@@ -2724,6 +2724,7 @@
             "sectionIDEs": "IDEs",
             "sectionCLIs": "CLIs",
             "sectionACPAgents": "ACP 에이전트",
+            "loading": "버로우를 불러오는 중…",
             "emptyHeadline": "ADHDev에 오신 것을 환영합니다",
             "emptyBody": "대시보드에 첫 번째 머신을 연결하세요. 한 번만 설정하면 해당 머신에서 ADHDev를 시작할 수 있습니다:",
             "emptyDocsLink": "📚 문서 읽기 →",

@@ -2724,6 +2724,7 @@
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
             "sectionACPAgents": "ACP エージェント",
+            "loading": "バロウを読み込んでいます…",
             "emptyHeadline": "ADHDev へようこそ",
             "emptyBody": "最初のマシンをダッシュボードに接続しましょう。セットアップを一度実行してから、そのマシンで ADHDev を起動してください:",
             "emptyDocsLink": "📚 ドキュメントを読む →",

@@ -2724,6 +2724,7 @@
             "sectionIDEs": "IDEs",
             "sectionCLIs": "CLIs",
             "sectionACPAgents": "ACP Agents",
+            "loading": "Loading your burrows…",
             "emptyHeadline": "Welcome to ADHDev",
             "emptyBody": "Connect your first machine to the dashboard. Run setup once, then start ADHDev on that machine:",
             "emptyDocsLink": "📚 Read the documentation →",

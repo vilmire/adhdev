@@ -2724,6 +2724,7 @@
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
             "sectionACPAgents": "Agentes ACP",
+            "loading": "Cargando tus madrigueras…",
             "emptyHeadline": "Te damos la bienvenida a ADHDev",
             "emptyBody": "Conecta tu primera máquina al panel. Ejecuta la configuración una vez y luego inicia ADHDev en esa máquina:",
             "emptyDocsLink": "📚 Leer la documentación →",

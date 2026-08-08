@@ -2724,6 +2724,7 @@
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
             "sectionACPAgents": "ACP 代理",
+            "loading": "正在加载你的洞穴…",
             "emptyHeadline": "欢迎使用 ADHDev",
             "emptyBody": "将你的第一台机器连接到仪表板。运行一次设置，然后在该机器上启动 ADHDev：",
             "emptyDocsLink": "📚 阅读文档 →",

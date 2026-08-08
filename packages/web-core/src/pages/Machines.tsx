@@ -77,7 +77,7 @@ export default function MachinesPage() {
     const { t } = useTranslation('common')
     const navigate = useNavigate()
     const daemonCtx = useDaemons()
-    const { ides: daemons } = daemonCtx
+    const { ides: daemons, initialLoaded } = daemonCtx
     const loadDaemonMetadata = useDaemonMetadataLoader()
     const loadMachineRuntime = useDaemonMachineRuntimeLoader()
     const connectionStates = daemonCtx.connectionStates || {}
@@ -182,8 +182,14 @@ export default function MachinesPage() {
                         <IconServer size={20} /> {t('machine.card.pageTitle')}
                     </h1>
                     <div className="header-subtitle flex gap-3 flex-wrap">
-                        <span>{t('machine.card.burrowCount', { count: machines.length })}</span>
-                        <span className="text-green-500">● {t('machine.card.onlineCount', { count: onlineCount })}</span>
+                        {/*
+                         * Same loading-vs-empty distinction as the body below:
+                         * before `initial_state` lands, "0 burrows / 0 online"
+                         * is a claim we cannot yet make, so show the counters
+                         * only once the numbers mean something.
+                         */}
+                        {initialLoaded && <span>{t('machine.card.burrowCount', { count: machines.length })}</span>}
+                        {initialLoaded && <span className="text-green-500">● {t('machine.card.onlineCount', { count: onlineCount })}</span>}
                         {allActiveAgents.length > 0 && (
                             <span className="text-orange-500">⚡ {t('machine.card.agentsActive', { count: allActiveAgents.length })}</span>
                         )}
@@ -510,8 +516,31 @@ export default function MachinesPage() {
                         )
                     })}
 
-                    {/* Empty state */}
-                    {machines.length === 0 && (
+                    {/*
+                     * Bootstrap placeholder — shown while the very first
+                     * `initial_state` is in flight. `daemons` starts as an empty
+                     * array, so `machines.length === 0` is indistinguishable
+                     * from "no data yet" until that message lands: rendering the
+                     * first-run onboarding here told an existing user with four
+                     * machines that they had none, and to go connect their
+                     * first one. Deliberately neutral — it must not look like
+                     * either terminal state (onboarding or a machine list),
+                     * because which one applies is exactly what is not yet
+                     * known. This is not a timed delay; it waits for the signal
+                     * that decides between them. New users are unaffected: the
+                     * daemon provider calls markLoaded() on `initial_state`
+                     * even when the payload is empty, so a genuine zero-machine
+                     * account still reaches onboarding on the first round trip.
+                     */}
+                    {!initialLoaded && (
+                        <div className="col-span-full flex flex-col items-center justify-center gap-3 py-24 text-text-muted">
+                            <img src="/otter-logo.png" alt="" aria-hidden="true" className="w-10 h-10 object-contain opacity-60 animate-pulse" />
+                            <p className="text-sm">{t('machine.card.loading')}</p>
+                        </div>
+                    )}
+
+                    {/* Empty state — only once we know the list is genuinely empty */}
+                    {initialLoaded && machines.length === 0 && (
                         <div className="col-span-full py-16 px-10 text-center bg-bg-secondary border-2 border-dashed border-border-subtle rounded-[20px] shadow-sm relative overflow-hidden">
                             <div className="absolute inset-0 bg-gradient-to-b from-violet-500/5 to-transparent pointer-events-none" />
                             <img src="/otter-logo.png" alt="ADHDev" className="w-14 h-14 object-contain mb-5 mx-auto opacity-90 animate-bounce" style={{ animationDuration: '3s' }} />
