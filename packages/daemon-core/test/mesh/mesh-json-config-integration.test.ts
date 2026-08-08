@@ -67,8 +67,8 @@ describe('OPSRULES integration — load → merge → prompt', () => {
         expect(effective.policy.maxParallelTasks).toBe(3);
 
         const prompt = buildCoordinatorSystemPrompt({ mesh: effective, coordinatorCliType: 'claude-cli' });
-        expect(prompt).toContain('Maximum **3** tasks running in parallel');
-        expect(prompt).not.toContain('Maximum **5** tasks running in parallel');
+        expect(prompt).toContain('Maximum **3** concurrent WRITE tasks; **6** concurrent READ-ONLY tasks');
+        expect(prompt).not.toContain('Maximum **5** concurrent WRITE tasks');
     });
 
     it('case (ii): machine-local policy drives the prompt', () => {
@@ -79,7 +79,7 @@ describe('OPSRULES integration — load → merge → prompt', () => {
         expect(effective.policy.maxParallelTasks).toBe(8);
 
         const prompt = buildCoordinatorSystemPrompt({ mesh: effective, coordinatorCliType: 'claude-cli' });
-        expect(prompt).toContain('Maximum **8** tasks running in parallel');
+        expect(prompt).toContain('Maximum **8** concurrent WRITE tasks; **16** concurrent READ-ONLY tasks');
     });
 
     it('case (ii-append): repo append + local append both stack in the prompt', () => {
