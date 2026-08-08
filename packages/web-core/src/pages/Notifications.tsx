@@ -74,9 +74,23 @@ interface NotificationsPageProps {
     onBrowserPrefChange?: (key: string, value: boolean) => void
     /** Optional: extra content to render in the browser notification section (e.g. push toggles) */
     renderPushSection?: () => React.ReactNode
+    /**
+     * Whether the daemon list backing `machines` has actually arrived yet.
+     *
+     * `machines` is derived from a context array that starts empty, so
+     * `onlineMachines.length === 0` is indistinguishable from "not loaded yet"
+     * — rendering "no online machines" on that alone tells a user with four
+     * connected machines that they have none, until the first state lands.
+     *
+     * Defaults to `true` so hosts that render this page only after their data
+     * is ready (and any caller predating this prop) keep their current
+     * behavior; only a host that genuinely has a pre-load window needs to
+     * thread its real flag through.
+     */
+    initialLoaded?: boolean
 }
 
-export default function NotificationsPage({ machines, onBrowserPrefChange, renderPushSection }: NotificationsPageProps) {
+export default function NotificationsPage({ machines, onBrowserPrefChange, renderPushSection, initialLoaded = true }: NotificationsPageProps) {
     const { t } = useTranslation('common')
     const [prefs, updatePrefs] = useNotificationPrefs()
     const { sendCommand } = useTransport()
@@ -305,7 +319,11 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                             {loading ? t('notifications.loading') : t('notifications.refresh')}
                         </button>
                     </div>
-                    {onlineMachines.length === 0 ? (
+                    {!initialLoaded ? (
+                        /* Daemon list still in flight — "no online machines" would be a
+                         * claim we cannot make yet (see the initialLoaded prop docs). */
+                        <p className="text-sm text-text-muted py-6 text-center">{t('notifications.loading')}</p>
+                    ) : onlineMachines.length === 0 ? (
                         <p className="text-sm text-text-muted py-6 text-center">{t('notifications.noOnlineMachines')}</p>
                     ) : loading && allEntries.length === 0 ? (
                         <p className="text-sm text-text-muted py-6 text-center">{t('notifications.loadingProviderSettings')}</p>
