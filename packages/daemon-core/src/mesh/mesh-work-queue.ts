@@ -259,6 +259,93 @@ function hasTrailingNegation(text: string, matchEnd: number): boolean {
 }
 
 /**
+ * GUARDRAIL-WRAPPER-GAP: command wrappers that take another command as their
+ * argument. `cat l | xargs rm -rf` and `sudo rm -rf build` are real invocations,
+ * but the wrapper token sat between the connective/line-start and the keyword, so
+ * the command-position checks below never saw the keyword at a command position
+ * and the mutation leaked through.
+ *
+ * Only wrappers that are *exclusively* command-invoking live here. Deliberately
+ * EXCLUDED, because they are ordinary English words that appear in read-only
+ * prose and would trade a rare miss for frequent false positives:
+ *   • `time`     — "time deploy takes 20 minutes"
+ *   • `command`  — "the command deploy is described in the runbook"
+ *   • `env`      — "env deploy differences are the subject"
+ *   • `nice`     — "nice release notes were written"
+ *   • `exec`     — "exec patch semantics differ"
+ *   • `builtin`  — "builtin edit support is missing"
+ *   • `timeout`  — "timeout deploy behaviour is the question"
+ * Those seven are still reachable in their genuine command form through the
+ * evidence rule in {@link stripCommandWrappers}: a wrapper carrying a flag,
+ * a `KEY=value` assignment, a numeric argument, or `-c` is command-shaped and
+ * IS stripped (`timeout 30 npm publish`, `env FOO=1 npm publish`). A bare
+ * `time deploy …` stays prose. See the FP fixtures in the test suite.
+ */
+const COMMAND_WRAPPERS = new Set(['xargs', 'sudo', 'doas', 'nohup', 'sh', 'bash', 'zsh']);
+
+/**
+ * Wrappers that are ordinary English words, so a BARE occurrence is prose. They
+ * count as a wrapper only when the token carries command-shaped evidence — see
+ * {@link stripCommandWrappers}.
+ */
+const EVIDENCE_ONLY_WRAPPERS = new Set(['time', 'command', 'env', 'nice', 'exec', 'builtin', 'timeout']);
+
+/**
+ * Consumes any leading command-wrapper tokens (plus their flags / `KEY=value`
+ * assignments / numeric args) from `prefix`, returning the remaining prefix as it
+ * would look if the wrappers were not there. Used so the command-position checks
+ * see `rm -rf` in `xargs rm -rf` as sitting at command position.
+ *
+ * An {@link EVIDENCE_ONLY_WRAPPERS} word only counts when the wrapper run carries
+ * command-shaped evidence (a `-flag`, a `KEY=value`, or a bare number) — that is
+ * what separates `timeout 30 npm publish` (a command) from `timeout deploy
+ * behaviour is the question` (prose). Returns null when nothing was stripped.
+ */
+function stripCommandWrappers(prefix: string): string | null {
+    // Split at the LAST shell connective (greedy) so `cat l | xargs ` yields
+    // head=`cat l | ` and rest=`xargs `; with no connective the whole prefix is
+    // the token run and head is just its leading whitespace.
+    const m = /^([\s\S]*(?:&&|\|\||\||;)\s*)([\s\S]*)$/.exec(prefix);
+    const head = m ? m[1] : (/^\s*/.exec(prefix)?.[0] ?? '');
+    let rest = m ? m[2] : prefix.slice(head.length);
+    let stripped = false;
+    let sawEvidence = false;
+    let sawEvidenceOnlyWrapper = false;
+
+    for (;;) {
+        const tok = /^([^\s]+)\s+/.exec(rest);
+        if (!tok) break;
+        const word = tok[1];
+        const lower = word.toLowerCase();
+        if (COMMAND_WRAPPERS.has(lower)) {
+            rest = rest.slice(tok[0].length);
+            stripped = true;
+            continue;
+        }
+        if (EVIDENCE_ONLY_WRAPPERS.has(lower)) {
+            rest = rest.slice(tok[0].length);
+            stripped = true;
+            sawEvidenceOnlyWrapper = true;
+            continue;
+        }
+        // Wrapper arguments: flags (-r, --no-run-if-empty), `-c`, KEY=value
+        // assignments, and bare numbers (timeout 30). Each is command-shaped
+        // evidence; none of them appear between two words in ordinary prose.
+        if (stripped && (/^-/.test(word) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || /^\d+$/.test(word))) {
+            rest = rest.slice(tok[0].length);
+            sawEvidence = true;
+            continue;
+        }
+        break;
+    }
+    if (!stripped) return null;
+    // A run that relied on an ordinary-English wrapper needs corroborating
+    // evidence; otherwise treat it as prose and do not strip.
+    if (sawEvidenceOnlyWrapper && !sawEvidence) return null;
+    return head + rest;
+}
+
+/**
  * Returns true when the keyword at [matchStart, matchEnd) looks like an actual
  * command invocation rather than a plain-prose mention. Command context is:
  *   - inside a fenced code block (``` ... ```) or inline backticks (`...`)
@@ -281,6 +368,17 @@ function isMutationKeywordInCommandContext(text: string, matchStart: number, mat
 
     // Line start (only whitespace before the keyword on this line).
     if (/^\s*$/.test(linePrefix)) return true;
+
+    // GUARDRAIL-WRAPPER-GAP: retry the command-position checks with leading
+    // command wrappers removed, so `xargs rm -rf` / `sudo rm -rf` / `timeout 30
+    // npm publish` are seen at the command position the wrapper displaced them
+    // from. Only the two position checks are re-run — the wrapper says nothing
+    // about backticks, prompts or run-prefix paths, which are already handled.
+    const unwrapped = stripCommandWrappers(linePrefix);
+    if (unwrapped !== null) {
+        if (/^\s*$/.test(unwrapped)) return true;
+        if (/(?:&&|\|\||\||;)\s*$/.test(unwrapped)) return true;
+    }
 
     // Executed script at command position: the keyword sits inside a run-prefix
     // path token (`./scripts/version-bump.sh`, `~/bin/deploy.sh`) that is the

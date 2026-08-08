@@ -1420,3 +1420,83 @@ describe('validateMeshTaskModeRequest — teaching error message', () => {
         expect(match.endsWith('…')).toBe(true);
     });
 });
+
+// GUARDRAIL-WRAPPER-GAP: a command wrapper between the connective/line-start and
+// the keyword (`cat l | xargs rm -rf`, `sudo rm -rf build`) displaced the keyword
+// out of command position, so the mutation leaked through. Wrappers are now
+// stripped before the position checks — but only when the run is command-shaped,
+// so ordinary prose containing "time"/"command"/"env"/... stays clean.
+describe('validateMeshTaskModeRequest — command wrappers do not hide a mutation', () => {
+    const expectViolation = (message: string, label: string) => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', message);
+        expect(result.violations).toContain(label);
+        expect(result.valid).toBe(false);
+    };
+    const expectClean = (message: string) => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', message);
+        expect(result.violations).toEqual([]);
+        expect(result.valid).toBe(true);
+    };
+
+    // Every wrapper below was measured leaking before this change.
+    describe('unconditional wrappers, after a pipe', () => {
+        for (const w of ['xargs', 'sudo', 'doas', 'nohup', 'sh', 'bash', 'zsh']) {
+            it(`rejects \`| ${w} rm -rf\``, () => {
+                expectViolation(`cat list | ${w} rm -rf build`, 'destructive_shell');
+            });
+        }
+    });
+
+    describe('unconditional wrappers, at line start', () => {
+        for (const w of ['xargs', 'sudo', 'doas', 'nohup', 'sh', 'bash', 'zsh']) {
+            it(`rejects \`${w} rm -rf\``, () => {
+                expectViolation(`${w} rm -rf build`, 'destructive_shell');
+            });
+        }
+    });
+
+    it('rejects stacked wrappers', () => {
+        expectViolation('cat list | xargs sudo rm -rf', 'destructive_shell');
+    });
+    it('rejects sh -c with an unquoted command', () => {
+        expectViolation('sh -c rm -rf build', 'destructive_shell');
+    });
+    it('rejects a wrapper carrying flags', () => {
+        expectViolation('cat list | xargs -r -n1 rm -rf', 'destructive_shell');
+    });
+
+    // ★The ordinary-English wrappers are command-shaped ONLY with evidence.
+    describe('ordinary-English wrappers WITH command-shaped evidence still reject', () => {
+        it('timeout with a numeric argument', () => {
+            expectViolation('timeout 30 npm publish', 'deploy_or_version_bump');
+        });
+        it('env with a KEY=value assignment', () => {
+            expectViolation('env FOO=1 npm publish', 'deploy_or_version_bump');
+        });
+        it('nice with a flag', () => {
+            expectViolation('nice -n 10 rm -rf build', 'destructive_shell');
+        });
+    });
+
+    // ★FALSE-POSITIVE FLOOR. These are ordinary words in read-only prose. If a
+    // future change strips wrappers unconditionally, these go red first.
+    describe('bare ordinary-English wrappers in prose stay clean', () => {
+        for (const w of ['time', 'command', 'env', 'nice', 'exec', 'builtin', 'timeout']) {
+            it(`allows "${w} deploy ..." as prose`, () => {
+                expectClean(`${w} deploy is the subject of this report`);
+            });
+        }
+        it('allows "time deploy takes 20 minutes to finish"', () => {
+            expectClean('time deploy takes 20 minutes to finish');
+        });
+        it('allows "the command deploy is described in the runbook"', () => {
+            expectClean('the command deploy is described in the runbook');
+        });
+        it('allows a Korean sentence using "time" as a noun', () => {
+            expectClean('time 이 오래 걸리는 deploy 를 조사하라');
+        });
+        it('allows "xargs rm semantics are documented here"', () => {
+            expectClean('xargs rm semantics are documented here');
+        });
+    });
+});
