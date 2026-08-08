@@ -652,7 +652,13 @@ async function resolveNodeFromOwningDaemons(
     const candidates: string[] = [];
     const pushCandidate = (id: unknown) => {
         if (typeof id !== 'string' || !id.trim()) return;
-        if (localDaemonId && id === localDaemonId) return; // already asked via the local refresh
+        // Compare under canonical machine-core form (daemonIdsEquivalent), NOT a raw
+        // `===`: ctx.localDaemonId is the daemon's status instanceId (standalone form
+        // `standalone_mach_X`) while a node's daemonId carries the config form
+        // `daemon_mach_X`. A raw match misses that equivalence and re-asks the local
+        // daemon over meshCommand — the same form mismatch the local refresh already
+        // covered.
+        if (localDaemonId && daemonIdsEquivalent(id, localDaemonId)) return; // already asked via the local refresh
         if (!candidates.includes(id)) candidates.push(id);
     };
     for (const node of ctx.mesh.nodes as any[]) pushCandidate(node?.daemonId);
