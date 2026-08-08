@@ -1000,11 +1000,24 @@ export class ProviderLoader {
  /**
  * Build CLI/ACP detection list (replaces cli-detector)
  * Dynamically generated from provider.js spawn.command.
+ *
+ * By default this only returns providers already enabled for this machine
+ * (config.machineProviders[type].enabled === true) — that's the right scope
+ * for `launch`, which must not spawn something the user never opted into.
+ *
+ * `includeDisabled: true` returns every cli/acp provider with a spawn
+ * command regardless of the enabled flag, with `enabled` reporting the REAL
+ * per-provider state instead of the hardcoded `true` the gated list implies.
+ * This exists for first-run setup detection: a fresh machine's
+ * machineProviders is `{}` (nothing enabled yet), so the gated list is always
+ * empty and setup could never show what it actually found on disk — the
+ * wizard needs to see candidates BEFORE anything has been enabled.
  */
-  getCliDetectionList(): CliDetectionEntry[] {
+  getCliDetectionList(options?: { includeDisabled?: boolean }): CliDetectionEntry[] {
     const result: CliDetectionEntry[] = [];
     for (const p of this.providers.values()) {
-      if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command && this.isMachineProviderEnabled(p.type)) {
+      const enabled = this.isMachineProviderEnabled(p.type);
+      if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command && (enabled || options?.includeDisabled)) {
         const versionCommand = this.getPlatformVersionCommand(p.versionCommand);
         const command = this.getSpawnCommand(p.type, p.spawn.command);
         const args = this.getSpawnArgs(p.type, p.spawn.args || []);
@@ -1015,7 +1028,7 @@ export class ProviderLoader {
           command,
           ...(args.length > 0 ? { args } : {}),
           category: p.category,
-          enabled: true,
+          enabled,
           ...(typeof versionCommand === 'string' && versionCommand.trim()
             ? { versionCommand: versionCommand.trim() }
             : {}),

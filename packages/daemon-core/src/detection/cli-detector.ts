@@ -106,7 +106,7 @@ function execAsync(cmd: string, timeoutMs = 5000): Promise<string | null> {
  */
 export async function detectCLIs(
     providerLoader?: ProviderLoader,
-    options?: { includeVersion?: boolean },
+    options?: { includeVersion?: boolean; includeDisabled?: boolean },
 ): Promise<CLIInfo[]> {
     const platform = os.platform();
     const whichCmd = platform === 'win32' ? 'where' : 'which';
@@ -114,7 +114,7 @@ export async function detectCLIs(
 
     // Provider-based dynamic list creation, fallback is empty array
     const cliList = providerLoader
-        ? providerLoader.getCliDetectionList()
+        ? providerLoader.getCliDetectionList({ includeDisabled: options?.includeDisabled })
         : [];
 
     // Run all `which` checks in parallel

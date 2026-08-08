@@ -541,6 +541,54 @@ describe('ProviderLoader settings schema', () => {
     });
   });
 
+  // Regression: a fresh machine's machineProviders is always {} — nothing is
+  // enabled yet — so the gated getCliDetectionList() is unconditionally empty
+  // on first run. That starved setup's first-run detection step, which used
+  // this same gated list: it could never show what was actually installed on
+  // disk, only what had ALREADY been enabled (impossible on a fresh machine).
+  // includeDisabled surfaces every cli/acp provider with a spawn command
+  // regardless of the enabled flag, and reports each entry's REAL enabled
+  // state instead of the gated list's implied-always-true.
+  it('includeDisabled surfaces not-yet-enabled providers with their real enabled state', () => {
+    writeProvider(userDir, 'cli', 'codex-cli', {
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      displayName: 'Codex CLI',
+      category: 'cli',
+      spawn: { command: 'codex' },
+    });
+    writeProvider(userDir, 'cli', 'claude-cli', {
+      type: 'claude-cli',
+      name: 'Claude Code',
+      displayName: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude' },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    // Fresh machine: nothing enabled yet. The default (gated) list is empty,
+    // exactly like before — includeDisabled must not change that contract.
+    expect(loader.getCliDetectionList()).toEqual([]);
+
+    const all = loader.getCliDetectionList({ includeDisabled: true });
+    expect(all.map((e) => e.id).sort()).toEqual(['claude-cli', 'codex-cli']);
+    expect(all.every((e) => e.enabled === false)).toBe(true);
+
+    expect(loader.setMachineProviderEnabled('codex-cli', true)).toBe(true);
+
+    const afterEnable = loader.getCliDetectionList({ includeDisabled: true });
+    const codex = afterEnable.find((e) => e.id === 'codex-cli');
+    const claude = afterEnable.find((e) => e.id === 'claude-cli');
+    expect(codex?.enabled).toBe(true);
+    expect(claude?.enabled).toBe(false);
+
+    // The gated (default) list now reflects only the one that was enabled —
+    // unaffected by the includeDisabled probe above.
+    expect(loader.getCliDetectionList().map((e) => e.id)).toEqual(['codex-cli']);
+  });
+
   // Regression: provider types and aliases share one namespace across
   // categories, so `extension/codex` (type 'codex') shadowed the `codex` alias
   // of `cli/codex-cli` on a plain resolveAlias. That made `adhdev launch codex`
