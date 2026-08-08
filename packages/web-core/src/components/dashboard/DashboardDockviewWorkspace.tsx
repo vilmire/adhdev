@@ -22,6 +22,7 @@ import type { DaemonData } from '../../types'
 import type { CliTerminalHandle } from '../CliTerminal'
 import PaneGroupContent from './PaneGroupContent'
 import PaneGroupEmptyState from './PaneGroupEmptyState'
+import { areConversationsLoaded } from './dashboard-mobile-chat-mode-helpers'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import {
     readDashboardDockviewHiddenRestoreState,
@@ -187,7 +188,7 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                     hasRegisteredMachines={ctx.hasRegisteredMachines}
                     onOpenNewSession={ctx.onOpenNewSession}
                     suppressGuide={ctx.hasDetachedConversationPanels}
-                    isLoading={!ctx.initialDataLoaded}
+                    isLoading={!areConversationsLoaded(ctx.ides, ctx.initialDataLoaded)}
                 />
             </div>
         )

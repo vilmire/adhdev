@@ -39,13 +39,25 @@ interface DashboardMobileChatInboxProps {
     onSectionChange: (section: DashboardMobileSection) => void
     wsStatus?: string
     /**
-     * False while the first daemon snapshot is still in flight. `wsStatus` alone
+     * False while the first DAEMON snapshot is still in flight. `wsStatus` alone
      * does not cover this: the socket reports 'connected' as soon as it is up,
-     * but the machine/session lists stay empty until the snapshot lands — which
-     * is exactly the window where the empty states claimed "no machines" / "no
-     * conversations" against data that had not arrived yet.
+     * but the machine list stays empty until the snapshot lands — which is exactly
+     * the window where the empty state claimed "no machines" against data that had
+     * not arrived yet.
+     *
+     * Scope note: this covers the MACHINE list only. On cloud the daemon snapshot is
+     * deliberately daemon-only, so conversations are still in flight when this turns
+     * true — see `conversationsLoaded`.
      */
     initialDataLoaded?: boolean
+    /**
+     * False while the CONVERSATION list is still in flight. Distinct from
+     * `initialDataLoaded` because conversations arrive over P2P strictly after the
+     * daemon discovery snapshot (see `areConversationsLoaded`). Defaults to
+     * `initialDataLoaded` so callers that do not distinguish the two keep the old
+     * behaviour.
+     */
+    conversationsLoaded?: boolean
     isConnected?: boolean
     isStandalone?: boolean
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
@@ -395,6 +407,7 @@ export default function DashboardMobileChatInbox({
     onSectionChange,
     wsStatus = 'connected',
     initialDataLoaded = true,
+    conversationsLoaded,
     isStandalone = false,
     onCollectChatDebugBundle,
     isConversationMuted,
@@ -404,7 +417,11 @@ export default function DashboardMobileChatInbox({
     const [hideConfirmConversation, setHideConfirmConversation] = useState<ActiveConversation | null>(null)
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
     // Distinct from isDisconnected: the socket is up, the data just is not here yet.
+    // Machine-section scope — gated on the daemon discovery snapshot.
     const isBootstrapping = !isDisconnected && !initialDataLoaded
+    // Conversation-section scope — additionally waits for the P2P session snapshot,
+    // which lands strictly after the daemon snapshot on cloud.
+    const isConversationBootstrapping = !isDisconnected && !(conversationsLoaded ?? initialDataLoaded)
     const hasMachines = machineCards.length > 0
     const hasAnyConversation = attentionItems.length > 0 || unreadItems.length > 0 || workingItems.length > 0 || completedItems.length > 0
     const inboxTitle = section === 'machines'
@@ -680,7 +697,7 @@ export default function DashboardMobileChatInbox({
                                     title={t('mobileInbox.connecting')}
                                     subtitle={t('mobileInbox.connectingSubtitle')}
                                 />
-                            ) : isBootstrapping ? (
+                            ) : isConversationBootstrapping ? (
                                 <MobileEmptyHero
                                     icon={<MobileSpinner size={28} />}
                                     title={t('mobileInbox.loading')}

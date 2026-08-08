@@ -3,6 +3,7 @@ import type { DaemonData } from '../../../src/types'
 import type { MobileConversationListItem } from '../../../src/components/dashboard/DashboardMobileChatShared'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import {
+    areConversationsLoaded,
     buildMobileMachineCards,
     buildSelectedMachineRecentLaunches,
     getMobileMachineConnectionLabel,
@@ -341,6 +342,96 @@ describe('dashboard mobile chat mode helpers', () => {
             expect(machineTotal).toBe(items.length)
             expect(machineUnread).toBe(chatsUnread)
             expect(machineUnread).toBe(2)
+        })
+    })
+
+    describe('areConversationsLoaded', () => {
+        // A cloud daemon as it exists between WS bootstrap and the first P2P status
+        // snapshot: discovered and connected, but no session list has arrived yet.
+        const connectedAwaitingSessions = () => createMachine({
+            id: 'machine-1',
+            p2p: { state: 'connected', available: true } as DaemonData['p2p'],
+        })
+        const connectedWithSessions = () => createMachine({
+            id: 'machine-1',
+            p2p: { state: 'connected', available: true } as DaemonData['p2p'],
+            _sessionListAuthoritative: true,
+        })
+
+        it('stays unloaded while the daemon snapshot itself is in flight', () => {
+            expect(areConversationsLoaded([], false)).toBe(false)
+        })
+
+        it('★regression: stays unloaded when a connected daemon has not delivered its session list', () => {
+            // This is the defect: `initialDataLoaded` is already true (daemon snapshot
+            // landed) but conversations are still in flight over P2P. Gating on
+            // initialDataLoaded alone rendered "No conversations yet" here.
+            expect(areConversationsLoaded([connectedAwaitingSessions()], true)).toBe(false)
+        })
+
+        it('reports loaded once the connected daemon delivers its session list', () => {
+            expect(areConversationsLoaded([connectedWithSessions()], true)).toBe(true)
+        })
+
+        it('treats an authoritative but empty session list as loaded', () => {
+            // A daemon with genuinely zero sessions still sets the flag, so the honest
+            // "No conversations yet" empty state must still be reachable.
+            expect(areConversationsLoaded([connectedWithSessions()], true)).toBe(true)
+        })
+
+        it('waits for every connected daemon, not just the first', () => {
+            const ides = [
+                connectedWithSessions(),
+                createMachine({
+                    id: 'machine-2',
+                    p2p: { state: 'connected', available: true } as DaemonData['p2p'],
+                }),
+            ]
+            expect(areConversationsLoaded(ides, true)).toBe(false)
+        })
+
+        it('does not wait on daemons that are offline or still connecting', () => {
+            // An unreachable machine would otherwise pin the list in a loading state forever.
+            const ides = [
+                connectedWithSessions(),
+                createMachine({
+                    id: 'machine-offline',
+                    status: 'offline',
+                    p2p: { state: 'failed', available: true } as DaemonData['p2p'],
+                }),
+                createMachine({
+                    id: 'machine-connecting',
+                    p2p: { state: 'connecting', available: true } as DaemonData['p2p'],
+                }),
+            ]
+            expect(areConversationsLoaded(ides, true)).toBe(true)
+        })
+
+        it('reports loaded when no machine is reachable at all', () => {
+            // "No machines connected" is the honest empty state here; there is no
+            // pending session list to wait for.
+            expect(areConversationsLoaded([], true)).toBe(true)
+        })
+
+        it('ignores non-daemon session entries when deciding', () => {
+            const ides = [
+                connectedWithSessions(),
+                { id: 'machine-1:cli:agent-1', type: 'codex', daemonId: 'machine-1', status: 'idle' } as DaemonData,
+            ]
+            expect(areConversationsLoaded(ides, true)).toBe(true)
+        })
+
+        it('keeps standalone unchanged: sessions land with the load-complete payload', () => {
+            // Standalone has no P2P telemetry and injects sessions in the same payload
+            // that marks load complete, so the flag is already set on arrival.
+            const standaloneDaemon = createMachine({
+                id: 'standalone-1',
+                status: 'online',
+                p2p: undefined,
+                _sessionListAuthoritative: true,
+            })
+            expect(areConversationsLoaded([standaloneDaemon], true)).toBe(true)
+            expect(areConversationsLoaded([standaloneDaemon], false)).toBe(false)
         })
     })
 })

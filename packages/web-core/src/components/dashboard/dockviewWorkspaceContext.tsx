@@ -21,6 +21,7 @@ import { getPreferredConversationForIde } from './conversation-sort'
 import { getConversationTabMetaText, getConversationTitle } from './conversation-presenters'
 import { getConversationNativeTargetSessionId } from './conversation-selectors'
 import PaneGroupEmptyState from './PaneGroupEmptyState'
+import { areConversationsLoaded } from './dashboard-mobile-chat-mode-helpers'
 import type { DashboardDockviewPanelParams, DashboardDockviewRemotePanelParams } from './dockviewWorkspaceLayout'
 
 export interface DashboardDockviewContextValue {
@@ -126,7 +127,7 @@ export function DashboardDockviewWatermark() {
                 hasRegisteredMachines={ctx.hasRegisteredMachines}
                 onOpenNewSession={ctx.onOpenNewSession}
                 suppressGuide={ctx.hasDetachedConversationPanels}
-                isLoading={!ctx.initialDataLoaded}
+                isLoading={!areConversationsLoaded(ctx.ides, ctx.initialDataLoaded)}
             />
         </div>
     )

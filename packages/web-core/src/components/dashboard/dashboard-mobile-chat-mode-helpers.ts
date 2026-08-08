@@ -56,6 +56,45 @@ export function groupMobileInboxItems(
     }
 }
 
+/**
+ * areConversationsLoaded — has the conversation list finished loading?
+ *
+ * `initialDataLoaded` (BaseDaemonContext `initialLoaded`) only means the DAEMON
+ * discovery snapshot landed. On cloud that snapshot is deliberately daemon-only
+ * (`expandServerBootstrapDaemons` passes `daemonOnlyId: () => true`), so it never
+ * carries sessions: conversations arrive strictly later over the P2P data channel.
+ * Gating the conversation empty state on `initialDataLoaded` alone therefore claims
+ * "no conversations yet" during the window between WS bootstrap and the first P2P
+ * status snapshot — against data that had not arrived yet.
+ *
+ * `_sessionListAuthoritative` is set only by `statusPayloadToEntries`
+ * (`utils/status-transform.ts`) and means "this daemon entry was built from a status
+ * payload that carried an explicit sessions array" — i.e. exactly "the session list
+ * for this daemon has arrived", even when that list is legitimately empty. It is
+ * sticky: a later daemon-only WS bootstrap merges through `mergeWeakEntry`, which
+ * spreads the existing entry, so the flag never flips back and cannot cause a
+ * loading↔empty flicker.
+ *
+ * A daemon is only awaited while it is actually reachable — an offline or
+ * still-connecting machine would otherwise pin the list in a loading state forever.
+ * Standalone injects sessions in the same payload that marks load complete, so every
+ * entry is authoritative on arrival and this returns `initialDataLoaded` unchanged.
+ */
+export function areConversationsLoaded(ides: DaemonData[], initialDataLoaded: boolean): boolean {
+    if (!initialDataLoaded) return false
+
+    const connectedDaemons = ides.filter(entry => (
+        entry.type === 'adhdev-daemon'
+        && getMobileMachineConnectionLabel(entry) === 'Connected'
+    ))
+
+    // No reachable daemon → nothing further to wait for; the empty state is honest
+    // ("no machines connected" is rendered ahead of "no conversations").
+    if (connectedDaemons.length === 0) return true
+
+    return connectedDaemons.every(entry => entry._sessionListAuthoritative === true)
+}
+
 export function getMobileMachineConnectionLabel(machineEntry: DaemonData): 'Connected' | 'Connecting' | 'Offline' {
     const p2pState = machineEntry.p2p?.state || ''
     if (p2pState === 'connected') return 'Connected'

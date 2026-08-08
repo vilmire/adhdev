@@ -20,6 +20,7 @@ import { getConversationPreviewText } from './conversation-presenters'
 import { getSessionChatTailSnapshotForConversation, useWarmSessionChatTailSnapshotVersion } from './session-chat-tail-controller'
 import { compareMachineEntries } from '../../utils/daemon-utils'
 import {
+    areConversationsLoaded,
     buildMobileMachineCards,
     buildSelectedMachineRecentLaunches,
     groupMobileInboxItems,
@@ -269,6 +270,13 @@ export default function DashboardMobileChatMode({
         [items, machineEntries, hiddenConversations],
     )
 
+    // Conversations arrive over P2P after the daemon snapshot, so the conversation
+    // empty state needs its own gate — `initialDataLoaded` alone turns true too early.
+    const conversationsLoaded = useMemo(
+        () => areConversationsLoaded(ides, initialDataLoaded),
+        [ides, initialDataLoaded],
+    )
+
     const handleOpenRecent = useCallback(async (session: MachineRecentLaunch) => {
         if (!selectedMachineEntry) return
         await machineActions.handleOpenRecent(selectedMachineEntry.id, session)
@@ -359,6 +367,7 @@ export default function DashboardMobileChatMode({
                     wsStatus={wsStatus}
                     isConnected={isConnected}
                     initialDataLoaded={initialDataLoaded}
+                    conversationsLoaded={conversationsLoaded}
                     isStandalone={isStandalone}
                     isConversationMuted={isConversationMuted}
                     onToggleMuteConversation={toggleMute}

@@ -18,6 +18,7 @@ import type { CliTerminalHandle } from '../CliTerminal'
 import PaneGroupContent from './PaneGroupContent'
 import PaneGroupDropOverlay from './PaneGroupDropOverlay'
 import PaneGroupEmptyState from './PaneGroupEmptyState'
+import { areConversationsLoaded } from './dashboard-mobile-chat-mode-helpers'
 import PaneGroupTabBar from './PaneGroupTabBar'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 
@@ -217,7 +218,7 @@ export default function PaneGroup({
                             isStandalone={isStandalone}
                             hasRegisteredMachines={hasRegisteredMachines}
                             onOpenNewSession={onOpenNewSession}
-                            isLoading={!initialDataLoaded}
+                            isLoading={!areConversationsLoaded(ides, initialDataLoaded)}
                         />
                     </div>
                 ) : (

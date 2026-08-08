@@ -10,11 +10,15 @@ interface PaneGroupEmptyStateProps {
     suppressGuide?: boolean
     onOpenNewSession?: () => void
     /**
-     * False while the first daemon snapshot is still in flight. Until it flips,
+     * True while the conversation list is still in flight. Until it clears,
      * "zero conversations" is indistinguishable from "not loaded yet", so the
      * empty state would otherwise assert "No conversations yet" (or, worse, the
      * install CTA) against data that has not arrived. Defaults to false so call
      * sites that do not track load state keep their current behaviour.
+     *
+     * Callers should derive this via `areConversationsLoaded(ides, initialDataLoaded)`
+     * rather than from `initialDataLoaded` alone: the latter only tracks the daemon
+     * discovery snapshot, while conversations arrive later over P2P.
      */
     isLoading?: boolean
 }
