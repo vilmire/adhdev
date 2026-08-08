@@ -241,13 +241,54 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('pendingCoordinatorEvents')
     expect(prompt).toContain('completion/approval/status signal')
     expect(prompt).toContain('Use at most one compact `mesh_read_chat` check')
-    expect(prompt).toContain('Never duplicate a session because')
+    expect(prompt).toContain('never duplicate a session because')
 
     // The anti-polling/concurrency rules must not bleed into deferring NEW
     // independent work — the proactive-parallelize rule draws that contrast.
     expect(prompt).toContain('**Proactively parallelize new work.**')
     expect(prompt).toContain('do not wait for a current task to finish or for the user to prompt you to parallelize')
     expect(prompt).toContain('a reason to defer starting a new, independent task')
+  })
+
+  it('surfaces the read-only exemption from the one-active-session-per-node invariant', () => {
+    // mesh-queue-assignment.ts gates auto-launch on nodeHasActiveAssignment ONLY
+    // for non-readonly tasks (`if (!isTaskReadonly(task) && ...)`), so a node can
+    // hold several concurrent read-only sessions. That exemption was invisible in
+    // the prompt, which led coordinators to serialize read-only investigation or
+    // clone a worktree they did not need. Assert it is stated where the
+    // coordinator decides whether to launch (Workflow 3b) AND in the Rules cap.
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('**A node is not limited to one live session for read-only work**')
+    expect(prompt).toContain('exempt from the one-active-per-node invariant')
+    expect(prompt).toContain('the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed')
+
+    // The parallelism rule must bound DUPLICATE load, not independent work — the
+    // old "Start with 1-2 tasks; scale only on success" anchored coordinators to
+    // serial dispatch before the release condition was ever read.
+    expect(prompt).toContain('**Bound duplicate/overlapping load, not independent work.**')
+    expect(prompt).toContain('Never launch a second session onto work already in flight for the same issue')
+    expect(prompt).not.toContain('Start with 1–2 tasks; scale only on success')
+
+    // The cap is a ceiling, not a target to approach cautiously from below.
+    expect(prompt).toContain('this is a ceiling, not a target')
   })
 
   it('prefers reusing idle sessions and concise delta instructions for same-issue continuations', () => {
