@@ -143,11 +143,22 @@ export const MESH_JSON_CONFIG_SCHEMA = {
                 type: 'object',
                 additionalProperties: false,
                 required: ['text'],
+                // Every property normalizeOperatingNote() reads must appear here:
+                // additionalProperties stays false (typo defence), so a field the
+                // loader accepts but the schema omits makes a VALID config fail
+                // validation. operating-notes-schema-loader-parity.test.ts pins the
+                // two sets together. `noteId` is deliberately absent — it is threaded
+                // from the ledger entry at launch and never declared in a repo file,
+                // so the loader does not read it.
                 properties: {
                     text: { type: 'string', minLength: 1 },
                     category: { enum: ['provider_quirk', 'pattern_to_avoid', 'recovery_lesson'] },
                     createdAt: { type: 'string' },
                     sourceCoordinator: { type: 'string' },
+                    pinned: { type: 'boolean' },
+                    expiresAt: { type: 'string' },
+                    supersedes: { type: 'string' },
+                    subjectKey: { type: 'string' },
                 },
             },
         },
