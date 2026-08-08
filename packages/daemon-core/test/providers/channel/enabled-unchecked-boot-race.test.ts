@@ -53,7 +53,7 @@ describe('daemon-lifecycle wiring — re-detect fires after first-sync activatio
     // place that observes the sync landing during boot — actually calls
     // them, so reverting the fix (removing the call site) is caught even
     // though it doesn't change provider-loader.ts itself.
-    const source = readFileSync(join(process.cwd(), 'src/boot/daemon-lifecycle.ts'), 'utf-8');
+    const source = readFileSync(join(import.meta.dirname, '../../../src/boot/daemon-lifecycle.ts'), 'utf-8');
     const callback = source.match(/void providerLoader\.maybeFirstSyncVerifiedChannel\(\)\s*\.then\(async \(report\) => \{([\s\S]*?)\n {8}\}\)/);
     expect(callback, 'maybeFirstSyncVerifiedChannel().then() callback not found').toBeTruthy();
     const activatedBranch = callback![1].match(/report\.activated\.length > 0\) \{([\s\S]*?)\n {12}\}/);
