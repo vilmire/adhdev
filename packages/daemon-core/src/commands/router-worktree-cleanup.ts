@@ -11,7 +11,8 @@
  */
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
-import { resolve as pathResolve, dirname as pathDirname, join as pathJoin } from 'path';
+import { homedir } from 'node:os';
+import { resolve as pathResolve, dirname as pathDirname, join as pathJoin, sep as pathSep } from 'path';
 import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -67,6 +68,51 @@ function acceptableManagedWorktreePaths(
 function meshWorktreeBaseDir(mesh: any): string | undefined {
     const v = mesh?.policy?.worktreeBaseDir;
     return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
+
+/**
+ * Both known build-track home dir names (see track-identity.ts). Listed
+ * directly rather than imported from getTrackIdentity() for every track: the
+ * set is exactly {stable, preview} and is not expected to grow silently —
+ * a new track would need this list updated deliberately anyway.
+ */
+const TRACK_CONFIG_DIR_NAMES = ['.adhdev', '.adhdev-preview'];
+
+/**
+ * True when `actualPath` sits under `<homedir>/<any known track dir>/worktrees/`
+ * but was NOT accepted by `expectedPaths` — i.e. it looks like a worktree
+ * created under the OLD track-unaware base (`getDefaultWorktreeBaseDir()`
+ * used to hard-code `.adhdev` regardless of build track; fixed in oss
+ * c24ae254). This is a distinct legacy shape from `LEGACY_WORKTREE_DIR_NAME`
+ * above (which predates the home-dir base entirely) — that shape IS in
+ * `expectedPaths` and never reaches this helper. Detection only; it must
+ * never be added to `expectedPaths` — recognizing the shape to explain a
+ * refusal is not the same as accepting it as managed for a different track's
+ * daemon, which would defeat the per-track isolation the fix restored.
+ */
+function looksLikeCrossTrackWorktreePath(actualPath: string, normalizePath: (value: string) => string): boolean {
+    const home = normalizePath(homedir());
+    return TRACK_CONFIG_DIR_NAMES.some(trackDirName => {
+        const trackWorktreesDir = pathJoin(home, trackDirName, 'worktrees');
+        return actualPath === normalizePath(trackWorktreesDir) || actualPath.startsWith(normalizePath(trackWorktreesDir) + pathSep);
+    });
+}
+
+/**
+ * Build the unexpected-path recoveryHint, adding a legacy-path escape hatch
+ * when the path matches the pre-track-fix layout (see
+ * looksLikeCrossTrackWorktreePath). Conditional rather than unconditional:
+ * an unrelated unmanaged/unsafe path (e.g. a manually-created worktree
+ * outside any ADHDev base) should not be told "this may be a legacy path" —
+ * that would misdirect an operator toward force-removing something that was
+ * never ADHDev-managed at all.
+ */
+function unexpectedPathRecoveryHint(actualPath: string, normalizePath: (value: string) => string, suffix: string): string {
+    const base = 'Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree.';
+    const legacyHint = looksLikeCrossTrackWorktreePath(actualPath, normalizePath)
+        ? " This path matches the layout used before worktree paths became build-track-aware (oss c24ae254) and is likely a legacy worktree from an older daemon version — mesh_remove_node will not remove it automatically. To clean it up: run `git worktree remove --force '" + actualPath + "'` directly, then retry mesh_remove_node so it can drop the now-missing-path node from the mesh registry."
+        : '';
+    return base + legacyHint + suffix;
 }
 
 export function sessionMatchesMeshNode(self: DaemonCommandRouter, record: any, node: any, nodeId: string, sessionIds?: Set<string>): boolean {
@@ -202,7 +248,7 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
                 ok: false,
                 code: 'mesh_worktree_cleanup_unexpected_path',
                 error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPaths[0]}'`,
-                recoveryHint: 'Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree.' + sessionPreservedNote,
+                recoveryHint: unexpectedPathRecoveryHint(actualPath, normalizePath, sessionPreservedNote),
             };
         }
 
@@ -316,7 +362,7 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
                 success: false,
                 code: 'mesh_worktree_cleanup_unexpected_path',
                 error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPaths[0]}'`,
-                recoveryHint: 'Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree.',
+                recoveryHint: unexpectedPathRecoveryHint(actualPath, normalizePath, ''),
             };
         }
 
