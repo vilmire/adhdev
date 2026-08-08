@@ -2448,7 +2448,7 @@ async function resolveNodeFromOwningDaemons(ctx, nodeId) {
   const candidates = [];
   const pushCandidate = (id) => {
     if (typeof id !== "string" || !id.trim()) return;
-    if (localDaemonId && id === localDaemonId) return;
+    if (localDaemonId && (0, import_daemon_core4.daemonIdsEquivalent)(id, localDaemonId)) return;
     if (!candidates.includes(id)) candidates.push(id);
   };
   for (const node of ctx.mesh.nodes) pushCandidate(node?.daemonId);
