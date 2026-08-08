@@ -398,7 +398,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
             {confirmAction === 'revoke' && (
                 <ConfirmDialog
                     title={t('machine.connectedMachines.removeTitle')}
-                    message={`Remove "${nickname}" from your dashboard?\n\nThis will:\n• Immediately disconnect the machine\n• Delete the machine registration\n• Require restarting ADHDev on that machine\n\nUse this if you want to permanently remove a machine.`}
+                    message={`Remove "${nickname}" from your dashboard?\n\nThis will:\n• Immediately disconnect the machine\n• Delete the machine registration\n• Require running \`adhdev setup\` again on that machine\n\nThe machine's IDE, workspace and provider settings are kept.`}
                     confirmLabel={t('machine.connectedMachines.remove')}
                     confirmColor="red"
                     onConfirm={handleRevoke}
