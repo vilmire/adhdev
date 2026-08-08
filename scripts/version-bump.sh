@@ -300,7 +300,58 @@ done <<< "$STAGED"
 
 git commit -m "chore: bump version to v$NEW_VERSION"
 git tag "v$NEW_VERSION"
-git push origin main --tags
+
+# ── Push: branch FIRST, then the tag ──
+#
+# DETACHED-HEAD RELEASE PUSH. This repo is normally consumed as the `oss/`
+# submodule of the private root repo, and a submodule is checked out at a
+# DETACHED HEAD. In that state the local `main` ref does not move with the bump
+# commit, so the historical `git push origin main --tags` pushed a stale `main`
+# and was rejected non-fast-forward -- while `--tags` had already succeeded.
+# That left the tag on the remote pointing at a commit absent from origin/main,
+# and GitHub Actions starts CI/publish from the TAG, so a release could publish
+# from a commit no branch contained. Push HEAD explicitly instead.
+#
+# Order matters: branch first, tag second. The tag is the CI/publish trigger, so
+# it must be the LAST thing that lands. If the branch push fails we abort before
+# creating the remote tag, and the failure is inert -- a local commit + local tag,
+# both re-runnable. The old combined `main --tags` could not offer that because a
+# single command cannot order its two ref updates.
+if BRANCH_REF=$(git symbolic-ref -q HEAD); then
+    PUSH_BRANCH="${BRANCH_REF#refs/heads/}"
+else
+    # Detached (the normal submodule case): push this exact commit to main.
+    PUSH_BRANCH="main"
+fi
+HEAD_SHA=$(git rev-parse HEAD)
+
+echo "  ⬆ Pushing branch ($PUSH_BRANCH) before the tag..."
+if ! git push origin "HEAD:refs/heads/$PUSH_BRANCH"; then
+    echo ""
+    echo "❌ Branch push FAILED — aborting before the tag is pushed."
+    echo "   Nothing was published: the remote tag does not exist yet, so no CI/publish ran."
+    echo ""
+    echo "   Local state (both re-runnable, nothing to undo on the remote):"
+    echo "     • commit v$NEW_VERSION  $HEAD_SHA"
+    echo "     • tag    v$NEW_VERSION  (local only)"
+    echo ""
+    echo "   Most likely cause: origin/$PUSH_BRANCH has commits you do not have."
+    echo "   Recover with:"
+    echo "     git fetch origin && git rebase origin/$PUSH_BRANCH"
+    echo "     git tag -f v$NEW_VERSION && git push origin HEAD:refs/heads/$PUSH_BRANCH"
+    echo "     git push origin refs/tags/v$NEW_VERSION"
+    exit 1
+fi
+
+echo "  ⬆ Branch pushed — now pushing tag v$NEW_VERSION (this triggers CI/publish)..."
+if ! git push origin "refs/tags/v$NEW_VERSION"; then
+    echo ""
+    echo "❌ Tag push FAILED (the branch push already SUCCEEDED)."
+    echo "   origin/$PUSH_BRANCH now contains $HEAD_SHA, but no tag exists, so"
+    echo "   CI/publish has NOT started. Finish the release with:"
+    echo "     git push origin refs/tags/v$NEW_VERSION"
+    exit 1
+fi
 
 # ── Tag push verification ──
 
