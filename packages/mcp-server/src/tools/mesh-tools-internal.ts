@@ -102,6 +102,7 @@ import {
     loadRepoMeshJsonConfig,
     resolveAllowSendKeysDestructive,
     validateMeshTaskModeRequest,
+    buildMeshTaskModeViolationError,
 } from '@adhdev/daemon-core';
 import { readString, readNumeric, LARGE_LEDGER_FIELD_KEYS, summarizeLargeLedgerField, elideLargeNestedValue } from './mesh-tool-shared.js';
 import {
@@ -354,6 +355,7 @@ export {
     tombstoneOperatingNote,
     upsertMeshMission,
     validateMeshTaskModeRequest,
+    buildMeshTaskModeViolationError,
 } from '@adhdev/daemon-core';
 export type {
     LocalMeshEntry,

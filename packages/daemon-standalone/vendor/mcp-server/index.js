@@ -7072,8 +7072,11 @@ async function meshSendTask(ctx, args) {
       code: "live_debug_readonly_guardrail_violation",
       taskMode: modeValidation.taskMode || requestedTaskMode,
       violations: modeValidation.violations,
+      // GUARDRAIL-TEACHING-ERROR: match location per violation, so the caller
+      // can see what tripped the guard instead of rewording blind.
+      ...modeValidation.violationDetails ? { violationDetails: modeValidation.violationDetails } : {},
       allowedOperations: modeValidation.allowedOperations,
-      error: `live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(", ")})`
+      error: (0, import_daemon_core5.buildMeshTaskModeViolationError)(modeValidation)
     });
   }
   const taskMode = modeValidation.taskMode;

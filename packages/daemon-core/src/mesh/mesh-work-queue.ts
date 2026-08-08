@@ -101,11 +101,79 @@ export function isTaskReadonly(task: { readonly?: boolean; taskMode?: MeshTaskMo
     return task.readonly === true || task.taskMode === 'live_debug_readonly';
 }
 
+/**
+ * GUARDRAIL-TEACHING-ERROR: where a forbidden keyword actually matched, so a
+ * rejected caller can see *what* tripped the guard instead of guessing and
+ * rewording blind. Line/column are 1-based, counted over the task message.
+ *
+ * PRIVACY: `match` is the matched keyword span ONLY (capped by
+ * {@link MAX_REPORTED_MATCH_LEN}) — never the surrounding instruction text. This
+ * result is echoed into error strings that reach logs and the MCP wire, so the
+ * task message itself must not ride along.
+ */
+export interface MeshTaskModeViolationDetail {
+    /** Rule label — same vocabulary as {@link MeshTaskModeValidationResult.violations}. */
+    label: string;
+    /** The matched keyword span, truncated. Never the full instruction. */
+    match: string;
+    /** 1-based line number within the task message. */
+    line: number;
+    /** 1-based column within that line. */
+    column: number;
+}
+
 export interface MeshTaskModeValidationResult {
     valid: boolean;
     taskMode?: MeshTaskMode;
+    /**
+     * Rule labels, e.g. `['git_mutation']`. Unchanged contract — existing callers
+     * (mcp-server mesh-tools-session) surface this array as-is.
+     */
     violations: string[];
+    /**
+     * Per-violation match locations, parallel in order to {@link violations}.
+     * Additive: callers that only read `violations` are unaffected.
+     */
+    violationDetails?: MeshTaskModeViolationDetail[];
     allowedOperations?: string[];
+}
+
+/** Cap on the echoed match span — keeps user instruction text out of logs. */
+const MAX_REPORTED_MATCH_LEN = 40;
+
+/**
+ * Renders violation details as the human-readable tail of a guardrail error:
+ * `git_mutation: 'git worktree remove' at line 4 col 1`, joined by `; `.
+ * Falls back to bare labels when no detail was captured.
+ */
+export function formatMeshTaskModeViolations(result: MeshTaskModeValidationResult): string {
+    const details = result.violationDetails;
+    if (!details?.length) return result.violations.join(', ');
+    return details
+        .map(d => `${d.label}: '${d.match}' at line ${d.line} col ${d.column}`)
+        .join('; ');
+}
+
+/** Builds the full guardrail error string used by every rejection site. */
+export function buildMeshTaskModeViolationError(result: MeshTaskModeValidationResult): string {
+    return `live_debug_readonly_guardrail_violation: forbidden operations (${result.violations.join(', ')}) — ${formatMeshTaskModeViolations(result)}`;
+}
+
+/** 1-based line/column of `index` within `text`. */
+function locateOffset(text: string, index: number): { line: number; column: number } {
+    const before = text.slice(0, index);
+    const line = before.split('\n').length;
+    const lastNl = before.lastIndexOf('\n');
+    return { line, column: index - lastNl };
+}
+
+/** Builds a privacy-safe detail record for a match at [start, end). */
+function buildViolationDetail(label: string, text: string, start: number, end: number): MeshTaskModeViolationDetail {
+    const raw = text.slice(start, end);
+    const match = raw.length > MAX_REPORTED_MATCH_LEN
+        ? `${raw.slice(0, MAX_REPORTED_MATCH_LEN)}…`
+        : raw;
+    return { label, match, ...locateOffset(text, start) };
 }
 
 const LIVE_DEBUG_READONLY_FORBIDDEN: Array<{ label: string; pattern: RegExp }> = [
@@ -230,8 +298,14 @@ function isMutationKeywordInCommandContext(text: string, matchStart: number, mat
     // We look at what immediately precedes the keyword on the same line.
     if (/(?:&&|\|\||\||;)\s*$/.test(linePrefix)) return true;
     if (/(?:^|[\s,])(?:then|run|first)\s+$/i.test(linePrefix)) return true;
-    if (/,\s*$/.test(linePrefix)) return true;
-
+    // GUARDRAIL-COMMA-FP: a bare comma before the keyword is NOT command context.
+    // It was the only suppression layer keyed on grammar rather than command shape,
+    // and it false-positived on ordinary prose in both English ("Read the logs,
+    // deploy is the subject") and Korean, where a comma before a verb is entirely
+    // normal ("로그를 읽고, deploy 실패 원인을 보고하라"). Miss-risk is low: every
+    // real command shape still reaches this function via line-start, a shell
+    // connective (&&/||/|/;), backticks/fences, a `$ `/`> ` prompt line, an
+    // imperative connective (then/run/first), or a run-prefix path token.
     return false;
 }
 
@@ -412,17 +486,21 @@ function isRealMutationMatch(text: string, matchStart: number, matchEnd: number)
 }
 
 /**
- * Runs a global regex over `text` and returns true if any match is a real
- * mutation (command context, not negated).
+ * Runs a global regex over `text` and returns the span of the FIRST real
+ * mutation match (command context, not negated), or null when there is none.
+ * Only the first match per rule is reported — one concrete example is enough to
+ * locate the problem, and reporting every hit would bloat the error string.
  */
-function patternHasRealMutation(pattern: RegExp, text: string): boolean {
+function findRealMutation(pattern: RegExp, text: string): { start: number; end: number } | null {
     const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
     let match: RegExpExecArray | null;
     while ((match = re.exec(text)) !== null) {
-        if (isRealMutationMatch(text, match.index, match.index + match[0].length)) return true;
+        const start = match.index;
+        const end = match.index + match[0].length;
+        if (isRealMutationMatch(text, start, end)) return { start, end };
         if (match.index === re.lastIndex) re.lastIndex++; // avoid zero-width loop
     }
-    return false;
+    return null;
 }
 
 /**
@@ -449,42 +527,49 @@ const GIT_STASH_READONLY_SUBCOMMANDS = new Set(['list', 'show']);
  * `git checkout-index`, `git status`, `git diff`, `git log`, ...) are allowed.
  * Returns true only when a genuine mutating git invocation is present.
  */
-function detectGitMutation(message: string): boolean {
+function detectGitMutation(message: string): { start: number; end: number } | null {
     const re = /\bgit\s+([a-z][a-z0-9-]*)/gi;
     let match: RegExpExecArray | null;
     while ((match = re.exec(message)) !== null) {
         const sub = match[1].toLowerCase();
+        const span = { start: match.index, end: match.index + match[0].length };
         // Only treat a mutating `git <sub>` as a real violation when it appears
         // as an actual command (code/command context) and is not negated. Plain
         // prose mentions ("don't git reset", "we won't push") are ignored.
-        const isReal = () => isRealMutationMatch(message, match!.index, match!.index + match![0].length);
+        const isReal = () => isRealMutationMatch(message, span.start, span.end);
         if (GIT_MUTATION_SUBCOMMANDS.has(sub)) {
-            if (isReal()) return true;
+            if (isReal()) return span;
             continue;
         }
         if (sub === 'stash') {
             // Token following `git stash`; read-only only for list/show.
             const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
             const next = after ? after[1].toLowerCase() : '';
-            if (!GIT_STASH_READONLY_SUBCOMMANDS.has(next) && isReal()) return true; // bare stash = push, or pop/apply/drop/...
+            if (!GIT_STASH_READONLY_SUBCOMMANDS.has(next) && isReal()) return span; // bare stash = push, or pop/apply/drop/...
         } else if (sub === 'checkout') {
             // `git checkout <ref/path>` mutates; `git checkout-index` is matched
             // as its own token by the regex (sub === 'checkout-index') and is read-only.
-            if (isReal()) return true;
+            if (isReal()) return span;
         } else if (sub === 'submodule') {
             // `git submodule update` mutates; `git submodule status` is read-only.
             const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
             const next = after ? after[1].toLowerCase() : '';
-            if ((next === 'update' || next === 'add' || next === 'sync' || next === 'deinit') && isReal()) return true;
+            if ((next === 'update' || next === 'add' || next === 'sync' || next === 'deinit') && isReal()) {
+                // Report the full `git <sub> <next>` span so the message names the
+                // actual mutating form rather than the bare `git submodule` prefix.
+                return { start: span.start, end: re.lastIndex + after![0].length };
+            }
         } else if (sub === 'worktree') {
             const after = message.slice(re.lastIndex).match(/^\s+([a-z][a-z0-9-]*)/i);
             const next = after ? after[1].toLowerCase() : '';
-            if ((next === 'add' || next === 'remove' || next === 'move' || next === 'prune') && isReal()) return true;
+            if ((next === 'add' || next === 'remove' || next === 'move' || next === 'prune') && isReal()) {
+                return { start: span.start, end: re.lastIndex + after![0].length };
+            }
         }
         // checkout-index, stash-with-no-next-already-handled, status/diff/log/show/
         // rev-parse/branch/submodule status fall through as read-only.
     }
-    return false;
+    return null;
 }
 
 export function normalizeMeshTaskMode(value: unknown): MeshTaskMode | undefined {
@@ -507,16 +592,24 @@ export function validateMeshTaskModeRequest(mode: unknown, message: string, read
     // Only flag keywords that look like real commands (code/command context) and
     // are not negated — descriptive/prohibitive prose ("don't run `npm publish`",
     // "read-only, no deploy") must not trip the guardrail.
-    const violations = LIVE_DEBUG_READONLY_FORBIDDEN
-        .filter(rule => patternHasRealMutation(rule.pattern, text))
-        .map(rule => rule.label);
-    if (detectGitMutation(text)) {
-        violations.push('git_mutation');
+    // GUARDRAIL-TEACHING-ERROR: collect WHERE each rule matched alongside the label,
+    // so the rejection tells the caller what tripped it instead of forcing a blind
+    // reword. `violations` keeps its exact prior shape (labels, same order).
+    const violationDetails: MeshTaskModeViolationDetail[] = [];
+    for (const rule of LIVE_DEBUG_READONLY_FORBIDDEN) {
+        const hit = findRealMutation(rule.pattern, text);
+        if (hit) violationDetails.push(buildViolationDetail(rule.label, text, hit.start, hit.end));
     }
+    const gitHit = detectGitMutation(text);
+    if (gitHit) {
+        violationDetails.push(buildViolationDetail('git_mutation', text, gitHit.start, gitHit.end));
+    }
+    const violations = violationDetails.map(d => d.label);
     return {
         valid: violations.length === 0,
         taskMode,
         violations,
+        ...(violationDetails.length ? { violationDetails } : {}),
         allowedOperations: [
             'process/log/window/port/session inspection',
             'read-only filesystem listing/reading',
@@ -1009,7 +1102,7 @@ export function enqueueTask(
     const readonly = opts?.readonly === true;
     const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message, readonly);
     if (!modeValidation.valid) {
-        throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
+        throw new Error(buildMeshTaskModeViolationError(modeValidation));
     }
     const id = typeof opts?.id === 'string' && opts.id.trim() ? opts.id.trim() : randomUUID();
     const dependsOn = normalizeDependsOn(opts?.dependsOn);
@@ -1174,7 +1267,7 @@ export function recordDirectDispatchTask(
     const readonly = opts.readonly === true;
     const modeValidation = validateMeshTaskModeRequest(opts.taskMode, message, readonly);
     if (!modeValidation.valid) {
-        throw new Error(`live_debug_readonly_guardrail_violation: forbidden operations (${modeValidation.violations.join(', ')})`);
+        throw new Error(buildMeshTaskModeViolationError(modeValidation));
     }
     const now = opts.dispatchedAt && opts.dispatchedAt.trim() ? opts.dispatchedAt : new Date().toISOString();
     return withQueueLock(meshId, () => {

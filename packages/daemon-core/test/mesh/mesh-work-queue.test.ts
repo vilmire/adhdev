@@ -22,7 +22,8 @@ import {
     isTaskReadonly,
     __clearMeshQueueForTests,
     __replaceMeshQueueForTests,
-    __resetMeshRuntimeStoreForTests
+    __resetMeshRuntimeStoreForTests,
+    buildMeshTaskModeViolationError,
 } from '../../src/mesh/mesh-work-queue.js';
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 
@@ -1280,5 +1281,142 @@ describe('reclaimStrandedAssignedTask (Bug B)', () => {
         expect(outcome.status).toBe('failed');
         expect(outcome.strandedReclaimCount).toBe(4);
         expect(String(outcome.cancelReason)).toContain('stranded_dispatch_unrecovered');
+    });
+});
+
+// GUARDRAIL-COMMA-FP + GUARDRAIL-TEACHING-ERROR (promoted from the 42-probe boundary
+// investigation). Two approved changes:
+//   1. the bare comma-connective rule was removed from command-context detection —
+//      it keyed on grammar, not command shape, and false-positived on ordinary
+//      English and Korean prose;
+//   2. rejections now name the matched keyword and its line/col.
+describe('validateMeshTaskModeRequest — comma prose is not command context', () => {
+    const expectClean = (message: string) => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', message);
+        expect(result.violations).toEqual([]);
+        expect(result.valid).toBe(true);
+    };
+
+    // These are the measured false positives the change fixes.
+    it('allows an English keyword after a comma in prose', () => {
+        expectClean('Read the logs, deploy is the subject.');
+    });
+    it('allows a Korean read-only instruction with a comma before the keyword', () => {
+        expectClean('로그를 읽고, deploy 실패 원인을 보고하라');
+    });
+    it('allows "patch" after a comma in prose', () => {
+        expectClean('Read the diff, patch semantics are the question.');
+    });
+    it('allows a git subcommand cited after a comma in prose', () => {
+        expectClean('Do not modify anything, git worktree remove was the trigger.');
+    });
+
+    // ★THE WALL DID NOT GET LOWER. Every real command shape must still reject.
+    // If the comma removal had over-reached, these are what would go green.
+    describe('real command paths still reject', () => {
+        it('rejects a keyword at line start', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', 'deploy is the subject');
+            expect(r.violations).toContain('deploy_or_version_bump');
+            expect(r.valid).toBe(false);
+        });
+        it('rejects a keyword after a shell connective (&&)', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', 'npm run build && npm run deploy');
+            expect(r.violations).toContain('deploy_or_version_bump');
+            expect(r.valid).toBe(false);
+        });
+        it('rejects a keyword after a semicolon connective', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', 'cd repo; git push origin main');
+            expect(r.violations).toContain('git_mutation');
+            expect(r.valid).toBe(false);
+        });
+        it('rejects a keyword after a pipe connective', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', 'cat list | rm -rf build');
+            expect(r.violations).toContain('destructive_shell');
+            expect(r.valid).toBe(false);
+        });
+        it('rejects a keyword inside inline backticks', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', 'Then run `npm run deploy` to ship.');
+            expect(r.violations).toContain('deploy_or_version_bump');
+            expect(r.valid).toBe(false);
+        });
+        it('rejects a keyword inside a fenced code block', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', 'Do this:\n```\ngit push origin main\n```');
+            expect(r.violations).toContain('git_mutation');
+            expect(r.valid).toBe(false);
+        });
+        it('rejects a keyword on a shell-prompt line', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', '$ npm publish --tag next');
+            expect(r.violations).toContain('deploy_or_version_bump');
+            expect(r.valid).toBe(false);
+        });
+        it('rejects a run-prefix script path at command position', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', './scripts/version-bump.sh patch');
+            expect(r.violations).toContain('deploy_or_version_bump');
+            expect(r.valid).toBe(false);
+        });
+        it('still rejects an imperative connective ("then"/"run") before the keyword', () => {
+            const r = validateMeshTaskModeRequest('live_debug_readonly', 'inspect the logs then deploy the worker');
+            expect(r.violations).toContain('deploy_or_version_bump');
+            expect(r.valid).toBe(false);
+        });
+    });
+});
+
+describe('validateMeshTaskModeRequest — teaching error message', () => {
+    it('reports the matched keyword with 1-based line/column', () => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', 'line one\nline two\ngit push origin main');
+        expect(result.valid).toBe(false);
+        expect(result.violations).toEqual(['git_mutation']);
+        expect(result.violationDetails).toEqual([
+            { label: 'git_mutation', match: 'git push', line: 3, column: 1 },
+        ]);
+    });
+
+    it('names the full mutating subcommand form for git worktree/submodule', () => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', 'git worktree remove /tmp/wt');
+        expect(result.violationDetails?.[0]?.match).toBe('git worktree remove');
+    });
+
+    it('keeps the rule labels contract unchanged for existing callers', () => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', '$ npm publish');
+        expect(result.violations).toEqual(['deploy_or_version_bump']);
+    });
+
+    it('omits violationDetails entirely when the task is clean', () => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', 'read the logs and report');
+        expect(result.valid).toBe(true);
+        expect(result.violationDetails).toBeUndefined();
+    });
+
+    it('lists every matching rule, in rule order, with its own location', () => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', '$ npm publish\ngit push origin main');
+        expect(result.violations).toEqual(['deploy_or_version_bump', 'git_mutation']);
+        expect(result.violationDetails?.map(d => d.line)).toEqual([1, 2]);
+    });
+
+    it('builds an error string naming the keyword and position', () => {
+        const result = validateMeshTaskModeRequest('live_debug_readonly', 'a\nb\nc\ngit push origin main');
+        const message = buildMeshTaskModeViolationError(result);
+        // Keeps the machine-greppable prefix + label list that callers match on...
+        expect(message).toContain('live_debug_readonly_guardrail_violation');
+        expect(message).toContain('(git_mutation)');
+        // ...and adds the teaching detail.
+        expect(message).toContain("'git push' at line 4 col 1");
+    });
+
+    it('never echoes the surrounding instruction text (privacy)', () => {
+        const secret = 'CONFIDENTIAL-INSTRUCTION-BODY';
+        const result = validateMeshTaskModeRequest('live_debug_readonly', `${secret}\ngit push origin main`);
+        const message = buildMeshTaskModeViolationError(result);
+        expect(message).not.toContain(secret);
+        expect(result.violationDetails?.[0]?.match).toBe('git push');
+    });
+
+    it('truncates an over-long match span rather than echoing it whole', () => {
+        const longPath = 'a'.repeat(200);
+        const result = validateMeshTaskModeRequest('live_debug_readonly', `mv ${longPath} ${longPath}`);
+        const match = result.violationDetails?.[0]?.match ?? '';
+        expect(match.length).toBeLessThanOrEqual(41);
+        expect(match.endsWith('…')).toBe(true);
     });
 });
