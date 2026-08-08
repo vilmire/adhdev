@@ -250,6 +250,55 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('a reason to defer starting a new, independent task')
   })
 
+  it('tells the coordinator when to let an investigator apply its own fix', () => {
+    // An investigator that already read the source and named file:line holds
+    // context a fresh worker must rebuild, and the coordinator would have to
+    // restate the findings to hand them over. Task mode is per-TASK, not
+    // per-session (validateMeshTaskModeRequest reads each dispatch's own
+    // readonly/taskMode and short-circuits to valid when not read-only), so the
+    // handoff is a follow-up mesh_send_task without the read-only flag — no new
+    // session or worktree needed. Pin both the mechanism and the split criteria.
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('Task mode is **per task, not per session**')
+    expect(prompt).toContain('WITHOUT the read-only flag')
+    expect(prompt).toContain('You do not need a new session or a fresh worktree for the mode to change')
+
+    // Both directions must be stated, or the rule collapses into "always hand
+    // off" — which produces unverified fixes.
+    expect(prompt).toContain('**Hand off in-session when**')
+    expect(prompt).toContain('**Split to a separate task when**')
+    expect(prompt).toContain('OVERTURNED your hypothesis')
+
+    // Over-handoff guard: a "do not change this" finding is a completed task.
+    expect(prompt).toContain('**Never convert an investigation whose own conclusion was "do not change this"**')
+
+    // The upfront-dispatch tip must carry its tradeoff, not just the shortcut.
+    expect(prompt).toContain('drops the guardrail that stops a worker fixing something prematurely')
+
+    // Must not contradict the parallelism rule: independent work runs side by
+    // side, sequential stages of ONE line of work stay in one session.
+    expect(prompt).toContain('does not mean splitting one line of work across sessions')
+    expect(prompt).toContain('see Workflow 3f')
+  })
+
   it('instructs recording operating notes even when NO notes exist yet', () => {
     // buildOperatingNotesSection returns '' when there are zero notes, and the
     // only imperative to CALL mesh_record_note used to live inside that section
