@@ -97,7 +97,13 @@ export interface WindowsInstallerLayout {
 
 export interface WindowsAtomicUpgradeHooks {
   install: (stagedPrefix: string, portableNode: string) => void | Promise<void>;
-  restart: (portableNode: string, stagedCliEntry: string) => ChildProcess;
+  /**
+   * Re-spawn the daemon from the newly activated prefix. Returns null when the
+   * caller asked for NO restart (empty restartArgv — `adhdev update` run while
+   * no daemon was up). Null is a success signal, not a failure: activation has
+   * already completed, so there is nothing to restart and nothing to roll back.
+   */
+  restart: (portableNode: string, stagedCliEntry: string) => ChildProcess | null;
   restartOld: (portableNode: string) => void;
   waitForHealth: (pid: number, targetVersion: string) => Promise<boolean>;
   stopProcess: (pid: number) => void;
@@ -118,7 +124,8 @@ export interface WindowsAtomicUpgradeOptions {
 export interface WindowsAtomicUpgradeResult {
   stagedPrefix: string;
   stagedCliEntry: string;
-  daemonPid: number;
+  /** Null when no restart was requested (empty restartArgv) — the version is activated but no daemon was started. */
+  daemonPid: number | null;
 }
 
 function normalizeForCompare(value: string): string {
@@ -501,6 +508,15 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
     publishStableShimsAndPointer(layout, versionName);
     hooks.log(`Atomically activated ${versionName}`);
     restarted = hooks.restart(portableNode, stagedCliEntry);
+    // A null restart means the caller asked for no daemon respawn. Activation
+    // has already completed, so the upgrade SUCCEEDED — skip the health gate
+    // (there is no daemon to probe; probing would time out and roll back a good
+    // install) and fall through to the normal post-success cleanup.
+    if (restarted === null) {
+      hooks.log(`Activated ${targetVersion} without restarting a daemon (none was running)`);
+      await hooks.cleanup(layout, stagedPrefix);
+      return { stagedPrefix, stagedCliEntry, daemonPid: null };
+    }
     const daemonPid = restarted.pid;
     if (!daemonPid || !(await hooks.waitForHealth(daemonPid, targetVersion))) {
       throw new Error('replacement daemon did not pass the health/version gate');
@@ -574,7 +590,17 @@ export function createDefaultWindowsAtomicHooks(options: {
     },
     restart: (portableNode, stagedCliEntry) => {
       const restartArgv = options.restartArgv.map((arg, index) => index === 0 ? stagedCliEntry : arg);
-      if (restartArgv.length === 0) throw new Error('replacement daemon restart arguments are missing');
+      // No restart requested. `adhdev update` passes an empty restartArgv when
+      // no daemon was running (it prints "Start daemon when ready" instead), so
+      // there is no argv to respawn and no daemon to re-establish. Throwing here
+      // used to fail the upgrade AFTER activation had already succeeded, which
+      // rolled a perfectly good install back to the previous version. Mirror
+      // restartOld's long-standing empty-argv no-op and report "nothing to
+      // restart" to the caller.
+      if (restartArgv.length === 0) {
+        options.log('No restart arguments provided (daemon was not running); leaving the activated version in place without starting a daemon');
+        return null;
+      }
       const child = spawn(portableNode, restartArgv, {
         detached: true,
         stdio: 'ignore',

@@ -20,6 +20,7 @@ import {
 import { canonicalizeInstancePath } from '@adhdev/session-host-core';
 import { resolveSessionHostAppName } from '../session-host/app-name.js';
 import { getConfigDir } from '../config/config.js';
+import { IDENTITY } from '../track-identity.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
 
@@ -925,8 +926,9 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       );
     }
 
+    let atomicResult: Awaited<ReturnType<typeof performWindowsAtomicUpgrade>>;
     try {
-      await performWindowsAtomicUpgrade({
+      atomicResult = await performWindowsAtomicUpgrade({
         layout: windowsInstallerLayout,
         packageName: payload.packageName,
         targetVersion: payload.targetVersion,
@@ -956,7 +958,13 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       throw error;
     }
     clearUpgradeFailureNotice();
-    appendUpgradeLog('Installer-managed Windows atomic upgrade completed');
+    if (atomicResult.daemonPid === null) {
+      appendUpgradeLog(
+        `Installer-managed Windows atomic upgrade completed (no daemon was running, so none was started — run \`${IDENTITY.binaryName} daemon\` to start it)`,
+      );
+    } else {
+      appendUpgradeLog('Installer-managed Windows atomic upgrade completed');
+    }
     return;
   }
   // Kill any *foreign* process still holding this install's conpty.node mapped

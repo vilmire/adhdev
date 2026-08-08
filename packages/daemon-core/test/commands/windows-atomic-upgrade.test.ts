@@ -265,6 +265,61 @@ describe('Windows installer-managed atomic upgrade', () => {
     expect(fs.readFileSync(path.join(layout.stablePrefix, 'adhdev'), 'utf8')).toBe(oldNoExt)
   })
 
+  // `adhdev update` with no daemon running passes an EMPTY restartArgv (it tells
+  // the user to start the daemon themselves). The default restart hook used to
+  // throw 'replacement daemon restart arguments are missing' at that point —
+  // AFTER activation had already succeeded — so the catch path rolled a
+  // perfectly good install back to the previous version seconds later. The
+  // upgrade must instead be reported as successful with the new version left
+  // active and simply no daemon started.
+  it('keeps the activated version and skips the health gate when no restart was requested (empty restartArgv)', async () => {
+    const { layout } = fixture()
+    let healthGateProbed = false
+    let restartedOld = 0
+    let stopped = 0
+    let cleanedActivePrefix = ''
+    const result = await performWindowsAtomicUpgrade({
+      layout, packageName: 'adhdev', targetVersion: '1.0.18-rc.1', portableNode: process.execPath,
+      hooks: hooks({
+        install: (prefix) => installPackage(prefix, '1.0.18-rc.1'),
+        // The real no-daemon signal: the default hook returns null for empty argv.
+        restart: () => null,
+        // There is no daemon to probe — probing would time out and roll back.
+        waitForHealth: async () => { healthGateProbed = true; return false },
+        restartOld: () => { restartedOld++ },
+        stopProcess: (pid) => { stopped = pid },
+        cleanup: (_layout, activePrefix) => { cleanedActivePrefix = activePrefix },
+      }),
+    })
+    expect(healthGateProbed).toBe(false)
+    // No rollback of any kind ran.
+    expect(restartedOld).toBe(0)
+    expect(stopped).toBe(0)
+    // The pointer moved to the NEW staged prefix and stayed there.
+    const staged = path.basename(result.stagedPrefix)
+    expect(staged).not.toBe('version-old')
+    expect(fs.readFileSync(layout.pointerPath, 'utf8')).toBe(staged)
+    // Post-success cleanup still runs, scoped to the newly staged prefix.
+    expect(cleanedActivePrefix).toBe(result.stagedPrefix)
+    // Null pid is the machine-readable "activated but nothing started" signal.
+    expect(result.daemonPid).toBeNull()
+  })
+
+  it('returns null from the default restart hook on empty restartArgv instead of throwing', () => {
+    const logs: string[] = []
+    const atomicHooks = createDefaultWindowsAtomicHooks({
+      packageName: 'adhdev',
+      targetVersion: '1.0.18-rc.1',
+      npmCliPath: '/tools/node22/npm-cli.js',
+      restartArgv: [],
+      cwd: '/',
+      env: {},
+      log: (m) => logs.push(m),
+    })
+    expect(atomicHooks.restart(process.execPath, '/staged/cli.js')).toBeNull()
+    expect(logs.join('\n')).toMatch(/no restart arguments provided/i)
+  })
+
   it('re-issues valid launchers and preserves the active pointer on rollback when the stable shims were absent at snapshot time', async () => {
     const { layout } = fixture()
     // Simulate a partial/first install: the stable launcher surface is missing
