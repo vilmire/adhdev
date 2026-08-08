@@ -250,6 +250,49 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('a reason to defer starting a new, independent task')
   })
 
+  it('instructs recording operating notes even when NO notes exist yet', () => {
+    // buildOperatingNotesSection returns '' when there are zero notes, and the
+    // only imperative to CALL mesh_record_note used to live inside that section
+    // — so a fresh mesh never saw the instruction to record the first note, and
+    // the section stayed empty forever. The rule must therefore live in Rules,
+    // which always renders. Build with NO operatingNotes to pin exactly that.
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    // Precondition: the Operating Notes section really is absent here.
+    expect(prompt).not.toContain('## Operating Notes\n')
+
+    expect(prompt).toContain('**Promote durable lessons to operating notes — especially at mission close.**')
+    expect(prompt).toContain('call `mesh_record_note` FIRST')
+
+    // Over-recording guard: all three conditions must be present, since a bare
+    // "record lessons" instruction turns the note list into a mission diary.
+    expect(prompt).toContain('a coordinator on another day or another session would act differently knowing it')
+    expect(prompt).toContain('it cannot be rediscovered from code, config, or `git log`')
+    expect(prompt).toContain('not a one-off detail specific to this single mission')
+
+    // Reachability: notes are injected into the coordinator prompt only (see
+    // buildCoordinatorSystemPrompt callers — mesh-coordinator-launch only), so
+    // worker-facing conventions must not be filed as notes.
+    expect(prompt).toContain('never injected into delegated worker sessions')
+  })
+
   it('surfaces the read-only exemption from the one-active-session-per-node invariant', () => {
     // mesh-queue-assignment.ts gates auto-launch on nodeHasActiveAssignment ONLY
     // for non-readonly tasks (`if (!isTaskReadonly(task) && ...)`), so a node can
