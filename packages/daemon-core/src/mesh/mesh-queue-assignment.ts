@@ -635,10 +635,33 @@ function deliverTaskToSession(
                 kind: 'dispatch_failed' as any,
                 nodeId: ctx.nodeId,
                 sessionId: ctx.sessionId,
-                payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable: true, transport: ctx.transport },
+                payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable: isRetryableDispatchFailure(e), transport: ctx.transport },
             });
         } catch { /* ledger write is best-effort */ }
     });
+}
+
+/**
+ * Is a dispatch failure worth re-dispatching?
+ *
+ * Most transport failures ARE transient (a busy adapter, a relay that never acked), so
+ * the default stays `true` — the reconcile loop re-dispatches and the task lands on a
+ * later tick. But a structured relay failure can say otherwise: the transport layer
+ * classifies a self-dial (routing decided "remote" for THIS daemon) as definitively
+ * non-recoverable, because a retry re-runs the identical decision on identical inputs
+ * and fails identically. Booking that as retryable is what let dispatchNonce climb
+ * without ever converging.
+ *
+ * Reads the flags defensively: an older daemon-cloud (or a plain Error) carries neither
+ * field, and `undefined` must keep the permissive legacy behavior rather than silently
+ * marking real transients terminal.
+ */
+function isRetryableDispatchFailure(e: any): boolean {
+    if (e && typeof e === 'object') {
+        if (e.retryRecommended === false) return false;
+        if (e.recoverable === false) return false;
+    }
+    return true;
 }
 
 // WTCLAIM: workspace normalization for base-vs-worktree comparison now lives in
@@ -965,7 +988,23 @@ export function tryAssignQueueTask(
     // 'Cannot read properties of undefined (reading handleCliCommand)'.
     const remoteDaemonId = readMeshNodeDaemonId(node ?? {});
     if (remoteDaemonId && components.dispatchMeshCommand) {
-        const isLocalNode = components.cliManager.adapters.has(sessionId);
+        // WTDISPATCH-SELFDIAL: locality is a DAEMON-IDENTITY question, not a session-presence
+        // one. This used to ask only `cliManager.adapters.has(sessionId)` — a raw Map lookup
+        // that is false for any session whose id is not byte-identical to a live adapter key
+        // on this daemon (a co-located worktree sibling observed solely through the
+        // remote-idle store, an ACP worker whose instanceId is minted independently of its
+        // adapter key, a prefixed id form). A local worktree node INHERITS the coordinator's
+        // own daemonId from the node it was cloned from (mesh-crud.ts addNode), so
+        // readMeshNodeDaemonId above returns THIS daemon's id and the false branch dialed
+        // P2P to ourselves — which daemon-mesh-manager's isSelfDial correctly refuses
+        // ("Refusing to send mesh command … to this daemon's own id"), failing the dispatch
+        // deterministically while the ledger booked it retryable.
+        //
+        // Ask the identity question FIRST, through the same canon-aware predicate the
+        // auto-launch path already uses (isLocalAutoLaunchNode → daemonIdsEquivalent, with
+        // an explicit isLocalWorktree branch). The adapter probe stays as a secondary
+        // signal so a node carrying NO resolvable daemon identity keeps its prior behavior.
+        const isLocalNode = isLocalAutoLaunchNode(node) || components.cliManager.adapters.has(sessionId);
         if (!isLocalNode) {
             const localDaemonIdForDispatch = localCoordinatorDaemonId();
             // (3) Originating coordinator session that enqueued this task — route its
