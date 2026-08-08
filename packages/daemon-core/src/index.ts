@@ -206,7 +206,7 @@ export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete
 export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 
 // ── Config ──
-export { loadConfig, saveConfig, resetConfig, isSetupComplete, markSetupComplete, updateConfig, setQuotaShowAccountEmail, getConfigDir, getDaemonDataDir } from './config/config.js';
+export { loadConfig, saveConfig, resetConfig, clearAuthCredentials, isSetupComplete, markSetupComplete, updateConfig, setQuotaShowAccountEmail, getConfigDir, getDaemonDataDir } from './config/config.js';
 export {
   getProcessInstanceContext,
   InstanceContextConflictError,

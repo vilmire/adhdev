@@ -564,3 +564,27 @@ export function isSetupComplete(): boolean {
 export function resetConfig(): void {
     saveConfig({ ...DEFAULT_CONFIG });
 }
+
+/**
+ * Clear only the credentials that authenticate this machine to the server,
+ * keeping every other setting — including this machine's IDENTITY.
+ *
+ * The distinction from `resetConfig()` matters. `machineId` (`mach_<uuid>`) is
+ * not a credential: server auth is `machineSecret` (`adm_`, stored server-side
+ * only as a SHA-256 hash) and the registered id is
+ * `mreg_ = sha256(userId:machineId)`. Wiping `machineId` therefore buys no
+ * security — the secret is already gone, and the id is useless without an
+ * account OAuth — but it does change `mreg_`, so the next `setup` INSERTs a
+ * SECOND machines row instead of UPDATEing the existing one. That is what made
+ * a dashboard "Remove" look like the machine came back from the dead.
+ *
+ * Keeping the id also preserves the user's IDE, workspace, provider and
+ * custom `serverUrl` settings, which a re-auth has no reason to destroy.
+ */
+export function clearAuthCredentials(): void {
+    const config = loadConfig();
+    config.machineSecret = undefined;
+    config.userEmail = null;
+    config.userName = null;
+    saveConfig(config);
+}
