@@ -78,6 +78,7 @@ import {
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
     TERMINAL_MESH_EVENTS,
 } from './cli-provider-instance-types.js';
+import { decideCompletionPreflight, decideCompletionVerdict, evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlushDecision, type CompletionPolicy, type CompletionSignalReader, type EvidenceSource } from './completion/completion-engine.js';
 import type {
     CompletedDebouncePending,
     CompletedFinalizationBlock,
@@ -2325,308 +2326,19 @@ export class CliProviderInstance implements ProviderInstance {
         return true;
     }
 
+    /**
+     * A-3/Phase-1 (completion-engine rewrite): thin back-compat delegate. The
+     * finalization judgment now lives in completion/completion-engine.ts
+     * (evaluateFinalizationBlock). This wrapper keeps the historical private API —
+     * the per-incident regression suites drive it directly — and preserves the
+     * evidence-stash side effect on `pending` (resolvedFinal*: the TOCTOU-free
+     * finalSummary snapshot).
+     */
     private getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
-        if (latestVisibleStatus !== 'idle') return { reason: `status:${latestVisibleStatus}`, terminal: true };
-
-        const adapterAny = this.adapter as any;
-        const approvalResolvedIdle = pending.previousStatus === 'waiting_approval';
-        // (FALSEIDLE-a FixA) The adapter pending-response checks run UNCONDITIONALLY.
-        // Previously they were SKIPPED when approvalResolvedIdle, on the assumption that
-        // a waiting_approval→idle transition proved the approval's turn was over. But
-        // auto-approve RESOLVES the modal and the agent RESUMES the same turn — currentTurnScope
-        // / isWaitingForResponse stay set, or a tool runs — so skipping the guard let the FIRST
-        // assistant bubble of the still-running turn be mistaken for the last and fired an early
-        // completion the coordinator could never correct (RCA case a). Keep the guard live for the
-        // approval path too: when the resumed turn genuinely ends these clear and the completion
-        // fires. Approval-resolved holds are NON-terminal (bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS)
-        // so a provider that never closes its turn-scope still force-fires a weak completion rather
-        // than wedging; the non-approval path keeps its terminal hold (a genuinely-busy adapter must
-        // never force a completion out).
-        if (adapterAny?.isWaitingForResponse === true) return { reason: 'adapter_waiting_for_response', terminal: !approvalResolvedIdle };
-        if (adapterAny?.currentTurnScope) return { reason: 'adapter_turn_scope_active', terminal: !approvalResolvedIdle };
-        if (this.hasAdapterPendingResponse()) return { reason: 'adapter_pending_response', terminal: !approvalResolvedIdle };
-
-        // (FALSE-IDLE, Fix 1) SETTLE-VALLEY hold extension for the generating→idle valley.
-        // The existing SETTLE-VALLEY hold below only covers previousStatus==='waiting_approval'.
-        // But when auto-approve RESOLVES a modal the engine flips straight to 'generating'
-        // (resolveModal → setStatus('generating')), so the resumed turn's brief inter-approval
-        // quiet valley arrives with previousStatus==='generating' and a recorded mid-turn
-        // assistant bubble — which satisfies every gate below and fires an early completion
-        // mid-turn (RCA: same session re-enters waiting_approval ~13s later). Here we HOLD:
-        // by this point the adapter's own pending-response evidence (above) is clean — the
-        // engine has torn down currentTurnScope/isWaitingForResponse in the valley — so we
-        // rely on the approval-resume recency signal instead. Non-terminal, so the retry loop
-        // re-runs the resume guard (busy_reentry / new_pty_output / resumed_status in the
-        // flush) and cancels the moment the turn actually resumes; and it clears on its own
-        // once the grace window lapses (a turn that genuinely ended right after an approval
-        // then emits normally). Bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS as a hard floor
-        // against a wedge. Scoped by inApprovalResumeGrace to autonomous auto-approving mesh
-        // sessions with a recent resolveModal, so a plain non-approval turn is untouched.
-        if (!approvalResolvedIdle && this.inApprovalResumeGrace()) {
-            return { reason: 'approval_resume_grace', terminal: false };
-        }
-
-        const partial = typeof this.adapter.getPartialResponse === 'function'
-            ? this.adapter.getPartialResponse()
-            : '';
-        if (typeof partial === 'string' && partial.trim()) return { reason: 'partial_response_pending', terminal: true };
-
-        let parsed: any;
-        try {
-            parsed = this.adapter.getScriptParsedStatus();
-        } catch (error: any) {
-            return { reason: `parse_error:${error?.message || String(error)}` };
-        }
-
-        const parsedStatus = typeof parsed?.status === 'string' ? parsed.status : 'unknown';
-        if (parsedStatus !== 'idle') {
-            const adapterStatus = this.adapter.getStatus({ allowParse: false });
-            if (this.shouldSuppressStaleParsedBusyStatus(parsed, adapterStatus)) return null;
-            return { reason: `parsed_status:${parsedStatus}`, terminal: isCliGeneratingLikeStatus(parsedStatus) };
-        }
-        if (parsed?.activeModal || parsed?.modal) return { reason: 'parsed_modal_active', terminal: true };
-        const adapterOwnsMessagesElsewhere = (this.adapter as any)?.chatMessagesOwnedExternally === true;
-        // FALSE-IDLE turn-boundary evidence (Defect 1b): turn-scope the present-check so a
-        // STALE mid-turn assistant (predating pending.turnStartedAt) cannot satisfy the
-        // finalization gate. Only the confirming final-assistant bubble that POST-DATES this
-        // turn's start counts as evidence the turn genuinely ended.
-        const finalAssistantEvidence = this.completionFinalAssistantEvidence(parsed?.messages, pending.turnStartedAt);
-        const allowMissingAssistantTimeout = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
-        LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${finalAssistantEvidence.present} source=${finalAssistantEvidence.source} adapterOwnsMessagesElsewhere=${adapterOwnsMessagesElsewhere} parsedStatus=${parsedStatus}`);
-        // EMPTY-FINAL-CONTENT (TOCTOU fix): stash the EXACT message array that just proved
-        // the turn done, keyed to this poll. If this call ultimately falls through to a
-        // clean (block===null) verdict, the caller extracts finalSummary from THIS snapshot
-        // instead of taking a second, independent read that can legitimately race a
-        // native-source transcript rewrite or a PTY buffer repaint (see
-        // CompletedDebouncePending.resolvedFinalMessages).
-        if (finalAssistantEvidence.present && finalAssistantEvidence.source !== 'unavailable') {
-            pending.resolvedFinalMessages = Array.isArray(finalAssistantEvidence.messages) ? finalAssistantEvidence.messages : undefined;
-            pending.resolvedFinalEvidenceSource = finalAssistantEvidence.source;
-            pending.resolvedFinalEvidenceObservedAt = Date.now();
-        } else {
-            pending.resolvedFinalMessages = undefined;
-            pending.resolvedFinalEvidenceSource = undefined;
-            pending.resolvedFinalEvidenceObservedAt = undefined;
-        }
-        if (!finalAssistantEvidence.present) {
-            if (adapterOwnsMessagesElsewhere) {
-                if (finalAssistantEvidence.source === 'external-native') {
-                    const probe = this.recordPendingTranscriptProbe(pending);
-                    if (probe && !pending.loggedTranscriptProbe) {
-                        LOG.info('CLI', `[${this.type}] external transcript probe: msgCount=${probe.msgCount} lastRole=${probe.lastRole || 'none'} lastKind=${probe.lastKind || 'none'} contentLen=${probe.contentLen} sourceMtime=${probe.sourceMtimeMs ?? 'unknown'} mtimeAge=${probe.mtimeAgeMs ?? 'unknown'}ms`);
-                        pending.loggedTranscriptProbe = true;
-                    }
-                    LOG.debug('CLI', `[${this.type}] external-native probe result: lastRole=${probe?.lastRole} contentLen=${probe?.contentLen}`);
-                    if (probe?.lastRole === 'assistant' && (probe.contentLen ?? 0) > 0) {
-                        return null;
-                    }
-                    // (FALSE-IDLE-MIDTURN antigravity) A native-history session whose
-                    // external-native transcript has NO in-turn final assistant bubble yet
-                    // (present=false AND the probe's tail is not an assistant reply) is NOT
-                    // proven done. antigravity previously returned null here — an IMMEDIATE
-                    // clean emit with zero transcript evidence — so a momentary PTY-parser
-                    // idle blip MID-TURN (the parser reads idle while the turn is still in
-                    // flight and the transcript's answer has not landed) fired an early
-                    // agent:generating_completed the coordinator could never correct. Instead
-                    // HOLD for the transcript: re-probe each retry (readExternalCompletionMessages
-                    // runs forceRefresh every call) and clear the block only once the assistant
-                    // turn actually lands (the probe branch above → genuine emit). Non-terminal
-                    // and bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS (30s) so a turn that
-                    // genuinely produced no assistant bubble (tool-only) still force-emits a weak
-                    // completion rather than wedging — preserving the a0fb6b05 "antigravity always
-                    // eventually emits" fix while filtering the mid-turn false-idle. Scoped to
-                    // autonomous mesh sessions (allowMissingAssistantTimeout) so an interactive
-                    // antigravity session, which has no coordinator to misfire at, is untouched.
-                    //
-                    // SPEC-DRIVEN completion timing (mission f2f6da1b root 2, P4 profile
-                    // substitution): the HOLD class is the authority profile's timing==='hold'
-                    // (manifest holdCompletionForTranscript — antigravity-cli declares it), NOT a
-                    // hardcoded provider name — a native-history provider whose PTY-derived idle can
-                    // precede the authoritative transcript write. write-lag (claude, 'immediate') and
-                    // floor (codex/kimi/…, 'floor') classes fall through to the decision below.
-                    if (resolveTranscriptAuthorityProfile(this.provider).timing === 'hold') {
-                        if (allowMissingAssistantTimeout) {
-                            return { reason: 'missing_final_assistant', terminal: false, holdForTranscript: true };
-                        }
-                        return null;
-                    }
-                    // (SETTLE-VALLEY) The inter-approval idle valley: a native-history mesh worker
-                    // that resolved an approval and fell briefly idle (waiting_approval→idle) BEFORE
-                    // the next approval turn resumes. The live valley (~3s) is mostly covered by the
-                    // 4000ms NATIVE_HISTORY_MESH_IDLE_SETTLE_MS settle window, but a longer valley can
-                    // still let the flush run while the transcript's final assistant turn is not yet
-                    // written (source still the screen parse → finalAssistantPresent=false,
-                    // workerResult.source='default'). CANON-C would emit immediately here, freezing a
-                    // truncated preamble summary as evidenceLevel=insufficient. Instead HOLD: this
-                    // waiting_approval hold complements the settle window. Retry until the transcript finalizes
-                    // (block clears → genuine emit) or the worker resumes (resume guard cancels),
-                    // bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS. Scoped to the approval-resolved
-                    // idle so a genuinely-finished background-child turn keeps the CANON-C immediate
-                    // emit (its transcript trails by a write, not by a whole resume).
-                    if (allowMissingAssistantTimeout && pending.previousStatus === 'waiting_approval') {
-                        return { reason: 'missing_final_assistant', terminal: false, holdForTranscript: true };
-                    }
-                    // (EARLY-EMIT FLOOR, external-native — mission f2f6da1b defect A) We reached
-                    // here because the external-native transcript probe found NO in-turn final
-                    // assistant reply (the assistant-tail branch at the top of this block already
-                    // returned null when it did). Two provider classes land here with very
-                    // different meanings:
-                    //
-                    //   • claude-cli — the transcript write merely TRAILS the (genuinely finished)
-                    //     idle transition by a fraction of a second (a background-child turn's
-                    //     answer lands moments later). CANON-C's decoupled-IMMEDIATE emit is the
-                    //     designed, correct behavior here (weak now, upgraded by the reconcile once
-                    //     the write lands) so the coordinator learns idle without delay. It stays
-                    //     UN-floored (owner decision, mission f2f6da1b).
-                    //
-                    //   • codex-cli / kimi — the SAME idle read is routinely a MID-TOOL-CALL quiet
-                    //     valley: the spec `busy→idle` fires on a ~1.5s cursor-stable window between
-                    //     tool calls with `Working (` / `esc to interrupt` momentarily off-screen.
-                    //     The turn is NOT over and no final assistant will ever land at this instant.
-                    //     Without the floor the CANON-C decoupled path fired a weak completed at the
-                    //     first ~13s poll (evidenceLevel=weak, finalAssistantPresent=false) while the
-                    //     worker was still `Working (2m+)` — the early-completion false-positive.
-                    //     Mark the block noExternalTranscriptSource so the CANON-C min-elapsed floor
-                    //     holds the weak emit until either the transcript's final assistant lands
-                    //     (block clears → genuine emit) OR the worker stays CONTINUOUSLY quiet-idle
-                    //     past the floor (a real answerless turn-end). A mid-tool-call quiet never
-                    //     reaches the floor because the next tool call's idle→busy transition cancels
-                    //     the pending.
-                    //
-                    // SPEC-DRIVEN completion timing (mission f2f6da1b root 2): the HOLD class already
-                    // returned above (holdCompletionForTranscript). The remaining two classes are the
-                    // manifest flag `requiresFinalAssistantBeforeIdle`:
-                    //   • FLOOR — declared (codex-cli / cursor-cli / kimi / opencode): "an idle without
-                    //     a final assistant reply is NOT a genuine turn-end", exactly the CANON-C
-                    //     min-elapsed floor's precondition, so it gets the floor
-                    //     (noExternalTranscriptSource).
-                    //   • IMMEDIATE (write-lag) — not declared (claude-cli): idle is authoritative, the
-                    //     transcript write merely trails by a fraction of a second, so it emits
-                    //     IMMEDIATELY, un-floored.
-                    // This is the SAME flag the sibling branch below (source !== 'external-native')
-                    // uses for the identical noExternalTranscriptSource decision, so the two branches
-                    // agree; and it covers third-party providers instead of a hardcoded provider name.
-                    const isWriteLagNativeSource = resolveTranscriptAuthorityProfile(this.provider).timing !== 'floor';
-                    return {
-                        reason: 'missing_final_assistant',
-                        terminal: true,
-                        allowTimeout: allowMissingAssistantTimeout,
-                        ...(isWriteLagNativeSource ? {} : { noExternalTranscriptSource: true }),
-                    };
-                }
-                if (resolveTranscriptAuthorityProfile(this.provider).timing === 'floor') {
-                    return { reason: 'missing_final_assistant', terminal: true, allowTimeout: allowMissingAssistantTimeout, noExternalTranscriptSource: true };
-                }
-            } else {
-                const notOwnsExternalTiming = resolveTranscriptAuthorityProfile(this.provider).timing;
-                LOG.debug('CLI', `[${this.type}] missing_final_assistant (not ownsExternal) requiresFinalAssistant=${notOwnsExternalTiming === 'floor'}`);
-                return {
-                    reason: 'missing_final_assistant',
-                    terminal: notOwnsExternalTiming === 'floor',
-                    allowTimeout: allowMissingAssistantTimeout,
-                    // PTY-parsed provider (codex-cli): no external transcript trails the idle
-                    // transition, so the CANON-C decoupled emit must observe the min-elapsed floor
-                    // rather than fire at the first-poll waitedMs. (claude-cli's external-native
-                    // branch above is exempt — its transcript legitimately lands moments later.)
-                    noExternalTranscriptSource: true,
-                };
-            }
-        }
-
-        // (FALSEIDLE-a) Structural approval-resolution gate. Runs BEFORE the brittle
-        // screen-text heuristic below so it also catches modals whose text does not match
-        // looksLikeActiveApprovalPromptText (e.g. claude-cli's cd / "untrusted hooks" prompt).
-        const approvalResolutionBlock = this.approvalResolutionFinalizationBlock(pending);
-        if (approvalResolutionBlock) return approvalResolutionBlock;
-
-        // Guard: if the screen still shows an approval/choice prompt as the last visible text,
-        // the turn is not complete even if the parsed status says idle and there is an assistant
-        // message. This catches the case where waiting_approval→idle transitions occur before
-        // the modal has been resolved (e.g. the PTY rendered the prompt but no button press fired).
-        try {
-            const screenText = typeof (this.adapter as any).getScreenText === 'function'
-                ? String((this.adapter as any).getScreenText() || '')
-                : '';
-            if (screenText) {
-                const tailLines = screenText.split(/\r?\n/).slice(-16).join('\n');
-                if (looksLikeActiveApprovalPromptText(tailLines)) {
-                    return { reason: 'screen_shows_approval_prompt', terminal: approvalResolvedIdle };
-                }
-            }
-        } catch { /* defensive: screen text read is best-effort */ }
-
-        // (FALSE-IDLE-MIDTURN codex/PTY) The turn-complete quiet-dwell gate. We only reach
-        // here with finalAssistantEvidence.present === true. For a PTY-PARSED provider
-        // (codex: !adapterOwnsMessagesElsewhere), that "present" verdict is derived from the
-        // on-screen assistant text, which can be a PARTIAL sentence fragment captured mid-stream
-        // when the FSM momentarily read idle. completionHasFinalAssistantMessage accepts the
-        // fragment and hasAdapterPendingResponse can transiently read clean between chunks, so
-        // present flips true mid-turn and this path would clean-emit an early completion. The
-        // flush's lastOutputAt continuity guard only cancels when NEW output ARRIVES during the
-        // settle — it cannot catch a turn that fell quiet just before the arm. Require instead a
-        // minimum QUIET DWELL since the last raw PTY output: a genuinely finished turn's screen
-        // has been stable well past this bound, whereas a mid-stream fragment either just received
-        // output or is about to. Non-terminal HOLD (bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS),
-        // so a real completion re-passes the gate one retry later once the dwell is met; and it
-        // force-emits at the 30s cap rather than wedging. Scoped to autonomous mesh sessions
-        // (allowMissingAssistantTimeout) and PTY-parsed sources only — native-history providers
-        // (antigravity/claude) resolve evidence from the authoritative transcript above, not the
-        // screen, so this dwell does not apply to them and interactive sessions are untouched.
-        if (allowMissingAssistantTimeout
-            && !adapterOwnsMessagesElsewhere
-            && finalAssistantEvidence.source === 'parsed') {
-            try {
-                const outStatus = this.adapter.getStatus({ allowParse: false }) as any;
-                const lastOutputAt = typeof outStatus?.lastOutputAt === 'number' && Number.isFinite(outStatus.lastOutputAt)
-                    ? outStatus.lastOutputAt as number
-                    : undefined;
-                if (typeof lastOutputAt === 'number') {
-                    const quietMs = Date.now() - lastOutputAt;
-                    if (quietMs < PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS) {
-                        return { reason: 'parsed_final_assistant_quiet_dwell', terminal: false };
-                    }
-                }
-            } catch { /* defensive: dwell read is best-effort — fall through to emit */ }
-        }
-
-        // TX-FSM Stage 2.2 (KIMI-POST-FINAL-WEDGE): quiet-dwell protection for a
-        // lease-gated NATIVE-SOURCE provider's OWN evidence
-        // (source==='external-native', reached because preferNativeOverParsed skipped the
-        // parsed short-circuit above). Use the authoritative transcript file's mtime snapshot,
-        // produced by the SAME native-history read that supplied finalAssistantEvidence above,
-        // rather than raw PTY output recency. Kimi repaints its idle prompt/status after the
-        // genuine final answer, so lastOutputAt may advance forever even though wire.jsonl is
-        // quiet; using that cosmetic clock wedged the pending completion. Conversely, before a
-        // tool.call lands the interim narration itself has just advanced wire.jsonl, so the
-        // transcript clock preserves the narrow pre-tool quiet-dwell protection.
-        //
-        // The snapshot is bounded and fail-open: ageMs below the existing dwell holds and
-        // retries; a quiet transcript releases, while an unavailable/unresolved/clockless
-        // snapshot cannot block completion. Deliberately NOT scoped to
-        // allowMissingAssistantTimeout: this defect surfaces on a plain interactive session's
-        // own idle/completion notification just as much as a mesh worker's, so restricting it to
-        // autonomous mesh sessions would leave every non-mesh kimi session unprotected. A
-        // provider outside the lease canary (or without adapterOwnsMessagesElsewhere) never
-        // reaches this branch — untouched.
-        if (adapterOwnsMessagesElsewhere
-            && finalAssistantEvidence.source === 'external-native'
-            && this.busyLeaseGateEnabled()) {
-            try {
-                const snapshot = this.lastTranscriptSignalSnapshot;
-                const transcriptAgeMs = snapshot?.available === true
-                    && typeof snapshot.detail?.ageMs === 'number'
-                    && Number.isFinite(snapshot.detail.ageMs)
-                    ? snapshot.detail.ageMs
-                    : undefined;
-                if (typeof transcriptAgeMs === 'number') {
-                    if (transcriptAgeMs < PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS) {
-                        return { reason: 'native_source_final_assistant_quiet_dwell', terminal: false };
-                    }
-                }
-            } catch { /* defensive: transcript dwell is best-effort — fail open */ }
-        }
-
-        return null;
+        const reader = this.buildCompletionSignalReader(pending, latestVisibleStatus);
+        const { block, evidencePatch } = evaluateFinalizationBlock(pending, reader, this.completionEnginePolicy());
+        this.applyCompletionArmPatch(pending, evidencePatch);
+        return block as CompletedFinalizationBlock | null;
     }
 
     // (FALSEIDLE-a) Positive, structural proof that the latest approval entry was resolved
@@ -3443,6 +3155,202 @@ export class CliProviderInstance implements ProviderInstance {
         });
     }
 
+    /** Engine policy — the historical tunables, threaded explicitly so tests can compress time. */
+    private completionEnginePolicy(): CompletionPolicy {
+        return {
+            finalizationRetryMs: COMPLETED_FINALIZATION_RETRY_MS,
+            finalizationMaxWaitMs: COMPLETED_FINALIZATION_MAX_WAIT_MS,
+            backgroundTaskHoldMaxMs: BACKGROUND_TASK_HOLD_MAX_MS,
+            canonCMinElapsedFloorMs: CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS,
+            transcriptGrowthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
+            holdClassHardCapMs: ANTIGRAVITY_HOLD_HARD_CAP_MS,
+            ptyParsedFinalAssistantQuietDwellMs: PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
+        };
+    }
+
+    /**
+     * A-3/Phase-1 (completion-engine rewrite): one memoized signal reader per
+     * flush attempt. Memoization guarantees the engine decides against a single
+     * coherent sample AND that expensive probes (native transcript reads) run at
+     * most once per attempt regardless of how many rules consult them.
+     * `visibleStatusOverride` serves the back-compat getCompletedFinalizationBlock
+     * delegate, whose historical signature receives the status pre-computed.
+     */
+    private buildCompletionSignalReader(pending: CompletedDebouncePending, visibleStatusOverride?: string): CompletionSignalReader {
+        const memo = new Map<string, unknown>();
+        const once = <T,>(key: string, compute: () => T): T => {
+            if (!memo.has(key)) memo.set(key, compute());
+            return memo.get(key) as T;
+        };
+        const adapterStatus = () => once('adapterStatus', () => this.adapter.getStatus({ allowParse: false }) as any);
+        const rawParsed = () => once('rawParsed', () => {
+            try { return { ok: true as const, value: this.adapter.getScriptParsedStatus() as any }; }
+            catch (error: any) { return { ok: false as const, error: error?.message || String(error) }; }
+        });
+        return {
+            now: () => Date.now(),
+            visibleStatus: () => once('visibleStatus', () => {
+                if (typeof visibleStatusOverride === 'string') return visibleStatusOverride;
+                const latest = adapterStatus();
+                const latestAutoApproveActive = latest?.status === 'waiting_approval' && this.shouldUsePtyAutoApprove();
+                return latestAutoApproveActive || this.autoApproveBusy ? 'generating' : String(latest?.status ?? 'unknown');
+            }),
+            busyEpoch: () => this.busyEpoch,
+            lastOutputAt: () => {
+                const v = adapterStatus()?.lastOutputAt;
+                return typeof v === 'number' && Number.isFinite(v) ? v as number : undefined;
+            },
+            adapterWaitingForResponse: () => (this.adapter as any)?.isWaitingForResponse === true,
+            adapterTurnScopeActive: () => !!(this.adapter as any)?.currentTurnScope,
+            adapterAnyPending: () => this.hasAdapterPendingResponse(),
+            partialResponsePending: () => {
+                const partial = typeof this.adapter.getPartialResponse === 'function'
+                    ? this.adapter.getPartialResponse()
+                    : '';
+                return typeof partial === 'string' && !!partial.trim();
+            },
+            parsedStatus: () => once('parsedStatus', () => {
+                const rp = rawParsed();
+                if (!rp.ok) return { ok: false as const, error: rp.error };
+                const parsed = rp.value;
+                return {
+                    ok: true as const,
+                    status: typeof parsed?.status === 'string' ? parsed.status : 'unknown',
+                    modalActive: !!(parsed?.activeModal || parsed?.modal),
+                    messages: parsed?.messages,
+                };
+            }),
+            staleParsedBusySuppressed: () => once('staleParsedBusySuppressed', () => {
+                const rp = rawParsed();
+                return rp.ok ? this.shouldSuppressStaleParsedBusyStatus(rp.value, adapterStatus()) : false;
+            }),
+            backgroundTask: () => once('backgroundTask', () => {
+                const rp = rawParsed();
+                const parsed = rp.ok ? rp.value as { backgroundTaskActive?: boolean; backgroundTaskCount?: number } : undefined;
+                return { active: parsed?.backgroundTaskActive === true, count: parsed?.backgroundTaskCount };
+            }),
+            finalAssistantEvidence: () => once('finalAssistantEvidence', () => {
+                const rp = rawParsed();
+                const evidence = this.completionFinalAssistantEvidence(rp.ok ? rp.value?.messages : undefined, pending.turnStartedAt);
+                LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${evidence.present} source=${evidence.source}`);
+                return {
+                    present: evidence.present,
+                    source: evidence.source as EvidenceSource,
+                    messages: Array.isArray(evidence.messages) ? evidence.messages : [],
+                };
+            }),
+            externalNativeTailProbe: () => once('externalNativeTailProbe', () => {
+                const probe = this.recordPendingTranscriptProbe(pending);
+                if (probe && !pending.loggedTranscriptProbe) {
+                    LOG.info('CLI', `[${this.type}] external transcript probe: msgCount=${probe.msgCount} lastRole=${probe.lastRole || 'none'} lastKind=${probe.lastKind || 'none'} contentLen=${probe.contentLen} sourceMtime=${probe.sourceMtimeMs ?? 'unknown'} mtimeAge=${probe.mtimeAgeMs ?? 'unknown'}ms`);
+                    pending.loggedTranscriptProbe = true;
+                }
+                LOG.debug('CLI', `[${this.type}] external-native probe result: lastRole=${probe?.lastRole} contentLen=${probe?.contentLen}`);
+                return probe ? { lastRole: probe.lastRole ?? undefined, contentLen: probe.contentLen } : null;
+            }),
+            transcriptGrowth: () => once('transcriptGrowth', () => {
+                let snapshot: SignalSnapshot | null = null;
+                try { snapshot = this.probeNativeTranscriptSignals()?.snapshot ?? null; } catch { snapshot = null; }
+                if (!snapshot) return null;
+                const available = snapshot.available === true;
+                return {
+                    available,
+                    growing: available && (snapshot as any).signals?.transcript_growing === true,
+                    msgCount: (snapshot as any).detail?.msgCount as number | undefined,
+                    mtimeAgeMs: ((snapshot as any).detail?.ageMs ?? 0) as number,
+                };
+            }),
+            busyLeaseGateEnabled: () => this.busyLeaseGateEnabled(),
+            busyLease: () => {
+                const lease = this.transcriptSignalSource?.busyLease() ?? null;
+                if (!lease) return null;
+                return {
+                    active: (lease as any).active === true,
+                    lastLiveAt: (lease as any).lastLiveAt as number | undefined,
+                    expiresAt: (lease as any).expiresAt as number | undefined,
+                    remainingMs: (lease as any).remainingMs as number | undefined,
+                };
+            },
+            transcriptAgeMs: () => {
+                try {
+                    const snapshot = this.lastTranscriptSignalSnapshot;
+                    return snapshot?.available === true
+                        && typeof (snapshot as any).detail?.ageMs === 'number'
+                        && Number.isFinite((snapshot as any).detail.ageMs)
+                        ? (snapshot as any).detail.ageMs as number
+                        : undefined;
+                } catch { return undefined; }
+            },
+            inApprovalResumeGrace: () => this.inApprovalResumeGrace(),
+            hasApprovalResolutionEvidence: () => this.hasApprovalResolutionEvidence(),
+            screenTailShowsApprovalPrompt: () => once('screenTailShowsApprovalPrompt', () => {
+                try {
+                    const screenText = typeof (this.adapter as any).getScreenText === 'function'
+                        ? String((this.adapter as any).getScreenText() || '')
+                        : '';
+                    if (!screenText) return false;
+                    const tailLines = screenText.split(/\r?\n/).slice(-16).join('\n');
+                    return looksLikeActiveApprovalPromptText(tailLines);
+                } catch { return false; }
+            }),
+            holdClassPtyStillActive: () => this.antigravityHoldPtyStillActive(),
+            ownsExternalHistory: () => (this.adapter as any)?.chatMessagesOwnedExternally === true,
+            authorityTiming: () => resolveTranscriptAuthorityProfile(this.provider).timing,
+            allowMissingAssistantTimeout: () => !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator),
+        };
+    }
+
+    /** Applies an engine decision's pending-record patch (null clears a field). */
+    private applyCompletionArmPatch(pending: CompletedDebouncePending, patch: CompletionArmPatch): void {
+        if ('loggedBlockReason' in patch) pending.loggedBlockReason = patch.loggedBlockReason ?? undefined;
+        if ('backgroundTaskHoldSince' in patch) pending.backgroundTaskHoldSince = patch.backgroundTaskHoldSince ?? undefined;
+        if ('resolvedFinalMessages' in patch) pending.resolvedFinalMessages = (patch.resolvedFinalMessages ?? undefined) as any;
+        if ('resolvedFinalEvidenceSource' in patch) pending.resolvedFinalEvidenceSource = (patch.resolvedFinalEvidenceSource ?? undefined) as any;
+        if ('resolvedFinalEvidenceObservedAt' in patch) pending.resolvedFinalEvidenceObservedAt = patch.resolvedFinalEvidenceObservedAt ?? undefined;
+    }
+
+    /** Human log + mesh trace for a hold decision — messages preserved verbatim per hold id. */
+    private logCompletionHold(decision: Extract<CompletionFlushDecision, { kind: 'hold' }>): void {
+        if (!decision.firstOfReason) return;
+        const t = decision.trace as Record<string, any>;
+        switch (decision.reason) {
+            case 'background_task_active':
+                LOG.info('CLI', `[${this.type}] holding pending completed (background_task_active count=${t.backgroundTaskCount ?? '?'} heldMs=${t.heldMs} max=${BACKGROUND_TASK_HOLD_MAX_MS})`);
+                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `background_task_active heldMs=${t.heldMs}`);
+                break;
+            case 'native_transcript_advancing':
+                LOG.info('CLI', `[${this.type}] holding pending completed (native_transcript_advancing: msgCount=${t.msgCount} mtimeAge=${t.sourceMtimeAgeMs}ms < ${MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS}ms) — transcript still growing, screen-idle verdict not trusted`);
+                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `native_transcript_advancing msgCount=${t.msgCount} mtimeAge=${t.sourceMtimeAgeMs}ms`);
+                break;
+            case 'busy_lease_active':
+                LOG.info('CLI', `[${this.type}] holding pending completed (busy_lease_active: lastLiveAt=${t.leaseLastLiveAt} expiresIn=${t.leaseRemainingMs}ms) — transcript live within the lease bound, screen-idle verdict not trusted`);
+                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `busy_lease_active lastLiveAt=${t.leaseLastLiveAt} expiresIn=${t.leaseRemainingMs}ms`);
+                break;
+            case 'canon_c_min_elapsed_floor':
+                LOG.info('CLI', `[${this.type}] holding CANON-C decoupled emit until min-elapsed floor (waitedMs=${t.waitedMs} floor=${CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS}); no final assistant yet (${t.blockReason})`);
+                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `canon_c_min_elapsed_floor waited=${t.waitedMs}ms`);
+                break;
+            case 'antigravity_hold_pty_active':
+                LOG.info('CLI', `[${this.type}] 30s cap reached but PTY still generating; holding antigravity completion past cap (waitedMs=${t.waitedMs} hardCap=${ANTIGRAVITY_HOLD_HARD_CAP_MS}) (${t.blockReason})`);
+                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `antigravity_hold_pty_active waited=${t.waitedMs}ms`);
+                break;
+            default:
+                LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${decision.reason})`);
+                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `${decision.reason} waited=${t.waitedMs}ms`);
+                break;
+        }
+    }
+
+    /**
+     * A-3/Phase-1 (completion-engine rewrite): the flush is now an INTERPRETER.
+     * decideCompletionFlush (completion/completion-engine.ts) owns the WHETHER/WHEN
+     * judgment — cancels, every hold class and its bound, the weak/genuine emit
+     * split — as one pure, ordered rule pipeline. This method only translates the
+     * returned decision into effects: logging/tracing, the pending-record patch,
+     * retry scheduling, and the single emit call. Rule semantics and their
+     * provenance (FALSE-IDLE / CANON-C / SETTLE-VALLEY / TX-FSM / …) are documented
+     * on the engine; do not re-inline judgment here.
+     */
     private flushCompletedDebounceIfFinalized(): void {
         const pending = this.completedDebouncePending;
         if (!pending) {
@@ -3450,352 +3358,53 @@ export class CliProviderInstance implements ProviderInstance {
             return;
         }
 
-        const latestStatus = this.adapter.getStatus({ allowParse: false });
-        const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldUsePtyAutoApprove();
-        const latestVisibleStatus = latestAutoApproveActive || this.autoApproveBusy ? 'generating' : latestStatus.status;
-        LOG.debug('CLI', `[${this.type}] flush attempt: adapterStatus=${latestStatus.status} latestVisible=${latestVisibleStatus} generatingStartedAt=${this.generatingStartedAt} isWaitingForResponse=${!!(this.adapter as any)?.isWaitingForResponse} hasPartial=${!!this.adapter.getPartialResponse?.()}`);
-        if (latestVisibleStatus !== 'idle') {
-            LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
-            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', {
-                blockReason: 'resumed_status',
-                latestVisibleStatus,
-                previousStatus: pending.previousStatus,
-                busyEpochAtArm: pending.busyEpochAtArm,
-                busyEpoch: this.busyEpoch,
-            });
+        const reader = this.buildCompletionSignalReader(pending);
+        const policy = this.completionEnginePolicy();
+        const latestVisibleStatus = reader.visibleStatus();
+        const pre = decideCompletionPreflight(pending, reader, policy);
+        let decision: CompletionFlushDecision;
+        if (pre.kind !== 'proceed') {
+            decision = pre;
+        } else {
+            this.applyCompletionArmPatch(pending, pre.armPatch);
+            // Historical seam: the finalization block is obtained through the instance
+            // method (not the engine directly) so the per-incident regression suites can
+            // pin it. The delegate also applies the evidence-stash patch to `pending`.
+            const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending);
+            decision = decideCompletionVerdict(pending, reader, policy, block);
+        }
+        LOG.debug('CLI', `[${this.type}] flush attempt: latestVisible=${latestVisibleStatus} decision=${decision.kind} generatingStartedAt=${this.generatingStartedAt}`);
+
+        if (decision.kind === 'cancel') {
+            const label = decision.reason === 'resumed_status'
+                ? `resumed ${latestVisibleStatus}`
+                : decision.reason === 'busy_reentry'
+                    ? `busy re-entry during settle: epoch ${pending.busyEpochAtArm}→${this.busyEpoch}`
+                    : `new PTY output during settle: ${pending.lastOutputAtArm}→${(decision.trace as any).lastOutputAt}`;
+            LOG.info('CLI', `[${this.type}] cancelled pending completed (${label})`);
+            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', { blockReason: decision.reason, ...decision.trace });
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
             return;
         }
 
-        // FALSE-IDLE continuity guard (Defect 1a): the point-sample above only proves the
-        // session is idle at THIS instant. A momentary busy→idle blip inside an inter-approval
-        // valley (auto-approved tool turns) opens AND closes a generating phase entirely within
-        // the settle window — so the single sample reads 'idle' even though the turn is still in
-        // flight (it re-enters generating ~0.5s later). Require instead that the session stayed
-        // CONTINUOUSLY idle since the debounce was armed: (1) no entry into a busy phase
-        // (busyEpoch unchanged), and (2) on the FIRST settle check, no new raw PTY output
-        // (lastOutputAt did not advance).
-        //
-        // Once a finalization block has claimed the pending completion (loggedBlockReason is
-        // set), its own bounded retry/evidence policy owns release. Re-applying the raw-output
-        // cancellation on every retry lets cosmetic idle redraws (notably Kimi's prompt/status
-        // repaint) delete the pending after a genuine final assistant has landed. The adapter
-        // emits no second idle edge for that already-idle turn, so deletion becomes a permanent
-        // internal-generating wedge. Busy re-entry remains an unconditional cancel above:
-        // busyEpoch is the structural continuity signal and must win even after a hold.
-        if (typeof pending.busyEpochAtArm === 'number' && this.busyEpoch !== pending.busyEpochAtArm) {
-            LOG.info('CLI', `[${this.type}] cancelled pending completed (busy re-entry during settle: epoch ${pending.busyEpochAtArm}→${this.busyEpoch})`);
-            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', {
-                blockReason: 'busy_reentry',
-                latestVisibleStatus,
-                previousStatus: pending.previousStatus,
-                busyEpochAtArm: pending.busyEpochAtArm,
-                busyEpoch: this.busyEpoch,
-                busyEpochDelta: this.busyEpoch - pending.busyEpochAtArm,
+        this.applyCompletionArmPatch(pending, decision.armPatch);
+
+        if (decision.kind === 'hold') {
+            this.logCompletionHold(decision);
+            if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
+                blockReason: (decision.trace as any).blockReason ?? decision.reason,
+                ...decision.trace,
             });
-            this.completedDebouncePending = null;
-            this.completedDebounceTimer = null;
-            return;
-        }
-        const latestOutputAt = typeof (latestStatus as any)?.lastOutputAt === 'number' ? (latestStatus as any).lastOutputAt as number : undefined;
-        if (!pending.loggedBlockReason
-            && typeof pending.lastOutputAtArm === 'number'
-            && typeof latestOutputAt === 'number'
-            && latestOutputAt > pending.lastOutputAtArm) {
-            LOG.info('CLI', `[${this.type}] cancelled pending completed (new PTY output during settle: ${pending.lastOutputAtArm}→${latestOutputAt})`);
-            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', {
-                blockReason: 'new_pty_output',
-                latestVisibleStatus,
-                previousStatus: pending.previousStatus,
-                lastOutputAtArm: pending.lastOutputAtArm,
-                lastOutputAt: latestOutputAt,
-                lastOutputAtDelta: latestOutputAt - pending.lastOutputAtArm,
-            });
-            this.completedDebouncePending = null;
-            this.completedDebounceTimer = null;
+            this.scheduleCompletedDebounceFlush(decision.retryInMs);
             return;
         }
 
-        // (FALSE-IDLE-BACKGROUND-CMD) FOURTH hold condition: the idle/generating
-        // judgment is PTY-screen/turn-derived and has no awareness of the provider's
-        // own run_in_background tool work. When a background invocation is launched
-        // and the turn returns to idle with progress prose, the point-sample above
-        // reads 'idle' → a false agent:generating_completed would fire while the
-        // background cell is still running (or, kimi, before the provider consumed
-        // the cell's terminal result into a final assistant response) — prematurely
-        // completing the delegated mesh queue task. The durable signal is the
-        // native-history transcript (claude-cli: background bash tool_use with NO
-        // matching tool_result; kimi: background tool.call cell with no terminal
-        // task.* notification/TaskStop result, or such a result with no consuming
-        // assistant text after it). getScriptParsedStatus() reads that transcript
-        // at poll time and surfaces backgroundTaskActive. When set, HOLD (re-arm)
-        // instead of emitting — the flag clears once the background work resolves
-        // (and is consumed), at which point a later flush proceeds normally and
-        // completes exactly once.
-        //
-        // ★Bounded against a permanent wedge: the signal is a MISSING tool_result in an
-        // append-only file, so a killed/crashed/never-finishing background job would leave
-        // the flag stuck true forever. BACKGROUND_TASK_HOLD_MAX_MS (5min) caps the total
-        // hold: once exceeded we stop holding on this signal alone and fall through to the
-        // normal finalization path (emit). This guarantees eventual release — a stuck
-        // background job can delay, never permanently pin, the completion.
-        const bgParsed = (() => {
-            try { return this.adapter.getScriptParsedStatus?.() as { backgroundTaskActive?: boolean; backgroundTaskCount?: number } | undefined; }
-            catch { return undefined; }
-        })();
-        if (bgParsed?.backgroundTaskActive === true) {
-            if (typeof pending.backgroundTaskHoldSince !== 'number') pending.backgroundTaskHoldSince = Date.now();
-            const heldMs = Date.now() - pending.backgroundTaskHoldSince;
-            if (heldMs < BACKGROUND_TASK_HOLD_MAX_MS) {
-                if (pending.loggedBlockReason !== 'background_task_active') {
-                    LOG.info('CLI', `[${this.type}] holding pending completed (background_task_active count=${bgParsed.backgroundTaskCount ?? '?'} heldMs=${heldMs} max=${BACKGROUND_TASK_HOLD_MAX_MS})`);
-                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
-                        blockReason: 'background_task_active',
-                        latestVisibleStatus,
-                        previousStatus: pending.previousStatus,
-                        backgroundTaskCount: bgParsed.backgroundTaskCount ?? null,
-                        heldMs,
-                    });
-                    pending.loggedBlockReason = 'background_task_active';
-                }
-                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
-                return;
-            }
-            // Hold cap exceeded — stop deferring on the background signal; the background
-            // job is not clearing. Fall through to normal finalization so the completion
-            // is never pinned indefinitely.
-            LOG.warn('CLI', `[${this.type}] background_task_active hold cap exceeded (heldMs=${heldMs} >= ${BACKGROUND_TASK_HOLD_MAX_MS}); releasing to normal finalization`);
-        } else if (typeof pending.backgroundTaskHoldSince === 'number') {
-            // The background job resolved during the hold — clear the marker so a later
-            // re-hold (if a new background job starts) restarts the cap window.
-            pending.backgroundTaskHoldSince = undefined;
-            if (pending.loggedBlockReason === 'background_task_active') pending.loggedBlockReason = undefined;
-        }
-
-        const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending);
-        if (block) {
-            const blockReason = block.reason;
-            const waitedMs = Date.now() - pending.firstObservedAt;
-            // CANON-C (completion-gate decouple): a block carrying `allowTimeout` is the
-            // transcript-evidence gate — the worker FSM has ALREADY reached idle and the only
-            // thing missing is the append-only transcript's final assistant turn (a native-source
-            // race: claude-cli owns its history externally and the file write trails the idle
-            // transition). `allowTimeout` is set ONLY on the missing_final_assistant block, and
-            // ONLY for mesh worker sessions (meshNodeFor / meshActiveTaskId / launchedByCoordinator).
-            // The coordinator's sole path to learn this session is idle is agent:generating_completed,
-            // so holding it up to COMPLETED_FINALIZATION_MAX_WAIT_MS (30s) leaves the coordinator
-            // false-generating while the worker is done. Decouple the idle NOTIFICATION from the
-            // transcript evidence: emit the completion immediately, marked weak
-            // (completionDiagnostic.blockReason=missing_final_assistant, finalAssistantPresent=false).
-            // The finalSummary is enriched on a SEPARATE path — the mesh reconcile loop reads the
-            // transcript once written and re-emits a GENUINE completion (CANON-B weak→genuine
-            // upgrade; buildPendingEventFingerprint keeps weak and genuine distinct so the enriched
-            // one still surfaces, and isFalseIdleCompletion keeps the direct dispatch active until
-            // then). All OTHER blocks (genuinely-busy adapter/partial/parsed states, transient
-            // parse_error) keep the existing terminal-hold / 30s-retry behavior unchanged.
-            //
-            // (SETTLE-VALLEY) Exception: a `holdForTranscript` block is the inter-approval idle
-            // valley of a native-history mesh worker (waiting_approval→idle that will resume into
-            // the next approval). It deliberately does NOT carry allowTimeout, so it falls into the
-            // hold-and-retry path below (terminal:false) rather than the CANON-C immediate emit —
-            // the retry loop re-runs the resume guard each cycle, so when the worker resumes the
-            // pending completion is cancelled, and when the transcript's final assistant arrives the
-            // block clears for a GENUINE emit. This blocks the truncated weak (insufficient) summary
-            // from ever being emitted during the valley, without depending on the valley's length.
-            const isTranscriptEvidenceGate = block.allowTimeout === true;
-            LOG.debug('CLI', `[${this.type}] finalization block: reason=${blockReason} terminal=${block.terminal} allowTimeout=${isTranscriptEvidenceGate} waitedMs=${waitedMs} maxWait=${COMPLETED_FINALIZATION_MAX_WAIT_MS}`);
-            // (TRANSCRIPT-GROWTH-HOLD — CODEX-FSM-DEGENERATE-STABLE RCA, upper safety net)
-            // The FLOOR class (missing_final_assistant + noExternalTranscriptSource:
-            // codex-cli / kimi / cursor-cli / opencode) releases its weak emit once
-            // the idle has been CONTINUOUSLY quiet past the floor/cap — "quiet" as
-            // judged by the SAME screen parsing whose lie armed this completion
-            // (spinner escaped the status window, or a degenerate stable region
-            // accumulated a false 353s "quiet"). The daemon already observes the
-            // independent liveness signal that proves otherwise — the native
-            // transcript advancing (the stall watchdog logs exactly this: "PTY
-            // quiet 365s but transcript advancing") — but it was never wired into
-            // the idle/completion judgment. Wire it here: if the provider's native
-            // transcript file was appended within the growth-quiet window, the
-            // turn is demonstrably alive; HOLD (re-probe each retry — the hold
-            // releases at most MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS after
-            // the transcript's last append) instead of emitting a completion the
-            // coordinator can never correct.
-            //
-            // Conservative by construction: this only ever DELAYS an emit on
-            // positive growth evidence. A pure-PTY provider (no native source →
-            // sample null), an unresolvable transcript, or a transcript whose
-            // mtime is unknown/quiet falls through to the unchanged floor/cap
-            // logic — missing information NEVER blocks an idle verdict (no
-            // false-busy wedge). Clean completions (in-turn final assistant
-            // present) never reach this branch, so genuine completion latency is
-            // untouched; claude-cli's write-lag CANON-C immediate emit is likewise
-            // untouched (its block deliberately omits noExternalTranscriptSource).
-            if (blockReason === 'missing_final_assistant' && block.noExternalTranscriptSource === true) {
-                // TX-FSM Stage 1: the freshness judgment is the shared signal
-                // source's transcript_growing signal (same growth-quiet window,
-                // normalized from the ONE re-probe this retry performs) instead
-                // of a private mtime scan. Fail-open identically: no signal
-                // (non-native-source / unresolved / read error / unknown mtime)
-                // → falls through to the unchanged floor/cap logic.
-                let growthSnapshot: SignalSnapshot | null = null;
-                try { growthSnapshot = this.probeNativeTranscriptSignals()?.snapshot ?? null; } catch { growthSnapshot = null; }
-                if (growthSnapshot?.available === true && growthSnapshot.signals.transcript_growing === true) {
-                    const growthDetail = growthSnapshot.detail;
-                    const mtimeAgeMs = growthDetail.ageMs ?? 0; // growing ⇒ ageMs non-null
-                    if (pending.loggedBlockReason !== 'native_transcript_advancing') {
-                        LOG.info('CLI', `[${this.type}] holding pending completed (native_transcript_advancing: msgCount=${growthDetail.msgCount} mtimeAge=${mtimeAgeMs}ms < ${MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS}ms) — transcript still growing, screen-idle verdict not trusted`);
-                        if (this.isMeshWorkerSession()) {
-                            traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `native_transcript_advancing msgCount=${growthDetail.msgCount} mtimeAge=${mtimeAgeMs}ms`);
-                        }
-                        if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
-                            blockReason: 'native_transcript_advancing',
-                            latestVisibleStatus,
-                            msgCount: growthDetail.msgCount,
-                            sourceMtimeAgeMs: mtimeAgeMs,
-                            growthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
-                            waitedMs,
-                        });
-                        pending.loggedBlockReason = 'native_transcript_advancing';
-                    }
-                    this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
-                    return;
-                }
-                // TX-FSM Stage 2 (bounded busy lease): the transcript is NOT
-                // growing right now (the branch above would have held), but a
-                // sample within the lease bound proved it live — the turn is in
-                // a PTY-quiet valley, not finished. For lease-gated providers
-                // (canary rollout, resolveBusyLeaseGate), keep HOLDING the
-                // missing_final_assistant emit until the lease EXPIRES; on
-                // expiry this branch stops engaging and the unchanged floor/cap
-                // logic below resumes — the lease extends busy, it can never
-                // create an unbounded one (the agy busy-wedge failure mode).
-                // Fail-open identically to the growth-hold: no usable snapshot,
-                // no signal source, a never-issued lease, or a non-gated
-                // provider all fall through untouched.
-                if (growthSnapshot?.available === true && this.busyLeaseGateEnabled()) {
-                    const lease = this.transcriptSignalSource?.busyLease() ?? null;
-                    if (lease?.active === true) {
-                        if (pending.loggedBlockReason !== 'busy_lease_active') {
-                            LOG.info('CLI', `[${this.type}] holding pending completed (busy_lease_active: lastLiveAt=${lease.lastLiveAt} expiresIn=${lease.remainingMs}ms) — transcript live within the lease bound, screen-idle verdict not trusted`);
-                            if (this.isMeshWorkerSession()) {
-                                traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `busy_lease_active lastLiveAt=${lease.lastLiveAt} expiresIn=${lease.remainingMs}ms`);
-                            }
-                            if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
-                                blockReason: 'busy_lease_active',
-                                latestVisibleStatus,
-                                leaseLastLiveAt: lease.lastLiveAt,
-                                leaseExpiresAt: lease.expiresAt,
-                                leaseRemainingMs: lease.remainingMs,
-                                waitedMs,
-                            });
-                            pending.loggedBlockReason = 'busy_lease_active';
-                        }
-                        this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
-                        return;
-                    }
-                }
-            }
-            if (!isTranscriptEvidenceGate && (block.terminal || waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS)) {
-                if (pending.loggedBlockReason !== blockReason) {
-                    LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
-                    // EVTTRACE: completion held by the finalization gate (CANON-C). Observation
-                    // only — does not change the hold decision above.
-                    if (this.isMeshWorkerSession()) {
-                        traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `${blockReason} waited=${waitedMs}ms`);
-                    }
-                    // COMPLETION-EARLYNOTIFY: a hold is the CORRECT outcome when the turn is not
-                    // yet proven done (the FixA/FixB gates route here); trace it so an early-notify
-                    // investigation can see the gate holding rather than firing.
-                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
-                        blockReason,
-                        latestVisibleStatus,
-                        terminal: block.terminal === true,
-                        holdForTranscript: block.holdForTranscript === true,
-                        approvalResolvedIdle: pending.previousStatus === 'waiting_approval',
-                        waitedMs,
-                    });
-                    pending.loggedBlockReason = blockReason;
-                }
-                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
-                return;
-            }
-            // (CANON-C EARLY-EMIT FLOOR) The transcript-evidence gate would otherwise fire its
-            // decoupled-immediate completion at ANY waitedMs — including the ~13s a codex PLAIN
-            // terminal `missing_final_assistant` block reaches on the first completion-gate poll,
-            // with NO final assistant ever observed. That stamps a weak evidenceLevel=insufficient
-            // completion the coordinator marks reviewRecommended but does not auto-hold, racing the
-            // transcript before it can land and pre-empting the 180s mesh-worker stall watchdog.
-            // Impose a minimum dwell — but ONLY for the no-external-transcript case
-            // (noExternalTranscriptSource): a PTY-parsed provider has no separate transcript that
-            // will land to upgrade the weak emit, so firing immediately is a pure timing guess. A
-            // native-source block (claude-cli external-native) is deliberately NOT floored: its
-            // transcript legitimately trails the idle transition by a write and the CANON-C
-            // immediate emit is correct (upgraded by the reconcile). Keep holding (re-probe each
-            // retry — the block clears for a GENUINE emit the moment the assistant turn lands) until
-            // either the floor is met or the 30s cap force-releases the weak completion below.
-            // Scoped to mesh worker sessions (the only place allowTimeout is set), so interactive
-            // completion timing is untouched.
-            if (isTranscriptEvidenceGate
-                && blockReason === 'missing_final_assistant'
-                && block.noExternalTranscriptSource === true
-                && waitedMs < CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS) {
-                if (pending.loggedBlockReason !== 'canon_c_min_elapsed_floor') {
-                    LOG.info('CLI', `[${this.type}] holding CANON-C decoupled emit until min-elapsed floor (waitedMs=${waitedMs} floor=${CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS}); no final assistant yet (${blockReason})`);
-                    if (this.isMeshWorkerSession()) {
-                        traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `canon_c_min_elapsed_floor waited=${waitedMs}ms`);
-                    }
-                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
-                        blockReason,
-                        latestVisibleStatus,
-                        terminal: block.terminal === true,
-                        canonCMinElapsedFloor: true,
-                        waitedMs,
-                    });
-                    pending.loggedBlockReason = 'canon_c_min_elapsed_floor';
-                }
-                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
-                return;
-            }
-            // (ANTIGRAVITY-30S-CAP-PREMATURE) The 30s cap has been reached for an antigravity
-            // `holdForTranscript` block. The cap releases on ELAPSED TIME, not proof-of-idle — but
-            // antigravity is native-source (assistant answer in native-history) with a PTY-derived
-            // idle verdict, so the transcript's final assistant bubble can legitimately land past 30s
-            // on a long turn. Releasing here would fire a premature weak completed/idle to the
-            // coordinator WHILE THE PTY IS STILL GENERATING (the live-reproduced defect). Gate the
-            // release on the PTY being genuinely quiet: if it is still active (adapter pending
-            // response OR raw output within ANTIGRAVITY_HOLD_QUIET_DWELL_MS) and we are under the
-            // absolute ANTIGRAVITY_HOLD_HARD_CAP_MS bound, KEEP HOLDING (re-probe next retry — the
-            // transcript branch above clears the block for a genuine emit once the answer lands).
-            // A genuinely quiescent tool-only turn (no assistant bubble, PTY stable) falls through
-            // to the existing weak force-emit; a runaway PTY that never quiets releases at the hard
-            // cap so it cannot wedge forever. SPEC-DRIVEN (mission f2f6da1b root 2): scoped to the
-            // HOLD completion-timing class (`holdCompletionForTranscript`, e.g. antigravity-cli) via
-            // its holdForTranscript block — NOT a hardcoded provider name — so claude-cli/codex-cli
-            // (immediate/floor classes, which never produce a holdForTranscript block) are unchanged.
-            if (resolveTranscriptAuthorityProfile(this.provider).timing === 'hold'
-                && block.holdForTranscript === true
-                && waitedMs < ANTIGRAVITY_HOLD_HARD_CAP_MS
-                && this.antigravityHoldPtyStillActive()) {
-                if (pending.loggedBlockReason !== 'antigravity_hold_pty_active') {
-                    LOG.info('CLI', `[${this.type}] 30s cap reached but PTY still generating; holding antigravity completion past cap (waitedMs=${waitedMs} hardCap=${ANTIGRAVITY_HOLD_HARD_CAP_MS}) (${blockReason})`);
-                    if (this.isMeshWorkerSession()) {
-                        traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `antigravity_hold_pty_active waited=${waitedMs}ms`);
-                    }
-                    if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
-                        blockReason,
-                        latestVisibleStatus,
-                        terminal: block.terminal === true,
-                        holdForTranscript: true,
-                        antigravityPtyStillActive: true,
-                        waitedMs,
-                    });
-                    pending.loggedBlockReason = 'antigravity_hold_pty_active';
-                }
-                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
-                return;
-            }
-            const emittedAfterFinalizationTimeout = waitedMs >= COMPLETED_FINALIZATION_MAX_WAIT_MS;
+        if (decision.kind === 'emit-weak') {
+            const blockReason = decision.block.reason;
+            const waitedMs = decision.waitedMs;
+            const emittedAfterFinalizationTimeout = decision.emittedAfterFinalizationTimeout;
+            const latestStatus = this.adapter.getStatus({ allowParse: false });
             const completionDiagnostic = this.buildCompletedFinalizationDiagnostic({
                 blockReason,
                 latestStatus,
@@ -3806,14 +3415,13 @@ export class CliProviderInstance implements ProviderInstance {
             });
             // Surface the CANON-C immediate-emit path distinctly so a delegated worker's idle
             // notification (transcript still pending) is not mistaken for a 30s-timeout fallback.
-            (completionDiagnostic as Record<string, unknown>).decoupledImmediateEmit = isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout;
-            LOG.warn('CLI', `[${this.type}] emitting completed event (${isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout ? 'CANON-C decoupled-immediate, transcript pending' : `after ${waitedMs}ms`}) without finalized assistant turn (${blockReason})`);
-            // EVTTRACE: completion fired (forced past the finalization timeout / CANON-C decoupled-immediate).
+            (completionDiagnostic as Record<string, unknown>).decoupledImmediateEmit = decision.decoupledImmediateEmit;
+            LOG.warn('CLI', `[${this.type}] emitting completed event (${decision.decoupledImmediateEmit ? 'CANON-C decoupled-immediate, transcript pending' : `after ${waitedMs}ms`}) without finalized assistant turn (${blockReason})`);
             if (this.isMeshWorkerSession()) {
                 traceMeshEventStage('fired', this.meshTraceCtx(), `forced after ${waitedMs}ms (${blockReason})`);
             }
             if (this.completionTraceOn()) this.recordCompletionGateTrace('fire', {
-                path: isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout ? 'canon_c_decoupled' : 'forced_timeout',
+                path: decision.decoupledImmediateEmit ? 'canon_c_decoupled' : 'forced_timeout',
                 blockReason,
                 latestVisibleStatus,
                 approvalResolvedIdle: pending.previousStatus === 'waiting_approval',
@@ -3830,25 +3438,8 @@ export class CliProviderInstance implements ProviderInstance {
                 duration: pending.duration,
                 timestamp: pending.timestamp,
                 taskId: pending.taskId,
-                // When finalization is forced past the timeout on a `parsed_status:` block
-                // (the parser never confirmed a final assistant turn) we previously rode an
-                // empty `finalSummary` unconditionally. That empty value propagates to the
-                // mesh coordinator's mirror preview (meshSessionLastMessagePreview), leaving a
-                // delegated session's inbox preview blank — or, for a LOCAL worktree session,
-                // stuck on the dispatched user task. If the parser DID surface assistant text,
-                // prefer it; only fall back to '' when no assistant summary can be derived.
-                // NOTIF Defect-B: completionFinalSummary is a point-sample of native-history/
-                // screen at THIS instant; on a native-source provider (antigravity) it can be
-                // empty at the forced-emit instant even though a prior poll already cached the
-                // real answer (lastCompletionSummary). Fall back to the cache so the notification
-                // carries the summary that mesh_read_chat.summary already shows — consistent with
-                // completionDiagnostic.finalAssistantPresent being credited from the same cache.
-                // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: when the gate's evidence
-                // probe already proved the turn done from an external-native read, its
-                // exact snapshot (pending.resolvedFinalMessages) is the authoritative
-                // final-message snapshot — reuse it instead of paying a second live
-                // read that can race a wire.jsonl rewrite (the EMPTY-FINAL-CONTENT
-                // TOCTOU class, now closed for the forced path too).
+                // finalSummary provenance chain unchanged (see snapshotExternalNativeCompletionSummary /
+                // completionFinalSummary / cachedInTurnCompletionSummaryContent docs above).
                 finalSummary: (this.snapshotExternalNativeCompletionSummary(pending)
                     || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
                     || this.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
@@ -3859,15 +3450,12 @@ export class CliProviderInstance implements ProviderInstance {
             this.completedDebounceTimer = null;
             this.generatingStartedAt = 0;
             this.lastApprovalEventFingerprint = '';
-            // A completion was emitted for this turn — stamp it as satisfied for
-            // the startup-grace collapse synth (see
-            // markCurrentTurnStartupGraceCollapseSatisfied).
             this.markCurrentTurnStartupGraceCollapseSatisfied();
             return;
         }
 
+        // emit-genuine: the clean path — transcript finalized, evidence stashed on pending.
         LOG.info('CLI', `[${this.type}] completed in ${pending.duration}s`);
-        // EVTTRACE: completion fired (transcript finalized cleanly).
         if (this.isMeshWorkerSession()) {
             traceMeshEventStage('fired', this.meshTraceCtx(), `duration=${pending.duration}s`);
         }
@@ -3920,9 +3508,6 @@ export class CliProviderInstance implements ProviderInstance {
         this.completedDebounceTimer = null;
         this.generatingStartedAt = 0;
         this.lastApprovalEventFingerprint = '';
-        // A completion was emitted for this turn — stamp it as satisfied for
-        // the startup-grace collapse synth (see
-        // markCurrentTurnStartupGraceCollapseSatisfied).
         this.markCurrentTurnStartupGraceCollapseSatisfied();
     }
 
