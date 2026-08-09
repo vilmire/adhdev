@@ -336,6 +336,59 @@ export function truncateValidationOutput(value: unknown): string {
     return `${head}\n[... ${omitted} chars omitted ...]\n${tail}`;
 }
 
+// REFINE-LOG-PRESERVATION. The summary above is a payload budget, not a
+// diagnostic record: a failing gate's output is cut TWICE on its way to the
+// coordinator — once by execFile's maxBuffer (REFINE_VALIDATION_OUTPUT_LIMIT_BYTES)
+// and again by truncateValidationOutput's head+tail window. Nothing kept the
+// whole thing, so a coordinator receiving `code: 'SQLITE_ERROR'` plus three
+// stack frames had no way to learn WHICH query or table failed. That gap
+// blocked five consecutive refine diagnoses.
+//
+// So: write the untruncated stdout/stderr of a FAILING validation command to
+// disk and surface the path in the command record. The truncated summary is
+// unchanged — this ADDS a durable artifact, it does not replace the budget.
+//
+// Retention: failures only. A green refine writes nothing. Each run of this
+// repo's own gate list is 17 commands, so preserving successes would accrue
+// ~17 files per refine across every branch and worktree for output nobody
+// reads — the log matters precisely when something failed. Best-effort
+// throughout: a log-write failure must never turn a passing gate red, nor
+// change the failure kind of a failing one, so every path is wrapped and
+// falls back to returning undefined.
+const REFINE_VALIDATION_LOG_DIR = pathJoin('.adhdev', 'logs');
+
+export function writeValidationFailureLog(
+    workspace: string,
+    index: number,
+    candidate: { command: string; args?: string[]; displayCommand?: string; cwd?: string },
+    streams: { stdout?: unknown; stderr?: unknown },
+    now: () => Date = () => new Date(),
+): string | undefined {
+    try {
+        const dir = pathJoin(workspace, REFINE_VALIDATION_LOG_DIR);
+        fs.mkdirSync(dir, { recursive: true });
+        // Colons are illegal in win32 filenames, so the ISO stamp is flattened.
+        const stamp = now().toISOString().replace(/[:.]/g, '-');
+        const file = pathJoin(dir, `refine-${stamp}-${index}.log`);
+        const asText = (v: unknown) => (typeof v === 'string' ? v : v == null ? '' : String(v));
+        const shown = candidate.displayCommand || [candidate.command, ...(candidate.args || [])].join(' ');
+        fs.writeFileSync(
+            file,
+            `# refine validation failure\n`
+            + `# command: ${shown}\n`
+            + `# cwd: ${candidate.cwd || workspace}\n`
+            + `# recorded: ${now().toISOString()}\n`
+            + `\n=== stdout ===\n${asText(streams.stdout)}\n`
+            + `\n=== stderr ===\n${asText(streams.stderr)}\n`,
+            'utf8',
+        );
+        return file;
+    } catch {
+        // Never let diagnostics break the gate.
+        return undefined;
+    }
+}
+
 /**
  * A spawn-resolution failure is when the executable itself could not be found by
  * the OS spawn boundary — `spawn <cmd> ENOENT` — as opposed to the command
@@ -2516,10 +2569,20 @@ export async function runMeshRefineValidationGate(
             const stderr = truncateValidationOutput(error?.stderr || error?.message);
             const missingDependencyFailure = !spawnResolutionFailed
                 && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
+            // REFINE-LOG-PRESERVATION: keep the UNtruncated streams on disk before
+            // the record below reduces them to the head+tail summary, and hand the
+            // coordinator the path so it can read the real failure.
+            const failureLogPath = writeValidationFailureLog(
+                workspace,
+                summary.commandsRun.length,
+                { command: candidate.command, args: candidate.args, displayCommand: candidate.displayCommand, cwd },
+                { stdout: error?.stdout, stderr: error?.stderr || error?.message },
+            );
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, error, false, {
                 exitCode: typeof error?.code === 'number' ? error.code : null,
                 signal: typeof error?.signal === 'string' ? error.signal : null,
                 timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
+                ...(failureLogPath ? { failureLogPath } : {}),
                 ...(spawnResolutionFailed
                     ? { failureKind: 'spawn_resolution_failed', resolvedCommand }
                     : missingDependencyFailure ? { failureKind: 'missing_dependencies' } : {}),
