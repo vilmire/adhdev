@@ -4,6 +4,7 @@ import {
     buildProvidersByDaemonId,
     resolveNodeAvailableProviders,
     deriveNodeCapabilityTags,
+    collectMeshProviderInventory,
 } from '../../src/pages/repo-mesh/node-providers'
 
 function cliProvider(type: string) {
@@ -89,10 +90,19 @@ describe('deriveNodeCapabilityTags', () => {
             capabilities: ['test-runner', 'gpu'],
         } as any
         const tags = deriveNodeCapabilityTags(node)
-        expect(tags.map(t => t.tag)).toEqual(['test-runner', 'gpu', 'os=darwin', 'arch=arm64', 'provider=claude-cli'])
+        // EVERY provider is tagged, not just providerPriority[0]. Showing only the
+        // first was worse than showing none: RESERVED_PREFIXES blocks typing
+        // `provider=` by hand, so this list is the operator's only way to learn which
+        // provider= values are valid for required_tags.
+        expect(tags.map(t => t.tag)).toEqual([
+            'test-runner', 'gpu', 'os=darwin', 'arch=arm64',
+            'provider=claude-cli', 'provider=codex-cli',
+        ])
         // custom vs auto flags
         expect(tags.filter(t => t.custom).map(t => t.tag)).toEqual(['test-runner', 'gpu'])
-        expect(tags.filter(t => !t.custom).map(t => t.tag)).toEqual(['os=darwin', 'arch=arm64', 'provider=claude-cli'])
+        expect(tags.filter(t => !t.custom).map(t => t.tag)).toEqual([
+            'os=darwin', 'arch=arm64', 'provider=claude-cli', 'provider=codex-cli',
+        ])
     })
 
     it('prefers userOverrides platform/arch over reported (matches daemon precedence)', () => {
@@ -119,5 +129,127 @@ describe('deriveNodeCapabilityTags', () => {
         const tags = deriveNodeCapabilityTags(node).map(t => t.tag)
         expect(tags).toEqual(['os=linux'])
         expect(tags.some(t => t.startsWith('converge='))).toBe(false)
+    })
+})
+
+describe('provider= tags mirror the daemon (slots first, then providerPriority)', () => {
+    // ★ The second half of the defect: the UI never read policy.slots at all. `slots`
+    // is the modern, coordinator-owned surface that routing actually matches against,
+    // so a provider configured ONLY as a slot was invisible in the UI forever even
+    // though the daemon tagged and routed to it. A providerPriority-only fixture
+    // cannot catch this — this case is its only evidence.
+    it('tags a provider that exists ONLY in policy.slots', () => {
+        const node = {
+            id: 'n_slots', workspace: '/w',
+            policy: {
+                slots: [
+                    { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'] },
+                    { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'] },
+                ],
+            },
+        } as any
+        const tags = deriveNodeCapabilityTags(node).map(t => t.tag)
+        expect(tags).toContain('provider=claude-cli')
+        expect(tags).toContain('provider=kimi') // ← invisible before the fix
+    })
+
+    it('orders slots before providerPriority and de-duplicates across both', () => {
+        const node = {
+            id: 'n_both', workspace: '/w',
+            policy: {
+                slots: [{ provider: 'kimi' }, { provider: 'claude-cli' }],
+                providerPriority: ['claude-cli', 'codex-cli'],
+            },
+        } as any
+        const providerTags = deriveNodeCapabilityTags(node)
+            .map(t => t.tag).filter(t => t.startsWith('provider='))
+        // slots order first; claude-cli appears once despite being in both lists.
+        expect(providerTags).toEqual(['provider=kimi', 'provider=claude-cli', 'provider=codex-cli'])
+    })
+
+    it('drops slot entries with no usable provider', () => {
+        const node = {
+            id: 'n_bad', workspace: '/w',
+            policy: { slots: [{ provider: '  ' }, { model: 'opus' }, { provider: 'kimi' }] },
+        } as any
+        const providerTags = deriveNodeCapabilityTags(node)
+            .map(t => t.tag).filter(t => t.startsWith('provider='))
+        expect(providerTags).toEqual(['provider=kimi'])
+    })
+
+    it('de-duplicates a custom tag that collides with a derived one (as the daemon does)', () => {
+        const node = {
+            id: 'n_dup', workspace: '/w',
+            reportedPlatform: 'linux',
+            capabilities: ['os=linux'],
+            policy: { providerPriority: ['kimi'] },
+        } as any
+        const tags = deriveNodeCapabilityTags(node).map(t => t.tag)
+        expect(tags.filter(t => t === 'os=linux')).toHaveLength(1)
+        expect(tags).toEqual(['os=linux', 'provider=kimi'])
+    })
+})
+
+describe('collectMeshProviderInventory (mesh-wide union)', () => {
+    // Two nodes on DIFFERENT machines with DIFFERENT providers, plus a daemon that
+    // belongs to no node of this mesh. A single-node fixture would pass even with the
+    // old coordinator-only read, and without the outside daemon nothing proves scoping.
+    const OUTSIDE_DAEMON = {
+        id: 'daemon_other_mesh',
+        availableProviders: [cliProvider('cursor-cli')],
+    } as any
+
+    const MESH_NODES = [
+        { id: 'n_local', workspace: '/w', daemon_id: 'daemon_local' },
+        { id: 'n_remote', workspace: '/w2', daemon_id: 'daemon_remote' },
+    ] as any[]
+
+    it('unions providers across the mesh\'s nodes', () => {
+        const inv = collectMeshProviderInventory(MESH_NODES, [...DAEMONS, OUTSIDE_DAEMON])
+        expect(inv.providers.map(p => p.type)).toEqual([
+            'antigravity-cli', 'claude-cli', 'codex-cli', 'hermes-cli',
+        ])
+        expect(inv.reportedNodeCount).toBe(2)
+        expect(inv.unreportedNodeCount).toBe(0)
+    })
+
+    it('★ never includes a daemon that belongs to no node of this mesh', () => {
+        const inv = collectMeshProviderInventory(MESH_NODES, [...DAEMONS, OUTSIDE_DAEMON])
+        // cursor-cli is installed on another machine entirely — this mesh cannot
+        // launch it, so offering it as configurable would be a false claim.
+        expect(inv.providers.map(p => p.type)).not.toContain('cursor-cli')
+    })
+
+    it('★ counts a not-yet-reported node instead of treating it as "none"', () => {
+        const nodes = [
+            { id: 'n_local', workspace: '/w', daemon_id: 'daemon_local' },
+            // Bound to a daemon that has not reported an inventory (offline, or P2P /
+            // get_status_metadata still in flight) — NOT the same as "has nothing".
+            { id: 'n_pending', workspace: '/w2', daemon_id: 'daemon_not_connected' },
+        ] as any[]
+        const inv = collectMeshProviderInventory(nodes, DAEMONS)
+        expect(inv.providers.map(p => p.type)).toEqual(['claude-cli', 'codex-cli'])
+        expect(inv.reportedNodeCount).toBe(1)
+        expect(inv.unreportedNodeCount).toBe(1)
+    })
+
+    it('reports every node as unreported when no daemon has an inventory', () => {
+        const inv = collectMeshProviderInventory(MESH_NODES, [])
+        expect(inv.providers).toEqual([])
+        expect(inv.reportedNodeCount).toBe(0)
+        expect(inv.unreportedNodeCount).toBe(2)
+    })
+
+    it('resolves an unbound node against a sole daemon (standalone shape)', () => {
+        const nodes = [{ id: 'n_standalone', workspace: '/w' }] as any[]
+        const inv = collectMeshProviderInventory(nodes, [LOCAL_DAEMON])
+        expect(inv.providers.map(p => p.type)).toEqual(['claude-cli', 'codex-cli'])
+        expect(inv.unreportedNodeCount).toBe(0)
+    })
+
+    it('de-duplicates a provider installed on both machines', () => {
+        const shared = { id: 'daemon_remote', availableProviders: [cliProvider('claude-cli')] } as any
+        const inv = collectMeshProviderInventory(MESH_NODES, [LOCAL_DAEMON, shared])
+        expect(inv.providers.map(p => p.type)).toEqual(['claude-cli', 'codex-cli'])
     })
 })

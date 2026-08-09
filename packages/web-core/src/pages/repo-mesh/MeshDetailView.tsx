@@ -15,6 +15,7 @@ import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGr
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
+import { collectMeshProviderInventory } from './node-providers'
 import { MeshMissionsSection } from './MeshMissionsSection'
 import { MeshProviderAutoApproveSection } from './MeshProviderAutoApproveSection'
 import { MeshNodeList } from './MeshNodeList'
@@ -230,6 +231,16 @@ export function MeshDetailView({
     const { t } = useTranslation('common')
     const policy = readMeshPolicy(selectedMesh)
     const nodes: MeshNode[] = selectedMesh.nodes || []
+    // Provider inventory for the auto-approve surface: the UNION across this mesh's
+    // nodes, not just the coordinator daemon's own. Auto-approve defaults are written
+    // to the repo's mesh.json and apply to whichever node runs a delegated worker, so
+    // a provider installed only on a member machine must be configurable here too.
+    // Routed through `nodes` (not `daemons` wholesale) so daemons belonging to other
+    // meshes never contribute providers this mesh cannot launch.
+    const meshProviderInventory = useMemo(
+        () => collectMeshProviderInventory(nodes, daemons),
+        [nodes, daemons],
+    )
     // Drives the priority_only → distribution display: a legacy 'priority_only' mesh
     // shows as Spread only when a node priority is actually set (otherwise it is
     // behaviorally identical to 'in_order').
@@ -458,13 +469,16 @@ export function MeshDetailView({
             {/* ── Provider auto-approve defaults (repo mesh.json providerDefaults) ──
                  Three-section surface: repo default (committed) / this machine's
                  authorization (local) / effective result with downgrade reasons. The
-                 host daemon carries the provider inventory (with autoApproveModes) and
-                 owns the repo workspace's .adhdev/mesh.json read/write. */}
+                 host daemon owns the repo workspace's .adhdev/mesh.json read/write,
+                 while the provider inventory (with autoApproveModes) is the union
+                 across this mesh's nodes — a member machine's provider is
+                 configurable here too. */}
             <MeshProviderAutoApproveSection
                 hostDaemonId={coordinatorDaemonId}
                 hostOnline={hostOnline}
                 hostWorkspace={selectedHostNode?.workspace || ''}
-                hostProviders={(daemons.find(d => d.id === coordinatorDaemonId) as any)?.availableProviders || []}
+                meshProviders={meshProviderInventory.providers}
+                unreportedNodeCount={meshProviderInventory.unreportedNodeCount}
                 machineAutoApproveEnabled={policy.delegatedWorkerAutoApprove !== false}
                 machineDangerousAllowed={policy.delegatedWorkerDangerousModeAllow === true}
                 onUpdatePolicy={onUpdatePolicy}

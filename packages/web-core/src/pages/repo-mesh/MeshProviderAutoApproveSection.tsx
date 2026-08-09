@@ -29,8 +29,23 @@ interface Props {
     hostOnline: boolean
     /** Host node workspace — the repo root that carries .adhdev/mesh.json. */
     hostWorkspace: string
-    /** Raw host-daemon provider inventory (carries autoApproveModes per provider). */
-    hostProviders: any[]
+    /**
+     * Raw provider inventory for the WHOLE mesh — the union across its nodes'
+     * daemons, de-duplicated by type (carries autoApproveModes per provider).
+     *
+     * Not the host daemon's inventory alone: auto-approve defaults are written to the
+     * repo's mesh.json and apply to whichever node runs a delegated worker, so a
+     * provider installed only on a member machine must still be configurable here.
+     * (It is scoped through this mesh's nodes, so daemons outside the mesh never
+     * contribute — see collectMeshProviderInventory.)
+     */
+    meshProviders: any[]
+    /**
+     * Nodes bound to a daemon that has not reported its inventory yet (offline, or
+     * P2P/status metadata still in flight). Non-zero means the list above may be
+     * INCOMPLETE — rendered as such rather than being silently presented as final.
+     */
+    unreportedNodeCount?: number
     /** Machine-local ENABLE gate (mesh policy delegatedWorkerAutoApprove; default true). */
     machineAutoApproveEnabled: boolean
     /** Machine-local dangerous opt-in (delegatedWorkerDangerousModeAllow; default false). */
@@ -42,9 +57,9 @@ interface Props {
     sendCommand: (daemonId: string, command: string, payload?: any) => Promise<any>
 }
 
-function readProvidersWithModes(hostProviders: any[]): ProviderWithModes[] {
+function readProvidersWithModes(meshProviders: any[]): ProviderWithModes[] {
     const out: ProviderWithModes[] = []
-    for (const p of hostProviders || []) {
+    for (const p of meshProviders || []) {
         if (!p || p.category !== 'cli') continue
         const config = p.autoApproveModes
         if (!config || !Array.isArray(config.modes) || config.modes.length === 0) continue
@@ -71,7 +86,8 @@ export function MeshProviderAutoApproveSection({
     hostDaemonId,
     hostOnline,
     hostWorkspace,
-    hostProviders,
+    meshProviders,
+    unreportedNodeCount = 0,
     machineAutoApproveEnabled,
     machineDangerousAllowed,
     onUpdatePolicy,
@@ -79,7 +95,7 @@ export function MeshProviderAutoApproveSection({
     sendCommand,
 }: Props) {
     const { t } = useTranslation('common')
-    const providers = useMemo(() => readProvidersWithModes(hostProviders), [hostProviders])
+    const providers = useMemo(() => readProvidersWithModes(meshProviders), [meshProviders])
 
     // Committed repo defaults, keyed by providerType → requested mode id.
     const [repoDefaults, setRepoDefaults] = useState<Record<string, string>>({})
@@ -238,10 +254,23 @@ export function MeshProviderAutoApproveSection({
             ) : loading ? (
                 <div className="text-[13px] text-text-muted">{t('repoMesh.providerAutoApprove.loading')}</div>
             ) : providers.length === 0 ? (
-                <div className="text-[13px] text-text-muted">{t('repoMesh.providerAutoApprove.noProviders')}</div>
+                // An empty list is only "no providers" once every node has actually
+                // reported. While any node's inventory is still outstanding, say so
+                // instead of asserting none exist — the reading isn't in yet.
+                <div className="text-[13px] text-text-muted">
+                    {unreportedNodeCount > 0
+                        ? t('repoMesh.providerAutoApprove.awaitingNodes', { count: unreportedNodeCount })
+                        : t('repoMesh.providerAutoApprove.noProviders')}
+                </div>
             ) : (
                 <div className="space-y-6">
                     {loadError && <AlertBanner variant="error" onDismiss={() => setLoadError(null)}>{loadError}</AlertBanner>}
+                    {/* The union is complete only when every node has reported. */}
+                    {unreportedNodeCount > 0 && (
+                        <div className="text-[11px] text-text-muted">
+                            {t('repoMesh.providerAutoApprove.partialInventory', { count: unreportedNodeCount })}
+                        </div>
+                    )}
 
                     {/* ── Section 1: repository default (editable) + Section 3 per provider ── */}
                     <div className="space-y-1">

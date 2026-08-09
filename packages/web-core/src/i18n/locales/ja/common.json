@@ -1082,7 +1082,9 @@
             "subtitle": "Per-provider default auto-approve mode for coordinator-launched workers.",
             "loading": "Loading provider defaults…",
             "loadError": "Failed to load provider auto-approve defaults.",
-            "noProviders": "No CLI providers with auto-approve modes detected on the host machine.",
+            "noProviders": "No CLI providers with auto-approve modes detected on this mesh's machines.",
+            "awaitingNodes": "Waiting for {{count}} node(s) to report their installed providers…",
+            "partialInventory": "Provider list may be incomplete — {{count}} node(s) have not reported yet.",
             "noHostDaemon": "Connect the mesh host daemon to configure provider auto-approve defaults.",
             "repoSection": {
                 "title": "Repository default",
