@@ -152,6 +152,9 @@ export interface DaemonComponents {
     // just that provider, debounced). Complements the periodic loop: the
     // post-turn reading lands within seconds instead of up to one interval.
     quotaEventRefresh?: { stop(): void };
+    // Verified-channel staleness probe (24h read-only listing → dashboard
+    // badge data). Stopped during shutdownDaemonComponents.
+    providerStalenessProbe?: { stop(): void };
     // Canonical status/daemon identity (e.g. `standalone_<machineId>` /
     // `daemon_<machineId>`). This is the SAME id the MCP layer stamps as a
     // worker's meshCoordinatorDaemonId (ctx.localDaemonId, sourced from
@@ -241,6 +244,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         channel: appConfig.providerChannel,
         updateChannel: appConfig.updateChannel,
         allowUnverifiedTarball: appConfig.providerAllowUnverifiedTarball,
+        // Enables the daemon-update = provider-activation stamp (option C):
+        // a boot on a NEW daemon version runs one verified sync; same-version
+        // boots stay network-free.
+        daemonVersion: config.statusVersion,
     });
 
     // Boot-time auto-sync is intentionally limited to the bounded first-sync
@@ -267,7 +274,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // on next boot.
     void providerLoader.maybeFirstSyncVerifiedChannel()
         .then(async (report) => {
-            if (!report) return;
+            if (!report) return null;
             if (report.status === 'error') {
                 LOG.warn('Init', `Verified channel first-sync failed (last-known-good preserved): ${report.errors.map((e) => e.code).join(', ') || 'unknown'}`);
             } else if (report.activated.length > 0) {
@@ -282,8 +289,59 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 await refreshProviderAvailability();
                 config.onStatusChange?.();
             }
+            return report;
         })
-        .catch((e: any) => LOG.warn('Init', `Verified channel first-sync error: ${e?.message || e}`));
+        // 2.2 Daemon-update activation (owner decision 2026-08-10, option C):
+        // chained AFTER the first-sync so the two verified syncs never run
+        // concurrently. No-op unless the store is non-empty AND the daemon
+        // version stamp differs (first boot of a new daemon version / channel
+        // switch) — every same-version boot stays network-free, preserving
+        // the pin design's boot contract. Fail-closed like the first-sync.
+        .then(async (firstSyncReport) => {
+            if (firstSyncReport) return; // first-sync ran — its success already stamped this version
+            const report = await providerLoader.maybeSyncVerifiedChannelOnDaemonUpdate();
+            if (!report) return;
+            if (report.status === 'error') {
+                LOG.warn('Init', `Daemon-update channel sync failed (last-known-good preserved, retries next boot): ${report.errors.map((e) => e.code).join(', ') || 'unknown'}`);
+            } else if (report.activated.length > 0) {
+                LOG.info('Init', `Daemon-update channel sync activated ${report.activated.length} providers (${providerLoader.channel})`);
+                providerLoader.registerToDetector();
+                await refreshProviderAvailability();
+                config.onStatusChange?.();
+            }
+        })
+        .catch((e: any) => LOG.warn('Init', `Verified channel boot sync error: ${e?.message || e}`));
+
+    // 2.3 Verified-channel staleness probe (owner decision 2026-08-10, option A):
+    // a read-only channel listing (one request, no downloads, no pointer
+    // writes) 10 minutes after boot and every 24h, so dashboards can badge
+    // stale pins and never-installed new types without the user opening the
+    // Providers tab. Deliberately NOT on the boot path and never from a
+    // status path; activation itself stays explicit (activate_provider_updates)
+    // plus the daemon-update ride-along above.
+    const runStalenessProbe = async () => {
+        try {
+            const snap = await providerLoader.checkVerifiedChannelStaleness();
+            if (snap.error) {
+                LOG.debug('Provider', `Channel staleness probe failed (kept previous snapshot): ${snap.error}`);
+            } else if (snap.staleTypes.length > 0 || snap.newTypes.length > 0) {
+                LOG.info('Provider', `Channel staleness: ${snap.staleTypes.length} stale [${snap.staleTypes.join(', ')}], ${snap.newTypes.length} never-installed [${snap.newTypes.join(', ')}] (${snap.channel})`);
+                config.onStatusChange?.();
+            }
+        } catch (e: any) {
+            LOG.debug('Provider', `Channel staleness probe error: ${e?.message || e}`);
+        }
+    };
+    const stalenessInitialTimer = setTimeout(() => { void runStalenessProbe(); }, 10 * 60_000);
+    stalenessInitialTimer.unref?.();
+    const stalenessIntervalTimer = setInterval(() => { void runStalenessProbe(); }, 24 * 60 * 60_000);
+    stalenessIntervalTimer.unref?.();
+    const providerStalenessProbe = {
+        stop() {
+            clearTimeout(stalenessInitialTimer);
+            clearInterval(stalenessIntervalTimer);
+        },
+    };
     // Register this loader as the default for loader-less provider-version reads.
     // The coordinator's own self/worktree node self-heal (mesh-node-identity.ts) reads
     // getCachedProviderVersions() with no loader in scope; without this the detection
@@ -532,6 +590,8 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // finished a turn, so the post-turn reading lands within seconds instead
     // of up to one refresh interval. Same enable gate as the periodic loop.
     components.quotaEventRefresh = setupQuotaEventRefresh(components);
+    // 11b-3. Verified-channel staleness probe handle (timers armed in step 2.3).
+    components.providerStalenessProbe = providerStalenessProbe;
     // 11c. Restore the last persisted snapshots, then fire the one-shot boot
     // refresh. Both are deferred past this function's return and neither is
     // awaited — a ~900ms codex app-server spawn must not add to daemon startup
@@ -600,7 +660,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     const {
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
-        meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh,
+        meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
     } = components;
 
     // 1. Stop timers
@@ -609,6 +669,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     try { meshReconcileLoop?.stop(); } catch { /* noop */ }
     try { quotaRefreshLoop?.stop(); } catch { /* noop */ }
     try { quotaEventRefresh?.stop(); } catch { /* noop */ }
+    try { providerStalenessProbe?.stop(); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

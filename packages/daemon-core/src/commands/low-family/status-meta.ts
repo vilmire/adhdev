@@ -49,7 +49,17 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         // outcome, so a failed/rolled-back upgrade is reported HERE via the
         // durable notice the helper leaves behind. null = no failed upgrade
         // on record.
-        return { success: true, status: snapshot, daemonBuild: getDaemonBuildInfo(), upgradeFailure: readUpgradeFailureNotice() };
+        // `providerChannelStaleness` mirrors the upgradeFailure pattern: pure
+        // read of the 24h probe's cached snapshot (null until the first probe)
+        // so dashboards can badge stale pins / never-installed channel types
+        // without any network on a status path.
+        return {
+            success: true,
+            status: snapshot,
+            daemonBuild: getDaemonBuildInfo(),
+            upgradeFailure: readUpgradeFailureNotice(),
+            providerChannelStaleness: ctx.deps.providerLoader?.getChannelStalenessSnapshot?.() ?? null,
+        };
     },
 
     get_machine_runtime_stats: async (_ctx: LowFamilyContext, _args: any) => {

@@ -86,6 +86,20 @@ export type ProviderMachineStatus =
   | 'not_detected'
   | 'detected';
 
+/**
+ * Read-only verified-channel staleness probe result.
+ * staleTypes: pinned providers whose channel entry moved past the local pin.
+ * newTypes: activatable channel entries never activated nor installed here
+ * (unreachable by activate_provider_updates — needs an explicit install).
+ */
+export interface ProviderChannelStalenessSnapshot {
+  checkedAt: string;
+  channel: ProviderChannel;
+  staleTypes: string[];
+  newTypes: string[];
+  error?: string;
+}
+
 export interface MachineProviderCheckResult {
   ok: boolean;
   stage?: 'detection' | 'runnable' | 'verification';
@@ -262,6 +276,10 @@ export class ProviderLoader {
     downloadFile?: (url: string, destPath: string) => Promise<void>;
     extractTarball?: (tarPath: string, destDir: string) => Promise<void>;
   };
+  /** Running daemon version (normalized, no leading 'v'); '' when unknown. */
+  private readonly daemonVersion: string = '';
+  /** Last read-only staleness probe result (checkVerifiedChannelStaleness). */
+  private channelStalenessSnapshot: ProviderChannelStalenessSnapshot | null = null;
 
   private probeStarts: string[] = [];
   private siblingLogged = false;
@@ -444,6 +462,13 @@ export class ProviderLoader {
       downloadFile?: (url: string, destPath: string) => Promise<void>;
       extractTarball?: (tarPath: string, destDir: string) => Promise<void>;
     };
+    /**
+     * The running daemon's own version. When set, every successful verified
+     * channel sync stamps it to disk, and maybeSyncVerifiedChannelOnDaemonUpdate
+     * compares the stamp on boot — the "daemon update = provider activation"
+     * policy (owner decision 2026-08-10).
+     */
+    daemonVersion?: string;
   }) {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
     this.probeStarts = options?.probeStarts ?? [process.cwd(), __dirname];
@@ -461,6 +486,7 @@ export class ProviderLoader {
       ? null
       : (options?.channelStore ?? new ProviderChannelStore(ProviderChannelStore.defaultRoot(), this.logFn));
     this.channelSyncIO = options?.channelSyncIO;
+    this.daemonVersion = (options?.daemonVersion || '').trim().replace(/^v/, '');
 
     // Default directory for auto-downloads. Resolved via getConfigDir() so
     // ADHDEV_CONFIG_DIR (preview/stable instance isolation) is honored instead
@@ -840,6 +866,13 @@ export class ProviderLoader {
     if (report.activated.length > 0) {
       this.loadAll();
     }
+    if (report.status !== 'error') {
+      // Record which daemon version last completed a verified sync — the
+      // boot-time daemon-update activation (maybeSyncVerifiedChannelOnDaemonUpdate)
+      // short-circuits on this stamp. Errored syncs write nothing so the next
+      // boot retries.
+      this.writeChannelActivationStamp();
+    }
     return report;
   }
 
@@ -889,6 +922,127 @@ export class ProviderLoader {
     // verified channel from the registry.
     try { fs.mkdirSync(this.defaultProvidersDir, { recursive: true }); } catch { /* best-effort */ }
     return this.syncVerifiedChannel({ bootstrapAll: true });
+  }
+
+  /** Stamp path recording which daemon version last ran a successful verified sync. */
+  private channelActivationStampPath(): string {
+    return path.join(this.defaultProvidersDir, '.channel-activation-stamp.json');
+  }
+
+  private readChannelActivationStamp(): { daemonVersion?: string; channel?: string } | null {
+    try {
+      return JSON.parse(fs.readFileSync(this.channelActivationStampPath(), 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  private writeChannelActivationStamp(): void {
+    if (!this.daemonVersion) return;
+    try {
+      fs.mkdirSync(this.defaultProvidersDir, { recursive: true });
+      fs.writeFileSync(this.channelActivationStampPath(), JSON.stringify({
+        daemonVersion: this.daemonVersion,
+        channel: this.channel,
+        syncedAt: new Date().toISOString(),
+      }, null, 2));
+    } catch { /* best-effort — a missing stamp only means one extra sync next boot */ }
+  }
+
+ /**
+  * DAEMON-UPDATE = PROVIDER ACTIVATION (owner decision 2026-08-10, option C).
+  *
+  * The verified-channel pin deliberately only advances on an explicit
+  * activation ("the user saying now"), which left published provider fixes
+  * invisible on every machine where nobody pressed the button — live 08-10
+  * measurement: every fleet pin still carried the 08-07 bootstrap timestamp
+  * after a publish AND a full fleet restart. The daemon upgrade is the one
+  * update moment the user already trusts, so ride it: on the FIRST boot of a
+  * new daemon version (or after a channel switch), run one full verified
+  * sync. Every other boot stays network-free — the stamp written by the last
+  * successful sync short-circuits same-version boots. Fail-closed: an
+  * errored sync writes no stamp, so the next boot retries; last-known-good
+  * activations are untouched throughout (syncVerifiedChannel semantics).
+  *
+  * Empty stores are excluded — maybeFirstSyncVerifiedChannel owns bootstrap,
+  * and its successful sync writes the same stamp (both paths converge in
+  * syncVerifiedChannel), so a fresh install does not double-sync.
+  *
+  * Note this advances EXISTING targets (active pins + installed set) only. A
+  * provider type first published after bootstrap still needs an explicit
+  * catalog install — surfaced by checkVerifiedChannelStaleness as newTypes.
+  */
+  async maybeSyncVerifiedChannelOnDaemonUpdate(): Promise<ChannelSyncReport | null> {
+    if (!this.channelStore || !this.daemonVersion) return null;
+    if (this.countVerifiedChannelPointers() === 0) return null;
+    const stamp = this.readChannelActivationStamp();
+    if (stamp?.daemonVersion === this.daemonVersion && stamp?.channel === this.channel) return null;
+    this.log(`Daemon version transition detected (stamp=${stamp?.daemonVersion ?? 'none'}@${stamp?.channel ?? '-'} → ${this.daemonVersion}@${this.channel}) — running verified channel sync`);
+    return this.syncVerifiedChannel();
+  }
+
+ /**
+  * Read-only staleness probe (owner decision 2026-08-10, option A).
+  *
+  * ONE channel-listing request, no downloads, no pointer writes: compares the
+  * channel's current entries against the local active pins and reports
+  *   - staleTypes: pinned providers whose channel entry moved past the pin
+  *   - newTypes:   activatable channel entries this machine has never
+  *                 activated NOR installed — the class that made kimi
+  *                 invisible (published after bootstrap, unreachable even by
+  *                 activate_provider_updates because the sync target set is
+  *                 pins+installed).
+  * The result is cached on the loader for get_status_metadata so dashboards
+  * can badge without triggering network from a status path. Fail-closed: on
+  * any transport/shape error the previous snapshot is kept and the error is
+  * recorded on it.
+  */
+  async checkVerifiedChannelStaleness(): Promise<ProviderChannelStalenessSnapshot> {
+    const checkedAt = new Date().toISOString();
+    if (!this.channelStore) {
+      return this.channelStalenessSnapshot = { checkedAt, channel: this.channel, staleTypes: [], newTypes: [], error: 'verified channel store is disabled' };
+    }
+    const runtime = new ProviderChannelRuntime({
+      store: this.channelStore,
+      registryBaseUrl: this.registryBaseUrl,
+      providerTarballUrl: this.providerTarballUrl,
+      logFn: this.logFn,
+      ...this.channelSyncIO,
+    });
+    let entries: Awaited<ReturnType<ProviderChannelRuntime['fetchChannelEntries']>>;
+    try {
+      entries = await runtime.fetchChannelEntries(this.channel);
+    } catch (e: any) {
+      const prev = this.channelStalenessSnapshot;
+      return this.channelStalenessSnapshot = {
+        checkedAt,
+        channel: this.channel,
+        staleTypes: prev?.staleTypes ?? [],
+        newTypes: prev?.newTypes ?? [],
+        error: e?.message || String(e),
+      };
+    }
+    const pins = this.listVerifiedChannelPins();
+    const installedTargets = collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
+    const staleTypes: string[] = [];
+    const newTypes: string[] = [];
+    for (const entry of entries) {
+      if (!entry.bundleDigest) continue; // not activatable — never actionable
+      const pin = pins.get(entry.providerType);
+      if (pin) {
+        if (pin.active?.digest !== entry.bundleDigest) staleTypes.push(entry.providerType);
+      } else if (!installedTargets.has(entry.providerType)) {
+        newTypes.push(entry.providerType);
+      }
+    }
+    staleTypes.sort();
+    newTypes.sort();
+    return this.channelStalenessSnapshot = { checkedAt, channel: this.channel, staleTypes, newTypes };
+  }
+
+  /** Last probe result (null until the first checkVerifiedChannelStaleness run). Pure read. */
+  getChannelStalenessSnapshot(): ProviderChannelStalenessSnapshot | null {
+    return this.channelStalenessSnapshot;
   }
 
  /**

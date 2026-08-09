@@ -85,6 +85,11 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const machineRetryStatus = machineId ? daemonCtx.connectionRetryStatuses?.[machineId] : undefined
     const isMachineBlocked = !!machineRetryStatus?.blocked
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
+    // Provider-channel staleness badge on the Providers tab (owner decision
+    // 2026-08-10, option A): the daemon's 24h read-only probe caches a
+    // snapshot; this surfaces it WITHOUT the user opening the tab. null until
+    // the daemon's first probe ran — no badge, never a wrong one.
+    const [providerStaleness, setProviderStaleness] = useState<{ staleTypes: string[]; newTypes: string[] } | null>(null)
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
     void useCallback((daemonId: string, workspace: string) => {
         setGitDialogTarget({ daemonId, workspace })
@@ -113,6 +118,26 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         if (!needsMetadata) return
         void loadDaemonMetadata(machineId, { minFreshMs: 30_000 }).catch(() => {})
     }, [loadDaemonMetadata, machineEntry, machineId])
+
+    useEffect(() => {
+        if (!machineId || !machineEntry) return
+        let cancelled = false
+        void (async () => {
+            try {
+                const res = await sendDaemonCommand(machineId, 'get_status_metadata')
+                const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as
+                    { providerChannelStaleness?: { staleTypes?: string[]; newTypes?: string[]; error?: string } } | undefined
+                const snap = body?.providerChannelStaleness
+                if (!cancelled && snap && !snap.error) {
+                    setProviderStaleness({
+                        staleTypes: Array.isArray(snap.staleTypes) ? snap.staleTypes : [],
+                        newTypes: Array.isArray(snap.newTypes) ? snap.newTypes : [],
+                    })
+                }
+            } catch { /* badge is best-effort — absence of data shows no badge */ }
+        })()
+        return () => { cancelled = true }
+    }, [machineId, machineEntry?.id, sendDaemonCommand])
 
     useEffect(() => {
         if (!machineId || !machineEntry || activeTab !== 'overview') return
@@ -449,7 +474,14 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
         { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> {t('machine.detail.tabWorkspace')}</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
         { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> {t('machine.detail.tabHostedRuntimes')}</span> },
-        { id: 'providers', label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> {t('machine.detail.tabProviders')}</span> },
+        {
+            id: 'providers',
+            label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> {t('machine.detail.tabProviders')}</span>,
+            // Update badge: stale pins + never-installed channel types.
+            ...(providerStaleness && (providerStaleness.staleTypes.length + providerStaleness.newTypes.length) > 0
+                ? { count: providerStaleness.staleTypes.length + providerStaleness.newTypes.length }
+                : {}),
+        },
         { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> {t('machine.detail.tabSystem')}</span> },
         { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> {t('machine.detail.tabLogs')}</span> },
     ]
