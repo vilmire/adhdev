@@ -6,6 +6,7 @@ import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
+import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -1047,6 +1048,48 @@ export class MeshRuntimeStore {
      * rows (no provider stamp) and other providers on the same node do not consume
      * this provider's budget, so the cap is fully backward compatible.
      */
+    /**
+     * Active assignments charged to ONE SLOT — the (provider, model) pair whose
+     * `maxParallel` is being enforced — on this node.
+     *
+     * A row with NO `assignedModel` (claimed by an older daemon, or via an idle/event
+     * drain that cannot know the launched model) counts against EVERY slot of its
+     * provider. That is deliberately conservative: skipping such a row would let a
+     * pre-upgrade opus task go uncounted and admit a second one past a cap of 1, which
+     * is the over-subscription this cap exists to prevent. The cost is that a mixed
+     * fleet can refuse slightly early, which is the safe direction.
+     *
+     * Model comparison goes through modelNamesEquivalent so `opus`,
+     * `claude-opus-4-6` and `Claude Opus 4.6 (Thinking)` are one slot rather than
+     * three separate budgets (the canon-identity defect class).
+     */
+    private activeSlotAssignmentCount(
+        meshId: string,
+        nodeId: string,
+        providerType: string,
+        assignedModel: string,
+    ): number {
+        const rows = this.db.prepare(`
+            SELECT payload FROM mesh_queue
+            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
+        `).all(meshId, nodeId) as Array<{ payload: string }>;
+        let count = 0;
+        for (const row of rows) {
+            try {
+                const entry = JSON.parse(row.payload) as MeshWorkQueueEntry;
+                if (entry.assignedProviderType !== providerType) continue;
+                const rowModel = typeof entry.assignedModel === 'string' ? entry.assignedModel.trim() : '';
+                // Unstamped row → counts against every slot of this provider.
+                if (!rowModel) { count += 1; continue; }
+                // Both sides model-less is the provider-default slot; otherwise compare
+                // canonically.
+                if (!assignedModel) continue;
+                if (modelNamesEquivalent(rowModel, assignedModel)) count += 1;
+            } catch { /* skip unparsable row */ }
+        }
+        return count;
+    }
+
     private activeProviderAssignmentCount(meshId: string, nodeId: string, providerType: string): number {
         const rows = this.db.prepare(`
             SELECT payload FROM mesh_queue
@@ -1071,6 +1114,8 @@ export class MeshRuntimeStore {
         opts?: {
             providerType?: string;
             providerMaxParallel?: number;
+            assignedModel?: string;
+            slotMaxParallel?: number;
             nodeIsWorktree?: boolean;
             assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
         },
@@ -1099,6 +1144,27 @@ export class MeshRuntimeStore {
                 && Number.isFinite(providerMaxParallel)
                 && providerMaxParallel >= 0
                 && this.activeProviderAssignmentCount(meshId, nodeId, providerType) >= providerMaxParallel
+            ) {
+                return null;
+            }
+
+            // Per-SLOT maxParallel cap. A slot — the (provider, model) pair — is an
+            // independent unit: `maxParallel: 1` on claude-cli/opus means ONE opus task
+            // on this node at a time, even while a sibling claude-cli/sonnet slot is
+            // idle. The provider cap above bounds the shared pool (one CLI, one auth,
+            // one upstream rate limit); this bounds the individual slot. Stricter wins,
+            // so both are checked, and a claim missing either bound is refused.
+            //
+            // Enforced inside the same transaction as the provider cap so concurrent
+            // claims cannot both read "1 free" and both commit.
+            const assignedModel = typeof opts?.assignedModel === 'string' ? opts.assignedModel.trim() : '';
+            const slotMaxParallel = opts?.slotMaxParallel;
+            if (
+                providerType
+                && typeof slotMaxParallel === 'number'
+                && Number.isFinite(slotMaxParallel)
+                && slotMaxParallel >= 0
+                && this.activeSlotAssignmentCount(meshId, nodeId, providerType, assignedModel) >= slotMaxParallel
             ) {
                 return null;
             }
@@ -1228,6 +1294,10 @@ export class MeshRuntimeStore {
             entry.assignedNodeId = nodeId;
             entry.assignedSessionId = sessionId;
             if (providerType) entry.assignedProviderType = providerType;
+            // Per-slot cap accounting: record WHICH model this claim runs, so the next
+            // claim can count assignments against the right slot instead of lumping
+            // every same-provider task into one pool.
+            if (assignedModel) entry.assignedModel = assignedModel;
             // P1 transcript-authority stamp (write-only for now): lets the
             // coordinator classify this worker without local provider access.
             if (opts?.assignedTranscriptProfile) entry.assignedTranscriptProfile = opts.assignedTranscriptProfile;

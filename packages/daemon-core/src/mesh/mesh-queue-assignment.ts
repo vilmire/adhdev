@@ -14,7 +14,7 @@ import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-deliv
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
+import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
@@ -29,7 +29,7 @@ import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
-import { decideSlotForModel, SLOT_MODEL_ABSENT_SKIP_REASON, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
+import { decideSlotForModel, isModelAllowedBySlot, SLOT_MODEL_ABSENT_SKIP_REASON, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
 import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, noteTargetPinCleared, rebindAttemptToLiveHolder } from './mesh-turn-ledger.js';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 
@@ -851,7 +851,27 @@ export function tryAssignQueueTask(
     // here where the claiming session's providerType + node policy are both known,
     // then enforced inside the atomic claim transaction so concurrent claims can't
     // overshoot it.
-    const providerMaxParallel = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), providerType);
+    const nodeSlotsForCap = resolveNodeCapabilitySlots(node, meshId);
+    const providerMaxParallel = resolveProviderMaxParallel(nodeSlotsForCap, providerType);
+    // PER-SLOT cap. `maxParallel` bounds ONE SLOT (a (provider, model) pair), not a
+    // shared provider pool: a node pinning claude-cli/opus to 1 means opus runs one
+    // task at a time even while the claude-cli/sonnet slot sits idle. Summing them
+    // (the provider cap above) let opus borrow sonnet's headroom and run up to the
+    // total, defeating the cost/rate-limit intent of pinning it.
+    //
+    // The model comes from the auto-launch routing decision, which is the only claim
+    // path that KNOWS which model it launched with (idle/event drains claim into a
+    // session that already exists, and a live CLI instance does not report a model).
+    // Without it, this falls back to the provider cap alone — the pre-existing
+    // behavior, never looser.
+    const assignedModel = typeof routingDecision?.resolvedModel === 'string' && routingDecision.resolvedModel.trim()
+        ? routingDecision.resolvedModel.trim()
+        : undefined;
+    const claimingSlot = nodeSlotsForCap.find(s =>
+        s.provider?.trim() === providerType && isModelAllowedBySlot(assignedModel, s));
+    const slotMaxParallel = claimingSlot
+        ? resolveSlotMaxParallel(nodeSlotsForCap, providerType, claimingSlot.model, isModelAllowedBySlot)
+        : undefined;
     // WTDISPATCH-FANOUT: tell the atomic claim whether the claiming node is a worktree
     // clone so a `convergence` task (base-only: merge → push → cleanup) is refused for
     // worktree sessions. Without it, every sibling worktree session on this daemon could
@@ -865,6 +885,8 @@ export function tryAssignQueueTask(
     const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags, {
         providerType,
         ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
+        ...(assignedModel ? { assignedModel } : {}),
+        ...(slotMaxParallel !== undefined ? { slotMaxParallel } : {}),
         nodeIsWorktree,
         ...(assignedTranscriptProfile ? { assignedTranscriptProfile } : {}),
     });
@@ -2132,25 +2154,85 @@ function activeProviderAssignedCount(meshId: string, nodeId: string, providerTyp
 }
 
 /**
+ * Active assignments charged to ONE SLOT — the (provider, model) pair — on this node.
+ *
+ * The slot is the unit `maxParallel` bounds (see resolveSlotMaxParallel), so a task
+ * running claude-cli/opus must not consume the claude-cli/sonnet slot's budget.
+ *
+ * BACK-COMPAT: rows claimed before `assignedModel` existed (or by an older daemon)
+ * carry no model. Such a row is counted against EVERY slot of its provider — the
+ * conservative direction. Ignoring it instead would let a pre-upgrade opus task go
+ * unnoticed and allow a second one past a cap of 1, which is precisely the
+ * over-subscription this change exists to prevent.
+ */
+function activeSlotAssignedCount(
+    meshId: string,
+    nodeId: string,
+    providerType: string,
+    slot: NodeCapabilitySlot,
+): number {
+    return getQueue(meshId, { status: ['assigned'] as any }).filter(task => {
+        if (!daemonIdsEquivalent(task.assignedNodeId, nodeId)) return false;
+        if (task.assignedProviderType !== providerType) return false;
+        const assignedModel = (task as any).assignedModel;
+        if (typeof assignedModel !== 'string' || !assignedModel.trim()) return true; // legacy row
+        return isModelAllowedBySlot(assignedModel, slot);
+    }).length;
+}
+
+/**
+ * Remaining-capacity verdict for one slot on a node, applying BOTH axes:
+ *
+ *   - the SLOT cap (provider, model) — an independent budget per slot, so idle
+ *     headroom on a sibling slot never flows into a saturated one;
+ *   - the PROVIDER cap (summed across that provider's slots) — still meaningful
+ *     because same-provider slots share one CLI, one auth and one upstream rate
+ *     limit, so an operator who wrote opus:1 + sonnet:3 also implied claude-cli:4.
+ *
+ * Stricter wins (a claim must satisfy both). Keeping the provider axis can only ever
+ * refuse MORE than before, never less, so no existing configuration is silently
+ * widened by this change.
+ */
+function slotCapacityRemaining(
+    meshId: string,
+    nodeId: string,
+    node: any,
+    slot: NodeCapabilitySlot,
+): { available: boolean; slotCap?: number; providerCap?: number } {
+    const providerType = typeof slot.provider === 'string' ? slot.provider.trim() : '';
+    if (!providerType) return { available: false };
+    const slots = resolveNodeCapabilitySlots(node, meshId);
+
+    const slotCap = resolveSlotMaxParallel(slots, providerType, slot.model, isModelAllowedBySlot);
+    if (slotCap !== undefined && activeSlotAssignedCount(meshId, nodeId, providerType, slot) >= slotCap) {
+        return { available: false, slotCap };
+    }
+    const providerCap = resolveProviderMaxParallel(slots, providerType);
+    if (providerCap !== undefined && activeProviderAssignedCount(meshId, nodeId, providerType) >= providerCap) {
+        return { available: false, slotCap, providerCap };
+    }
+    return { available: true, slotCap, providerCap };
+}
+
+/**
  * Does `slot` currently have capacity for one more task on this node?
  *
- * SLOT MODEL GUARD support. Capacity is tracked per (node, provider) — the caps
- * of same-provider slots are summed by resolveProviderMaxParallel — so a slot's
- * availability is that provider's remaining headroom on this node. A provider
- * with no declared cap is uncapped and always available.
+ * Capacity is per SLOT — its own (provider, model) budget — and additionally bounded
+ * by the provider-wide pool (see slotCapacityRemaining). A slot with no declared cap,
+ * on a provider with no declared cap, is uncapped and always available.
  *
- * This mirrors the pre-launch cap check already applied below for the selected
- * provider; the authoritative enforcement remains the atomic claim transaction.
- * Being approximate here is safe in the right direction: if this says "available"
- * and the claim then refuses, the task simply stays queued and retries — the
- * same place it would have waited anyway.
+ * It must stay per-slot for the two consumers to agree: the SLOT MODEL GUARD decides
+ * run/wait/notify from it, and provider SELECTION ranks slots with headroom first. If
+ * this reverted to a provider-summed reading, a saturated opus slot would still look
+ * "available" while its provider pool had room, and selection would rank it ahead of an
+ * idle sibling — reintroducing the starvation that made a second provider unreachable.
+ *
+ * The authoritative enforcement remains the atomic claim transaction; being approximate
+ * here is safe in the right direction — if this says "available" and the claim then
+ * refuses, the task simply stays queued and retries.
  */
 function slotHasCapacity(meshId: string, nodeId: string, node: any, slot: NodeCapabilitySlot): boolean {
-    const providerType = typeof slot.provider === 'string' ? slot.provider.trim() : '';
-    if (!providerType) return false;
-    const cap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), providerType);
-    if (cap === undefined) return true;             // no declared cap → uncapped
-    return activeProviderAssignedCount(meshId, nodeId, providerType) < cap;
+    return slotCapacityRemaining(meshId, nodeId, node, slot).available;
 }
 
 export function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {
@@ -2572,6 +2654,20 @@ export function __decideSlotForModelForTests(
 /** Test hook: is a skip reason one that pages the coordinator? */
 export function __isActionableSkipReasonForTests(reason: string): boolean {
     return isActionableSkipReason(reason);
+}
+
+/**
+ * Test hook: the per-slot capacity verdict (slot cap AND provider cap) the SLOT MODEL
+ * GUARD and provider selection both consume. Exposed so a test can pin the per-slot
+ * accounting without spawning sessions.
+ */
+export function __slotHasCapacityForTests(
+    meshId: string,
+    nodeId: string,
+    node: any,
+    slot: NodeCapabilitySlot,
+): boolean {
+    return slotHasCapacity(meshId, nodeId, node, slot);
 }
 
 /**

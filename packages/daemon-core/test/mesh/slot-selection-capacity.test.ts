@@ -69,7 +69,7 @@ const DIFFICULT = { difficulty: 'difficult' as const };
  * queue directly with `assigned` rows — exactly what activeProviderAssignedCount
  * counts (status 'assigned' + assignedNodeId + assignedProviderType).
  */
-function saturate(meshId: string, occupancy: Record<string, number>): void {
+function saturate(meshId: string, occupancy: Record<string, number>, model?: string): void {
     const rows: any[] = [];
     for (const [providerType, n] of Object.entries(occupancy)) {
         for (let i = 0; i < n; i++) {
@@ -80,6 +80,7 @@ function saturate(meshId: string, occupancy: Record<string, number>): void {
                 status: 'assigned',
                 assignedNodeId: NODE_ID,
                 assignedProviderType: providerType,
+                ...(model ? { assignedModel: model } : {}),
                 assignedSessionId: `sess_${providerType}_${i}`,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
@@ -113,15 +114,32 @@ describe('provider selection orders slots by capacity, then fitness', () => {
         expect(order[0].model).toBe('kimi-code/k3');
     });
 
-    it('kimi does NOT jump the queue while claude-cli still has headroom', () => {
+    it('kimi does NOT jump the queue while the opus slot still has headroom', () => {
         const meshId = freshMesh();
-        saturate(meshId, { 'claude-cli': 3 }); // cap is 4 → one slot still free
+        // Load the SONNET slot only (its own cap is 3). The opus slot has run nothing,
+        // so it keeps winning: capacity is a tie-break among equally-fit slots, not a
+        // preference flip.
+        //
+        // Models are stamped explicitly because caps are now per SLOT, not per provider:
+        // three UNSTAMPED claude-cli rows would count against every claude-cli slot
+        // (the conservative legacy-row rule) and would legitimately exhaust opus's
+        // cap of 1 — a different scenario from the one this test is about.
+        saturate(meshId, { 'claude-cli': 3 }, 'sonnet');
 
         const order = __orderSlotsForProviderSelectionForTests(meshId, NODE_ID, TWO_PROVIDER_NODE, DIFFICULT);
-        // Capacity is a tie-break among equally-fit slots, not a preference flip:
-        // an un-saturated higher-priority provider keeps winning.
         expect(order[0].provider).toBe('claude-cli');
         expect(order[0].model).toBe('opus');
+    });
+
+    it('★ loading the opus slot alone hands the difficult task to kimi', () => {
+        const meshId = freshMesh();
+        // ONE opus task exhausts the opus slot (maxParallel: 1) even though the sonnet
+        // slot and the claude-cli pool both have room. This is the owner's intent:
+        // "opus runs one task on this machine", sibling headroom must not leak into it.
+        saturate(meshId, { 'claude-cli': 1 }, 'opus');
+
+        const order = __orderSlotsForProviderSelectionForTests(meshId, NODE_ID, TWO_PROVIDER_NODE, DIFFICULT);
+        expect(order[0].provider).toBe('kimi');
     });
 
     it('when EVERY slot is saturated the order is unchanged (wait semantics preserved)', () => {

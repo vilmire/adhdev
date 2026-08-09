@@ -828,6 +828,20 @@ export interface MeshWorkQueueEntry {
      */
     assignedProviderType?: string;
     /**
+     * Model the claiming session actually launched with, stamped at claim time so the
+     * queue can count active assignments PER SLOT — a slot being the (provider, model)
+     * pair its `maxParallel` bounds. Without it, claude-cli/opus and claude-cli/sonnet
+     * are indistinguishable on the row and their caps collapse into one summed provider
+     * pool, letting a slot pinned to 1 run as many tasks as its siblings' headroom
+     * allowed.
+     *
+     * Absent on rows claimed by an older daemon, and on claim paths that cannot know
+     * the model (idle/event drains claim into an already-running session). Consumers
+     * MUST treat an absent value as "counts against every slot of its provider" — the
+     * conservative direction; ignoring it would under-count and over-subscribe a cap.
+     */
+    assignedModel?: string;
+    /**
      * Transcript-authority class of the claiming session's provider, stamped at
      * claim time (P1 of the transcript-authority unification — root repo
      * docs/design/2026-07-25-transcript-authority-unification.md). Lets the
@@ -1465,6 +1479,10 @@ export function claimNextTask(
     opts?: {
         providerType?: string;
         providerMaxParallel?: number;
+        /** Model the claiming session launched with — stamped so per-slot caps can be counted. */
+        assignedModel?: string;
+        /** Enforced cap of the SLOT (provider, model) this claim belongs to. */
+        slotMaxParallel?: number;
         nodeIsWorktree?: boolean;
         assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
     },
@@ -1668,6 +1686,7 @@ export function cancelTask(
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
         delete entry.assignedProviderType;
+        delete entry.assignedModel;
         delete entry.dispatchTimestamp;
         // Belt-and-suspenders: bump the dispatch nonce so any in-flight inject the
         // now-orphaned worker later echoes carries a stale nonce and is rejected by the
@@ -1920,6 +1939,7 @@ export function reclaimStrandedAssignedTask(
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
         delete entry.assignedProviderType;
+        delete entry.assignedModel;
         delete entry.dispatchTimestamp;
         // REDRIVE-DUP: bump the dispatch nonce so the ORIGINAL inject to prevNode/prevSession
         // (which is delivered-but-unconsumed and about to be re-dispatched elsewhere) now

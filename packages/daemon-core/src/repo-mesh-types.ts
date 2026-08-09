@@ -1120,6 +1120,67 @@ export function resolveProviderMaxParallel(
     return total;
 }
 
+/**
+ * Resolve the enforced per-SLOT maxParallel cap: how many tasks may run concurrently
+ * on the slot identified by (provider, model), or undefined when no such slot
+ * declares a finite cap (uncapped).
+ *
+ * WHY THIS EXISTS, SEPARATE FROM resolveProviderMaxParallel: a slot is an independent
+ * unit and its `maxParallel` is that slot's own concurrency, not a contribution to a
+ * shared provider pool. A node declaring
+ *   { provider: 'claude-cli', model: 'opus',   difficulty: ['difficult'], maxParallel: 1 }
+ *   { provider: 'claude-cli', model: 'sonnet', difficulty: ['medium'],    maxParallel: 3 }
+ * means "opus runs at most ONE task on this machine, ever" — the point of pinning opus
+ * to 1 is cost and rate-limit control. Summing those into a single claude-cli pool of 4
+ * let opus run up to 4 concurrently as long as the sonnet slot sat idle, defeating the
+ * cap entirely. Idle headroom on the sonnet slot must NOT flow to opus.
+ *
+ * SLOT IDENTITY is (provider, model), deliberately not the array index and not the full
+ * slot shape:
+ *   - The array index is unstable: slot writes are WHOLESALE replacements, so index 1
+ *     can denote a different slot between when a task was claimed and when it is
+ *     counted, charging in-flight work to the wrong budget.
+ *   - The full composite (…+thinkingLevel+difficulty+capability) is over-specific:
+ *     editing a slot's difficulty range would orphan its in-flight rows, silently
+ *     freeing their budget at the exact moment an operator was retuning it.
+ *   (provider, model) is the axis the cap is actually expressed on, and it is stable
+ *   across edits to the fields that do not change which model runs.
+ *
+ * Model matching is injected (`modelMatchesSlot`) rather than imported so this module
+ * stays dependency-free; callers pass isModelAllowedBySlot, which uses the same
+ * canonical identity as the slot-model guard. That way the surface forms `opus`,
+ * `claude-opus-4-6` and `Claude Opus 4.6 (Thinking)` all resolve to ONE slot instead of
+ * fragmenting its budget (the canon-identity defect class), and a model-less slot pairs
+ * with a model-less launch rather than matching everything.
+ *
+ * A slot with no `maxParallel` is UNCAPPED (returns undefined) — matching the prior
+ * behavior for uncapped slots.
+ */
+export function resolveSlotMaxParallel(
+    slots: NodeCapabilitySlot[] | null | undefined,
+    providerType: string | null | undefined,
+    model: string | null | undefined,
+    modelMatchesSlot: (model: string | undefined, slot: NodeCapabilitySlot) => boolean,
+): number | undefined {
+    const wanted = typeof providerType === 'string' ? providerType.trim().toLowerCase() : '';
+    if (!wanted) return undefined;
+    if (!Array.isArray(slots)) return undefined;
+    const wantedModel = typeof model === 'string' && model.trim() ? model.trim() : undefined;
+    let total: number | undefined;
+    for (const slot of slots) {
+        if (!slot || typeof slot !== 'object') continue;
+        const type = typeof slot.provider === 'string' ? slot.provider.trim().toLowerCase() : '';
+        if (!type || type !== wanted) continue;
+        if (!modelMatchesSlot(wantedModel, slot)) continue;
+        const raw = Number(slot.maxParallel);
+        if (!Number.isFinite(raw) || raw < 0) continue;
+        // Sum only across slots that are the SAME (provider, model) — i.e. genuine
+        // duplicates of one logical slot, not different models on one provider.
+        total = (total ?? 0) + Math.floor(raw);
+    }
+    return total;
+}
+
 // ─── Capabilities ───────────────────────────────
 
 export interface RepoMeshNodeCapabilities {
