@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+    MESH_COORDINATOR_AUTO_IMPORT_FORMATS,
     buildMeshCoordinatorMcpServerEntry,
     getMcpServersKey,
+    isSupportedMeshCoordinatorConfigFormat,
     parseMeshCoordinatorMcpConfig,
     serializeMeshCoordinatorMcpConfig,
 } from '../../src/mesh/mesh-coordinator-config.js';
@@ -57,5 +59,23 @@ describe('opencode_json coordinator MCP config format', () => {
         };
         expect(Object.keys(merged.mcp)).toEqual(['other', 'adhdev-mesh']);
         expect(merged.instructions).toEqual(['docs/guide.md']);
+    });
+
+    // COORD-FORMAT-ALLOWLIST (live P4 verification catch): the launch path used
+    // to carry its own two-entry format allowlist, so opencode_json passed the
+    // schema + helpers but was rejected at launch with
+    // "Unsupported auto-import MCP config format". The launch gate now consumes
+    // this shared list — every format the helpers support must be in it.
+    it('the shared auto-import format list covers every format the helpers support', () => {
+        expect([...MESH_COORDINATOR_AUTO_IMPORT_FORMATS].sort())
+            .toEqual(['claude_mcp_json', 'hermes_config_yaml', 'opencode_json']);
+        for (const format of MESH_COORDINATOR_AUTO_IMPORT_FORMATS) {
+            expect(isSupportedMeshCoordinatorConfigFormat(format)).toBe(true);
+            // parse/serialize/build must all accept it — the list and the helpers move together.
+            expect(() => buildMeshCoordinatorMcpServerEntry(format, server)).not.toThrow();
+            expect(parseMeshCoordinatorMcpConfig(serializeMeshCoordinatorMcpConfig({}, format), format)).toEqual({});
+        }
+        expect(isSupportedMeshCoordinatorConfigFormat('cli_command')).toBe(false);
+        expect(isSupportedMeshCoordinatorConfigFormat(undefined)).toBe(false);
     });
 });

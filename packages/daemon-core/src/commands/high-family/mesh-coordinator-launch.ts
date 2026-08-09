@@ -29,6 +29,7 @@ import {
     loadHermesCoordinatorBaseConfig,
     stripHermesCoordinatorTempModelProviderOverrides,
     copyHermesCoordinatorCredentialFiles,
+    isSupportedMeshCoordinatorConfigFormat,
     type MeshCoordinatorConfigFormat,
 } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
@@ -322,6 +323,13 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         }
                         cliType = resolved.providerType;
                     }
+                    // COORD-ALIAS: canonicalize before the manifest gate. resolve()/getMeta()
+                    // are exact-type lookups, so an alias ('claude' for 'claude-cli') would
+                    // return no provider and misreport a coordinator-capable CLI as
+                    // mesh_coordinator_unsupported. Scope to cli/acp — coordinator sessions
+                    // are never IDE-webview providers, and the unscoped direct match would
+                    // hit e.g. extension/codex (type 'codex') instead of cli/codex-cli.
+                    cliType = ctx.deps.providerLoader.resolveAlias?.(cliType, ['cli', 'acp']) || cliType;
                     const providerMeta = ctx.deps.providerLoader.resolve?.(cliType) || ctx.deps.providerLoader.getMeta(cliType);
                     const coordinatorSetup = resolveMeshCoordinatorSetup({
                         provider: providerMeta,
@@ -589,7 +597,10 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     }
 
                     const configFormat = coordinatorSetup.configFormat as MeshCoordinatorConfigFormat;
-                    if (configFormat !== 'claude_mcp_json' && configFormat !== 'hermes_config_yaml') {
+                    // Gate on the shared format list (single source next to the
+                    // parse/serialize/build helpers) — a hand-maintained allowlist here
+                    // silently rejected opencode_json after the format landed everywhere else.
+                    if (!isSupportedMeshCoordinatorConfigFormat(configFormat)) {
                         return {
                             success: false,
                             code: 'mesh_coordinator_unsupported',

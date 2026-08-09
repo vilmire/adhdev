@@ -16,6 +16,21 @@ import { join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 import type { MeshCoordinatorConfigFormat } from './mesh-refine-gates.js';
 
+/**
+ * Every auto-import config format this module can parse/serialize/build an
+ * entry for. The coordinator LAUNCH path gates on this list before writing a
+ * workspace config — keep it here, next to the parse/serialize/build helpers,
+ * so a new format cannot pass schema validation yet be rejected at launch
+ * (the opencode_json miss: the format existed in the enum, the schema and the
+ * helpers below, but the launch path carried its own two-entry allowlist).
+ */
+export const MESH_COORDINATOR_AUTO_IMPORT_FORMATS: readonly MeshCoordinatorConfigFormat[] =
+    ['claude_mcp_json', 'hermes_config_yaml', 'opencode_json'];
+
+export function isSupportedMeshCoordinatorConfigFormat(format: unknown): format is MeshCoordinatorConfigFormat {
+    return MESH_COORDINATOR_AUTO_IMPORT_FORMATS.includes(format as MeshCoordinatorConfigFormat);
+}
+
 function loadYamlModule(): { load: (input: string) => any; dump: (input: any, options?: Record<string, any>) => string } {
     return yaml as { load: (input: string) => any; dump: (input: any, options?: Record<string, any>) => string };
 }
