@@ -41,6 +41,7 @@
  */
 
 import { isCliGeneratingLikeStatus } from '../cli-provider-status-helpers';
+import { NATIVE_HISTORY_MESH_IDLE_SETTLE_MS } from '../cli-provider-instance-types';
 
 export type EvidenceSource = 'parsed' | 'external-native' | 'unavailable';
 export type AuthorityTiming = 'immediate' | 'floor' | 'hold';
@@ -579,4 +580,77 @@ export function decideCompletionFlush(
     const { block, evidencePatch } = evaluateFinalizationBlock(armAfterPre, reader, policy);
     const verdict = decideCompletionVerdict(armAfterPre, reader, policy, block);
     return { ...verdict, armPatch: { ...pre.armPatch, ...evidencePatch, ...verdict.armPatch } };
+}
+
+// ---------------------------------------------------------------------------
+// ARM POLICY — the generating→idle transition's completion-arm decisions.
+// These were inline branches in detectStatusTransition; they are the WHETHER/
+// WHEN judgment for arming (not flushing) a completion, so they belong to the
+// engine. The caller still owns the clock, the pending-record construction and
+// all logging/tracing keyed off the returned decision.
+// ---------------------------------------------------------------------------
+
+/**
+ * Settle-window selection for the normal (debounce-elapsed) completion arm.
+ *
+ * - Native-history providers (transcript authoritative) flush immediately —
+ *   UNLESS the session progresses autonomously (mesh worker OR self-
+ *   coordinator), where a short settle window lets the continuity guard catch
+ *   a background-child false idle / inter-approval valley (FALSEIDLE-BGCHILD-a,
+ *   FALSE-IDLE self-coordinator settle) instead of firing an early completion
+ *   the coordinator can never correct.
+ * - Screen-parsed providers keep the historical 3s debounce.
+ */
+export function resolveCompletionSettleDelayMs(input: {
+    ownsExternalHistory: boolean;
+    autonomousMeshSession: boolean;
+}): number {
+    if (!input.ownsExternalHistory) return 3000;
+    return input.autonomousMeshSession ? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS : 0;
+}
+
+export type ShortGenerationAction = 'settle_arm' | 'suppress' | 'inline_fire';
+
+export interface ShortGenerationDecision {
+    action: ShortGenerationAction;
+    /** FALSE-IDLE short-gen: zero-evidence dip — as unproven as a floor-class miss. */
+    missingEvidence: boolean;
+    /** Present only for settle_arm. */
+    flushDelayMs?: number;
+}
+
+/**
+ * Routing for a completion whose generating phase was shorter than the UI
+ * debounce (the "short generating" branch).
+ *
+ * - Autonomous mesh sessions NEVER fire inline: the short branch used to be a
+ *   point-sample that synchronously emitted a false completion the
+ *   coordinator could not correct (FALSE-IDLE short-gen settle, the core
+ *   fix). They arm the same settle + continuity machinery as the normal
+ *   branch.
+ * - Non-mesh with missing evidence suppresses entirely (no coordinator to
+ *   notify; an unproven completion would surface an empty turn).
+ * - Non-mesh with confirmed evidence keeps the interactive fast-path: a fast
+ *   turn surfaces its completion promptly, and there is no coordinator to be
+ *   falsely notified.
+ *
+ * missingEvidence folds 'unavailable' into the floor/external-native
+ * predicate: a zero-evidence dip (the mid-turn point-sample that triggered
+ * the false-idle bug) is weak/held, never fired as genuine. A confirmed
+ * finalSummary always clears the gate.
+ */
+export function decideShortGenerationCompletion(input: {
+    timing: AuthorityTiming;
+    evidenceSource: EvidenceSource;
+    hasFinalSummary: boolean;
+    autonomousMeshSession: boolean;
+}): ShortGenerationDecision {
+    const missingEvidence = (input.timing === 'floor'
+        || input.evidenceSource === 'external-native'
+        || input.evidenceSource === 'unavailable') && !input.hasFinalSummary;
+    if (input.autonomousMeshSession) {
+        return { action: 'settle_arm', missingEvidence, flushDelayMs: NATIVE_HISTORY_MESH_IDLE_SETTLE_MS };
+    }
+    if (missingEvidence) return { action: 'suppress', missingEvidence };
+    return { action: 'inline_fire', missingEvidence: false };
 }

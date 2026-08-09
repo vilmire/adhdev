@@ -39,6 +39,7 @@ import {
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
 } from '../cli-provider-instance-types.js';
+import { decideShortGenerationCompletion, resolveCompletionSettleDelayMs } from './completion-engine.js';
 
 /**
  * The surface of CliProviderInstance the transition tick reads/writes. All
@@ -425,21 +426,22 @@ export function runStatusTransitionTick(host: StatusTransitionHost): void {
                 const shortTaskId = host.completingTurnTaskId();
                 host.generatingDebouncePending = null;
                 host.generatingStartedAt = 0;
-                // FALSE-IDLE short-gen: a short-generating completion with NO transcript
-                // backing at all (shortEvidenceSource === 'unavailable': both the screen parse
-                // AND the external-native transcript failed to yield a final assistant) is just
-                // as unproven as an 'external-native' source that returned no final assistant.
-                // Fold 'unavailable' into the missing-evidence predicate so a zero-evidence dip
-                // (the mid-turn point-sample that triggered this whole false-idle bug) is treated
-                // as weak/held, not fired as a genuine completion. A real shortFinalSummary being
-                // present still clears the gate (the !shortFinalSummary guard is unchanged).
-                const missingEvidence = (resolveTranscriptAuthorityProfile(host.provider).timing === 'floor'
-                    || shortEvidenceSource === 'external-native'
-                    || shortEvidenceSource === 'unavailable') && !shortFinalSummary;
+                // Route the three-way outcome (mesh settle-arm / non-mesh suppress /
+                // non-mesh inline fire) through the engine's pure arm policy —
+                // decideShortGenerationCompletion carries the FALSE-IDLE short-gen
+                // rationale (zero-evidence dips fold into missingEvidence, autonomous
+                // mesh sessions never fire inline).
+                const shortDecision = decideShortGenerationCompletion({
+                    timing: resolveTranscriptAuthorityProfile(host.provider).timing,
+                    evidenceSource: shortEvidenceSource,
+                    hasFinalSummary: !!shortFinalSummary,
+                    autonomousMeshSession: host.isAutonomousMeshSession(),
+                });
+                const missingEvidence = shortDecision.missingEvidence;
                 if (missingEvidence) {
                     LOG.warn('CLI', `[${host.type}] short completion missing final assistant evidence (source=${shortEvidenceSource})`);
                 }
-                if (host.isAutonomousMeshSession()) {
+                if (shortDecision.action === 'settle_arm') {
                     // FALSE-IDLE short-gen settle (the core fix): for an autonomously-progressing
                     // mesh session (delegated worker OR self-coordinator), the short-generating
                     // branch was a POINT-SAMPLE — a single idle read from getStatus({allowParse:false})
@@ -488,13 +490,13 @@ export function runStatusTransitionTick(host: StatusTransitionHost): void {
                         turnStartedAt: shortTurnStartedAt || null,
                         busyEpochAtArm: host.busyEpoch,
                         lastOutputAtArm: typeof adapterStatus?.lastOutputAt === 'number' ? adapterStatus.lastOutputAt : null,
-                        flushDelay: NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
+                        flushDelay: shortDecision.flushDelayMs ?? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
                         evidenceSource: shortEvidenceSource,
                         missingEvidence,
                         hasFinalSummary: !!shortFinalSummary,
                     });
-                    host.scheduleCompletedDebounceFlush(NATIVE_HISTORY_MESH_IDLE_SETTLE_MS);
-                } else if (missingEvidence) {
+                    host.scheduleCompletedDebounceFlush(shortDecision.flushDelayMs ?? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS);
+                } else if (shortDecision.action === 'suppress') {
                     // NON-MESH, missing evidence: suppress the completion event entirely (the
                     // original !hasMeshContext suppression). A genuinely non-mesh session has no
                     // coordinator to notify, and firing a completion with no confirmed final
@@ -581,9 +583,10 @@ export function runStatusTransitionTick(host: StatusTransitionHost): void {
                 // no non-mesh behaviour changes; this only ADDS a settle window (strictly
                 // stricter — the guard can only ever CANCEL a pending flush, never emit more).
                 const meshSettleSession = host.isAutonomousMeshSession();
-                const flushDelay = ownsExternalHistory
-                    ? (meshSettleSession ? NATIVE_HISTORY_MESH_IDLE_SETTLE_MS : 0)
-                    : 3000;
+                const flushDelay = resolveCompletionSettleDelayMs({
+                    ownsExternalHistory,
+                    autonomousMeshSession: meshSettleSession,
+                });
                 LOG.debug('CLI', `[${host.type}] set completedDebouncePending duration=${duration}s ownsExternalHistory=${ownsExternalHistory} meshSettle=${meshSettleSession} flushDelay=${flushDelay}ms generatingStartedAt=${host.generatingStartedAt}`);
                 if (host.completionTraceOn()) host.recordCompletionGateTrace('arm', {
                     branch: 'normal',

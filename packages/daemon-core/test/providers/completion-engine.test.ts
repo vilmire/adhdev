@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
     decideCompletionFlush,
+    decideShortGenerationCompletion,
     evaluateFinalizationBlock,
+    resolveCompletionSettleDelayMs,
     type CompletionArmState,
     type CompletionPolicy,
     type CompletionSignalReader,
 } from '../../src/providers/completion/completion-engine';
+import { NATIVE_HISTORY_MESH_IDLE_SETTLE_MS } from '../../src/providers/cli-provider-instance-types';
 
 // Historical production values — tests use the same numbers the incidents were fixed at.
 const POLICY: CompletionPolicy = {
@@ -454,5 +457,51 @@ describe('decideCompletionFlush — hold pipeline ordering and release', () => {
             POLICY,
         );
         expect((repeat as any).firstOfReason).toBe(false);
+    });
+});
+
+describe('arm policy — settle-window selection (generating→idle normal branch)', () => {
+    it('native-history + autonomous mesh gets the settle window; plain native-history flushes immediately', () => {
+        expect(resolveCompletionSettleDelayMs({ ownsExternalHistory: true, autonomousMeshSession: true }))
+            .toBe(NATIVE_HISTORY_MESH_IDLE_SETTLE_MS);
+        expect(resolveCompletionSettleDelayMs({ ownsExternalHistory: true, autonomousMeshSession: false })).toBe(0);
+    });
+
+    it('screen-parsed providers keep the historical 3s debounce regardless of mesh', () => {
+        expect(resolveCompletionSettleDelayMs({ ownsExternalHistory: false, autonomousMeshSession: true })).toBe(3000);
+        expect(resolveCompletionSettleDelayMs({ ownsExternalHistory: false, autonomousMeshSession: false })).toBe(3000);
+    });
+});
+
+describe('arm policy — short-generation routing (FALSE-IDLE short-gen settle)', () => {
+    it('an autonomous mesh session NEVER fires inline — always the settle arm, even with a confirmed summary', () => {
+        const withSummary = decideShortGenerationCompletion({
+            timing: 'immediate', evidenceSource: 'parsed', hasFinalSummary: true, autonomousMeshSession: true,
+        });
+        expect(withSummary).toEqual({ action: 'settle_arm', missingEvidence: false, flushDelayMs: NATIVE_HISTORY_MESH_IDLE_SETTLE_MS });
+        const zeroEvidenceDip = decideShortGenerationCompletion({
+            timing: 'floor', evidenceSource: 'unavailable', hasFinalSummary: false, autonomousMeshSession: true,
+        });
+        expect(zeroEvidenceDip.action).toBe('settle_arm');
+        expect(zeroEvidenceDip.missingEvidence).toBe(true);
+    });
+
+    it('missingEvidence folds floor-class, external-native, AND zero-evidence dips; a summary clears all three', () => {
+        for (const input of [
+            { timing: 'floor', evidenceSource: 'parsed' },
+            { timing: 'immediate', evidenceSource: 'external-native' },
+            { timing: 'immediate', evidenceSource: 'unavailable' },
+        ] as const) {
+            expect(decideShortGenerationCompletion({ ...input, hasFinalSummary: false, autonomousMeshSession: false }))
+                .toEqual({ action: 'suppress', missingEvidence: true });
+            expect(decideShortGenerationCompletion({ ...input, hasFinalSummary: true, autonomousMeshSession: false }).action)
+                .toBe('inline_fire');
+        }
+    });
+
+    it('non-mesh interactive fast-path keeps the inline fire when evidence is confirmed-class', () => {
+        expect(decideShortGenerationCompletion({
+            timing: 'immediate', evidenceSource: 'parsed', hasFinalSummary: false, autonomousMeshSession: false,
+        })).toEqual({ action: 'inline_fire', missingEvidence: false });
     });
 });
