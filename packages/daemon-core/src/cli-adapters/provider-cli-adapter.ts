@@ -85,6 +85,7 @@ import {
 } from './provider-cli-runtime.js';
 import { detectBackgroundTaskActive } from '../providers/spec/background-task-detector.js';
 import type { NativeHistoryConfig } from '../providers/spec/types.js';
+import { createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss } from './startup-dismiss.js';
 
 export {
     normalizeCliProviderForRuntime,
@@ -223,6 +224,8 @@ export class ProviderCliAdapter implements CliAdapter {
     private startupSettleTimer: NodeJS.Timeout | null = null;
     private spawnAt = 0;
     private startupFirstOutputAt = 0;
+    // OPENCODE-UPDATE-MODAL: spec-driven boot-prompt dismissal (see startup-dismiss.ts).
+    private startupDismissState = createStartupDismissState();
 
  // PTY I/O
     private onPtyDataCallback: ((data: string) => void) | null = null;
@@ -753,6 +756,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.startupParseGate = true;
         this.startupBuffer = '';
         this.startupFirstOutputAt = 0;
+        this.startupDismissState = createStartupDismissState();
         if (this.startupSettleTimer) { clearTimeout(this.startupSettleTimer); this.startupSettleTimer = null; }
         this.resetTerminalScreen(DEFAULT_SESSION_HOST_ROWS, DEFAULT_SESSION_HOST_COLS);
         this.pendingTerminalQueryTail = '';
@@ -783,6 +787,18 @@ export class ProviderCliAdapter implements CliAdapter {
         if (shouldReadScreen && normalizedScreenSnapshot !== this.lastScreenSnapshot) {
             this.lastScreenSnapshot = normalizedScreenSnapshot;
             this.lastScreenChangeAt = now;
+            // OPENCODE-UPDATE-MODAL: a boot-time prompt (e.g. opencode's
+            // "Update Available … esc") hijacks the composer before the first
+            // send. When the provider spec declares tui.startupDismiss, send its
+            // dismiss key — bounded (spawn window + attempt cap + per-snapshot
+            // dedupe in decideStartupDismiss) so it can never key-spam.
+            const dismissConfig = normalizeStartupDismissConfig((this.provider as any)?.tui?.startupDismiss);
+            const dismissVerdict = decideStartupDismiss(dismissConfig, this.startupDismissState, normalizedScreenSnapshot, this.spawnAt, now);
+            if (dismissVerdict.dismiss) {
+                recordStartupDismiss(this.startupDismissState, normalizedScreenSnapshot);
+                LOG.info('CLI', `[${this.cliType}] startup prompt matched /${dismissVerdict.matchedPattern}/ — sending spec dismiss key (attempt ${this.startupDismissState.attempts})`);
+                try { this.ptyProcess?.write(dismissConfig!.key); } catch { /* pty gone — nothing to dismiss */ }
+            }
         }
         if (this.startupParseGate && !this.startupFirstOutputAt && (cleanData.trim() || normalizedScreenSnapshot.trim())) {
             this.startupFirstOutputAt = now;
