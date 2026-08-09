@@ -22,7 +22,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const VENDOR_PATH = 'packages/daemon-standalone/vendor/mcp-server';
+// Every TRACKED vendor directory under packages/daemon-standalone/vendor. This guard
+// used to diff only vendor/mcp-server, leaving the committed session-host-daemon copy
+// unverified even though the same bundle:vendor run regenerates it from the same dists
+// and it carries identical drift risk. The sibling root guard already checks all three
+// of its copies; this keeps both layers symmetric.
+const VENDOR_PATHS = [
+  'packages/daemon-standalone/vendor/mcp-server',
+  'packages/daemon-standalone/vendor/session-host-daemon',
+];
 const isWin = process.platform === 'win32';
 const npm = isWin ? 'npm.cmd' : 'npm';
 
@@ -41,23 +49,37 @@ run(npm, ['run', 'build', '-w', 'packages/session-host-daemon']);
 run(npm, ['run', 'build', '-w', 'packages/mcp-server']);
 run(npm, ['run', 'bundle:vendor', '-w', 'packages/daemon-standalone']);
 
-try {
-  // Exclude *.map: sourcemaps are a non-reproducible debug artifact (see note above).
-  execFileSync(
-    'git',
-    ['diff', '--exit-code', '--ignore-cr-at-eol', '--', VENDOR_PATH, `:(exclude,glob)${VENDOR_PATH}/**/*.map`],
-    { stdio: 'inherit', cwd: root },
-  );
-} catch {
+// ★Compare against HEAD, not the index. A bare `git diff` is worktree-vs-index, which
+// this guard can never fail on: the bundle:vendor run above just rewrote the worktree,
+// and anything already `git add`ed matches the index by definition. A vendor copy that
+// was COMMITTED stale therefore diffed clean and the gate went green — the failure mode
+// this guard exists to catch. `diff HEAD` compares the committed bytes instead.
+const stalePaths = [];
+for (const vendorPath of VENDOR_PATHS) {
+  try {
+    // Exclude *.map: sourcemaps are a non-reproducible debug artifact (see note above).
+    execFileSync(
+      'git',
+      ['diff', '--exit-code', '--ignore-cr-at-eol', 'HEAD', '--', vendorPath, `:(exclude,glob)${vendorPath}/**/*.map`],
+      { stdio: 'inherit', cwd: root },
+    );
+  } catch {
+    stalePaths.push(vendorPath);
+  }
+}
+
+if (stalePaths.length > 0) {
   console.error(
-    `\n✗ ${VENDOR_PATH} is stale.\n` +
-    `  packages/mcp-server changed but the vendored copy was not re-synced.\n` +
+    `\n✗ ${stalePaths.length} vendored copy/copies are stale:\n` +
+    stalePaths.map((p) => `    ${p}\n`).join('') +
+    `  The corresponding source package(s) changed but the vendored copy was not re-synced.\n` +
     `  Fix (from the cloud monorepo root): npm run bundle:vendor:all\n` +
     `       — re-syncs BOTH the daemon-cloud and daemon-standalone vendor copies.\n` +
     `  Standalone-only (inside oss): npm run bundle:vendor -w packages/daemon-standalone\n` +
-    `  then commit the updated ${VENDOR_PATH}.\n`,
+    `  then commit the updated path(s) above.\n`,
   );
   process.exit(1);
 }
 
-console.log(`\n✓ ${VENDOR_PATH} is in sync with packages/mcp-server build output.`);
+console.log(`\n✓ All ${VENDOR_PATHS.length} vendored copies are in sync with their source build output:`);
+for (const vendorPath of VENDOR_PATHS) console.log(`    ${vendorPath}`);
