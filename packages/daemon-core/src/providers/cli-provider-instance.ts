@@ -79,6 +79,7 @@ import {
     TERMINAL_MESH_EVENTS,
 } from './cli-provider-instance-types.js';
 import { decideCompletionPreflight, decideCompletionVerdict, evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlushDecision, type CompletionPolicy, type CompletionSignalReader, type EvidenceSource } from './completion/completion-engine.js';
+import { closeSqliteProbeCache, createSqliteProbeCache, probeDirectoriesFor, querySqliteSessionId, sqlPlaceholderList } from './completion/transcript-probe.js';
 import type {
     CompletedDebouncePending,
     CompletedFinalizationBlock,
@@ -495,12 +496,8 @@ export class CliProviderInstance implements ProviderInstance {
     private recentUserInputAcks = new Map<string, number>();
     private lastNativeSourceCanonicalCheckAt = 0;
     private lastNativeSourceCanonicalCacheKey: string | undefined = undefined;
-    private cachedSqliteDb: {
-        prepare(sql: string): { get(...values: Array<string | number>): unknown };
-        close(): void;
-    } | null = null;
-    private cachedSqliteDbPath: string | null = null;
-    private cachedSqliteDbMissingUntil = 0;
+    // Session-id SQLite probe state (see completion/transcript-probe.ts).
+    private readonly sqliteProbeCache = createSqliteProbeCache();
     readonly instanceId: string;
     private suppressIdleHistoryReplay = false;
     private errorMessage: string | undefined = undefined;
@@ -656,13 +653,13 @@ export class CliProviderInstance implements ProviderInstance {
         const resolvedDbPath = probe.dbPath.replace(/^~/, os.homedir());
         // Skip existsSync if we already confirmed DB is missing (cache for 10s)
         const now = Date.now();
-        if (this.cachedSqliteDbMissingUntil > now) return null;
+        if (this.sqliteProbeCache.missingUntil > now) return null;
         if (!fs.existsSync(resolvedDbPath)) {
-            this.cachedSqliteDbMissingUntil = now + 10_000;
+            this.sqliteProbeCache.missingUntil = now + 10_000;
             return null;
         }
 
-        const directories = this.getProbeDirectories();
+        const directories = probeDirectoriesFor(this.workingDir);
         const minCreatedAt = Math.max(0, this.startedAt - 60_000);
         const tsFormat = probe.timestampFormat || 'unix_ms';
 
@@ -676,11 +673,11 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         // Build query: replace {dirs} with SQL placeholder list
-        const placeholders = this.buildSqlPlaceholderList(directories.length);
+        const placeholders = sqlPlaceholderList(directories.length);
         const query = probe.query.replace('{dirs}', placeholders);
 
         try {
-            return this.querySqliteText(resolvedDbPath, query, [...directories, timestampParam]);
+            return querySqliteSessionId(this.sqliteProbeCache, resolvedDbPath, query, [...directories, timestampParam]);
         } catch {
             return null;
         }
@@ -1558,9 +1555,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
         if (this.autoApproveBusyTimer) { clearTimeout(this.autoApproveBusyTimer); this.autoApproveBusyTimer = null; }
         this.appliedEffectKeys.clear();
-        try { this.cachedSqliteDb?.close(); } catch { /* noop */ }
-        this.cachedSqliteDb = null;
-        this.cachedSqliteDbPath = null;
+        closeSqliteProbeCache(this.sqliteProbeCache);
     }
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
@@ -5651,46 +5646,4 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
 
-    private getProbeDirectories(): string[] {
-        const dirs = new Set<string>();
-        const addDir = (value: string | null | undefined) => {
-            const normalized = typeof value === 'string' ? value.trim() : '';
-            if (normalized) dirs.add(normalized);
-        };
-
-        addDir(this.workingDir);
-        try {
-            addDir(fs.realpathSync.native(this.workingDir));
-        } catch {
-            // noop
-        }
-
-        return Array.from(dirs);
-    }
-
-    private buildSqlPlaceholderList(count: number): string {
-        return Array.from({ length: count }, () => '?').join(', ');
-    }
-
-    private querySqliteText(dbPath: string, query: string, params: Array<string | number>): string | null {
-        try {
-            if (this.cachedSqliteDb === null || this.cachedSqliteDbPath !== dbPath) {
-                try { this.cachedSqliteDb?.close(); } catch { /* noop */ }
-                this.cachedSqliteDb = null;
-                this.cachedSqliteDbPath = null;
-                const DatabaseSync = getDatabaseSync();
-                this.cachedSqliteDb = new DatabaseSync(dbPath, { readOnly: true });
-                this.cachedSqliteDbPath = dbPath;
-            }
-            const row = this.cachedSqliteDb!.prepare(query).get(...params) as { id?: unknown } | undefined;
-            const sessionId = typeof row?.id === 'string' ? row.id.trim() : '';
-            return sessionId || null;
-        } catch {
-            // Close cached connection on error so we retry fresh next tick
-            try { this.cachedSqliteDb?.close(); } catch { /* noop */ }
-            this.cachedSqliteDb = null;
-            this.cachedSqliteDbPath = null;
-            return null;
-        }
-    }
 }
