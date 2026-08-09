@@ -20,20 +20,47 @@ function loadYamlModule(): { load: (input: string) => any; dump: (input: any, op
     return yaml as { load: (input: string) => any; dump: (input: any, options?: Record<string, any>) => string };
 }
 
-export function getMcpServersKey(format: MeshCoordinatorConfigFormat): 'mcpServers' | 'mcp_servers' {
-    return format === 'hermes_config_yaml' ? 'mcp_servers' : 'mcpServers';
+export function getMcpServersKey(format: MeshCoordinatorConfigFormat): 'mcpServers' | 'mcp_servers' | 'mcp' {
+    if (format === 'hermes_config_yaml') return 'mcp_servers';
+    if (format === 'opencode_json') return 'mcp'; // opencode.json `mcp` block (opencode.ai/docs/mcp-servers)
+    return 'mcpServers';
 }
 
 export function parseMeshCoordinatorMcpConfig(text: string, format: MeshCoordinatorConfigFormat): Record<string, any> {
     if (!text.trim()) return {};
-    if (format === 'claude_mcp_json') return JSON.parse(text);
+    if (format === 'claude_mcp_json' || format === 'opencode_json') return JSON.parse(text);
     const parsed = loadYamlModule().load(text);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
 export function serializeMeshCoordinatorMcpConfig(config: Record<string, any>, format: MeshCoordinatorConfigFormat): string {
-    if (format === 'claude_mcp_json') return JSON.stringify(config, null, 2);
+    if (format === 'claude_mcp_json' || format === 'opencode_json') return JSON.stringify(config, null, 2);
     return loadYamlModule().dump(config, { noRefs: true, lineWidth: 120 });
+}
+
+/**
+ * Format-specific server ENTRY shape for the auto-import writer. Claude-style
+ * configs (claude_mcp_json, hermes_config_yaml) take `{command, args, env?}`;
+ * opencode's `mcp` block takes a local-server object with the command+args as
+ * ONE array (`{type:'local', command:[...], enabled, environment?}`).
+ */
+export function buildMeshCoordinatorMcpServerEntry(
+    format: MeshCoordinatorConfigFormat,
+    server: { command: string; args: string[]; env?: Record<string, string> },
+): Record<string, any> {
+    if (format === 'opencode_json') {
+        return {
+            type: 'local',
+            command: [server.command, ...server.args],
+            enabled: true,
+            ...(server.env ? { environment: server.env } : {}),
+        };
+    }
+    return {
+        command: server.command,
+        args: server.args,
+        ...(server.env ? { env: server.env } : {}),
+    };
 }
 
 function resolveHermesUserHome(): string {

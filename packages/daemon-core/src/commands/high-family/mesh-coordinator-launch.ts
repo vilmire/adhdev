@@ -22,6 +22,7 @@ import {
     readProviderPriorityFromPolicy,
     resolveProviderTypeFromPriority,
     readLiveMeshNodeWorkspace,
+    buildMeshCoordinatorMcpServerEntry,
     getMcpServersKey,
     parseMeshCoordinatorMcpConfig,
     serializeMeshCoordinatorMcpConfig,
@@ -648,18 +649,23 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // Merge ADHDev mesh server into existing config.
                     // Pass full mesh data as env var so the MCP server can bootstrap
                     // without depending on meshes.json or a running daemon.
-                    const mcpServerEntry: Record<string, any> = {
-                        command: coordinatorSetup.mcpServer.command,
-                        args: coordinatorSetup.mcpServer.args,
-                    };
+                    // Entry SHAPE is format-specific (opencode's `mcp` block differs
+                    // from the Claude-style {command,args}) — see
+                    // buildMeshCoordinatorMcpServerEntry.
+                    let mcpServerEnv: Record<string, string> | undefined;
                     if (args?.inlineMesh) {
                         const modeArgIndex = coordinatorSetup.mcpServer.args.findIndex((value: string) => value === '--mode');
                         const mcpTransport = modeArgIndex >= 0 ? coordinatorSetup.mcpServer.args[modeArgIndex + 1] : 'ipc';
-                        mcpServerEntry.env = {
+                        mcpServerEnv = {
                             ADHDEV_INLINE_MESH: JSON.stringify(mesh),
                             ADHDEV_MCP_TRANSPORT: mcpTransport === 'local' ? 'local' : 'ipc',
                         };
                     }
+                    const mcpServerEntry = buildMeshCoordinatorMcpServerEntry(configFormat, {
+                        command: coordinatorSetup.mcpServer.command,
+                        args: coordinatorSetup.mcpServer.args,
+                        ...(mcpServerEnv ? { env: mcpServerEnv } : {}),
+                    });
 
                     try {
                         mkdirSync(dirname(mcpConfigPath), { recursive: true });

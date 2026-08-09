@@ -33,7 +33,7 @@ import type { CommandRouterResult } from '../commands/router.js';
 // no shell:true is used anywhere here so there is no quoting risk.
 const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
 
-export type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
+export type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml' | 'opencode_json';
 type MeshRefineValidationStatus = 'passed' | 'failed' | 'skipped';
 type MeshRefineValidationCommand = MeshRefineValidationCommandPlan;
 

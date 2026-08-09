@@ -408,8 +408,8 @@ function validateMeshCoordinatorMcpConfig(mcpConfig: unknown, errors: string[]):
   }
 
   const format = config.format
-  if (format !== undefined && !['claude_mcp_json', 'hermes_config_yaml'].includes(String(format))) {
-    errors.push('meshCoordinator.mcpConfig.format must be one of: claude_mcp_json, hermes_config_yaml')
+  if (format !== undefined && !['claude_mcp_json', 'hermes_config_yaml', 'opencode_json'].includes(String(format))) {
+    errors.push('meshCoordinator.mcpConfig.format must be one of: claude_mcp_json, hermes_config_yaml, opencode_json')
   }
 
   for (const key of ['path', 'serverName', 'configPathCommand', 'instructions', 'template']) {
