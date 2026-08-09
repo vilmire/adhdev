@@ -1223,13 +1223,17 @@ function pruneMagiKindPanelsForRemovedNode(mesh: LocalMeshEntry, nodeId: string)
 // sonnet without changing what any other mesh runs.
 
 /**
- * The difficulty→brain presets for one mesh. When that mesh has nothing configured,
- * returns the sensible DEFAULT_DIFFICULTY_BRAINS so the coordinator always has a
- * usable mapping (the operator can override via setDifficultyBrains). Returns a
- * normalized copy — never the stored reference.
+ * The difficulty→brain presets for one mesh. Returns a normalized copy — never the
+ * stored reference.
+ *
+ * When that mesh has nothing configured this falls back to DEFAULT_DIFFICULTY_BRAINS,
+ * which is now EMPTY by design (see brain-routing.ts): nothing ships pre-stamped, so
+ * an unconfigured mesh resolves to no preset and the node's capability slots alone
+ * decide model / thinking level. An operator who explicitly calls setDifficultyBrains
+ * still gets exactly what they set.
  *
  * An omitted meshId resolves to the sole mesh; with several meshes it is ambiguous
- * and this returns the DEFAULTS rather than leaking another mesh's model choice.
+ * and this returns the (empty) defaults rather than leaking another mesh's model choice.
  */
 export function getDifficultyBrains(meshId?: string): DifficultyBrainMap {
     const config = loadMeshConfig();

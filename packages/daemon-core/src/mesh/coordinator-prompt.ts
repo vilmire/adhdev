@@ -872,32 +872,49 @@ function truncateNote(text: string): string {
 }
 
 /**
- * Render the difficulty→brain presets so the coordinator knows what each
- * `difficulty` value resolves to (which model / thinking level). Machine-local,
- * read live at prompt-build time — seeded defaults when nothing is configured.
+ * Render how `difficulty` resolves into a model / thinking level.
+ *
+ * The mesh no longer SHIPS difficulty→model presets: `difficulty` is a routing
+ * hint, and the node's capability slots decide what actually runs (see
+ * DEFAULT_DIFFICULTY_BRAINS in brain-routing.ts for why). So the common case
+ * renders the slot-authority rule and nothing else.
+ *
+ * An operator MAY still configure presets explicitly (difficulty_brains_set); when
+ * they have, those are listed here so the coordinator knows a model is being
+ * stamped at enqueue on top of slot routing. Only configured difficulties are
+ * listed — the empty case is stated once rather than as four "(no preset)" lines.
  */
 function buildBrainPresetsSection(): string {
     let brains;
     try { brains = getDifficultyBrains(); } catch { brains = {}; }
+    const brainMap = (brains ?? {}) as Record<string, { provider?: string; model?: string; thinkingLevel?: string } | undefined>;
+
     const lines = [
-        '## Brain presets',
+        '## Task difficulty',
         '',
-        'When you pass `difficulty` on `mesh_enqueue_task`, it resolves to this model / thinking level (an explicit model/thinkingLevel on the task overrides it). Pick easy for trivial work to save tokens, difficult for hard reasoning.',
+        'Pass `difficulty` on `mesh_enqueue_task` (`easy` / `medium` / `difficult` / `freeform`) to describe how hard the work is. It is a ROUTING HINT: it is matched against each node\'s capability slots, so a task goes to a slot configured for that difficulty.',
         '',
+        '**The slot decides the model and thinking level — not the difficulty.** `difficulty: "difficult"` does not mean "use opus"; it means "route to a slot that handles difficult work", and that slot\'s own model/thinking is what launches. So classify honestly by how hard the task is, and change what a difficulty RUNS ON by editing the node\'s slots (`mesh_node_slots_set`), never by picking a different difficulty. Passing an explicit `model`/`thinkingLevel` still overrides everything for one task.',
     ];
-    for (const key of MESH_TASK_DIFFICULTIES) {
-        const slot = (brains as Record<string, { provider?: string; model?: string; thinkingLevel?: string } | undefined>)[key];
-        if (!slot || (!slot.provider && !slot.model && !slot.thinkingLevel)) {
-            lines.push(`- **${key}**: (no preset — ordinary routing)`);
-            continue;
+
+    const configured = MESH_TASK_DIFFICULTIES
+        .map(key => [key, brainMap[key]] as const)
+        .filter(([, slot]) => !!slot && (!!slot.provider || !!slot.model || !!slot.thinkingLevel));
+
+    if (configured.length) {
+        lines.push('');
+        lines.push('This mesh additionally has EXPLICIT difficulty presets configured, which stamp a model/thinking at enqueue time (a difficulty-matched slot still overrides a preset value):');
+        lines.push('');
+        for (const [key, slot] of configured) {
+            const parts = [
+                slot!.provider ? `provider: \`${slot!.provider}\`` : '',
+                slot!.model ? `model: \`${slot!.model}\`` : '',
+                slot!.thinkingLevel ? `thinking: \`${slot!.thinkingLevel}\`` : '',
+            ].filter(Boolean).join(' | ');
+            lines.push(`- **${key}**: ${parts}`);
         }
-        const parts = [
-            slot.provider ? `provider: \`${slot.provider}\`` : '',
-            slot.model ? `model: \`${slot.model}\`` : '',
-            slot.thinkingLevel ? `thinking: \`${slot.thinkingLevel}\`` : '',
-        ].filter(Boolean).join(' | ');
-        lines.push(`- **${key}**: ${parts}`);
     }
+
     return lines.join('\n');
 }
 
@@ -1113,9 +1130,11 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh — they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no \`mesh_task_history\` record. ALL code reading, analysis, RCA, and implementation must be delegated to mesh nodes via \`mesh_enqueue_task\` / \`mesh_send_task\` (use \`task_mode: "live_debug_readonly"\` for read-only investigation), or cross-verified via \`mesh_magi_review\` for read-only fan-out. The coordinator's own actions are limited to \`mesh_*\` tool orchestration and synthesizing results.
 - **Front-load task messages.** Include everything the agent needs (files, problem, expected fix) in \`mesh_enqueue_task\` / \`mesh_send_task\`. Append a structured result request at the end: ask the worker to conclude with a JSON block containing \`status\`, \`changedFiles\`, \`gitStatus\`, \`validationResults\`, \`errors\`, \`nextAction\`. The daemon parses this automatically; you can read it from \`mesh_task_history\`.
 - **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** — a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred — this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.
+- **Nodes are separate machines with separate checkouts — not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** — its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here — win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. "That node is idle" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.
+- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as \`code_change\` from the start rather than a read-only investigation you hand off afterwards. The session that did the investigating already holds the findings; making a second session redo that context — especially on a different machine, where the findings have to be rewritten into a new task message — is pure loss. Carrying an investigation forward into its own fix is the SAME subject and belongs in that session (see the idle-session reuse rule). Split only when the fix genuinely belongs on another machine for reason (a) above.
 - **Base nodes are reserved for environment-specific testing.** Do NOT use a base node for a general code change. If a task does not strictly test OS- or machine-specific physical behavior (win32 PATH/registry, clean install/uninstall on one OS, that machine's package-manager state, OS-dependent runtime behavior), you MUST clone a worktree with \`mesh_clone_node\` and assign the task there; pin genuine environment tasks to the base with \`required_tags\`/\`target_node_id\` instead. Having several nodes available is NOT branch isolation — every base node is one shared checkout of the same branch — and cloning is ~10s with auto-launch starting the session, so there is no dispatch-cost reason to skip it.
 - **Worktree affinity.** A worktree is a durable per-branch workspace; keep all of a branch's code_change/fix/review work on its worktree node. Target it with \`required_tags: ["worktree=<branch>"]\` or \`target_node_id\`. Get the id/branch from the \`mesh_clone_node\` result or a live \`mesh_status\` — the Configured Nodes snapshot won't list a worktree cloned after launch. Untargeted same-branch follow-ups drift to the base node. Only \`convergence\` (merge/push) runs on the base, never pinned to the worktree.
-- **Classify task difficulty to save tokens.** For each task you enqueue, judge its execution difficulty and pass \`difficulty\`: \`easy\` (extraction, renames, doc tweaks, trivial fixes), \`medium\` (ordinary feature/bugfix work), \`difficult\` (architecture, tricky debugging, multi-file refactors, subtle reasoning), or \`freeform\`. The mesh's per-difficulty brain preset then runs easy tasks on a cheaper model at low reasoning effort and hard tasks on a stronger model at high effort — real token savings on simple work. The current presets are shown in the "Brain presets" section below. You may still pass an explicit \`model\`/\`thinkingLevel\` to override the preset for one task.
+- **Classify task difficulty honestly.** For each task you enqueue, judge its execution difficulty and pass \`difficulty\`: \`easy\` (extraction, renames, doc tweaks, trivial fixes), \`medium\` (ordinary feature/bugfix work), \`difficult\` (architecture, tricky debugging, multi-file refactors, subtle reasoning), or \`freeform\`. This is a ROUTING HINT matched against node capability slots — the matched slot's OWN model/thinking is what launches, so difficulty does not name a model. Do NOT inflate or deflate difficulty to reach a model you want: fix the node's slots instead (\`mesh_node_slots_set\`). See the "Task difficulty" section below. You may still pass an explicit \`model\`/\`thinkingLevel\` to override for one task.
 - **Retune node profiles when routing is a poor fit — but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via \`mesh_node_slots_list\`) are what task→node fitness routing matches against. If you notice a persistent mismatch — e.g. every \`difficult\` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared — you MAY propose a slot change with \`mesh_node_slots_set\` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.
 - **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to "first available provider"), or CLI agents were newly installed on it, call \`mesh_node_slots_propose({ node_id })\` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them — read-only, it never writes. Present its \`proposedSlots\` with the \`droppedSlots\` / \`destructive\` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with \`mesh_node_slots_set({ slots: proposedSlots, write: true })\` after approval. It flags \`unknownProvider\` / \`provisional\` slots whose placement is a conservative guess rather than an attested one — call those out rather than presenting them as settled.
 - **Respect explicit provider requests.** Map: Hermes → \`hermes-cli\`, Claude/Claude Code → \`claude-cli\`, Codex → \`codex-cli\`, Gemini → \`gemini-cli\`, Antigravity → \`antigravity-cli\`. Never substitute the coordinator's own runtime.

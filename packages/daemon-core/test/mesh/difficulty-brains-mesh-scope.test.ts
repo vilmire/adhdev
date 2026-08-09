@@ -257,17 +257,25 @@ describe('difficultyBrains × slot-model guard — the cost defect end to end', 
     // stamped onto tasks. Per-mesh scoping is what lets one mesh say "difficult =
     // sonnet" without touching another, and the merged slot guard is what stops an
     // undeclared model reaching launch. These two must compose.
-    it('a mesh can pin difficult→sonnet while another keeps the opus default', () => {
+    it('a mesh can pin difficult→sonnet while another pins opus', () => {
         const { meshA, meshB } = seedTwoMeshes();
         addNode(meshA, { workspace: '/tmp/a' });
         addNode(meshB, { workspace: '/tmp/b' });
 
-        // Mesh A opts out of the expensive default; mesh B is left untouched.
+        // Each mesh pins its own model. (Nothing is shipped by default any more —
+        // DEFAULT_DIFFICULTY_BRAINS is {} — so mesh B states its choice explicitly.)
         setDifficultyBrains({ difficult: { model: 'sonnet', thinkingLevel: 'high' } }, meshA);
+        setDifficultyBrains({ difficult: { model: 'opus', thinkingLevel: 'high' } }, meshB);
 
         expect(getDifficultyBrains(meshA).difficult?.model).toBe('sonnet');
-        // Mesh B still gets the shipped default — unchanged by mesh A's write.
+        // Mesh B keeps its own — unchanged by mesh A's write.
         expect(getDifficultyBrains(meshB).difficult?.model).toBe('opus');
+    });
+
+    it('an UNCONFIGURED mesh gets no preset at all (nothing is shipped)', () => {
+        const { meshA } = seedTwoMeshes();
+        addNode(meshA, { workspace: '/tmp/a' });
+        expect(getDifficultyBrains(meshA).difficult).toBeUndefined();
     });
 
     it('legacy-derived node slots use the OWNING mesh\'s presets, not another mesh\'s', () => {
@@ -316,8 +324,11 @@ describe('difficultyBrains × slot-model guard — the cost defect end to end', 
     // The un-pinned mesh still inherits the shipped default, and on the SAME node the
     // guard correctly refuses it. This is the pre-existing guard behaviour — asserted
     // here so the per-mesh change is shown not to weaken it.
-    it('an un-pinned mesh still stamps the opus default and the guard still blocks it', () => {
+    it('a mesh pinned to an undeclared model stamps it and the guard still blocks it', () => {
         const meshId = createMesh({ name: 'm2', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
+        // Explicit now: opus is no longer stamped by default, so pin it to keep
+        // exercising the guard's block on a model the node's slots never declare.
+        setDifficultyBrains({ difficult: { model: 'opus' } }, meshId);
 
         enqueueTask(meshId, 'redesign the scheduler', { difficulty: 'difficult' });
         const task = getQueue(meshId)[0];
@@ -337,6 +348,7 @@ describe('difficultyBrains × slot-model guard — the cost defect end to end', 
         const pinned = createMesh({ name: 'pinned', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
         const defaulted = createMesh({ name: 'defaulted', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
         setDifficultyBrains({ difficult: { model: 'sonnet' } }, pinned);
+        setDifficultyBrains({ difficult: { model: 'opus' } }, defaulted);
 
         enqueueTask(pinned, 'hard work', { difficulty: 'difficult' });
         enqueueTask(defaulted, 'hard work', { difficulty: 'difficult' });

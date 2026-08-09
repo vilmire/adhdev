@@ -50,16 +50,36 @@ export function isMeshTaskDifficulty(value: unknown): value is MeshTaskDifficult
 }
 
 /**
- * Sensible default presets, seeded when a mesh has no `difficultyBrains` configured
- * yet. Model names are provider-agnostic strings (opus/sonnet/haiku); a provider
- * that cannot honor a given model or thinking level ignores it (best-effort). The
- * operator can edit these. `freeform` has no preset by default (untouched routing).
+ * Shipped difficulty presets: NONE. `difficulty` is a ROUTING HINT only — the
+ * node's capability slots are the sole authority on which model / thinking level
+ * a task actually runs with.
+ *
+ * WHY THIS IS EMPTY (it formerly shipped easy→haiku/low, medium→sonnet/medium,
+ * difficult→opus/high):
+ *
+ *   1. WRONG AXIS. `opus`/`sonnet`/`haiku` are Claude model families, but the
+ *      preset was stamped on a task at ENQUEUE time — before routing has chosen
+ *      a node, let alone a provider. A `difficult` task therefore carried
+ *      `model: 'opus'` even when it landed on kimi / codex / antigravity. The
+ *      CODEX-400 guard (model-provider-compat.ts) exists ONLY to strip these
+ *      Claude aliases back off before a non-Anthropic launch — a workaround for
+ *      a value that should never have been stamped provider-blind.
+ *
+ *   2. IT FOUGHT THE SLOTS. Operators express model choice per node via
+ *      capability slots (`mesh_node_slots_set`), which know the provider. A
+ *      mesh-wide preset that also picks a model duplicated that decision from a
+ *      position with strictly less information, and needed the modelSource
+ *      ('explicit' vs 'preset') precedence machinery plus a fail-closed
+ *      slot-model guard just to keep the slot winning.
+ *
+ * Removing the shipped defaults does NOT remove the feature: the map is still
+ * honored, so an operator who deliberately sets presets (difficulty_brains_set)
+ * keeps exactly that behavior. It only stops the mesh from inventing a model
+ * nobody configured. A node WITH slots is unaffected (its slots already decided);
+ * a node WITHOUT slots now launches on the provider's own default model instead
+ * of a Claude alias picked blind.
  */
-export const DEFAULT_DIFFICULTY_BRAINS: DifficultyBrainMap = {
-    easy: { model: 'haiku', thinkingLevel: 'low' },
-    medium: { model: 'sonnet', thinkingLevel: 'medium' },
-    difficult: { model: 'opus', thinkingLevel: 'high' },
-}
+export const DEFAULT_DIFFICULTY_BRAINS: DifficultyBrainMap = {}
 
 /** Normalize a raw thinking level to the standard union, or undefined. */
 export function normalizeThinkingLevel(value: unknown): 'low' | 'medium' | 'high' | undefined {

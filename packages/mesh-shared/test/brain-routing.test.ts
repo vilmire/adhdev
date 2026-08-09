@@ -5,6 +5,7 @@ import {
     normalizeBrainSlot,
     normalizeDifficultyBrainMap,
     DEFAULT_DIFFICULTY_BRAINS,
+    MESH_TASK_DIFFICULTIES,
     normalizeNodeCapabilitySlot,
     normalizeNodeCapabilitySlots,
     deriveSlotsFromLegacy,
@@ -45,11 +46,16 @@ describe('brain-routing', () => {
         expect(out.difficult).toEqual({ thinkingLevel: 'high' })
     })
 
-    it('DEFAULT_DIFFICULTY_BRAINS covers easy/medium/difficult with model+thinking', () => {
-        expect(DEFAULT_DIFFICULTY_BRAINS.easy).toEqual({ model: 'haiku', thinkingLevel: 'low' })
-        expect(DEFAULT_DIFFICULTY_BRAINS.medium).toEqual({ model: 'sonnet', thinkingLevel: 'medium' })
-        expect(DEFAULT_DIFFICULTY_BRAINS.difficult).toEqual({ model: 'opus', thinkingLevel: 'high' })
-        expect(DEFAULT_DIFFICULTY_BRAINS.freeform).toBeUndefined()
+    // ★ Nothing is shipped: `difficulty` is a ROUTING HINT and the node's capability
+    // slots are the sole authority on model/thinking. A non-empty default would stamp
+    // a Claude alias (opus/sonnet/haiku) onto a task at ENQUEUE time — before routing
+    // has picked a provider — so a `difficult` task landed on kimi/codex/antigravity
+    // carrying `model: 'opus'`. An operator may still configure presets explicitly.
+    it('DEFAULT_DIFFICULTY_BRAINS ships EMPTY — no difficulty implies a model', () => {
+        expect(DEFAULT_DIFFICULTY_BRAINS).toEqual({})
+        for (const difficulty of MESH_TASK_DIFFICULTIES) {
+            expect(DEFAULT_DIFFICULTY_BRAINS[difficulty]).toBeUndefined()
+        }
     })
 })
 

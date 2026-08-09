@@ -1956,6 +1956,35 @@ function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask, quotaBonu
     return score;
 }
 
+/**
+ * The slot order provider selection walks: CAPACITY first, then task→slot fitness.
+ *
+ * Capacity is the primary key because the selection loop returns the first slot
+ * whose CLI is detected — see the SATURATED-SLOT STARVATION note at the call site.
+ * Saturated slots are ordered last rather than dropped, so when every slot is at
+ * its cap the resulting selection (and the wait/notify semantics the downstream
+ * SLOT MODEL GUARD derives from it) is identical to the pre-fix behaviour.
+ *
+ * Shared by production and the test hook so a regression in either sort key is
+ * observable from the test.
+ */
+function orderSlotsForProviderSelection(
+    slots: NodeCapabilitySlot[],
+    meshId: string,
+    nodeId: string,
+    node: any,
+    task: FitnessTask,
+    quotaBonusByProvider?: Record<string, number>,
+): NodeCapabilitySlot[] {
+    return [...slots].sort((a, b) => {
+        const capDelta = Number(slotHasCapacity(meshId, nodeId, node, b))
+            - Number(slotHasCapacity(meshId, nodeId, node, a));
+        if (capDelta !== 0) return capDelta; // slots with headroom first
+        return scoreSlotForTask(b, task, quotaBonusByProvider?.[b.provider] ?? 0)
+            - scoreSlotForTask(a, task, quotaBonusByProvider?.[a.provider] ?? 0);
+    });
+}
+
 /** Best (slot, score) for a task on a node, or null when the node has no slots. */
 function bestSlotForTask(node: any, task: FitnessTask, meshId?: string, quotaBonusByProvider?: Record<string, number>): { slot: NodeCapabilitySlot; score: number } | null {
     const slots = resolveNodeCapabilitySlots(node, meshId);
@@ -2433,13 +2462,32 @@ async function resolveUsableProvider(
     // to the legacy providerPriority-derived slots when no explicit slots exist.
     // The QUOTA SPREAD bonus folds into the fitness score as a per-provider number
     // computed HERE (the caller side) so scoreSlotForTask itself stays pure.
+    //
+    // SATURATED-SLOT STARVATION (kimi-never-selected): fitness alone ranked a
+    // SATURATED slot ahead of an idle equally-fit one, and this loop returns the
+    // first slot whose CLI is detected — it never consulted capacity. On a node
+    // with `claude-cli/opus [difficult] maxParallel:1` and `kimi [difficult]
+    // maxParallel:2`, both score the same +100 difficulty match, so the stable
+    // sort put opus first by ARRAY ORDER on every difficult task and kimi was
+    // never selected — not once. Worse, when opus was busy the loop still
+    // returned claude-cli, and the downstream SLOT MODEL GUARD ('wait') / the
+    // provider-cap check skipped the WHOLE NODE rather than falling through to
+    // the node's idle second slot. So a second provider configured precisely to
+    // absorb difficult-task overflow was unreachable whether opus was free OR
+    // busy. (The quota-spread bonus widened the same gap: a provider whose quota
+    // reads 'ok' earns up to +30 while one reporting an error earns 0, turning
+    // the tie into a decisive loss.)
+    //
+    // Capacity is therefore the PRIMARY sort key: an idle slot outranks a
+    // saturated one regardless of fitness, and fitness orders within each group.
+    // Saturated slots are kept (not filtered) and merely sorted last, so when
+    // EVERY slot is at its cap the selection — and the wait/notify semantics the
+    // downstream guard derives from it — is byte-identical to before.
     const slots = resolveNodeCapabilitySlots(node, meshId);
     if (!slots.length) return { reason: 'missing_provider_priority' };
     const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting) : undefined;
     const orderedSlots = task
-        ? [...slots].sort((a, b) =>
-            scoreSlotForTask(b, task, quotaBonusByProvider?.[b.provider] ?? 0)
-            - scoreSlotForTask(a, task, quotaBonusByProvider?.[a.provider] ?? 0))
+        ? orderSlotsForProviderSelection(slots, meshId ?? '', nodeId, node, task, quotaBonusByProvider)
         : slots;
 
     const failed: string[] = [];
@@ -2524,6 +2572,29 @@ export function __decideSlotForModelForTests(
 /** Test hook: is a skip reason one that pages the coordinator? */
 export function __isActionableSkipReasonForTests(reason: string): boolean {
     return isActionableSkipReason(reason);
+}
+
+/**
+ * Test hook: the slot ORDER resolveUsableProvider walks when picking a provider,
+ * exposed so a test can assert selection without a live providerLoader / CLI
+ * detection. Mirrors that function's sort exactly (capacity first, then fitness
+ * incl. the quota-spread bonus), so a regression in either key is caught here.
+ */
+export function __orderSlotsForProviderSelectionForTests(
+    meshId: string,
+    nodeId: string,
+    node: any,
+    task: { difficulty?: string; requiredTags?: string[] },
+    quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
+): NodeCapabilitySlot[] {
+    return orderSlotsForProviderSelection(
+        resolveNodeCapabilitySlots(node, meshId),
+        meshId,
+        nodeId,
+        node,
+        task as FitnessTask,
+        quotaSpreadBonusByProvider(node, quotaRouting ?? null),
+    );
 }
 
 /** Test hook: the pure task→slot fitness scorer, including the quota-spread

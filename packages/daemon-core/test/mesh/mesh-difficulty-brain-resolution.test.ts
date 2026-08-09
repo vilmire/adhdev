@@ -32,21 +32,37 @@ function freshMesh(): string {
 }
 
 describe('difficulty → brain resolution at enqueue', () => {
-    it('fills model + thinkingLevel from the DEFAULT preset for the difficulty', () => {
+    // ★ The mesh ships NO difficulty→model presets (DEFAULT_DIFFICULTY_BRAINS is {}).
+    // `difficulty` is a routing hint; the node's capability slots decide the model.
+    // These two pin that nothing is stamped provider-blind at enqueue — the defect
+    // being fixed was a `difficult` task carrying model:'opus' onto a kimi/codex node.
+    it('an UNCONFIGURED mesh stamps no model/thinkingLevel for easy', () => {
         const meshId = freshMesh();
-        // No difficultyBrains configured → getDifficultyBrains seeds the defaults.
         enqueueTask(meshId, 'rename a variable', { difficulty: 'easy' });
         const [task] = getQueue(meshId);
-        expect(task.model).toBe('haiku');        // DEFAULT_DIFFICULTY_BRAINS.easy
-        expect(task.thinkingLevel).toBe('low');
+        expect(task.model).toBeUndefined();
+        expect(task.thinkingLevel).toBeUndefined();
+        // The difficulty itself is still persisted — it is the routing key.
+        expect(task.difficulty).toBe('easy');
     });
 
-    it('uses the difficult preset (opus / high)', () => {
+    it('an UNCONFIGURED mesh stamps no model/thinkingLevel for difficult either', () => {
         const meshId = freshMesh();
+        enqueueTask(meshId, 'redesign the scheduler', { difficulty: 'difficult' });
+        const [task] = getQueue(meshId);
+        expect(task.model).toBeUndefined();
+        expect(task.thinkingLevel).toBeUndefined();
+        expect(task.difficulty).toBe('difficult');
+    });
+
+    it('an EXPLICITLY configured preset is still honored (the feature is not removed)', () => {
+        const meshId = freshMesh();
+        setDifficultyBrains({ difficult: { model: 'opus', thinkingLevel: 'high' } }, meshId);
         enqueueTask(meshId, 'redesign the scheduler', { difficulty: 'difficult' });
         const [task] = getQueue(meshId);
         expect(task.model).toBe('opus');
         expect(task.thinkingLevel).toBe('high');
+        expect(task.modelSource).toBe('preset');
     });
 
     it('an explicit model/thinkingLevel WINS over the preset', () => {

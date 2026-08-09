@@ -26,7 +26,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { enqueueTask, getQueue, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
-import { createMesh } from '../../src/config/mesh-config.js';
+import { createMesh, setDifficultyBrains } from '../../src/config/mesh-config.js';
 import { resolveNodeCapabilitySlots } from '../../src/mesh/mesh-node-slots.js';
 import {
     decideSlotForModel,
@@ -52,6 +52,10 @@ const SONNET_ONLY_NODE = {
 describe('slot-constrained launch model (production repro)', () => {
     it('enqueue stamps the undeclared opus preset onto a sonnet-only node task', () => {
         const meshId = createMesh({ name: 'm', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
+        // difficult→opus is no longer a SHIPPED default (DEFAULT_DIFFICULTY_BRAINS is
+        // {}), so configure it explicitly — the guard this file covers still governs
+        // any mesh whose operator sets a preset the node's slots do not declare.
+        setDifficultyBrains({ difficult: { model: 'opus', thinkingLevel: 'high' } }, meshId);
         enqueueTask(meshId, 'redesign the scheduler', { difficulty: 'difficult' });
         const [task] = getQueue(meshId);
 
@@ -66,6 +70,10 @@ describe('slot-constrained launch model (production repro)', () => {
 
     it('★ opus is never launched on a node whose slots do not declare it', () => {
         const meshId = createMesh({ name: 'm', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
+        // difficult→opus is no longer a SHIPPED default (DEFAULT_DIFFICULTY_BRAINS is
+        // {}), so configure it explicitly — the guard this file covers still governs
+        // any mesh whose operator sets a preset the node's slots do not declare.
+        setDifficultyBrains({ difficult: { model: 'opus', thinkingLevel: 'high' } }, meshId);
         enqueueTask(meshId, 'redesign the scheduler', { difficulty: 'difficult' });
         const [task] = getQueue(meshId);
 

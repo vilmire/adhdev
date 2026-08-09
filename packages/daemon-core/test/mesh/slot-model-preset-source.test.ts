@@ -29,7 +29,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { enqueueTask, getQueue, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
-import { createMesh } from '../../src/config/mesh-config.js';
+import { createMesh, setDifficultyBrains } from '../../src/config/mesh-config.js';
 import { __decideSlotForModelForTests } from '../../src/mesh/mesh-queue-assignment.js';
 
 afterEach(() => {
@@ -37,8 +37,23 @@ afterEach(() => {
     if (existsSync(testTmpDir)) rmSync(testTmpDir, { recursive: true, force: true });
 });
 
+/**
+ * A mesh with difficulty presets CONFIGURED EXPLICITLY.
+ *
+ * These presets are no longer shipped by default (DEFAULT_DIFFICULTY_BRAINS is {} —
+ * `difficulty` is a routing hint and the slot owns the model). But the modelSource
+ * precedence machinery this file covers still governs any mesh whose operator DID
+ * configure presets, so the tests seed the former defaults explicitly to keep
+ * exercising exactly that path.
+ */
 function freshMesh(): string {
-    return createMesh({ name: 'm', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
+    const meshId = createMesh({ name: 'm', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
+    setDifficultyBrains({
+        easy: { model: 'haiku', thinkingLevel: 'low' },
+        medium: { model: 'sonnet', thinkingLevel: 'medium' },
+        difficult: { model: 'opus', thinkingLevel: 'high' },
+    }, meshId);
+    return meshId;
 }
 
 /** M1-Server-like node: easy/medium on sonnet, difficult on opus. No haiku anywhere. */

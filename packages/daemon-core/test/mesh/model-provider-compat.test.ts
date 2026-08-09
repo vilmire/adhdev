@@ -70,13 +70,20 @@ describe('model ↔ provider compatibility guard (codex 400 root)', () => {
 
     describe('difficulty-preset scenario: codex-cli node never gets a claude model', () => {
         // The launch guard strips exactly the model a difficulty preset would have
-        // forwarded. Prove that EVERY default brain-preset model — the values a
-        // `difficulty` task carries — is refused on a codex-cli node.
-        it('every DEFAULT_DIFFICULTY_BRAINS model is blocked on codex-cli', () => {
-            const presetModels = Object.values(DEFAULT_DIFFICULTY_BRAINS)
-                .map(slot => slot?.model)
-                .filter((m): m is string => typeof m === 'string' && m.length > 0);
-            expect(presetModels.length).toBeGreaterThan(0); // guard against an empty preset map
+        // forwarded. Prove that every Claude-family preset alias is refused on a
+        // codex-cli node.
+        //
+        // These aliases are no longer SHIPPED (DEFAULT_DIFFICULTY_BRAINS is {} —
+        // difficulty is a routing hint and the slot owns the model), so the list is
+        // written out literally rather than read from that map, which would now make
+        // the loop vacuous. The guard still matters: an operator may configure these
+        // presets explicitly, and MAGI slots carry the same aliases.
+        it('every Claude-family preset alias is blocked on codex-cli', () => {
+            const presetModels = ['haiku', 'sonnet', 'opus'];
+            // Any alias an operator could still configure must be covered.
+            for (const slot of Object.values(DEFAULT_DIFFICULTY_BRAINS)) {
+                if (slot?.model) expect(presetModels).toContain(slot.model);
+            }
             for (const model of presetModels) {
                 // A difficulty task resolves to `model`; on a codex-cli node the guard must
                 // refuse it → effectiveModel dropped → codex launches with its own default.

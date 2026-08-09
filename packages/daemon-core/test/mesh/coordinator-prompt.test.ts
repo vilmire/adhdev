@@ -1052,5 +1052,51 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(withPanels).toContain('## Configured MAGI panels')
     expect(withPanels).toContain('codex-cli@node_f1f8')
   })
-})
 
+  // ─── Difficulty is a routing hint, not a model selector ───
+  it('renders difficulty as a ROUTING HINT and drops the shipped brain presets', () => {
+    const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+
+    // The section exists and states who actually decides the model.
+    expect(prompt).toContain('## Task difficulty')
+    expect(prompt).toContain('ROUTING HINT')
+    expect(prompt).toContain('The slot decides the model and thinking level')
+    expect(prompt).toContain('mesh_node_slots_set')
+
+    // ★ The old preset framing must be GONE from the rendered prompt. These are the
+    // exact strings that taught the coordinator difficulty == a model choice, and
+    // that a `difficult` task means opus regardless of which provider it lands on.
+    expect(prompt).not.toContain('## Brain presets')
+    expect(prompt).not.toContain('(no preset — ordinary routing)')
+    expect(prompt).not.toContain('runs easy tasks on a cheaper model at low reasoning effort')
+    expect(prompt).not.toContain('The current presets are shown in the "Brain presets" section below.')
+    // Nothing is shipped, so an unconfigured mesh must not name a model at all.
+    expect(prompt).not.toContain('model: `opus`')
+    expect(prompt).not.toContain('model: `haiku`')
+
+    // And the difficulty axis itself survives — it is still the routing key.
+    expect(prompt).toContain('Classify task difficulty honestly')
+    expect(prompt).toContain('Do NOT inflate or deflate difficulty')
+  })
+
+  // ─── Node routing default: the coordinator's own machine ───
+  it('makes the coordinator machine the default for code changes, with only two exceptions', () => {
+    const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+
+    // Nodes are machines, not interchangeable slots — the framing that produced the
+    // live mistake (a fix dispatched to a win32 node, needing commit/push/pull back).
+    expect(prompt).toContain('separate machines with separate checkouts')
+    expect(prompt).toContain('default to this coordinator\'s own machine for code changes')
+    // The cost that makes it the default: the round trip, doubled by deploy locality.
+    expect(prompt).toContain('committed, pushed, and pulled back')
+    // Exactly two legitimate reasons, both named.
+    expect(prompt).toContain('platform-specific verification')
+    expect(prompt).toContain('parallelizing read-only investigation')
+    // The non-reason is called out explicitly.
+    expect(prompt).toContain('"That node is idle" is not a reason')
+
+    // Investigation and fix stay in one session when the fix lands here.
+    expect(prompt).toContain('Don\'t split investigation from the fix')
+    expect(prompt).toContain('code_change')
+  })
+})
