@@ -266,6 +266,14 @@ export async function meshCloneNode(
         ctx.mesh.updatedAt = new Date().toISOString();
         await syncCoordinatorDaemonMeshCache(ctx);
     }
+    // Carry the preflight's advisories onto the clone result. The dirty-source case is
+    // the important one: the clone SUCCEEDS but is created from HEAD, so uncommitted
+    // work in the source is not in it. Dropping the warning here would silently hide
+    // the one thing the operator needs to know about an otherwise-successful clone.
+    const planWarnings = Array.isArray(planned?.warnings) ? planned.warnings : [];
+    if (planWarnings.length && result && typeof result === 'object') {
+        return JSON.stringify({ ...result, warnings: planWarnings }, null, 2);
+    }
     return JSON.stringify(result, null, 2);
 }
 

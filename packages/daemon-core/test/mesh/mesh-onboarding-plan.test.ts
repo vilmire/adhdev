@@ -287,7 +287,12 @@ describe('planMeshOnboarding', () => {
         expect(result.code).toBe('not_git_repository');
     });
 
-    it('blocks a dirty source when the chosen operation clones a worktree', async () => {
+    // ★ A dirty source is ADVISORY by default, not a block. `git worktree add` builds
+    // the new tree from HEAD, so uncommitted changes are simply absent from the clone —
+    // defined worktree behaviour, not a fault. Hard-failing here killed the whole
+    // parallel-worktree workflow, because a coordinator's own checkout is dirty most of
+    // the time it is working.
+    it('allows cloning from a dirty source under the default policy, with a warning', async () => {
         const repo = makeRepo('mesh-plan-dirty');
         writeFileSync(join(repo, 'dirty.txt'), 'uncommitted\n');
         const result = await planMeshOnboarding({
@@ -295,11 +300,77 @@ describe('planMeshOnboarding', () => {
             meshId: 'mesh_dirty',
             operation: 'clone_worktree',
             branch: 'feat/isolated',
+            // policy: {} → dirtyWorkspaceBehavior defaults to 'warn'.
             meshes: [mesh('github.com/acme/project', repo, 'mesh_dirty')],
+        });
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        expect(result.plan.kind).toBe('clone_new_worktree');
+        // The operator must be told the uncommitted work does not travel.
+        expect(result.warnings?.length).toBeGreaterThan(0);
+        expect(result.warnings?.join(' ')).toMatch(/created from HEAD/i);
+        expect(result.warnings?.join(' ')).toMatch(/NOT included/i);
+        // ...and the plan no longer misdescribes itself as requiring a clean tree.
+        expect(result.plan.requiresClean).toBe(false);
+    });
+
+    it('★ still blocks a dirty source when the mesh policy says block', async () => {
+        const repo = makeRepo('mesh-plan-dirty-block');
+        writeFileSync(join(repo, 'dirty.txt'), 'uncommitted\n');
+        const blocking = mesh('github.com/acme/project', repo, 'mesh_dirty_block');
+        (blocking.policy as any).dirtyWorkspaceBehavior = 'block';
+        const result = await planMeshOnboarding({
+            workspace: repo,
+            meshId: 'mesh_dirty_block',
+            operation: 'clone_worktree',
+            branch: 'feat/isolated',
+            meshes: [blocking],
         });
         expect(result.success).toBe(false);
         if (result.success) return;
         expect(result.code).toBe('dirty_workspace');
+        // The refusal names the policy that caused it, so it is actionable.
+        expect(result.action).toMatch(/dirtyWorkspaceBehavior/);
+    });
+
+    it('emits no warning when the source is clean', async () => {
+        const repo = makeRepo('mesh-plan-clean-clone');
+        const result = await planMeshOnboarding({
+            workspace: repo,
+            meshId: 'mesh_clean',
+            operation: 'clone_worktree',
+            branch: 'feat/isolated',
+            meshes: [mesh('github.com/acme/project', repo, 'mesh_clean')],
+        });
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        expect(result.warnings).toBeUndefined();
+    });
+
+    // ★ The relaxation must NOT tunnel through genuinely dangerous states. Unresolved
+    // conflicts hard-fail earlier (discoverWorkspace), independent of the dirty policy,
+    // so a conflicted tree is still refused even under 'warn'.
+    it('★ still refuses a CONFLICTED workspace under the permissive default policy', async () => {
+        const repo = makeRepo('mesh-plan-conflict');
+        // Build a real merge conflict.
+        run(repo, ['checkout', '-b', 'side']);
+        writeFileSync(join(repo, 'README.md'), '# side\n');
+        run(repo, ['commit', '-am', 'side change']);
+        run(repo, ['checkout', 'main']);
+        writeFileSync(join(repo, 'README.md'), '# main\n');
+        run(repo, ['commit', '-am', 'main change']);
+        try { run(repo, ['merge', 'side']); } catch { /* expected conflict */ }
+
+        const result = await planMeshOnboarding({
+            workspace: repo,
+            meshId: 'mesh_conflict',
+            operation: 'clone_worktree',
+            branch: 'feat/isolated',
+            meshes: [mesh('github.com/acme/project', repo, 'mesh_conflict')],
+        });
+        expect(result.success).toBe(false);
+        if (result.success) return;
+        expect(result.code).toBe('conflicted_workspace');
     });
 
     it('fails closed on detached HEAD', async () => {

@@ -8105,6 +8105,10 @@ async function meshCloneNode(ctx, args) {
     ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     await syncCoordinatorDaemonMeshCache(ctx);
   }
+  const planWarnings = Array.isArray(planned?.warnings) ? planned.warnings : [];
+  if (planWarnings.length && result && typeof result === "object") {
+    return JSON.stringify({ ...result, warnings: planWarnings }, null, 2);
+  }
   return JSON.stringify(result, null, 2);
 }
 async function meshRemoveNode(ctx, args) {

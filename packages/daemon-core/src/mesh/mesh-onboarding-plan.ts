@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 
 import type { CLIInfo } from '../detection/cli-detector.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry } from '../repo-mesh-types.js';
+import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import {
     listMeshesReadOnly,
     normalizeRepoIdentity,
@@ -116,6 +117,13 @@ export interface MeshOnboardingPlanSuccess {
     };
     suggestedConfig: RunMeshInitResult;
     note: string;
+    /**
+     * Non-blocking advisories the operator should see before approving. Present only
+     * when something is worth saying — e.g. a clone planned from a workspace with
+     * uncommitted changes, which is allowed but does NOT carry those changes into the
+     * new worktree. Callers should surface these; they are not failures.
+     */
+    warnings?: string[];
 }
 
 export interface MeshOnboardingPlanFailure {
@@ -563,6 +571,9 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
     }
 
     if (operation === 'clone_worktree') {
+        // Advisories accumulated while planning; surfaced on the successful plan so the
+        // operator approves with full knowledge rather than being blocked outright.
+        const planWarnings: string[] = [];
         if (!compatibleMesh) {
             return failure(
                 'mesh_not_found',
@@ -571,12 +582,40 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
                 { discovery, membership },
             );
         }
-        if (discovery.dirty) {
+        // DIRTY SOURCE: advisory by default, blocking only when the mesh says so.
+        //
+        // `git worktree add` creates the new tree from HEAD, so uncommitted changes in
+        // the source workspace are simply absent from the clone — that is the defined
+        // behavior of a worktree, not a fault. Hard-failing here made worktrees
+        // unusable in the normal case, because a coordinator's own checkout is dirty
+        // most of the time it is working; the whole parallel-worktree workflow (clone
+        // N branches → work → converge) died on this preflight rather than on anything
+        // being wrong.
+        //
+        // The mesh already has `dirtyWorkspaceBehavior` (default 'warn') expressing the
+        // operator's intent, and this path simply never read it. Honor it: 'block'
+        // still refuses; 'warn' / 'checkpoint_then_continue' proceed with an advisory.
+        //
+        // Genuinely dangerous states are NOT relaxed here and are handled elsewhere:
+        // unresolved conflicts hard-fail earlier in discoverWorkspace
+        // ('conflicted_workspace'), before this point is ever reached.
+        // Normalize against the shipped defaults so an unset/invalid value resolves to
+        // the documented default ('warn') rather than being read as a block.
+        const dirtyBehavior = mergeAndNormalizePolicy(compatibleMesh.policy, undefined).dirtyWorkspaceBehavior;
+        if (discovery.dirty && dirtyBehavior === 'block') {
             return failure(
                 'dirty_workspace',
                 `Workspace has ${discovery.changedFileCount} uncommitted change(s); a cloned worktree would not include them.`,
-                'Commit or stash the changes, then re-run the clone plan.',
+                'Commit or stash the changes, then re-run the clone plan. '
+                    + "(This mesh's dirtyWorkspaceBehavior is 'block'; set it to 'warn' to allow cloning from a dirty workspace.)",
                 { discovery, membership },
+            );
+        }
+        if (discovery.dirty) {
+            planWarnings.push(
+                `Source workspace has ${discovery.changedFileCount} uncommitted change(s). `
+                + 'The new worktree is created from HEAD, so uncommitted changes are NOT included in it — '
+                + 'commit them first if the cloned branch needs them.',
             );
         }
         const branch = (options.branch || '').trim();
@@ -608,8 +647,11 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
             compatibleMesh: meshSummary(compatibleMesh),
             plan: {
                 kind: 'clone_new_worktree',
-                summary: `Create a clean isolated worktree node from '${sourceNode.id}' on branch '${branch}'.`,
-                requiresClean: true,
+                summary: `Create an isolated worktree node from '${sourceNode.id}' on branch '${branch}'.`,
+                // Only a 'block' mesh actually requires a clean source; under the
+                // default 'warn' a dirty workspace is advisory, so reporting true here
+                // would misdescribe the plan the caller is approving.
+                requiresClean: dirtyBehavior === 'block',
                 approvalRequired: true,
                 steps: [{
                     command: 'clone_mesh_node',
@@ -627,6 +669,7 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
             },
             suggestedConfig,
             note: 'Read-only plan only. No mesh, config, branch, remote or worktree state was changed.',
+            ...(planWarnings.length ? { warnings: planWarnings } : {}),
         };
     }
 
