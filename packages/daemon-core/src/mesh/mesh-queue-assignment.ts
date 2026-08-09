@@ -1268,6 +1268,17 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     'provider_priority_unusable',
     'provider_unusable',
     'dirty_workspace',
+    // TARGET-PIN-TTL EXPIRY: the task was pinned to a specific session (a delta —
+    // a correction addressed to work already in flight) and that session never
+    // claimed it within the TTL, so the pin was cleared. Unlike the transient
+    // skips, this does NOT self-resolve into the intended outcome: the delta is
+    // now claimable by ANY compatible session, i.e. it will not reach the session
+    // it was written for. Previously this only bumped a metrics counter and wrote
+    // a log, so the coordinator kept waiting for a delivery that could no longer
+    // happen — measured live as 74min of silence while a worker continued on a
+    // premise the delta was meant to correct. The coordinator must know its
+    // addressed message lost its address.
+    'target_session_pin_expired',
     // SLOT MODEL GUARD (absent): no slot on the node declares the task's model.
     // Permanent — no amount of waiting produces a slot, so the coordinator must
     // re-drive (adjust difficulty, target another node, ask the owner). Its
@@ -1495,6 +1506,10 @@ function actionableSkipGuidance(reason: string): { summary: string; nextAction: 
     if (reason === 'dirty_workspace') return {
         summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
         nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign.",
+    };
+    if (reason === 'target_session_pin_expired') return {
+        summary: 'it was pinned to a specific session (a follow-up/delta for work already in flight) that never claimed it within the pin TTL, so the pin was cleared and the message will NOT reach the session it was addressed to',
+        nextAction: 'Assume the addressed session never received this delta and is still acting on its previous instructions. Re-send it to that session once it is idle (or re-target it), and re-check the work it produced in the meantime.',
     };
     if (reason === SLOT_MODEL_ABSENT_SKIP_REASON) return {
         summary: "no capability slot on the node declares the model this task resolved to (its difficulty→brain preset picked a model the node was never configured to run)",

@@ -880,7 +880,7 @@ function assignedRowLiveStatusIsAwaitingApproval(
 function queueHoldHardDeadlineExceeded(
     meshId: string,
     row: { id: string; assignedNodeId?: string; assignedSessionId?: string; assignedProviderType?: string },
-    gate: 'live_awaiting_approval' | 'held_suspension' | 'active_attempt_stage',
+    gate: 'live_awaiting_approval' | 'held_suspension' | 'active_attempt_stage' | 'live_generating',
     dispatchedAtMs: number,
     nowMs: number,
     detail?: string,
@@ -1820,7 +1820,23 @@ async function recoverStrandedAssignedDispatches(
             const verdict = evidenceSessionId
                 ? resolveSessionBusyVerdict(components, evidenceSessionId)
                 : 'IDLE_CONFIRMED'; // no session bound → nothing live to protect
-            if (verdict === 'GENERATING') {
+            if (verdict === 'GENERATING'
+                // GENERATING-HARD-DEADLINE: 'GENERATING' resets the grace every tick and
+                // `continue`s, so a session whose liveness signal is stuck ON holds the row
+                // 'assigned' FOREVER — the only branch in this phase with no ceiling. That is
+                // not hypothetical: a worker that had already posted its final report sat
+                // 'generating' for 86min, and because the row stayed assigned the node kept
+                // reading as busy, so `node_has_active_assignment` skipped every later
+                // auto-launch on it — a dead task blocking live ones, exactly the failure the
+                // QUEUE_HOLD_HARD_DEADLINE_MS comment above records.
+                //
+                // Bound it with the SAME ceiling as the other holds rather than a new number:
+                // 90min is 6x the delivered-no-turn deadline and far past any realistic single
+                // turn, so a genuinely-working worker is never pre-empted — below the ceiling
+                // the reset-grace behavior is untouched. Past it the liveness signal is
+                // presumed stale and control falls through to the ordinary bounded reclaim
+                // (streak grace still applies); it never tears a worker off immediately.
+                && !queueHoldHardDeadlineExceeded(meshId, row, 'live_generating', dispatchedAtMs, nowMs, 'delivered_no_turn')) {
                 deliveredNoTurnUnknownStreak.delete(streakKey); // demonstrably alive → reset grace
                 // HELD-SUSPENSION RESTART CONTRACT: a locally-active session with an
                 // unresolved pre-consumed hold proves the prompt WAS consumed — promote
