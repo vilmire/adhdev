@@ -4472,6 +4472,16 @@ function findInFlightDuplicate(ctx, message, targetNodeId) {
   }
   return null;
 }
+function buildUntargetedCodeChangeWorktreeAdvisory(input) {
+  if (input.taskMode !== "code_change") return null;
+  if (input.readonly) return null;
+  if (input.targetNodeId) return null;
+  if (input.preferWorktree) return null;
+  if (Array.isArray(input.requiredTags) && input.requiredTags.length > 0) return null;
+  return {
+    worktreeRoutingAdvisory: 'This untargeted `code_change` will be claimed by whichever node polls first \u2014 usually the BASE node, which gives it no branch isolation. Base nodes are for environment-specific testing (win32 PATH/registry, clean install on one OS, that machine\'s package state, OS-dependent runtime behavior). If this task only changes code, cancel it (mesh_queue_cancel), call mesh_clone_node (~10s, auto-launch starts the session), and re-enqueue with target_node_id set to the returned worktree node id \u2014 or pass prefer_worktree: true to route to the most recent worktree. If it DOES need a specific machine, pin it with required_tags (e.g. ["os=win32"]) or target_node_id and this advisory will not appear.'
+  };
+}
 async function meshEnqueueTask(ctx, args) {
   const message = readString(args.message);
   if (!message) {
@@ -4541,6 +4551,13 @@ async function meshEnqueueTask(ctx, args) {
     });
     const duplicateWarning = duplicateSuspect ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: "An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time." } : {};
     const missionWarning = buildMissionInactiveWarning(ctx, missionId) ?? {};
+    const worktreeAdvisory = buildUntargetedCodeChangeWorktreeAdvisory({
+      taskMode,
+      readonly,
+      requiredTags,
+      targetNodeId,
+      preferWorktree
+    }) ?? {};
     const enqueueEcho = {
       ...task.priority ? { priority: task.priority } : {},
       ...task.notBefore ? { notBefore: task.notBefore } : {},
@@ -4560,6 +4577,7 @@ async function meshEnqueueTask(ctx, args) {
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
         ...duplicateWarning,
         ...missionWarning,
+        ...worktreeAdvisory,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -4645,6 +4663,7 @@ async function meshEnqueueTask(ctx, args) {
         ...eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: "dependencies_unsatisfied" } : {},
         ...duplicateWarning,
         ...missionWarning,
+        ...worktreeAdvisory,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
