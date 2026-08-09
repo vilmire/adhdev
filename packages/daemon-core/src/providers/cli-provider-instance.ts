@@ -81,6 +81,8 @@ import {
 import { decideCompletionPreflight, decideCompletionVerdict, evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlushDecision, type CompletionPolicy, type CompletionSignalReader, type EvidenceSource } from './completion/completion-engine.js';
 import { closeSqliteProbeCache, createSqliteProbeCache, probeDirectoriesFor, querySqliteSessionId, sqlPlaceholderList } from './completion/transcript-probe.js';
 import { resetMeshStallEpisode, runMeshStallTick, type MeshStallHost } from './completion/mesh-stall-watchdog.js';
+import * as approvalGate from './completion/approval-gate.js';
+import type { ApprovalGateHost } from './completion/approval-gate.js';
 import type {
     CompletedDebouncePending,
     CompletedFinalizationBlock,
@@ -101,15 +103,6 @@ export {
     waitForCliAdapterReady,
 } from './cli-provider-status-helpers.js';
 
-/**
- * The auto-approve settle-gate identity signature: the modal's question line plus
- * the NORMALIZED affirmative label, no volatile counters or raw button set. Shared
- * by the fire path (maybeAutoApproveStatus) and the mask-stall nudge so both compare
- * the SAME identity the settle clock tracks (AUTOAPPROVE-SETTLE-FLAP).
- */
-function approvalModalSignature(message: unknown, affirmativeAnchor: string): string {
-    return [typeof message === 'string' ? message.trim() : '', affirmativeAnchor].join('::');
-}
 
 export class CliProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -126,7 +119,7 @@ export class CliProviderInstance implements ProviderInstance {
      * authoritative over the `waiting_approval` state; this only delays the
      * keystroke until the modal *content* has settled.
      */
-    private static readonly AUTO_APPROVE_SETTLE_MS = 600;
+    private static readonly AUTO_APPROVE_SETTLE_MS = approvalGate.APPROVAL_SETTLE_MS;
 
     /**
      * APPROVAL-INBOX-BLINDSPOT (Fix A): how long after a LOCAL auto-approve fire the mesh
@@ -151,7 +144,7 @@ export class CliProviderInstance implements ProviderInstance {
      * gate cleared. Bounded so a genuinely new, later approval still re-settles
      * from scratch rather than firing on a stale timestamp.
      */
-    private static readonly AUTO_APPROVE_GATE_HYSTERESIS_MS = 1500;
+    private static readonly AUTO_APPROVE_GATE_HYSTERESIS_MS = approvalGate.APPROVAL_GATE_HYSTERESIS_MS;
 
     /**
      * AUTOAPPROVE-FLAP-RECUR (Fix B): extended busy-side continuity window for a
@@ -190,7 +183,7 @@ export class CliProviderInstance implements ProviderInstance {
      * nudge leaked to the coordinator. 6000ms bridges the ~4.5s busy phase with
      * margin so the returning approval frame survives to resume its settle clock.
      */
-    private static readonly AUTO_APPROVE_FLAP_CONTINUITY_MS = 6000;
+    private static readonly AUTO_APPROVE_FLAP_CONTINUITY_MS = approvalGate.APPROVAL_FLAP_CONTINUITY_MS;
 
     /**
      * STATUS-MISMATCH: upper bound on how long the auto-approve→`generating` SURFACE
@@ -223,7 +216,7 @@ export class CliProviderInstance implements ProviderInstance {
      * the old 4500ms tripped inside the very first busy phase (while modal=none, so
      * the nudge was NOT deferred) and leaked to the coordinator.
      */
-    private static readonly AUTO_APPROVE_MASK_STALL_MS = 10500;
+    private static readonly AUTO_APPROVE_MASK_STALL_MS = approvalGate.APPROVAL_AUTO_MASK_STALL_MS;
 
     /**
      * AUTOAPPROVE-FLAP-INBOX-MISSING: sticky-approval overlay window. Same time-tick
@@ -2763,36 +2756,6 @@ export class CliProviderInstance implements ProviderInstance {
      * session, or no active mask episode — keeps the tight default hysteresis so a
      * genuine resolution frees the gate promptly.
      */
-    private autoApproveContinuityWindowMs(): number {
-        return this.autoApproveMaskSince > 0 && this.isAutonomousMeshSession()
-            ? CliProviderInstance.AUTO_APPROVE_FLAP_CONTINUITY_MS
-            : CliProviderInstance.AUTO_APPROVE_GATE_HYSTERESIS_MS;
-    }
-
-    /**
-     * The settle-gate identity signature for a raw activeModal, or null when the
-     * modal is NOT a concrete auto-approvable consent prompt (no captured buttons,
-     * a picker/confirm kind, or no reliable affirmative+decline anchor). Mirrors the
-     * gates the auto-approve fire path applies before computing modalSignature, so
-     * the mask-stall nudge can ask the SAME question the settle gate is tracking —
-     * "is THIS frame's modal the identity the settle clock is accruing against?" —
-     * without duplicating the button-pick logic. The signature is message +
-     * normalized affirmative label only (no volatile counters/button set), matching
-     * the fire path exactly (AUTOAPPROVE-SETTLE-FLAP).
-     */
-    private approvableModalSignature(modal: any): string | null {
-        const buttons = Array.isArray(modal?.buttons)
-            ? modal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
-            : [];
-        if (!modal || buttons.length === 0) return null;
-        const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
-        if (modalKind !== 'approval') return null;
-        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
-        const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons)
-            || hasReliableApprovalAffirmative(buttons);
-        if (buttonIndex < 0 || !hasReliableConsentAnchor) return null;
-        return approvalModalSignature(modal?.message, normalizeApprovalLabel(buttonLabel));
-    }
 
     // FALSE-IDLE (self-coordinator settle): an autonomously-progressing mesh session
     // is either a delegated worker (isMeshWorkerSession) OR the coordinator's OWN
@@ -3560,349 +3523,25 @@ export class CliProviderInstance implements ProviderInstance {
         return adapterStatus;
     }
 
+    /**
+     * PTY auto-approve decision for one status frame — the settle/hysteresis/
+     * flap-continuity/mask-stall machinery lives in completion/approval-gate.ts
+     * (verbatim move; episode state stays instance-owned for the suites).
+     */
     private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
-        // launch-args modes grant approval in the CLI process itself and therefore
-        // must never enter the PTY modal parser/fire/settle/mask/nudge subsystem.
-        // post-boot-command is reserved and resolves inactive in v1.
-        if (!this.shouldUsePtyAutoApprove()) {
-            this.resetPtyAutoApproveState();
-            return false;
-        }
-        // Manual-attendance suppression (provider-common): when a human is
-        // Manual-attendance suppression (provider-common): when a human is
-        // actively driving this session from the dashboard, hold auto-approve so
-        // the modal stays visible and they can pick a button / use the controlbar
-        // themselves. Return false (NOT auto-approving) so getState keeps the
-        // modal surfaced. Clear any in-progress settle gate — a genuine fire
-        // after the window lapses must re-settle from scratch — and arm a
-        // re-check for the lapse moment, because the PTY may have gone silent and
-        // would otherwise never re-drive this decision. Background mesh workers
-        // are never attended, so their delegated auto-approve is untouched.
-        if (adapterStatus?.status === 'waiting_approval'
-            && this.shouldUsePtyAutoApprove()
-            && this.manualAttendance.isAttended(now)) {
-            this.lastAutoApprovalSignature = '';
-            this.pendingAutoApprovalSignature = '';
-            this.pendingAutoApprovalSince = 0;
-            this.autoApproveInactiveSince = 0;
-            // Manual attendance takes over — the modal stays surfaced (maybeAutoApproveStatus
-            // returns false), so end the mask episode.
-            this.autoApproveMaskSince = 0;
-            this.stalledApprovalNudgeEpisode = 0;
-            this.autoApproveLastModalSeenAt = 0;
-            if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
-            this.autoApproveSettleTimer = setTimeout(() => {
-                this.autoApproveSettleTimer = null;
-                this.recheckAutoApproveSettled();
-            }, this.manualAttendance.remainingMs(now) + 20);
-            return false;
-        }
-        const autoApproveActive = adapterStatus?.status === 'waiting_approval' && this.shouldUsePtyAutoApprove();
-        // Guard re-entry: onStatusChange/getState can observe the same modal multiple
-        // times while the PTY absorbs the approval key. Without this flag, repeated
-        // snapshots would write stray keys into the input once the modal dismisses.
-        // However, Claude Code can present a second approval immediately after the
-        // first. Resolve a changed modal signature even while the previous write is
-        // still inside the short busy window.
-        if (!autoApproveActive) {
-            this.lastAutoApprovalSignature = '';
-            // Hysteresis: if a settle gate is mid-progress, a momentary
-            // status!=waiting_approval blip (a generating flip while the same
-            // modal's button block is still on screen) must NOT wipe the settle
-            // clock — otherwise the modal→generating→modal flap restarts the
-            // 600ms window every time and auto-approve never fires. Keep the
-            // gate warm for AUTO_APPROVE_GATE_HYSTERESIS_MS; re-arm a timer so
-            // that if the modal does NOT come back the gate is cleared on the
-            // re-check (a genuine resolution → idle frees the gate normally).
-            if (this.pendingAutoApprovalSince) {
-                if (!this.autoApproveInactiveSince) this.autoApproveInactiveSince = now;
-                const goneForMs = now - this.autoApproveInactiveSince;
-                // AUTOAPPROVE-FLAP-RECUR (Fix B): a delegated-worker flap cycles the
-                // FULL waiting_approval → busy → waiting_approval state on a
-                // multi-second period, outrunning the tight default hysteresis and
-                // wiping the settle clock before 600ms ever accumulates. For an
-                // active worker mask episode the continuity window is widened (still
-                // capped by AUTO_APPROVE_MASK_STALL_MS) so the settle clock survives
-                // the busy phase and the returning approval keeps accruing settle time.
-                const continuityMs = this.autoApproveContinuityWindowMs();
-                if (goneForMs < continuityMs) {
-                    if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
-                    this.autoApproveSettleTimer = setTimeout(() => {
-                        this.autoApproveSettleTimer = null;
-                        this.recheckAutoApproveSettled();
-                    }, continuityMs - goneForMs + 20);
-                    return autoApproveActive;
-                }
-            }
-            // Clear the settle gate so the next approval starts its own quiet
-            // window from scratch (a stale timestamp would let it fire instantly).
-            this.pendingAutoApprovalSignature = '';
-            this.pendingAutoApprovalSince = 0;
-            this.autoApproveInactiveSince = 0;
-            // Modal has genuinely been gone past the hysteresis window → the episode ended;
-            // end the mask episode too (a later approval starts a fresh stall clock).
-            this.autoApproveMaskSince = 0;
-            this.stalledApprovalNudgeEpisode = 0;
-            this.autoApproveLastModalSeenAt = 0;
-            if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
-            return autoApproveActive;
-        }
-        // Active approval observed — reset the inactivity tracker so a later
-        // blip starts its hysteresis window fresh.
-        this.autoApproveInactiveSince = 0;
-        // STATUS-MISMATCH: start (or keep) the mask-stall clock for this episode. Set ONLY
-        // when zero so it survives modal-signature changes and hysteresis blips — it measures
-        // the true age of the unresolved auto-approve, not the per-signature settle window.
-        if (!this.autoApproveMaskSince) this.autoApproveMaskSince = now;
-        // NOTIF-APPROVAL-MASKED (Q1b): once this episode has stalled past the mask threshold,
-        // surface the raw waiting_approval to the mesh coordinator (decoupled from the dashboard
-        // mask). Placed on the active-approval path here — the single choke point that owns the
-        // mask-stall clock and is re-driven throughout a silent stall (getState heartbeat,
-        // detectStatusTransition, recheckAutoApproveSettled). No-op until the stall threshold trips.
-        this.maybeEmitStalledApprovalNudge(adapterStatus, now);
-        const modal = adapterStatus.activeModal;
-        // (fix) Do not auto-approve when no concrete modal/buttons are present.
-        // Claude TUI flaps between paints; without this guard adapterStatus
-        // could report status=waiting_approval with activeModal=null (or with
-        // an empty buttons array briefly) and we'd still call
-        // resolveModal(-1) — which used to type "1" into the prompt
-        // repeatedly. Skip until a real modal is captured.
-        const buttons = Array.isArray(modal?.buttons)
-            ? modal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
-            : [];
-        if (!modal || buttons.length === 0) {
-            // AUTOAPPROVE-FLAP-RECUR (Fix A): the button block momentarily scrolled
-            // out of the captured frame (status is still waiting_approval — we are
-            // on the active path). Do NOT tear the settle gate down on this frame:
-            // if a concrete modal was captured within the continuity window and a
-            // settle gate is in progress, this is a short scroll-out blip — keep the
-            // gate warm against the last-captured signature and arm a re-check so a
-            // silent PTY still re-drives the decision when the buttons repaint. Only
-            // once the modal has stayed empty PAST the continuity window is it a
-            // genuine close, and the gate is cleared here so a later approval
-            // re-settles from scratch (never fires on a stale timestamp).
-            const blipForMs = this.autoApproveLastModalSeenAt ? now - this.autoApproveLastModalSeenAt : Infinity;
-            if (this.pendingAutoApprovalSince && blipForMs < this.autoApproveContinuityWindowMs()) {
-                if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
-                this.autoApproveSettleTimer = setTimeout(() => {
-                    this.autoApproveSettleTimer = null;
-                    this.recheckAutoApproveSettled();
-                }, this.autoApproveContinuityWindowMs() - blipForMs + 20);
-                return autoApproveActive;
-            }
-            if (blipForMs >= this.autoApproveContinuityWindowMs()) {
-                // Buttons empty continuously past the window → the modal genuinely
-                // closed (or never captured). Reset the per-signature settle gate so
-                // a later approval re-settles cleanly. The mask-stall clock keeps
-                // running underneath so a never-captured worker modal still surfaces
-                // to the coordinator within AUTO_APPROVE_MASK_STALL_MS.
-                this.pendingAutoApprovalSignature = '';
-                this.pendingAutoApprovalSince = 0;
-            }
-            return autoApproveActive;
-        }
-        // Concrete modal captured this frame — mark the last-good-modal timestamp so
-        // a subsequent scroll-out blip (buttons.length===0) can be told apart from a
-        // genuine close by how long it persists (Fix A above).
-        this.autoApproveLastModalSeenAt = now;
-        // Picker/confirm exclusion (provider-common). A /model or /mode picker is
-        // surfaced with status=waiting_approval so the dashboard shows it, but it
-        // has no "correct" answer to auto-pick — blindly selecting the first
-        // option silently switches the model (the "always Opus, before I even
-        // choose" bug). Two independent gates, BOTH must pass to fire:
-        //
-        //   (1) modal_kind — the spec/FSM tells us this is an 'approval' modal,
-        //       not a 'picker'/'confirm'. A modal whose kind is unknown (legacy
-        //       adapter, or a spec that predates modal_kind) reads as 'approval'
-        //       so genuine approvals keep auto-approving; only an explicit
-        //       'picker'/'confirm' is excluded here.
-        //   (2) structural anchor — a real approval offers an affirmative AND a
-        //       decline option (pickApprovalButton finds a positive that isn't a
-        //       decline, and hasNegativeApprovalOption confirms a No/Cancel/Deny
-        //       is present). A model picker ("1. Default  2. Opus  3. Sonnet")
-        //       has no decline, so even an un-migrated picker is caught here.
-        //
-        // Mirrors the SDK v1 detect-status approval heuristic (detect-status.ts).
-        const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
-        if (modalKind !== 'approval') {
-            // Defense-in-depth (APPROVAL-PICKER-MISROUTE): a genuine tool-consent
-            // modal ("Do you want to proceed?" + 1. Yes / 3. No) can be MIS-routed
-            // to modal_kind='picker' by the spec FSM when a picker matcher wins the
-            // priority tie in the wrong state. The spec-level negative guard (Fix A)
-            // is the root fix, but a stale/undeployed spec would leave the worker
-            // wedged on a modal it could safely have approved. So don't bail on the
-            // kind label alone: only bail when this modal is ALSO a genuine SELECTION
-            // picker (/model, /mode — "Select a model/mode/option" / "Switch
-            // between") with NO consent structure. A modal that carries approval
-            // text or a decline/grant anchor is treated as an approval and falls
-            // through to the structural gate below, even under kind='picker'.
-            const modalText = `${String(modal?.title || '')}\n${String(modal?.message || '')}\n${buttons.join('\n')}`;
-            const looksLikeSelectionPicker = /Select (?:a |an )?(?:model|mode|option)\b|Switch between/i.test(modalText);
-            const looksLikeConsent = looksLikeActiveApprovalPromptText(modalText)
-                || /Do you want to (?:proceed|create|make|edit|apply|run|delete|modify|allow)\b|allow all edits\b|don'?t ask again\b/i.test(modalText)
-                || hasNegativeApprovalOption(buttons)
-                || hasReliableApprovalAffirmative(buttons);
-            if (looksLikeSelectionPicker && !looksLikeConsent) {
-                // Genuine /model or /mode selection picker — no safe default to
-                // auto-pick. Leave it for the user; keep the modal surfaced.
-                return autoApproveActive;
-            }
-            // Otherwise: mis-routed consent modal (or an ambiguous picker that still
-            // carries consent structure) — fall through to the structural approval
-            // gate below, which only fires on a real affirmative+decline/grant set.
-        }
-        const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, this.provider);
-        // Structural decline anchor. A real approval offers BOTH an affirmative
-        // and a decline — but on a TALL Write/Edit diff the trailing "3. No"
-        // scrolls off the captured frame, leaving only "1. Yes" + "2. Yes, allow
-        // … this session" so hasNegativeApprovalOption reads false (#137). A
-        // scoped grant-affirmative ("Yes, allow … during this session" / "…don't
-        // ask again") ONLY appears in a genuine consent modal (never a picker),
-        // so it stands in for the off-frame decline as a reliable second anchor.
-        // Conservative by construction: a picker without a grant-scope option
-        // still bails here, and the fire below still picks the plain allow-once
-        // "Yes" via pickApprovalButton, not the broader grant.
-        const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons)
-            || hasReliableApprovalAffirmative(buttons);
-        if (buttonIndex < 0 || !hasReliableConsentAnchor) {
-            // No affirmative matched, or no decline / reliable grant option present
-            // (→ not a real consent prompt, e.g. a picker that slipped past the
-            // kind gate). Surface the modal so the user decides; never pick blindly.
-            return autoApproveActive;
-        }
-        // Modal *identity* signature — the question plus the STABLE affirmative
-        // anchor only, NO volatile counters and NO raw button set. This is what
-        // the settle gate tracks: the FSM bumps approvalEntrySeq on every fresh
-        // waiting_approval entry, and a modal→generating→modal flap (the question
-        // line scrolled out of the captured frame while the button block stays)
-        // re-enters and bumps it again. Folding that seq into the settle signature
-        // made the 600ms settle clock restart on every flap, so the modal never
-        // stayed stable long enough to fire — the gate was never satisfied.
-        // Identity excludes the seq so seq flap of the SAME modal keeps one clock.
-        //
-        // The raw button set is also excluded: on a TALL Write/Edit diff claude's
-        // TUI repaints the button block 3↔5↔none between frames (buttons scroll in
-        // and out of the captured region), which flipped both buttons.join('|') and
-        // the positional buttonIndex every frame → signature flap → the settle
-        // clock reset 4–9s and only mask-stalled episodes leaked to the coordinator
-        // (AUTOAPPROVE-SETTLE-FLAP). The affirmative the auto-approve will actually
-        // press is the invariant across those repaints, so we anchor on its
-        // NORMALIZED label (numbers/bullets/punctuation stripped, so "1. Yes" and
-        // "3. Yes" collapse to "yes"). Message + affirmative label uniquely
-        // identifies the consent question without tracking the volatile button
-        // positions.
-        const affirmativeAnchor = normalizeApprovalLabel(buttonLabel);
-        const modalSignature = approvalModalSignature(modal?.message, affirmativeAnchor);
-        // Busy-window re-entry guard still needs the seq: two DISTINCT
-        // back-to-back approvals can carry identical message/buttons (common
-        // with claude-cli). Without the seq their busy signatures collide and
-        // the 5s busy-window guard below would swallow the second auto-approve,
-        // leaving it stuck. The seq is bumped by the FSM on every fresh
-        // waiting_approval entry, so a new approval always yields a new busy
-        // signature and fires through.
-        const approvalEntrySeq = typeof adapterStatus?.approvalEntrySeq === 'number'
-            ? adapterStatus.approvalEntrySeq
-            : 0;
-        const busySignature = `${approvalEntrySeq}::${modalSignature}`;
-        // Already fired for this exact modal entry and still inside the busy
-        // window — nothing to do (re-entry guard for repeated snapshots of one
-        // modal).
-        if (this.autoApproveBusy && busySignature === this.lastAutoApprovalSignature) {
-            return autoApproveActive;
-        }
-
-        // Settle gate: only fire once this modal identity has been stable for
-        // AUTO_APPROVE_SETTLE_MS. A still-streaming prompt mutates its
-        // message/buttons each frame → new identity → clock restarts, so we
-        // never approve a half-rendered prompt (the "resolves too fast" bug).
-        if (modalSignature !== this.pendingAutoApprovalSignature) {
-            this.pendingAutoApprovalSignature = modalSignature;
-            this.pendingAutoApprovalSince = now;
-        }
-        const settledForMs = now - this.pendingAutoApprovalSince;
-        if (settledForMs < CliProviderInstance.AUTO_APPROVE_SETTLE_MS) {
-            // Not yet settled. Arm a timer to re-check after the remaining quiet
-            // window — the PTY may go silent once the prompt finishes painting,
-            // so there is no guaranteed status-change frame to re-drive us.
-            if (this.autoApproveSettleTimer) clearTimeout(this.autoApproveSettleTimer);
-            this.autoApproveSettleTimer = setTimeout(() => {
-                this.autoApproveSettleTimer = null;
-                this.recheckAutoApproveSettled();
-            }, CliProviderInstance.AUTO_APPROVE_SETTLE_MS - settledForMs + 20);
-            return autoApproveActive;
-        }
-
-        // Settled — fire the approve key.
-        if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
-        this.autoApproveBusy = true;
-        this.lastAutoApprovalSignature = busySignature;
-        this.pendingAutoApprovalSignature = '';
-        this.pendingAutoApprovalSince = 0;
-        this.autoApproveInactiveSince = 0;
-        // Fired (resolveModal in flight) — the episode resolved; end the mask-stall clock.
-        this.autoApproveMaskSince = 0;
-        this.stalledApprovalNudgeEpisode = 0;
-        this.autoApproveLastModalSeenAt = 0;
-        if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
-        this.autoApproveBusyTimer = setTimeout(() => {
-            this.autoApproveBusy = false;
-            this.autoApproveBusyTimer = null;
-            this.lastAutoApprovalSignature = '';
-        }, 5000);
-        this.recordAutoApproval(modal?.message, buttonLabel, now);
-        // APPROVAL-INBOX-BLINDSPOT (Fix A) + BUTTON-INDEX-MISMAP (Fix C): stamp the
-        // local-resolution clock so the mesh forwarder can distinguish "auto-approve just
-        // fired / is firing" (suppress the coordinator notification — modal is being resolved
-        // locally) from "auto-approve is merely configured but has not fired for this modal"
-        // (forward it so the coordinator is told and a task_approval_needed ledger row is
-        // created). Only stamp when the click actually MATCHED a button: resolveModalMatched
-        // maps the array position to the real FSM display index and reports whether a button
-        // was pressed, so a mis-mapped/never-pressed modal does NOT falsely mark itself
-        // locally-resolved (which would suppress the coordinator notification for a modal that
-        // never got answered — the exact blind spot). Legacy adapters keep the void resolveModal.
-        this.lastAutoApproveFiredAt = now;
-        setTimeout(() => {
-            const adapter = this.adapter as {
-                resolveModalMatched?: (i: number) => boolean;
-                resolveModal?: (i: number) => void;
-            };
-            if (typeof adapter.resolveModalMatched === 'function') {
-                const matched = adapter.resolveModalMatched(buttonIndex);
-                if (!matched) {
-                    // Click did not land on any button — undo the local-resolution stamp so the
-                    // next agent:waiting_approval is FORWARDED to the coordinator/inbox rather
-                    // than suppressed as "resolved locally".
-                    if (this.lastAutoApproveFiredAt === now) this.lastAutoApproveFiredAt = 0;
-                    LOG.warn('CLI', `[${this.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) — surfacing approval to coordinator`);
-                }
-            } else {
-                adapter.resolveModal?.(buttonIndex);
-            }
-        }, 0);
-        return autoApproveActive;
+        return approvalGate.maybeAutoApproveStatus(this as unknown as ApprovalGateHost, adapterStatus, now);
     }
 
     /**
      * Re-drive the auto-approve check after the settle quiet window elapses.
-     * The PTY may have gone silent once the approval prompt finished painting,
-     * so no status-change frame is guaranteed to re-enter maybeAutoApproveStatus
-     * — this timer-driven re-check picks up the now-settled modal and fires.
-     * Deliberately lighter than detectStatusTransition(): it only re-evaluates
-     * the approval decision; the next real PTY frame refreshes visible status.
+     * APPROVAL Defect-C: re-probe with a LIVE parse (allowParse:true) — the
+     * cached engine snapshot can hold a null/stale modal for a between-writes
+     * arrival, which made this recheck a silent no-op and stranded quiet
+     * approvals. Stays on the instance (not the gate module) so the timer path
+     * dispatches through instance-level overrides, exactly as before the move.
      */
     private recheckAutoApproveSettled(): void {
         try {
-            // APPROVAL Defect-C (auto-approve gap): re-probe with a LIVE parse, not the cached
-            // engine snapshot. This timer is the ONLY re-drive when the PTY goes silent after the
-            // approval prompt finishes painting (its whole reason to exist) — but with
-            // allowParse:false it read only engine.activeModal, which the engine's per-frame settle
-            // pass can leave null/stale when the modal arrived between writes. The re-check then saw
-            // no modal and never fired, so the delegated worker's transient/quiet approval was missed
-            // and the coordinator had to step in with a manual mesh_approve. allowParse:true makes
-            // getStatus re-run runDetectStatus/runParseApproval on the current screen buffer (the same
-            // live re-probe the coordinator's resolveAction path uses), recovering the modal so
-            // auto-approve fires on its own. The half-rendered-frame guard (buttons.length===0) and
-            // the settle gate in maybeAutoApproveStatus still protect against firing on a partial modal.
             const adapterStatus = this.adapter.getStatus({ allowParse: true });
             this.maybeAutoApproveStatus(adapterStatus, Date.now());
         } catch { /* adapter gone / transient — next frame retries */ }
@@ -5007,25 +4646,6 @@ export class CliProviderInstance implements ProviderInstance {
         return this.shouldAutoApprove() && resolved.strategy === 'pty-parse-default';
     }
 
-    private resetPtyAutoApproveState(): void {
-        this.lastAutoApprovalSignature = '';
-        this.pendingAutoApprovalSignature = '';
-        this.pendingAutoApprovalSince = 0;
-        this.autoApproveInactiveSince = 0;
-        this.autoApproveMaskSince = 0;
-        this.stalledApprovalNudgeEpisode = 0;
-        this.autoApproveLastModalSeenAt = 0;
-        this.autoApproveBusy = false;
-        if (this.autoApproveSettleTimer) {
-            clearTimeout(this.autoApproveSettleTimer);
-            this.autoApproveSettleTimer = null;
-        }
-        if (this.autoApproveBusyTimer) {
-            clearTimeout(this.autoApproveBusyTimer);
-            this.autoApproveBusyTimer = null;
-        }
-    }
-
     /** @see ProviderInstance.noteManualInteraction */
     noteManualInteraction(now = Date.now(), opts?: { passive?: boolean }): void {
         // P1b (#137 secondary): a DELEGATED worker session must not treat a
@@ -5062,92 +4682,9 @@ export class CliProviderInstance implements ProviderInstance {
     // maybeAutoApproveStatus (driven by getState + the recheck timer during a waiting episode);
     // this read is side-effect-free so getStatusMetadata can consult it too.
     private autoApproveMaskStalled(now = Date.now()): boolean {
-        return this.shouldUsePtyAutoApprove()
-            && this.autoApproveMaskSince > 0
-            && now - this.autoApproveMaskSince > CliProviderInstance.AUTO_APPROVE_MASK_STALL_MS;
+        return approvalGate.autoApproveMaskStalled(this as unknown as ApprovalGateHost, now);
     }
 
-    /**
-     * NOTIF-APPROVAL-MASKED (Q1b): surface a delegated worker's STALLED auto-approve modal
-     * to the mesh COORDINATOR, decoupled from the dashboard visible-status mask.
-     *
-     * When auto-approve is configured but the episode never settles (modal parse miss / the
-     * settle gate never satisfied), getState()/detectStatusTransition() fold the raw
-     * `waiting_approval` into `generating` to suppress dashboard flicker — so
-     * detectStatusTransition()'s `waiting_approval` arm never runs and NO agent:waiting_approval
-     * event is emitted. The coordinator's real-time approval-nudge delivery then has no input and
-     * the worker's stuck modal is never surfaced (the live ~25s stall). The dashboard mask is
-     * intentional and stays; this emits the coordinator nudge exactly ONCE, gated on the SAME
-     * raw-waiting_approval + mask-stalled signal resolveModalParkStatus() distinguishes, the
-     * instant the mask-stall threshold trips (the same moment getState un-folds the mask).
-     *
-     * Only delegated worker sessions qualify: a foreground session has no coordinator to notify,
-     * and its own dashboard mask already reveals the modal on stall. A normally-resolving
-     * auto-approve never reaches AUTO_APPROVE_MASK_STALL_MS, so it emits nothing here; and if a
-     * masked approval clears just as this fires, rc.455's isApprovalNudgeResolved stale-drop
-     * discards the nudge coordinator-side without noise. Dedup is per-episode (keyed on the
-     * mask-clock value) so a modal that flaps between parsed/unparsed states is announced once.
-     */
-    private maybeEmitStalledApprovalNudge(adapterStatus: any, now: number): void {
-        if (!this.shouldUsePtyAutoApprove()) return;
-        if (!this.isMeshWorkerSession()) return;
-        if (adapterStatus?.status !== 'waiting_approval') return;
-        // ASKUSERQUESTION-NOT-APPROVAL (rc.19): a picker modal whose interactive prompt
-        // was captured is a QUESTION (waiting_choice) — already surfaced via
-        // agent:waiting_choice with its promptId. Auto-approve can never resolve it (no
-        // consent anchor), so its mask episode always stalls; nudging it as
-        // agent:waiting_approval would re-misroute the question into the mesh_approve
-        // inbox. Mirrors the isQuestionPicker classification in detectStatusTransition.
-        const nudgeModal = adapterStatus.activeModal;
-        const nudgeModalKind = nudgeModal && typeof nudgeModal.kind === 'string' ? nudgeModal.kind : null;
-        if (adapterStatus.activeInteractivePrompt && (!nudgeModal || nudgeModalKind === 'picker')) return;
-        if (!this.autoApproveMaskStalled(now)) return;
-        // AUTOAPPROVE-FLAP-RECUR (Fix C, redesigned): the mask-stall bound tripped.
-        // If auto-approve is genuinely about to fire on its own, defer to that fire —
-        // the nudge would race a resolveModal landing milliseconds later, producing
-        // the coordinator flap this fix targets.
-        //
-        // The ORIGINAL guard deferred on `pendingAutoApprovalSince && buttons > 0`
-        // alone. That is FALSE-POSITIVE for a FLAPPING modal: a modal whose identity
-        // changes every frame (message streaming) keeps pendingAutoApprovalSince
-        // nonzero (it is re-stamped to `now` on every signature change) and keeps
-        // buttons present, yet its settle clock is wiped back to ~0 each frame and
-        // NEVER reaches SETTLE_MS — so auto-approve can never fire and this is exactly
-        // the stuck episode the coordinator MUST be paged about. The old guard
-        // silenced it permanently (the live rc.466 regression).
-        //
-        // Discriminator: a settle is genuinely PROGRESSING only if THIS frame's modal
-        // carries the SAME identity the settle clock is already accruing against
-        // (pendingAutoApprovalSignature). A stable modal keeps its signature across
-        // frames → the clock climbs → resolveModal is imminent → defer. A flapping
-        // modal presents a DIFFERENT signature this frame (or none — a non-concrete /
-        // picker / never-captured modal) → the clock is about to reset (or never
-        // engaged) → do NOT defer, page the coordinator. This is evaluated for the
-        // CURRENT frame (not a stale prior-frame value), so a stable modal polled only
-        // twice — start, then past the stall bound — is still correctly deferred.
-        const currentSignature = this.approvableModalSignature(adapterStatus.activeModal);
-        const settleProgressing = !!currentSignature
-            && this.pendingAutoApprovalSince > 0
-            && currentSignature === this.pendingAutoApprovalSignature;
-        if (settleProgressing) return;
-        // Exactly once per stalled episode (autoApproveMaskSince uniquely identifies it).
-        if (this.stalledApprovalNudgeEpisode === this.autoApproveMaskSince) return;
-        this.stalledApprovalNudgeEpisode = this.autoApproveMaskSince;
-        const modal = adapterStatus.activeModal;
-        const dirName = workingDirBasename(this.workingDir);
-        const chatTitle = `${this.provider.name} · ${dirName}`;
-        this.appendRuntimeSystemMessage(
-            formatApprovalRequestMessage(modal?.message, modal?.buttons),
-            `approval_request:${now}`,
-            now,
-        );
-        this.pushEvent({
-            event: 'agent:waiting_approval', chatTitle, timestamp: now,
-            modalMessage: modal?.message,
-            modalButtons: modal?.buttons,
-        });
-        LOG.info('CLI', `[${this.type}] stalled auto-approve nudge → coordinator (masked ${Math.round((now - this.autoApproveMaskSince) / 1000)}s)`);
-    }
 
     private recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {
         this.appendRuntimeSystemMessage(
