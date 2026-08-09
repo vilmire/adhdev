@@ -336,6 +336,38 @@ export function truncateValidationOutput(value: unknown): string {
     return `${head}\n[... ${omitted} chars omitted ...]\n${tail}`;
 }
 
+/**
+ * Classify a failed validation command. Exported (rather than inlined in the
+ * gate) so the regression suite binds to the REAL logic — a test that mirrors a
+ * copy of this silently stops protecting anything the moment the two diverge.
+ *
+ * A maxBuffer overflow is NOT a dependency problem. When a command's output
+ * exceeds REFINE_VALIDATION_OUTPUT_LIMIT_BYTES, Node KILLS the child and rejects
+ * with ERR_CHILD_PROCESS_STDIO_MAXBUFFER — carrying code === 1 even though the
+ * command was on its way to exit 0. The missing-dependency heuristic then matches
+ * "node_modules" inside the captured stack frames (every vitest/tsc frame contains
+ * that substring) and reports `missing_dependencies`. That misdiagnosis cost a full
+ * investigation into an absent packages/server/node_modules (normal npm hoisting)
+ * and an uninitialized local D1 (never touched by those tests — measured: db:init
+ * left the output byte-for-byte identical) before the real cause was found: a
+ * verbose-reporter suite sitting ~7% under the output cap.
+ *
+ * Order matters — the output-budget check must run FIRST and suppress the
+ * dependency heuristic, never the reverse.
+ */
+export function classifyValidationFailure(
+    error: { code?: unknown; message?: unknown } | null | undefined,
+    stderr: string,
+    spawnResolutionFailed: boolean,
+): { outputLimitExceeded: boolean; missingDependencyFailure: boolean } {
+    const outputLimitExceeded = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+        || /maxBuffer length exceeded/i.test(String(error?.message || ''));
+    const missingDependencyFailure = !spawnResolutionFailed
+        && !outputLimitExceeded
+        && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
+    return { outputLimitExceeded, missingDependencyFailure };
+}
+
 // REFINE-LOG-PRESERVATION. The summary above is a payload budget, not a
 // diagnostic record: a failing gate's output is cut TWICE on its way to the
 // coordinator — once by execFile's maxBuffer (REFINE_VALIDATION_OUTPUT_LIMIT_BYTES)
@@ -2567,8 +2599,8 @@ export async function runMeshRefineValidationGate(
             // coordinator surfaces the real cause (win32 .cmd resolution).
             const spawnResolutionFailed = isSpawnResolutionError(error);
             const stderr = truncateValidationOutput(error?.stderr || error?.message);
-            const missingDependencyFailure = !spawnResolutionFailed
-                && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
+            const { outputLimitExceeded, missingDependencyFailure } =
+                classifyValidationFailure(error, stderr, spawnResolutionFailed);
             // REFINE-LOG-PRESERVATION: keep the UNtruncated streams on disk before
             // the record below reduces them to the head+tail summary, and hand the
             // coordinator the path so it can read the real failure.
@@ -2585,6 +2617,7 @@ export async function runMeshRefineValidationGate(
                 ...(failureLogPath ? { failureLogPath } : {}),
                 ...(spawnResolutionFailed
                     ? { failureKind: 'spawn_resolution_failed', resolvedCommand }
+                    : outputLimitExceeded ? { failureKind: 'output_limit_exceeded' }
                     : missingDependencyFailure ? { failureKind: 'missing_dependencies' } : {}),
             }));
             summary.status = 'failed';
@@ -2592,6 +2625,9 @@ export async function runMeshRefineValidationGate(
                 summary.failureKind = 'spawn_resolution_failed';
                 summary.failureCode = 'spawn_resolution_failed';
                 summary.spawnResolutionError = describeSpawnError(error, resolvedCommand, true);
+            } else if (outputLimitExceeded) {
+                summary.failureKind = 'output_limit_exceeded';
+                summary.failureCode = 'output_limit_exceeded';
             } else if (missingDependencyFailure) {
                 summary.failureKind = 'missing_dependencies';
                 summary.failureCode = 'missing_dependencies';
