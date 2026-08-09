@@ -128,6 +128,77 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('mesh_clone_node')
   })
 
+  it('draws the base-node vs worktree boundary for write tasks, and blocks the "enough nodes" misreading', () => {
+    // WORKTREE-ROUTING-BOUNDARY. The prior wording — "N parallel write tasks need N
+    // nodes (clone worktrees)" — reads as a NODE-COUNT condition: a coordinator with
+    // four base nodes in the mesh concludes the requirement is already satisfied and
+    // dispatches general code_change work straight onto the base checkouts. The real
+    // requirement is BRANCH ISOLATION, which node count never satisfies. These
+    // assertions pin the reframing in the rendered prompt (not just in source).
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1', name: 'ADHDev', repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', userOverrides: {}, policy: {} }],
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    // 1. The node-count framing is replaced by branch isolation, in BOTH the Policy
+    //    rule and the Rules "Match concurrency to task kind" entry.
+    expect(prompt).toContain('N parallel write tasks need N *separate branch workspaces*')
+    expect(prompt).toContain('**Having N nodes in the mesh does not satisfy this**')
+    expect(prompt).toContain('a mesh with four base nodes still has zero branch isolation')
+    // The exact old sentence must be gone — it is the source of the misreading.
+    expect(prompt).not.toContain('N parallel write tasks need N nodes (clone worktrees)')
+
+    // 2. The decision rule the coordinator applies per task.
+    expect(prompt).toContain('Base nodes are for environment-specific testing, not for general code changes')
+    expect(prompt).toContain('does this task verify the physical environment of a specific machine or OS, or does it only change code?')
+    expect(prompt).toContain('**Do NOT send these to a base node.**')
+
+    // 3. Concrete physical-node examples — without these the boundary over-corrects
+    //    and genuine win32/OS verification gets pushed onto worktrees where it
+    //    cannot be verified at all.
+    expect(prompt).toContain('win32')
+    expect(prompt).toContain('registry')
+    expect(prompt).toContain('Homebrew')
+    expect(prompt).toContain('OS-dependent runtime behavior')
+    // ...and the mechanism for pinning them to the real machine.
+    expect(prompt).toContain('required_tags` (e.g. `["os=win32"]`)')
+
+    // 4. Clone cost / auto-launch, so 2-step friction is not a reason to fall back
+    //    to a base node. mesh_clone_node returns the id and auto-launch starts the
+    //    session — mesh_launch_session is NOT needed.
+    expect(prompt).toContain('auto-launch starts the session on it for you')
+    expect(prompt).toContain('never as a reason to fall back to a base node')
+
+    // 5. The same boundary is restated in the durable Rules section.
+    expect(prompt).toContain('**Base nodes are reserved for environment-specific testing.**')
+    expect(prompt).toContain('you MUST clone a worktree with `mesh_clone_node` and assign the task there')
+  })
+
+  it('keeps the pre-existing worktree affinity guidance intact alongside the new clone boundary', () => {
+    // Regression guard for the two-layer design: b0 governs the CLONE decision,
+    // b1 governs routing AFTER a clone exists. The earlier affinity hardening
+    // (e09460cd/0862a3f1) only ever fired post-clone, which is why it never
+    // prevented the base-node spray — but it is still correct and must not be
+    // dropped while adding the front half.
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1', name: 'ADHDev', repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', userOverrides: {}, policy: {} }],
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('Keep a branch\'s work on its worktree (worktree affinity)')
+    expect(prompt).toContain('durable per-branch workspace')
+    expect(prompt).toContain('required_tags: ["worktree=<branch>"]')
+    // The convergence exception survives: merge/push is base-only, so the new
+    // "clone a worktree for write work" rule must not swallow it.
+    expect(prompt).toContain('base-only')
+  })
+
   it('requires mesh tool exposure before doing coordinator work', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
@@ -381,7 +452,12 @@ describe('Repo Mesh coordinator prompt', () => {
     // dispatch before the release condition was ever read.
     expect(prompt).toContain('**Match concurrency to task kind.**')
     expect(prompt).toContain('dispatch every independent read-only task at once')
-    expect(prompt).toContain('limited to ONE active task per node, so N parallel write tasks need N nodes')
+    // The per-node write limit stays; its justification is now branch isolation
+    // rather than node count (WORKTREE-ROUTING-BOUNDARY) — "need N nodes" was read
+    // as already-satisfied by any multi-node mesh, which sent general code_change
+    // work to base checkouts. See the base-node boundary test above.
+    expect(prompt).toContain('limited to ONE active task per node and each needs its OWN branch workspace')
+    expect(prompt).toContain('clone a worktree per write task')
     expect(prompt).not.toContain('Start with 1–2 tasks; scale only on success')
 
     // The duplicate-session guard must survive the rewrite.

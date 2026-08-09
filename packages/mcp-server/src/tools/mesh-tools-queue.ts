@@ -96,6 +96,50 @@ function findInFlightDuplicate(
     return null;
 }
 
+/**
+ * WORKTREE-ROUTING-ADVISORY (b1): flag an untargeted `code_change` enqueue that will be
+ * claimed by whichever node polls first — in practice the base node, which strands general
+ * code work on a shared checkout with no branch isolation. Advisory ONLY: the task still
+ * enqueues unchanged. This is the tool-side companion to the coordinator prompt's
+ * "base nodes are for environment-specific testing" boundary, for the case where the
+ * coordinator ignored or never read it.
+ *
+ * EXEMPTIONS are the whole safety story here — a task is NOT flagged when:
+ *   - `required_tags` is present (e.g. `os=win32`): the coordinator is deliberately pinning
+ *     to a physical environment. Flagging these would push genuine win32 PATH / clean-install
+ *     / machine-state verification onto worktrees, where it cannot be verified at all.
+ *   - `target_node_id` (any spelling) resolved a concrete node: already explicitly routed.
+ *   - `prefer_worktree` already asked for worktree routing.
+ *   - the task is read-only (`readonly` / `live_debug_readonly`): exempt from the
+ *     one-write-per-node invariant, needs no isolation, and may stack on a busy node.
+ *   - `task_mode` is `convergence`: merge/push is base-only by design and must NOT be
+ *     pinned to a worktree.
+ * Only an untargeted, non-read-only `code_change` reaches the advisory.
+ */
+export function buildUntargetedCodeChangeWorktreeAdvisory(input: {
+    taskMode?: string;
+    readonly: boolean;
+    requiredTags?: string[];
+    targetNodeId?: string;
+    preferWorktree: boolean;
+}): { worktreeRoutingAdvisory: string } | null {
+    if (input.taskMode !== 'code_change') return null;
+    if (input.readonly) return null;
+    if (input.targetNodeId) return null;
+    if (input.preferWorktree) return null;
+    if (Array.isArray(input.requiredTags) && input.requiredTags.length > 0) return null;
+    return {
+        worktreeRoutingAdvisory:
+            'This untargeted `code_change` will be claimed by whichever node polls first — usually the BASE node, '
+            + 'which gives it no branch isolation. Base nodes are for environment-specific testing (win32 PATH/registry, '
+            + 'clean install on one OS, that machine\'s package state, OS-dependent runtime behavior). If this task only '
+            + 'changes code, cancel it (mesh_queue_cancel), call mesh_clone_node (~10s, auto-launch starts the session), '
+            + 'and re-enqueue with target_node_id set to the returned worktree node id — or pass prefer_worktree: true to '
+            + 'route to the most recent worktree. If it DOES need a specific machine, pin it with required_tags '
+            + '(e.g. ["os=win32"]) or target_node_id and this advisory will not appear.',
+    };
+}
+
 export async function meshEnqueueTask(
     ctx: MeshContext,
     args: {
@@ -231,6 +275,10 @@ export async function meshEnqueueTask(
         // MISSION-STATUS-TASK-WARNING: warn (never block) when this task attaches to a
         // mission that is paused/completed/abandoned — see buildMissionInactiveWarning.
         const missionWarning = buildMissionInactiveWarning(ctx, missionId) ?? {};
+        // WORKTREE-ROUTING-ADVISORY (b1): advisory only — never blocks, never re-routes.
+        const worktreeAdvisory = buildUntargetedCodeChangeWorktreeAdvisory({
+            taskMode, readonly, requiredTags, targetNodeId, preferWorktree,
+        }) ?? {};
         const enqueueEcho = {
             ...(task.priority ? { priority: task.priority } : {}),
             ...(task.notBefore ? { notBefore: task.notBefore } : {}),
@@ -252,6 +300,7 @@ export async function meshEnqueueTask(
                 ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
                 ...duplicateWarning,
                 ...missionWarning,
+                ...worktreeAdvisory,
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });
@@ -366,6 +415,7 @@ export async function meshEnqueueTask(
                 ...(eagerPushDeferred ? { eagerPushDeferred: true, eagerPushDeferredReason: 'dependencies_unsatisfied' } : {}),
                 ...duplicateWarning,
                 ...missionWarning,
+                ...worktreeAdvisory,
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });
