@@ -253,7 +253,7 @@ export class CliProviderInstance implements ProviderInstance {
      * margin while staying well under AUTO_APPROVE_MASK_STALL_MS (a truly stalled/absent
      * approval still surfaces).
      */
-    private static readonly APPROVAL_STICKY_FLAP_MS = 4000;
+    private static readonly APPROVAL_STICKY_FLAP_MS = approvalGate.APPROVAL_STICKY_FLAP_MS;
 
     /**
      * FALSE-IDLE (inter-approval quiet valley): grace window after an auto-approve
@@ -2899,23 +2899,6 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
-     * AUTOAPPROVE-FLAP-INBOX-MISSING sticky-approval overlay. Returns the adapterStatus a
-     * flap-prone claude-cli approval SHOULD present this frame — either the raw status
-     * unchanged, or, when the raw status has momentarily flapped OFF a recently-dominant
-     * concrete approval, a synthetic `waiting_approval` re-presenting the cached modal.
-     *
-     * Records the concrete approval whenever the raw status is waiting_approval WITH
-     * buttons. On a subsequent non-approval frame (the spec `approval→busy` flap), if that
-     * concrete approval was seen within APPROVAL_STICKY_FLAP_MS AND the engine has NOT
-     * resolved a modal since (lastApprovalResolvedAt not advanced past the sticky start),
-     * overlay the cached modal + waiting_approval so the inbox / auto-approve / mesh_approve
-     * all see the stable approval. A genuine resolution (auto-approve or mesh_approve fires
-     * resolveModal → lastApprovalResolvedAt advances) clears the sticky immediately, so a
-     * legitimate post-approval resume is NEVER masked as a lingering approval. Bounded by the
-     * window, and scoped to autonomous mesh sessions (a foreground/attended or non-mesh
-     * session, where a human answers the prompt, is returned untouched).
-     */
-    /**
      * TERMINAL-STALE-APPROVAL (provider side): true once a GENUINE (non-weak) completion
      * has been emitted for the CURRENT busy epoch — the turn is over and no new generating
      * phase has opened since the emit (busyEpoch has not advanced past the latch). A stale
@@ -2930,66 +2913,13 @@ export class CliProviderInstance implements ProviderInstance {
         return this.busyEpoch <= latch.emittedAtEpoch;
     }
 
+    /**
+     * AUTOAPPROVE-FLAP-INBOX-MISSING sticky-approval projection — see
+     * completion/approval-gate.ts (verbatim move; sticky state stays
+     * instance-owned for the suites).
+     */
     private stabilizeFlappingApprovalStatus(adapterStatus: any, now = Date.now()): any {
-        // Only autonomous auto-approving mesh sessions are subject to the delegated flap;
-        // never overlay for attended/foreground/non-mesh sessions.
-        if (!this.isAutonomousMeshSession() || !this.shouldUsePtyAutoApprove()) return adapterStatus;
-
-        const rawStatus = adapterStatus?.status;
-        const resolvedAt = typeof (this.adapter as any)?.lastApprovalResolvedAt === 'number'
-            ? (this.adapter as any).lastApprovalResolvedAt as number
-            : 0;
-
-        if (rawStatus === 'waiting_approval') {
-            // A concrete modal this frame refreshes the sticky anchor; an approval frame
-            // with buttons momentarily scrolled out is left to the existing settle-gate
-            // hysteresis (we do not touch it — status is already waiting_approval).
-            if (hasNonEmptyCliModalButtons(adapterStatus?.activeModal)) {
-                this.approvalStickyLastConcreteAt = now;
-                this.approvalStickyModal = adapterStatus.activeModal;
-                this.approvalStickyEntrySeq = typeof adapterStatus?.approvalEntrySeq === 'number'
-                    ? adapterStatus.approvalEntrySeq
-                    : this.approvalStickyEntrySeq;
-            }
-            return adapterStatus;
-        }
-
-        // Non-approval frame. TERMINAL-STALE-APPROVAL: once a GENUINE completion for the
-        // current turn has been emitted (no new busy phase since), the turn is OVER — the
-        // cached sticky modal is stale by construction and must not re-pin waiting_approval
-        // onto getState / detectStatusTransition (the late agent:waiting_approval it would
-        // emit re-pins every coordinator projection with an approval no mesh_approve can
-        // resolve — "Not in approval state"). Drop the sticky anchor and report the raw
-        // status. A NEW current concrete modal still surfaces via the raw branch above.
-        if (this.approvalStickyLastConcreteAt > 0 && this.hasEmittedGenuineCompletionForCurrentEpoch()) {
-            this.approvalStickyLastConcreteAt = 0;
-            this.approvalStickyModal = null;
-            this.approvalStickyEntrySeq = 0;
-        }
-
-        // Non-approval frame. Overlay only if a concrete approval was dominant within the
-        // window AND no resolution has happened since the sticky anchor (a resolveModal
-        // advances lastApprovalResolvedAt to at/after the anchor → the flap is really a
-        // genuine resume, so drop the sticky and report the raw status).
-        if (this.approvalStickyLastConcreteAt > 0 && this.approvalStickyModal) {
-            const withinWindow = (now - this.approvalStickyLastConcreteAt) < CliProviderInstance.APPROVAL_STICKY_FLAP_MS;
-            const resolvedSinceAnchor = resolvedAt >= this.approvalStickyLastConcreteAt;
-            if (withinWindow && !resolvedSinceAnchor) {
-                return {
-                    ...adapterStatus,
-                    status: 'waiting_approval',
-                    activeModal: this.approvalStickyModal,
-                    ...(this.approvalStickyEntrySeq ? { approvalEntrySeq: this.approvalStickyEntrySeq } : {}),
-                    approvalStickyOverlay: true,
-                };
-            }
-            // Window lapsed or a resolution landed — clear the sticky so a later approval
-            // re-anchors from scratch and a genuine resume surfaces immediately.
-            this.approvalStickyLastConcreteAt = 0;
-            this.approvalStickyModal = null;
-            this.approvalStickyEntrySeq = 0;
-        }
-        return adapterStatus;
+        return approvalGate.stabilizeFlappingApprovalStatus(this as unknown as ApprovalGateHost, adapterStatus, now);
     }
 
     /**
