@@ -11,6 +11,47 @@ export type LiveTurnPendingEvidence = {
     observedAt?: number;
 };
 
+/**
+ * Single definition of "read the live-turn pending evidence off a provider
+ * instance" — shared by the two enforcement points of the completion contract:
+ *
+ *   1. The instance-level completion engine
+ *      (providers/completion/completion-engine.ts) gates the instance's OWN
+ *      emit: getLiveTurnPendingEvidence feeds the NATIVE-TRAILING-TOOL-GATE
+ *      and the finalization block's adapter-pending checks.
+ *   2. The forwarding-level MID-TURN-LIVE-STATE-GATE (mesh-event-forwarding)
+ *      re-checks at delivery time. It is NOT redundant with (1): it also
+ *      covers completion events that never pass through the engine flush —
+ *      provider-native event completions and the out-of-band stall rescues —
+ *      plus the emit→forward TOCTOU window.
+ *
+ * Fail-open by design: a probe error must never wedge a completion.
+ */
+export function readLiveTurnPendingEvidence(instance: unknown): LiveTurnPendingEvidence {
+    const candidate = instance as {
+        getLiveTurnPendingEvidence?: () => LiveTurnPendingEvidence;
+        hasLiveTurnPendingEvidence?: () => boolean;
+    } | null | undefined;
+    try {
+        if (typeof candidate?.getLiveTurnPendingEvidence === 'function') {
+            const evidence = candidate.getLiveTurnPendingEvidence();
+            if (evidence && typeof evidence === 'object') {
+                return {
+                    pending: evidence.pending === true,
+                    ...(evidence.kind === 'adapter' || evidence.kind === 'modal' || evidence.kind === 'transcript_tool'
+                        ? { kind: evidence.kind } : {}),
+                    ...(typeof evidence.observedAt === 'number' && Number.isFinite(evidence.observedAt)
+                        ? { observedAt: evidence.observedAt } : {}),
+                };
+            }
+        }
+        if (typeof candidate?.hasLiveTurnPendingEvidence === 'function') {
+            return { pending: candidate.hasLiveTurnPendingEvidence() === true };
+        }
+    } catch { /* fail open — diagnostics must not wedge completion */ }
+    return { pending: false };
+}
+
 export type CompletionAuthorityDecision =
     | {
         authoritative: true;

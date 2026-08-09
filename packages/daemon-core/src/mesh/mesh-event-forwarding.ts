@@ -63,6 +63,7 @@ import {
     authoritativeEvidenceOutranksLivePending,
     completionEligibleForLiveStateRetry,
     evaluateAuthoritativeTranscriptCompletion,
+    readLiveTurnPendingEvidence,
     type LiveTurnPendingEvidence,
 } from './mesh-completion-live-gate.js';
 
@@ -151,26 +152,9 @@ function heldCompletionKey(meshId: string, taskId: string, attemptId: string, se
     return `${meshId}\u001f${taskId}\u001f${attemptId}\u001f${sessionId}\u001f${nonce}`;
 }
 
-function readLivePendingEvidence(instance: any): LiveTurnPendingEvidence {
-    try {
-        if (typeof instance?.getLiveTurnPendingEvidence === 'function') {
-            const evidence = instance.getLiveTurnPendingEvidence();
-            if (evidence && typeof evidence === 'object') {
-                return {
-                    pending: evidence.pending === true,
-                    ...(evidence.kind === 'adapter' || evidence.kind === 'modal' || evidence.kind === 'transcript_tool'
-                        ? { kind: evidence.kind } : {}),
-                    ...(typeof evidence.observedAt === 'number' && Number.isFinite(evidence.observedAt)
-                        ? { observedAt: evidence.observedAt } : {}),
-                };
-            }
-        }
-        if (typeof instance?.hasLiveTurnPendingEvidence === 'function') {
-            return { pending: instance.hasLiveTurnPendingEvidence() === true };
-        }
-    } catch { /* fail open — diagnostics must not wedge completion */ }
-    return { pending: false };
-}
+// Live-evidence semantics live in mesh-completion-live-gate.ts (shared with the
+// instance-level completion engine — see readLiveTurnPendingEvidence docs there).
+const readLivePendingEvidence = readLiveTurnPendingEvidence;
 
 function scheduleHeldLiveStateCompletionDrain(): void {
     if (heldLiveStateCompletionTimer || heldLiveStateCompletions.size === 0) return;
