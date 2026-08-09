@@ -28,7 +28,7 @@
 
 import { homedir } from 'os';
 import { join } from 'path';
-import { getTrackIdentity, resolveBuildTrack } from '../track-identity.js';
+import { getTrackIdentity, resolveBuildTrack, type BuildTrack } from '../track-identity.js';
 
 /** Legacy stable home dir name — also the empty-ipc-key compat instance. */
 export const DEFAULT_CONFIG_DIR_NAME = '.adhdev';
@@ -60,4 +60,67 @@ export function resolveConfigLogsDir(
     homeDir?: string,
 ): string {
     return join(resolveConfigDir(env, homeDir), 'logs');
+}
+
+/**
+ * The SIBLING track's own canonical (un-overridden) config dir — i.e. what
+ * `resolveConfigDir()` would return for the OTHER track with no
+ * ADHDEV_CONFIG_DIR set. Used only to detect the narrow cross-track pollution
+ * signature below; never a general "expected config dir" helper.
+ */
+export function otherTrackConfigDir(
+    env: NodeJS.ProcessEnv = process.env,
+    homeDir?: string,
+): string {
+    const ownTrack = resolveBuildTrack(env);
+    const otherTrack: BuildTrack = ownTrack === 'preview' ? 'stable' : 'preview';
+    return join(homeDir ?? homedir(), getTrackIdentity(otherTrack).configDirName);
+}
+
+/**
+ * True only when ADHDEV_CONFIG_DIR is explicitly set AND resolves to EXACTLY
+ * the sibling track's own canonical home directory (e.g. a `stable` binary
+ * whose ADHDEV_CONFIG_DIR points at `~/.adhdev-preview`) — the cross-track
+ * pollution signature behind the 2026-08 incident where a stable
+ * `uninstall --force` deleted a live preview install because that env var had
+ * been left set in the shell from an earlier session.
+ *
+ * IMPORTANT — this is NOT a general "is my env unusual" check, and callers
+ * must not use it to warn on ordinary commands. Pinning ADHDEV_CONFIG_DIR to
+ * the sibling track's dir is a DELIBERATE, DOCUMENTED, routine setup on some
+ * machines (see scripts/deploy-restart-verify.mjs's coordinator note: it
+ * talks to whichever daemon is actually installed, which on a coordinator is
+ * routinely the preview instance). That is normal and this function still
+ * returns true for it — the mismatch is not the problem; running an
+ * IRREVERSIBLE command (uninstall) against it without the operator noticing
+ * is. Gate destructive actions only, never informational ones.
+ *
+ * Any other override value (a /tmp test-isolation dir, daemon-standalone's
+ * own `.adhdev-standalone`, a self-host custom path, or a directory that
+ * merely happens to share the sibling's basename somewhere else on disk)
+ * never matches the sibling's full canonical path and returns false — full
+ * absolute-path comparison (not a basename-only check) is what keeps an
+ * unrelated same-named directory from being misjudged as the sibling track.
+ *
+ * `platform` defaults to `process.platform` and exists only so tests can pin
+ * win32 case-insensitive comparison deterministically without depending on
+ * the host OS running the test.
+ */
+export function isCrossTrackConfigDirOverride(
+    env: NodeJS.ProcessEnv = process.env,
+    homeDir?: string,
+    platform: NodeJS.Platform = process.platform,
+): boolean {
+    const override = env.ADHDEV_CONFIG_DIR;
+    if (!override || !override.trim()) return false;
+
+    const sibling = otherTrackConfigDir(env, homeDir);
+    const normalize = (p: string): string => {
+        // Unify separators before comparing so a mixed forward/back-slash
+        // override still lines up with a native join() result regardless of
+        // which OS actually produced either string.
+        const unified = p.trim().replace(/[\\/]+$/, '').replace(/\\/g, '/');
+        return platform === 'win32' ? unified.toLowerCase() : unified;
+    };
+    return normalize(override) === normalize(sibling);
 }

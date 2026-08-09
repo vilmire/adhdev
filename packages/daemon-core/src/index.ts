@@ -207,6 +207,7 @@ export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 
 // ── Config ──
 export { loadConfig, saveConfig, resetConfig, clearAuthCredentials, isSetupComplete, markSetupComplete, updateConfig, setQuotaShowAccountEmail, getConfigDir, getDaemonDataDir } from './config/config.js';
+export { isCrossTrackConfigDirOverride, otherTrackConfigDir } from './config/config-dir.js';
 export {
   getProcessInstanceContext,
   InstanceContextConflictError,
