@@ -69,6 +69,43 @@ function isMachineRuntimeProvider(category: string): boolean {
     return category === 'cli' || category === 'acp'
 }
 
+/**
+ * The one switch visual for every on/off in this row (owner feedback
+ * 2026-08-10: no text-button toggles). A span with role=switch, not a
+ * <button>: the header usage sits inside the row's expand <button>, and
+ * nested buttons are invalid HTML with broken event handling.
+ */
+function RowSwitch({ checked, busy, label, onToggle }: {
+    checked: boolean
+    busy?: boolean
+    label: string
+    onToggle: () => void
+}) {
+    return (
+        <span
+            role="switch"
+            aria-checked={checked}
+            aria-label={label}
+            onClick={(e) => {
+                e.stopPropagation()
+                if (busy) return
+                onToggle()
+            }}
+            className={`relative inline-flex items-center shrink-0 ${busy ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
+        >
+            <span
+                className="inline-block w-[34px] h-[19px] rounded-full transition-colors duration-200 ease-in-out"
+                style={{ backgroundColor: checked ? 'var(--accent-primary)' : 'color-mix(in srgb, var(--surface-primary) 60%, var(--border-default))' }}
+            />
+            <span
+                className={`absolute left-[1.5px] top-[1.5px] w-[16px] h-[16px] bg-white rounded-full transition-transform duration-200 ease-in-out shadow-[0_1px_2px_rgba(0,0,0,0.15)] ${
+                    checked ? 'translate-x-[15px]' : 'translate-x-0'
+                }`}
+            />
+        </span>
+    )
+}
+
 interface InstalledProviderRowProps {
     prov: ProviderSettingsEntry
     /** This machine's plan quota snapshot for this provider, when one exists. */
@@ -232,32 +269,14 @@ export default function InstalledProviderRow({
                         </span>
                     )}
                     {/* Enable is a SWITCH, not a red/green text button (owner
-                        feedback 2026-08-10). Same visual as settings ToggleRow,
-                        compact. Rendered as a span with role=switch because the
-                        row header itself is a <button> (nested buttons are
-                        invalid HTML and break event handling). */}
+                        feedback 2026-08-10). */}
                     {isRuntime && (
-                        <span
-                            role="switch"
-                            aria-checked={enabled}
-                            aria-label={enabled ? t('machine.providerRow.disable') : t('machine.providerRow.enable')}
-                            onClick={(e) => {
-                                e.stopPropagation()
-                                if (savingKey === `${prov.type}.enabled`) return
-                                void onEnableToggle(prov.type, !enabled)
-                            }}
-                            className={`relative inline-flex items-center shrink-0 ${savingKey === `${prov.type}.enabled` ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
-                        >
-                            <span
-                                className="inline-block w-[34px] h-[19px] rounded-full transition-colors duration-200 ease-in-out"
-                                style={{ backgroundColor: enabled ? 'var(--accent-primary)' : 'color-mix(in srgb, var(--surface-primary) 60%, var(--border-default))' }}
-                            />
-                            <span
-                                className={`absolute left-[1.5px] top-[1.5px] w-[16px] h-[16px] bg-white rounded-full transition-transform duration-200 ease-in-out shadow-[0_1px_2px_rgba(0,0,0,0.15)] ${
-                                    enabled ? 'translate-x-[15px]' : 'translate-x-0'
-                                }`}
-                            />
-                        </span>
+                        <RowSwitch
+                            checked={enabled}
+                            busy={savingKey === `${prov.type}.enabled`}
+                            label={enabled ? t('machine.providerRow.disable') : t('machine.providerRow.enable')}
+                            onToggle={() => { void onEnableToggle(prov.type, !enabled) }}
+                        />
                     )}
                     <span className="text-text-muted text-xs">{expanded ? '▾' : '▸'}</span>
                 </div>
@@ -292,17 +311,17 @@ export default function InstalledProviderRow({
                                     </div>
                                 </div>
                             ) : (
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation()
+                                <RowSwitch
+                                    checked={quotaEnabled}
+                                    label={t('machine.providerRow.quotaTracking')}
+                                    onToggle={() => {
                                         // Only claude enabling confirms: it is the
                                         // one direction with a user-file side effect
                                         // (the statusLine wrapper install).
                                         if (prov.type === 'claude-cli' && !quotaEnabled) setConfirmQuotaEnable(true)
                                         else void onQuotaToggle(prov.type, !quotaEnabled)
                                     }}
-                                    className={`machine-btn text-[10px] px-2 py-0.5 shrink-0 ${quotaEnabled ? 'text-green-400 border-green-500/25' : 'text-text-muted'}`}
-                                >{quotaEnabled ? t('machine.providerRow.quotaTrackingOn') : t('machine.providerRow.quotaTrackingOff')}</button>
+                                />
                             )}
                         </div>
                     )}
@@ -317,10 +336,11 @@ export default function InstalledProviderRow({
                                 <div className="text-[11px] text-text-secondary font-medium">{t('machine.providerRow.quotaAccountLabel')}</div>
                                 <div className="text-[10px] text-text-muted">{t('machine.providerRow.quotaAccountLabelHint')}</div>
                             </div>
-                            <button
-                                onClick={(e) => { e.stopPropagation(); void onQuotaAccountLabelToggle(!quotaAccountLabelEnabled) }}
-                                className={`machine-btn text-[10px] px-2 py-0.5 shrink-0 ${quotaAccountLabelEnabled ? 'text-green-400 border-green-500/25' : 'text-text-muted'}`}
-                            >{quotaAccountLabelEnabled ? t('machine.providerRow.quotaAccountLabelOn') : t('machine.providerRow.quotaAccountLabelOff')}</button>
+                            <RowSwitch
+                                checked={quotaAccountLabelEnabled}
+                                label={t('machine.providerRow.quotaAccountLabel')}
+                                onToggle={() => { void onQuotaAccountLabelToggle(!quotaAccountLabelEnabled) }}
+                            />
                         </div>
                     )}
                     {/* Details: manifest metadata + source identity. Pulled
