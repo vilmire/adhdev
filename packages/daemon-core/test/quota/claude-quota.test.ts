@@ -91,7 +91,11 @@ describe('fetchClaudeQuota', () => {
         const quota = await fetch();
 
         expect(quota.status).toBe('unavailable');
-        expect(quota.metadata?.failureKind).toBe('missing-credentials');
+        // 'no-data', never 'missing-credentials': this fetcher reads no
+        // credential, and the old label rendered "(missing credentials)" on
+        // the dashboard for a machine merely awaiting its first capture —
+        // misread live as a claude-cli auth failure (owner report 2026-08-10).
+        expect(quota.metadata?.failureKind).toBe('no-data');
         expect(quota.error).toContain('not set up');
     });
 
@@ -106,6 +110,7 @@ describe('fetchClaudeQuota', () => {
         expect(quota.status).toBe('unavailable');
         expect(quota.error).toContain('No Claude quota captured yet');
         expect(quota.error).not.toContain('not set up');
+        expect(quota.metadata?.failureKind).toBe('no-data');
     });
 
     it('reports a stale reading as an error while still surfacing the numbers', async () => {
@@ -115,6 +120,7 @@ describe('fetchClaudeQuota', () => {
 
         expect(quota.status).toBe('error');
         expect(quota.error).toContain('stale');
+        expect(quota.metadata?.failureKind).toBe('no-data');
         // The last known values stay visible — they are better than nothing,
         // as long as they are not labelled current.
         expect(quota.session?.usedPercent).toBe(23.5);

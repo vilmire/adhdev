@@ -121,7 +121,10 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
             updatedAt: snapshot.capturedAt,
             error: `Claude quota reading is stale (${minutes} min old) — open a Claude Code session to refresh`,
             status: 'error',
-            metadata: { source: SOURCE, failureKind: 'unsupported' },
+            // 'no-data' (not 'unsupported'): the channel works, the reading
+            // just aged out — same ordinary wait-for-a-session state as the
+            // never-captured case above.
+            metadata: { source: SOURCE, failureKind: 'no-data' },
         };
     }
 
@@ -154,6 +157,11 @@ function missingSnapshotFailure(env: NodeJS.ProcessEnv): ProviderQuota {
         installed
             ? 'No Claude quota captured yet — open a Claude Code session to record one'
             : 'Claude quota reporting is not set up — run `adhdev quota claude:install`',
-        { source: SOURCE, failureKind: 'missing-credentials' },
+        // 'no-data', NOT 'missing-credentials': this fetcher reads no
+        // credential at all (see the header), and the old label made the
+        // dashboard render "(missing credentials)" for a machine that was
+        // merely waiting for its first statusline capture — a live
+        // coordinator misread that as a claude-cli auth failure.
+        { source: SOURCE, failureKind: 'no-data' },
     );
 }

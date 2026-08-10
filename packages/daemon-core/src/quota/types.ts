@@ -45,6 +45,17 @@ export type QuotaFailureKind =
     | 'parse'
     | 'cli-unavailable'
     | 'unsupported'
+    /**
+     * The capture channel works but holds no CURRENT reading — nothing was
+     * recorded yet, or the last reading aged out. Claude's statusline bridge
+     * is the canonical case: quota only flows while a Claude Code session is
+     * open, so "no snapshot yet" and "snapshot too old" are ordinary states
+     * that resolve when the user next opens a session — NOT credential
+     * problems. (These states used to be mislabeled 'missing-credentials' /
+     * 'unsupported', which the dashboard rendered as "(missing credentials)"
+     * and a live coordinator misread as a claude-cli auth failure.)
+     */
+    | 'no-data'
     | 'unknown';
 
 /**
