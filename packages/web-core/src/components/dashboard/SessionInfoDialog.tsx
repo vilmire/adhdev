@@ -27,6 +27,7 @@ import {
     collectQuotaEntries,
     describeQuotaFailure,
     formatQuotaAccount,
+    formatQuotaUsage,
     formatQuotaWindow,
     quotaProviderLabel,
     quotaUsageTone,
@@ -237,6 +238,9 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                             {collectQuotaEntries(data.quota).map(({ provider, quota }) => {
                                 const session = formatQuotaWindow(quota.session)
                                 const weekly = formatQuotaWindow(quota.weekly)
+                                // Usage-shaped provider (opencode): absolute
+                                // tokens/cost, no percent windows to chip.
+                                const usage = formatQuotaUsage(quota)
                                 return (
                                     <Row
                                         key={provider}
@@ -247,6 +251,8 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                                     {session && <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} />}
                                                     {weekly && <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} />}
                                                 </span>
+                                            ) : usage ? (
+                                                <QuotaChip label={usage} tone="info" />
                                             ) : (
                                                 <span className="text-text-secondary">{describeQuotaFailure(quota)}</span>
                                             )

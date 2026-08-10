@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
+import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 
 /**
  * Providers whose quota actually carries an account label. Only codex reports
@@ -19,7 +20,7 @@ const QUOTA_ACCOUNT_PROVIDERS = new Set(['codex-cli'])
  * daemon-core's quota/refresh.ts. The toggle switches a probe, so offering it
  * for a provider with no fetcher would promise a switch that does nothing.
  */
-const QUOTA_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'kimi'])
+const QUOTA_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderCloneModal from './ProviderCloneModal'
@@ -31,9 +32,11 @@ interface ProvidersTabProps {
     machineId: string
     providers: ProviderInfo[]
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
+    /** Machine plan quota (MachineInfo.quota) — rendered per provider row. */
+    quota?: Record<string, MeshNodeFactsProviderQuota>
 }
 
-export default function ProvidersTab({ machineId, providers, sendDaemonCommand }: ProvidersTabProps) {
+export default function ProvidersTab({ machineId, providers, sendDaemonCommand, quota }: ProvidersTabProps) {
     const { t } = useTranslation('common')
     const [settings, setSettings] = useState<ProviderSettingsEntry[]>([])
     // Quota account label — machine-level config, so it has its own read/write
@@ -50,7 +53,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
     const [installingNewType, setInstallingNewType] = useState<string | null>(null)
     const [loading, setLoading] = useState(false)
     const [savingKey, setSavingKey] = useState<string | null>(null)
-    const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('all')
+    const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('cli')
     const [showClone, setShowClone] = useState(false)
     const [showSources, setShowSources] = useState(false)
     const [showSourceConfig, setShowSourceConfig] = useState(false)
@@ -282,7 +285,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">
                     <span className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mr-2">{t('machine.providers.filter')}</span>
-                    {(['all', 'acp', 'cli', 'ide', 'extension'] as const).map(cat => (
+                    {(['cli', 'ide', 'acp', 'extension', 'all'] as const).map(cat => (
                         <button
                             key={cat}
                             onClick={() => setFilter(cat)}
@@ -409,6 +412,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                 <div className="flex flex-col gap-1.5">
                     {filteredSettings.map(prov => (
                         <InstalledProviderRow
+                            quota={quota?.[prov.type]}
                             key={prov.type}
                             prov={prov}
                             providerInfo={providers.find(p => p.type === prov.type)}

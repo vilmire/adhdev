@@ -2606,7 +2606,7 @@
             "loadingSettings": "Loading provider settings…",
             "noProviders": "No providers installed yet. Open \"Add provider\" above to install one.",
             "noFilteredProviders": "No {{filter}} providers installed.",
-            "refresh": "↻ Refresh",
+            "refresh": "Refresh",
             "sources": "🌐 Sources",
             "create": "✨ Create",
             "advanced": "⚙ Advanced",
@@ -2788,7 +2788,8 @@
             "sessionHint": "Rolling 5-hour plan window reported by this machine",
             "weeklyHint": "Rolling 7-day plan window reported by this machine",
             "failureHint": "This machine reported that it could not read this provider's quota",
-            "accountHint": "The signed-in account this quota belongs to, as reported by the provider CLI"
+            "accountHint": "The signed-in account this quota belongs to, as reported by the provider CLI",
+            "usageHint": "Absolute usage over the trailing window — this provider routes to your own upstream accounts, so there is no plan limit to show a percentage against."
         }
     },
     "settings": {

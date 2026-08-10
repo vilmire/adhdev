@@ -14,6 +14,8 @@ import { useTranslation } from 'react-i18next'
 import Card from '../../components/Card'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
+import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
+import { formatQuotaUsage, formatQuotaWindow, quotaUsageTone } from '../../utils/quota-format'
 
 /**
  * Validate a provider-manifest URL before rendering it as an anchor.
@@ -40,6 +42,15 @@ const STATUS_CLASS: Record<string, string> = {
     disabled: 'bg-white/[0.04] border-white/[0.10] text-text-muted',
 }
 
+/** Quota chip tones — same palette as the Overview quota chips. */
+const QUOTA_CHIP_TONE: Record<string, string> = {
+    default: 'bg-white/[0.04] border-white/[0.10] text-text-muted',
+    good: 'bg-green-500/[0.10] border-green-500/25 text-green-400',
+    warn: 'bg-yellow-500/[0.10] border-yellow-500/25 text-yellow-400',
+    danger: 'bg-red-500/[0.10] border-red-500/25 text-red-400',
+    info: 'bg-sky-500/[0.10] border-sky-500/25 text-sky-300',
+}
+
 const CATEGORY_BG: Record<string, string> = {
     acp: 'bg-violet-500/10 text-violet-300 border-violet-500/20',
     cli: 'bg-blue-500/10 text-blue-300 border-blue-500/20',
@@ -60,6 +71,8 @@ function isMachineRuntimeProvider(category: string): boolean {
 
 interface InstalledProviderRowProps {
     prov: ProviderSettingsEntry
+    /** This machine's plan quota snapshot for this provider, when one exists. */
+    quota?: MeshNodeFactsProviderQuota
     providerInfo: ProviderInfo | undefined
     savingKey: string | null
     onSetSetting: (providerType: string, key: string, value: unknown) => Promise<void>
@@ -118,6 +131,7 @@ export interface ProviderPinInfo {
 
 export default function InstalledProviderRow({
     prov,
+    quota,
     providerInfo,
     savingKey,
     onSetSetting,
@@ -163,6 +177,26 @@ export default function InstalledProviderRow({
             ? 'enabled_unchecked'
             : (rawStatus || (enabled ? 'enabled_unchecked' : 'disabled'))
     const isRuntime = isMachineRuntimeProvider(prov.category)
+    // Inline plan-quota chip (owner feedback 2026-08-10): the smallest useful
+    // reading — the session window when present, else the weekly window, else
+    // the usage summary (opencode). Tone follows the same 70/90 thresholds as
+    // every other quota surface.
+    const quotaChip = (() => {
+        if (!quota) return null
+        const session = formatQuotaWindow(quota.session)
+        if (session) {
+            const tone = quotaUsageTone(quota.session?.usedPercent ?? NaN)
+            return { label: `5h ${session}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.sessionHint') }
+        }
+        const weekly = formatQuotaWindow(quota.weekly)
+        if (weekly) {
+            const tone = quotaUsageTone(quota.weekly?.usedPercent ?? NaN)
+            return { label: `7d ${weekly}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.weeklyHint') }
+        }
+        const usage = formatQuotaUsage(quota)
+        if (usage) return { label: usage, tone: QUOTA_CHIP_TONE.info, title: t('machine.quota.usageHint') }
+        return null
+    })()
 
     return (
         <Card padding="none">
@@ -188,13 +222,42 @@ export default function InstalledProviderRow({
                         {STATUS_LABEL_I18N[machineStatus] ?? machineStatus}
                     </span>
                 )}
-                <div className="ml-auto flex items-center gap-1.5">
+                <div className="ml-auto flex items-center gap-2">
+                    {/* Machine plan quota, inline (owner feedback 2026-08-10):
+                        percent windows chip for quota providers, usage chip for
+                        usage-shaped ones (opencode). */}
+                    {quotaChip && (
+                        <span className={`text-[9px] font-semibold px-1.5 py-px rounded border shrink-0 ${quotaChip.tone}`} title={quotaChip.title}>
+                            {quotaChip.label}
+                        </span>
+                    )}
+                    {/* Enable is a SWITCH, not a red/green text button (owner
+                        feedback 2026-08-10). Same visual as settings ToggleRow,
+                        compact. Rendered as a span with role=switch because the
+                        row header itself is a <button> (nested buttons are
+                        invalid HTML and break event handling). */}
                     {isRuntime && (
-                        <button
-                            onClick={(e) => { e.stopPropagation(); void onEnableToggle(prov.type, !enabled) }}
-                            disabled={savingKey === `${prov.type}.enabled`}
-                            className={`machine-btn text-[10px] px-2 py-0.5 ${enabled ? 'text-red-400 border-red-500/25' : 'text-green-400 border-green-500/25'}`}
-                        >{enabled ? t('machine.providerRow.disable') : t('machine.providerRow.enable')}</button>
+                        <span
+                            role="switch"
+                            aria-checked={enabled}
+                            aria-label={enabled ? t('machine.providerRow.disable') : t('machine.providerRow.enable')}
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                if (savingKey === `${prov.type}.enabled`) return
+                                void onEnableToggle(prov.type, !enabled)
+                            }}
+                            className={`relative inline-flex items-center shrink-0 ${savingKey === `${prov.type}.enabled` ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
+                        >
+                            <span
+                                className="inline-block w-[34px] h-[19px] rounded-full transition-colors duration-200 ease-in-out"
+                                style={{ backgroundColor: enabled ? 'var(--accent-primary)' : 'color-mix(in srgb, var(--surface-primary) 60%, var(--border-default))' }}
+                            />
+                            <span
+                                className={`absolute left-[1.5px] top-[1.5px] w-[16px] h-[16px] bg-white rounded-full transition-transform duration-200 ease-in-out shadow-[0_1px_2px_rgba(0,0,0,0.15)] ${
+                                    enabled ? 'translate-x-[15px]' : 'translate-x-0'
+                                }`}
+                            />
+                        </span>
                     )}
                     <span className="text-text-muted text-xs">{expanded ? '▾' : '▸'}</span>
                 </div>

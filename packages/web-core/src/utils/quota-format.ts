@@ -23,6 +23,37 @@ const QUOTA_PROVIDER_LABELS: Record<string, string> = {
     'claude-cli': 'Claude Code',
     'codex-cli': 'Codex CLI',
     kimi: 'Kimi Code',
+    opencode: 'opencode',
+}
+
+/** "184230" → "184.2K"; small counts stay exact. */
+function formatTokenCount(count: number): string {
+    if (count >= 1e9) return `${(count / 1e9).toFixed(1)}B`
+    if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`
+    if (count >= 1e3) return `${(count / 1e3).toFixed(1)}K`
+    return String(count)
+}
+
+/**
+ * The chip label for a USAGE-shaped entry — absolute tokens/cost over a
+ * trailing window, from a provider with no rate-limit concept to report a
+ * percentage against (opencode: a BYO-provider router whose limits belong to
+ * the upstream accounts). Null when the entry carries no usage block, so
+ * window-shaped providers are untouched.
+ */
+export function formatQuotaUsage(quota: MeshNodeFactsProviderQuota): string | null {
+    const usage = quota.metadata?.usage as { days?: number;[k: string]: unknown } | undefined
+    if (!usage || typeof usage.days !== 'number') return null
+    const parts: string[] = []
+    if (typeof usage.totalCostUsd === 'number') parts.push(`$${usage.totalCostUsd.toFixed(2)}`)
+    const inTok = typeof usage.inputTokens === 'number' ? usage.inputTokens : null
+    const outTok = typeof usage.outputTokens === 'number' ? usage.outputTokens : null
+    if (inTok !== null || outTok !== null) {
+        parts.push(`${formatTokenCount((inTok ?? 0) + (outTok ?? 0))} tok`)
+    }
+    if (typeof usage.sessions === 'number') parts.push(`${usage.sessions} sess`)
+    if (parts.length === 0) return null
+    return `${usage.days}d ${parts.join(' · ')}`
 }
 
 export function quotaProviderLabel(provider: string): string {

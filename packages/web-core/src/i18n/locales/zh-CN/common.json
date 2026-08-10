@@ -2606,7 +2606,7 @@
             "loadingSettings": "正在加载提供程序设置…",
             "noProviders": "尚未安装任何提供程序。请打开上方的“Add provider”来安装一个。",
             "noFilteredProviders": "未安装 {{filter}} 提供程序。",
-            "refresh": "↻ 刷新",
+            "refresh": "刷新",
             "sources": "🌐 来源",
             "create": "✨ 创建",
             "advanced": "⚙ 高级",
@@ -2788,7 +2788,8 @@
             "sessionHint": "该机器上报的 5 小时滚动套餐窗口",
             "weeklyHint": "该机器上报的 7 天滚动套餐窗口",
             "failureHint": "该机器报告无法读取此提供程序的用量",
-            "accountHint": "该用量所属的登录账号（由提供程序 CLI 上报）"
+            "accountHint": "该用量所属的登录账号（由提供程序 CLI 上报）",
+            "usageHint": "最近时间窗内的绝对用量 — 该 Provider 路由到你自己的上游账户，因此没有可按百分比显示的套餐上限。"
         }
     },
     "settings": {

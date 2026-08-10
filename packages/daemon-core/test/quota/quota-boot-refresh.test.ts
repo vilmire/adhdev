@@ -8,10 +8,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
+const fetchOpencodeUsage = vi.fn()
 
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
+vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
 const {
     refreshQuotaCacheOnBoot,
@@ -72,7 +74,7 @@ describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
         await vi.waitFor(() => {
             const quota = readQuotaCache()
             expect(quota).toBeDefined()
-            expect(Object.keys(quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi'])
+            expect(Object.keys(quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
         })
     })
 

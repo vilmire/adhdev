@@ -8,10 +8,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
+const fetchOpencodeUsage = vi.fn()
 
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
+vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
 const { buildLocalNodeFacts } = await import('../../src/mesh/node-facts.js')
 const {
@@ -81,7 +83,7 @@ describe('buildLocalNodeFacts — quota', () => {
         await refreshQuotaCacheOnce()
 
         const facts = buildLocalNodeFacts()
-        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi'])
+        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
         expect(facts.quota?.['codex-cli'].status).toBe('ok')
         expect(facts.quota?.['codex-cli'].session?.usedPercent).toBeCloseTo(38.2)
     })

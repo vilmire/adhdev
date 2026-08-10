@@ -14,6 +14,7 @@ import {
     collectQuotaEntries,
     describeQuotaFailure,
     formatQuotaAccount,
+    formatQuotaUsage,
     formatQuotaWindow,
     quotaProviderLabel,
     quotaUsageTone,
@@ -60,6 +61,7 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                 {entries.map(({ provider, quota }) => {
                     const session = formatQuotaWindow(quota.session)
                     const weekly = formatQuotaWindow(quota.weekly)
+                    const usage = formatQuotaUsage(quota)
                     return (
                         <div key={provider} className="flex flex-wrap items-center gap-2">
                             <span className="text-[12px] text-text-primary min-w-[92px]">{quotaProviderLabel(provider)}</span>
@@ -76,7 +78,12 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                             {weekly && (
                                 <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} title={t('machine.quota.weeklyHint')} />
                             )}
-                            {!session && !weekly && (
+                            {/* Usage-shaped provider (opencode): absolute tokens/cost,
+                                no percent windows to chip. */}
+                            {!session && !weekly && usage && (
+                                <QuotaChip label={usage} tone="info" title={t('machine.quota.usageHint')} />
+                            )}
+                            {!session && !weekly && !usage && (
                                 <span className="text-[11px] text-text-secondary" title={t('machine.quota.failureHint')}>
                                     {describeQuotaFailure(quota)}
                                 </span>

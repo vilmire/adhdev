@@ -29,7 +29,7 @@ describe('quota toggle — provider set', () => {
     // Mirrors REFRESHERS in daemon-core's quota/refresh.ts. Offering the
     // switch for a provider with no fetcher would promise a switch that does
     // nothing.
-    expect(tabSource).toContain("const QUOTA_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'kimi'])")
+    expect(tabSource).toContain("const QUOTA_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'kimi', 'opencode'])")
   })
 
   it('reads and writes through the dedicated command pair', () => {

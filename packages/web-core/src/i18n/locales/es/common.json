@@ -2606,7 +2606,7 @@
             "loadingSettings": "Cargando configuración de proveedores…",
             "noProviders": "Aún no hay proveedores instalados. Abre \"Add provider\" arriba para instalar uno.",
             "noFilteredProviders": "No hay proveedores de {{filter}} instalados.",
-            "refresh": "↻ Actualizar",
+            "refresh": "Actualizar",
             "sources": "🌐 Orígenes",
             "create": "✨ Crear",
             "advanced": "⚙ Avanzado",
@@ -2788,7 +2788,8 @@
             "sessionHint": "Ventana móvil de 5 horas del plan reportada por esta máquina",
             "weeklyHint": "Ventana móvil de 7 días del plan reportada por esta máquina",
             "failureHint": "Esta máquina informó que no pudo leer la cuota de este proveedor",
-            "accountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor"
+            "accountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor",
+            "usageHint": "Uso absoluto en la ventana reciente: este provider enruta a tus propias cuentas upstream, así que no hay límite de plan para mostrar un porcentaje."
         }
     },
     "settings": {

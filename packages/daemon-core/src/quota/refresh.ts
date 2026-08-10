@@ -26,6 +26,7 @@ import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from '.
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchKimiQuota } from './fetchers/kimi.js';
+import { fetchOpencodeUsage } from './fetchers/opencode.js';
 import { loadQuotaCache, saveQuotaCache } from './persist.js';
 
 /**
@@ -46,6 +47,7 @@ const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<
     { provider: 'claude-cli', fetch: () => fetchClaudeQuota() },
     { provider: 'codex-cli', fetch: () => fetchCodexQuota() },
     { provider: 'kimi', fetch: () => fetchKimiQuota() },
+    { provider: 'opencode', fetch: () => fetchOpencodeUsage() },
 ];
 
 /**

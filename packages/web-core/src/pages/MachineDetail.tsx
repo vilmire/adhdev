@@ -619,6 +619,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 machineId={machineId!}
                                 providers={providers}
                                 sendDaemonCommand={sendDaemonCommand}
+                                quota={machine.quota}
                             />
                         )}
 

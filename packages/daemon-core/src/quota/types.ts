@@ -17,7 +17,7 @@
 
 /** Providers that can report a quota. Kept narrow on purpose — adding one
  *  means an actual fetcher exists, not just a CLI we support. */
-export type QuotaProvider = 'kimi' | 'claude-cli' | 'codex-cli' | 'antigravity-cli';
+export type QuotaProvider = 'kimi' | 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'opencode';
 
 /**
  * Lifecycle of a quota snapshot.
@@ -113,6 +113,15 @@ export interface QuotaBucket extends QuotaWindow {
 
 /** Extra provenance/diagnostic detail; never required to render a snapshot. */
 export interface QuotaMetadata {
+    /**
+     * Absolute usage over a trailing window, for providers with no
+     * rate-limit concept to report a percentage against (opencode is a
+     * bring-your-own-provider router — limits belong to the upstream
+     * accounts). When present, dashboards render a usage chip instead of
+     * quota windows. `days` is the window length; the rest are counts/USD,
+     * null when the CLI did not report that field.
+     */
+    usage?: { days: number; [field: string]: number | null };
     /** Where the numbers came from, e.g. 'oauth' | 'statusline' | 'app-server'. */
     source?: string;
     failureKind?: QuotaFailureKind;

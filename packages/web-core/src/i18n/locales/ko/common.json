@@ -2606,7 +2606,7 @@
             "loadingSettings": "프로바이더 설정 불러오는 중…",
             "noProviders": "설치된 프로바이더가 없습니다. 위의 '프로바이더 추가'를 열어 설치하세요.",
             "noFilteredProviders": "{{filter}} 프로바이더가 설치되어 있지 않습니다.",
-            "refresh": "↻ 새로고침",
+            "refresh": "새로고침",
             "sources": "🌐 소스",
             "create": "✨ 생성",
             "advanced": "⚙ 고급",
@@ -2788,7 +2788,8 @@
             "sessionHint": "이 머신이 보고한 5시간 롤링 플랜 창",
             "weeklyHint": "이 머신이 보고한 7일 롤링 플랜 창",
             "failureHint": "이 머신이 해당 프로바이더의 사용량을 읽지 못했다고 보고했습니다",
-            "accountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값"
+            "accountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값",
+            "usageHint": "최근 기간의 절대 사용량입니다 — 이 프로바이더는 사용자의 업스트림 계정으로 라우팅되므로 퍼센트로 표시할 플랜 한도가 없습니다."
         }
     },
     "settings": {

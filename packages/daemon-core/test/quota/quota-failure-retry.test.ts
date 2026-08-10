@@ -9,10 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
+const fetchOpencodeUsage = vi.fn()
 
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
+vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
 const {
     QUOTA_FAILURE_MAX_RETRIES,
@@ -254,6 +256,7 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
         saveQuotaCache({
             'claude-cli': okQuota('claude-cli') as any,
             'codex-cli': okQuota('codex-cli') as any,
+            opencode: okQuota('opencode') as any,
             kimi: quotaFailure('kimi', 'unavailable', 'Not signed in to Kimi Code', {
                 failureKind: 'missing-credentials',
             }) as any,

@@ -22,6 +22,7 @@ const fetchKimiQuota = vi.fn();
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }));
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }));
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }));
+vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage: vi.fn(), OPENCODE_USAGE_DAYS: 7 }));
 
 // The statusline install is mocked so enabling claude-cli never touches the
 // real ~/.claude/settings.json, and so a failing install can be simulated.
