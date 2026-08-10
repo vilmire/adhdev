@@ -72,6 +72,7 @@ import {
     PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
     ANTIGRAVITY_HOLD_QUIET_DWELL_MS,
     ANTIGRAVITY_HOLD_HARD_CAP_MS,
+    TERMINAL_BLOCK_HARD_CAP_MS,
     BACKGROUND_TASK_HOLD_MAX_MS,
     USER_INPUT_ACK_DEDUP_WINDOW_MS,
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
@@ -2408,6 +2409,7 @@ export class CliProviderInstance implements ProviderInstance {
             transcriptGrowthQuietMs: MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
             holdClassHardCapMs: ANTIGRAVITY_HOLD_HARD_CAP_MS,
             ptyParsedFinalAssistantQuietDwellMs: PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
+            terminalBlockHardCapMs: TERMINAL_BLOCK_HARD_CAP_MS,
         };
     }
 
@@ -2659,12 +2661,21 @@ export class CliProviderInstance implements ProviderInstance {
             // Surface the CANON-C immediate-emit path distinctly so a delegated worker's idle
             // notification (transcript still pending) is not mistaken for a 30s-timeout fallback.
             (completionDiagnostic as Record<string, unknown>).decoupledImmediateEmit = decision.decoupledImmediateEmit;
-            LOG.warn('CLI', `[${this.type}] emitting completed event (${decision.decoupledImmediateEmit ? 'CANON-C decoupled-immediate, transcript pending' : `after ${waitedMs}ms`}) without finalized assistant turn (${blockReason})`);
+            // (INFINITE-GENERATING) A hard-cap release means the terminal block's reason never
+            // cleared — the session would previously have wedged in generating forever. Log it
+            // distinctly from the ordinary timeout so the stuck provider stays diagnosable.
+            (completionDiagnostic as Record<string, unknown>).releasedByTerminalBlockHardCap = decision.releasedByTerminalBlockHardCap;
+            const emitCause = decision.releasedByTerminalBlockHardCap
+                ? `terminal block never cleared, released at ${waitedMs}ms hard cap`
+                : decision.decoupledImmediateEmit ? 'CANON-C decoupled-immediate, transcript pending' : `after ${waitedMs}ms`;
+            LOG.warn('CLI', `[${this.type}] emitting completed event (${emitCause}) without finalized assistant turn (${blockReason})`);
             if (this.isMeshWorkerSession()) {
                 traceMeshEventStage('fired', this.meshTraceCtx(), `forced after ${waitedMs}ms (${blockReason})`);
             }
             if (this.completionTraceOn()) this.recordCompletionGateTrace('fire', {
-                path: decision.decoupledImmediateEmit ? 'canon_c_decoupled' : 'forced_timeout',
+                path: decision.releasedByTerminalBlockHardCap
+                    ? 'terminal_block_hard_cap'
+                    : decision.decoupledImmediateEmit ? 'canon_c_decoupled' : 'forced_timeout',
                 blockReason,
                 latestVisibleStatus,
                 approvalResolvedIdle: pending.previousStatus === 'waiting_approval',

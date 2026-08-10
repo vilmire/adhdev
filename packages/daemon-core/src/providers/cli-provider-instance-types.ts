@@ -215,6 +215,20 @@ export const ANTIGRAVITY_HOLD_QUIET_DWELL_MS = 3000;
 // finish and let the transcript land / the PTY fall quiet naturally, while still guaranteeing
 // eventual release. Mirrors BACKGROUND_TASK_HOLD_MAX_MS's escape-hatch rationale.
 export const ANTIGRAVITY_HOLD_HARD_CAP_MS = 5 * 60_000;
+// (INFINITE-GENERATING) Absolute upper bound on how long a TERMINAL finalization block may
+// hold a pending completion. A terminal block outliving the 30s finalization cap is by design
+// — the reason is supposed to clear on its own (adapter closes its turn scope, the parsed
+// status leaves a generating-like state, the native transcript grows a final assistant). But
+// nothing guarantees it ever does: a codex-cli worker whose transcript never gains a final
+// assistant message, or any provider whose adapter never closes its turn scope, re-derives
+// the same terminal block on every retry and holds forever. Observed live as a codex-cli mesh
+// worker pinned in `generating` for 13+ minutes, permanently occupying its one-active-per-node
+// write slot with no completion ever delivered to the coordinator. Same escape-hatch rationale
+// as ANTIGRAVITY_HOLD_HARD_CAP_MS / BACKGROUND_TASK_HOLD_MAX_MS: sized generously (10 min, well
+// above every other bound) so it never becomes the ordinary release path and only rescues a
+// genuinely stuck turn, releasing through the weak-emit path that carries explicit
+// "no finalized assistant turn" provenance.
+export const TERMINAL_BLOCK_HARD_CAP_MS = 10 * 60_000;
 // (FALSE-IDLE-BACKGROUND-CMD) Hard cap on how long a pending completion may be HELD
 // solely because the claude-cli transcript still shows an unresolved run_in_background
 // bash job (backgroundTaskActive). The hold is the correct behaviour while the job is

@@ -127,6 +127,14 @@ export interface CompletionPolicy {
     transcriptGrowthQuietMs: number;        // MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS (60_000)
     holdClassHardCapMs: number;             // ANTIGRAVITY_HOLD_HARD_CAP_MS (300_000)
     ptyParsedFinalAssistantQuietDwellMs: number; // PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS (1_200)
+    /**
+     * (INFINITE-GENERATING) Absolute bound on a TERMINAL finalization block.
+     * TERMINAL_BLOCK_HARD_CAP_MS (600_000). Terminal blocks legitimately outlive the 30s
+     * finalization cap — that is what makes them terminal — but a reason that never clears
+     * must not pin the session in `generating` forever. Set well above the hold-class hard
+     * cap so it is a backstop for the genuinely stuck case, never the ordinary release path.
+     */
+    terminalBlockHardCapMs: number;
 }
 
 export interface FinalizationBlock {
@@ -164,6 +172,12 @@ export type CompletionFlushDecision =
         emittedAfterFinalizationTimeout: boolean;
         /** CANON-C decoupled-immediate (vs 30s forced-timeout release). */
         decoupledImmediateEmit: boolean;
+        /**
+         * (INFINITE-GENERATING) Released by the terminal-block hard cap — a terminal block
+         * whose reason never cleared. Distinct provenance from the ordinary 30s timeout:
+         * this one means the turn was genuinely stuck, which is worth surfacing.
+         */
+        releasedByTerminalBlockHardCap: boolean;
         waitedMs: number;
         armPatch: CompletionArmPatch;
         trace: Record<string, unknown>;
@@ -506,9 +520,22 @@ export function decideCompletionVerdict(
         }
     }
 
-    // 6) Non-gate blocks hold: terminal blocks indefinitely (their reason must clear),
-    // non-terminal blocks up to the 30s cap.
-    if (!isTranscriptEvidenceGate && (block.terminal || waitedMs < policy.finalizationMaxWaitMs)) {
+    // 6) Non-gate blocks hold: terminal blocks until their reason clears, non-terminal
+    // blocks up to the 30s cap.
+    //
+    // (INFINITE-GENERATING) A terminal hold is bounded by terminalBlockHardCapMs. The
+    // original rule held terminal blocks *indefinitely* on the premise that "their reason
+    // must clear" — but nothing guarantees that. A codex-cli worker whose native transcript
+    // never grows a final assistant, or any provider whose adapter never closes its turn
+    // scope, re-evaluates to the same terminal block on every retry and holds forever: the
+    // session is pinned in `generating`, permanently occupying its one-active-per-node mesh
+    // write slot, and the coordinator never receives a completion. Every other hold in this
+    // engine is already bounded (background-task cap, 30s finalization cap, CANON-C floor,
+    // hold-class hard cap); this was the one unbounded path. Past the cap we fall through to
+    // the weak emit, which is the same release the 30s timeout produces — a completion with
+    // explicit "no finalized assistant turn" provenance, not a fabricated clean one.
+    if (!isTranscriptEvidenceGate
+        && (block.terminal ? waitedMs < policy.terminalBlockHardCapMs : waitedMs < policy.finalizationMaxWaitMs)) {
         return hold(block.reason, {
             terminal: block.terminal === true,
             holdForTranscript: block.holdForTranscript === true,
@@ -538,13 +565,18 @@ export function decideCompletionVerdict(
         });
     }
 
-    // 9) Weak emit: CANON-C decoupled-immediate, or the 30s forced-timeout release.
+    // 9) Weak emit: CANON-C decoupled-immediate, the 30s forced-timeout release, or the
+    // (INFINITE-GENERATING) terminal-block hard-cap rescue.
     const emittedAfterFinalizationTimeout = waitedMs >= policy.finalizationMaxWaitMs;
+    const releasedByTerminalBlockHardCap = block.terminal === true
+        && !isTranscriptEvidenceGate
+        && waitedMs >= policy.terminalBlockHardCapMs;
     return {
         kind: 'emit-weak',
         block,
         emittedAfterFinalizationTimeout,
         decoupledImmediateEmit: isTranscriptEvidenceGate && !emittedAfterFinalizationTimeout,
+        releasedByTerminalBlockHardCap,
         waitedMs,
         armPatch: basePatch,
         trace: {
@@ -552,6 +584,7 @@ export function decideCompletionVerdict(
             latestVisibleStatus: visibleStatus,
             approvalResolvedIdle: arm.previousStatus === 'waiting_approval',
             emittedAfterFinalizationTimeout,
+            releasedByTerminalBlockHardCap,
             waitedMs,
             busyEpoch,
         },

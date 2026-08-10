@@ -19,6 +19,7 @@ const POLICY: CompletionPolicy = {
     transcriptGrowthQuietMs: 60_000,
     holdClassHardCapMs: 300_000,
     ptyParsedFinalAssistantQuietDwellMs: 1_200,
+    terminalBlockHardCapMs: 600_000,
 };
 
 const T0 = 1_000_000;
@@ -393,14 +394,29 @@ describe('decideCompletionFlush — hold pipeline ordering and release', () => {
         expect((forced as any).decoupledImmediateEmit).toBe(false);
     });
 
-    it('terminal blocks hold indefinitely (a genuinely busy adapter never force-completes)', () => {
+    it('terminal blocks hold far past the 30s cap (a genuinely busy adapter never force-completes early)', () => {
+        // Well past the 30s finalization cap and the 5min hold-class cap, still holding:
+        // a terminal block owns its own release while its reason plausibly still holds.
         const d = decideCompletionFlush(
             makeArm(),
-            makeReader({ adapterWaitingForResponse: true, now: T0 + 10 * 60_000 }),
+            makeReader({ adapterWaitingForResponse: true, now: T0 + POLICY.terminalBlockHardCapMs - 1_000 }),
             POLICY,
         );
         expect(d.kind).toBe('hold');
         expect((d as any).reason).toBe('adapter_waiting_for_response');
+    });
+
+    it('(INFINITE-GENERATING) but a terminal block whose reason never clears releases at the hard cap', () => {
+        // Previously this held forever, pinning the session in `generating` and — for a mesh
+        // worker — permanently occupying its one-active-per-node write slot.
+        const d = decideCompletionFlush(
+            makeArm(),
+            makeReader({ adapterWaitingForResponse: true, now: T0 + POLICY.terminalBlockHardCapMs }),
+            POLICY,
+        );
+        expect(d.kind).toBe('emit-weak');
+        expect((d as any).releasedByTerminalBlockHardCap).toBe(true);
+        expect((d as any).block.reason).toBe('adapter_waiting_for_response');
     });
 
     it('ANTIGRAVITY-30S-CAP-PREMATURE: hold-class holds past the cap while the PTY is active, releases at the hard cap', () => {
