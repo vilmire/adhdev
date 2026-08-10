@@ -9595,6 +9595,7 @@ ${lines.join("\n\n")}`;
 }
 
 // src/server.ts
+var MCP_SERVER_VERSION = "0.0.0-vendored";
 async function buildMeshModeCoordinatorPrompt(mesh) {
   try {
     const { buildCoordinatorSystemPrompt } = await import("@adhdev/daemon-core");
@@ -9678,7 +9679,7 @@ async function startMcpServer(opts) {
     const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {}, ...coordinatorSessionId ? { coordinatorSessionId } : {} };
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
     const server2 = new import_server.Server(
-      { name: "adhdev-mcp-server", version: "1.0.42" },
+      { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
       { capabilities: { tools: {}, resources: {} } }
     );
     const { ListResourcesRequestSchema, ReadResourceRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
@@ -9924,7 +9925,7 @@ async function startMcpServer(opts) {
     ...isLocal ? [SCREENSHOT_TOOL] : []
   ];
   const server = new import_server.Server(
-    { name: "adhdev-mcp-server", version: "0.9.66" },
+    { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
     { capabilities: { tools: {} } }
   );
   server.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: allTools }));

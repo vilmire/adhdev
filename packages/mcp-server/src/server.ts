@@ -53,6 +53,31 @@ import {
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
+/**
+ * Version reported in the MCP `initialize` response (`serverInfo.version`).
+ *
+ * ★Keep this a fixed literal. Do NOT set it to the real package version, and do
+ * NOT read it at runtime from package.json. This build is vendored verbatim into
+ * two committed bundles (packages/daemon-cloud/vendor/mcp-server and
+ * oss/packages/daemon-standalone/vendor/mcp-server) that a drift gate compares
+ * against HEAD. Any value tracking the release version makes every version bump
+ * rewrite those bundles, and version-bump.sh cannot commit them before the gate
+ * runs — a structural deadlock that blocked the 1.0.42 release twice before it
+ * was pushed through by hand.
+ *
+ * Nothing consumes this value: MCP negotiates on `protocolVersion`, not on
+ * serverInfo, and no code in this repo reads it. The evidence is that the
+ * standard-mode literal sat at 0.9.66 for ~50 releases without anyone noticing.
+ * A placeholder is honest about that; a real-looking number would only invite
+ * someone to trust it again.
+ *
+ * A runtime package.json lookup is doubly wrong: the vendored package.json is
+ * synthesized by vendor-runtime-deps.mjs with no `version` field (it would
+ * resolve to undefined), and it would re-embed the version in the vendor bytes,
+ * reintroducing the exact drift this constant removes.
+ */
+const MCP_SERVER_VERSION = '0.0.0-vendored';
+
 export interface AdhdevMcpServerOptions {
   mode: 'local' | 'ipc';
   // local options
@@ -173,7 +198,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
 
     const server = new Server(
-      { name: 'adhdev-mcp-server', version: '1.0.42' },
+      { name: 'adhdev-mcp-server', version: MCP_SERVER_VERSION },
       { capabilities: { tools: {}, resources: {} } },
     );
 
@@ -313,7 +338,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
   ];
 
   const server = new Server(
-    { name: 'adhdev-mcp-server', version: '0.9.66' },
+    { name: 'adhdev-mcp-server', version: MCP_SERVER_VERSION },
     { capabilities: { tools: {} } },
   );
 

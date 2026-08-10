@@ -98,11 +98,29 @@ if (fs.existsSync(path.join(mcpPackageDir, 'package.json')) && mcpServerDistIsSt
 if (fs.existsSync(mcpSourceRoot)) {
   fs.rmSync(mcpTargetRoot, { recursive: true, force: true });
   copyRecursive(mcpSourceRoot, mcpTargetRoot);
-  // Copy package.json for metadata
-  const mcpPkgSrc = path.resolve(packageDir, '..', 'mcp-server', 'package.json');
-  if (fs.existsSync(mcpPkgSrc)) {
-    fs.copyFileSync(mcpPkgSrc, path.join(mcpTargetRoot, 'package.json'));
-  }
+  // Write a MINIMAL manifest — do NOT copy mcp-server's real package.json.
+  //
+  // ★It must not carry a `version` field. This directory is committed and a drift
+  // gate diffs it against HEAD, so any field tracking the release version makes
+  // every version bump dirty the vendored copy; version-bump.sh cannot commit that
+  // before `npm run ci` runs the gate. That deadlock blocked the 1.0.42 release
+  // twice via the bundle's embedded version string, and this file is the same trap
+  // by a second path.
+  //
+  // Copying the real manifest was also simply wrong: it advertised `main` and
+  // `bin` pointing at `dist/index.js`, which does not exist here — the vendored
+  // entry is `index.js` beside it. Nothing reads this file (the sole consumer,
+  // src/index.ts, resolves vendor/mcp-server/index.js directly); it exists so the
+  // directory is a well-formed package. This mirrors the synthesized manifest the
+  // daemon-cloud vendorer already writes.
+  fs.writeFileSync(
+    path.join(mcpTargetRoot, 'package.json'),
+    JSON.stringify({
+      name: '@adhdev/mcp-server',
+      private: true,
+      main: './index.js',
+    }, null, 2),
+  );
   console.log(`vendored mcp-server dist -> ${mcpTargetRoot}`);
 } else {
   console.warn(`⚠ mcp-server dist not found at ${mcpSourceRoot}, skipping`);

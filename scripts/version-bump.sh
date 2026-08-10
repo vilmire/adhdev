@@ -213,17 +213,16 @@ for pkg in "${PACKAGES[@]}"; do
     fi
 done
 
-MCP_SERVER_SOURCE="packages/mcp-server/src/server.ts"
-if [ -f "$MCP_SERVER_SOURCE" ]; then
-    node -e "
-        const fs = require('fs');
-        const file = '$MCP_SERVER_SOURCE';
-        const content = fs.readFileSync(file, 'utf-8');
-        const updated = content.replace(/name: 'adhdev-mcp-server', version: '[^']+'/, \"name: 'adhdev-mcp-server', version: '$NEW_VERSION'\");
-        fs.writeFileSync(file, updated);
-    "
-    echo "  ✅ $MCP_SERVER_SOURCE → $NEW_VERSION"
-fi
+# NOTE: packages/mcp-server/src/server.ts used to have its MCP serverInfo version
+# rewritten here. That is deliberately gone. The version is now a fixed constant
+# (MCP_SERVER_VERSION = '0.0.0-vendored') because the built mcp-server is vendored
+# into committed bundles that a drift gate compares against HEAD — a per-release
+# version string there made every bump rewrite the vendor bundles, which the bump
+# script cannot commit before `npm run ci` runs the gate. That deadlock blocked
+# the 1.0.42 release twice. Do not reintroduce a rewrite here; it would overwrite
+# the constant and bring the deadlock back. (The old regex also only ever matched
+# the first of the two call sites, leaving the second stale at 0.9.66 for ~50
+# releases — further evidence the value is unused.)
 
 # ── Re-sync vendored mcp-server (standalone) before staging ──
 # The standalone vendor embeds the mcp-server version string; re-bundle it so
