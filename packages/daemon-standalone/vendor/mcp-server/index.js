@@ -9678,7 +9678,7 @@ async function startMcpServer(opts) {
     const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {}, ...coordinatorSessionId ? { coordinatorSessionId } : {} };
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
     const server2 = new import_server.Server(
-      { name: "adhdev-mcp-server", version: "1.0.40" },
+      { name: "adhdev-mcp-server", version: "1.0.41" },
       { capabilities: { tools: {}, resources: {} } }
     );
     const { ListResourcesRequestSchema, ReadResourceRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
