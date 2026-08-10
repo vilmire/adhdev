@@ -473,6 +473,14 @@ export {
 } from './logging/logger.js';
 export type { ScopedLogger, LogLevel, LogEntry } from './logging/logger.js';
 export {
+    SYM,
+    consoleSymbols,
+    resolveConsoleSymbols,
+    supportsUnicodeSymbols,
+    resetConsoleSymbolsCache,
+} from './logging/console-symbols.js';
+export type { ConsoleSymbols, UnicodeSupportProbe } from './logging/console-symbols.js';
+export {
     resolveDebugRuntimeConfig,
     setDebugRuntimeConfig,
     getDebugRuntimeConfig,
