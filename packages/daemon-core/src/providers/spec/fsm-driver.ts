@@ -184,6 +184,60 @@ function countNewlines(s: string): number {
 
 const SUBMIT_DELAY_FLOOR_MS = 200;
 
+// ── send_message serialization (SEND-OVERLAP) ────────────────────────────────
+//
+// Live defect (2026-08-10, antigravity/darwin): one coordinator-side enqueue of a
+// ~1.5KB task arrived in the worker transcript as TWO user bubbles 8.5s apart —
+// the second one CORRUPTED, missing ~90 chars out of its MIDDLE while head and
+// tail survived. That signature is an interleave, not an overflow: a second body
+// was written into the composer while the first turn was still being consumed, so
+// the two writes braided.
+//
+// Root cause: handleSendMessage gated only on `readySeenOnce`, a ONE-SHOT latch.
+// Once the machine had ever been ready, EVERY later send went straight to the PTY
+// without consulting the current FSM state — so a resend landing mid-turn was
+// written on top of a `generating` turn. The pre-write duplicate gate that should
+// have absorbed the resend (isRecentDuplicateSend in chat-commands-write.ts) has a
+// 1.2s window, and the only 60s-window dedup (recordAcknowledgedUserInput) runs
+// AFTER the PTY write and merely collapses the display bubble. The observed 8.5s
+// gap falls in the hole between the two.
+//
+// The fix is state-gated serialization, mirroring what the legacy
+// provider-cli-adapter already does with pendingOutboundQueue + ptyWriteChain:
+// a send that arrives while the machine is busy/approval, or while a previous
+// send is still in flight, is QUEUED (never written concurrently) and drained
+// when the machine returns to idle.
+
+/** Upper bound on how long a written-but-unobserved send holds the in-flight
+ *  latch. The latch normally clears the moment the FSM leaves idle (the CLI
+ *  visibly consumed the submit). A CLI that submits without any observable state
+ *  change would otherwise wedge the queue forever, so the latch self-expires.
+ *  Generous: it must outlast the win32 echo-gate + resend budget (~20s) so a slow
+ *  but legitimate submit is never treated as abandoned. */
+const SEND_IN_FLIGHT_MAX_MS = 30_000;
+
+/** Duplicate-resend suppression window for the PRE-WRITE gate. Sized to match
+ *  USER_INPUT_ACK_DEDUP_WINDOW_MS (60s), the post-write bubble-collapse window in
+ *  cli-provider-instance — the two now cover the same span, closing the
+ *  1.2s..60s hole where a redelivery was collapsed in the UI but had already been
+ *  written to the PTY twice.
+ *
+ *  This is deliberately NOT applied to sends that go out while the machine is
+ *  idle and nothing is in flight — see isDuplicateResend. A user legitimately
+ *  typing the same text twice ("continue", "y", "run it again") is a normal turn
+ *  and must still reach the CLI; only a resend that collides with the SAME text
+ *  still being processed is dropped. */
+const DUPLICATE_RESEND_WINDOW_MS = 60_000;
+
+/** djb2 — a short, stable content hash for the duplicate gate. Not security
+ *  relevant; only needs to make accidental collisions vanishingly unlikely
+ *  while keeping the map keys small. */
+function hashSendText(text: string): string {
+    let h = 5381;
+    for (let i = 0; i < text.length; i += 1) h = (((h << 5) + h) ^ text.charCodeAt(i)) >>> 0;
+    return `${h.toString(36)}:${text.length}`;
+}
+
 /** FSMLOG-SESSION-ATTRIBUTION (D3): fallback log-tag sequence for drivers constructed without a
  *  session id. Process-local and monotonic — enough to group one driver's lines together. */
 let fsmDriverSeq = 0;
@@ -379,6 +433,19 @@ export class FsmDriver implements ISpecDriver {
     //    non-busy ("ready") state — same contract as v3's idleSeenOnce.
     private readySeenOnce = false;
     private pendingSends: string[] = [];
+    /** True while a send is written but the FSM has not yet left idle, i.e. the
+     *  composer is mid-submit. Blocks a second send from overwriting the first
+     *  before the CLI has consumed it (see handleSendMessage). */
+    private sendInFlight = false;
+    /** Wall-clock (ms) the in-flight send was written. Bounds sendInFlight so a
+     *  send the CLI never visibly consumed cannot wedge the queue forever. */
+    private sendInFlightAt = 0;
+    /** Content hash → wall-clock of the last PTY write, for the pre-write
+     *  duplicate gate (see isDuplicateResend). */
+    private recentSendHashes = new Map<string, number>();
+    /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
+     *  a torn-down driver never writes a queued body into a dead PTY. */
+    private pendingSendDrainTimer: ReturnType<typeof setTimeout> | null = null;
 
     private pickerInProgress: { control_id: string; spec: Control } | null = null;
     private delegateTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -523,6 +590,10 @@ export class FsmDriver implements ISpecDriver {
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
         if (this.win32ModalConfirmTimer) { clearTimeout(this.win32ModalConfirmTimer); this.win32ModalConfirmTimer = null; }
+        // SEND-OVERLAP: drop the queued-send drain and its backlog — a torn-down
+        // driver must never write a queued body into a dead PTY.
+        if (this.pendingSendDrainTimer) { clearTimeout(this.pendingSendDrainTimer); this.pendingSendDrainTimer = null; }
+        this.pendingSends.length = 0;
         this.specWatcher?.close();
         this.adapter.kill();
     }
@@ -763,6 +834,11 @@ export class FsmDriver implements ISpecDriver {
             // idempotent (guarded by readySeenOnce) so calling it on both
             // branches is safe.
             this.maybeMarkReady();
+            // SEND-OVERLAP: release the in-flight latch once the machine has
+            // visibly left idle, and write the next queued send on the SAME frame
+            // it returns to idle — same "quiet CLI produces no further frame"
+            // hazard the ready-gate drain above documents.
+            this.drainPendingSends();
             return;
         }
 
@@ -774,6 +850,7 @@ export class FsmDriver implements ISpecDriver {
         this.scheduleStallWatchdog();
         // Drain queued sends once we first reach a "ready" state.
         this.maybeMarkReady();
+        this.drainPendingSends();
     }
 
     private commitTransition(fired: TransitionEval, now: number, ev: FsmEvaluation): void {
@@ -1122,8 +1199,13 @@ export class FsmDriver implements ISpecDriver {
         // "Ready" = a non-initial state whose status is idle (the prompt is up).
         if (!st.initial && statusForState(st) === 'idle') {
             this.readySeenOnce = true;
-            const queued = this.pendingSends.splice(0);
-            for (const text of queued) setTimeout(() => this.actuallySendMessage(text), 50);
+            // SEND-OVERLAP: the queue is drained ONE message at a time through
+            // drainPendingSends (each waits for the machine to come back to idle)
+            // rather than flushed all at once. The old flush wrote every queued
+            // body back-to-back into the same composer, which is the overlap this
+            // fix exists to prevent — it just happened to be rare because the
+            // queue seldom held more than one message at boot.
+            this.drainPendingSends();
         }
     }
 
@@ -1168,9 +1250,127 @@ export class FsmDriver implements ISpecDriver {
     // Dashboard commands (identical semantics to v3)
     // ────────────────────────────────────────────────────────────────────
 
+    /**
+     * SEND-OVERLAP gate. A send may only go straight to the PTY when the machine
+     * is genuinely able to accept one: it has been ready at least once, it is
+     * sitting at an idle prompt right now, and no earlier send is still in flight.
+     * Anything else is queued and drained by drainPendingSends() when the machine
+     * next returns to idle.
+     *
+     * Before the fix this consulted ONLY `readySeenOnce` — a one-shot latch — so
+     * every send after the first ignored the live FSM state and could be written
+     * on top of a still-generating turn, braiding the two bodies in the composer
+     * (see the SEND-OVERLAP note above the constants).
+     */
     private handleSendMessage(text: string): void {
-        if (!this.readySeenOnce) { this.pendingSends.push(text); return; }
+        // A resend of text we are already in the middle of delivering is dropped
+        // outright rather than queued: queueing it would just submit the same
+        // prompt a second time once the turn ends, which is the duplicate-bubble
+        // symptom in a slower disguise.
+        if (this.isDuplicateResend(text)) {
+            LOG.info('FsmDriver', `[${this.specTag()}] send suppressed — duplicate resend within ${DUPLICATE_RESEND_WINDOW_MS}ms (len=${text.length})`);
+            return;
+        }
+        if (!this.canSendNow()) {
+            this.pendingSends.push(text);
+            LOG.info(
+                'FsmDriver',
+                `[${this.specTag()}] send queued — ${this.sendBlockedReason()} (len=${text.length}, queued=${this.pendingSends.length})`,
+            );
+            return;
+        }
+        this.beginSend(text);
+    }
+
+    /** True when a send can be written to the PTY right now. */
+    private canSendNow(): boolean {
+        if (!this.readySeenOnce) return false;
+        if (this.isSendInFlight()) return false;
+        return this.currentStatus() === 'idle';
+    }
+
+    /** Human-readable reason a send was queued — logged, never used for control flow. */
+    private sendBlockedReason(): string {
+        if (!this.readySeenOnce) return 'machine not ready yet';
+        if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
+        return `machine is ${this.currentStatus()}`;
+    }
+
+    /** In-flight latch with its self-expiry applied, so a send the CLI never
+     *  visibly consumed cannot wedge the queue permanently. */
+    private isSendInFlight(): boolean {
+        if (!this.sendInFlight) return false;
+        if (Date.now() - this.sendInFlightAt > SEND_IN_FLIGHT_MAX_MS) {
+            LOG.warn('FsmDriver', `[${this.specTag()}] in-flight send latch expired after ${SEND_IN_FLIGHT_MAX_MS}ms — releasing`);
+            this.sendInFlight = false;
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Pre-write duplicate gate. Suppresses a repeat of text that was written to
+     * the PTY within DUPLICATE_RESEND_WINDOW_MS *while that text is still being
+     * processed* — i.e. a send is in flight or the machine has not returned to
+     * idle. A genuine repeat typed at an idle prompt is NOT suppressed: sending
+     * "continue" twice in a row is ordinary use, and silently swallowing the
+     * second one would be a worse defect than the one being fixed.
+     */
+    private isDuplicateResend(text: string): boolean {
+        const now = Date.now();
+        const key = hashSendText(text);
+        for (const [candidate, at] of this.recentSendHashes) {
+            if (now - at > DUPLICATE_RESEND_WINDOW_MS) this.recentSendHashes.delete(candidate);
+        }
+        const previous = this.recentSendHashes.get(key);
+        if (previous === undefined) return false;
+        if (now - previous > DUPLICATE_RESEND_WINDOW_MS) return false;
+        // Same text, inside the window. Only a collision with work still in
+        // progress is a redelivery; at a settled idle prompt it is a new turn.
+        const stillProcessing = this.isSendInFlight()
+            || this.currentStatus() !== 'idle'
+            || this.pendingSends.length > 0;
+        return stillProcessing;
+    }
+
+    /** Mark a send as in flight, record it for the duplicate gate, and write it. */
+    private beginSend(text: string): void {
+        this.sendInFlight = true;
+        this.sendInFlightAt = Date.now();
+        this.recentSendHashes.set(hashSendText(text), this.sendInFlightAt);
         this.actuallySendMessage(text);
+    }
+
+    /**
+     * Release the in-flight latch and write the next queued send, if the machine
+     * can take one. Called from the FSM evaluation loop, so it runs on the same
+     * frame the machine reaches idle — the queue never waits for an extra PTY
+     * frame that a quiet CLI would never produce (the same hazard maybeMarkReady
+     * documents for the very first message).
+     */
+    private drainPendingSends(): void {
+        if (!this.readySeenOnce) return;
+        const status = this.currentStatus();
+        // Leaving idle is the observable proof the CLI consumed the submit.
+        if (this.sendInFlight && status !== 'idle') {
+            this.sendInFlight = false;
+        }
+        if (status !== 'idle') return;
+        if (this.isSendInFlight()) return;
+        if (this.pendingSends.length === 0) return;
+        const next = this.pendingSends.shift()!;
+        LOG.info('FsmDriver', `[${this.specTag()}] draining queued send (len=${next.length}, remaining=${this.pendingSends.length})`);
+        // Small delay for parity with the ready-gate drain: it lets the prompt
+        // frame settle before the body lands.
+        if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
+        this.pendingSendDrainTimer = setTimeout(() => {
+            this.pendingSendDrainTimer = null;
+            this.beginSend(next);
+        }, 50);
+        // Hold the latch immediately so a second drain on the very next frame
+        // cannot write a second body into the same composer line.
+        this.sendInFlight = true;
+        this.sendInFlightAt = Date.now();
     }
 
     private actuallySendMessage(text: string): void {
