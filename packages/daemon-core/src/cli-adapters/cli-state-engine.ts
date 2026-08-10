@@ -677,6 +677,15 @@ export class CliStateEngine {
         this.activeModal = null;
         this.setStatus('idle', reason);
         this.recordTrace('poll_static_idle_confirmed', { reason });
+        // QUEUE-DRAIN-ON-POLL-IDLE (live 2026-08-10, kimi coordinator): a
+        // message enqueued mid-turn (current_status_generating gate) is
+        // drained by the OTHER two idle commits (scheduleIdleFinish,
+        // script_idle_commit) — but a turn that ends through THIS poll-driven
+        // release never flushed, so the queued message sat undelivered
+        // forever (the STALE QUEUE warner fired at idle/ready and only
+        // logged). Every generating→idle commit must drain the outbound
+        // queue.
+        this.transport.flushOutboundQueue();
         return true;
     }
 

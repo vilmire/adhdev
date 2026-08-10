@@ -1142,6 +1142,34 @@ describe('CliStateEngine', () => {
             expect(flipped).toBe(false)
             expect(engine.currentStatus).toBe('idle')
         })
+
+        // QUEUE-DRAIN-ON-POLL-IDLE (live 2026-08-10, kimi coordinator): a message
+        // enqueued mid-turn (current_status_generating gate) was drained by the
+        // other two idle commits but NOT by this poll-driven release — the queued
+        // message sat undelivered forever while the STALE QUEUE warner logged at
+        // idle/ready. Every generating→idle commit must drain the queue.
+        it('drains the outbound queue when the poll-idle release commits', () => {
+            let flushes = 0
+            const { engine } = buildEngine({}, { flushOutboundQueue: () => { flushes++ } })
+            engine.setStatus('generating')
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = null
+            engine.activeModal = null
+
+            expect(engine.confirmPollStaticIdle('poll_static_idle')).toBe(true)
+            expect(flushes).toBe(1)
+        })
+
+        it('does not flush when the release is refused (turn in flight)', () => {
+            let flushes = 0
+            const { engine } = buildEngine({}, { flushOutboundQueue: () => { flushes++ } })
+            engine.setStatus('generating')
+            engine.isWaitingForResponse = true
+            engine.currentTurnScope = { prompt: 'do work', startedAt: Date.now(), bufferStart: 0, rawBufferStart: 0 }
+
+            expect(engine.confirmPollStaticIdle('poll_static_idle')).toBe(false)
+            expect(flushes).toBe(0)
+        })
     })
 
     // ── FALSE-IDLE (Fix 2): applyIdle post-approval resume-grace hysteresis ──────
