@@ -432,6 +432,35 @@ function parsePbFile(
 const AGY_STEP_TYPE_USER = 14;
 const AGY_STEP_TYPE_MODEL = 15;
 
+/**
+ * (ANTIGRAVITY-STEPS-STATUS-COMPLETION) `steps.status` value meaning SETTLED —
+ * the step is finished and its step_payload is complete.
+ *
+ * Antigravity writes a model step INCREMENTALLY. The row first appears with
+ * status 8 (in-flight) carrying a truncated step_payload that grows on every
+ * flush, then flips to status 3 with the complete answer — reusing the SAME
+ * `idx`. Reading a status-8 row therefore hands out a half-written answer as if
+ * it were the model's final word, and since the settled row carries the same
+ * (providerSessionId, idx) identity, the partial and the full text collided
+ * downstream instead of the latter replacing the former.
+ *
+ * Live capture of a 199s turn (agy 1.1.11), store polled every 400ms:
+ *   t=189.3s  idx7 ty15 st8   247B   ← partial
+ *   t=195.8s  idx7 ty15 st8  2268B   ← same row, grown
+ *   t=199.1s  idx7 ty15 st3  3529B   ← settled, complete
+ *
+ * Filtering to status 3 costs no coverage: across 289 real conversation stores,
+ * every settled step_type 14/15 row holds status 3 and nothing else (456 user +
+ * 2260 model rows, zero exceptions). The other observed values — 2 (running),
+ * 6, 7 (awaiting approval) — occur ONLY on tool step types, which this reader
+ * does not select anyway. So no user-visible message is withheld by this filter;
+ * the only rows it removes are turns still being written.
+ *
+ * This also brings the .db reader in line with its sibling: parseBrainTranscript
+ * has always required `row.status === 'DONE'`. The .db path was the outlier.
+ */
+const AGY_STATUS_DONE = 3;
+
 interface ProtoField {
   field: number;
   wireType: number;
@@ -730,6 +759,7 @@ function parseConversationDb(
           `SELECT idx, step_type, step_payload
              FROM steps
             WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL})
+              AND status = ${AGY_STATUS_DONE}
             ORDER BY idx ASC`,
         )
         .all() as AgyDbStepRow[];

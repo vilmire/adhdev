@@ -32,6 +32,16 @@ const SESSION_A = 'aaaaaaaa-1111-0000-0000-000000000001';
 const SESSION_B = 'bbbbbbbb-2222-0000-0000-000000000002';
 const SESSION_C = 'cccccccc-3333-0000-0000-000000000003';
 const SESSION_D = 'dddddddd-4444-0000-0000-000000000004';
+const SESSION_E = 'eeeeeeee-5555-0000-0000-000000000005';
+
+// steps.status values, verified against 289 real conversation stores
+// (~/.gemini/antigravity-cli/conversations/*.db) plus a live in-flight capture.
+/** Settled / DONE. The ONLY status a step_type 14/15 row ever holds at rest. */
+const AGY_STATUS_DONE = 3;
+/** In-flight: the model step is still being written; step_payload keeps growing. */
+const AGY_STATUS_IN_FLIGHT = 8;
+/** Awaiting tool approval. Observed only on tool step types, never on 14/15. */
+const AGY_STATUS_AWAITING_APPROVAL = 7;
 
 function antigravityRoot(): string {
   return path.join(tmpDir, '.gemini', 'antigravity-cli');
@@ -173,7 +183,7 @@ function encodeToolStep(): Buffer {
  */
 async function makeConversationDb(
   sessionId: string,
-  steps: Array<{ step_type: number; payload: Buffer }>,
+  steps: Array<{ step_type: number; payload: Buffer; status?: number }>,
 ): Promise<string> {
   const dir = path.join(antigravityRoot(), 'conversations');
   fs.mkdirSync(dir, { recursive: true });
@@ -189,9 +199,11 @@ async function makeConversationDb(
       '`status` integer NOT NULL DEFAULT 0, `step_payload` blob, PRIMARY KEY (`idx`));',
   );
   const insert = db.prepare(
-    'INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?, ?, 3, ?)',
+    'INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?, ?, ?, ?)',
   );
-  steps.forEach((s, i) => insert.run(i, s.step_type, s.payload));
+  // Rows default to status 3 (DONE) — the settled state every step reaches on
+  // disk. Tests that exercise an in-flight turn pass an explicit status.
+  steps.forEach((s, i) => insert.run(i, s.step_type, s.status ?? AGY_STATUS_DONE, s.payload));
   db.close();
   return filePath;
 }
@@ -789,6 +801,108 @@ describe('antigravity-cli-transcript — readSession (.db SQLite)', () => {
 // SAME session's assistant answer was still recoverable from the legacy brain
 // transcript / .pb / history.jsonl. readSession now falls back across those
 // siblings for the same session id before giving up.
+/**
+ * (ANTIGRAVITY-STEPS-STATUS-COMPLETION) The reader must consume only SETTLED
+ * steps. Antigravity writes a model step incrementally: the row appears with
+ * status 8 (in-flight) and a tiny step_payload that grows on every flush, then
+ * flips to status 3 (DONE) with the complete answer — at the SAME idx.
+ *
+ * Live capture of a 199s turn (agy 1.1.11), polling the store every 400ms:
+ *   t=189.3s  idx7 ty15 st8   247B   ← partial, still being written
+ *   t=195.8s  idx7 ty15 st8  2268B   ← same row, grown
+ *   t=199.1s  idx7 ty15 st3  3529B   ← settled, complete answer
+ *
+ * Reading the status-8 row surfaced a truncated answer as if it were final, and
+ * because the settled row reuses the same providerSessionId + idx, the partial
+ * and the full text collided downstream instead of replacing.
+ *
+ * Filtering to status 3 costs nothing in coverage: across 289 real conversation
+ * stores, step_type 14/15 rows hold status 3 and no other value once settled
+ * (456 user + 2260 model rows, zero exceptions).
+ */
+describe('antigravity-cli-transcript — readSession (.db in-flight step filtering)', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-agy-inflight-'));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = '';
+  });
+
+  it('skips an in-flight (status 8) model step so a partial answer never surfaces as final', async () => {
+    const dbPath = await makeConversationDb(SESSION_E, [
+      { step_type: 14, payload: encodeUserStep('Explain B-tree indexes in depth') },
+      { step_type: 15, payload: encodeModelStep({ answer: 'A B-tree index is a balanced tree that keeps keys sorted.' }) },
+      { step_type: 14, payload: encodeUserStep('Now cover page splits') },
+      // The turn currently generating: present on disk, but truncated.
+      {
+        step_type: 15,
+        status: AGY_STATUS_IN_FLIGHT,
+        payload: encodeModelStep({ answer: 'When a leaf page fills, the' }),
+      },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_E, '/workspaces/agy');
+
+    expect(result).not.toBeNull();
+    const messages = result!.messages;
+
+    // The truncated in-flight text must not appear anywhere.
+    expect(messages.some((m) => m.content.includes('When a leaf page fills, the'))).toBe(false);
+
+    // Settled turns are unaffected.
+    expect(messages).toHaveLength(3);
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].content).toBe('A B-tree index is a balanced tree that keeps keys sorted.');
+    expect(messages[2].role).toBe('user');
+    expect(messages[2].content).toBe('Now cover page splits');
+  });
+
+  it('surfaces the settled answer once the same idx flips from status 8 to status 3', async () => {
+    const FULL = 'When a leaf page fills, the node splits at its median and the separator key is promoted to the parent.';
+
+    // Same row, now settled — this is the state the store reaches at t=199.1s.
+    const dbPath = await makeConversationDb(SESSION_E, [
+      { step_type: 14, payload: encodeUserStep('Now cover page splits') },
+      { step_type: 15, status: AGY_STATUS_DONE, payload: encodeModelStep({ answer: FULL }) },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_E, '/workspaces/agy');
+
+    expect(result).not.toBeNull();
+    const assistant = result!.messages.filter((m) => m.role === 'assistant');
+    // Exactly one assistant bubble carrying the COMPLETE text — no concatenation
+    // of the earlier partial with the settled answer.
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0].content).toBe(FULL);
+  });
+
+  it('does not treat an approval-wait (status 7) step as a completed message', async () => {
+    const dbPath = await makeConversationDb(SESSION_E, [
+      { step_type: 14, payload: encodeUserStep('Delete the build directory') },
+      // A model step parked awaiting tool approval must not read as a finished turn.
+      {
+        step_type: 15,
+        status: AGY_STATUS_AWAITING_APPROVAL,
+        payload: encodeModelStep({ answer: 'Running rm -rf build/' }),
+      },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_E, '/workspaces/agy');
+
+    const assistantText = (result?.messages ?? [])
+      .filter((m) => m.role === 'assistant')
+      .map((m) => m.content);
+    expect(assistantText).not.toContain('Running rm -rf build/');
+  });
+});
+
 describe('antigravity-cli-transcript — readSession (.db empty → sibling fallback)', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-agy-dbfallback-'));
