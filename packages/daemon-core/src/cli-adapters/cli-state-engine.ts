@@ -158,6 +158,33 @@ const APPROVAL_RESUME_IDLE_DEFER_CAP_MS = 18_000;
 const MAX_TRANSCRIPT_FINISH_DEFERS = 3;
 const TRANSCRIPT_FINISH_DEFER_CAP_MS = 30_000;
 
+// (INFINITE-GENERATING, adapter side) Absolute backstop on the fail-closed 'blocked'
+// verdict above. The comment above says the chain "fails CLOSED ... and the mesh rescue
+// nets own the wedged session" — but a 'blocked' return makes finishResponse early-return
+// WITHOUT resetActiveTurnState(), so currentTurnScope stays set and isWaitingForResponse
+// stays true FOREVER. hasAdapterPendingResponse() then reports pending on every subsequent
+// poll, which (i) re-derives adapter_turn_scope_active / turnClosed=false in the completion
+// engine indefinitely and (ii) survives even the terminal-block hard cap: that cap makes the
+// engine EMIT a completion, but it cannot reach into this adapter FSM, so the session stays
+// generating and the NEXT turn starts holding a stale open scope.
+//
+// The live killer is guard (b): a provider that paints cosmetic PTY output (spinner frames,
+// token counters, status bars) never satisfies hasScreenBeenQuietForIdle, so the guard is
+// permanently false and the cap, once tripped, re-blocks on every evaluation.
+//
+// Past this bound we force the turn closed. Deliberately much larger than
+// TRANSCRIPT_FINISH_DEFER_CAP_MS so it is a wedge rescue and never the ordinary path, and
+// aligned with the established escape-hatch discipline of ANTIGRAVITY_HOLD_HARD_CAP_MS /
+// BACKGROUND_TASK_HOLD_MAX_MS (both 5min). Guard (a) is deliberately EXCLUDED from this
+// escape — force-idling a waiting_approval / waiting_choice state would discard a real
+// pending user decision, which is strictly worse than a wedge.
+const TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS = 5 * 60_000;
+// Floor on the single re-evaluation a BLOCKED finish schedules. Nothing else re-arms on
+// the blocked path, so without this one-shot the FSM goes dormant and no time-based bound
+// could ever fire. It fires once at the hard cap (never a polling loop) and is cleared by
+// clearAllTimers on every turn-teardown path.
+const BLOCKED_FINISH_WATCHDOG_MIN_DELAY_MS = 1_000;
+
 // FALSE-IDLE (screen-quiet gate): the generating→idle transition (both the
 // candidate-confirmed finish AND the idleFinish timeout finish) requires the
 // VISIBLE TERMINAL SCREEN CONTENT to have been byte-identical for at least this
@@ -268,6 +295,9 @@ export class CliStateEngine {
     // ── Timers ───────────────────────────────────────
     private settleTimer: NodeJS.Timeout | null = null;
     private idleTimeout: NodeJS.Timeout | null = null;
+    // (INFINITE-GENERATING) Re-evaluation tick for a BLOCKED transcript finish — the only
+    // thing that keeps the blocked path alive long enough for its hard cap to fire.
+    private blockedFinishWatchdogTimer: NodeJS.Timeout | null = null;
     private finishRetryTimer: NodeJS.Timeout | null = null;
     private providerErrorRetryTimer: NodeJS.Timeout | null = null;
     private providerErrorRetryKey = '';
@@ -617,6 +647,7 @@ export class CliStateEngine {
         if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
         if (this.providerErrorRetryTimer) { clearTimeout(this.providerErrorRetryTimer); this.providerErrorRetryTimer = null; }
         if (this.pendingIdleFinishTimer) { clearTimeout(this.pendingIdleFinishTimer); this.pendingIdleFinishTimer = null; this.pendingIdleFinishAt = 0; }
+        if (this.blockedFinishWatchdogTimer) { clearTimeout(this.blockedFinishWatchdogTimer); this.blockedFinishWatchdogTimer = null; }
         this.providerErrorRetryKey = '';
     }
 
@@ -1323,7 +1354,16 @@ export class CliStateEngine {
                 // screen (spinner + streaming output), so lastScreenChangeAt stays
                 // fresh and the quiet age never reaches SCREEN_QUIET_IDLE_MS. Re-arm
                 // and re-evaluate instead of emitting a weak/false completion.
-                if (!this.hasScreenBeenQuietForIdle(Date.now())) {
+                // (INFINITE-GENERATING) This re-arm is UNBOUNDED: a provider painting
+                // cosmetic PTY output (spinner frames, token counters, status bars) never
+                // satisfies hasScreenBeenQuietForIdle, so this branch re-arms itself forever
+                // and deferOrEscalateTranscriptFinish below is NEVER reached — meaning the
+                // bounded defer chain and its escape hatch can never even be consulted. This
+                // is the live wedge: the FSM spins here with currentTurnScope open while the
+                // turn is long finished. Bound the spin on the turn clock; past the cap we
+                // fall through to the defer/escape chain, which applies its own guards.
+                const turnAgeMs = this.currentTurnStartedAt > 0 ? Date.now() - this.currentTurnStartedAt : 0;
+                if (!this.hasScreenBeenQuietForIdle(Date.now()) && turnAgeMs < TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS) {
                     if (this.idleTimeout) clearTimeout(this.idleTimeout);
                     this.idleTimeout = setTimeout(() => {
                         if (this.isWaitingForResponse) this.evaluateSettled(this.transport.getSnapshot());
@@ -1472,6 +1512,14 @@ export class CliStateEngine {
             return 'deferred';
         }
 
+        // (INFINITE-GENERATING) The defer chain is now exhausted, so rescheduleTranscript‑
+        // FinishCheck will never re-arm again. Every path below either proceeds (turn closes,
+        // the watchdog is cleared by clearAllTimers) or fails closed — and a fail-closed
+        // verdict leaves NOTHING scheduled, which is precisely how the FSM went dormant with
+        // currentTurnScope still open. Arm the one-shot rescue here, before the guards, so it
+        // is reachable no matter which guard blocks.
+        this.armBlockedFinishWatchdog(reason);
+
         // ── Cap tripped: the bounded escape ──────────────────────────────────
         // (a) Never force-idle a non-generating / approval-blocked state.
         if (this.currentStatus !== 'generating' || !this.isWaitingForResponse || this.hasActionableApproval()) {
@@ -1482,10 +1530,27 @@ export class CliStateEngine {
             });
             return 'blocked';
         }
+        // (INFINITE-GENERATING) Absolute backstop: guards (b) and (c) below can be
+        // permanently unsatisfiable — a provider painting cosmetic PTY output never goes
+        // screen-quiet, and a provider with no native-proof callback can never prove (c).
+        // Once this bound elapses the turn is force-closed so the adapter FSM is restored
+        // (currentTurnScope released) rather than wedging the session forever. Guard (a)
+        // above already returned, so an approval-blocked state can never reach here.
+        const blockedForMs = elapsedMs;
+        const hardCapTripped = blockedForMs >= TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS;
+
         // (b) Screen/interaction quiet on a fresh live snapshot — recent output
         // or repaints mean the turn is genuinely still running.
         const snap = this.transport.getSnapshot();
         if (!this.hasScreenBeenQuietForIdle(now) || this.hasRecentInteractiveActivity(snap, now)) {
+            if (hardCapTripped) {
+                this.recordTrace('transcript_finish_blocked_hard_cap_escape', {
+                    reason, guard: 'screen_active',
+                    count: this.transcriptFinishDeferCount, elapsedMs,
+                    hardCapMs: TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS,
+                });
+                return 'proceed';
+            }
             this.recordTrace('transcript_finish_defer_cap_fail_closed', {
                 reason, guard: 'screen_active',
                 count: this.transcriptFinishDeferCount, elapsedMs,
@@ -1499,6 +1564,14 @@ export class CliStateEngine {
             try { nativeProven = this.callbacks.hasFreshNativeFinalAssistantForCurrentTurn() === true; } catch { nativeProven = false; }
         }
         if (!nativeProven) {
+            if (hardCapTripped) {
+                this.recordTrace('transcript_finish_blocked_hard_cap_escape', {
+                    reason, guard: 'native_proof',
+                    count: this.transcriptFinishDeferCount, elapsedMs,
+                    hardCapMs: TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS,
+                });
+                return 'proceed';
+            }
             this.recordTrace('transcript_finish_defer_cap_fail_closed', {
                 reason, guard: 'native_proof',
                 count: this.transcriptFinishDeferCount, elapsedMs,
@@ -1857,6 +1930,42 @@ export class CliStateEngine {
             this.evaluateSettled(this.transport.getSnapshot());
         }, this.timeouts.idleFinishConfirm);
         this.recordTrace('transcript_finish_deferred', { reason });
+    }
+
+    /**
+     * (INFINITE-GENERATING) Keep a BLOCKED transcript finish re-evaluated until the
+     * hard cap can release it.
+     *
+     * rescheduleTranscriptFinishCheck only re-arms on the 'deferred' path. On 'blocked'
+     * nothing re-armed at all, so finishResponse was never re-entered: the FSM went
+     * fully dormant with currentTurnScope still open, and no purely time-based cap could
+     * ever be consulted because no timer would fire to consult it. That is what made the
+     * wedge permanent rather than merely slow.
+     *
+     * Deliberately NOT rescheduleTranscriptFinishCheck: this must not call setStatus or
+     * clearIdleFinishCandidate (the blocked state is already correct and re-asserting it
+     * would churn status history), and it must not touch transcriptFinishDeferCount —
+     * the defer bound stays tripped. It is a bare re-evaluation tick, self-cancelling
+     * once the turn closes.
+     */
+    private armBlockedFinishWatchdog(reason: string): void {
+        if (this.blockedFinishWatchdogTimer) return; // already armed for this epoch
+        const epoch = this.responseEpoch;
+        // Fire ONCE, exactly when the hard cap becomes reachable — never a polling loop.
+        // The cap is anchored on transcriptFinishDeferSince, so the remaining wait is
+        // deterministic; a self-rescheduling tick would spin without ever changing the
+        // verdict (and would never terminate under fake timers in tests).
+        const elapsed = this.transcriptFinishDeferSince > 0 ? Date.now() - this.transcriptFinishDeferSince : 0;
+        const remaining = Math.max(BLOCKED_FINISH_WATCHDOG_MIN_DELAY_MS, TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS - elapsed);
+        this.blockedFinishWatchdogTimer = setTimeout(() => {
+            this.blockedFinishWatchdogTimer = null;
+            // Turn moved on (new turn, teardown, approval) — nothing to rescue.
+            if (epoch !== this.responseEpoch) return;
+            if (!this.isWaitingForResponse || !this.currentTurnScope) return;
+            if (this.hasActionableApproval()) return;
+            this.finishResponse();
+        }, remaining);
+        this.recordTrace('transcript_finish_blocked_watchdog_armed', { reason, remainingMs: remaining });
     }
 
     private shouldRetryFinishResponse(snap: CliBufferSnapshot, commitResult: { hasAssistant: boolean; assistantContent: string }): boolean {

@@ -303,17 +303,52 @@ export function evaluateFinalizationBlock(
                     evidencePatch,
                 };
             }
-            if (timing === 'floor') {
-                return {
-                    block: {
-                        reason: 'missing_final_assistant',
-                        terminal: true,
-                        allowTimeout: allowMissingAssistantTimeout,
-                        noExternalTranscriptSource: true,
-                    },
-                    evidencePatch,
-                };
-            }
+            // (INFINITE-GENERATING / EVIDENCE-FALLTHROUGH) Everything below is the
+            // "owns an external transcript, but this probe did NOT resolve it" case:
+            // evidence.source is 'unavailable' (no session pinned yet, file not written,
+            // typed fail-closed attribution) or 'parsed' (fell back to the PTY scrape).
+            //
+            // Previously ONLY timing==='floor' returned here. A 'hold'/'immediate' provider
+            // fell out of both enclosing ifs, skipped the missing-evidence branch entirely,
+            // and reached the tail `return { block: null }` — a CLEAN completion asserting
+            // "the turn is provably finished" while the evidence explicitly said the final
+            // assistant was NOT found. That is antigravity's unstable verdict and the
+            // empty-summary first notification: the completion fired off a probe that had
+            // resolved nothing, so the summary extractor (which applies stricter turn-scoping)
+            // had nothing to emit.
+            //
+            // WHY WEAK-EMIT AND NOT A HOLD: a hold is only correct when there is reason to
+            // expect the blocker to clear. Here the transcript is UNRESOLVED, which the
+            // evidence layer itself treats as fail-open (completionFinalAssistantEvidence
+            // falls back to parsed rather than reporting present:false forever). Holding
+            // would recreate the exact unbounded wedge the terminal-block hard cap exists to
+            // prevent. So: block it (never clean), but route it through the transcript-
+            // evidence gate (allowTimeout) so the verdict stage releases it via the WEAK
+            // emit — which carries explicit "without finalized assistant turn" provenance in
+            // the log line, the completionDiagnostic and the completion-gate trace, instead
+            // of the silent clean completion this used to produce.
+            //
+            // allowTimeout is unconditional here, NOT allowMissingAssistantTimeout: on a
+            // non-mesh interactive session there is no mesh rescue net, so gating it would
+            // leave the block held to the 30s cap for a turn that is already idle and has no
+            // transcript coming.
+            //
+            // noExternalTranscriptSource is scoped to the FLOOR class only. That flag is what
+            // arms the CANON-C 20s min-elapsed floor, and the floor exists to stop a
+            // floor-class provider from emitting on a first-poll timing guess. Setting it for
+            // hold/immediate would import a 20s delay those classes never had — the exact
+            // over-correction that turns a false-completion fix into a new latency defect.
+            // So: floor keeps its floor, hold/immediate release as soon as the verdict stage
+            // runs, and BOTH now carry weak-emit provenance instead of emitting clean.
+            return {
+                block: {
+                    reason: 'missing_final_assistant',
+                    terminal: false,
+                    allowTimeout: true,
+                    ...(timing === 'floor' ? { noExternalTranscriptSource: true } : {}),
+                },
+                evidencePatch,
+            };
         } else {
             // PTY-parsed provider: no external transcript will land to upgrade a weak emit.
             return {

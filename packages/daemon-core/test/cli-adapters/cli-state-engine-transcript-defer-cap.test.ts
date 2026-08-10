@@ -221,10 +221,16 @@ describe('CliStateEngine floor-class transcript finish defer cap', () => {
         expect(failClosed.length).toBeGreaterThanOrEqual(1)
         expect(failClosed.at(-1)?.payload?.guard).toBe('screen_active')
 
-        // Bounded: no further reschedule re-arms — far-future advancement changes nothing.
+        // Bounded: the defer CHAIN does not re-arm (still exactly MAX_DEFERS).
+        // (INFINITE-GENERATING) It used to also assert the turn NEVER completes. That was
+        // the wedge, not a contract: the FSM sat dormant with currentTurnScope open forever
+        // and the mesh slot stayed occupied. The blocked-finish watchdog now re-evaluates
+        // once at the hard cap, so a turn whose screen finally quiesces DOES complete.
+        // The fail-closed guarantee that still holds is asserted above (no completion at the
+        // moment the guard trips); permanence is not part of it.
         vi.advanceTimersByTime(10 * 60_000)
-        expect(h.callbacks.onTurnCompleted).not.toHaveBeenCalled()
         expect(deferredTraces(h.engine)).toHaveLength(MAX_DEFERS)
+        expect((h.engine as any).currentTurnScope, 'turn scope must not stay open forever').toBeNull()
     })
 
     it('never force-idles waiting_choice / waiting_approval at the cap', () => {
@@ -284,11 +290,12 @@ describe('CliStateEngine floor-class transcript finish defer cap', () => {
         expect(failClosed.length).toBeGreaterThanOrEqual(1)
         expect(failClosed.at(-1)?.payload?.guard).toBe('native_proof')
 
-        // Bounded: far-future advancement produces neither completion nor more defers.
+        // Bounded: no additional defers. (INFINITE-GENERATING) The turn no longer stays
+        // generating forever — see the note on the screen_active case above; the watchdog
+        // releases a turn whose guards can never be satisfied rather than wedging it.
         vi.advanceTimersByTime(10 * 60_000)
-        expect(h.callbacks.onTurnCompleted).not.toHaveBeenCalled()
-        expect(h.engine.currentStatus).toBe('generating')
         expect(deferredTraces(h.engine)).toHaveLength(MAX_DEFERS)
+        expect((h.engine as any).currentTurnScope, 'turn scope must not stay open forever').toBeNull()
     })
 
     it('fails closed at the cap when the native-proof callback returns false', () => {
@@ -302,9 +309,12 @@ describe('CliStateEngine floor-class transcript finish defer cap', () => {
         const failClosed = h.engine.getTraceEntries().filter(e => e.type === 'transcript_finish_defer_cap_fail_closed')
         expect(failClosed.at(-1)?.payload?.guard).toBe('native_proof')
 
+        // (INFINITE-GENERATING) Bounded: no additional defers, and the turn scope is
+        // eventually released by the watchdog rather than pinned open forever. The
+        // fail-closed guarantee at the moment the guard trips is asserted above.
         vi.advanceTimersByTime(10 * 60_000)
-        expect(h.callbacks.onTurnCompleted).not.toHaveBeenCalled()
         expect(deferredTraces(h.engine)).toHaveLength(MAX_DEFERS)
+        expect((h.engine as any).currentTurnScope, 'turn scope must not stay open forever').toBeNull()
     })
 
     it('a fresh turn after one bounded finish starts with clean deferral state (epoch-anchored)', () => {
