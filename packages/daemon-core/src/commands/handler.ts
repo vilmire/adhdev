@@ -677,357 +677,77 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Download a single provider manifest from the registry and write it to
-     * ~/.adhdev/providers/.upstream/{category}/{type}/provider.json.
+     * Install (activate) a provider from the VERIFIED CHANNEL.
      *
-     * Used by standalone onboarding to seed the upstream cache with the
-     * default provider set on first launch. Verifies SHA-256 checksum
-     * against the registry meta before persisting. Refuses to write
-     * outside the upstream root.
+     * CHANNEL-FIRST INSTALL (M-PROVIDER-DIST-UNIFY, 2026-08-10): this used to
+     * download a single manifest JSON via the legacy registry shape and write
+     * it into providers/.upstream — a path that 404s for channel-only
+     * publications (the live kimi miss: published post-bootstrap, invisible
+     * to every targeted sync AND uninstallable from the dashboard) and that
+     * could not carry script bytes without a follow-up GitHub raw pull. The
+     * verified channel bundle IS the full provider tree (scripts included,
+     * digest-verified, atomic pointer flip, rollback), so installing a new
+     * type is just a targeted channel sync — and the activation pointer then
+     * keeps the type in every future sync's target set, so no .upstream
+     * write is needed as an intent record.
      *
-     * Args: { type: string, category?: string, version?: string }
-     * If category/version are omitted, looks up the latest from the registry.
+     * Args: { type: string, version?: string } (category accepted and
+     * ignored — legacy REST callers send it). The verified channel serves
+     * exactly ONE version per channel: a version request that does not match
+     * the channel entry fails closed instead of pretending to honor it.
      */
     private async handleInstallProviderManifest(args: any): Promise<CommandResult> {
-        if (!this._ctx.providerLoader) {
+        const loader = this._ctx.providerLoader;
+        if (!loader) {
             return { success: false, error: 'ProviderLoader not initialized' };
         }
-        const type = typeof args?.type === 'string' ? args.type : '';
+        const type = typeof args?.type === 'string' ? args.type.trim() : '';
         if (!type) return { success: false, error: 'type is required' };
         // Defense in depth: reject any obvious path-traversal in the type.
         if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(type)) {
             return { success: false, error: 'invalid type' };
         }
+        const requestedVersion = typeof args?.version === 'string' && args.version.trim()
+            ? args.version.trim()
+            : null;
 
-        const https = require('https') as typeof import('https');
-        const fs = require('fs') as typeof import('fs');
-        const path = require('path') as typeof import('path');
-        const cfg = loadConfig();
-        const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
+        const report = await loader.syncVerifiedChannel({ extraTargetTypes: [type] });
+        const activatedNow = report.activated.some((a) => a.providerType === type);
+        const active = loader.listVerifiedChannelPins().get(type)?.active ?? null;
 
-        function fetchText(url: string, timeoutMs: number): Promise<string> {
-            return new Promise((resolve, reject) => {
-                const req = https.get(url, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: timeoutMs }, (res) => {
-                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
-                    const chunks: Buffer[] = [];
-                    res.on('data', (c: Buffer) => chunks.push(c));
-                    res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-                });
-                req.on('error', reject);
-                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-            });
-        }
-
-        try {
-            // 1. Look up provider metadata so we know the expected category, version, checksum.
-            const metaBody = await fetchText(`${REGISTRY}/providers/${encodeURIComponent(type)}`, 10000);
-            const meta = JSON.parse(metaBody) as { type: string; category: string; version: string; checksum: string };
-            const category = typeof args?.category === 'string' ? args.category : meta.category;
-            const version = typeof args?.version === 'string' ? args.version : meta.version;
-
-            // Defense in depth on category as well — only known categories.
-            if (!['cli', 'ide', 'extension', 'acp'].includes(category)) {
-                return { success: false, error: `unknown category: ${category}` };
-            }
-
-            // 2. Download the manifest body.
-            const manifestBody = await fetchText(
-                `${REGISTRY}/providers/${encodeURIComponent(type)}/${encodeURIComponent(version)}/download`,
-                30000
-            );
-
-            // 3. Verify checksum.
-            const actualChecksum = sha256Hex(manifestBody);
-            if (actualChecksum !== meta.checksum) {
-                return { success: false, error: `checksum mismatch: expected ${meta.checksum}, got ${actualChecksum}` };
-            }
-
-            // 4. Write to the upstream cache root, NOT to ProviderLoader.getUserDir():
-            //    in dev, userDir points at the sibling adhdev-providers git checkout.
-            const installRoot = this.getUpstreamInstallRoot();
-            const installRootResolved = path.resolve(installRoot);
-            const targetDir = path.resolve(path.join(installRoot, category, type));
-            if (!targetDir.startsWith(installRootResolved + path.sep)) {
-                return { success: false, error: 'install path escaped upstream root' };
-            }
-            fs.mkdirSync(targetDir, { recursive: true });
-            // v1 vs v0 manifest selection — v1 manifests carry an SDK
-            // $schema URL or v1-only keys (tui, overrides-as-object,
-            // source, canonicalHistory). The loader prefers
-            // provider.v1.json when both exist, so writing v1 manifests
-            // under the v0 name would shadow them. Detect and write to
-            // the right file.
-            let manifestProbe: Record<string, any> = {};
-            try { manifestProbe = JSON.parse(manifestBody) as Record<string, any>; } catch { /* validation below */ }
-            const isV1 = typeof manifestProbe?.$schema === 'string' && manifestProbe.$schema.includes('/v1/')
-                || (manifestProbe?.overrides && typeof manifestProbe.overrides === 'object' && !Array.isArray(manifestProbe.overrides))
-                || !!manifestProbe?.tui;
-
-            // Reject v1 manifests that don't match the schema at install
-            // time so the daemon never persists a known-bad manifest.
-            // The provider-loader keeps a permissive warn-only behavior
-            // for manifests already on disk, but the install path is the
-            // right place to fail fast.
-            if (isV1 && manifestProbe?.category === 'cli') {
-                try {
-                    const { validateCliProviderManifest, formatManifestValidationIssues } =
-                        require('../providers/sdk/v1/validators/manifest.js') as typeof import('../providers/sdk/v1/validators/manifest.js');
-                    const validation = validateCliProviderManifest(manifestProbe);
-                    if (!validation.ok) {
-                        return {
-                            success: false,
-                            error: `manifest failed v1 schema validation:\n${formatManifestValidationIssues(validation.issues)}`,
-                            validationIssues: validation.issues,
-                        };
-                    }
-                } catch (e: any) {
-                    // Validator load failure shouldn't block install — log
-                    // and continue. The loader's warn-only path will
-                    // surface the same issue at boot if it's real.
-                    LOG.warn('Command', `[install_provider_manifest] schema validator unavailable: ${e?.message || e}`);
-                }
-            }
-
-            const targetFile = isV1 ? 'provider.v1.json' : 'provider.json';
-            const targetPath = path.join(targetDir, targetFile);
-            fs.writeFileSync(targetPath, manifestBody, 'utf-8');
-
-            // 5. If the manifest declares a `source` GitHub repo, fetch the
-            //    script directories listed in the manifest (defaultScriptDir +
-            //    each compatibility[].scriptDir). Extended-tier providers
-            //    bundle their override JS this way — the registry intentionally
-            //    only stores the manifest JSON, not the script bytes, so a
-            //    third-party can publish a manifest pointing at their own fork
-            //    without pushing files into our R2 bucket.
-            const manifestJson = JSON.parse(manifestBody) as Record<string, any>;
-            const scriptFetch = await this.fetchProviderSources(
-                manifestJson,
-                category,
-                type,
-                targetDir,
-            );
-
-            // Hot-reload so the daemon picks up the new manifest.
-            this._ctx.providerLoader.reload();
-            this._ctx.providerLoader.registerToDetector();
-
+        if (!active) {
+            const skip = report.skipped.find((s: any) => s?.entry?.providerType === type);
+            const err = report.errors.find((e) => e.providerType === type) ?? report.errors[0];
             return {
-                success: true,
-                installed: {
-                    type, category, version, checksum: actualChecksum, path: targetPath,
-                    scriptsFetched: scriptFetch.fetchedCount,
-                    scriptSource: scriptFetch.source,
-                    scriptErrors: scriptFetch.errors,
-                },
+                success: false,
+                code: 'channel_install_failed',
+                error: skip?.reason
+                    || err?.message
+                    || `provider "${type}" is not activatable on channel "${loader.channel}" (not published, or no verified artifact)`,
             };
-        } catch (e: any) {
-            return { success: false, error: `install failed: ${e?.message || e}` };
         }
-    }
-
-    /**
-     * If `manifest.source = { type:'github', repo, ref, subdir? }` is set,
-     * walk each script directory the manifest references and download every
-     * file from the public GitHub raw endpoint. Returns a small summary so
-     * the caller can report what was fetched.
-     *
-     * Best-effort: failures don't reject the install — the manifest itself is
-     * usable for declarative-only providers, and the user still gets a clear
-     * error string back if a needed script is missing.
-     */
-    private async fetchProviderSources(
-        manifest: Record<string, any>,
-        category: string,
-        type: string,
-        targetDir: string,
-    ): Promise<{ fetchedCount: number; source: string | null; errors: string[] }> {
-        const errors: string[] = [];
-        const source = manifest?.source;
-        if (!source || source.type !== 'github' || typeof source.repo !== 'string' || typeof source.ref !== 'string') {
-            return { fetchedCount: 0, source: null, errors };
+        if (requestedVersion && active.providerVersion !== requestedVersion) {
+            return {
+                success: false,
+                code: 'channel_version_mismatch',
+                error: `verified channel "${loader.channel}" serves ${type}@${active.providerVersion}; version "${requestedVersion}" is not addressable — the channel carries exactly one version per channel`,
+            };
         }
-
-        // Collect every script directory the manifest references. v1 manifests
-        // use `defaultScriptDir` and `compatibility[].scriptDir`. We also pull
-        // any override path's directory (e.g. overrides.detectStatus.path =
-        // "scripts/v1/detect_status.js" → fetch the scripts/v1/ directory too).
-        const scriptDirs = new Set<string>();
-        if (typeof manifest.defaultScriptDir === 'string') scriptDirs.add(manifest.defaultScriptDir);
-        if (Array.isArray(manifest.compatibility)) {
-            for (const c of manifest.compatibility) {
-                if (typeof c?.scriptDir === 'string') scriptDirs.add(c.scriptDir);
-                // Spec-driven providers (claude/codex/agy/…) point at a
-                // single specs/<version>.json instead of a scriptDir.
-                // The whole specs/ directory needs to come down so the
-                // spec adapter can resolve the file at runtime — without
-                // this, install_provider_manifest leaves the marketplace
-                // copy spec-less and provider-loader falls back to the
-                // legacy tui-based ProviderCliAdapter.
-                if (typeof c?.spec === 'string' && c.spec.includes('/')) {
-                    const dir = c.spec.substring(0, c.spec.lastIndexOf('/'));
-                    if (dir) scriptDirs.add(dir);
-                }
-            }
-        }
-        if (manifest.overrides && typeof manifest.overrides === 'object' && !Array.isArray(manifest.overrides)) {
-            for (const override of Object.values(manifest.overrides) as Array<Record<string, unknown>>) {
-                const overridePath = override?.path;
-                if (typeof overridePath === 'string' && overridePath.includes('/')) {
-                    const dir = overridePath.substring(0, overridePath.lastIndexOf('/'));
-                    if (dir) scriptDirs.add(dir);
-                }
-            }
-        }
-        if (scriptDirs.size === 0) {
-            return { fetchedCount: 0, source: `${source.repo}@${source.ref}`, errors };
-        }
-
-        const subdir: string = typeof source.subdir === 'string' && source.subdir.length > 0
-            ? source.subdir
-            : `${category}/${type}`;
-        const repo: string = source.repo;
-        const ref: string = source.ref;
-
-        const https = require('https') as typeof import('https');
-        const fs = require('fs') as typeof import('fs');
-        const path = require('path') as typeof import('path');
-
-        function fetchJson(url: string, timeoutMs: number): Promise<any> {
-            return new Promise((resolve, reject) => {
-                const req = https.get(url, {
-                    headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/vnd.github+json' },
-                    timeout: timeoutMs,
-                }, (res) => {
-                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
-                    const chunks: Buffer[] = [];
-                    res.on('data', (c: Buffer) => chunks.push(c));
-                    res.on('end', () => {
-                        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
-                        catch (e) { reject(e); }
-                    });
-                });
-                req.on('error', reject);
-                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-            });
-        }
-
-        function fetchBinary(url: string, timeoutMs: number): Promise<Buffer> {
-            return new Promise((resolve, reject) => {
-                const req = https.get(url, {
-                    headers: { 'User-Agent': 'adhdev-daemon' },
-                    timeout: timeoutMs,
-                }, (res) => {
-                    // Raw endpoint redirects through codeload — follow the redirect.
-                    if (res.statusCode === 301 || res.statusCode === 302) {
-                        if (res.headers.location) {
-                            return fetchBinary(res.headers.location, timeoutMs).then(resolve, reject);
-                        }
-                    }
-                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
-                    const chunks: Buffer[] = [];
-                    res.on('data', (c: Buffer) => chunks.push(c));
-                    res.on('end', () => resolve(Buffer.concat(chunks)));
-                });
-                req.on('error', reject);
-                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-            });
-        }
-
-        let fetchedCount = 0;
-
-        // The shared helpers directory (cli/_shared/) is referenced by most
-        // CLI providers via `require('../../../_shared/...')`. Fetch it once
-        // alongside the provider's own scripts so node's require resolution
-        // succeeds at runtime. Best-effort — silent if the source repo has no
-        // _shared dir (e.g. ACP-only repos).
-        const sharedDirRel = `${category}/_shared`;
-        const sharedTargetDir = path.resolve(path.join(targetDir, '../_shared'));
-        const installRootResolved = path.resolve(path.join(targetDir, '../..'));
-        if (sharedTargetDir.startsWith(installRootResolved + path.sep)) {
-            const sharedStack: string[] = [sharedDirRel];
-            while (sharedStack.length) {
-                const relDir = sharedStack.pop()!;
-                const apiUrl = `https://api.github.com/repos/${repo}/contents/${encodeURI(relDir)}?ref=${encodeURIComponent(ref)}`;
-                let entries: Array<{ type: string; path: string; name: string; download_url: string | null }>;
-                try {
-                    entries = await fetchJson(apiUrl, 15000);
-                } catch (e: any) {
-                    // Silent: _shared may not exist on third-party repos
-                    if (relDir === sharedDirRel) break;
-                    errors.push(`list shared ${relDir}: ${e?.message ?? e}`);
-                    continue;
-                }
-                if (!Array.isArray(entries)) continue;
-                for (const entry of entries) {
-                    if (entry.type === 'dir') { sharedStack.push(entry.path); continue; }
-                    if (entry.type !== 'file' || !entry.download_url) continue;
-                    try {
-                        const body = await fetchBinary(entry.download_url, 30000);
-                        // entry.path is like 'cli/_shared/foo.js' — strip 'cli/_shared/' prefix
-                        const relInside = entry.path.startsWith(sharedDirRel + '/')
-                            ? entry.path.slice(sharedDirRel.length + 1)
-                            : entry.path;
-                        const outPath = path.resolve(path.join(sharedTargetDir, relInside));
-                        if (!outPath.startsWith(path.resolve(sharedTargetDir) + path.sep)) continue;
-                        fs.mkdirSync(path.dirname(outPath), { recursive: true });
-                        fs.writeFileSync(outPath, body);
-                        fetchedCount++;
-                    } catch (e: any) {
-                        errors.push(`fetch shared ${entry.path}: ${e?.message ?? e}`);
-                    }
-                }
-            }
-        }
-
-        for (const scriptDir of scriptDirs) {
-            // GitHub Contents API returns the file list under the dir. We
-            // recurse into subdirectories so e.g. scripts/v1/helpers/foo.js is
-            // captured too.
-            const stack: string[] = [`${subdir}/${scriptDir}`];
-            while (stack.length) {
-                const relDir = stack.pop()!;
-                const apiUrl = `https://api.github.com/repos/${repo}/contents/${encodeURI(relDir)}?ref=${encodeURIComponent(ref)}`;
-                let entries: Array<{ type: string; path: string; name: string; download_url: string | null }>;
-                try {
-                    entries = await fetchJson(apiUrl, 15000);
-                } catch (e: any) {
-                    errors.push(`list ${relDir}: ${e?.message ?? e}`);
-                    continue;
-                }
-                if (!Array.isArray(entries)) {
-                    errors.push(`list ${relDir}: unexpected response shape`);
-                    continue;
-                }
-                for (const entry of entries) {
-                    if (entry.type === 'dir') {
-                        stack.push(entry.path);
-                        continue;
-                    }
-                    if (entry.type !== 'file' || !entry.download_url) continue;
-                    try {
-                        const body = await fetchBinary(entry.download_url, 30000);
-                        // entry.path is relative to repo root → strip the repo subdir prefix
-                        // so the path inside targetDir matches the layout the loader expects.
-                        const relInsideProvider = entry.path.startsWith(subdir + '/')
-                            ? entry.path.slice(subdir.length + 1)
-                            : entry.path;
-                        const outPath = path.resolve(path.join(targetDir, relInsideProvider));
-                        // Path-traversal guard.
-                        if (!outPath.startsWith(path.resolve(targetDir) + path.sep)) {
-                            errors.push(`refusing to write outside targetDir: ${entry.path}`);
-                            continue;
-                        }
-                        fs.mkdirSync(path.dirname(outPath), { recursive: true });
-                        fs.writeFileSync(outPath, body);
-                        fetchedCount++;
-                    } catch (e: any) {
-                        errors.push(`fetch ${entry.path}: ${e?.message ?? e}`);
-                    }
-                }
-            }
-        }
-
-        return { fetchedCount, source: `${repo}@${ref}`, errors };
+        // syncVerifiedChannel already reloaded manifests on activation; refresh
+        // detection so a freshly installed provider resolves detected/not_detected
+        // instead of sitting unchecked.
+        loader.registerToDetector();
+        return {
+            success: true,
+            installed: {
+                type,
+                category: active.category,
+                version: active.providerVersion,
+                digest: active.digest,
+                channel: loader.channel,
+                alreadyInstalled: !activatedNow,
+            },
+        };
     }
 
     /**
@@ -1236,7 +956,17 @@ export class DaemonCommandHandler implements CommandHelpers {
         // this command — and the GET that exposes it — cannot change state.
         // `channelSync: null` is kept so existing readers of the field see a
         // shape they already handle rather than an absent key.
-        return { success: true, providers: checks, channelSync: null };
+        //
+        // channelStaleness: one extra READ-ONLY channel listing so the caller
+        // also learns about channel types this machine has never activated
+        // nor installed (newTypes — the kimi class, invisible in the
+        // installed-set rows above). Refreshes the badge snapshot as a side
+        // effect of the same read; still zero pointer writes.
+        let channelStaleness: unknown = null;
+        try {
+            channelStaleness = await this._ctx.providerLoader?.checkVerifiedChannelStaleness?.() ?? null;
+        } catch { /* read-only extra — rows above are still valid without it */ }
+        return { success: true, providers: checks, channelSync: null, channelStaleness };
     }
 
     /**
@@ -1250,12 +980,30 @@ export class DaemonCommandHandler implements CommandHelpers {
      *
      * Fail-closed: on any registry/transport/digest failure nothing is
      * activated and the last-known-good objects keep loading.
+     *
+     * Args: { types?: string[] } — optional provider types unioned into the
+     * sync target set. This is how a NEVER-activated channel type is
+     * installed from the dashboard (kimi class): the default target set is
+     * pins+installed, which by construction cannot contain a type published
+     * after this machine's bootstrap.
      */
-    private async handleActivateProviderUpdates(_args: any): Promise<CommandResult> {
+    private async handleActivateProviderUpdates(args: any): Promise<CommandResult> {
+        const typesRaw = Array.isArray(args?.types) ? args.types : [];
+        const types: string[] = [];
+        for (const candidate of typesRaw) {
+            const type = typeof candidate === 'string' ? candidate.trim() : '';
+            if (!type) continue;
+            if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(type)) {
+                return { success: false, error: `invalid type: ${String(candidate).slice(0, 80)}` };
+            }
+            types.push(type);
+        }
         const before = this._ctx.providerLoader?.listVerifiedChannelPins?.() ?? new Map();
         let channelSync: unknown = null;
         try {
-            channelSync = await this._ctx.providerLoader?.syncVerifiedChannel?.() ?? null;
+            channelSync = await this._ctx.providerLoader?.syncVerifiedChannel?.(
+                types.length > 0 ? { extraTargetTypes: types } : undefined,
+            ) ?? null;
         } catch (e: any) {
             return { success: false, error: e?.message ?? String(e) };
         }

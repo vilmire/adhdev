@@ -174,62 +174,6 @@ describe('Channel policy — sibling checkout adoption', () => {
   });
 });
 
-describe('Channel policy — unverified tarball fallback refusal', () => {
-  const UNREACHABLE = 'https://adhdev-channel-policy-test.invalid/providers.tar.gz';
-  let tmpRoot = '';
-  let configDirBefore: string | undefined;
-  let envBefore: string | undefined;
-
-  beforeEach(() => {
-    tmpRoot = makeTmp('adhdev-channel-tarball-');
-    configDirBefore = process.env.ADHDEV_CONFIG_DIR;
-    process.env.ADHDEV_CONFIG_DIR = tmpRoot;
-    envBefore = process.env.ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL;
-    delete process.env.ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL;
-  });
-
-  afterEach(() => {
-    if (configDirBefore === undefined) delete process.env.ADHDEV_CONFIG_DIR;
-    else process.env.ADHDEV_CONFIG_DIR = configDirBefore;
-    if (envBefore === undefined) delete process.env.ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL;
-    else process.env.ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL = envBefore;
-    if (tmpRoot && existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
-    tmpRoot = '';
-  });
-
-  function newLoader(extra?: ConstructorParameters<typeof ProviderLoader>[0]) {
-    return new ProviderLoader({
-      providerTarballUrl: UNREACHABLE,
-      logFn: () => {},
-      probeStarts: [join(tmpRoot, 'no-sibling-here')],
-      ...extra,
-    });
-  }
-
-  it('stable production mode refuses the fallback even with the dev opt-in', async () => {
-    const result = await newLoader({ channel: 'stable', allowUnverifiedTarball: true }).fetchLatest();
-    expect(result.updated).toBe(false);
-    expect(result.error).toContain('TARBALL_FALLBACK_REFUSED');
-  });
-
-  it('refuses the fallback without the explicit dev opt-in (any channel)', async () => {
-    const result = await newLoader({ channel: 'preview' }).fetchLatest();
-    expect(result.error).toContain('TARBALL_FALLBACK_REFUSED');
-  });
-
-  it('env opt-in alone cannot unlock the fallback on the stable channel', async () => {
-    process.env.ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL = '1';
-    const result = await newLoader({ channel: 'stable' }).fetchLatest();
-    expect(result.error).toContain('TARBALL_FALLBACK_REFUSED');
-  });
-
-  it('dev opt-in on a non-stable channel passes the gate (fails later at the unreachable host)', async () => {
-    const result = await newLoader({ channel: 'preview', allowUnverifiedTarball: true }).fetchLatest();
-    expect(result.updated).toBe(false);
-    expect(result.error ?? '').not.toContain('TARBALL_FALLBACK_REFUSED');
-  });
-});
-
 describe('Channel contract — standalone/cloud boot caller parity', () => {
   let tmpRoot = '';
   let configDirBefore: string | undefined;
@@ -275,14 +219,4 @@ describe('Channel contract — standalone/cloud boot caller parity', () => {
     }
   });
 
-  it('normalizes providerAllowUnverifiedTarball from config.json', () => {
-    writeFileSync(
-      join(tmpRoot, 'config.json'),
-      JSON.stringify({ providerAllowUnverifiedTarball: true }),
-      'utf-8',
-    );
-    expect(loadConfig().providerAllowUnverifiedTarball).toBe(true);
-    writeFileSync(join(tmpRoot, 'config.json'), JSON.stringify({}), 'utf-8');
-    expect(loadConfig().providerAllowUnverifiedTarball).toBe(false);
-  });
 });

@@ -80,15 +80,21 @@ describe('provider pin — data source', () => {
   it('reads pins with the READ-ONLY command, never the activating one', () => {
     // check_provider_updates is safe on mount BECAUSE it no longer activates.
     // Calling activate_provider_updates here would move every machine's
-    // pointer just by opening the tab.
-    const fetchBlock = tabSource.slice(tabSource.indexOf('const fetchPins'), tabSource.indexOf('const handleActivatePins'))
+    // pointer just by opening the tab. (handleInstallNewType — the explicit
+    // per-type install button — is the first declaration after fetchPins and
+    // legitimately activates, so the mount-path slice ends there.)
+    const fetchBlock = tabSource.slice(tabSource.indexOf('const fetchPins'), tabSource.indexOf('const handleInstallNewType'))
     expect(fetchBlock).toContain("'check_provider_updates'")
     expect(fetchBlock).not.toContain("'activate_provider_updates'")
   })
 
-  it('activation and rollback are behind explicit handlers', () => {
+  it('activation, new-type install and rollback are behind explicit handlers', () => {
     expect(tabSource).toContain("'activate_provider_updates'")
     expect(tabSource).toContain("'rollback_provider_update'")
+    // New-type install (kimi class) rides activate_provider_updates {types}.
+    expect(tabSource).toContain('const handleInstallNewType')
+    const installBlock = tabSource.slice(tabSource.indexOf('const handleInstallNewType'), tabSource.indexOf('const handleActivatePins'))
+    expect(installBlock).toContain('types: [providerType]')
   })
 
   it('re-reads the pin after acting, rather than assuming it moved', () => {

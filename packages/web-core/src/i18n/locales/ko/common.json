@@ -2609,7 +2609,10 @@
             "refresh": "↻ 새로고침",
             "sources": "🌐 소스",
             "create": "✨ 생성",
-            "advanced": "⚙ 고급"
+            "advanced": "⚙ 고급",
+            "newChannelTypesTitle": "채널에 새로 게시된 프로바이더",
+            "newChannelTypesDesc": "검증 채널에 게시됐지만 이 머신에는 아직 설치되지 않았습니다. 설치하면 digest 검증된 번들이 활성화됩니다.",
+            "installNewType": "설치"
         },
         "providerRow": {
             "statusDetected": "감지됨",

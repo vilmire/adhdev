@@ -2609,7 +2609,10 @@
             "refresh": "↻ 刷新",
             "sources": "🌐 来源",
             "create": "✨ 创建",
-            "advanced": "⚙ 高级"
+            "advanced": "⚙ 高级",
+            "newChannelTypesTitle": "渠道新发布的 Provider",
+            "newChannelTypesDesc": "已发布到验证渠道但尚未安装到本机。安装后将激活经摘要校验的包。",
+            "installNewType": "安装"
         },
         "providerRow": {
             "statusDetected": "已检测",

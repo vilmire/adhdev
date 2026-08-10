@@ -42,7 +42,6 @@ import { getConfigDir } from '../config/config.js';
 import {
   resolveRegistryBaseUrl,
   resolveProviderTarballUrl,
-  resolveProviderTarballTarget,
 } from '../config/registry-resolver.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
@@ -234,8 +233,6 @@ export class ProviderLoader {
     this.versionArchive = archive;
   }
 
-  private static readonly META_FILE = '.meta.json';
-  private static readonly REGISTRY_META_FILE = '.registry-meta.json';
   private static readonly REPO_PROVIDER_DIRNAME = 'adhdev-providers';
   private static readonly SIBLING_MARKER_FILE = '.adhdev-provider-root';
   private static readonly SIBLING_ENV_VAR = 'ADHDEV_USE_SIBLING_PROVIDERS';
@@ -244,7 +241,6 @@ export class ProviderLoader {
    * upstream fallback. Even with this set, the fallback is refused whenever
    * the resolved provider channel is 'stable' (production mode).
    */
-  private static readonly UNVERIFIED_TARBALL_ENV_VAR = 'ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL';
   /**
    * Verification-path opt-in that lets a STABLE runtime adopt a sibling
    * `adhdev-providers` checkout, without switching the provider channel.
@@ -269,7 +265,6 @@ export class ProviderLoader {
 
   /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
   readonly channel: ProviderChannel;
-  private readonly allowUnverifiedTarball: boolean;
   private readonly channelStore: ProviderChannelStore | null;
   private readonly channelSyncIO?: {
     fetchJson?: (url: string) => Promise<any>;
@@ -440,13 +435,6 @@ export class ProviderLoader {
      */
     updateChannel?: string;
     /**
-     * Development-only opt-in for the legacy unverified `main.tar.gz`
-     * fallback (config.providerAllowUnverifiedTarball /
-     * ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL=1). Refused on the stable
-     * channel regardless of this flag.
-     */
-    allowUnverifiedTarball?: boolean;
-    /**
      * Verified channel store override (tests). Pass `null` to disable the
      * verified channel layer entirely. Defaults to the content-addressed
      * store under `<configDir>/providers/.store`.
@@ -479,9 +467,6 @@ export class ProviderLoader {
     // channel config/env always wins; otherwise the provider channel derives
     // from the daemon release channel (preview daemon → preview providers).
     this.channel = resolveProviderChannel(options?.channel, process.env, options?.updateChannel);
-    this.allowUnverifiedTarball =
-      options?.allowUnverifiedTarball === true ||
-      process.env[ProviderLoader.UNVERIFIED_TARBALL_ENV_VAR] === '1';
     this.channelStore = options?.channelStore === null
       ? null
       : (options?.channelStore ?? new ProviderChannelStore(ProviderChannelStore.defaultRoot(), this.logFn));
@@ -668,10 +653,11 @@ export class ProviderLoader {
  *    always wins
  * Highest priority listed last (overwrites earlier loads).
  * Empty .upstream/ is normal: verified channel activations (step 1.5) are
- * the primary source on a fresh install, bootstrapped from the registry by
- * maybeFirstSyncVerifiedChannel() at boot — fetchLatest() is NOT the
- * production path (gated behind providerAllowUnverifiedTarball, off by
- * default).
+ * the primary source, bootstrapped from the registry by
+ * maybeFirstSyncVerifiedChannel() at boot. (The legacy GitHub-tarball and
+ * single-manifest registry sync paths were removed 2026-08-10 —
+ * M-PROVIDER-DIST-UNIFY; the digest-verified channel is the only
+ * registry-sourced layer.)
  */
   loadAll(): void {
     this.providers.clear();
@@ -838,7 +824,18 @@ export class ProviderLoader {
   * nothing new is activated and the previous active objects keep loading.
   * Reloads providers when at least one activation changed.
   */
-  async syncVerifiedChannel(options?: { bootstrapAll?: boolean }): Promise<ChannelSyncReport> {
+  async syncVerifiedChannel(options?: {
+    bootstrapAll?: boolean;
+    /**
+     * Extra provider types unioned into the sync target set. This is THE
+     * install path for a channel type this machine has never activated
+     * (kimi class: published after bootstrap → not in pins, not in
+     * .upstream, unreachable by any targeted sync). Once activated the
+     * pointer itself keeps the type in every future target set, so the
+     * intent record needs no .upstream write.
+     */
+    extraTargetTypes?: readonly string[];
+  }): Promise<ChannelSyncReport> {
     if (!this.channelStore) {
       return {
         channel: this.channel,
@@ -856,6 +853,9 @@ export class ProviderLoader {
       ...this.channelSyncIO,
     });
     const targetTypes = collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
+    for (const extra of options?.extraTargetTypes ?? []) {
+      if (typeof extra === 'string' && extra.trim()) targetTypes.add(extra.trim());
+    }
     const report = await runtime.sync({ channel: this.channel, targetTypes, bootstrapAll: options?.bootstrapAll });
     for (const skip of report.skipped) {
       this.log(`⚠ Verified channel skip: ${skip.reason}`);
@@ -865,6 +865,16 @@ export class ProviderLoader {
     }
     if (report.activated.length > 0) {
       this.loadAll();
+      // Self-heal the staleness badge: everything just activated is neither
+      // stale nor new anymore. Pure cache update — no network from here.
+      if (this.channelStalenessSnapshot) {
+        const activatedTypes = new Set(report.activated.map((a) => a.providerType));
+        this.channelStalenessSnapshot = {
+          ...this.channelStalenessSnapshot,
+          staleTypes: this.channelStalenessSnapshot.staleTypes.filter((t) => !activatedTypes.has(t)),
+          newTypes: this.channelStalenessSnapshot.newTypes.filter((t) => !activatedTypes.has(t)),
+        };
+      }
     }
     if (report.status !== 'error') {
       // Record which daemon version last completed a verified sync — the
@@ -2152,349 +2162,6 @@ export class ProviderLoader {
       }
     }
     this.loadAll();
-  }
-
- // ─── Upstream Auto-Update ─────────────────────────
-
- /**
- * Download latest providers tarball from GitHub → extract to .upstream/
- * - ETag-based change detection (skip if unchanged)
- * - Never touches user custom files in ~/.adhdev/providers/
- * - Runs in background; existing providers are kept on failure
- * 
- * @returns Whether an update occurred
- */
-  /**
-   * Sync providers from the ADHDev registry (registry.adhf.dev).
-   *
-   * Downloads only providers whose server checksum differs from the locally
-   * cached checksum. Falls back gracefully to the GitHub tarball path if the
-   * registry is unreachable or returns an unexpected response.
-   *
-   * Returns `{ updated: true }` when at least one provider file changed on disk,
-   * `{ updated: false }` when everything is already current, or
-   * `{ updated: false, error }` when the registry couldn't be reached and we
-   * should proceed to the GitHub tarball fallback.
-   */
-  async fetchFromRegistry(): Promise<{ updated: boolean; error?: string }> {
-    if (this.disableUpstream) {
-      this.log('Registry sync skipped (sourceMode=no-upstream)');
-      return { updated: false };
-    }
-    this.log(`Registry sync starting (${this.registryBaseUrl})...`);
-
-    const https = require('https') as typeof import('https');
-    const regMetaPath = path.join(this.upstreamDir, ProviderLoader.REGISTRY_META_FILE);
-
-    // Load cached checksums
-    let cachedChecksums: Record<string, string> = {};
-    try {
-      if (fs.existsSync(regMetaPath)) {
-        cachedChecksums = JSON.parse(fs.readFileSync(regMetaPath, 'utf-8')).checksums ?? {};
-      }
-    } catch { }
-
-    try {
-      // 1. Fetch provider list
-      const listUrl = `${this.registryBaseUrl}/providers`;
-      const listBody = await new Promise<string>((resolve, reject) => {
-        const req = https.get(listUrl, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 10000 }, (res) => {
-          if (res.statusCode !== 200) { reject(new Error(`registry list HTTP ${res.statusCode}`)); return; }
-          const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
-          res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('registry list timeout')); });
-      });
-
-      const list = JSON.parse(listBody) as { providers: Array<{ type: string; category: string; checksum: string; version: string }> };
-      if (!Array.isArray(list.providers)) throw new Error('unexpected registry response shape');
-
-      let updatedCount = 0;
-
-      for (const entry of list.providers) {
-        const { type, category, checksum, version } = entry;
-        const cacheKey = `${category}/${type}`;
-        if (cachedChecksums[cacheKey] === checksum) continue; // already current
-
-        // Download this provider's manifest
-        const dlUrl = `${this.registryBaseUrl}/providers/${type}/${version}/download`;
-        const manifestBody = await new Promise<string>((resolve, reject) => {
-          const req = https.get(dlUrl, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 30000 }, (res) => {
-            if (res.statusCode !== 200) { reject(new Error(`registry download HTTP ${res.statusCode} for ${type}@${version}`)); return; }
-            const chunks: Buffer[] = [];
-            res.on('data', (c: Buffer) => chunks.push(c));
-            res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-          });
-          req.on('error', reject);
-          req.on('timeout', () => { req.destroy(); reject(new Error(`download timeout for ${type}`)); });
-        });
-
-        // Verify checksum
-        const actualChecksum = sha256Hex(manifestBody);
-        if (actualChecksum !== checksum) {
-          this.log(`⚠ Registry checksum mismatch for ${type}@${version} — skipping`);
-          continue;
-        }
-
-        // Write to upstream dir
-        const providerDir = path.join(this.upstreamDir, category, type);
-        fs.mkdirSync(providerDir, { recursive: true });
-        fs.writeFileSync(path.join(providerDir, 'provider.json'), manifestBody, 'utf-8');
-
-        cachedChecksums[cacheKey] = checksum;
-        updatedCount++;
-        this.log(`✓ Registry updated: ${category}/${type}@${version}`);
-      }
-
-      // Persist updated checksums
-      fs.mkdirSync(this.upstreamDir, { recursive: true });
-      fs.writeFileSync(regMetaPath, JSON.stringify({
-        checksums: cachedChecksums,
-        syncedAt: new Date().toISOString(),
-        providerCount: list.providers.length,
-      }, null, 2));
-
-      this.log(`Registry sync complete: ${list.providers.length} providers, ${updatedCount} updated`);
-      return { updated: updatedCount > 0 };
-    } catch (e: any) {
-      this.log(`⚠ Registry sync failed (falling back to GitHub tarball): ${e?.message}`);
-      return { updated: false, error: e?.message };
-    }
-  }
-
-  async fetchLatest(): Promise<{ updated: boolean; error?: string }> {
-    if (this.disableUpstream) {
-      this.log('Upstream fetch skipped (sourceMode=no-upstream)');
-      return { updated: false };
-    }
-    // Stage 2: the unauthenticated main.tar.gz fallback is no longer a
-    // production path. It requires an unmistakable development-only opt-in
-    // (config.providerAllowUnverifiedTarball or
-    // ADHDEV_PROVIDER_ALLOW_UNVERIFIED_TARBALL=1) AND a non-stable channel;
-    // stable production mode always refuses it. The verified channel sync
-    // (syncVerifiedChannel) is the production loading path.
-    if (!this.isUnverifiedTarballAllowed()) {
-      const msg =
-        `TARBALL_FALLBACK_REFUSED: unverified provider tarball fallback is disabled ` +
-        `(channel=${this.channel}, opt-in=${this.allowUnverifiedTarball ? 'on' : 'off'}). ` +
-        `Use the verified channel sync instead.`;
-      this.log(`⚠ ${msg}`);
-      return { updated: false, error: msg };
-    }
-    const https = require('https') as typeof import('https');
-
-    const metaPath = path.join(this.upstreamDir, ProviderLoader.META_FILE);
-    let prevEtag = '';
-    let prevTimestamp = 0;
-
- // Read previous metadata
-    try {
-      if (fs.existsSync(metaPath)) {
-        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-        prevEtag = meta.etag || '';
-        prevTimestamp = meta.timestamp || 0;
-      }
-    } catch { }
-
- // Minimum 30-minute interval (prevent excessive checks). BUT the cooldown must
- // never strand a clean machine with zero providers: fetchLatest() stamps the
- // timestamp even on a failed/ETag-unchanged attempt (to avoid retry storms), so
- // if the very first attempt hiccups the upstream dir stays empty yet every later
- // boot within 30min is skipped — leaving "Total: 0 providers" forever. When the
- // upstream currently has NO providers we bypass the cooldown and force a fetch;
- // the normal 30min throttle still applies once at least one provider is present.
-    const MIN_INTERVAL_MS = 30 * 60 * 1000;
-    const upstreamProviderCount = this.countProviders(this.upstreamDir);
-    if (
-      upstreamProviderCount > 0 &&
-      prevTimestamp &&
-      (Date.now() - prevTimestamp) < MIN_INTERVAL_MS
-    ) {
-      this.log('Upstream check skipped (last check < 30min ago)');
-      return { updated: false };
-    }
-    if (upstreamProviderCount === 0 && prevTimestamp && (Date.now() - prevTimestamp) < MIN_INTERVAL_MS) {
-      this.log('Upstream empty (0 providers) — forcing fetch despite <30min cooldown');
-    }
-
-    // Resolve the tarball target (config → env → vendor default) once so the
-    // HEAD probe and the download below hit the same (possibly self-hosted) URL.
-    const tarballTarget = resolveProviderTarballTarget(this.providerTarballUrl);
-
-    try {
- // Step 1: HEAD request to check ETag
-      const etag = await new Promise<string>((resolve, reject) => {
-        const options = {
-          method: 'HEAD',
-          hostname: tarballTarget.hostname,
-          path: tarballTarget.path,
-          headers: { 'User-Agent': 'adhdev-launcher' },
-          timeout: 10000,
-        };
-
-        const req = https.request(options, (res) => {
- // GitHub 302 redirect → follow
-          if (res.statusCode === 302 && res.headers.location) {
-            const url = new URL(res.headers.location);
-            const req2 = https.request({
-              method: 'HEAD',
-              hostname: url.hostname,
-              path: url.pathname + (url.search || ''),
-              headers: { 'User-Agent': 'adhdev-launcher' },
-              timeout: 10000,
-            }, (res2) => {
-              resolve(res2.headers.etag || res2.headers['last-modified'] || '');
-            });
-            req2.on('error', reject);
-            req2.on('timeout', () => { req2.destroy(); reject(new Error('timeout')); });
-            req2.end();
-          } else {
-            resolve(res.headers.etag || res.headers['last-modified'] || '');
-          }
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
-      });
-
- // Compare ETag — skip if unchanged, but only when providers are actually on
- // disk. A stale .meta.json etag can match while .upstream is empty (first-boot
- // hiccup, or the dir was cleared under a persisted meta); short-circuiting then
- // would leave the machine at 0 providers, so fall through to a real download.
-      if (etag && etag === prevEtag && upstreamProviderCount > 0) {
- // Update timestamp only
-        this.writeMeta(metaPath, prevEtag, Date.now());
-        this.log('Upstream unchanged (ETag match)');
-        return { updated: false };
-      }
-
- // Step 2: Download + extract
-      this.log('Downloading latest providers from GitHub...');
-
-      const tmpTar = path.join(os.tmpdir(), `adhdev-providers-${Date.now()}.tar.gz`);
-      const tmpExtract = path.join(os.tmpdir(), `adhdev-providers-extract-${Date.now()}`);
-
- // Download tarball
-      await this.downloadFile(tarballTarget.url, tmpTar);
-
- // Extract (Node-native: zlib gunzip + tar-fs — no external `tar` binary)
-      fs.mkdirSync(tmpExtract, { recursive: true });
-      await extractTarballGz(tmpTar, tmpExtract);
-
- // Tarball internal structure: adhdev-providers-main/ide/... → strip 1 level
-      const extracted = fs.readdirSync(tmpExtract);
-      const rootDir = extracted.find(d =>
-        fs.statSync(path.join(tmpExtract, d)).isDirectory() && d.startsWith('adhdev-providers')
-      );
-      if (!rootDir) throw new Error('Unexpected tarball structure');
-
-      const sourceDir = path.join(tmpExtract, rootDir);
-
- // .upstream replacement (atomic-ish: rename old → copy new → delete old)
-      const backupDir = this.upstreamDir + '.bak';
-      if (fs.existsSync(this.upstreamDir)) {
- // Backup
-        if (fs.existsSync(backupDir)) fs.rmSync(backupDir, { recursive: true, force: true });
-        fs.renameSync(this.upstreamDir, backupDir);
-      }
-
-      try {
- // Copy new upstream
-        this.copyDirRecursive(sourceDir, this.upstreamDir);
- // Save metadata
-        this.writeMeta(metaPath, etag || `ts-${Date.now()}`, Date.now());
- // Backup remove
-        if (fs.existsSync(backupDir)) fs.rmSync(backupDir, { recursive: true, force: true });
-      } catch (e) {
- // Restore backup on copy failure
-        if (fs.existsSync(backupDir)) {
-          if (fs.existsSync(this.upstreamDir)) fs.rmSync(this.upstreamDir, { recursive: true, force: true });
-          fs.renameSync(backupDir, this.upstreamDir);
-        }
-        throw e;
-      }
-
- // Cleanup temp
-      try { fs.rmSync(tmpTar, { force: true }); } catch { }
-      try { fs.rmSync(tmpExtract, { recursive: true, force: true }); } catch { }
-
-      const upstreamCount = this.countProviders(this.upstreamDir);
-      this.log(`✅ Upstream updated: ${upstreamCount} providers`);
-
-      return { updated: true };
-    } catch (e: any) {
-      this.log(`⚠ Upstream fetch failed (using existing): ${e?.message}`);
- // Update timestamp even on failure (prevent continuous retries)
-      this.writeMeta(metaPath, prevEtag, Date.now());
-      return { updated: false, error: e?.message };
-    }
-  }
-
- /**
-  * Development-only gate for the legacy unverified tarball fallback: the
-  * explicit opt-in must be on AND the resolved channel must be non-stable.
-  * Stable (production) always refuses.
-  */
-  private isUnverifiedTarballAllowed(): boolean {
-    return this.allowUnverifiedTarball && this.channel !== 'stable';
-  }
-
- /** HTTP(S) file download (follows redirects) */
-  private downloadFile(url: string, destPath: string): Promise<void> {    const https = require('https') as typeof import('https');
-    const http = require('http') as typeof import('http');
-
-    return new Promise((resolve, reject) => {
-      const doRequest = (reqUrl: string, redirectCount = 0) => {
-        if (redirectCount > 5) { reject(new Error('Too many redirects')); return; }
-        const mod = reqUrl.startsWith('https') ? https : http;
-        const req = mod.get(reqUrl, { headers: { 'User-Agent': 'adhdev-launcher' }, timeout: 60000 }, (res) => {
-          if (res.statusCode === 301 || res.statusCode === 302) {
-            doRequest(res.headers.location!, redirectCount + 1);
-            return;
-          }
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            return;
-          }
-          const ws = fs.createWriteStream(destPath);
-          res.pipe(ws);
-          ws.on('finish', () => { ws.close(); resolve(); });
-          ws.on('error', reject);
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
-      };
-      doRequest(url);
-    });
-  }
-
- /** Recursive directory copy */
-  private copyDirRecursive(src: string, dest: string): void {
-    fs.mkdirSync(dest, { recursive: true });
-    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-      const srcPath = path.join(src, entry.name);
-      const destPath = path.join(dest, entry.name);
-      if (entry.isDirectory()) {
-        this.copyDirRecursive(srcPath, destPath);
-      } else {
-        fs.copyFileSync(srcPath, destPath);
-      }
-    }
-  }
-
- /** .meta.json save */
-  private writeMeta(metaPath: string, etag: string, timestamp: number): void {
-    try {
-      fs.mkdirSync(path.dirname(metaPath), { recursive: true });
-      fs.writeFileSync(metaPath, JSON.stringify({
-        etag,
-        timestamp,
-        lastCheck: new Date(timestamp).toISOString(),
-        source: this.providerTarballUrl,
-      }, null, 2));
-    } catch { }
   }
 
   /** Count provider files (provider.v1.json or provider.json — at most one per dir). */

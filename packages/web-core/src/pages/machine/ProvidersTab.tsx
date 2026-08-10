@@ -45,6 +45,9 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
     // QUOTA_PROVIDERS members; a missing key renders as ON (absent = enabled).
     const [quotaEnabled, setQuotaEnabled] = useState<Record<string, boolean>>({})
     const [pins, setPins] = useState<Record<string, ProviderPinInfo>>({})
+    // Verified-channel types never activated/installed on this machine (kimi class).
+    const [channelNewTypes, setChannelNewTypes] = useState<string[]>([])
+    const [installingNewType, setInstallingNewType] = useState<string | null>(null)
     const [loading, setLoading] = useState(false)
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('all')
@@ -148,7 +151,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         try {
             const res = await sendDaemonCommand(machineId, 'check_provider_updates', {})
             const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as
-                { providers?: Array<Record<string, any>> } | undefined
+                { providers?: Array<Record<string, any>>; channelStaleness?: { newTypes?: string[] } } | undefined
             const next: Record<string, ProviderPinInfo> = {}
             for (const row of body?.providers ?? []) {
                 if (typeof row?.type !== 'string') continue
@@ -162,8 +165,27 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                 }
             }
             setPins(next)
+            // Channel types this machine has never activated nor installed —
+            // the kimi class: without this list there is NO dashboard path to
+            // install a type first published after bootstrap.
+            setChannelNewTypes(Array.isArray(body?.channelStaleness?.newTypes) ? body.channelStaleness.newTypes : [])
         } catch { /* leave empty — rows then show no pin rather than a wrong one */ }
     }, [machineId, sendDaemonCommand])
+
+    const handleInstallNewType = useCallback(async (providerType: string) => {
+        if (!machineId) return
+        setInstallingNewType(providerType)
+        try {
+            // activate_provider_updates {types} unions the never-activated type
+            // into the verified-channel sync target set (digest-verified,
+            // atomic pointer flip — same machinery as updates).
+            await sendDaemonCommand(machineId, 'activate_provider_updates', { types: [providerType] })
+        } finally {
+            setInstallingNewType(null)
+            await fetchPins()
+            await fetchSettings()
+        }
+    }, [machineId, sendDaemonCommand, fetchPins])
 
     const handleActivatePins = useCallback(async () => {
         if (!machineId) return
@@ -291,6 +313,31 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                     >{t('machine.providers.advanced')}</button>
                 </div>
             </div>
+
+            {/* Verified-channel types never installed on this machine (kimi
+                class: first published AFTER this machine bootstrapped, so no
+                pin, nothing in .upstream — invisible to every targeted sync
+                and, before this section, uninstallable from the dashboard). */}
+            {channelNewTypes.length > 0 && (
+                <Card padding="none" className="px-4.5 py-3.5">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.newChannelTypesTitle')}</div>
+                    <div className="text-[11px] text-text-muted mt-1 mb-2.5">{t('machine.providers.newChannelTypesDesc')}</div>
+                    <div className="flex flex-col gap-1.5">
+                        {channelNewTypes.map((providerType) => (
+                            <div key={providerType} className="flex items-center justify-between gap-3 text-[13px]">
+                                <span className="font-mono text-text-primary">{providerType}</span>
+                                <button
+                                    onClick={() => { void handleInstallNewType(providerType) }}
+                                    disabled={installingNewType !== null}
+                                    className="px-2.5 py-1 rounded-md text-[12px] font-medium bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:opacity-50"
+                                >
+                                    {installingNewType === providerType ? '⏳' : t('machine.providers.installNewType')}
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </Card>
+            )}
 
             {/* External provider sources (3rd-party git URLs) */}
             {showSources && (

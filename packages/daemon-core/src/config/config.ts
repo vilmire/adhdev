@@ -186,7 +186,6 @@ export interface ADHDevConfig {
      * upstream fallback. Refused whenever the resolved provider channel is
      * 'stable' (production mode), regardless of this flag.
      */
-    providerAllowUnverifiedTarball?: boolean;
 
     /**
      * DEPRECATED (Phase 3): legacy runtime update channel. The channel is now
@@ -343,7 +342,6 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         registryUrl: asOptionalString(parsed.registryUrl),
         providerTarballUrl: asOptionalString(parsed.providerTarballUrl),
         providerChannel: asOptionalString(parsed.providerChannel),
-        providerAllowUnverifiedTarball: asBoolean(parsed.providerAllowUnverifiedTarball, false),
         // Phase 3: legacy runtime channel field, read-only and never written
         // anymore (channel is a build-time identity — track-identity.ts). An
         // explicit preview/next value is still honored so the provider-channel

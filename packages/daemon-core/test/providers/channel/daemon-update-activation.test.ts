@@ -216,6 +216,49 @@ describe('daemon-update activation + staleness probe', () => {
     expect(loader.getChannelStalenessSnapshot()).toBe(snap);
   });
 
+  it('A3: extraTargetTypes installs a NEVER-activated channel type (the kimi class)', async () => {
+    const loader = newLoader('1.0.41');
+    await loader.maybeFirstSyncVerifiedChannel();
+
+    // A new type is published to the channel after this machine bootstrapped:
+    // no pin, nothing in .upstream — the default target set can never reach it.
+    const newcomer: FixtureProviderSpec = { category: 'cli', dirname: 'gamma-cli', type: 'gamma-cli', version: '1.0.0' };
+    buildRepoTree(repoRoot, [newcomer]);
+    metadata.rows = [...metadata.rows!, makeRegistryRow(newcomer, digestFor(repoRoot, 'cli', 'gamma-cli'))];
+
+    // A plain sync (no extras) must NOT pick it up — that is the design.
+    await loader.syncVerifiedChannel();
+    expect(loader.listVerifiedChannelPins().has('gamma-cli')).toBe(false);
+
+    // The install path: union the type into the target set.
+    const report = await loader.syncVerifiedChannel({ extraTargetTypes: ['gamma-cli'] });
+    expect(report.activated.map((a) => a.providerType)).toContain('gamma-cli');
+    expect(loader.listVerifiedChannelPins().get('gamma-cli')?.active?.providerVersion).toBe('1.0.0');
+    // Once pinned, every FUTURE plain sync includes it — the pointer IS the intent record.
+    publishBump('alpha-cli', '1.1.0');
+    const later = await loader.syncVerifiedChannel();
+    expect(later.status).not.toBe('error');
+    expect(loader.listVerifiedChannelPins().has('gamma-cli')).toBe(true);
+  });
+
+  it('A4: activation self-heals the staleness snapshot (badge drops without a re-probe)', async () => {
+    const loader = newLoader('1.0.41');
+    await loader.maybeFirstSyncVerifiedChannel();
+    publishBump('alpha-cli', '1.1.0');
+    const newcomer: FixtureProviderSpec = { category: 'cli', dirname: 'gamma-cli', type: 'gamma-cli', version: '1.0.0' };
+    buildRepoTree(repoRoot, [newcomer]);
+    metadata.rows = [...metadata.rows!, makeRegistryRow(newcomer, digestFor(repoRoot, 'cli', 'gamma-cli'))];
+
+    let snap = await loader.checkVerifiedChannelStaleness();
+    expect(snap.staleTypes).toEqual(['alpha-cli']);
+    expect(snap.newTypes).toEqual(['gamma-cli']);
+
+    await loader.syncVerifiedChannel({ extraTargetTypes: ['gamma-cli'] });
+    snap = loader.getChannelStalenessSnapshot()!;
+    expect(snap.staleTypes).toEqual([]); // alpha advanced by the same sync
+    expect(snap.newTypes).toEqual([]);   // gamma installed
+  });
+
   it('A2: a probe transport failure keeps the previous lists and records the error', async () => {
     const loader = newLoader('1.0.41');
     await loader.maybeFirstSyncVerifiedChannel();

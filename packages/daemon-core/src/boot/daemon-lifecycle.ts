@@ -243,7 +243,6 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         providerTarballUrl: appConfig.providerTarballUrl,
         channel: appConfig.providerChannel,
         updateChannel: appConfig.updateChannel,
-        allowUnverifiedTarball: appConfig.providerAllowUnverifiedTarball,
         // Enables the daemon-update = provider-activation stamp (option C):
         // a boot on a NEW daemon version runs one verified sync; same-version
         // boots stay network-free.

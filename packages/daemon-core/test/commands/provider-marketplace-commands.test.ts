@@ -286,9 +286,13 @@ describe('REST surface (skipped when daemon offline)', () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type: 'claude-cli' }),
         })
-        const install = await installRes.json() as { success: boolean; installed?: { path?: string } }
+        // CHANNEL-FIRST INSTALL (M-PROVIDER-DIST-UNIFY): install activates the
+        // verified channel entry (digest pointer), no .upstream/marketplace write.
+        const install = await installRes.json() as { success: boolean; installed?: { type?: string; version?: string; digest?: string; channel?: string } }
         expect(install.success).toBe(true)
-        expect(install.installed?.path).toMatch(/marketplace\/cli\/claude-cli/)
+        expect(install.installed?.type).toBe('claude-cli')
+        expect(install.installed?.digest).toMatch(/^sha256:/)
+        expect(install.installed?.version).toBeTruthy()
 
         // Uninstall
         const uninstallRes = await fetch(`${DAEMON}/api/v1/providers/uninstall`, {

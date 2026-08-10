@@ -2609,7 +2609,10 @@
             "refresh": "↻ 更新",
             "sources": "🌐 ソース",
             "create": "✨ 作成",
-            "advanced": "⚙ 詳細設定"
+            "advanced": "⚙ 詳細設定",
+            "newChannelTypesTitle": "チャンネルの新規プロバイダー",
+            "newChannelTypesDesc": "検証チャンネルに公開済みですが、このマシンには未インストールです。インストールするとダイジェスト検証済みバンドルが有効化されます。",
+            "installNewType": "インストール"
         },
         "providerRow": {
             "statusDetected": "検出済み",

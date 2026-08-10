@@ -93,7 +93,6 @@ export declare class ProviderLoader {
     * 1. .upstream/ (GitHub auto-download — primary source)
     * 2. User custom (~/.adhdev/providers/ excluding .upstream)
     * User custom always wins (highest priority).
-    * If .upstream/ is empty, call fetchLatest() before loadAll().
     */
     loadAll(): void;
     /**
@@ -254,24 +253,6 @@ export declare class ProviderLoader {
     * Full reload
     */
     reload(): void;
-    /**
-    * Download latest providers tarball from GitHub → extract to .upstream/
-    * - ETag-based change detection (skip if unchanged)
-    * - Never touches user custom files in ~/.adhdev/providers/
-    * - Runs in background; existing providers are kept on failure
-    *
-    * @returns Whether an update occurred
-    */
-    fetchLatest(): Promise<{
-        updated: boolean;
-        error?: string;
-    }>;
-    /** HTTP(S) file download (follows redirects) */
-    private downloadFile;
-    /** Recursive directory copy */
-    private copyDirRecursive;
-    /** .meta.json save */
-    private writeMeta;
     /** Count provider files (provider.js or provider.json) */
     private countProviders;
     /**
