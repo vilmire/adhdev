@@ -1041,7 +1041,15 @@ export class ProviderLoader {
       const pin = pins.get(entry.providerType);
       if (pin) {
         if (pin.active?.digest !== entry.bundleDigest) staleTypes.push(entry.providerType);
-      } else if (!installedTargets.has(entry.providerType)) {
+      } else if (!installedTargets.has(entry.providerType) && !this.providers.has(entry.providerType)) {
+        // "New" means this machine cannot run the provider today. A type
+        // already LOADED through any layer — user dir, sibling checkout,
+        // external source — is not new, and offering an install would be
+        // actively misleading: those layers OUTRANK the channel store
+        // (getProviderRoots order), so activating the channel bundle would
+        // change nothing the daemon loads. Live catch 2026-08-10: a dev
+        // machine loading opencode/cursor from the sibling checkout showed
+        // both as "감지됨" rows AND as installable new types.
         newTypes.push(entry.providerType);
       }
     }

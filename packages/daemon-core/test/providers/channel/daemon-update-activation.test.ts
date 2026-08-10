@@ -259,6 +259,31 @@ describe('daemon-update activation + staleness probe', () => {
     expect(snap.newTypes).toEqual([]);   // gamma installed
   });
 
+  it('A5: a type already LOADED (user dir / sibling checkout) is never a "new type"', async () => {
+    const loader = newLoader('1.0.41');
+    await loader.maybeFirstSyncVerifiedChannel();
+
+    // gamma is published on the channel AND already loaded locally from the
+    // user providers dir — the layer that OUTRANKS the channel store, so an
+    // install offer would change nothing the daemon loads (the live
+    // opencode/cursor dev-machine contradiction: a "감지됨" row next to an
+    // installable "new type" entry for the same provider).
+    const newcomer: FixtureProviderSpec = { category: 'cli', dirname: 'gamma-cli', type: 'gamma-cli', version: '1.0.0' };
+    buildRepoTree(repoRoot, [newcomer]);
+    metadata.rows = [...metadata.rows!, makeRegistryRow(newcomer, digestFor(repoRoot, 'cli', 'gamma-cli'))];
+    const userDir = join(tmpRoot, 'providers', 'cli', 'gamma-cli');
+    const { mkdirSync, writeFileSync: writeFs } = await import('fs');
+    mkdirSync(userDir, { recursive: true });
+    writeFs(join(userDir, 'provider.json'), JSON.stringify({
+      type: 'gamma-cli', name: 'gamma', category: 'cli', version: '1.0.0', spawn: { command: 'gamma-cli' },
+    }), 'utf-8');
+    loader.loadAll();
+    expect(loader.getMeta('gamma-cli')).toBeDefined();
+
+    const snap = await loader.checkVerifiedChannelStaleness();
+    expect(snap.newTypes).toEqual([]);
+  });
+
   it('A2: a probe transport failure keeps the previous lists and records the error', async () => {
     const loader = newLoader('1.0.41');
     await loader.maybeFirstSyncVerifiedChannel();
