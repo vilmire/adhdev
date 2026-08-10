@@ -43,6 +43,7 @@ import {
     isTranscriptClaimedByOther,
     transcriptClaimOwnerToken,
 } from '../native-history/transcript-claim-registry.js';
+import type { NativeTurnTerminalMarker } from '../completion/native-turn-signal.js';
 
 export interface NativeHistoryInput {
     agentType?: string;
@@ -116,6 +117,14 @@ export interface NativeHistoryResult {
     /** Token totals, present only when the spec declares `usage_records` and
      *  the transcript actually carried at least one matching record. */
     usage?: SessionUsageTotals;
+    /**
+     * (NATIVE-TURN-SIGNAL) The provider's own turn-terminal records (codex
+     * task_complete / turn_aborted), when the reader for this agentType knows
+     * how to find them. Undefined for every source this executor has no
+     * built-in signal extraction for — those keep the message-shape inference
+     * path unchanged.
+     */
+    turnTerminalMarkers?: NativeTurnTerminalMarker[];
 }
 
 const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -466,6 +475,8 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     }
     if (messages.length === 0) return null;
 
+    const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines);
+
     return {
         messages,
         providerSessionId,
@@ -483,7 +494,65 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
                 }),
             }
             : {}),
+        ...(turnTerminalMarkers.length > 0 ? { turnTerminalMarkers } : {}),
     };
+}
+
+/**
+ * (NATIVE-TURN-SIGNAL) Extract the provider's own turn-terminal records for
+ * agentTypes this declarative jsonl executor has a BUILT-IN signal for.
+ *
+ * A v1 SDK provider (spec.json's `native_history.source`, the shape this
+ * executor reads) has no `completionSignal` declaration surface at all —
+ * unlike the legacy TypeScript-reader path (native-turn-signal.ts /
+ * codex-cli-transcript.ts), which only activates for a provider whose
+ * `provider.v1.json` sets `nativeHistory.scripts.readSession` to the daemon
+ * dispatcher. codex-cli ships as a v1 SDK provider (specs/4.0.json) driven by
+ * SpecCliAdapter, which reads through THIS executor, not that dispatcher — so
+ * the dispatcher-side fix never took effect for it. Mirrors
+ * codex-cli-transcript.ts's CODEX_DEFAULT_COMPLETION_SIGNAL default (same
+ * reasoning: editing the published spec.json would drift the channel
+ * bundleDigest and require a provider version bump, a release action, not a
+ * code change) rather than duplicating a `completionSignal` concept into the
+ * v1 spec schema.
+ */
+function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines: any[]): NativeTurnTerminalMarker[] {
+    if (agentType !== 'codex-cli') return [];
+    const markers: NativeTurnTerminalMarker[] = [];
+    for (const rec of lines) {
+        if (String(rec?.type ?? '') !== 'event_msg') continue;
+        const payload = rec?.payload;
+        if (!payload || typeof payload !== 'object') continue;
+        const payloadType = String(payload.type ?? '').trim();
+        const isComplete = payloadType === 'task_complete';
+        const isAbort = payloadType === 'turn_aborted';
+        if (!isComplete && !isAbort) continue;
+        const receivedAt = parseTimestamp(rec?.timestamp) ?? Date.now();
+        const summary = flattenJsonlText(payload.last_agent_message);
+        const rawTurnId = payload.turn_id;
+        const turnId = typeof rawTurnId === 'string' && rawTurnId.trim() ? rawTurnId.trim() : '';
+        markers.push({
+            receivedAt,
+            outcome: isAbort ? 'aborted' : 'completed',
+            summary,
+            ...(turnId ? { turnId } : {}),
+        });
+    }
+    return markers;
+}
+
+/** Flatten a codex jsonl text-bearing field (string, array, or {text}-shaped
+ *  object) into plain text — same coercions codex-cli-transcript.ts applies. */
+function flattenJsonlText(value: unknown): string {
+    if (typeof value === 'string') return value.trim();
+    if (value == null) return '';
+    if (Array.isArray(value)) return value.map(flattenJsonlText).filter(Boolean).join('\n').trim();
+    if (typeof value === 'object') {
+        const obj = value as Record<string, unknown>;
+        if (typeof obj.text === 'string') return obj.text.trim();
+        if (typeof obj.content === 'string' || Array.isArray(obj.content)) return flattenJsonlText(obj.content);
+    }
+    return '';
 }
 
 /**
