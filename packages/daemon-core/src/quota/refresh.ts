@@ -22,7 +22,7 @@
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
-import { QUOTA_TRANSIENT_RETRY_DELAY_MS } from './types.js';
+import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchKimiQuota } from './fetchers/kimi.js';
@@ -105,6 +105,51 @@ const cache = new Map<string, MeshNodeFactsProviderQuota>();
  */
 function toWireQuota(quota: ProviderQuota): MeshNodeFactsProviderQuota {
     return quota as MeshNodeFactsProviderQuota;
+}
+
+/**
+ * LAST-GOOD CARRY-FORWARD (owner report 2026-08-10: kimi shows a bald
+ * "token expired" and drops its numbers).
+ *
+ * Every provider whose credential the CLI refreshes on its own cadence
+ * (kimi's ~15-min tokens are the recurring case) periodically fails a quota
+ * read for a few seconds through no fault of the user — a TRANSIENT failure.
+ * The fetcher correctly returns status!='ok' with empty windows, but blindly
+ * caching that erased the last good reading, so the dashboard flipped from
+ * "28% used" to a scary error until the next successful tick.
+ *
+ * When the fresh read is a transient failure AND we still hold a real reading
+ * (status 'ok' with at least one window), keep those windows and the prior
+ * updatedAt, but surface the fresh failure's status/error/kind so the reader
+ * can render "28% used · (refreshing)" rather than either a stale-looking OK
+ * or a numberless error. A NON-transient failure (missing credentials, parse,
+ * unauthorized) still replaces wholesale — those are real problems the old
+ * numbers would mask. A fresh 'ok' always replaces.
+ */
+export function carryForwardLastGoodWindows(
+    prev: MeshNodeFactsProviderQuota | undefined,
+    fresh: MeshNodeFactsProviderQuota,
+): MeshNodeFactsProviderQuota {
+    if (fresh.status === 'ok') return fresh;
+    const kind = typeof fresh.metadata?.failureKind === 'string' ? fresh.metadata.failureKind : '';
+    const transient = TRANSIENT_QUOTA_FAILURE_KINDS.has(kind as any);
+    if (!transient) return fresh;
+    const prevHasWindows = !!prev && prev.status === 'ok' && (prev.session !== null || prev.weekly !== null);
+    if (!prevHasWindows) return fresh;
+    // Keep the last good numbers + their age; carry the fresh failure signal.
+    return {
+        ...fresh,
+        session: prev!.session,
+        weekly: prev!.weekly,
+        updatedAt: prev!.updatedAt,
+        metadata: {
+            ...fresh.metadata,
+            // Mark the windows as a retained last-good reading so a reader can
+            // label them (e.g. "· refreshing") instead of treating them as
+            // freshly measured.
+            lastGoodWindows: true,
+        },
+    };
 }
 
 /**
@@ -225,7 +270,8 @@ export async function refreshQuotaCacheOnce(
     await Promise.all(
         active.map(async ({ provider, fetch }) => {
             try {
-                cache.set(provider, toWireQuota(await fetch()));
+                const fresh = toWireQuota(await fetch());
+                cache.set(provider, carryForwardLastGoodWindows(cache.get(provider), fresh));
                 hydratedOnly.delete(provider); // measured in this process now
             } catch (e: any) {
                 // Contract violation, not an ordinary quota failure — record it

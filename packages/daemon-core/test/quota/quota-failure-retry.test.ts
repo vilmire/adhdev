@@ -66,6 +66,41 @@ afterEach(() => {
     vi.clearAllMocks()
 })
 
+describe('refreshQuotaCacheOnce — last-good carry-forward (wiring)', () => {
+    it('a transient kimi failure after a good reading keeps the numbers in the cache', async () => {
+        const kimiFetch = { provider: 'kimi' as const, fetch: fetchKimiQuota };
+
+        fetchKimiQuota.mockResolvedValueOnce(okQuota('kimi'));
+        await refreshQuotaCacheOnce([kimiFetch], allEnabled);
+        expect(readQuotaCache()?.kimi?.session?.usedPercent).toBe(10);
+
+        // Token expired mid-cycle — transient, empty windows.
+        fetchKimiQuota.mockResolvedValueOnce(
+            quotaFailure('kimi', 'error', 'token expired', { failureKind: 'expired-token' }),
+        );
+        await refreshQuotaCacheOnce([kimiFetch], allEnabled);
+
+        const after = readQuotaCache()?.kimi;
+        // The dashboard still sees the numbers instead of a bald error.
+        expect(after?.session?.usedPercent).toBe(10);
+        expect(after?.status).toBe('error');
+        expect(after?.metadata?.lastGoodWindows).toBe(true);
+    });
+
+    it('a NON-transient kimi failure clears the numbers (real problem, not a refresh race)', async () => {
+        const kimiFetch = { provider: 'kimi' as const, fetch: fetchKimiQuota };
+        fetchKimiQuota.mockResolvedValueOnce(okQuota('kimi'));
+        await refreshQuotaCacheOnce([kimiFetch], allEnabled);
+
+        fetchKimiQuota.mockResolvedValueOnce(
+            quotaFailure('kimi', 'unavailable', 'not signed in', { failureKind: 'missing-credentials' }),
+        );
+        await refreshQuotaCacheOnce([kimiFetch], allEnabled);
+
+        expect(readQuotaCache()?.kimi?.session).toBeNull();
+    });
+});
+
 describe('quotaFailure retry classification', () => {
     it('stamps transient kinds with a short retryAtMs and leaves persistent kinds unstamped', () => {
         const before = Date.now()
