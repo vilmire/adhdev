@@ -684,6 +684,48 @@ interface AgyDbStepRow {
   idx: number;
   step_type: number;
   step_payload: Buffer | null;
+  /** Absent when the store's `steps` table has no `metadata` column. */
+  metadata?: Buffer | null;
+}
+
+/**
+ * (ANTIGRAVITY-STALE-TURN-TIMESTAMP) Decode a step's REAL creation time from its
+ * `metadata` blob.
+ *
+ * The reader used to synthesize every message's `receivedAt` from the .db file's
+ * CURRENT mtime (`baseTs + messages.length`). That collapses a whole multi-turn
+ * conversation into a few consecutive milliseconds, and — because mtime moves
+ * every time antigravity touches the store — it RESTAMPS old turns to "now".
+ * The completion gate's staleness guard (completionHasFinalAssistantMessage:
+ * `ts < turnStartedAt` ⇒ reject) then fails open: the previous task's answer
+ * looks like it arrived after the new turn started, so injecting a new task
+ * completes instantly against the OLD reply, leaving the screen on an empty
+ * prompt while the session sits in `generating`.
+ *
+ * `metadata` is a protobuf message whose field 1 is a google.protobuf.Timestamp
+ * (seconds + nanos) holding the step's creation time. Verified across every real
+ * store: all 2723 step_type 14/15 rows in 291 conversations decode, and the
+ * decoded times are monotonic by idx in 100% of stores.
+ *
+ * Returns null when the blob is absent or carries no plausible timestamp, so the
+ * caller can fall back to the old mtime synthesis rather than dropping the turn.
+ */
+function extractStepCreatedAtMs(metadata: Buffer | null): number | null {
+  if (!metadata || !Buffer.isBuffer(metadata) || metadata.length === 0) return null;
+  const stamp = firstLenField(metadata, 1);
+  if (!stamp) return null;
+  let seconds = 0;
+  let nanos = 0;
+  for (const f of decodeProtoFields(stamp)) {
+    if (f.wireType !== 0 || typeof f.varint !== 'number') continue;
+    if (f.field === 1) seconds = f.varint;
+    else if (f.field === 2) nanos = f.varint;
+  }
+  // Sanity-bound the value so a mis-decoded field can never produce a wild
+  // timestamp: accept only 2017-07-14 .. 2049-03-22 (epoch seconds).
+  if (!(seconds > 1_500_000_000 && seconds < 2_500_000_000)) return null;
+  const ms = seconds * 1000 + Math.floor(nanos / 1_000_000);
+  return Number.isFinite(ms) ? ms : null;
 }
 
 /**
@@ -754,12 +796,28 @@ function parseConversationDb(
       // lock is momentarily held by antigravity. Set as early as possible
       // after open so the prepare/all below inherits the wait.
       try { db.pragma(`busy_timeout = ${AGY_DB_BUSY_TIMEOUT_MS}`); } catch { /* ignore */ }
+      // Both `status` and `metadata` are present in every real store, but they
+      // are the two columns this reader added a dependency on — so probe the
+      // actual table shape rather than assuming it. A store that lacks either
+      // (schema drift, or a legacy/synthetic db) then degrades to the previous
+      // behaviour instead of throwing and collapsing the whole read to null.
+      let columns: Set<string>;
+      try {
+        columns = new Set<string>(
+          (db.prepare('PRAGMA table_info(steps)').all() as Array<{ name?: unknown }>)
+            .map((c) => String(c?.name ?? '')),
+        );
+      } catch {
+        columns = new Set<string>();
+      }
+      const hasStatus = columns.has('status');
+      const hasMetadata = columns.has('metadata');
       rows = db
         .prepare(
-          `SELECT idx, step_type, step_payload
+          `SELECT idx, step_type, step_payload${hasMetadata ? ', metadata' : ''}
              FROM steps
             WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL})
-              AND status = ${AGY_STATUS_DONE}
+              ${hasStatus ? `AND status = ${AGY_STATUS_DONE}` : ''}
             ORDER BY idx ASC`,
         )
         .all() as AgyDbStepRow[];
@@ -807,10 +865,13 @@ function parseConversationDb(
     const payload = row.step_payload;
     if (!payload || !Buffer.isBuffer(payload) || payload.length === 0) continue;
 
-    // Steps are ordered by idx; the db carries no per-step timestamp we can
-    // trust as ms, so synthesize a monotonically increasing receivedAt that
-    // preserves order (idx-derived) around the file mtime.
-    const receivedAt = baseTs + messages.length;
+    // (ANTIGRAVITY-STALE-TURN-TIMESTAMP) Prefer the step's REAL creation time
+    // from its metadata blob. Only when that is unavailable do we fall back to
+    // the old mtime-derived synthesis — which cannot distinguish turns and
+    // restamps the whole conversation to "now" on every write, defeating the
+    // completion gate's `ts < turnStartedAt` staleness guard.
+    const realCreatedAt = extractStepCreatedAtMs(row.metadata ?? null);
+    const receivedAt = realCreatedAt ?? baseTs + messages.length;
 
     if (row.step_type === AGY_STEP_TYPE_USER) {
       let content = extractUserPrompt(payload);

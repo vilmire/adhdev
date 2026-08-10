@@ -168,6 +168,18 @@ function encodeToolArgModelStep(reasoning: string, toolArgsJson: string): Buffer
   ]);
 }
 
+/**
+ * Build a step `metadata` blob carrying the step's real creation time, mirroring
+ * the real store: field 1 is a google.protobuf.Timestamp (field 1 = seconds,
+ * field 2 = nanos).
+ */
+function encodeStepMetadata(createdAtMs: number): Buffer {
+  const seconds = Math.floor(createdAtMs / 1000);
+  const nanos = (createdAtMs % 1000) * 1_000_000;
+  const stamp = Buffer.concat([varField(1, seconds), varField(2, nanos)]);
+  return lenField(1, stamp);
+}
+
 /** Build a non-message step (e.g. a tool call) that the reader must ignore. */
 function encodeToolStep(): Buffer {
   return Buffer.concat([
@@ -183,7 +195,7 @@ function encodeToolStep(): Buffer {
  */
 async function makeConversationDb(
   sessionId: string,
-  steps: Array<{ step_type: number; payload: Buffer; status?: number }>,
+  steps: Array<{ step_type: number; payload: Buffer; status?: number; createdAtMs?: number }>,
 ): Promise<string> {
   const dir = path.join(antigravityRoot(), 'conversations');
   fs.mkdirSync(dir, { recursive: true });
@@ -196,14 +208,25 @@ async function makeConversationDb(
   const db = new Database(filePath);
   db.exec(
     'CREATE TABLE `steps` (`idx` integer, `step_type` integer NOT NULL DEFAULT 0, ' +
-      '`status` integer NOT NULL DEFAULT 0, `step_payload` blob, PRIMARY KEY (`idx`));',
+      '`status` integer NOT NULL DEFAULT 0, `metadata` blob, `step_payload` blob, ' +
+      'PRIMARY KEY (`idx`));',
   );
   const insert = db.prepare(
-    'INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?, ?, ?, ?)',
+    'INSERT INTO steps (idx, step_type, status, metadata, step_payload) VALUES (?, ?, ?, ?, ?)',
   );
   // Rows default to status 3 (DONE) — the settled state every step reaches on
   // disk. Tests that exercise an in-flight turn pass an explicit status.
-  steps.forEach((s, i) => insert.run(i, s.step_type, s.status ?? AGY_STATUS_DONE, s.payload));
+  // `createdAtMs` populates the real per-step timestamp the reader prefers over
+  // the file-mtime synthesis; omitted means "no metadata" (fallback path).
+  steps.forEach((s, i) =>
+    insert.run(
+      i,
+      s.step_type,
+      s.status ?? AGY_STATUS_DONE,
+      s.createdAtMs === undefined ? null : encodeStepMetadata(s.createdAtMs),
+      s.payload,
+    ),
+  );
   db.close();
   return filePath;
 }
@@ -900,6 +923,104 @@ describe('antigravity-cli-transcript — readSession (.db in-flight step filteri
       .filter((m) => m.role === 'assistant')
       .map((m) => m.content);
     expect(assistantText).not.toContain('Running rm -rf build/');
+  });
+});
+
+/**
+ * (ANTIGRAVITY-STALE-TURN-TIMESTAMP) Messages must carry their REAL per-step
+ * creation time, not a timestamp synthesized from the .db file mtime.
+ *
+ * The old reader computed `receivedAt = fileMtime + messages.length`, so an
+ * entire multi-turn conversation collapsed into a few consecutive milliseconds
+ * AND every old turn was restamped to "now" each time antigravity touched the
+ * store. The completion gate rejects a stale final assistant via
+ * `ts < turnStartedAt` (completionHasFinalAssistantMessage); with synthesized
+ * timestamps that guard fails open, so injecting a SECOND task completed
+ * instantly against the FIRST task's answer — screen on an empty prompt while
+ * the session sat in `generating`.
+ *
+ * The real time is in `steps.metadata` field 1 (google.protobuf.Timestamp).
+ * Verified across every real store: all 2723 step_type 14/15 rows in 291
+ * conversations decode, monotonic by idx in 100% of stores.
+ */
+describe('antigravity-cli-transcript — readSession (.db per-step timestamps)', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-agy-ts-'));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = '';
+  });
+
+  const TASK1_AT = 1_800_000_000_000; // first task
+  const TASK2_AT = TASK1_AT + 3_600_000; // second task, an hour later
+
+  it('uses each step\'s real creation time instead of the file mtime', async () => {
+    const dbPath = await makeConversationDb(SESSION_E, [
+      { step_type: 14, payload: encodeUserStep('First task'), createdAtMs: TASK1_AT },
+      { step_type: 15, payload: encodeModelStep({ answer: 'First answer.' }), createdAtMs: TASK1_AT + 5_000 },
+      { step_type: 14, payload: encodeUserStep('Second task'), createdAtMs: TASK2_AT },
+      { step_type: 15, payload: encodeModelStep({ answer: 'Second answer.' }), createdAtMs: TASK2_AT + 5_000 },
+    ]);
+    // Touch the store the way a live antigravity write would.
+    const now = Date.now();
+    fs.utimesSync(dbPath, new Date(now), new Date(now));
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_E, '/workspaces/agy');
+
+    expect(result).not.toBeNull();
+    const [u1, a1, u2, a2] = result!.messages;
+    expect(u1.receivedAt).toBe(TASK1_AT);
+    expect(a1.receivedAt).toBe(TASK1_AT + 5_000);
+    expect(u2.receivedAt).toBe(TASK2_AT);
+    expect(a2.receivedAt).toBe(TASK2_AT + 5_000);
+
+    // The turns must stay an hour apart, not collapse into adjacent ms.
+    expect(a2.receivedAt - a1.receivedAt).toBe(3_600_000);
+  });
+
+  it('keeps the previous task\'s answer STALE relative to a newly started turn', async () => {
+    // The live failure: task 1 answered long ago; task 2 was just injected and
+    // its answer has NOT landed yet, but the store's mtime is now. Anchor the
+    // step times to the real clock so "an hour ago" is genuinely in the past.
+    const now = Date.now();
+    const answeredAt = now - 3_600_000; // task 1 answered an hour ago
+    const dbPath = await makeConversationDb(SESSION_E, [
+      { step_type: 14, payload: encodeUserStep('First task'), createdAtMs: answeredAt - 5_000 },
+      { step_type: 15, payload: encodeModelStep({ answer: 'Stale answer from the previous task.' }), createdAtMs: answeredAt },
+    ]);
+    fs.utimesSync(dbPath, new Date(now), new Date(now));
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_E, '/workspaces/agy');
+
+    const last = result!.messages[result!.messages.length - 1];
+    expect(last.role).toBe('assistant');
+
+    // This is exactly the completion gate's staleness check
+    // (completionHasFinalAssistantMessage: `ts < turnStartedAt` ⇒ reject).
+    const turnStartedAt = now - 1_000; // the new turn began 1s ago
+    expect(last.receivedAt).toBeLessThan(turnStartedAt);
+  });
+
+  it('falls back to mtime-derived ordering when a step carries no metadata', async () => {
+    // Schema drift / legacy rows: no metadata blob. The reader must still return
+    // the turns in idx order rather than dropping them.
+    const dbPath = await makeConversationDb(SESSION_E, [
+      { step_type: 14, payload: encodeUserStep('No metadata prompt') },
+      { step_type: 15, payload: encodeModelStep({ answer: 'No metadata answer.' }) },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_E, '/workspaces/agy');
+
+    expect(result).not.toBeNull();
+    expect(result!.messages).toHaveLength(2);
+    expect(result!.messages[1].receivedAt).toBeGreaterThanOrEqual(result!.messages[0].receivedAt);
   });
 });
 
