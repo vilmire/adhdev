@@ -140,12 +140,17 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     }, [machineId, machineEntry?.id, sendDaemonCommand])
 
     useEffect(() => {
-        if (!machineId || !machineEntry || activeTab !== 'overview') return
+        // Providers included (owner catch 2026-08-10): the per-row quota chips
+        // read machine.quota, which rides get_machine_runtime_stats — loading
+        // it only for Overview left the Providers tab chip-less unless the
+        // user happened to visit Overview first.
+        if (!machineId || !machineEntry || (activeTab !== 'overview' && activeTab !== 'providers')) return
         const info = machineEntry.machine
         const needsRuntime = typeof info?.cpus !== 'number'
             || typeof info?.totalMem !== 'number'
             || typeof info?.arch !== 'string'
             || typeof info?.release !== 'string'
+            || (activeTab === 'providers' && !info?.quota)
         if (!needsRuntime) return
         void loadMachineRuntime(machineId, { minFreshMs: 30_000 }).catch(() => {})
     }, [activeTab, loadMachineRuntime, machineEntry, machineId])
