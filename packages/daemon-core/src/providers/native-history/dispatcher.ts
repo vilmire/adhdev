@@ -14,6 +14,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { NativeTurnTerminalMarker } from '../completion/native-turn-signal.js';
 import { readSession as readClaudeCliSession } from './claude-cli-transcript.js';
 import { readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';
@@ -63,6 +64,12 @@ export interface NativeHistoryResult {
      * unaffected by this signal).
      */
     ownerConfirmed?: boolean;
+    /**
+     * (NATIVE-TURN-SIGNAL) The provider's own turn-terminal records, when its reader
+     * surfaces them (codex task_complete / turn_aborted). Absent for readers that have
+     * no such record — those keep the message-shape inference path.
+     */
+    turnTerminalMarkers?: NativeTurnTerminalMarker[];
 }
 
 export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeHistoryInput) => NativeHistoryResult | null {
@@ -135,6 +142,11 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             sourceMtimeMs: session.sourceMtimeMs,
             nativeHistoryCoverage: (session as any).nativeHistoryCoverage || 'full',
             ownerConfirmed,
+            // (NATIVE-TURN-SIGNAL) Pass the provider's own turn-terminal records through
+            // untouched. Readers that surface none simply omit the field.
+            ...(Array.isArray((session as any).turnTerminalMarkers) && (session as any).turnTerminalMarkers.length > 0
+                ? { turnTerminalMarkers: (session as any).turnTerminalMarkers }
+                : {}),
         };
     };
 }

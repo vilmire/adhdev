@@ -1740,6 +1740,8 @@ export type ProviderNativeHistoryScripts = Record<string, ((input: any) => any) 
 
 type ProviderNativeHistoryReadResult = {
     records: HistoryMessage[];
+    /** (NATIVE-TURN-SIGNAL) provider-native turn-terminal records, when the reader surfaces them. */
+    turnTerminalMarkers?: Array<{ receivedAt: number; outcome: 'completed' | 'aborted'; summary: string; turnId?: string }>;
     sourcePath: string;
     sourceMtimeMs: number;
     providerSessionId?: string;
@@ -1887,6 +1889,7 @@ function callProviderNativeHistoryRead(
     }
     return {
         records,
+        turnTerminalMarkers: Array.isArray((result as any).turnTerminalMarkers) ? (result as any).turnTerminalMarkers : undefined,
         sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
         sourceMtimeMs: Number((result as any).sourceMtimeMs) || 0,
         providerSessionId: typeof (result as any).providerSessionId === 'string' ? (result as any).providerSessionId.trim() : undefined,
@@ -1995,6 +1998,8 @@ export function readProviderChatHistory(
     unavailableReason?: string;
     ownerConfirmed?: boolean;
     attribution?: string;
+    /** (NATIVE-TURN-SIGNAL) provider-native turn-terminal records, when the reader surfaces them. */
+    turnTerminalMarkers?: Array<{ receivedAt: number; outcome: 'completed' | 'aborted'; summary: string; turnId?: string }>;
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
         const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);
@@ -2024,6 +2029,9 @@ export function readProviderChatHistory(
             unavailableReason: nativeResult.unavailableReason,
             ownerConfirmed: nativeResult.ownerConfirmed,
             attribution: nativeResult.attribution,
+            // (NATIVE-TURN-SIGNAL) Terminal markers ride alongside the paged messages —
+            // deliberately NOT paged, since they are turn metadata, not chat content.
+            turnTerminalMarkers: nativeResult.turnTerminalMarkers,
         };
     }
     return {

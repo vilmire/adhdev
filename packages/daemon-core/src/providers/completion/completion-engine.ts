@@ -43,7 +43,9 @@
 import { isCliGeneratingLikeStatus } from '../cli-provider-status-helpers';
 import { NATIVE_HISTORY_MESH_IDLE_SETTLE_MS } from '../cli-provider-instance-types';
 
-export type EvidenceSource = 'parsed' | 'external-native' | 'unavailable';
+// (NATIVE-TURN-SIGNAL) 'native-signal' = the provider's own turn-terminal record proved
+// the turn ended. Strictly stronger than the shape-inference sources below it.
+export type EvidenceSource = 'parsed' | 'external-native' | 'unavailable' | 'native-signal';
 export type AuthorityTiming = 'immediate' | 'floor' | 'hold';
 
 /** Immutable per-arm record — the engine-visible projection of CompletedDebouncePending. */
@@ -264,6 +266,18 @@ export function evaluateFinalizationBlock(
     }
 
     if (!evidence.present) {
+        // (NATIVE-TURN-SIGNAL) The provider TOLD us the turn ended, but our own adapter still
+        // reports something pending (turnClosed false — an in-flight tool or partial buffer).
+        // That disagreement is transient by construction: the adapter drains. Hold NON-terminally
+        // and let the ordinary 30s cap release it; never a terminal hold, because the authoritative
+        // side has already said the turn is over, and never the CANON-C floor, which exists to
+        // stop premature emits on providers that have no such signal at all.
+        if (evidence.source === 'native-signal') {
+            return {
+                block: { reason: 'native_signal_adapter_pending', terminal: false, allowTimeout: true },
+                evidencePatch,
+            };
+        }
         if (ownsExternal) {
             if (evidence.source === 'external-native') {
                 // Native tail probe: an assistant tail with content proves the turn done.

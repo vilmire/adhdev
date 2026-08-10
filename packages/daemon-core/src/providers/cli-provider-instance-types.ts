@@ -97,7 +97,15 @@ export type CompletedFinalizationBlock = {
 export type CompletionFinalAssistantEvidence = {
     present: boolean;
     messages: unknown[];
-    source: 'parsed' | 'external-native' | 'unavailable';
+    // (NATIVE-TURN-SIGNAL) 'native-signal' = the provider's OWN turn-terminal record
+    // (codex task_complete / turn_aborted) proved the turn ended. Strictly stronger than
+    // the other sources, which all infer turn end from message shape and therefore cannot
+    // judge a turn that ends on a tool call or with an empty reply.
+    source: 'parsed' | 'external-native' | 'unavailable' | 'native-signal';
+    /** Final text carried by the terminal record; '' is valid (tool-terminated turn). */
+    nativeSummary?: string;
+    /** Whether the provider reported a normal end or an abort. */
+    nativeOutcome?: 'completed' | 'aborted';
 };
 
 export type ExternalTranscriptProbe = {

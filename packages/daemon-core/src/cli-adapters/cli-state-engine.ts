@@ -25,6 +25,7 @@ import {
 } from './provider-cli-shared.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import type { CliScriptRunner } from './cli-script-runner.js';
+import { providerHasNativeTurnSignal } from '../providers/completion/native-turn-signal.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -1360,10 +1361,25 @@ export class CliStateEngine {
                 // and deferOrEscalateTranscriptFinish below is NEVER reached — meaning the
                 // bounded defer chain and its escape hatch can never even be consulted. This
                 // is the live wedge: the FSM spins here with currentTurnScope open while the
-                // turn is long finished. Bound the spin on the turn clock; past the cap we
-                // fall through to the defer/escape chain, which applies its own guards.
+                // turn is long finished.
+                //
+                // (NATIVE-TURN-SIGNAL) The bound is scoped to SIGNAL-LESS providers. Screen
+                // quiet is a proxy for "is the turn over?" and it is the WRONG oracle — that
+                // is exactly why it needed a timer bolted on. A provider that declares a
+                // turn-terminal record answers the question authoritatively, so it must not
+                // be force-released on a screen-repaint heuristic at all: fall straight
+                // through to the defer/escape chain, which consults the real signal. For
+                // claude-cli / hermes-cli (no terminal record exists) the bound stays — they
+                // are permanently on the inference path and still need the escape hatch.
+                const hasNativeTurnSignal = providerHasNativeTurnSignal(this.provider);
                 const turnAgeMs = this.currentTurnStartedAt > 0 ? Date.now() - this.currentTurnStartedAt : 0;
-                if (!this.hasScreenBeenQuietForIdle(Date.now()) && turnAgeMs < TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS) {
+                // Signal-bearing: never force-release on screen quiet — fall through to the
+                // defer/escape chain, which consults the authoritative record.
+                // Signal-less: keep re-arming, but only until the hard cap (the escape hatch).
+                const keepWaitingOnScreen = hasNativeTurnSignal
+                    ? false
+                    : turnAgeMs < TRANSCRIPT_FINISH_BLOCKED_HARD_CAP_MS;
+                if (!this.hasScreenBeenQuietForIdle(Date.now()) && keepWaitingOnScreen) {
                     if (this.idleTimeout) clearTimeout(this.idleTimeout);
                     this.idleTimeout = setTimeout(() => {
                         if (this.isWaitingForResponse) this.evaluateSettled(this.transport.getSnapshot());

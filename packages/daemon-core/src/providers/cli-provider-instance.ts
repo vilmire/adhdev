@@ -18,6 +18,11 @@ import { shortHash } from '../system/hash.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { resolveTranscriptAuthorityProfile } from './transcript-evidence.js';
+import {
+    resolveNativeCompletionSignalSpec,
+    selectTurnTerminalMarker,
+    type NativeTurnTerminalMarker,
+} from './completion/native-turn-signal.js';
 import { TranscriptSignalSource } from './transcript-signal-source.js';
 import { resolveBusyLeaseGate } from './busy-lease-gate.js';
 import type { SignalSnapshot } from './spec/signal-envelope.js';
@@ -1531,6 +1536,9 @@ export class CliProviderInstance implements ProviderInstance {
     private completedDebounceTimer: NodeJS.Timeout | null = null;
     private completedDebouncePending: CompletedDebouncePending | null = null;
     private lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
+    // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
+    // on every completion probe; null when the provider surfaces none.
+    private lastNativeTurnTerminalMarkers: NativeTurnTerminalMarker[] | null = null;
     /** TX-FSM: lazily-created transcript signal normalizer. Fed ONLY by
      *  transcript reads this instance already performs — it adds zero I/O.
      *  Stage 0: its output was a pure shadow observation for the FSM driver.
@@ -2231,6 +2239,31 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
+     * (NATIVE-TURN-SIGNAL) This turn's terminal marker from the provider's own transcript,
+     * or null when the provider declares no completion signal / the turn has not ended.
+     *
+     * Turn scoping prefers the provider-native turn id when the adapter knows it, falling
+     * back to the turn-start boundary — see selectTurnTerminalMarker. Any read error fails
+     * CLOSED (null ⇒ shape inference), so a malformed transcript can never manufacture a
+     * completion.
+     */
+    private nativeTurnTerminalMarker(turnStartedAt?: number): NativeTurnTerminalMarker | null {
+        try {
+            // Markers are only ever populated by a reader that HAS a signal, so their
+            // presence is itself the capability check — no provider-name branching needed.
+            const markers = this.lastNativeTurnTerminalMarkers;
+            if (!markers || markers.length === 0) return null;
+            const adapterTurnId = typeof (this.adapter as any)?.currentProviderTurnId === 'string'
+                ? (this.adapter as any).currentProviderTurnId as string
+                : undefined;
+            return selectTurnTerminalMarker(markers, {
+                ...(adapterTurnId ? { turnId: adapterTurnId } : {}),
+                ...(typeof turnStartedAt === 'number' ? { turnStartedAt } : {}),
+            });
+        } catch { return null; }
+    }
+
+    /**
      * See completion/stall-rescue.ts — pre-cleanup mesh completion flush
      * (verbatim move; KIMI-MESH-COMPLETION-EMIT axis 2 provenance lives with
      * the module). Turn state stays instance-owned.
@@ -2694,7 +2727,8 @@ export class CliProviderInstance implements ProviderInstance {
                 taskId: pending.taskId,
                 // finalSummary provenance chain unchanged (see snapshotExternalNativeCompletionSummary /
                 // completionFinalSummary / cachedInTurnCompletionSummaryContent docs above).
-                finalSummary: (this.snapshotExternalNativeCompletionSummary(pending)
+                finalSummary: (this.nativeTurnTerminalSummary(pending.turnStartedAt)
+                    || this.snapshotExternalNativeCompletionSummary(pending)
                     || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
                     || this.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
                     || (blockReason.startsWith('parsed_status:') ? '' : undefined)),
@@ -2792,6 +2826,22 @@ export class CliProviderInstance implements ProviderInstance {
     /** See completion/evidence.ts — EMPTY-FINAL-CONTENT TOCTOU snapshot preference. */
     private cleanCompletionFinalSummary(pending: CompletedDebouncePending): string | undefined {
         return evidence.cleanCompletionFinalSummary(this as unknown as EvidenceHost, pending);
+    }
+
+    /**
+     * (NATIVE-TURN-SIGNAL) finalSummary straight from the provider's own terminal record.
+     *
+     * Placed at the HEAD of the finalSummary provenance chain so the two sources can never
+     * diverge: when the provider states the turn's final text, that text wins outright and
+     * the reconstruction chain (native snapshot > parsed screen > cached in-turn summary) is
+     * not consulted at all. Returns undefined — not '' — for a terminal record with no text,
+     * so a tool-terminated turn falls through to the existing chain rather than forcing an
+     * empty summary onto a completion that might legitimately have one from elsewhere.
+     */
+    private nativeTurnTerminalSummary(turnStartedAt?: number): string | undefined {
+        const marker = this.nativeTurnTerminalMarker(turnStartedAt);
+        const text = typeof marker?.summary === 'string' ? marker.summary.trim() : '';
+        return text || undefined;
     }
 
     /** See completion/evidence.ts — KIMI-RC30 forced-emit native snapshot seed. */

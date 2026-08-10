@@ -24,6 +24,32 @@ import {
   type NativeUsageRecord,
   type SessionUsageTotals,
 } from './usage-normalize.js';
+import {
+  resolveNativeCompletionSignalSpec,
+  type NativeCompletionSignalSpec,
+  type NativeTurnTerminalMarker,
+} from '../completion/native-turn-signal.js';
+
+/**
+ * (NATIVE-TURN-SIGNAL) codex's turn-terminal declaration.
+ *
+ * This mirrors what belongs in codex-cli's provider.v1.json under
+ * `nativeHistory.completionSignal` — the manifest is the intended home and
+ * `nativeHistory` is an open object in the v1 CLI schema, so declaring it there
+ * needs no schema change. It is defaulted HERE only because codex-cli@1.1.17 is
+ * already published to the registry: editing the manifest would drift the
+ * channel bundleDigest and require a provider version bump + channel
+ * regeneration + republish, which is a release action, not a code change.
+ * Consumption is generic (resolveNativeCompletionSignalSpec) and a manifest
+ * declaration overrides this default, so moving it is a pure data change with
+ * no code edit.
+ */
+const CODEX_DEFAULT_COMPLETION_SIGNAL: NativeCompletionSignalSpec = {
+  recordType: 'task_complete',
+  abortRecordType: 'turn_aborted',
+  summaryField: 'last_agent_message',
+  turnIdField: 'turn_id',
+};
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +80,21 @@ export interface NativeHistorySession {
   workspace?: string;
   /** Token totals, omitted when the rollout records no token_count events. */
   usage?: SessionUsageTotals;
+  /**
+   * (NATIVE-TURN-SIGNAL) Codex's own turn-terminal records — one per
+   * task_complete / turn_aborted, in file order.
+   *
+   * These are deliberately NOT derived from `messages`. A terminal record whose
+   * last_agent_message is empty produces no assistant bubble at all
+   * (pushAssistantStandardMessage drops empty content, correctly — an empty
+   * bubble is not chat content), and that is exactly the turn shape completion
+   * detection could never judge: measured 193 of 991 task_complete events in 40
+   * local rollouts carry an empty last_agent_message, i.e. a turn that ended on
+   * a tool call or with no reply. Surfacing the marker separately lets the
+   * completion engine see "the provider says this turn ended" independently of
+   * whether there is any text to show.
+   */
+  turnTerminalMarkers?: NativeTurnTerminalMarker[];
 }
 
 export interface NativeHistorySessionMeta {
@@ -281,13 +322,15 @@ function parseSessionFile(
   filePath: string,
   sessionId: string,
   workspaceFallback?: string,
-): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[] } {
+  completionSignal: NativeCompletionSignalSpec | null = CODEX_DEFAULT_COMPLETION_SIGNAL,
+): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[]; turnTerminalMarkers: NativeTurnTerminalMarker[] } {
   let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return { messages: [], usageRecords: [] }; }
+  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return { messages: [], usageRecords: [], turnTerminalMarkers: [] }; }
 
   const lines = raw.split('\n').filter(Boolean);
   const records: NativeHistoryMessage[] = [];
   const usageRecords: NativeUsageRecord[] = [];
+  const turnTerminalMarkers: NativeTurnTerminalMarker[] = [];
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
@@ -309,7 +352,7 @@ function parseSessionFile(
     if (type === 'session_meta') {
       // Validate session identity — if the meta reports a different id, bail out
       const metaId = String(payload.id ?? '').trim();
-      if (metaId && metaId !== sessionId) return { messages: [], usageRecords: [] };
+      if (metaId && metaId !== sessionId) return { messages: [], usageRecords: [], turnTerminalMarkers: [] };
 
       const metaWorkspace = String(payload.cwd ?? '').trim();
       if (!detectedWorkspace && metaWorkspace) detectedWorkspace = metaWorkspace;
@@ -333,6 +376,29 @@ function parseSessionFile(
     const payloadType = String(payload.type ?? '').trim();
 
     if (type === 'event_msg') {
+      // (NATIVE-TURN-SIGNAL) Record the provider's own turn-terminal marker BEFORE
+      // the message-building below. This runs for EVERY terminal record, including
+      // one whose summary field is empty — that turn (tool-terminated or empty
+      // reply) produces no assistant bubble, and it is precisely the case the
+      // completion engine could never judge from message shape.
+      if (completionSignal) {
+        const isComplete = payloadType === completionSignal.recordType;
+        const isAbort = !!completionSignal.abortRecordType && payloadType === completionSignal.abortRecordType;
+        if (isComplete || isAbort) {
+          const summary = completionSignal.summaryField
+            ? flattenCodexContent(payload[completionSignal.summaryField]).trim()
+            : '';
+          const rawTurnId = completionSignal.turnIdField ? payload[completionSignal.turnIdField] : undefined;
+          const turnId = typeof rawTurnId === 'string' && rawTurnId.trim() ? rawTurnId.trim() : '';
+          turnTerminalMarkers.push({
+            receivedAt,
+            outcome: isAbort ? 'aborted' : 'completed',
+            summary,
+            ...(turnId ? { turnId } : {}),
+          });
+        }
+      }
+
       if (payloadType === 'task_complete') {
         pushAssistantStandardMessage(
           records,
@@ -412,7 +478,7 @@ function parseSessionFile(
     }
   }
 
-  return { messages: records, usageRecords };
+  return { messages: records, usageRecords, turnTerminalMarkers };
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -424,7 +490,16 @@ function parseSessionFile(
  * under ~/.codex/sessions/.
  * Returns `null` when the file is missing, empty, or yields no parseable messages.
  */
-export function readSession(sessionPath: string): NativeHistorySession | null {
+export function readSession(
+  sessionPath: string,
+  /**
+   * (NATIVE-TURN-SIGNAL) The provider's nativeHistory block. When it declares a
+   * `completionSignal`, that declaration wins — this is the generic path a NEW
+   * provider uses with no code change here. Omitted/undeclared falls back to
+   * codex's built-in default (see CODEX_DEFAULT_COMPLETION_SIGNAL).
+   */
+  nativeHistory?: unknown,
+): NativeHistorySession | null {
   if (!sessionPath || !path.isAbsolute(sessionPath)) return null;
   if (!fs.existsSync(sessionPath)) return null;
 
@@ -448,7 +523,13 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
 
   const workspaceFallback = typeof meta?.cwd === 'string' ? meta.cwd : undefined;
   const sourceMtimeMs = statMtimeMs(sessionPath);
-  const { messages, usageRecords } = parseSessionFile(sessionPath, sessionId, workspaceFallback);
+  const declaredSignal = resolveNativeCompletionSignalSpec(nativeHistory);
+  const { messages, usageRecords, turnTerminalMarkers } = parseSessionFile(
+    sessionPath,
+    sessionId,
+    workspaceFallback,
+    declaredSignal ?? CODEX_DEFAULT_COMPLETION_SIGNAL,
+  );
   if (messages.length === 0) return null;
 
   const firstSystem = messages.find((m) => m.kind === 'session_start');
@@ -469,6 +550,7 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
       agent: 'codex-cli',
     });
   }
+  if (turnTerminalMarkers.length > 0) session.turnTerminalMarkers = turnTerminalMarkers;
   return session;
 }
 

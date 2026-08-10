@@ -34,6 +34,7 @@ import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
 import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../../config/chat-history.js';
 import { loadPersistedProviderSessionPins } from '../../config/state-store.js';
 import { buildExternalTranscriptProbe } from '../cli-provider-transcript-merge.js';
+import type { NativeTurnTerminalMarker } from './native-turn-signal.js';
 import type {
     CompletedDebouncePending,
     CompletionFinalAssistantEvidence,
@@ -62,12 +63,22 @@ export interface EvidenceHost {
     };
     // Mutable evidence state (instance-owned).
     lastExternalCompletionProbe: ExternalTranscriptProbe | null;
+    /** (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. */
+    lastNativeTurnTerminalMarkers?: NativeTurnTerminalMarker[] | null;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
     // Instance-owned helpers the moved methods call.
     hasAdapterPendingResponse(): boolean;
     isModalParked(): boolean;
     probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null;
     busyLeaseGateEnabled(): boolean;
+    /**
+     * (NATIVE-TURN-SIGNAL) The provider's own terminal record for THIS turn, or null
+     * when the provider declares no completion signal (claude-cli, hermes-cli) or the
+     * turn has not ended. Optional so signal-less hosts and existing test doubles keep
+     * working unchanged — absent means "fall back to shape inference", which is the
+     * pre-existing behaviour.
+     */
+    nativeTurnTerminalMarker?(turnStartedAt?: number): NativeTurnTerminalMarker | null;
     injectedTaskHasStartedGenerating(): boolean;
     publishTranscriptSignalObservation(messages: unknown[] | null, error?: boolean): void;
     spawnedEnvOverrides(): Record<string, string> | undefined;
@@ -236,7 +247,23 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         instanceId: host.instanceId,
         envOverrides: host.spawnedEnvOverrides(),
         forceRefresh: true,
+        // (NATIVE-TURN-SIGNAL audit) excludeInProgressTurn is deliberately NOT passed
+        // here, and that is correct — not the declared-but-ignored field it looks like.
+        // It is a per-CALL display concern, not a manifest policy: read_chat sets it only
+        // for `returnedStatus === 'waiting_approval'` (chat-commands-read.ts) so a paused
+        // turn's half-written tail is hidden from the user. The completion gate needs the
+        // exact opposite — it exists to judge the turn that JUST finished, so excluding the
+        // in-progress turn would hide the very evidence it is looking for and would make
+        // missing_final_assistant strictly more common. Codex's manifest sets
+        // excludeInProgressTurn:true for its own read path; that must not leak here.
     });
+    // (NATIVE-TURN-SIGNAL) Capture the provider's own turn-terminal records from THIS read,
+    // before the source check below can early-return. Refreshed on every probe so a stale
+    // marker from a previous read can never satisfy a later turn's gate.
+    host.lastNativeTurnTerminalMarkers = Array.isArray((restoredHistory as any).turnTerminalMarkers)
+        ? (restoredHistory as any).turnTerminalMarkers as NativeTurnTerminalMarker[]
+        : null;
+
     if (restoredHistory.source !== 'provider-native') {
         host.lastExternalCompletionProbe = null;
         host.publishTranscriptSignalObservation(null);
@@ -289,6 +316,33 @@ export function completionFinalAssistantEvidence(host: EvidenceHost, parsedMessa
     // `completionHasFinalAssistantMessage(...) && !hasAdapterPendingResponse()` pairing already
     // used by the no-progress monitor reconcile path.
     const turnClosed = !host.hasAdapterPendingResponse();
+
+    // (NATIVE-TURN-SIGNAL) The provider's OWN terminal record is authoritative — consult it
+    // before any message-shape inference. This is the whole point of the mechanism: a turn
+    // that ended on a tool call or with an empty reply produces no assistant bubble, so
+    // shape inference reports "no final assistant" forever and only a timeout ever releases
+    // it (measured: 193 of 991 codex turns, 19.5%). The marker answers the question directly.
+    //
+    // Still gated on turnClosed: the marker proves the PROVIDER finished its turn, while
+    // turnClosed proves OUR adapter agrees no tool/partial is in flight. Requiring both keeps
+    // the FALSEIDLE FixB upper bound intact rather than trading one false-positive class for
+    // another. Scoping is turn-id-first (see selectTurnTerminalMarker), which is strictly
+    // stronger than the timestamp comparison the shape path falls back to, and it preserves
+    // the ANTIGRAVITY-PREMATURE-COMPLETION rule: a PRIOR turn's marker can never satisfy
+    // this turn's gate.
+    const terminalMarker = host.nativeTurnTerminalMarker?.(turnStartedAt);
+    if (terminalMarker) {
+        // An ABORTED turn is genuinely over — it must not hang waiting for a final
+        // assistant that will never be written.
+        return {
+            present: turnClosed,
+            messages: Array.isArray(parsedMessages) ? parsedMessages : [],
+            source: 'native-signal',
+            nativeSummary: terminalMarker.summary,
+            nativeOutcome: terminalMarker.outcome,
+        };
+    }
+
     // TX-FSM Stage 2.1 (KIMI-PARSED-RACE): a native-source provider that ALSO ships a
     // tui.transcriptPty scrape (kimi, like opencode/cursor-cli) keeps that scrape purely
     // for LIVE status convenience — the manifest itself says "Chat is authoritative from
