@@ -1570,6 +1570,13 @@ export class ProviderCliAdapter implements CliAdapter {
                 sessionStartedAtMs: this.spawnAt,
                 envOverrides: this.extraEnv,
                 workspace: this.workingDir,
+                // Sidecar-claim owner token (== session registry sessionId ==
+                // the read path's targetSessionId). WITHOUT it claiming is
+                // skipped and the sidecar resolution fails closed on
+                // ambiguity — any second kimi session dir in the workspace
+                // (e.g. a probe session) made detection silently dead
+                // (live: coordinator AskUserQuestion never surfaced).
+                instanceId: this.owningSessionId || undefined,
             });
             if ((prompt?.promptId ?? null) !== (this.activeInteractivePrompt?.promptId ?? null)) {
                 this.activeInteractivePrompt = prompt;

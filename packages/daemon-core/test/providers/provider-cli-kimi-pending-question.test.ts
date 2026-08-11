@@ -137,6 +137,20 @@ maybe('ProviderCliAdapter — kimi pending AskUserQuestion hold', () => {
             .toEqual(['Red', 'Green', 'Blue'])
     })
 
+    it('resolves the kimi 0.34 sidecar shape (state.json `cwd`, no `workDir`)', () => {
+        writeWire([ASK_CALL_ROW])
+        // kimi 0.34 renamed the sidecar workspace field workDir → cwd (live
+        // capture: ~/.kimi-code/sessions/*\/session_*\/state.json has `cwd`).
+        // The shipped manifest reads `$.workDir || $.cwd` — without the
+        // fallback the sidecar match misses EVERY candidate and detection
+        // silently dies (the coordinator-question live defect).
+        const statePath = path.join(sessionsDir, 'wd_adhdev_78117b8afba9', SESSION_ID, 'state.json')
+        fs.writeFileSync(statePath, JSON.stringify({ cwd: workspace }), 'utf8')
+        const adapter = makeAdapter(makeProvider(loadShippedManifest()))
+        adapter.getScriptParsedStatus()
+        expect((adapter.getStatus() as any).activeInteractivePrompt?.promptId).toBe(CALL_ID)
+    })
+
     it('clears the hold once the tool.result lands (answered in-terminal or injected)', () => {
         writeWire([ASK_CALL_ROW])
         const adapter = makeAdapter(makeProvider(loadShippedManifest()))
