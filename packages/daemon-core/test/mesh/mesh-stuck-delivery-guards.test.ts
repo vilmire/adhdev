@@ -19,7 +19,10 @@ import { join } from 'path'
 //      guard for the fix that was considered and deliberately NOT made — see below.
 
 const SRC = join(import.meta.dirname, '../../src/mesh')
-const reconcile = readFileSync(join(SRC, 'mesh-reconcile-loop.ts'), 'utf-8')
+// The delivered-no-turn / hard-deadline code these assertions scan moved out of
+// mesh-reconcile-loop.ts into mesh-reconcile-stranded-dispatch.ts (pure move, no
+// behavior change). Only the path follows it — every assertion below is unchanged.
+const reconcile = readFileSync(join(SRC, 'mesh-reconcile-stranded-dispatch.ts'), 'utf-8')
 const assignment = readFileSync(join(SRC, 'mesh-queue-assignment.ts'), 'utf-8')
 
 /** Body of the delivered-no-turn GENERATING branch. */
