@@ -1183,6 +1183,13 @@ export class ProviderCliAdapter implements CliAdapter {
  // ─── Public API (CliAdapter) ───────────────────
 
     getStatus(options: { allowParse?: boolean } = {}): CliSessionStatus {
+        // kimi AskUserQuestion picker hold: refresh on the ROUTINE status poll,
+        // not only on getScriptParsedStatus — the parsed-status path only runs
+        // on chat reads / completion probes, so a question asked while nobody
+        // reads the chat would never be detected (live: coordinator question
+        // stayed invisible until answered). Bounded wire tail read, same
+        // every-poll cadence + fail-open semantics as detectBackgroundTask.
+        this.refreshKimiPendingQuestion();
         const allowParse = options.allowParse !== false;
         let startupModal = allowParse && this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
         // (fix: kimi startup-gate stale-approval bypass) startupParseGate can

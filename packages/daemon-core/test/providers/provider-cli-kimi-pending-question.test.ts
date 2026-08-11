@@ -200,6 +200,11 @@ maybe('ProviderCliAdapter.setInteractivePromptResponse — kimi keystrokes', () 
             answers: { q1: { selectedLabels: ['Green'] } },
         })
         expect(writes).toEqual(['2', '\r'])
+        // The hold now follows the WIRE, not the local clear: getStatus()
+        // refreshes the pending-question detection on every routine poll, so
+        // until kimi appends the tool.result the same pending call re-detects.
+        // Simulate kimi recording the answer, then the hold clears.
+        writeWire([ASK_CALL_ROW, ANSWER_RESULT_ROW])
         expect((adapter.getStatus() as any).activeInteractivePrompt).toBeNull()
     }, 15000)
 })
