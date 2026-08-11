@@ -51,6 +51,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
 }))
 
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
+import { __clearMeshPendingEventsForTests, __persistUnstampedPendingEventForTests } from '../../src/mesh/mesh-events-pending.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches, recordTaskAutoLaunch, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
@@ -106,7 +107,6 @@ function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<stri
 function cleanupMeshFiles(meshId: string) {
   const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
   const ledgerPath = path.join(getLedgerDir(), `${meshId}.jsonl`)
-  const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
   __clearMeshQueueForTests(meshId)
   __resetMeshRuntimeStoreForTests()
   __resetIdleAutoFastForwardForTests()
@@ -116,7 +116,6 @@ function cleanupMeshFiles(meshId: string) {
   fastForwardMocks.fastForwardMeshNode.mockReset()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
   if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
-  if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
 }
 
 function createQueueAutoLaunchComponents(args?: {
@@ -3801,143 +3800,44 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
   })
 })
 
-describe('atomic drain — concurrent safety', () => {
-  it('concurrent drains return events only once (atomic rename guarantees single consumer)', () => {
-    const meshId = `drain-concurrent-${randomUUID().slice(0, 8)}`
-    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+describe('drain consumption safety', () => {
+  // These used to pin JSONL file mechanics (atomic rename, `.draining` temp files,
+  // the 100KB/50-entry trim). SQLite is now the sole store, so the guarantees are
+  // enforced by the atomic `drained = 1` marking instead of a rename, and growth is
+  // bounded by prunePendingMeshCoordinatorEventsRetention rather than a file trim.
+  // What still matters — an event is consumed exactly once — is pinned here through
+  // the public API.
+  it('repeated drains return each event only once', () => {
+    const meshId = `drain-once-${randomUUID().slice(0, 8)}`
     try {
-      // Write 3 events directly to the pending-events file
       const base = Date.now()
-      const lines = [0, 1, 2].map(i =>
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + i }, queuedAt: base + i })
-      )
-      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
+      for (const i of [0, 1, 2]) {
+        queuePendingMeshCoordinatorEvent({
+          event: 'agent:ready',
+          meshId,
+          nodeLabel: 'n',
+          metadataEvent: { timestamp: base + i },
+          queuedAt: base + i,
+        })
+      }
 
-      // In Node.js single-threaded execution, the second drain happens after the first rename
-      // completes — meaning it finds no file and returns empty.
       const first = drainPendingMeshCoordinatorEvents(meshId)
       const second = drainPendingMeshCoordinatorEvents(meshId)
 
       expect(first.length).toBe(3)
       expect(second.length).toBe(0)
     } finally {
-      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
       cleanupMeshFiles(meshId)
     }
   })
 
-  it('drain is idempotent — empty on second call', () => {
-    const meshId = `drain-idempotent-${randomUUID().slice(0, 8)}`
-    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
-    try {
-      const base = Date.now()
-      const lines = [0, 1].map(i =>
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + i }, queuedAt: base + i })
-      )
-      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
-
-      const first = drainPendingMeshCoordinatorEvents(meshId)
-      expect(first.length).toBe(2)
-
-      // File is already gone after first drain — second drain must return empty
-      const second = drainPendingMeshCoordinatorEvents(meshId)
-      expect(second.length).toBe(0)
-    } finally {
-      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
-      cleanupMeshFiles(meshId)
-    }
-  })
-
-  it('drain leaves no .draining temp file behind', () => {
-    const meshId = `drain-no-temp-${randomUUID().slice(0, 8)}`
-    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
-    const drainingPath = `${pendingPath}.draining`
-    try {
-      const base = Date.now()
-      fs.writeFileSync(
-        pendingPath,
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base }, queuedAt: base }) + '\n',
-        'utf-8'
-      )
-
-      drainPendingMeshCoordinatorEvents(meshId)
-
-      // The .draining temp file must not remain on disk after a successful drain
-      expect(fs.existsSync(drainingPath)).toBe(false)
-    } finally {
-      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
-      if (fs.existsSync(drainingPath)) fs.unlinkSync(drainingPath)
-      cleanupMeshFiles(meshId)
-    }
-  })
-})
-
-describe('pending events file size guard', () => {
-  // These pin the JSONL trim behaviour of the append path. A queued event is now
-  // v2-stamped (stampPendingEventV2), and an ownerless broadcast picks up a
-  // targetCoordinatorDaemonId so it lands in the COORDINATOR-SCOPED pending file
-  // (`<meshId>-<daemon>.pending-events.jsonl`), not the legacy shared
-  // `<meshId>.pending-events.jsonl`. Address the event to an explicit coordinator
-  // daemon so the target path is deterministic, seed THAT file, and assert on it —
-  // otherwise the seed and the append land in different files and no trim fires.
-  const coordinatorDaemonId = 'coord-trim-guard'
-  const scopedPendingPath = (meshId: string) =>
-    path.join(getLedgerDir(), `${meshId}-${coordinatorDaemonId}.pending-events.jsonl`)
-
-  it('trims pending events file to last 50 events when it exceeds 100KB', () => {
-    const meshId = 'mesh-pending-trim-' + randomUUID().slice(0, 8)
-    const pendingPath = scopedPendingPath(meshId)
-    try {
-      // Write 100 large event lines (~1200 chars each) so total > 100KB.
-      // Each line has a unique timestamp so duplicate detection does not suppress any of them.
-      const base = Date.now()
-      const lines = Array.from({ length: 100 }, (_, i) =>
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { data: 'x'.repeat(1100), timestamp: base + i }, queuedAt: base + i })
-      )
-      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
-
-      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { timestamp: base + 200 }, queuedAt: base + 200 })
-
-      const result = fs.readFileSync(pendingPath, 'utf-8').split('\n').filter(Boolean)
-      expect(result.length).toBeLessThanOrEqual(51)
-    } finally {
-      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
-      cleanupMeshFiles(meshId)
-    }
-  })
-
-  it('does not trim file that is under 100KB', () => {
-    const meshId = 'mesh-pending-notrim-' + randomUUID().slice(0, 8)
-    const pendingPath = scopedPendingPath(meshId)
-    try {
-      // Write 10 small event lines (~50 chars each, well under 100KB total).
-      // Each line has a unique timestamp so duplicate detection does not suppress any of them.
-      const base = Date.now()
-      const lines = Array.from({ length: 10 }, (_, i) =>
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { timestamp: base + i }, queuedAt: base + i })
-      )
-      fs.writeFileSync(pendingPath, lines.join('\n') + '\n', 'utf-8')
-
-      queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', targetCoordinatorDaemonId: coordinatorDaemonId, metadataEvent: { timestamp: base + 100 }, queuedAt: base + 100 })
-
-      const result = fs.readFileSync(pendingPath, 'utf-8').split('\n').filter(Boolean)
-      expect(result.length).toBe(11)
-    } finally {
-      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
-      cleanupMeshFiles(meshId)
-    }
-  })
-
-  it('trim is best-effort — does not fail if file is unreadable', () => {
-    // Calling queuePendingMeshCoordinatorEvent on a normal non-existent file should not throw
-    const meshId = 'mesh-pending-nofile-' + randomUUID().slice(0, 8)
-    const pendingPath = path.join(getLedgerDir(), `${meshId}.pending-events.jsonl`)
+  it('queueing does not throw when the mesh has no prior pending state', () => {
+    const meshId = `mesh-pending-nofile-${randomUUID().slice(0, 8)}`
     try {
       expect(() => {
         queuePendingMeshCoordinatorEvent({ event: 'agent:ready', meshId, nodeLabel: 'node', metadataEvent: { timestamp: Date.now() }, queuedAt: Date.now() })
       }).not.toThrow()
     } finally {
-      if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath)
       cleanupMeshFiles(meshId)
     }
   })
@@ -3997,14 +3897,8 @@ describe('daemon-scoped pending event drain', () => {
   // daemon polls drainPendingMeshCoordinatorEvents(meshId, daemonId), it must consume
   // events targeted at it (or unscoped), and leave events targeted at a different daemon
   // untouched in their own scoped file.
-  function safeId(s: string) { return s.replace(/[^a-zA-Z0-9_-]/g, '_') }
-  function cleanupScoped(meshId: string, daemonIds: string[]) {
-    const sharedPath = path.join(getLedgerDir(), `${safeId(meshId)}.pending-events.jsonl`)
-    if (fs.existsSync(sharedPath)) fs.unlinkSync(sharedPath)
-    for (const id of daemonIds) {
-      const scopedPath = path.join(getLedgerDir(), `${safeId(meshId)}-${safeId(id)}.pending-events.jsonl`)
-      if (fs.existsSync(scopedPath)) fs.unlinkSync(scopedPath)
-    }
+  function cleanupScoped(meshId: string, _daemonIds: string[]) {
+    __clearMeshPendingEventsForTests(meshId)
   }
 
   it('coordinator drain consumes scoped events for its daemon and leaves other daemons\' scoped events on disk', () => {
@@ -4044,35 +3938,34 @@ describe('daemon-scoped pending event drain', () => {
     }
   })
 
-  it('legacy unscoped events in shared file are filtered to the polling coordinator only (other daemons leave them in place)', () => {
+  it('an unscoped (broadcast) event reaches the polling coordinator without consuming another daemon\'s targeted event', () => {
     const meshId = `mesh_drain_legacy_${randomUUID().slice(0, 8)}`
     const daemonA = `daemon_a_${randomUUID().slice(0, 8)}`
     const daemonB = `daemon_b_${randomUUID().slice(0, 8)}`
-    const sharedPath = path.join(getLedgerDir(), `${safeId(meshId)}.pending-events.jsonl`)
-    // This pins the LEGACY unscoped-file accept-mode contract: a genuinely-unversioned
-    // (v1) row written straight to the shared JSONL still broadcasts to the polling
-    // coordinator. v2 enforce (default ON) would quarantine that unversioned row, so pin
-    // enforce OFF here — the enforce/quarantine behaviour has its own dedicated suite.
+    // A genuinely-unversioned (v1) row still broadcasts to the polling coordinator.
+    // v2 enforce (default ON) would quarantine an unversioned row, so pin enforce OFF
+    // here — the enforce/quarantine behaviour has its own dedicated suite.
     const prevEnforce = process.env.MESH_PROTOCOL_V2_ENFORCE
     process.env.MESH_PROTOCOL_V2_ENFORCE = '0'
     try {
       const base = Date.now()
-      // Write directly to the legacy shared file: one targeted at daemonB, one fully unscoped.
-      const lines = [
-        JSON.stringify({ event: 'agent:generating_completed', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + 1, target: 'B' }, queuedAt: base + 1, targetCoordinatorDaemonId: daemonB }),
-        JSON.stringify({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + 2 }, queuedAt: base + 2 }),
-      ]
-      fs.writeFileSync(sharedPath, lines.join('\n') + '\n', 'utf-8')
+      // One targeted at daemonB, one fully unscoped. Injected unstamped so they are
+      // genuine v1 rows (the emit path always stamps v2).
+      __persistUnstampedPendingEventForTests({ event: 'agent:generating_completed', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + 1, target: 'B' }, queuedAt: base + 1, targetCoordinatorDaemonId: daemonB })
+      __persistUnstampedPendingEventForTests({ event: 'agent:ready', meshId, nodeLabel: 'n', metadataEvent: { timestamp: base + 2 }, queuedAt: base + 2 })
 
-      // Daemon A drains: must NOT receive the daemon-B-targeted event. Should receive the unscoped one.
+      // Daemon A drains: must NOT receive the daemon-B-targeted event, but does get the
+      // unscoped broadcast.
       const drainedByA = drainPendingMeshCoordinatorEvents(meshId, daemonA)
       expect(drainedByA.map(e => e.event)).toEqual(['agent:ready'])
 
-      // The atomic rename consumed the file; daemon B polling now sees nothing because the
-      // shared file is gone. This is a known limitation of the legacy shared file path —
-      // the test pins the behavior so it surfaces if anyone changes the contract.
+      // Daemon B's targeted event SURVIVES A's drain. Under the retired JSONL shared
+      // file this was impossible — the atomic rename consumed the whole file, so B got
+      // nothing (a limitation the old test pinned). Per-row drain marking in SQLite
+      // fixes it: B still receives what was addressed to it.
       const drainedByB = drainPendingMeshCoordinatorEvents(meshId, daemonB)
-      expect(drainedByB).toHaveLength(0)
+      expect(drainedByB.map(e => e.event)).toEqual(['agent:generating_completed'])
+      expect((drainedByB[0].metadataEvent as any).target).toBe('B')
     } finally {
       if (prevEnforce === undefined) delete process.env.MESH_PROTOCOL_V2_ENFORCE
       else process.env.MESH_PROTOCOL_V2_ENFORCE = prevEnforce

@@ -1,5 +1,3 @@
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
@@ -24,15 +22,30 @@ import {
 } from './contracts.js';
 
 // ---------------------------------------------------------------------------
-// MCP coordinator pending-event queue — FILE-BASED PERSISTENCE
+// MCP coordinator pending-event queue — SQLite (mesh_pending_events)
 // ---------------------------------------------------------------------------
 // When a mesh event fires but no CLI coordinator session is registered (e.g.
-// the coordinator is Claude Code running via MCP), we persist the event to a
-// per-mesh JSONL file so it survives daemon restarts. The 50-entry hard cap
-// is removed; the file is drained atomically on each get_pending_mesh_events
-// call and limited to 100 KB to prevent runaway growth.
+// the coordinator is Claude Code running via MCP), we persist the event to the
+// SQLite inbox so it survives daemon restarts. It is drained on each
+// get_pending_mesh_events call and bounded by
+// prunePendingMeshCoordinatorEventsRetention (drained >7d / undrained >30d).
 //
-// File: <ledgerDir>/<meshId>.pending-events.jsonl
+// This queue used to ALSO mirror every event into a per-mesh
+// `<ledgerDir>/<meshId>.pending-events.jsonl` and drain both stores on every
+// call. That mirror is gone. It bought one thing — a degraded mode where events
+// kept flowing if better-sqlite3 failed to load — and cost split-brain drains:
+// the two stores were emptied non-transactionally, so a SQLite drain failure
+// still let the JSONL half deliver while the SQLite rows stayed undrained, and
+// the next tick re-delivered them (duplicate refine:completed). With one store
+// a drain failure means nothing drained: no half-drain, no duplicate delivery.
+//
+// The cost of losing that degraded mode is real and deliberate: if the store is
+// unavailable there is no fallback, so a persist failure now means the event is
+// NOT queued at all. Every store failure on the write path is therefore logged
+// loudly rather than swallowed — see persistPendingMeshCoordinatorEvent.
+//
+// Legacy JSONL files on machines upgrading past this cut are drained into SQLite
+// once at boot by mesh-events-pending-migration.ts. Nothing else reads them.
 // ---------------------------------------------------------------------------
 
 export interface PendingMeshCoordinatorEvent {
@@ -129,7 +142,7 @@ const REFINE_TERMINAL_EVENTS = new Set(['refine:completed', 'refine:failed']);
  *  expansion a `daemon_mach_X`-scoped completion is silently skipped by a coordinator
  *  that only knows itself as bare `mach_X` (the base-node completion-surface bug).
  *  Expanding here fixes every drain/peek/surface caller uniformly. The first ORIGINAL
- *  id stays at [0] so per-daemon JSONL file naming keeps its primary; expansion stays
+ *  id stays at [0] so the per-daemon scope filter keeps its primary; expansion stays
  *  within one machine core so a different coordinator's events are never claimed. */
 function normalizeCoordinatorDaemonIds(
     coordinatorDaemonId?: string | null | ReadonlyArray<string>,
@@ -140,7 +153,7 @@ function normalizeCoordinatorDaemonIds(
 // ─── B3a: drain-side v2 routing (accept-and-warn) ────────────────────────────
 //
 // Stage-1 of the v2 receive path. The drain scope is still primarily gated by the
-// SQLite/JSONL `coordinator_daemon_id` filter (v1 mechanism, untouched here), so
+// SQLite `coordinator_daemon_id` filter (v1 mechanism, untouched here), so
 // this layer runs on top of an already daemon-scoped candidate set and adds:
 //
 //   1. v2 unicast routing — an event whose intendedFor addresses a DIFFERENT
@@ -289,9 +302,9 @@ export function __resetMeshV2WarnDedupForTests(): void {
 // Log-once guard for the SQLite pending-event drain failure. When better-sqlite3 is
 // unavailable (native load failure on a clean npx install with no build tools), the
 // SQLite drain throws every drain call — once per mesh, every reconcile tick (~4s) —
-// while the JSONL fallback below keeps delivering events correctly. That is the
-// intended degraded path, so the operator only needs to be told ONCE that SQLite is
-// down; repeating the WARN every cycle floods the logs (mirrors MeshRuntimeStore's
+// and, with the JSONL mirror retired, NO events can be delivered while it is down.
+// The operator only needs to be told ONCE that SQLite is down; repeating the WARN
+// every cycle floods the logs (mirrors MeshRuntimeStore's
 // loggedGetInstanceFailure guard). New/different drain errors still surface: the
 // guard keys on nothing beyond "already warned", but the first occurrence is always
 // shown at WARN and every occurrence stays at debug.
@@ -445,7 +458,8 @@ function routeV2EventsForDrainer(
         }
 
         // eventId idempotency: skip if already drained (durable) or already seen in
-        // this same batch (guards the SQLite+JSONL dual-store merge duplicate).
+        // this same batch (a batch can still repeat an eventId across reconcile
+        // sources, so the in-batch guard stays even with a single store).
         const eventId = validated.eventId;
         if (ctx.batchSeen.has(eventId) || ctx.alreadyDrained(eventId)) {
             bump('v2DedupSkipped');
@@ -586,9 +600,18 @@ function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEve
     if (!REFINE_TERMINAL_EVENTS.has(event.event)) return false;
     const jobId = readRefineJobId(event);
     if (!jobId) return false;
-    return readPendingMeshCoordinatorEventsFromDisk(event.meshId).some((pending) =>
-        pending.event === event.event && readRefineJobId(pending) === jobId,
-    );
+    // Same suppression as before, now read from the SQLite inbox: a second
+    // refine:completed/failed for a jobId already queued is a duplicate. (This
+    // check used to scan the JSONL mirror, so it silently stopped working the
+    // moment SQLite became the only store — keep it reading the live store.)
+    try {
+        return MeshRuntimeStore.getInstance().peekPendingEvents(event.meshId).some((row) =>
+            row.event === event.event
+            && readRefineJobId(row.payload as PendingMeshCoordinatorEvent) === jobId,
+        );
+    } catch {
+        return false;
+    }
 }
 
 // CANON-B / DUPNOTIF: terminal completion events that the coordinator surfaces as a
@@ -666,46 +689,14 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
 export function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
     const fingerprint = buildPendingEventFingerprint(event);
     if (!fingerprint.trim()) return false;
-    // Check SQLite inbox first (G3 primary path)
     try {
-        if (MeshRuntimeStore.getInstance().hasPendingEventFingerprint(event.meshId, fingerprint)) return true;
-    } catch { /* fall through to JSONL check */ }
-    return readPendingMeshCoordinatorEventsFromDisk(event.meshId).some((pending) => buildPendingEventFingerprint(pending) === fingerprint);
-}
-
-function getPendingEventsPath(meshId: string, coordinatorDaemonId?: string): string {
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    if (coordinatorDaemonId) {
-        const safeDaemon = coordinatorDaemonId.replace(/[^a-zA-Z0-9_-]/g, '_');
-        return join(getLedgerDir(), `${safe}-${safeDaemon}.pending-events.jsonl`);
+        return MeshRuntimeStore.getInstance().hasPendingEventFingerprint(event.meshId, fingerprint);
+    } catch {
+        // Store unavailable: report "no duplicate" so the caller still attempts the
+        // persist (which surfaces the real store failure) rather than silently
+        // suppressing the event as an assumed duplicate.
+        return false;
     }
-    return join(getLedgerDir(), `${safe}.pending-events.jsonl`);
-}
-
-function readPendingMeshCoordinatorEventsFromDisk(meshId?: string, coordinatorDaemonId?: string | ReadonlyArray<string>): PendingMeshCoordinatorEvent[] {
-    if (!meshId) return [];
-    const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
-    const primaryDaemonId = daemonIds[0];
-    // Read coordinator-scoped file first; fall back to legacy shared file.
-    const paths = primaryDaemonId
-        ? [getPendingEventsPath(meshId, primaryDaemonId), getPendingEventsPath(meshId)]
-        : [getPendingEventsPath(meshId)];
-    const events: PendingMeshCoordinatorEvent[] = [];
-    for (const path of paths) {
-        if (!existsSync(path)) continue;
-        try {
-            const raw = readFileSync(path, 'utf-8');
-            const parsed = raw.split('\n').filter(Boolean).flatMap(line => {
-                try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
-            });
-            // If reading the shared file, filter to events that target this coordinator or are unscoped.
-            const filtered = (primaryDaemonId && path === getPendingEventsPath(meshId))
-                ? parsed.filter(e => !e.targetCoordinatorDaemonId || daemonIds.includes(e.targetCoordinatorDaemonId))
-                : parsed;
-            events.push(...filtered);
-        } catch { /* skip unreadable files */ }
-    }
-    return events;
 }
 
 function refineTerminalEventFromLedger(meshId: string, pending: readonly PendingMeshCoordinatorEvent[]): PendingMeshCoordinatorEvent[] {
@@ -783,9 +774,6 @@ function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMe
     return backfilled.length === 0 ? reconciled : [...reconciled, ...backfilled];
 }
 
-const MAX_PENDING_EVENTS_BYTES = 100 * 1024; // 100 KB — keep the pending file small
-const MAX_PENDING_EVENTS_KEEP = 50;           // keep the last 50 events when trimming
-
 // ─── SQLite pending-event retention ─────────────────────────────────────────
 // mesh_pending_events had no lifecycle GC: drained rows are retained forever (the
 // durable v2-eventId dedup baseline drainedEventIdsForMesh reads them), and an
@@ -808,6 +796,19 @@ const PENDING_EVENTS_UNDRAINED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 da
  */
 export function prunePendingMeshCoordinatorEventsRetention(): number {
     try {
+        // NOTE (held-event feeder): the retired JSONL trim used to mirror events it
+        // dropped into the ledger as `event_held` / `pending_trim_dropped`, feeding
+        // mesh_requeue_held_events. That trim existed to bound a 100 KB append-only
+        // FILE and has no successor here — SQLite growth is bounded by this
+        // retention sweep instead, on a 30-day undrained window rather than a
+        // 50-entry cap, so it discards far less and far later.
+        //
+        // The feeder itself is NOT lost: `event_held` is still produced by the v2
+        // enforce quarantine (ledgerRecordQuarantinedEvent, this file) and by two
+        // reconcile-loop hold paths, and mesh_requeue_held_events reads all of them.
+        // What is currently unmirrored is this sweep's own undrained delete. Adding
+        // that mirror needs a global "undrained rows about to expire" accessor on
+        // MeshRuntimeStore, which is deliberately out of scope for this change.
         const removed = MeshRuntimeStore.getInstance().prunePendingEvents({
             drainedOlderThanMs: PENDING_EVENTS_DRAINED_RETENTION_MS,
             undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS,
@@ -820,55 +821,6 @@ export function prunePendingMeshCoordinatorEventsRetention(): number {
         LOG.warn('MeshEvents', `Pending-event retention prune failed: ${e?.message || e}`);
         return 0;
     }
-}
-
-function trimPendingEventsIfNeeded(path: string): void {
-    try {
-        if (!existsSync(path)) return;
-        if (statSync(path).size <= MAX_PENDING_EVENTS_BYTES) return;
-        const lines = readFileSync(path, 'utf-8').split('\n').filter(Boolean);
-        if (lines.length <= MAX_PENDING_EVENTS_KEEP) return;
-        // C1 (data safety): this trim discards the OLDEST queued lines to keep the file
-        // bounded. An undelivered terminal completion among them would otherwise lose its
-        // worker summary silently (the JSONL is the only copy when the SQLite dual-write
-        // failed). Before dropping, mirror any meaningful (coordinator-facing / summary-
-        // bearing) dropped event into the ledger so it stays auditable and recoverable,
-        // and LOG.warn so the drop is observable instead of silent.
-        const dropped = lines.slice(0, lines.length - MAX_PENDING_EVENTS_KEEP);
-        for (const line of dropped) {
-            let event: PendingMeshCoordinatorEvent | undefined;
-            try { event = JSON.parse(line) as PendingMeshCoordinatorEvent; } catch { continue; }
-            if (!event || !event.meshId) continue;
-            const finalSummary = readMeshCompletionSummary(event.metadataEvent || {});
-            // "Meaningful" = would have been delivered to a coordinator (carries a message)
-            // or carries worker output worth preserving. Silent lifecycle events are not
-            // logged — losing them on trim is harmless (they re-drive nothing once stale).
-            if (!readNonEmptyString(event.coordinatorMessage) && !finalSummary) continue;
-            try {
-                appendLedgerEntry(event.meshId, {
-                    kind: 'event_held',
-                    ...(event.nodeId ? { nodeId: event.nodeId } : {}),
-                    payload: {
-                        event: event.event,
-                        reason: 'pending_trim_dropped',
-                        recoverable: true,
-                        nodeLabel: event.nodeLabel,
-                        ...(event.workspace ? { workspace: event.workspace } : {}),
-                        targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
-                        ...(readNonEmptyString(event.eventId) ? { eventId: event.eventId } : {}),
-                        queuedAt: event.queuedAt,
-                        ...(finalSummary ? { finalSummary } : {}),
-                        // Full original event for lossless mesh_requeue_held_events restore.
-                        heldEvent: event,
-                    },
-                });
-                LOG.warn('MeshEvents', `Pending-events trim dropping undelivered ${event.event} for mesh ${event.meshId} — recorded to ledger (recoverable)`);
-            } catch (e: any) {
-                LOG.warn('MeshEvents', `Failed to ledger-record trim-dropped ${event.event} for mesh ${event.meshId}: ${e?.message || e}`);
-            }
-        }
-        writeFileSync(path, lines.slice(-MAX_PENDING_EVENTS_KEEP).join('\n') + '\n', 'utf-8');
-    } catch { /* best-effort; if trim fails, append still proceeds */ }
 }
 
 /**
@@ -1074,7 +1026,7 @@ export function queuePendingMeshCoordinatorEvent(
 }
 
 /**
- * Persist an ALREADY-STAMPED pending event to both stores (dedup + SQLite + JSONL),
+ * Persist an ALREADY-STAMPED pending event to the SQLite inbox (dedup + insert),
  * without re-running the emit stamp. queuePendingMeshCoordinatorEvent stamps then
  * calls this; the only other caller is the test helper below, which needs to inject
  * a genuinely-unversioned (v1) row to exercise the drain-side v1 handling now that
@@ -1093,46 +1045,47 @@ function persistPendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent):
 
         const fingerprint = buildPendingEventFingerprint(event);
 
-        // G3: Write to SQLite inbox (primary path going forward)
-        let sqliteOk = false;
-        try {
-            MeshRuntimeStore.getInstance().insertPendingEvent({
-                id: randomUUID(),
-                meshId: event.meshId,
-                coordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
-                event: event.event,
-                payload: event,
-                fingerprint: fingerprint || null,
-                queuedAt: event.queuedAt,
-                // v2 envelope columns (B2a) — all nullable so v1 rows coexist. The
-                // authoritative copy still rides inside `payload`; these columns exist
-                // for queryable idempotency (event_id) and scope-based drain filtering
-                // (scope / intended_for) without JSON-parsing every row.
-                protocolVersion: event.protocolVersion ?? null,
-                eventId: event.eventId ?? null,
-                scope: event.scope ?? null,
-                dispatchedBy: event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
-                intendedFor: event.intendedFor ? JSON.stringify(event.intendedFor) : null,
-            });
-            sqliteOk = true;
-        } catch {
-            // SQLite write failure is non-fatal; JSONL fallback below still works.
-        }
-
-        // Also write to JSONL (retained as legacy/export artifact). Best-effort once
-        // SQLite (the primary store) has the event: a JSONL append failure (disk full,
-        // permissions) must NOT report the whole persist as failed when SQLite holds it.
-        try {
-            const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
-            trimPendingEventsIfNeeded(path);
-            appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
-        } catch (e: any) {
-            if (!sqliteOk) throw e; // neither store has it — surface as a real failure
-            LOG.warn('MeshEvents', `JSONL append failed for mesh ${event.meshId}; SQLite holds the event: ${e?.message || e}`);
-        }
+        // SQLite inbox — the ONLY store. There is no second copy: a failure here
+        // means the event is not queued anywhere, so it is rethrown into the outer
+        // catch (which returns false) rather than swallowed. The JSONL mirror that
+        // used to absorb this is gone.
+        //
+        // Losing that fallback is loudest on `mesh:dispatch_blocked`
+        // (mesh-queue-assignment notifyCoordinatorOfActionableSkip): that event is
+        // the compensating notification telling the coordinator its task was NOT
+        // dispatched — e.g. a target-session pin that expired, dropping a delta
+        // addressed to work already in flight. Silently failing to queue it is the
+        // exact failure it exists to prevent (measured: 74 minutes of a worker
+        // running on a premise a lost correction was meant to fix). So a persist
+        // failure is reported at ERROR with the event named, never at debug.
+        MeshRuntimeStore.getInstance().insertPendingEvent({
+            id: randomUUID(),
+            meshId: event.meshId,
+            coordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+            event: event.event,
+            payload: event,
+            fingerprint: fingerprint || null,
+            queuedAt: event.queuedAt,
+            // v2 envelope columns (B2a) — all nullable so v1 rows coexist. The
+            // authoritative copy still rides inside `payload`; these columns exist
+            // for queryable idempotency (event_id) and scope-based drain filtering
+            // (scope / intended_for) without JSON-parsing every row.
+            protocolVersion: event.protocolVersion ?? null,
+            eventId: event.eventId ?? null,
+            scope: event.scope ?? null,
+            dispatchedBy: event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
+            intendedFor: event.intendedFor ? JSON.stringify(event.intendedFor) : null,
+        });
         return true;
     } catch (e: any) {
-        LOG.warn('MeshEvents', `Failed to persist pending coordinator event: ${e?.message || e}`);
+        // ERROR, not warn: with the JSONL mirror retired this is total loss of the
+        // event, not a degraded-but-delivered path. Name the event and mesh so the
+        // dropped notification is identifiable after the fact.
+        LOG.error(
+            'MeshEvents',
+            `PENDING-EVENT PERSIST FAILED — ${event.event} for mesh ${event.meshId} is NOT queued and will NOT be delivered `
+            + `(SQLite is the only store; there is no fallback): ${e?.message || e}`,
+        );
         return false;
     }
 }
@@ -1166,112 +1119,28 @@ export function requeueDrainedPendingMeshCoordinatorEvent(event: PendingMeshCoor
     try {
         requeued = MeshRuntimeStore.getInstance().requeueDrainedPendingEventByFingerprint(event.meshId, fingerprint);
     } catch (e: any) {
-        LOG.warn('MeshEvents', `SQLite re-queue of held ${event.event} failed for mesh ${event.meshId}: ${e?.message || e}`);
-    }
-
-    // Restore the JSONL mirror too: the drain consumed its line, and the JSONL copy is
-    // the only store when SQLite is unavailable (better-sqlite3 missing / degraded).
-    // Guarded against re-appending a line the file already holds so repeated holds of
-    // the same event cannot grow the file without bound.
-    try {
-        const path = getPendingEventsPath(event.meshId, event.targetCoordinatorDaemonId);
-        const alreadyOnDisk = readPendingMeshCoordinatorEventsFromDisk(event.meshId, event.targetCoordinatorDaemonId)
-            .some(pending => buildPendingEventFingerprint(pending) === fingerprint);
-        if (!alreadyOnDisk) {
-            trimPendingEventsIfNeeded(path);
-            appendFileSync(path, JSON.stringify(event) + '\n', 'utf-8');
-            requeued = true;
-        }
-    } catch (e: any) {
-        if (!requeued) {
-            LOG.warn('MeshEvents', `Failed to durably re-queue held ${event.event} for mesh ${event.meshId}: ${e?.message || e}`);
-            return false;
-        }
-        LOG.warn('MeshEvents', `JSONL re-queue append failed for mesh ${event.meshId}; SQLite holds the event: ${e?.message || e}`);
+        // No JSONL mirror to fall back on: a failure here means the hold is not
+        // durable and the event will not be re-delivered after a restart.
+        LOG.error(
+            'MeshEvents',
+            `HELD-EVENT RE-QUEUE FAILED — ${event.event} for mesh ${event.meshId} was NOT durably returned to the queue `
+            + `(SQLite is the only store): ${e?.message || e}`,
+        );
+        return false;
     }
     return requeued;
 }
 
-// Atomically rename the file before reading so concurrent drains can't both consume
-// the same events. renameSync is atomic on POSIX (same filesystem); only one caller
-// wins the rename — the other gets ENOENT and returns null, preventing duplicate delivery.
-function atomicDrainFile(path: string): string | null {
-    const tmpPath = `${path}.draining`;
-    try {
-        renameSync(path, tmpPath);
-    } catch {
-        return null; // another drain already renamed it, or file doesn't exist
-    }
-    try {
-        const content = readFileSync(tmpPath, 'utf-8');
-        try { unlinkSync(tmpPath); } catch { /* already cleaned up */ }
-        return content;
-    } catch {
-        try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
-        return null;
-    }
-}
-
-// Selectively drain a JSONL pending-events file: atomically claim it (rename), then
-// consume only the lines whose parsed event matches `predicate` and rewrite the
-// remaining (kept) lines back to the original path. Unparseable lines are kept
-// untouched. Returns the consumed events. The rename makes claiming exclusive —
-// only one concurrent caller wins, so there is no double-consume of the same lines.
-function selectiveDrainFile(
-    path: string,
-    predicate: (event: PendingMeshCoordinatorEvent) => boolean,
-): PendingMeshCoordinatorEvent[] {
-    const tmpPath = `${path}.draining`;
-    try {
-        renameSync(path, tmpPath);
-    } catch {
-        return []; // another drain claimed it, or the file doesn't exist
-    }
-    let content: string;
-    try {
-        content = readFileSync(tmpPath, 'utf-8');
-    } catch {
-        try { unlinkSync(tmpPath); } catch { /* best-effort */ }
-        return [];
-    }
-
-    const consumed: PendingMeshCoordinatorEvent[] = [];
-    const keptLines: string[] = [];
-    for (const line of content.split('\n')) {
-        if (!line) continue;
-        let parsed: PendingMeshCoordinatorEvent | undefined;
-        try { parsed = JSON.parse(line) as PendingMeshCoordinatorEvent; } catch { parsed = undefined; }
-        if (parsed && predicate(parsed)) {
-            consumed.push(parsed);
-        } else {
-            keptLines.push(line); // non-matching or unparseable → leave queued
-        }
-    }
-
-    try {
-        if (keptLines.length > 0) {
-            writeFileSync(path, keptLines.join('\n') + '\n', 'utf-8');
-        }
-        unlinkSync(tmpPath);
-    } catch {
-        // If the rewrite/cleanup fails, restore the claimed file so no events are
-        // lost — the next drain retries the whole file.
-        try { if (existsSync(tmpPath) && !existsSync(path)) renameSync(tmpPath, path); } catch { /* best-effort */ }
-        return [];
-    }
-    return consumed;
-}
-
 /**
- * Drain and return pending coordinator events for meshId, removing the drained
- * ones from both the SQLite inbox and the JSONL legacy file.
+ * Drain and return pending coordinator events for meshId, marking the drained rows
+ * consumed in the SQLite inbox.
  *
  * When `opts.onlyEvents` is supplied, ONLY events whose name is in that set are
- * drained; every other event stays queued (undrained in SQLite, rewritten back to
- * the JSONL file). The reconcile loop uses this to force-drain terminal/force-inject
- * events into a *generating* coordinator while leaving non-force progress events for
- * the coordinator's next idle transition. The atomic SQLite drained=1 marking and the
- * atomic JSONL rename keep force-drain and a concurrent full drain from double-consuming.
+ * drained; every other event stays queued (undrained). The reconcile loop uses this
+ * to force-drain terminal/force-inject events into a *generating* coordinator while
+ * leaving non-force progress events for the coordinator's next idle transition. The
+ * atomic SQLite drained=1 marking keeps force-drain and a concurrent full drain from
+ * double-consuming.
  */
 export function drainPendingMeshCoordinatorEvents(
     meshId?: string,
@@ -1288,10 +1157,8 @@ export function drainPendingMeshCoordinatorEvents(
 
     // A daemon may answer to more than one coordinator-id form (its canonical
     // status id like `standalone_<machineId>` AND the bare machineId). Normalise
-    // to a list so both the SQLite IN-filter and the JSONL targeting predicate
-    // accept any of them.
+    // to a list so the SQLite IN-filter accepts any of them.
     const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
-    const primaryDaemonId = daemonIds[0];
 
     // B3a: the drainer's v2 identity, for unicast routing + eventId dedup. Derived
     // from the daemon ids the (untouchable) reconcile-loop already passes, so no
@@ -1306,23 +1173,12 @@ export function drainPendingMeshCoordinatorEvents(
     } catch { /* store unavailable — no durable baseline; batch guard still applies */ }
 
     const onlyEvents = opts?.onlyEvents;
-    const matchesFilter = (eventName: string): boolean => !onlyEvents || onlyEvents.has(eventName);
 
-    // Dual-write means SQLite and JSONL hold the same events. Both stores must be
-    // emptied in one drain call — draining only one leaves the other to re-deliver
-    // the same events on the next call. Merge with fingerprint dedup.
+    // SQLite is the sole store, and UNIQUE (mesh_id, fingerprint) already guarantees
+    // one row per event, so no cross-store fingerprint merge is needed here — the
+    // former pushUnique() existed only to collapse the SQLite/JSONL dual-store copy.
     const merged: PendingMeshCoordinatorEvent[] = [];
-    const seenFingerprints = new Set<string>();
-    const pushUnique = (event: PendingMeshCoordinatorEvent) => {
-        const fingerprint = buildPendingEventFingerprint(event);
-        if (fingerprint.trim()) {
-            if (seenFingerprints.has(fingerprint)) return;
-            seenFingerprints.add(fingerprint);
-        }
-        merged.push(event);
-    };
 
-    // G3: SQLite inbox
     try {
         const store = MeshRuntimeStore.getInstance();
         if (store.pendingEventCount(meshId) > 0) {
@@ -1336,55 +1192,28 @@ export function drainPendingMeshCoordinatorEvents(
                 { ...(onlyEvents ? { onlyEvents } : {}), drainedBy },
             )) {
                 const event = row.payload as PendingMeshCoordinatorEvent;
-                if (event) pushUnique(event);
+                if (event) merged.push(event);
             }
         }
     } catch (e: any) {
-        // SQLite drain failed — JSONL below still drains. Surface it: a silent
-        // failure here means the JSONL copy is emptied while the SQLite rows
-        // survive undrained, so the next drain re-delivers the same events to the
-        // coordinator (duplicate refine:completed etc.) with no diagnostic trail.
-        // Log-once (then debug): when better-sqlite3 is unavailable this throws every
-        // tick × mesh count, and the JSONL fallback below is the intended degraded
-        // path — so warn ONCE, then keep the per-cycle repetition at debug to stop the
-        // log flood without hiding the diagnosis (see loggedSqlitePendingDrainFailure).
+        // With the JSONL mirror retired there is no second store to fall back on, so
+        // a failure here means NOTHING drained this cycle — no half-drain, and no
+        // duplicate re-delivery on the next tick (the old failure mode, where the
+        // JSONL copy was emptied while the SQLite rows stayed undrained).
+        //
+        // Nothing was consumed, so events are not lost: the next tick retries them.
+        // Log-once then debug — when better-sqlite3 is unavailable this throws every
+        // tick × mesh count, and a flood would bury the diagnosis rather than surface
+        // it. The once-warn names the real consequence: delivery is STOPPED, not
+        // degraded (see loggedSqlitePendingDrainFailure).
         if (!loggedSqlitePendingDrainFailure) {
             loggedSqlitePendingDrainFailure = true;
-            LOG.warn('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId}; JSONL fallback only (further occurrences at debug): ${e?.message || e}`);
+            LOG.warn('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId} — NO events can be delivered while the store is unavailable (there is no fallback store; further occurrences at debug): ${e?.message || e}`);
         } else {
-            LOG.debug('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId}; JSONL fallback only: ${e?.message || e}`);
+            LOG.debug('MeshEvents', `SQLite pending-event drain failed for mesh ${meshId}; no events delivered this cycle: ${e?.message || e}`);
         }
     }
 
-    // JSONL (legacy / migration path) — always drained alongside SQLite.
-    // The scoped per-daemon file is keyed by a single id; use the primary. The
-    // shared (unscoped) file's targeting predicate accepts ANY of this daemon's ids.
-    const paths = primaryDaemonId
-        ? [getPendingEventsPath(meshId, primaryDaemonId), getPendingEventsPath(meshId)]
-        : [getPendingEventsPath(meshId)];
-    for (const path of paths) {
-        const isSharedFile = !!primaryDaemonId && path === getPendingEventsPath(meshId);
-        // Targeting predicate for the shared (unscoped) file: only this coordinator's
-        // events (or legacy untargeted ones) are eligible.
-        const targets = (e: PendingMeshCoordinatorEvent): boolean =>
-            !isSharedFile || !e.targetCoordinatorDaemonId || daemonIds.includes(e.targetCoordinatorDaemonId);
-
-        if (onlyEvents) {
-            // Selective JSONL drain: consume only matching events, rewrite the rest back.
-            for (const event of selectiveDrainFile(path, e => targets(e) && matchesFilter(e.event))) {
-                pushUnique(event);
-            }
-            continue;
-        }
-        const content = atomicDrainFile(path);
-        if (!content) continue;
-        const parsed = content.split('\n').filter(Boolean).flatMap(line => {
-            try { return [JSON.parse(line) as PendingMeshCoordinatorEvent]; } catch { return []; }
-        });
-        // If reading the shared file, filter to events that target this coordinator or are unscoped.
-        const filtered = isSharedFile ? parsed.filter(targets) : parsed;
-        for (const event of filtered) pushUnique(event);
-    }
     if (merged.length === 0) return [];
     // (Former R3 direct-delivered dedup removed.) Spontaneous PTY direct-inject no
     // longer exists — delivery is now queue-drain-only (reconcile loop or MCP pull),
@@ -1414,8 +1243,7 @@ export function drainPendingMeshCoordinatorEvents(
  *
  * Only removes events that have NOT yet been drained/delivered to the coordinator — an
  * already-delivered message cannot be unsent, but de-dup re-arm (caller side) plus this
- * retraction guarantee no NEW stale blocker accumulates. Best-effort across both the
- * SQLite inbox and the JSONL legacy files (scoped + shared). Returns rows removed.
+ * retraction guarantee no NEW stale blocker accumulates. Best-effort. Returns rows removed.
  */
 export function retractPendingDispatchBlockedEvent(
     meshId: string | undefined,
@@ -1439,18 +1267,10 @@ export function retractPendingDispatchBlockedEvent(
             if (matchesTask(row.payload as PendingMeshCoordinatorEvent)) ids.push(row.id);
         }
         if (ids.length) removed += store.deletePendingEventsById(ids);
-    } catch { /* best-effort — JSONL retraction below still runs */ }
-
-    // JSONL legacy files: selectively drop matching lines (rewrites the rest back).
-    const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
-    const primaryDaemonId = daemonIds[0];
-    const paths = primaryDaemonId
-        ? [getPendingEventsPath(meshId, primaryDaemonId), getPendingEventsPath(meshId)]
-        : [getPendingEventsPath(meshId)];
-    for (const path of paths) {
-        try {
-            removed += selectiveDrainFile(path, matchesTask).length;
-        } catch { /* best-effort */ }
+    } catch (e: any) {
+        // Best-effort: a failed retraction leaves a stale blocker visible to the
+        // coordinator, which is noisy but not lossy.
+        LOG.warn('MeshEvents', `Failed to retract dispatch_blocked for task ${taskId} on mesh ${meshId}: ${e?.message || e}`);
     }
     return removed;
 }
@@ -1472,32 +1292,22 @@ export function getPendingMeshCoordinatorEvents(
         priorDrainedEventIds = MeshRuntimeStore.getInstance().drainedEventIdsForMesh(meshId);
     } catch { /* store unavailable — batch guard still applies */ }
 
-    // Merge SQLite (primary) + JSONL (legacy) with fingerprint dedup.
+    // SQLite inbox (non-destructive peek at undrained rows). UNIQUE (mesh_id,
+    // fingerprint) already guarantees one row per event, so no cross-store dedup
+    // is needed — that only existed to collapse the retired JSONL mirror's copy.
     const merged: PendingMeshCoordinatorEvent[] = [];
-    const seenFingerprints = new Set<string>();
-    const pushUnique = (event: PendingMeshCoordinatorEvent) => {
-        const fingerprint = buildPendingEventFingerprint(event);
-        if (fingerprint.trim()) {
-            if (seenFingerprints.has(fingerprint)) return;
-            seenFingerprints.add(fingerprint);
-        }
-        merged.push(event);
-    };
-
-    // G3: SQLite inbox (non-destructive peek at undrained rows)
     try {
         const store = MeshRuntimeStore.getInstance();
         if (store.pendingEventCount(meshId) > 0) {
             for (const row of store.peekPendingEvents(meshId, daemonIds.length > 0 ? daemonIds : undefined)) {
                 const event = row.payload as PendingMeshCoordinatorEvent;
-                if (event) pushUnique(event);
+                if (event) merged.push(event);
             }
         }
-    } catch { /* SQLite unavailable — JSONL fallback below */ }
-
-    // JSONL (legacy)
-    for (const event of readPendingMeshCoordinatorEventsFromDisk(meshId, daemonIds)) {
-        pushUnique(event);
+    } catch {
+        // Non-destructive path (status counts, reconcile pre-checks): a store failure
+        // reports "nothing pending". The destructive drain logs the same failure
+        // loudly, so this stays quiet to avoid flooding the frequent poll path.
     }
 
     // (Former R3 direct-delivered filter removed — no PTY direct-inject path exists
@@ -1539,8 +1349,8 @@ function annotatePendingEventWithTurnProjection(meshId: string, event: PendingMe
 }
 
 /**
- * Test helper: purge all pending-event state for a mesh — SQLite rows
- * (including drained fingerprint history) and JSONL files.
+ * Test helper: purge all pending-event state for a mesh — SQLite rows,
+ * including drained fingerprint history.
  */
 export function __clearMeshPendingEventsForTests(meshId: string): void {
     try {
@@ -1732,15 +1542,7 @@ export function requeueHeldMeshCoordinatorEvents(
 }
 
 /** Explicitly clear all pending coordinator events for a mesh (and coordinator if scoped). */
-export function clearPendingMeshCoordinatorEvents(meshId?: string, coordinatorDaemonId?: string): void {
+export function clearPendingMeshCoordinatorEvents(meshId?: string, _coordinatorDaemonId?: string): void {
     if (!meshId) return;
-    // Clear SQLite rows
     try { MeshRuntimeStore.getInstance().clearPendingEventsForMesh(meshId); } catch { /* store unavailable */ }
-    // Clear JSONL files
-    const paths = coordinatorDaemonId
-        ? [getPendingEventsPath(meshId, coordinatorDaemonId), getPendingEventsPath(meshId)]
-        : [getPendingEventsPath(meshId)];
-    for (const path of paths) {
-        if (existsSync(path)) try { unlinkSync(path); } catch { /* already removed */ }
-    }
 }

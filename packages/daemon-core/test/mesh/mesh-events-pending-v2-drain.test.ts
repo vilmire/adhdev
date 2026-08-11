@@ -177,13 +177,43 @@ describe('mesh pending-event — v2 drain routing (B3a accept-and-warn)', () => 
         expect(eventId).toBeTruthy();
 
         // Re-queue the SAME event (same eventId — stampPendingEventV2 preserves it).
-        // A distinct fingerprint would otherwise let it through; the eventId dedup must
-        // still skip it because that eventId was already drained.
         __resetMeshV2DrainCountersForTests();
         const requeue = { ...first[0], queuedAt: Date.now() + 1 } as PendingMeshCoordinatorEvent;
-        // The fingerprint dedup on queue would suppress an identical event; mutate the
-        // metadata timestamp so the fingerprint differs and only eventId dedup can catch it.
         requeue.metadataEvent = { ...requeue.metadataEvent, timestamp: Date.now() + 999 };
+        queuePendingMeshCoordinatorEvent(requeue);
+
+        // Not re-delivered. Two independent suppressors cover this now that SQLite is
+        // the sole store, and which one fires depends on the event type:
+        //   - this event is a TERMINAL COMPLETION carrying a taskId, so DUPNOTIF
+        //     fingerprints it by taskId and deliberately IGNORES the timestamp above.
+        //     The drained row still occupies that fingerprint, so the store's
+        //     INSERT OR IGNORE on UNIQUE (mesh_id, fingerprint) drops the re-queue
+        //     before it is ever queued (mesh-runtime-store.ts documents this).
+        //   - for an event whose fingerprint genuinely differs, the row lands and the
+        //     drain-side v2 eventId dedup skips it (v2DedupSkipped).
+        // The invariant under test — an already-drained eventId is never delivered
+        // twice — holds either way; only the layer that enforces it differs.
+        const second = drainPendingMeshCoordinatorEvents(meshId, BARE, { drainerIdentity: ident(BARE) });
+        expect(second).toHaveLength(0);
+    });
+
+    it('bumps v2DedupSkipped when an already-drained eventId returns under a DIFFERENT fingerprint', () => {
+        const meshId = `mesh-v2dedup2-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+
+        const evt = makeTerminal(meshId, { coordinatorMessage: 'once' });
+        queuePendingMeshCoordinatorEvent(evt);
+        const first = drainPendingMeshCoordinatorEvents(meshId, BARE, { drainerIdentity: ident(BARE) });
+        expect(first).toHaveLength(1);
+        const eventId = (first[0] as PendingMeshCoordinatorEvent).eventId;
+        expect(eventId).toBeTruthy();
+
+        // Same eventId, but a DIFFERENT taskId — so DUPNOTIF produces a different
+        // fingerprint and the unique-index suppressor cannot fire. The row lands, and
+        // only the drain-side eventId idempotency can stop the re-delivery.
+        __resetMeshV2DrainCountersForTests();
+        const requeue = { ...first[0], queuedAt: Date.now() + 1 } as PendingMeshCoordinatorEvent;
+        requeue.metadataEvent = { ...requeue.metadataEvent, taskId: randomUUID() };
         queuePendingMeshCoordinatorEvent(requeue);
 
         const second = drainPendingMeshCoordinatorEvents(meshId, BARE, { drainerIdentity: ident(BARE) });

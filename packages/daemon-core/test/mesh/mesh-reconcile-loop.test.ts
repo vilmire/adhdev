@@ -594,13 +594,17 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
-  it('C1: pending-file trim records dropped undelivered completions to the ledger (no silent loss)', () => {
+  it('C1: a large backlog of undelivered completions is not dropped (no silent loss)', () => {
     const meshId = `mesh_trim_drop_${Date.now()}`
     try {
-      // Each event carries a ~4KB finalSummary; 60 unique events push the per-mesh pending
-      // JSONL well past the 100KB / 50-entry trim threshold, so the oldest are dropped on a
-      // later queue call. The trim must mirror each dropped (coordinator-facing) event into
-      // the ledger rather than discarding it silently.
+      // This used to pin the JSONL trim: 60 events × ~4KB pushed the per-mesh pending
+      // file past its 100KB / 50-entry cap, and the trim had to mirror each dropped
+      // event into the ledger as `pending_trim_dropped` rather than discard it silently.
+      //
+      // SQLite is now the sole store and has no size/count cap — growth is bounded by
+      // prunePendingMeshCoordinatorEventsRetention on a 30-day undrained window instead.
+      // So the same backlog is simply NOT dropped, which is a strictly stronger
+      // guarantee than mirroring the loss. Assert that directly.
       const bigSummary = 'S'.repeat(4096)
       for (let i = 0; i < 60; i++) {
         queuePendingMeshCoordinatorEvent({
@@ -608,16 +612,21 @@ describe('runMeshReconcileTick', () => {
           meshId,
           nodeLabel: "Node 'n'",
           nodeId: 'n',
-          metadataEvent: { sessionId: `sess-${i}`, timestamp: 1000 + i, finalSummary: bigSummary },
+          metadataEvent: { sessionId: `sess-${i}`, taskId: `task-${i}`, timestamp: 1000 + i, finalSummary: bigSummary },
           coordinatorMessage: `completion ${i}`,
           queuedAt: 1000 + i,
         })
       }
+
+      // Every queued completion survives — nothing was trimmed away.
+      const pending = getPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(60)
+      expect((pending[0].metadataEvent as any).finalSummary).toBe(bigSummary)
+
+      // And nothing was recorded as dropped, because nothing was.
       const dropped = readLedgerEntries(meshId)
         .filter(e => e.kind === 'event_held' && (e.payload as any).reason === 'pending_trim_dropped')
-      expect(dropped.length).toBeGreaterThan(0)
-      expect((dropped[0].payload as any).recoverable).toBe(true)
-      expect((dropped[0].payload as any).finalSummary).toBe(bigSummary)
+      expect(dropped).toHaveLength(0)
     } finally {
       cleanup(meshId)
     }

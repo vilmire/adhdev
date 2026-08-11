@@ -9,7 +9,7 @@ import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, consumeSessionDelivery } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
-import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, prunePendingMeshCoordinatorEventsRetention, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { queuePendingMeshCoordinatorEvent, requeueDrainedPendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, prunePendingMeshCoordinatorEventsRetention, readV2EnvelopeFromWire, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
@@ -2709,7 +2709,21 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
         // must not be injected): re-queue so the reconcile loop owns it (lazy-synth / strict
         // hold/expire). Re-queue preserves queuedAt so the strict TTL measures true age.
         if (targets.length === 0 || !pending.coordinatorMessage) {
-            try { queuePendingMeshCoordinatorEvent(pending); } catch { /* best-effort re-queue */ }
+            // MUST be requeueDrainedPendingMeshCoordinatorEvent, not
+            // queuePendingMeshCoordinatorEvent: this event was just DRAINED, and the
+            // normal persist path cannot return a drained event to the queue. The
+            // drained row still occupies UNIQUE (mesh_id, fingerprint), so INSERT OR
+            // IGNORE silently discards the fresh copy while hasPendingEventFingerprint
+            // (which filters drained = 0) reports no duplicate — the caller is told the
+            // re-queue worked when nothing was written. The requeue helper instead flips
+            // the existing row back to drained = 0, which also clears the v2 eventId
+            // drained-baseline. queuedAt is preserved either way, so the strict TTL keeps
+            // measuring true age.
+            //
+            // This was masked until now: the retired JSONL mirror re-appended the line
+            // unconditionally, so the event came back on the next drain even though the
+            // SQLite half was a no-op.
+            try { requeueDrainedPendingMeshCoordinatorEvent(pending); } catch { /* best-effort re-queue */ }
             continue;
         }
         const message = pending.coordinatorMessage;
