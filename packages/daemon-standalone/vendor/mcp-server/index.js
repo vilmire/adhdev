@@ -3709,6 +3709,10 @@ async function drainCoordinatorPendingEvents(ctx, opts) {
       if (counters && typeof counters === "object") {
         ctx.lastMeshProtocolV2Counters = counters;
       }
+      const retentionCounters = payloadRaw?.pendingRetentionCounters ?? raw?.pendingRetentionCounters;
+      if (retentionCounters && typeof retentionCounters === "object") {
+        ctx.lastPendingRetentionCounters = retentionCounters;
+      }
       const hasLiveCliCoordinator = payloadRaw?.hasLiveCliCoordinator === true || raw?.hasLiveCliCoordinator === true;
       const surfacedForSelfCoordinator = payloadRaw?.surfacedForSelfCoordinator === true || raw?.surfacedForSelfCoordinator === true;
       const localEvents = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
@@ -4426,6 +4430,9 @@ async function meshStatus(ctx, args = {}) {
     }
     if (ctx.lastMeshProtocolV2Counters) {
       response.meshProtocolV2Counters = ctx.lastMeshProtocolV2Counters;
+    }
+    if (ctx.lastPendingRetentionCounters) {
+      response.pendingRetentionCounters = ctx.lastPendingRetentionCounters;
     }
   } catch {
   }
