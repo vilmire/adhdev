@@ -24,6 +24,11 @@ const SRC = join(import.meta.dirname, '../../src/mesh')
 // behavior change). Only the path follows it — every assertion below is unchanged.
 const reconcile = readFileSync(join(SRC, 'mesh-reconcile-stranded-dispatch.ts'), 'utf-8')
 const assignment = readFileSync(join(SRC, 'mesh-queue-assignment.ts'), 'utf-8')
+// The actionable-skip classifier and its guidance text moved out of mesh-queue-assignment.ts
+// into mesh-skip-notify.ts (pure move, no behavior change). Only the path follows them —
+// every assertion below is unchanged. Without this the two scans would slice an empty
+// string and pass against nothing.
+const skipNotify = readFileSync(join(SRC, 'mesh-skip-notify.ts'), 'utf-8')
 
 /** Body of the delivered-no-turn GENERATING branch. */
 function generatingBranch(): string {
@@ -69,20 +74,18 @@ describe('generating hold is bounded (defect B)', () => {
 
 describe('expired target pin reaches the coordinator (defect A — the real one)', () => {
   it('target_session_pin_expired is classified actionable', () => {
-    const list = assignment.slice(
-      assignment.indexOf('const ACTIONABLE_SKIP_REASON_PREFIXES = ['),
-      assignment.indexOf('];', assignment.indexOf('const ACTIONABLE_SKIP_REASON_PREFIXES = [')),
-    )
+    const listStart = skipNotify.indexOf('const ACTIONABLE_SKIP_REASON_PREFIXES = [')
+    expect(listStart, 'actionable-skip classifier list not found').toBeGreaterThan(-1)
+    const list = skipNotify.slice(listStart, skipNotify.indexOf('];', listStart))
     expect(list).toContain("'target_session_pin_expired'")
   })
 
   it('carries guidance saying the delta did NOT reach its addressee', () => {
     // The actionable part is not "a pin expired" but "assume the worker never got your
     // correction and is still acting on the old premise".
-    const guidance = assignment.slice(
-      assignment.indexOf("if (reason === 'target_session_pin_expired')"),
-      assignment.indexOf('};', assignment.indexOf("if (reason === 'target_session_pin_expired')")),
-    )
+    const guidanceStart = skipNotify.indexOf("if (reason === 'target_session_pin_expired')")
+    expect(guidanceStart, 'pin-expired guidance branch not found').toBeGreaterThan(-1)
+    const guidance = skipNotify.slice(guidanceStart, skipNotify.indexOf('};', guidanceStart))
     expect(guidance).toMatch(/NOT reach the session/i)
     expect(guidance).toMatch(/still acting on its previous instructions/i)
   })
