@@ -5,7 +5,13 @@ node_modules/
 dist/
 packages/daemon-standalone/public/
 .wrangler/
+# daemon-core's tsup outDir is dist/, so any .d.ts/.js under src/ is a stray
+# build artifact, not source. Hand-authored ambient declarations (this repo's
+# convention: vite-env.d.ts in Vite packages) are not needed here — daemon-core
+# has no `declare global`/`declare module` file today — but if one is ever
+# added, name it *.ambient.d.ts to keep it out of this pattern.
 packages/daemon-core/src/**/*.d.ts
+!packages/daemon-core/src/**/*.ambient.d.ts
 packages/daemon-core/src/**/*.js
 
 # Environment
