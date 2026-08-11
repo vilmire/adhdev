@@ -297,7 +297,10 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
  * user who deliberately turned the label ON keeps it.
  */
 function resolveQuotaShowAccountEmail(parsed: Record<string, any>): boolean {
-    const fallback = DEFAULT_CONFIG.quotaShowAccountEmail ?? true;
+    // `?? false` is unreachable today (DEFAULT_CONFIG always sets the key) but
+    // must not read `?? true`: a PII opt-in has to fail closed, so if the key
+    // ever goes missing the answer is OFF, never ON.
+    const fallback = DEFAULT_CONFIG.quotaShowAccountEmail ?? false;
     if (parsed.quotaShowAccountEmailSetByUser === true) {
         return asBoolean(parsed.quotaShowAccountEmail, fallback);
     }
