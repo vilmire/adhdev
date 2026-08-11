@@ -787,34 +787,134 @@ function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMe
 const PENDING_EVENTS_DRAINED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
 const PENDING_EVENTS_UNDRAINED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+/** Reason stamped on an `event_held` entry produced by the retention sweep below —
+ *  the SQLite-era successor to the retired JSONL trim's `pending_trim_dropped`. Kept
+ *  as its own string (not reusing that literal) because the trigger is genuinely
+ *  different: age-based (30-day undrained window), not a 50-entry count cap. */
+export const PENDING_RETENTION_EXPIRED_HOLD_REASON = 'pending_retention_expired';
+
+/** Observability counters for the pending-event retention sweep (this file's
+ *  prunePendingMeshCoordinatorEventsRetention). Process-lifetime totals, mirroring
+ *  the meshV2DrainCounters pattern above. `undrainedExpired` is the one that matters
+ *  operationally: every increment is a genuine silent-drop risk (an event that never
+ *  reached a coordinator) that this sweep now mirrors to `event_held` instead of
+ *  deleting outright, so a non-zero count is recoverable via mesh_requeue_held_events,
+ *  not a loss report. `drainedExpired` is NOT a drop (the coordinator already
+ *  consumed those rows) and is tracked only for visibility into table growth. */
+const pendingRetentionCounters = {
+    /** Already-drained rows deleted past the 7-day dedup-useful window. Not a drop. */
+    drainedExpired: 0,
+    /** Never-delivered rows deleted past the 30-day undrained window. A genuine
+     *  silent-drop risk — mirrored to event_held before deletion (see below). */
+    undrainedExpired: 0,
+    /** undrainedExpired rows that failed to mirror to the ledger (ledger write threw).
+     *  Non-zero here means those specific rows are NOT recoverable via
+     *  mesh_requeue_held_events — the delete still proceeds (retention must not wedge
+     *  on a ledger fault), but this count is the operator's signal of true loss. */
+    undrainedExpiredMirrorFailed: 0,
+    /** How many times the sweep has run and found nothing to prune (0 in both
+     *  windows). Purely diagnostic — confirms the sweep is actually firing. */
+    sweepsNoop: 0,
+};
+
+/** Observability accessor for the pending-event retention counters. Surfaced via
+ *  mesh_status / mesh_events alongside meshV2DrainCounters (see repo-mesh-types.ts
+ *  MeshProtocolV2Counters / high-family/mesh-status.ts). */
+export function getPendingRetentionCounters(): Readonly<typeof pendingRetentionCounters> {
+    return { ...pendingRetentionCounters };
+}
+
+/** Test helper: zero the pending-retention counters so a test starts clean. */
+export function __resetPendingRetentionCountersForTests(): void {
+    for (const k of Object.keys(pendingRetentionCounters) as Array<keyof typeof pendingRetentionCounters>) {
+        pendingRetentionCounters[k] = 0;
+    }
+}
+
+/**
+ * Mirror an undrained-expired pending-event row to the mesh ledger as a recoverable
+ * `event_held` entry, in the exact shape ledgerRecordQuarantinedEvent /
+ * mesh-reconcile-coordinator-drain use, so mesh_requeue_held_events can restore it
+ * losslessly. Best-effort: a ledger write failure must not block the retention
+ * delete (an unbounded table is worse than one unmirrored row), but it is counted
+ * via undrainedExpiredMirrorFailed and logged so the loss is not silent either.
+ */
+function ledgerRecordExpiredUndrainedEvent(row: { id: string; meshId: string; event: string; payload: unknown }): void {
+    try {
+        const restored = (row.payload && typeof row.payload === 'object') ? row.payload as PendingMeshCoordinatorEvent : undefined;
+        const finalSummary = restored?.metadataEvent ? readMeshCompletionSummary(restored.metadataEvent) : undefined;
+        appendLedgerEntry(row.meshId, {
+            kind: 'event_held',
+            ...(restored?.nodeId ? { nodeId: restored.nodeId } : {}),
+            payload: {
+                event: row.event,
+                reason: PENDING_RETENTION_EXPIRED_HOLD_REASON,
+                recoverable: true,
+                nodeLabel: restored?.nodeLabel ?? '',
+                ...(restored?.workspace ? { workspace: restored.workspace } : {}),
+                targetCoordinatorDaemonId: restored?.targetCoordinatorDaemonId ?? null,
+                ...(readNonEmptyString(restored?.eventId) ? { eventId: restored!.eventId } : {}),
+                queuedAt: restored?.queuedAt ?? null,
+                ...(finalSummary ? { finalSummary } : {}),
+                // Full original event so mesh_requeue_held_events can restore it
+                // losslessly (event_held→pending), same as every other event_held feeder.
+                ...(restored ? { heldEvent: restored } : {}),
+            },
+        });
+    } catch (e: any) {
+        pendingRetentionCounters.undrainedExpiredMirrorFailed++;
+        LOG.warn('MeshEvents', `Failed to ledger-record retention-expired pending event ${row.event} (row ${row.id}, mesh ${row.meshId}) — it is being deleted UNRECOVERABLY: ${e?.message || e}`);
+    }
+}
+
 /**
  * Retention sweep for the SQLite mesh_pending_events inbox. Deletes long-drained
  * rows (past the idempotency-useful window) and long-orphaned undrained rows (a
  * coordinator identity that never returned). Best-effort and idempotent: a store
  * failure or an empty table is a cheap no-op. Called from the periodic mesh-event
- * maintenance sweep. Returns the number of rows pruned (0 when nothing to do).
+ * maintenance sweep. Returns the total number of rows pruned (0 when nothing to do).
+ *
+ * Every undrained-expired row is a genuine silent-drop risk — it was queued for a
+ * coordinator that never drained it — so before deleting them this mirrors each one
+ * into the mesh ledger as `event_held` (reason: pending_retention_expired), the same
+ * recovery channel the retired JSONL trim's `pending_trim_dropped` used to feed.
+ * mesh_requeue_held_events can restore them afterward. The drop itself is also logged
+ * at WARN with the count and the mesh ids affected, so it is visible at the moment it
+ * happens rather than only discoverable by later running mesh_requeue_held_events —
+ * that historical blind spot (130 drops across 4 days surfaced only in bulk, well
+ * after the fact) is exactly what this sweep must not repeat. The WARN always names
+ * the sweep's OWN timestamp as the drop time, never a later recovery time, so it
+ * cannot be misread as "just happened" during a later requeue.
  */
 export function prunePendingMeshCoordinatorEventsRetention(): number {
     try {
-        // NOTE (held-event feeder): the retired JSONL trim used to mirror events it
-        // dropped into the ledger as `event_held` / `pending_trim_dropped`, feeding
-        // mesh_requeue_held_events. That trim existed to bound a 100 KB append-only
-        // FILE and has no successor here — SQLite growth is bounded by this
-        // retention sweep instead, on a 30-day undrained window rather than a
-        // 50-entry cap, so it discards far less and far later.
-        //
-        // The feeder itself is NOT lost: `event_held` is still produced by the v2
-        // enforce quarantine (ledgerRecordQuarantinedEvent, this file) and by two
-        // reconcile-loop hold paths, and mesh_requeue_held_events reads all of them.
-        // What is currently unmirrored is this sweep's own undrained delete. Adding
-        // that mirror needs a global "undrained rows about to expire" accessor on
-        // MeshRuntimeStore, which is deliberately out of scope for this change.
-        const removed = MeshRuntimeStore.getInstance().prunePendingEvents({
+        const { drainedExpired, undrainedExpired, undrainedRows } = MeshRuntimeStore.getInstance().prunePendingEvents({
             drainedOlderThanMs: PENDING_EVENTS_DRAINED_RETENTION_MS,
             undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS,
         });
+
+        pendingRetentionCounters.drainedExpired += drainedExpired;
+        pendingRetentionCounters.undrainedExpired += undrainedExpired;
+
+        if (undrainedRows.length > 0) {
+            for (const row of undrainedRows) {
+                ledgerRecordExpiredUndrainedEvent(row);
+            }
+            const meshIds = [...new Set(undrainedRows.map(r => r.meshId))];
+            const droppedAt = new Date().toISOString();
+            LOG.warn(
+                'MeshEvents',
+                `Pending-event retention DROPPED ${undrainedRows.length} never-delivered event(s) at ${droppedAt} `
+                + `(queued >30d, still undrained) across mesh(es) ${meshIds.join(', ')} — mirrored to the ledger as `
+                + `event_held (reason: ${PENDING_RETENTION_EXPIRED_HOLD_REASON}); recover with mesh_requeue_held_events.`,
+            );
+        }
+
+        const removed = drainedExpired + undrainedExpired;
         if (removed > 0) {
             LOG.info('MeshEvents', `Pruned ${removed} stale pending-event row(s) (drained >7d / undrained >30d)`);
+        } else {
+            pendingRetentionCounters.sweepsNoop++;
         }
         return removed;
     } catch (e: any) {

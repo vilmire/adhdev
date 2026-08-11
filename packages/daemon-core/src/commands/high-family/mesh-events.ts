@@ -15,6 +15,7 @@ import {
     getMeshV2DrainCounters,
     getMeshV2BackstopCounters,
     isMeshProtocolV2EnforceEnabled,
+    getPendingRetentionCounters,
 } from '../../mesh/mesh-events.js';
 import { normalizeInteractivePromptResponse } from '../../providers/types/interactive-prompt.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
@@ -79,11 +80,15 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
             drain: { ...getMeshV2DrainCounters() },
             backstop: { ...getMeshV2BackstopCounters() },
         };
+        // Same rationale as meshProtocolV2Counters above: ride the live pending-event
+        // retention counters on the drain response so a pure stdio MCP coordinator sees
+        // undrainedExpired (silent-drop risk, mirrored to event_held) without a separate call.
+        const pendingRetentionCounters = { ...getPendingRetentionCounters() };
         // SELF-COORDINATOR INBOX LEVEL-DRAIN: when the busy local coordinator drained its OWN
         // inbox (selfCoordinatorInboxRead), tell the puller these events were surfaced through
         // the caller's tool result — it must NOT re-forward them into the (busy) PTY (that is the
         // lossy path). Absent the flag, delivery is unchanged (reconcile-owned PTY / remote pull).
-        return { success: true, events, hasLiveCliCoordinator, meshProtocolV2Counters, ...(selfCoordinatorInboxRead ? { surfacedForSelfCoordinator: true } : {}) };
+        return { success: true, events, hasLiveCliCoordinator, meshProtocolV2Counters, pendingRetentionCounters, ...(selfCoordinatorInboxRead ? { surfacedForSelfCoordinator: true } : {}) };
     },
 
     interactive_prompt_response: async (ctx: HighFamilyContext, args: any) => {

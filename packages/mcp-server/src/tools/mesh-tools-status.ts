@@ -964,6 +964,14 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         if (ctx.lastMeshProtocolV2Counters) {
             response.meshProtocolV2Counters = ctx.lastMeshProtocolV2Counters;
         }
+
+        // Pending-event retention sweep counters (see MeshContext.lastPendingRetentionCounters).
+        // undrainedExpired non-zero is the operational signal: events queued for a coordinator
+        // that were deleted before ever being drained. Mirrored to event_held first, so this
+        // is a "check mesh_requeue_held_events" flag, not a bare loss report.
+        if (ctx.lastPendingRetentionCounters) {
+            response.pendingRetentionCounters = ctx.lastPendingRetentionCounters;
+        }
     } catch {
         // Non-fatal: pending events are best-effort.
     }

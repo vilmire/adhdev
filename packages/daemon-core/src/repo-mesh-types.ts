@@ -1578,6 +1578,28 @@ export interface RepoMeshStatus {
      * rollout-health signal (target 0). Omitted when unavailable.
      */
     meshProtocolV2Counters?: MeshProtocolV2Counters;
+    /**
+     * Live process-lifetime counters for the mesh_pending_events retention sweep
+     * (age-based: drained rows >7d, undrained rows >30d). `undrainedExpired` is the
+     * operational signal — every increment is a pending event that was queued for a
+     * coordinator but NEVER delivered before its 30-day window expired; the sweep
+     * mirrors each one to the ledger as `event_held` (reason: pending_retention_expired)
+     * before deleting it, so it stays recoverable via mesh_requeue_held_events instead
+     * of vanishing. `undrainedExpiredMirrorFailed` non-zero means some of those rows
+     * are genuinely unrecoverable (the ledger write itself failed). `drainedExpired`
+     * is NOT a drop (the coordinator already consumed those rows) — tracked only for
+     * table-growth visibility. Diagnostic-only and never cached (a live snapshot).
+     * Omitted when unavailable.
+     */
+    pendingRetentionCounters?: MeshPendingRetentionCounters;
+}
+
+/** Live pending-event retention sweep counters (see RepoMeshStatus.pendingRetentionCounters). */
+export interface MeshPendingRetentionCounters {
+    drainedExpired: number;
+    undrainedExpired: number;
+    undrainedExpiredMirrorFailed: number;
+    sweepsNoop: number;
 }
 
 /** T6 (B3c) live v2 enforce/observability counters (see RepoMeshStatus.meshProtocolV2Counters). */

@@ -2733,21 +2733,46 @@ export class MeshRuntimeStore {
      *     receives its backlog; only genuinely unrecoverable orphans are swept.
      *
      * Both windows key off `queued_at` (always present) — `drained_at` can be NULL on
-     * legacy rows. Returns the number of rows deleted. Best-effort / idempotent:
-     * running it repeatedly with nothing to prune is a cheap no-op.
+     * legacy rows. Returns the number of rows deleted, split by which window matched:
+     * `drainedExpired` (already-delivered rows past the dedup-useful window — not a
+     * drop, the coordinator already got these) and `undrainedExpired` (rows that were
+     * NEVER delivered — a genuine silent drop, same shape as the retired JSONL trim's
+     * `pending_trim_dropped`). `undrainedRows` carries the id/meshId/event/payload of
+     * every undrained-expired row BEFORE deletion so the caller can mirror it to the
+     * mesh ledger as `event_held` (recoverable via mesh_requeue_held_events) instead of
+     * losing it silently — this is the observability gap the retired trim used to cover
+     * and the SQLite-only cutover left open. Best-effort / idempotent: running it
+     * repeatedly with nothing to prune is a cheap no-op.
      */
-    prunePendingEvents(opts: { drainedOlderThanMs: number; undrainedOlderThanMs: number }): number {
+    prunePendingEvents(opts: { drainedOlderThanMs: number; undrainedOlderThanMs: number }): {
+        drainedExpired: number;
+        undrainedExpired: number;
+        undrainedRows: Array<{ id: string; meshId: string; event: string; payload: unknown }>;
+    } {
         const now = Date.now();
         const drainedCutoff = now - Math.max(0, opts.drainedOlderThanMs);
         const undrainedCutoff = now - Math.max(0, opts.undrainedOlderThanMs);
-        let removed = 0;
-        removed += this.db.prepare(
+
+        // Capture the undrained-expired rows BEFORE deleting them — these never
+        // reached a coordinator, so deleting them is a silent drop unless the caller
+        // mirrors this snapshot to the ledger first.
+        const undrainedSelectRows = this.db.prepare(
+            'SELECT id, mesh_id, event, payload FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?'
+        ).all(undrainedCutoff) as Array<{ id: string; mesh_id: string; event: string; payload: string }>;
+        const undrainedRows = undrainedSelectRows.map(r => ({
+            id: r.id,
+            meshId: r.mesh_id,
+            event: r.event,
+            payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
+        }));
+
+        const drainedExpired = this.db.prepare(
             'DELETE FROM mesh_pending_events WHERE drained = 1 AND queued_at < ?'
         ).run(drainedCutoff).changes;
-        removed += this.db.prepare(
+        const undrainedExpired = this.db.prepare(
             'DELETE FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?'
         ).run(undrainedCutoff).changes;
-        return removed;
+        return { drainedExpired, undrainedExpired, undrainedRows };
     }
 
     // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────

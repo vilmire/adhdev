@@ -20,6 +20,8 @@ export {
     readV2EnvelopeFromWire,
     getMeshV2DrainCounters,
     isMeshProtocolV2EnforceEnabled,
+    getPendingRetentionCounters,
+    PENDING_RETENTION_EXPIRED_HOLD_REASON,
 } from './mesh-events-pending.js';
 
 export {

@@ -396,6 +396,15 @@ export interface MeshContext {
      * a second daemon round-trip. Absent on version-skewed daemons that don't ride it.
      */
     lastMeshProtocolV2Counters?: MeshProtocolV2CountersSnapshot;
+    /**
+     * Pending-event retention sweep counters ridden on the most recent local
+     * get_pending_mesh_events drain response (set by drainCoordinatorPendingEvents),
+     * same rationale as lastMeshProtocolV2Counters above. `undrainedExpired` non-zero
+     * means the sweep deleted events that were never delivered — mirrored to the
+     * ledger as event_held (reason: pending_retention_expired), recoverable via
+     * mesh_requeue_held_events. Absent on version-skewed daemons that don't ride it.
+     */
+    lastPendingRetentionCounters?: MeshPendingRetentionCountersSnapshot;
 }
 
 /** T6 (B3c) live v2 enforce/observability counters snapshot (mirrors the daemon-core
@@ -404,6 +413,15 @@ export interface MeshProtocolV2CountersSnapshot {
     enforce: boolean;
     drain: Record<string, number>;
     backstop: Record<string, number>;
+}
+
+/** Pending-event retention sweep counters snapshot (mirrors the daemon-core
+ *  RepoMeshStatus.pendingRetentionCounters shape). Structural type — no daemon-core import. */
+export interface MeshPendingRetentionCountersSnapshot {
+    drainedExpired: number;
+    undrainedExpired: number;
+    undrainedExpiredMirrorFailed: number;
+    sweepsNoop: number;
 }
 
 export type MeshSessionProviderMetadata = {
@@ -2588,6 +2606,11 @@ export async function drainCoordinatorPendingEvents(
             const counters = payloadRaw?.meshProtocolV2Counters ?? raw?.meshProtocolV2Counters;
             if (counters && typeof counters === 'object') {
                 ctx.lastMeshProtocolV2Counters = counters as MeshProtocolV2CountersSnapshot;
+            }
+            // Same relay for the pending-event retention sweep counters (see MeshContext).
+            const retentionCounters = payloadRaw?.pendingRetentionCounters ?? raw?.pendingRetentionCounters;
+            if (retentionCounters && typeof retentionCounters === 'object') {
+                ctx.lastPendingRetentionCounters = retentionCounters as MeshPendingRetentionCountersSnapshot;
             }
             const hasLiveCliCoordinator = payloadRaw?.hasLiveCliCoordinator === true
                 || raw?.hasLiveCliCoordinator === true;

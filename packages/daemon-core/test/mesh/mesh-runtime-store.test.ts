@@ -1507,8 +1507,15 @@ describe('mesh-runtime-store', () => {
             // Very old undrained (> 30d) — unrecoverable orphan → pruned.
             db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: now - 40 * day });
 
-            const removed = db.prunePendingEvents({ drainedOlderThanMs: 7 * day, undrainedOlderThanMs: 30 * day });
-            expect(removed).toBe(2); // oldDrained + very-old-undrained
+            const result = db.prunePendingEvents({ drainedOlderThanMs: 7 * day, undrainedOlderThanMs: 30 * day });
+            expect(result.drainedExpired).toBe(1); // oldDrained
+            expect(result.undrainedExpired).toBe(1); // very-old-undrained
+
+            // The undrained-expired row is returned BEFORE deletion so a caller (the
+            // daemon-core retention sweep) can mirror it to event_held.
+            expect(result.undrainedRows).toHaveLength(1);
+            expect(result.undrainedRows[0].meshId).toBe(meshId);
+            expect(result.undrainedRows[0].event).toBe('agent:ready');
 
             // Undrained survivors: recent + the 10d-old (within 30d window).
             expect(db.pendingEventCount(meshId)).toBe(2);
@@ -1520,8 +1527,10 @@ describe('mesh-runtime-store', () => {
             const meshId = `mesh-g3-prune-noop-${randomUUID().slice(0, 8)}`;
             const db = MeshRuntimeStore.getInstance();
             db.insertPendingEvent({ id: randomUUID(), meshId, event: 'agent:ready', payload: {}, queuedAt: Date.now() });
-            const removed = db.prunePendingEvents({ drainedOlderThanMs: 7 * 24 * 60 * 60 * 1000, undrainedOlderThanMs: 30 * 24 * 60 * 60 * 1000 });
-            expect(removed).toBe(0);
+            const result = db.prunePendingEvents({ drainedOlderThanMs: 7 * 24 * 60 * 60 * 1000, undrainedOlderThanMs: 30 * 24 * 60 * 60 * 1000 });
+            expect(result.drainedExpired).toBe(0);
+            expect(result.undrainedExpired).toBe(0);
+            expect(result.undrainedRows).toHaveLength(0);
             expect(db.pendingEventCount(meshId)).toBe(1);
         });
 

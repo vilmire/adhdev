@@ -25,8 +25,9 @@ import {
     getMeshV2DrainCounters,
     getMeshV2BackstopCounters,
     isMeshProtocolV2EnforceEnabled,
+    getPendingRetentionCounters,
 } from '../../mesh/mesh-events.js';
-import type { MeshProtocolV2Counters } from '../../repo-mesh-types.js';
+import type { MeshProtocolV2Counters, MeshPendingRetentionCounters } from '../../repo-mesh-types.js';
 import { getTurnPresentationMetrics } from '../../mesh/mesh-turn-presentation.js';
 import { getRecentUnroutableDeliveries } from '../../mesh/mesh-routing.js';
 import { normalizeMeshDaemonRole, resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
@@ -638,6 +639,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         drain: { ...getMeshV2DrainCounters() },
                         backstop: { ...getMeshV2BackstopCounters() },
                     };
+                    // Pending-event retention sweep counters — surfaced the same way as
+                    // meshProtocolV2Counters (process-lifetime, never cached) so an operator
+                    // can see undrainedExpired (genuine silent-drop risk, mirrored to
+                    // event_held) without having to run mesh_requeue_held_events first.
+                    const pendingRetentionCounters: MeshPendingRetentionCounters = { ...getPendingRetentionCounters() };
                     // Stage 6: unified turn-presentation observability — authority source
                     // usage, shadow divergences (reason|surface|provider) and age gauges.
                     // Process-lifetime snapshot (never cached — like meshProtocolV2Counters).
@@ -758,6 +764,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                         ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
                         meshProtocolV2Counters,
+                        pendingRetentionCounters,
                         turnPresentationCounters,
                         activeRefineJobs: Array.from(ctx.runningRefineJobs.values())
                             .filter(job => job.meshId === meshId)
@@ -770,7 +777,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 targetCoordinatorDaemonId: job.targetCoordinatorDaemonId,
                             })),
                     };
-                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, meshProtocolV2Counters: _meshProtocolV2Counters, turnPresentationCounters: _turnPresentationCounters, ...cacheableStatusResult } = statusResult as any;
+                    const { pendingCoordinatorEvents: _pendingCoordinatorEvents, unroutableDeliveries: _unroutableDeliveries, meshProtocolV2Counters: _meshProtocolV2Counters, pendingRetentionCounters: _pendingRetentionCounters, turnPresentationCounters: _turnPresentationCounters, ...cacheableStatusResult } = statusResult as any;
                     // Verbose carries full mission goals; never store it in the shared
                     // (compact) aggregate cache or a later compact poll would return the
                     // heavy goals from cache. Return it without caching.
@@ -782,6 +789,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
                         ...(unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {}),
                         meshProtocolV2Counters,
+                        pendingRetentionCounters,
                         turnPresentationCounters,
                     };
                     logRepoMeshStatusDebug('return_live', {
