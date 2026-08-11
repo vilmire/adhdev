@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
-import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
+import { QUOTA_SUPPORTED_PROVIDERS, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 
 /**
  * Providers whose quota actually carries an account label. Only codex reports
@@ -16,14 +16,17 @@ import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 const QUOTA_ACCOUNT_PROVIDERS = new Set(['codex-cli'])
 
 /**
- * Providers with a shipped quota fetcher — exactly REFRESHERS in
- * daemon-core's quota/refresh.ts. The toggle switches a probe, so offering it
- * for a provider with no fetcher would promise a switch that does nothing.
+ * Providers with a shipped quota fetcher. Derived from the mesh-shared list
+ * rather than re-listed here: this used to be a hand-copied literal of
+ * daemon-core's REFRESHERS, which is precisely the copy that can drift out of
+ * step with the fetchers. A drift gate pins the shared list to REFRESHERS
+ * (daemon-core test/quota/quota-supported-providers-drift.test.ts).
  */
-const QUOTA_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
+const QUOTA_PROVIDERS = new Set(QUOTA_SUPPORTED_PROVIDERS)
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderCloneModal from './ProviderCloneModal'
+import ProviderInstallOptionsModal from './ProviderInstallOptionsModal'
 import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderRow'
 import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
@@ -55,6 +58,9 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('cli')
     const [showClone, setShowClone] = useState(false)
+    // Provider type whose install-options modal is open, or null. Set when a
+    // provider is switched ON; nothing is persisted until it is confirmed.
+    const [installOptionsFor, setInstallOptionsFor] = useState<string | null>(null)
     const [showSources, setShowSources] = useState(false)
     const [showSourceConfig, setShowSourceConfig] = useState(false)
     const [sourceConfig, setSourceConfig] = useState<ProviderSourceConfigPayload | null>(null)
@@ -234,10 +240,70 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
         setSavingKey(null)
     }
 
+    /**
+     * Enabling a provider is the INSTALL moment, so it asks for the two options
+     * that were previously only discoverable after the fact — quota tracking
+     * and auto-approve. Disabling never asks: there is nothing to configure
+     * about a provider being turned off.
+     *
+     * Nothing is written until the modal is confirmed, including the enable
+     * itself. Cancelling therefore leaves the provider disabled, which is what
+     * a cancelled install should mean — a half-applied state (enabled, options
+     * skipped) would be the worse outcome.
+     */
     const handleMachineProviderEnable = async (providerType: string, enabled: boolean) => {
-        await handleSetSetting(providerType, 'enabled', enabled)
+        if (enabled) {
+            setInstallOptionsFor(providerType)
+            return
+        }
+        await handleSetSetting(providerType, 'enabled', false)
         await fetchSettings()
     }
+
+    /**
+     * Apply the confirmed install options, THEN enable.
+     *
+     * Order matters: `enabled` is what makes the provider claimable and
+     * launchable, so writing the options first means there is no window in
+     * which the provider is live under defaults the user just declined.
+     *
+     * Each write goes through the same command the standing surfaces use, so
+     * this stores nothing new — see ProviderInstallOptionsModal's header.
+     */
+    const handleInstallOptionsConfirm = useCallback(async (
+        providerType: string,
+        options: { quotaEnabled?: boolean; autoApprove: boolean },
+    ) => {
+        setInstallOptionsFor(null)
+        setSavingKey(`${providerType}.enabled`)
+        try {
+            // Quota is only written when the provider actually supports it;
+            // `undefined` means the modal never offered the row.
+            if (options.quotaEnabled !== undefined) {
+                await sendDaemonCommand(machineId, 'set_quota_provider_enabled', {
+                    providerType,
+                    enabled: options.quotaEnabled,
+                })
+            }
+            // Written explicitly even when it matches the manifest default, so
+            // the stored value records a choice the user actually made rather
+            // than inheriting whatever the default later becomes.
+            await sendDaemonCommand(machineId, 'set_provider_setting', {
+                providerType,
+                key: 'autoApprove',
+                value: options.autoApprove,
+            })
+            await sendDaemonCommand(machineId, 'set_provider_setting', {
+                providerType,
+                key: 'enabled',
+                value: true,
+            })
+        } finally {
+            setSavingKey(null)
+            await fetchSettings()
+            await fetchQuotaEnabled()
+        }
+    }, [machineId, sendDaemonCommand, fetchSettings, fetchQuotaEnabled])
 
     const handleDetectProvider = async (providerType: string) => {
         setSavingKey(`${providerType}.detect`)
@@ -434,6 +500,16 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             )}
 
             {/* Modals */}
+            {installOptionsFor && (
+                <ProviderInstallOptionsModal
+                    providerType={installOptionsFor}
+                    displayName={settings.find(s => s.type === installOptionsFor)?.displayName || installOptionsFor}
+                    supportsQuota={QUOTA_PROVIDERS.has(installOptionsFor)}
+                    quotaInstallsClaudeStatusline={installOptionsFor === 'claude-cli'}
+                    onCancel={() => setInstallOptionsFor(null)}
+                    onConfirm={(options) => { void handleInstallOptionsConfirm(installOptionsFor, options) }}
+                />
+            )}
             {showClone && (
                 <ProviderCloneModal
                     machineId={machineId}

@@ -2694,6 +2694,19 @@
             "createdRunHint": "运行 adhdev provider fix {{type}} 或使用自动修复来实现脚本。",
             "close": "关闭"
         },
+        "installOptions": {
+            "title": "设置 {{provider}}",
+            "subtitle": "决定该提供方行为的两个选项。两者默认开启，之后可在此页面更改。",
+            "quotaLabel": "跟踪套餐用量",
+            "quotaHint": "定期读取该提供方的套餐用量，以便仪表板和 `adhdev quota` 显示剩余额度。关闭后将完全停止读取，不收集任何内容。",
+            "quotaClaudeNote": "Claude Code 没有 quota API，因此会在 ~/.claude/settings.json 中安装 ADHDev statusLine 包装器。你原有的命令仍会在其中运行，原值会被备份。",
+            "autoApproveLabel": "自动批准工具调用",
+            "autoApproveHint": "当该智能体请求运行命令、编辑文件或使用工具的权限时，ADHDev 会替你回答“是”。你不会看到批准提示，操作会直接执行。",
+            "autoApproveWarning": "智能体可以在本机上运行命令而无需先询问你。若想逐一批准，请关闭此项。",
+            "changeableLater": "这两项都可随时在该提供方的设置中更改。",
+            "cancel": "取消",
+            "confirm": "启用提供方"
+        },
         "connectedMachines": {
             "noMachines": "没有已连接的机器",
             "defaultDescription": "在机器上安装 ADHDev 并登录，即可在此连接。",

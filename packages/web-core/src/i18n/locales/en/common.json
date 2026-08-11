@@ -2694,6 +2694,19 @@
             "createdRunHint": "Run adhdev provider fix {{type}} or use Auto-Fix to implement scripts.",
             "close": "Close"
         },
+        "installOptions": {
+            "title": "Set up {{provider}}",
+            "subtitle": "Two options that shape how this provider behaves. Both are on by default and can be changed later from this page.",
+            "quotaLabel": "Track plan usage",
+            "quotaHint": "Periodically read this provider's plan quota so the dashboards and `adhdev quota` can show what's left. Off stops the reads entirely — nothing is collected.",
+            "quotaClaudeNote": "Claude Code has no quota API, so this installs the ADHDev statusLine wrapper into ~/.claude/settings.json. Your existing command keeps running inside it, and the original is backed up.",
+            "autoApproveLabel": "Approve tool calls automatically",
+            "autoApproveHint": "When this agent asks permission to run a command, edit a file or use a tool, ADHDev answers yes for you. You will not see the approval prompt, and the action runs without waiting.",
+            "autoApproveWarning": "The agent can run commands on this machine without asking you first. Turn this off to approve each one yourself.",
+            "changeableLater": "You can change both of these any time from this provider's settings.",
+            "cancel": "Cancel",
+            "confirm": "Enable provider"
+        },
         "connectedMachines": {
             "noMachines": "No machines connected",
             "defaultDescription": "Install ADHDev on a machine and sign in to connect it here.",

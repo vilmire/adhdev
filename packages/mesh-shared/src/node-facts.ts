@@ -126,6 +126,46 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
 }
 
 /**
+ * Provider types with a SHIPPED quota fetcher — the providers whose quota can
+ * actually be read on a node today.
+ *
+ * This must mirror `REFRESHERS` in daemon-core's `quota/refresh.ts`, which is
+ * the runtime authority: a provider absent from REFRESHERS is never probed, so
+ * offering it a quota switch anywhere would promise a control that does
+ * nothing. It lives here, in the dependency-free leaf, for the same reason
+ * `formatQuotaAccount` does — the machine page and the new-install surfaces are
+ * in web-core, the fetchers and the `adhdev setup` wizard reach it from
+ * daemon-core, and the dependency arrow only runs one way. This list previously
+ * existed as a hand-copied literal in web-core's ProvidersTab; that copy is now
+ * derived from this one.
+ *
+ * Deliberately NOT the same set as the `QuotaProvider` union in daemon-core's
+ * quota/types.ts. That union includes `antigravity-cli`, which is *supportable*
+ * (it authenticates via OAuth) but has no fetcher implemented — so it is a
+ * valid key to carry a snapshot under, and not a provider whose quota anything
+ * can collect. Support here means "a fetcher exists", nothing weaker.
+ *
+ * Known non-members and why, so this is not re-litigated per surface:
+ *   - cursor-cli    — permanently impossible; no personal usage API exists
+ *   - antigravity-cli — possible via OAuth, not implemented
+ *   - hermes-cli    — no model-axis quota to report
+ *
+ * ★Adding a provider here without adding its fetcher to REFRESHERS re-creates
+ * exactly the "switch that does nothing" this constant prevents.
+ */
+export const QUOTA_SUPPORTED_PROVIDERS: readonly string[] = [
+    'claude-cli',
+    'codex-cli',
+    'kimi',
+    'opencode',
+]
+
+/** Whether this provider's quota can be probed at all — see QUOTA_SUPPORTED_PROVIDERS. */
+export function supportsQuota(providerType: string | undefined | null): boolean {
+    return !!providerType && QUOTA_SUPPORTED_PROVIDERS.includes(providerType)
+}
+
+/**
  * The account/plan label for a provider quota row: "you@example.com · Plus".
  *
  * Lives HERE, in the dependency-free leaf, because both renderers need it and

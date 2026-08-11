@@ -25,11 +25,16 @@ const rowSource = fs.readFileSync(ROW, 'utf8')
 const tabSource = fs.readFileSync(TAB, 'utf8')
 
 describe('quota toggle — provider set', () => {
-  it('QUOTA_PROVIDERS is exactly the providers with a shipped fetcher', () => {
-    // Mirrors REFRESHERS in daemon-core's quota/refresh.ts. Offering the
-    // switch for a provider with no fetcher would promise a switch that does
-    // nothing.
-    expect(tabSource).toContain("const QUOTA_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'kimi', 'opencode'])")
+  it('QUOTA_PROVIDERS derives from the shared list, not a local copy', () => {
+    // Was a hand-copied literal of REFRESHERS (daemon-core quota/refresh.ts).
+    // It now derives from mesh-shared's QUOTA_SUPPORTED_PROVIDERS, which a
+    // drift gate pins to REFRESHERS itself
+    // (daemon-core test/quota/quota-supported-providers-drift.test.ts), so the
+    // set cannot fall out of step with the shipped fetchers. Asserting the
+    // derivation rather than the membership is the point: a re-introduced
+    // literal fails here even if it happens to be correct today.
+    expect(tabSource).toContain('const QUOTA_PROVIDERS = new Set(QUOTA_SUPPORTED_PROVIDERS)')
+    expect(tabSource).toContain("QUOTA_SUPPORTED_PROVIDERS, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'")
   })
 
   it('reads and writes through the dedicated command pair', () => {

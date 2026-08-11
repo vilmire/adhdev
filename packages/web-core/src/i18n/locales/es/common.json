@@ -2694,6 +2694,19 @@
             "createdRunHint": "Ejecuta adhdev provider fix {{type}} o usa la corrección automática para implementar los scripts.",
             "close": "Cerrar"
         },
+        "installOptions": {
+            "title": "Configurar {{provider}}",
+            "subtitle": "Dos opciones que definen el comportamiento de este proveedor. Ambas están activadas por defecto y puedes cambiarlas después desde esta página.",
+            "quotaLabel": "Seguir el uso del plan",
+            "quotaHint": "Lee periódicamente la cuota del plan de este proveedor para que los paneles y `adhdev quota` muestren lo que queda. Al desactivarlo se detienen las lecturas por completo: no se recopila nada.",
+            "quotaClaudeNote": "Claude Code no tiene API de cuota, así que esto instala el envoltorio statusLine de ADHDev en ~/.claude/settings.json. Tu comando actual sigue ejecutándose dentro y se hace una copia de seguridad del original.",
+            "autoApproveLabel": "Aprobar llamadas a herramientas automáticamente",
+            "autoApproveHint": "Cuando este agente pida permiso para ejecutar un comando, editar un archivo o usar una herramienta, ADHDev responderá que sí por ti. No verás el aviso de aprobación y la acción se ejecutará sin esperar.",
+            "autoApproveWarning": "El agente puede ejecutar comandos en esta máquina sin preguntarte antes. Desactívalo para aprobar cada uno tú mismo.",
+            "changeableLater": "Puedes cambiar ambas opciones en cualquier momento desde los ajustes de este proveedor.",
+            "cancel": "Cancelar",
+            "confirm": "Activar proveedor"
+        },
         "connectedMachines": {
             "noMachines": "No hay máquinas conectadas",
             "defaultDescription": "Instala ADHDev en una máquina e inicia sesión para conectarla aquí.",

@@ -2694,6 +2694,19 @@
             "createdRunHint": "adhdev provider fix {{type}} を実行するか、自動修正でスクリプトを実装してください。",
             "close": "閉じる"
         },
+        "installOptions": {
+            "title": "{{provider}} のセットアップ",
+            "subtitle": "このプロバイダーの動作を決める 2 つのオプションです。どちらも既定でオンで、後からこのページで変更できます。",
+            "quotaLabel": "プラン使用量を追跡",
+            "quotaHint": "このプロバイダーのプラン使用量を定期的に読み取り、ダッシュボードと `adhdev quota` に残量を表示します。オフにすると読み取りを完全に停止し、何も収集しません。",
+            "quotaClaudeNote": "Claude Code には quota API がないため、~/.claude/settings.json に ADHDev の statusLine ラッパーをインストールします。既存のコマンドはラッパー内で実行され、元の値はバックアップされます。",
+            "autoApproveLabel": "ツール呼び出しを自動承認",
+            "autoApproveHint": "エージェントがコマンド実行・ファイル編集・ツール使用の許可を求めたとき、ADHDev が代わりに「はい」と答えます。承認ダイアログは表示されず、そのまま実行されます。",
+            "autoApproveWarning": "エージェントが確認なしにこのマシンでコマンドを実行できます。個別に承認するにはオフにしてください。",
+            "changeableLater": "どちらもこのプロバイダーの設定からいつでも変更できます。",
+            "cancel": "キャンセル",
+            "confirm": "プロバイダーを有効化"
+        },
         "connectedMachines": {
             "noMachines": "接続中のマシンがありません",
             "defaultDescription": "マシンに ADHDev をインストールしてサインインすると、ここに接続できます。",
