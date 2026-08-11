@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { SessionHostPtyTransportFactory } from '../src/cli-adapters/session-host-transport.js';
-import type { PtyRuntimeTransport } from '../src/cli-adapters/pty-transport.js';
-import type { SessionHostEvent } from '@adhdev/session-host-core';
+import type { PtyRuntimeExitInfo, PtyRuntimeTransport } from '../src/cli-adapters/pty-transport.js';
+import type { SessionHostEvent, SessionTermination } from '@adhdev/session-host-core';
 
 const RUNTIME_ID = 'runtime-under-test';
 
@@ -13,7 +13,7 @@ const RUNTIME_ID = 'runtime-under-test';
  * then neutralize the outbound IPC teardown so the test stays offline and
  * deterministic — only the event→callback transformation is exercised.
  */
-function driveExit(event: Extract<SessionHostEvent, { type: 'session_exit' }>): Array<{ exitCode: number | null; signal?: number | null }> {
+function driveExit(event: Extract<SessionHostEvent, { type: 'session_exit' }>): PtyRuntimeExitInfo[] {
   const factory = new SessionHostPtyTransportFactory({
     clientId: 'test-client',
     runtimeId: RUNTIME_ID,
@@ -31,7 +31,7 @@ function driveExit(event: Extract<SessionHostEvent, { type: 'session_exit' }>): 
   (transport as any).ready?.catch?.(() => {});
   (transport as any).closeClient = async () => {};
 
-  const seen: Array<{ exitCode: number | null; signal?: number | null }> = [];
+  const seen: PtyRuntimeExitInfo[] = [];
   transport.onExit((info) => seen.push(info));
   (transport as any).handleEvent(event);
   return seen;
@@ -68,5 +68,35 @@ describe('session-host transport session_exit propagation', () => {
   it('ignores exit events for other runtimes', () => {
     const seen = driveExit({ type: 'session_exit', sessionId: 'some-other-runtime', exitCode: null });
     expect(seen).toHaveLength(0);
+  });
+
+  // TOMBSTONE-LEDGER-BRIDGE: the transport used to narrow the exit payload to
+  // {exitCode, signal} and drop `termination` on the floor. That drop is the
+  // reason an externally-killed mesh session never reached the mesh ledger —
+  // the tombstone data existed here and went nowhere.
+  it('forwards the host termination classification to exit subscribers', () => {
+    const termination: SessionTermination = {
+      exitCode: 143,
+      signal: 0,
+      reason: 'failed',
+      lifecycle: 'failed',
+      terminatedAt: Date.parse('2026-08-11T05:06:34.099Z'),
+      previousLifecycle: 'running',
+      lastOutputAt: Date.parse('2026-08-11T05:06:33.986Z'),
+    };
+    const seen = driveExit({ type: 'session_exit', sessionId: RUNTIME_ID, exitCode: 143, signal: 0, termination });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].termination).toBeDefined();
+    expect(seen[0].termination?.exitCode).toBe(143);
+    // previousLifecycle is what distinguishes "died mid-work" from "died idle".
+    expect(seen[0].termination?.previousLifecycle).toBe('running');
+    expect(seen[0].termination?.lastOutputAt).toBe(Date.parse('2026-08-11T05:06:33.986Z'));
+  });
+
+  it('leaves termination undefined when the host did not supply one', () => {
+    // Back-compat: an older host (or the raw node-pty transport) reports no
+    // tombstone, and consumers must tolerate that rather than assume one.
+    const seen = driveExit({ type: 'session_exit', sessionId: RUNTIME_ID, exitCode: 0 });
+    expect(seen[0].termination).toBeUndefined();
   });
 });

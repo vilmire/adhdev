@@ -7,7 +7,7 @@ import {
 } from '@adhdev/session-host-core';
 import { LOG } from '../logging/logger.js';
 import { resolveWin32Executable } from './resolve-executable.js';
-import type { PtyRuntimeMetadata, PtyRuntimeTransport, PtySpawnOptions, PtyTransportFactory } from './pty-transport.js';
+import type { PtyRuntimeExitInfo, PtyRuntimeMetadata, PtyRuntimeTransport, PtySpawnOptions, PtyTransportFactory } from './pty-transport.js';
 
 interface SessionHostPtyTransportFactoryOptions {
     endpoint?: SessionHostEndpoint;
@@ -42,7 +42,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
 
     private readonly client: SessionHostClient;
     private readonly dataCallbacks = new Set<(data: string) => void>();
-    private readonly exitCallbacks = new Set<(info: { exitCode: number | null; signal?: number | null }) => void>();
+    private readonly exitCallbacks = new Set<(info: PtyRuntimeExitInfo) => void>();
     private readonly pendingOutput: string[] = [];
     private operationChain = Promise.resolve();
     private unsubscribe: (() => void) | null = null;
@@ -79,7 +79,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         }
     }
 
-    onExit(callback: (info: { exitCode: number | null; signal?: number | null }) => void): void {
+    onExit(callback: (info: PtyRuntimeExitInfo) => void): void {
         this.exitCallbacks.add(callback);
     }
 
@@ -366,8 +366,14 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             // make a signal-terminated process indistinguishable from a clean exit.
             const exitCode = typeof event.exitCode === 'number' ? event.exitCode : null;
             const signal = typeof (event as any).signal === 'number' ? (event as any).signal : null;
+            // TOMBSTONE-LEDGER-BRIDGE: forward the host's authoritative termination
+            // classification alongside the raw pair. This used to be dropped here,
+            // which is why an externally-killed session left no trace in the mesh
+            // ledger — the tombstone had exitCode/signal/previousLifecycle/
+            // lastOutputAt all along, but nothing downstream could see it.
+            const termination = event.termination;
             for (const callback of this.exitCallbacks) {
-                callback({ exitCode, signal });
+                callback({ exitCode, signal, termination });
             }
             void this.closeClient(false);
         }

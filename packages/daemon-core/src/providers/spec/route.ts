@@ -27,8 +27,9 @@ export function createCliAdapter(
     extraEnv: Record<string, string>,
     transportFactory?: PtyTransportFactory,
     /** FSMLOG-SESSION-ATTRIBUTION (D3): owning session id, threaded to SpecCliAdapter so the
-     *  FSM driver's log lines carry a session segment. Spec path only — the legacy
-     *  ProviderCliAdapter already tags its logs per instance. */
+     *  FSM driver's log lines carry a session segment.
+     *  TOMBSTONE-LEDGER-BRIDGE: also threaded to ProviderCliAdapter, which needs the
+     *  owning session id to attribute a mesh `session_stopped` ledger entry on exit. */
     sessionId?: string,
 ): CliAdapter {
     // Prefer the path provider-loader already resolved (it walks the
@@ -51,5 +52,5 @@ export function createCliAdapter(
             LOG.warn('spec-route', `[${provider.type}] spec invalid, falling back to ProviderCliAdapter: ${(err as Error).message}`);
         }
     }
-    return new ProviderCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory) as unknown as CliAdapter;
+    return new ProviderCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory, sessionId) as unknown as CliAdapter;
 }

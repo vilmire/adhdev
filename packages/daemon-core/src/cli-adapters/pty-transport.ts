@@ -1,4 +1,5 @@
 import * as os from 'os';
+import type { SessionTermination } from '@adhdev/session-host-core';
 import { ensureNodePtySpawnHelperPermissions } from './spawn-env.js';
 import { resolveWin32Executable } from './resolve-executable.js';
 
@@ -72,6 +73,20 @@ export interface PtyRuntimeMetadata {
   recoveryError?: string | null;
 }
 
+/**
+ * Info delivered to an `onExit` subscriber.
+ *
+ * `termination` is the session host's authoritative classification of the exit
+ * (TOMBSTONE-LEDGER-BRIDGE). It is OPTIONAL because only the session-host
+ * transport can produce it — a raw node-pty child has no tombstone — so every
+ * consumer must tolerate its absence and fall back to (exitCode, signal).
+ */
+export interface PtyRuntimeExitInfo {
+  exitCode: number | null;
+  signal?: number | null;
+  termination?: SessionTermination;
+}
+
 export interface PtyRuntimeTransport {
   readonly pid: number;
   readonly ready: Promise<void>;
@@ -84,7 +99,7 @@ export interface PtyRuntimeTransport {
   updateMeta?(meta: Record<string, unknown>, replace?: boolean): void;
   getMetadata?(): PtyRuntimeMetadata | null;
   onData(callback: (data: string) => void): void;
-  onExit(callback: (info: { exitCode: number | null; signal?: number | null }) => void): void;
+  onExit(callback: (info: PtyRuntimeExitInfo) => void): void;
 }
 
 export interface PtyTransportFactory {

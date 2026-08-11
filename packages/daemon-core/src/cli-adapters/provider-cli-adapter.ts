@@ -22,12 +22,18 @@ import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
+import type { SessionTermination } from '@adhdev/session-host-core';
 import {
     NodePtyTransportFactory,
+    type PtyRuntimeExitInfo,
     type PtyRuntimeMetadata,
     type PtyRuntimeTransport,
     type PtyTransportFactory,
 } from './pty-transport.js';
+import {
+    recordMeshSessionTerminationStop,
+    resolveMeshTerminationBinding,
+} from '../mesh/mesh-termination-bridge.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,
     WIN32_PTY_WRITE_CHUNK_GAP_MS,
@@ -534,6 +540,10 @@ export class ProviderCliAdapter implements CliAdapter {
         private extraArgs: string[] = [],
         private extraEnv: Record<string, string> = {},
         transportFactory: PtyTransportFactory = new NodePtyTransportFactory(),
+        /** TOMBSTONE-LEDGER-BRIDGE: owning session id, used to attribute a mesh
+         *  `session_stopped` ledger entry when this adapter's PTY terminates.
+         *  Optional — a session id is not required for any other adapter behavior. */
+        private readonly owningSessionId?: string,
     ) {
         this.runner = new CliScriptRunner(provider.type);
         this.provider = provider;
@@ -738,10 +748,16 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         });
 
-        this.ptyProcess.onExit(({ exitCode, signal }: { exitCode: number | null; signal?: number | null }) => {
+        this.ptyProcess.onExit(({ exitCode, signal, termination }: PtyRuntimeExitInfo) => {
             // Preserve the unknown case: a null exitCode (signal-terminated or
             // otherwise unreported) is logged as "unknown", never as exit 0.
             LOG.info('CLI', `[${this.cliType}] Exit code ${exitCode === null || exitCode === undefined ? 'unknown' : exitCode}${signal ? ` (signal ${signal})` : ''}`);
+            // TOMBSTONE-LEDGER-BRIDGE: if this was a mesh session, write the
+            // termination to the mesh ledger before local state is reset. This is
+            // the observation point that already exists for a dying child — no new
+            // watcher or polling loop is introduced. Fire-and-forget so a ledger
+            // write can never delay or break PTY teardown.
+            this.recordMeshTerminationIfBound(termination);
             this.flushPendingOutputParse();
             this.ptyProcess = null;
             this.engine.onPtyExit();
@@ -768,6 +784,39 @@ export class ProviderCliAdapter implements CliAdapter {
         this.engine.onSpawnReady();
         this.scheduleStartupSettleCheck();
         this.onStatusChange?.();
+    }
+
+    /**
+     * TOMBSTONE-LEDGER-BRIDGE: write a mesh `session_stopped` ledger entry for a
+     * terminated mesh session.
+     *
+     * This is the daemon's existing observation point for a dying CLI child — the
+     * session host already emits `session_exit` carrying its termination
+     * classification, so no watcher or polling loop is added. Previously the
+     * classification was discarded here, which is why an externally-killed mesh
+     * session (e.g. a SIGTERM from outside the mesh) left the ledger with no entry
+     * at all and its death read as an unexplained gap in the record.
+     *
+     * Silent no-op for a non-mesh session or a transport that reports no
+     * termination (raw node-pty), and never throws into the exit path.
+     */
+    private recordMeshTerminationIfBound(termination?: SessionTermination): void {
+        if (!termination || !this.owningSessionId) return;
+        try {
+            const binding = resolveMeshTerminationBinding(this.runtimeSettings);
+            if (!binding) return;
+            void recordMeshSessionTerminationStop({
+                meshId: binding.meshId,
+                sessionId: this.owningSessionId,
+                nodeId: binding.nodeId,
+                providerType: this.cliType,
+                workspace: this.workingDir,
+                isCoordinator: binding.isCoordinator,
+                termination,
+            });
+        } catch (e: any) {
+            LOG.warn('CLI', `[${this.cliType}] mesh termination ledger bridge failed: ${e?.message || e}`);
+        }
     }
 
  // ─── Output Handling ────────────────────────────
