@@ -41,6 +41,7 @@ import type { IdeProviderInstance } from '../providers/ide-provider-instance.js'
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
 import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
+import { migratePendingEventsJsonlToSqlite } from '../mesh/mesh-events-pending-migration.js';
 import { setupQuotaRefreshLoop, setupQuotaEventRefresh, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../quota/refresh.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
@@ -580,6 +581,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // queues over P2P). This is the single-model (queue + polling) replacement for the
     // old spontaneous-forward push paths.
     setupMeshEventForwarding(components);
+    // 11a. One-shot: drain any leftover legacy `*.pending-events.jsonl` into the SQLite
+    // inbox. MUST run BEFORE setupMeshReconcileLoop — that loop drives the disk
+    // retention sweep, whose pruneExpiredLedgerJsonl deletes `*.jsonl` at 30 days
+    // WITHOUT draining, so a machine upgrading past the JSONL cut would silently lose
+    // every event still queued at upgrade time.
+    try { migratePendingEventsJsonlToSqlite(); } catch { /* best-effort — never block boot */ }
     components.meshReconcileLoop = setupMeshReconcileLoop(components);
     // 11b. Periodic quota refresh (observation only — nothing routes on it).
     // Writes the cache that buildLocalNodeFacts reads; the builder never
