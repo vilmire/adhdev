@@ -526,14 +526,29 @@ function deliverTaskToSession(
         // delivery record was just committed above. Record the ACK idempotently; a
         // consumed-stage attempt (worker ack raced ahead) is left untouched by the
         // monotonic guard.
-        if (!isQueued && ctx.task.attemptId) {
+        //
+        // DISPATCH-ACK-EVIDENCE: a QUEUED result is a positive receipt too, and it used to
+        // record nothing at all. The adapter buffered the prompt in its outbound queue
+        // because the session was busy — the message IS held for that session and will be
+        // submitted when it frees up. Leaving the attempt at 'accepted' made that state
+        // byte-identical to "never dispatched", which is what let downstream consumers
+        // conclude a delta was lost when it was merely waiting. The delivery record already
+        // distinguishes the two ('queued' vs no row); the turn ledger now does as well.
+        //
+        // Still NOT 'delivered': queued means handed to the adapter's buffer, not to the
+        // PTY. Recording it as delivered would license the redrive gates to treat a merely
+        // buffered prompt as submitted. The stage stays 'accepted' and the distinction is
+        // carried as evidence on the ack, so nothing that keys on stage rank changes
+        // behavior — this is an observability addition, not a control-flow change.
+        if (ctx.task.attemptId) {
             try {
                 recordTurnAck({
                     meshId: ctx.meshId,
                     taskId: ctx.task.id,
-                    kind: 'delivered',
+                    kind: isQueued ? 'accepted' : 'delivered',
                     attemptId: ctx.task.attemptId,
                     sessionId: ctx.sessionId,
+                    ...(isQueued ? { evidence: { source: 'transport_queued_in_adapter' } } : {}),
                 });
             } catch { /* ACK is best-effort — the delivery record above is the pre-Stage-5 witness */ }
         }

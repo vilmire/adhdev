@@ -1,6 +1,7 @@
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { LOG } from '../logging/logger.js';
 import { getQueue, expireTaskTargetPin } from './mesh-work-queue.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -250,7 +251,42 @@ export function retractActionableSkipIfPreviouslyNotified(meshId: string, taskId
     }
 }
 
-function actionableSkipGuidance(reason: string): { summary: string; nextAction: string } {
+/**
+ * DISPATCH-ACK-EVIDENCE: what the coordinator can actually PROVE about whether a task's
+ * message reached its worker, read from the durable delivery records.
+ *
+ * The distinction this exists to make (see the false-positive it fixes in
+ * {@link actionableSkipGuidance}):
+ *
+ *  - 'consumed'      — a delivery reached 'acked'/'completed', i.e. the worker emitted
+ *                      agent:generating_started. The worker demonstrably HAS the message.
+ *  - 'delivered'     — a delivery reached 'delivered': the transport confirmed the handoff
+ *                      to the provider/PTY boundary, but no turn-start echo came back. The
+ *                      message very likely arrived; we cannot prove the worker acted on it.
+ *  - 'never_dispatched' — no delivery record exists at all. Nothing was ever handed to a
+ *                      transport, so the message certainly did not reach the session.
+ *
+ * Only 'never_dispatched' licenses telling the coordinator to re-send. Asserting that on
+ * the other two produces the duplicate-injection hazard: re-sending a delta the worker is
+ * already acting on runs the same instruction twice.
+ */
+type TaskDeliveryEvidence = 'consumed' | 'delivered' | 'never_dispatched';
+
+function resolveTaskDeliveryEvidence(meshId: string, taskId: string): TaskDeliveryEvidence {
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.taskDeliveryConsumed(meshId, taskId)) return 'consumed';
+        if (store.taskHasConfirmedDelivery(meshId, taskId)) return 'delivered';
+    } catch {
+        // Store unreadable — fall through to the conservative answer. 'delivered' (not
+        // 'never_dispatched') is the safe default: it withholds the re-send advice rather
+        // than inventing a "certainly not received" claim we have no evidence for.
+        return 'delivered';
+    }
+    return 'never_dispatched';
+}
+
+function actionableSkipGuidance(reason: string, evidence?: TaskDeliveryEvidence): { summary: string; nextAction: string } {
     if (reason === 'target_node_id_unmatched') return {
         summary: 'it is pinned to a target node id that matches no node in the mesh (the node may have been removed, or its id form does not resolve)',
         nextAction: 'Verify the target node still exists with mesh_status, then re-enqueue without the node pin or with a valid node id (or re-clone the node).',
@@ -275,10 +311,32 @@ function actionableSkipGuidance(reason: string): { summary: string; nextAction: 
         summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
         nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign.",
     };
-    if (reason === 'target_session_pin_expired') return {
-        summary: 'it was pinned to a specific session (a follow-up/delta for work already in flight) that never claimed it within the pin TTL, so the pin was cleared and the message will NOT reach the session it was addressed to',
-        nextAction: 'Assume the addressed session never received this delta and is still acting on its previous instructions. Re-send it to that session once it is idle (or re-target it), and re-check the work it produced in the meantime.',
-    };
+    if (reason === 'target_session_pin_expired') {
+        // DISPATCH-ACK-EVIDENCE. This guidance used to assert, unconditionally, that the
+        // addressed session "never received this delta" and to instruct a re-send. That is an
+        // inference from the absence of a coordinator-side CLAIM, and the claim proves nothing
+        // about the worker's inbox: 'unclaimed' here means only that the queue row never left
+        // 'pending' within the TTL. Observed live 2026-08-11 (4x in one session): the worker had
+        // in fact received the delta and was already acting on it — mesh_read_terminal showed the
+        // work under way — so following the advice would have injected the same instruction twice.
+        //
+        // Branch on what the delivery records actually witness. Only the case with NO delivery
+        // record at all still recommends a re-send; the others report the uncertainty honestly
+        // and send the coordinator to verify before acting, because a duplicate injection is the
+        // more expensive error.
+        if (evidence === 'consumed') return {
+            summary: 'it was pinned to a specific session and the pin TTL expired before the queue row was claimed — but the delivery record shows this session DID receive and start acting on the message (a turn was started for it), so the queue row lagging is a bookkeeping gap, not a lost delta',
+            nextAction: 'Do NOT re-send it — the session already has this message and re-sending would run the same instruction twice. Check its current output (mesh_read_chat / mesh_read_terminal) to confirm the work is under way.',
+        };
+        if (evidence === 'delivered') return {
+            summary: 'it was pinned to a specific session and the pin TTL expired before the queue row was claimed; the message WAS handed to that session\'s transport, but the session never echoed a turn start, so whether it acted on it is unconfirmed',
+            nextAction: 'Verify before re-sending: check the session with mesh_read_chat / mesh_read_terminal. Re-send only if its output shows no sign of this message — it may already be acting on it, and re-sending would duplicate the instruction.',
+        };
+        return {
+            summary: 'it was pinned to a specific session (a follow-up/delta for work already in flight) that never claimed it within the pin TTL, so the pin was cleared; no delivery to that session was ever recorded, so the message did not reach it',
+            nextAction: 'The addressed session never received this delta and is still acting on its previous instructions. Re-send it to that session once it is idle (or re-target it), and re-check the work it produced in the meantime.',
+        };
+    }
     if (reason === SLOT_MODEL_ABSENT_SKIP_REASON) return {
         summary: "no capability slot on the node declares the model this task resolved to (its difficulty→brain preset picked a model the node was never configured to run)",
         nextAction: "Re-enqueue with a difficulty/model the node's slots declare, target a node that declares this model, or add a slot for it. The task is NOT run on a substitute model — an undeclared model is never launched.",
@@ -313,8 +371,22 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
     const targetCoordinatorSessionId = readNonEmptyString(task?.sourceCoordinatorSessionId);
     const nodeLabel = readNonEmptyString(nodeId) || readNonEmptyString(task?.targetNodeId);
-    const { summary, nextAction } = actionableSkipGuidance(reason!);
-    const coordinatorMessage = `[System] A queued mesh task${nodeLabel ? ` for node ${nodeLabel}` : ''} is not being dispatched because ${summary}. ${nextAction} This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.`;
+    // DISPATCH-ACK-EVIDENCE: resolve what the delivery records actually witness for this task
+    // so the pin-expiry guidance can distinguish "certainly not received" from "unknown".
+    // Only read for the reason that branches on it — every other reason is unaffected.
+    const evidence = reason === 'target_session_pin_expired'
+        ? resolveTaskDeliveryEvidence(meshId, taskId)
+        : undefined;
+    const { summary, nextAction } = actionableSkipGuidance(reason!, evidence);
+    // The trailing clause is reason-dependent. 'target_session_pin_expired' has ALREADY cleared
+    // the pin by the time this fires (expireTaskTargetPin ran), so the task is claimable by any
+    // compatible session — telling the coordinator it "stays pending until you resolve it" is
+    // false for this reason and contradicts the summary itself. Every other actionable reason is
+    // a genuine standing blocker, so the original clause stands there unchanged.
+    const closing = reason === 'target_session_pin_expired'
+        ? 'The stale pin has already been cleared, so the task is now claimable by any compatible session — the action above is about the session it was originally addressed to.'
+        : 'This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.';
+    const coordinatorMessage = `[System] A queued mesh task${nodeLabel ? ` for node ${nodeLabel}` : ''} is not being dispatched because ${summary}. ${nextAction} ${closing}`;
     try {
         queuePendingMeshCoordinatorEvent({
             event: 'mesh:dispatch_blocked',

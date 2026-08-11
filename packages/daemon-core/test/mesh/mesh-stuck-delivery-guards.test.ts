@@ -80,14 +80,27 @@ describe('expired target pin reaches the coordinator (defect A — the real one)
     expect(list).toContain("'target_session_pin_expired'")
   })
 
-  it('carries guidance saying the delta did NOT reach its addressee', () => {
+  it('carries guidance saying the delta did NOT reach its addressee — when that is what the evidence shows', () => {
     // The actionable part is not "a pin expired" but "assume the worker never got your
     // correction and is still acting on the old premise".
+    //
+    // DISPATCH-ACK-EVIDENCE (2026-08-11): that guidance is now CONDITIONAL on the delivery
+    // records, because asserting it unconditionally was itself a defect — the message was
+    // emitted verbatim for tasks the worker had demonstrably received and was already acting
+    // on (observed 4x in one session), and acting on it would inject the same instruction
+    // twice. The wording below is the no-delivery-record branch: the case this test was
+    // written for, and the only one that still licenses a re-send. The behavioural assertions
+    // for all three branches live in mesh-pin-expiry-delivery-evidence.test.ts.
     const guidanceStart = skipNotify.indexOf("if (reason === 'target_session_pin_expired')")
     expect(guidanceStart, 'pin-expired guidance branch not found').toBeGreaterThan(-1)
-    const guidance = skipNotify.slice(guidanceStart, skipNotify.indexOf('};', guidanceStart))
-    expect(guidance).toMatch(/NOT reach the session/i)
+    // Slice to the end of the whole branch (its closing `}` + blank line), not the first
+    // `};` — the branch now contains several returns.
+    const guidance = skipNotify.slice(guidanceStart, skipNotify.indexOf('\n    }\n', guidanceStart))
+    expect(guidance).toMatch(/did not reach it/i)
     expect(guidance).toMatch(/still acting on its previous instructions/i)
+    // And the branch must actually discriminate rather than assert one answer for every case.
+    expect(guidance).toMatch(/evidence === 'consumed'/)
+    expect(guidance).toMatch(/evidence === 'delivered'/)
   })
 
   it('the expiry skip is recorded with the reason the classifier matches', () => {
