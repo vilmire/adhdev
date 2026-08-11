@@ -23,6 +23,24 @@
  * on data that no longer describes them (the stale-quota misexclusion failure
  * mode). Observation without confidence must be inert.
  *
+ * ★QUOTA TRACKING TURNED OFF is one of those missing entries, and it is a
+ * DELIBERATE user choice, not a failure. A provider whose probe is disabled
+ * (`machineProviders[type].quotaEnabled === false`, set from the install
+ * options or the machine page) is never fetched, so it reports no snapshot and
+ * lands in the fail-open branch: neither gated nor bonused, routed purely on
+ * the other fitness axes exactly as it was before quota routing existed.
+ *
+ * That is the intended meaning of the switch — "do not read my usage" — and it
+ * is the reason the switch is safe to offer at install time. But it has a
+ * COST that grows as scheduling gets smarter: quota is an INPUT to routing,
+ * and planned work makes it a larger one. A node that opts out is invisible to
+ * every quota-derived decision, so it can be handed work a quota-aware
+ * scheduler would have steered elsewhere. Preserve the fail-open direction if
+ * that work lands — an opted-out node must degrade to "no quota signal", never
+ * to "assumed exhausted" (which would silently strand it) and never to
+ * "assumed full" (which would preferentially overload the one node that
+ * declined to be measured).
+ *
  * CLOCK-SKEW rule: reportedAt / updatedAt / resetsAt are all stamped on the
  * REPORTER's clock, so comparing them against the coordinator's Date.now()
  * directly would misjudge age by the skew. The age computation below therefore
