@@ -68,7 +68,8 @@ export interface QuotaFetchDeps {
     clearTimeout?: (handle: unknown) => void;
     /**
      * Has the user opted into labelling quota with the signed-in account's
-     * email? Defaults to the persisted config (`quotaShowAccountEmail`, off).
+     * email? Defaults to the persisted config (`quotaShowAccountEmail`, which
+     * is itself off unless the user turned it on — see config.ts).
      *
      * Injectable like every other side effect here so a test can exercise both
      * states without writing a config file. Read through a function rather than

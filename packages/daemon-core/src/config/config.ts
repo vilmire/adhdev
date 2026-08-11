@@ -65,10 +65,24 @@ export interface ADHDevConfig {
     /**
      * Label provider quota with the signed-in account's email address.
      *
-     * ON by default (owner decision, 2026-08-05). Every quota surface — the
-     * three dashboards and `adhdev quota` — shows the same label, so the
-     * account is part of the normal reading rather than a hidden extra. Users
-     * who do not want it turn it off from the machine page's provider settings.
+     * OFF by default (owner decision, 2026-08-11 — reverses the 2026-08-05 ON
+     * default). The label is an account identifier, so the quiet default is the
+     * one that does not acquire it; users who want it turn it on from the
+     * machine page's provider settings or during `adhdev setup`.
+     *
+     * SCOPE: this is a machine-global boolean, but codex-cli is its only
+     * consumer — `quota/fetchers/codex.ts` holds the sole `showAccountEmail()`
+     * call, and the dashboard offers the toggle only for codex-cli
+     * (QUOTA_ACCOUNT_PROVIDERS in web-core's ProvidersTab). No other provider
+     * reports an account label at all, so flipping this default changes
+     * codex-cli's behaviour and nothing else. If a second provider ever gains
+     * an account label, split this into a per-provider key rather than
+     * silently widening the default change made here.
+     *
+     * EXISTING USERS ARE NOT MIGRATED: only a value carrying the
+     * `quotaShowAccountEmailSetByUser` marker is authoritative, so this default
+     * change reaches new installs and users who never chose — never someone who
+     * deliberately turned it on. See resolveQuotaShowAccountEmail.
      *
      * When off, the email is never ACQUIRED: the codex fetcher skips the
      * `account/read` call entirely, so nothing downstream (the in-memory cache,
@@ -209,7 +223,7 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     // preview API instead of silently pinning stable.
     serverUrl: IDENTITY.serverUrl,
     allowServerApiProxy: false,
-    quotaShowAccountEmail: true,
+    quotaShowAccountEmail: false,
     selectedIde: null,
     configuredIdes: [],
     installedExtensions: [],
@@ -274,8 +288,13 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
  *   - marker present  → honour the stored value, whichever way it points
  *   - marker absent   → the stored value is (at best) an old default; use the
  *                       current default instead
- * A user who turns the option off after this change gets the marker and keeps
- * it off across upgrades; nobody has their choice silently reverted.
+ * A user who chooses a value after this change gets the marker and keeps that
+ * choice across upgrades; nobody has their choice silently reverted.
+ *
+ * This is direction-agnostic, which is why the 2026-08-11 flip back to OFF
+ * needed no migration of its own: an unmarked `true` written by the ON-default
+ * builds is discarded the same way an unmarked `false` from rc.7 was, while a
+ * user who deliberately turned the label ON keeps it.
  */
 function resolveQuotaShowAccountEmail(parsed: Record<string, any>): boolean {
     const fallback = DEFAULT_CONFIG.quotaShowAccountEmail ?? true;

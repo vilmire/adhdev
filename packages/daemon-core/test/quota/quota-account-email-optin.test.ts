@@ -188,16 +188,18 @@ describe('account email opt-in — ON', () => {
 });
 
 describe('the opt-in default', () => {
-    it('defaults ON, and a malformed config still fails CLOSED', async () => {
-        // The default flipped to ON (owner decision) so every quota surface
-        // agrees. The fail-closed half is unchanged and still matters: an
-        // unreadable config must never be the thing that turns PII collection
-        // on, so a parse failure resolves to OFF rather than to the default.
+    it('defaults OFF, and a malformed config still fails CLOSED', async () => {
+        // The default flipped back to OFF on 2026-08-11 (owner decision): the
+        // account label is an identifier, so the quiet default is the one that
+        // never acquires it. The fail-closed half is unchanged and still
+        // matters independently — an unreadable config must never be the thing
+        // that turns PII collection on, so a parse failure resolves to OFF
+        // whichever way the default happens to point.
         const { resolveDeps } = await import('../../src/quota/fetchers/deps.js');
         const previous = process.env.ADHDEV_CONFIG_DIR;
         process.env.ADHDEV_CONFIG_DIR = home;
         try {
-            expect(resolveDeps().showAccountEmail()).toBe(true);
+            expect(resolveDeps().showAccountEmail()).toBe(false);
 
             // An explicit user choice is honoured either way.
             writeFileSync(join(home, 'config.json'), JSON.stringify({
