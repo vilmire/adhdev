@@ -62,8 +62,10 @@ import type { MeshContext } from './tools/mesh-tools.js';
  * oss/packages/daemon-standalone/vendor/mcp-server) that a drift gate compares
  * against HEAD. Any value tracking the release version makes every version bump
  * rewrite those bundles, and version-bump.sh cannot commit them before the gate
- * runs — a structural deadlock that blocked the 1.0.42 release twice before it
- * was pushed through by hand.
+ * runs — a structural deadlock that blocked the root half of the 1.0.42 release
+ * twice. (The oss half had already shipped: oss/scripts/version-bump.sh does not
+ * run check:vendor, so it sails through the same stage-then-check pattern. The
+ * two scripts are not symmetric despite the root script's comment.)
  *
  * Nothing consumes this value: MCP negotiates on `protocolVersion`, not on
  * serverInfo, and no code in this repo reads it. The evidence is that the
