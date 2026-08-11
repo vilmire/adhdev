@@ -105,6 +105,34 @@ describe('findBinary win32 resolution', () => {
         expect(resolved).toBe(shim);
     });
 
+    it('retries `npm config get prefix` on the next call after a failed/timed-out first call, instead of permanently caching the failure', () => {
+        const prefixDir = path.join(tmpDir, 'nvm-prefix-retry');
+        fs.mkdirSync(prefixDir, { recursive: true });
+        const shim = path.join(prefixDir, 'nvmcli.cmd');
+        fs.writeFileSync(shim, '@echo off');
+
+        process.env.PATH = '';
+        process.env.PATHEXT = '.EXE;.CMD';
+        delete process.env.APPDATA;
+        delete process.env.LOCALAPPDATA;
+        delete process.env.USERPROFILE;
+
+        // First call: simulate a transient failure (e.g. boot-time load causing
+        // a timeout). The prefix must NOT resolve, and — critically — the
+        // failure must not be memoized as a permanent "no prefix" result.
+        mocks.execSync.mockImplementationOnce(() => {
+            throw new Error('spawn timeout');
+        });
+        const firstAttempt = findBinary('nvmcli');
+        expect(firstAttempt).not.toBe(shim);
+
+        // Second call: npm now succeeds. If the failure had been cached
+        // permanently, this would still miss and return the sentinel.
+        mocks.execSync.mockReturnValue(`${prefixDir}\n`);
+        const secondAttempt = findBinary('nvmcli');
+        expect(secondAttempt).toBe(shim);
+    });
+
     it('falls back to the default extension list when PATHEXT is unset', () => {
         const npmDir = path.join(tmpDir, 'appdata', 'npm');
         fs.mkdirSync(npmDir, { recursive: true });

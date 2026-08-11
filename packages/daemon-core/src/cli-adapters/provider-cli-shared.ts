@@ -823,13 +823,17 @@ function windowsExecutableExtensions(): string[] {
  * `npm config get prefix`. This is the authoritative non-default prefix that a
  * daemon's inherited PATH cannot infer — nvm / nvm-windows, `npm config set
  * prefix`, `~/.npm-global`, custom `--prefix`. Consulted with a SHORT timeout so
- * a slow/absent npm never hangs detection, and memoized per-process so repeated
- * detections don't re-spawn the (relatively slow) npm process.
+ * a slow/absent npm never hangs detection, and a successful resolution is
+ * memoized per-process so repeated detections don't re-spawn the (relatively
+ * slow) npm process. A failed/empty resolution is deliberately NOT cached —
+ * only the successful case is expensive+stable enough to be worth freezing;
+ * a failure (e.g. system load at boot causing a timeout) must be retried on
+ * the next call rather than permanently remembered as "no prefix".
  * Returns the raw prefix dir, or undefined when npm is unavailable.
  */
-let cachedNpmPrefix: string | undefined | null = undefined; // null = resolved-to-nothing
+let cachedNpmPrefix: string | undefined;
 function npmGlobalPrefix(): string | undefined {
-    if (cachedNpmPrefix !== undefined) return cachedNpmPrefix ?? undefined;
+    if (cachedNpmPrefix !== undefined) return cachedNpmPrefix;
     try {
         const prefix = execSync('npm config get prefix', {
             encoding: 'utf-8',
@@ -837,11 +841,11 @@ function npmGlobalPrefix(): string | undefined {
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'ignore'],
         }).trim();
-        cachedNpmPrefix = prefix && prefix !== 'undefined' ? prefix : null;
+        if (prefix && prefix !== 'undefined') cachedNpmPrefix = prefix;
     } catch {
-        cachedNpmPrefix = null; // npm not on PATH or slow — remember and skip
+        // npm not on PATH or slow — leave uncached so the next call retries.
     }
-    return cachedNpmPrefix ?? undefined;
+    return cachedNpmPrefix;
 }
 
 /** Test-only: reset the memoized npm-prefix so a test can re-stub `execSync`. */
