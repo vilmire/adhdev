@@ -269,7 +269,6 @@ echo "📝 Committing and tagging..."
 # git add -A would sweep up unrelated working-tree changes.
 OSS_RELEASE_PATHS=(
     "${PACKAGES[@]}"
-    "$MCP_SERVER_SOURCE"
     "package-lock.json"
     "$CHANGELOG"
     "packages/daemon-standalone/vendor/mcp-server"
