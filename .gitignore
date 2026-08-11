@@ -5,6 +5,8 @@ node_modules/
 dist/
 packages/daemon-standalone/public/
 .wrangler/
+packages/daemon-core/src/**/*.d.ts
+packages/daemon-core/src/**/*.js
 
 # Environment
 .env
