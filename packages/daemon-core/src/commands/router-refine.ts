@@ -2696,9 +2696,29 @@ export async function recordRefineAcceptBaseDivergence(
 
 export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
         const key = buildRefineJobKey(self, meshId, nodeId);
-        const running = self.runningRefineJobs.get(key);
-        if (running) return { ...running, duplicate: true };
         const terminal = self.terminalRefineJobs.get(key);
+
+        // CONCURRENT-FIRE: reserve the slot with a placeholder SYNCHRONOUSLY, before the
+        // first `await` below. Two `startMeshRefineJob` calls for the same meshId:nodeId
+        // can land back-to-back (observed ~1ms apart): the OLD code checked
+        // `runningRefineJobs.get(key)` and only set it after `await
+        // getMeshForCommand(...)`, so both calls could pass the check and both proceed —
+        // the second one racing a cleanup (remove_mesh_node) that was mid-flight for the
+        // first, landing on a disappearing worktree and failing with
+        // dependency_bootstrap_failed / commandsRun: 0. Reserving here (get+set with no
+        // await between them) closes that window: the second caller's `get` always
+        // observes the first caller's placeholder and returns `duplicate: true` instead
+        // of ever reaching the mesh lookup.
+        const alreadyRunning = self.runningRefineJobs.get(key);
+        if (alreadyRunning) return { ...alreadyRunning, duplicate: true };
+        // Mint jobId/interactionId once, up front, and carry them into the FINAL handle
+        // below too — otherwise a poller (mesh_status → activeRefineJobs) that reads the
+        // placeholder in this narrow window would see a jobId that immediately vanishes
+        // and gets replaced by a different one once the real handle overwrites it.
+        const jobId = `refine_${createInteractionId()}`;
+        const interactionId = createInteractionId();
+        const placeholder = buildRefineJobHandle(self, { meshId, nodeId, jobId, interactionId, retryOfJobId: terminal?.jobId });
+        self.runningRefineJobs.set(key, placeholder);
 
         // preferInline so inline-cache-only clone worktree nodes resolve — same
         // membership authority as clone_mesh_node / get_mesh. Without it refine reads
@@ -2706,8 +2726,14 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
         const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
         const mesh = meshRecord?.mesh;
         const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
-        if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
-        if (!node.isLocalWorktree || !node.workspace) return { success: false, error: `Refinery requires a local worktree node` };
+        if (!node) {
+            self.runningRefineJobs.delete(key);
+            return { success: false, error: `Node '${nodeId}' not found in mesh` };
+        }
+        if (!node.isLocalWorktree || !node.workspace) {
+            self.runningRefineJobs.delete(key);
+            return { success: false, error: `Refinery requires a local worktree node` };
+        }
 
         // Capture the caller's coordinator daemon ID so completed/failed events are
         // scoped to that coordinator's pending-events queue and survive daemon restarts.
@@ -2724,7 +2750,7 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
         const coordinatorSessionId = typeof args?.coordinatorSessionId === 'string' && args.coordinatorSessionId.trim()
             ? args.coordinatorSessionId.trim()
             : undefined;
-        const handle = buildRefineJobHandle(self, { meshId, nodeId, node, retryOfJobId: terminal?.jobId, coordinatorDaemonId, coordinatorSessionId });
+        const handle = buildRefineJobHandle(self, { meshId, nodeId, node, jobId, interactionId, retryOfJobId: terminal?.jobId, coordinatorDaemonId, coordinatorSessionId });
         self.runningRefineJobs.set(key, handle);
         await appendRefineJobLedger(self, 'task_dispatched', handle);
         queueRefineJobEvent(self, 'refine:accepted', handle);
