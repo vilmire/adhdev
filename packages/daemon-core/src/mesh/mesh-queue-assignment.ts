@@ -604,21 +604,94 @@ function deliverTaskToSession(
         // for a clean re-dispatch). Clear the single-flight mark so a legitimate
         // requeue/re-claim is not blocked as if a worker were still generating.
         endTaskDispatchInFlight(ctx.meshId, ctx.task.id);
-        updateTaskStatus(ctx.meshId, ctx.task.id, 'pending');
         // TURN-LEDGER (Stage 5): the dispatch never reached the worker — close this
         // attempt (reassigned:dispatch_failed); the re-claim opens a fresh attempt.
         try {
             closeAttemptForReassignment({ meshId: ctx.meshId, taskId: ctx.task.id, reason: 'dispatch_failed' });
         } catch { /* best-effort */ }
+        // DEAD-DISPATCH-BOUND: return the row to 'pending' THROUGH the retry budget rather
+        // than with a bare status flip.
+        //
+        // The bare `updateTaskStatus(..., 'pending')` this replaces was the unbounded leg of
+        // the re-dispatch loop: it reset the row to claimable while touching neither
+        // requeueCount nor any other counter, so a target that fails EVERY time — a node
+        // absent from the live mesh, whose P2P dial can never be answered — was re-claimed
+        // and re-failed on every drain forever. Observed live 2026-08-11 (task 25994f43 →
+        // node_d4bc9f12…, 17 dispatches in 64s, dispatchNonce to 23, ended only by a manual
+        // mesh_queue_cancel). `isRetryableDispatchFailure` already existed but was computed
+        // ONLY for the ledger payload below — purely descriptive, gating nothing — so even
+        // the self-dial classification it was written for never actually stopped the cycle.
+        //
+        // requeueTask supplies the bound that was missing: it increments requeueCount and,
+        // past maxRetries, auto-fails the row (`max_retries_exceeded`) and cascades to
+        // dependents, so an undeliverable task reaches a terminal state instead of cycling.
+        // This is the SAME budget every other requeue path spends, so a genuinely transient
+        // failure keeps its ordinary retries — the fix bounds the loop, it does not remove
+        // retrying. Pins are preserved (clearTargetSession:false): a dispatch failure says
+        // nothing about whether the pin is still the right destination, and DEAD-TARGET-
+        // SELFHEAL owns unpinning on its own liveness evidence.
+        //
+        // A failure the transport classified as non-recoverable (self-dial: a retry re-runs
+        // an identical decision on identical inputs) skips the budget entirely and fails the
+        // row now — retrying it is provably pointless.
+        const retryable = isRetryableDispatchFailure(e);
+        if (!retryable) {
+            failTaskAsUndeliverable(ctx, `dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);
+        } else {
+            const requeued = requeueTask(ctx.meshId, ctx.task.id, {
+                reason: 'dispatch_failed',
+                clearTargetSession: false,
+            });
+            // requeueTask no-ops (null) only when the row is already gone/terminal — nothing
+            // left to schedule. When it auto-failed on the cap, say so plainly in the log so
+            // the terminal state is not mistaken for a silent drop.
+            if (requeued?.status === 'failed') {
+                LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) failed after repeated undeliverable dispatches to node ${ctx.nodeId}: ${requeued.cancelReason || 'max_retries_exceeded'}. Dependents were unblocked.`);
+            }
+        }
         try {
             appendLedgerEntry(ctx.meshId, {
                 kind: 'dispatch_failed' as any,
                 nodeId: ctx.nodeId,
                 sessionId: ctx.sessionId,
-                payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable: isRetryableDispatchFailure(e), transport: ctx.transport },
+                payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable, transport: ctx.transport },
             });
         } catch { /* ledger write is best-effort */ }
     });
+}
+
+/**
+ * DEAD-DISPATCH-BOUND: terminate a task whose dispatch can never succeed.
+ *
+ * Used for the two provably-unrecoverable cases: a transport that classified its own
+ * failure as non-recoverable (self-dial), and a pre-dispatch target that is absent from
+ * the live mesh. Both would otherwise re-claim and re-fail on every drain forever.
+ *
+ * Fails the row directly rather than through requeueTask's budget because there is no
+ * point spending retries on a destination that cannot answer; cascading to dependents
+ * matches what the retry-cap path does, so a blocked chain unblocks either way.
+ */
+function failTaskAsUndeliverable(ctx: Pick<DeliverTaskContext, 'meshId' | 'nodeId' | 'sessionId' | 'task'>, reason: string): void {
+    // maxRetries:0 makes requeueTask's own cap trip immediately, so the row lands terminal
+    // ('failed' + max_retries_exceeded) and cascades to dependents through exactly the same
+    // code path as an exhausted retry budget — no second terminal-transition mechanism to
+    // keep in sync, and the reason string below records WHY it skipped the budget.
+    try {
+        const failed = requeueTask(ctx.meshId, ctx.task.id, { maxRetries: 0, reason, clearTargetSession: false });
+        if (!failed) return; // row already gone/terminal — nothing to fail
+    } catch (err: any) {
+        LOG.warn('MeshQueue', `Failed to mark undeliverable task ${ctx.task.id} (mesh ${ctx.meshId}) terminal: ${err?.message || err}`);
+        return;
+    }
+    LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? '?'}) and will NOT be retried: ${reason}`);
+    try {
+        appendLedgerEntry(ctx.meshId, {
+            kind: 'task_failed' as any,
+            nodeId: ctx.nodeId,
+            sessionId: ctx.sessionId,
+            payload: { taskId: ctx.task.id, reason, undeliverable: true },
+        });
+    } catch { /* ledger write is best-effort */ }
 }
 
 /**
