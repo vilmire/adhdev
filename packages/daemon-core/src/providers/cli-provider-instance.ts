@@ -100,6 +100,7 @@ import type {
     ExternalTranscriptProbe,
 } from './cli-provider-instance-types.js';
 import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
+import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
 import { getEffectDedupKey, formatApprovalRequestMessage, formatMarkerTimestamp } from './cli-provider-effect-format.js';
 import { resolveProviderAutoApproveMode, type ResolvedAutoApproveMode } from './auto-approve-modes.js';
 
@@ -488,6 +489,11 @@ export class CliProviderInstance implements ProviderInstance {
     private appliedEffectKeys = new Set<string>();
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
+    // INGEST-TIMESTAMP: stamps untimed provider-parsed messages with their
+    // first-observed time so mergeConversationMessages can interleave the
+    // timestamped runtime user-input ack by clock instead of pinning it after
+    // every parsed message (the "user bubble stuck at the bottom" defect).
+    private readonly parsedIngestTimestamps = new ParsedIngestTimestampStamper();
     private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
     private lastAcknowledgedUserInputAt = 0;
     // TASKBUBBLE-DUP: per-content last-ack timestamps so the same dispatched
@@ -794,7 +800,7 @@ export class CliProviderInstance implements ProviderInstance {
                 ? parsedMessages.slice(-historyMessageCount)
                 : [];
         }
-        const mergedMessages = mergeConversationMessages(this.runtimeMessages, parsedMessages);
+        const mergedMessages = mergeConversationMessages(this.runtimeMessages, this.parsedIngestTimestamps.stamp(parsedMessages));
         const canonicalBackedHistory = this.shouldHydrateExistingProviderHistory()
             ? this.syncCanonicalSavedHistoryIfNeeded()
             : false;
@@ -3388,7 +3394,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     mergeRuntimeChatMessages(parsedMessages: ChatMessage[]): ChatMessage[] {
-        return mergeConversationMessages(this.runtimeMessages, parsedMessages);
+        return mergeConversationMessages(this.runtimeMessages, this.parsedIngestTimestamps.stamp(parsedMessages));
     }
 
     private promoteProviderSessionId(sessionId: string, opts: { authoritative?: boolean } = {}): void {
