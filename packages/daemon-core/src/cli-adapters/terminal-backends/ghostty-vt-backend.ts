@@ -57,6 +57,12 @@ function getBindingCandidates(): string[] {
     return explicit ? [explicit] : DEFAULT_BINDING_CANDIDATES;
 }
 
+/** Test-only: reset the memoized binding/error so a test can force a reload. */
+export function __resetGhosttyVtBindingCacheForTests(): void {
+    cachedBinding = undefined;
+    cachedBindingError = null;
+}
+
 function loadGhosttyVtBinding(): GhosttyVtBinding {
     if (cachedBinding !== undefined) {
         if (!cachedBinding && cachedBindingError) throw cachedBindingError;
@@ -64,6 +70,12 @@ function loadGhosttyVtBinding(): GhosttyVtBinding {
     }
 
     const errors: string[] = [];
+    // True only if every candidate failed with MODULE_NOT_FOUND. Any other
+    // failure (native ABI crash, permission error, transient load issue) means
+    // the binding may in fact be loadable, so the failure must NOT be
+    // memoized — otherwise one bad load wedges this backend unavailable for
+    // the rest of the daemon's life even though a later attempt could succeed.
+    let allModuleNotFound = true;
 
     for (const ref of getBindingCandidates()) {
         try {
@@ -77,17 +89,23 @@ function loadGhosttyVtBinding(): GhosttyVtBinding {
                 errors.push(`${ref}: module not found`);
                 continue;
             }
+            allModuleNotFound = false;
             const message = error instanceof Error ? error.message : String(error);
             errors.push(`${ref}: ${message}`);
         }
     }
 
-    cachedBinding = null;
-    cachedBindingError = new Error(
-        `ghostty-vt binding unavailable for runtime ${runtimeTriplet()} ` +
-            `(${errors.join('; ') || 'no candidates tried'})`,
-    );
-    throw cachedBindingError;
+    const buildError = () =>
+        new Error(
+            `ghostty-vt binding unavailable for runtime ${runtimeTriplet()} ` +
+                `(${errors.join('; ') || 'no candidates tried'})`,
+        );
+
+    if (allModuleNotFound) {
+        cachedBinding = null;
+        cachedBindingError = buildError();
+    }
+    throw buildError();
 }
 
 export class GhosttyVtTerminalBackend implements TerminalViewportBackend {

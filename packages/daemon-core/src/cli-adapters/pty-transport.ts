@@ -4,18 +4,40 @@ import { resolveWin32Executable } from './resolve-executable.js';
 
 let cachedPty: any | null | undefined;
 
+// Test-only seam: lets a test simulate a native-load failure/success without
+// touching the real node-pty addon. Defaults to the real require().
+let requireNodePty: () => any = () => require('node-pty');
+
+function isModuleNotFoundError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'MODULE_NOT_FOUND';
+}
+
 function loadNodePty(): any {
   if (cachedPty !== undefined) return cachedPty;
   try {
     // Keep node-pty out of processes that delegate PTY ownership elsewhere
     // (for example via session-host on Windows), so native PTY crashes do not
     // take down the daemon just by importing this module.
-    cachedPty = require('node-pty');
+    cachedPty = requireNodePty();
     ensureNodePtySpawnHelperPermissions();
-  } catch {
-    cachedPty = null;
+  } catch (error) {
+    // Only memoize a genuine "package not installed" — that state cannot
+    // change without a reinstall/restart, so it's safe (and cheap) to cache.
+    // Any other failure (native ABI mismatch, transient load error) must NOT
+    // be cached: node-pty may in fact be installed, and permanently caching
+    // that failure would wedge PTY spawning for the rest of the daemon's
+    // life even though a later require() could succeed.
+    if (isModuleNotFoundError(error)) {
+      cachedPty = null;
+    }
   }
-  return cachedPty;
+  return cachedPty ?? null;
+}
+
+/** Test-only: reset the memoized node-pty handle and/or stub its loader. */
+export function __setNodePtyLoaderForTests(loader: (() => any) | null): void {
+  cachedPty = undefined;
+  requireNodePty = loader ?? (() => require('node-pty'));
 }
 
 export interface PtySpawnOptions {
