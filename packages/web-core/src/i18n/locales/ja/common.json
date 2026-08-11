@@ -39,6 +39,7 @@
         "taskCompleted": "{{label}} エージェントのタスクが完了しました",
         "taskCompletedWithDuration": "{{label}} エージェントのタスクが完了しました（{{duration}}秒）",
         "approvalNeeded": "{{label}} の承認が必要です",
+        "questionNeeded": "{{label}} の質問に回答が必要です",
         "noProgress": "{{label}} エージェントに進捗がありません",
         "noProgressWithDuration": "{{label}} エージェントに進捗がありません（{{minutes}}分）",
         "noProgressTitle": "{{label}} — 進捗なし",

@@ -39,6 +39,7 @@
         "taskCompleted": "{{label}} agent task completed",
         "taskCompletedWithDuration": "{{label}} agent task completed ({{duration}}s)",
         "approvalNeeded": "{{label}} approval needed",
+        "questionNeeded": "{{label}} question needs an answer",
         "noProgress": "{{label}} agent shows no progress",
         "noProgressWithDuration": "{{label}} agent shows no progress ({{minutes}}m)",
         "noProgressTitle": "{{label}} — No Progress",

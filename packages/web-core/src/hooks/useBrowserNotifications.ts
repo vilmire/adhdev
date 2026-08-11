@@ -65,6 +65,27 @@ export function canNotify(): boolean {
 }
 
 /**
+ * Mute-skip decision for one agent's status transition (exported for tests).
+ *
+ * A muted conversation (daemon-owned flag — coordinator-spawned mesh session
+ * or a manual mute) silences every transition notification EXCEPT entry into
+ * waiting_choice (AskUserQuestion picker parked). A muted coordinator
+ * auto-approves its consent modals locally, so approval pings are noise — but
+ * a question has NO local auto-answer: the session sits parked until a human
+ * picks an option. Suppressing that ping was the live "coordinator's
+ * questions never notify" defect, so the mute is deliberately overridden for
+ * this one transition.
+ */
+export function shouldSkipNotificationForMute(
+    muted: boolean | undefined,
+    prev: string | undefined,
+    curr: string,
+): boolean {
+    if (!muted) return false
+    return !(curr === 'waiting_choice' && prev !== 'waiting_choice')
+}
+
+/**
  * Check if a Service Worker Push subscription is already active (cloud PWA).
  * If so, the server handles push notifications — we should skip browser-level ones.
  */
@@ -164,10 +185,29 @@ export function useBrowserNotifications(
             const curr = normalizeManagedStatus(agent.status, { activeModal: agent.activeModal })
             const name = agent.name || agent.id
 
-            // Muted conversation (daemon-owned): track the transition but stay silent.
-            if (agent.muted) {
+            // A parked AskUserQuestion picker (waiting_choice) — detected on
+            // the transition INTO the state, same edge-trigger rule as
+            // approval below.
+            const questionEntered = curr === 'waiting_choice' && prev !== 'waiting_choice'
+
+            // Muted conversation (daemon-owned): track the transition but stay
+            // silent — EXCEPT a parked question (shouldSkipNotificationForMute
+            // documents the deliberate override).
+            if (shouldSkipNotificationForMute(agent.muted, prev, curr)) {
                 prevStates.current.set(agent.id, curr)
                 continue
+            }
+
+            // Question needs an answer (AskUserQuestion). Rides the approval
+            // pref category (an attention-required prompt) — no separate
+            // 'question' toggle; the throttle is shared too.
+            if (questionEntered && opts.onApproval && shouldNotify('approval')) {
+                const msg = agent.activeModal?.message || 'A question is waiting for your answer'
+                throttledNotify(
+                    `❓ ${name} — Question needs answer`,
+                    msg.slice(0, 120),
+                    `question-${agent.id}`,
+                )
             }
 
             // Approval request

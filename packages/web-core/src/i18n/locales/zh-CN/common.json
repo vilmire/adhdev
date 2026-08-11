@@ -39,6 +39,7 @@
         "taskCompleted": "{{label}} 代理任务已完成",
         "taskCompletedWithDuration": "{{label}} 代理任务已完成（{{duration}} 秒）",
         "approvalNeeded": "{{label}} 需要审批",
+        "questionNeeded": "{{label}} 有问题待回答",
         "noProgress": "{{label}} 代理没有进展",
         "noProgressWithDuration": "{{label}} 代理没有进展（{{minutes}} 分钟）",
         "noProgressTitle": "{{label}} — 无进展",

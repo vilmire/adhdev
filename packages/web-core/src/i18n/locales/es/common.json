@@ -39,6 +39,7 @@
         "taskCompleted": "La tarea del agente {{label}} se completó",
         "taskCompletedWithDuration": "La tarea del agente {{label}} se completó ({{duration}} s)",
         "approvalNeeded": "Se requiere aprobación de {{label}}",
+        "questionNeeded": "{{label}} tiene una pregunta pendiente",
         "noProgress": "El agente {{label}} no muestra progreso",
         "noProgressWithDuration": "El agente {{label}} no muestra progreso ({{minutes}} min)",
         "noProgressTitle": "{{label}} — Sin progreso",

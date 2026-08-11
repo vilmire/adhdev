@@ -39,6 +39,7 @@
         "taskCompleted": "{{label}} 에이전트 작업 완료",
         "taskCompletedWithDuration": "{{label}} 에이전트 작업 완료 ({{duration}}초)",
         "approvalNeeded": "{{label}} 승인 필요",
+        "questionNeeded": "{{label}} 질문에 답변 필요",
         "noProgress": "{{label}} 에이전트 진행 없음",
         "noProgressWithDuration": "{{label}} 에이전트 진행 없음 ({{minutes}}분)",
         "noProgressTitle": "{{label}} — 진행 없음",

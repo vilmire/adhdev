@@ -309,6 +309,35 @@ class EventManager {
                 msg = '' // skip default toast
             }
 
+        // ── agent:waiting_choice (AskUserQuestion picker parked) ──
+        } else if (payload.event === 'agent:waiting_choice') {
+            msg = `❓ ${i18next.t('event.questionNeeded', { label: ideLabel })}`
+            type = 'warning'
+            // DELIBERATE: unlike agent:waiting_approval, this toast is NOT
+            // suppressed for muted conversations. A muted coordinator session
+            // auto-approves its consent modals locally, so approval toasts are
+            // noise — but a QUESTION cannot be auto-answered: the session (and
+            // every mesh task queued behind it) sits parked until a human
+            // picks an option. Suppressing the ping here was the live
+            // "coordinator's questions never notify" complaint, so the
+            // conversation mute is overridden for this one event class. The
+            // question text rides modalMessage (push-friendly projection of
+            // the structured interactivePrompt payload).
+            const questionText = typeof payload.modalMessage === 'string' && payload.modalMessage.trim()
+                ? payload.modalMessage.replace(/[\n\r]+/g, ' ').slice(0, 120)
+                : ''
+            if (questionText) msg = `${msg} — ${questionText}`
+            // No inline action buttons: answering needs the structured picker
+            // (mesh_answer_question / the session's choice UI), not a yes/no
+            // resolve_action. Emitted directly (not via the default-toast
+            // path) so the mute override above actually reaches the user.
+            const toastId = Date.now()
+            this.emitToast({
+                id: toastId, message: msg, type, timestamp: toastId,
+                targetKey: conversationKey || payload.daemonId, duration: 10000,
+            })
+            msg = '' // skip default toast (already emitted, mute override)
+
         // ── monitor:no_progress (legacy event name: monitor:long_generating) ──
         } else if (payload.event === 'monitor:no_progress' || payload.event === 'monitor:long_generating') {
             const minutes = payload.elapsedSec ? Math.round(payload.elapsedSec / 60) : 0

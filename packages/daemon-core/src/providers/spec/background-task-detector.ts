@@ -478,8 +478,12 @@ function parseNotificationAttrs(tag: string): Map<string, string> {
  * Read only the last `maxBytes` of a JSONL file and parse the whole lines
  * within it (the first partial line at the read boundary is dropped). Keeps
  * per-poll cost bounded on long transcripts.
+ *
+ * Exported for the sibling wire-tail readers (kimi-pending-question) that
+ * share the same bounded-read requirement — one implementation of the
+ * partial-line-drop rule.
  */
-function readTailJsonlLines(filePath: string, maxBytes: number): unknown[] {
+export function readTailJsonlLines(filePath: string, maxBytes: number): unknown[] {
     const stat = fs.statSync(filePath);
     const size = stat.size;
     const start = size > maxBytes ? size - maxBytes : 0;

@@ -17,7 +17,9 @@
 import * as os from 'os';
 import { createHash } from 'crypto';
 import type { CliAdapter, CliLaunchInfo } from '../cli-adapter-types.js';
-import type { InteractivePromptResponse } from '../providers/types/interactive-prompt.js';
+import type { InteractivePrompt, InteractivePromptResponse } from '../providers/types/interactive-prompt.js';
+import { buildKimiInteractiveTuiAnswerSteps } from '../providers/types/interactive-prompt.js';
+import { detectKimiPendingQuestion } from '../providers/kimi-pending-question.js';
 import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
@@ -253,6 +255,21 @@ export class ProviderCliAdapter implements CliAdapter {
     // single momentarily-silent point-sample of a still-live turn cannot flip
     // it. Reset to 0 the instant any poll is ineligible.
     private staticIdlePollStreak = 0;
+
+    /**
+     * kimi AskUserQuestion picker hold (wire.jsonl authority). kimi renders
+     * AskUserQuestion as a TUI picker the modal/spinner matchers do NOT
+     * classify, so the session reads 'generating' while parked on the
+     * question. Refreshed from the session's own wire.jsonl on each
+     * getScriptParsedStatus() poll (refreshKimiPendingQuestion — same
+     * cadence/rationale as the background-task passthrough), surfaced on
+     * getStatus() as activeInteractivePrompt so CliProviderInstance overlays
+     * waiting_choice and the status-transition layer emits agent:waiting_choice,
+     * and consumed by setInteractivePromptResponse (mesh_answer_question) to
+     * drive the picker keystrokes. claude-cli is untouched — its prompt
+     * capture lives in SpecCliAdapter (stream-json / TUI screen parse).
+     */
+    private activeInteractivePrompt: InteractivePrompt | null = null;
 
  // Server log forwarding
     private serverConn: any = null;
@@ -1355,6 +1372,10 @@ export class ProviderCliAdapter implements CliAdapter {
             messages: [],
             workingDir: this.workingDir,
             activeModal: effectiveModal,
+            // kimi AskUserQuestion picker hold (null for every other provider /
+            // when no unanswered call is on the wire). Always keyed so
+            // CliProviderInstance's mirror sees the clear edge too.
+            activeInteractivePrompt: this.activeInteractivePrompt,
             approvalEntrySeq: this.engine.approvalEntrySeq,
             lastResolvedEntrySeq: this.engine.lastResolvedEntrySeq,
             pendingOutboundCount: this.pendingOutboundQueue.length,
@@ -1398,6 +1419,12 @@ export class ProviderCliAdapter implements CliAdapter {
             backgroundTaskSupport: bg.support ?? 'unknown',
             ...(bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}),
         };
+        // kimi AskUserQuestion picker hold — same every-call rule as the bg
+        // passthrough above (the wire transcript changes independently of
+        // every PTY/buffer cache key), and the same fail-open semantics. The
+        // prompt itself is NOT overlaid on the parsed result; it lives on the
+        // adapter and rides getStatus().activeInteractivePrompt.
+        this.refreshKimiPendingQuestion();
         const cached = this.parsedStatusCache;
         const accumulatedRawBufferKey = this.getAccumulatedRawBufferCacheKey();
         if (
@@ -1513,6 +1540,39 @@ export class ProviderCliAdapter implements CliAdapter {
         }
     }
 
+    /**
+     * Refresh the kimi AskUserQuestion hold from the session's own wire.jsonl
+     * (see the activeInteractivePrompt field comment). Runs on the parsed-status
+     * poll cadence — a bounded tail read, NOT on the hot PTY path — and shares
+     * detectBackgroundTask's input shape so transcript attribution (sidecar
+     * workspace + claim rules) is identical to the proven kimi readers.
+     *
+     * A detector throw fails OPEN by keeping the currently-held prompt: a
+     * transient read error must not flap waiting_choice off and on. A clean
+     * null (no pending call / tool.result landed / turn moved on) clears it.
+     * No-op for every non-kimi provider.
+     */
+    private refreshKimiPendingQuestion(): void {
+        if (this.cliType !== 'kimi') return;
+        const nativeHistory = (this.provider as { nativeHistory?: NativeHistoryConfig } | null | undefined)?.nativeHistory;
+        if (!nativeHistory?.source) return;
+        try {
+            const prompt = detectKimiPendingQuestion(nativeHistory, {
+                agentType: this.cliType,
+                providerSessionId: this.providerSessionId || undefined,
+                sessionStartedAtMs: this.spawnAt,
+                envOverrides: this.extraEnv,
+                workspace: this.workingDir,
+            });
+            if ((prompt?.promptId ?? null) !== (this.activeInteractivePrompt?.promptId ?? null)) {
+                this.activeInteractivePrompt = prompt;
+                // Notify so the status poll re-reads getStatus() promptly and
+                // the waiting_choice overlay/event follow the wire promptly.
+                this.onStatusChange?.();
+            }
+        } catch { /* fail open — keep the currently-held prompt */ }
+    }
+
     async invokeScript(scriptName: string, args?: Record<string, any>): Promise<any> {
         const input = buildCliParseInput({
             accumulatedBuffer: this.accumulatedBuffer,
@@ -1563,7 +1623,30 @@ export class ProviderCliAdapter implements CliAdapter {
         await this.sendMessage(promptText);
     }
 
-    async setInteractivePromptResponse(_response: InteractivePromptResponse): Promise<void> {
+    async setInteractivePromptResponse(response: InteractivePromptResponse): Promise<void> {
+        // kimi AskUserQuestion picker (wire-detected, see
+        // refreshKimiPendingQuestion): drive the TUI with the measured
+        // keystroke protocol (digit select / digit toggles + Tab / Enter on
+        // the review screen — see buildKimiInteractiveTuiAnswerSteps). The
+        // promptId-match check mirrors SpecCliAdapter's fail-closed rule: a
+        // stale answer is rejected outright, never defaulted into the active
+        // prompt's options.
+        if (this.cliType === 'kimi') {
+            const prompt = this.activeInteractivePrompt;
+            if (!prompt || prompt.promptId !== response.promptId) {
+                throw new Error('Interactive prompt response does not match active prompt');
+            }
+            const steps = buildKimiInteractiveTuiAnswerSteps(prompt, response);
+            for (const step of steps) {
+                await this.writeToPty(step);
+                // Same ~180ms inter-key gap as the claude TUI answer path —
+                // the picker needs a beat to repaint/auto-advance between keys.
+                await new Promise(resolve => setTimeout(resolve, 180));
+            }
+            this.activeInteractivePrompt = null;
+            this.onStatusChange?.();
+            return;
+        }
         // Legacy TUI providers do not currently expose an interactive prompt
         // protocol. Spec-backed claude-cli implements the first real wiring.
     }

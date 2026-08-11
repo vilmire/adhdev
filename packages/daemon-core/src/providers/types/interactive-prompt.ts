@@ -632,6 +632,78 @@ export function buildClaudeInteractiveTuiAnswerSteps(
   return steps;
 }
 
+/**
+ * kimi AskUserQuestion TUI answer steps (kimi 0.34 picker — keystroke protocol
+ * reverse-engineered live; do not "simplify" from the screen text):
+ *
+ *   * Single-select question page: a digit key (1-based option index) selects
+ *     that option AND auto-advances — to the next question tab, or to the
+ *     review screen after the last question.
+ *   * Multi-select page (checkbox rows, footer "↵ toggle"): digit keys TOGGLE
+ *     that option and do NOT advance; Tab commits the checked set and advances
+ *     to the next question tab (or the review screen after the last one).
+ *   * Review screen ("Ready to submit your answers?"): Submit is pre-selected,
+ *     so a single Enter submits.
+ *
+ * Detection is wire.jsonl-based (kimi-pending-question.ts), NOT screen-based —
+ * the picker's promptId is the AskUserQuestion toolCallId from the wire, so an
+ * answer binds to exactly the option list the wire carried.
+ */
+export function buildKimiInteractiveTuiAnswerSteps(
+  prompt: InteractivePrompt,
+  response: InteractivePromptResponse,
+): string[] {
+  if (response.promptId !== prompt.promptId) throw new Error('Interactive prompt response does not match active prompt');
+  const steps: string[] = [];
+  for (const question of prompt.questions) {
+    const answer = response.answers[question.questionId];
+    if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
+    const freeformText = answer.freeformText?.trim() ?? '';
+
+    // Same defensive rule as the claude builder: >1 selected label can only
+    // come from a checkbox page, so treat it as multi-select even if the
+    // captured flag says single.
+    const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+
+    if (treatAsMultiSelect) {
+      const labels = answer.selectedLabels;
+      if (labels.length === 0) {
+        throw new Error(`Expected at least one selected label for ${question.questionId}`);
+      }
+      for (const label of labels) {
+        const selectedIndex = question.options.findIndex(option => option.label === label);
+        if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label}`);
+        // Digit TOGGLES the option's checkbox; the page stays put.
+        steps.push(String(selectedIndex + 1));
+      }
+      // Tab commits this question's checked set and advances (digits alone
+      // never leave a multi-select page).
+      steps.push('\t');
+    } else if (freeformText) {
+      // Freeform ("Other"): kimi always renders an "Other" row as the LAST
+      // visible option, and the wire's options list never includes it — so
+      // its on-screen number is options.length + 1.
+      // UNVERIFIED: the Other-row keystroke path (digit → type → Enter) was
+      // NOT measured live; it mirrors the claude freeform path and the
+      // measured kimi digit/auto-advance rule. Verify against a live picker
+      // before relying on it.
+      steps.push(String(question.options.length + 1));
+      for (const ch of freeformText) steps.push(ch);
+      steps.push('\r');
+    } else {
+      if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+      const selectedIndex = question.options.findIndex(option => option.label === answer.selectedLabels[0]);
+      if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+      // Digit selects AND auto-advances (no separate commit key).
+      steps.push(String(selectedIndex + 1));
+    }
+  }
+  // After the last question the review screen is shown with Submit
+  // pre-selected — a single Enter confirms and submits.
+  steps.push('\r');
+  return steps;
+}
+
 export function interactivePromptFromClaudeAskUserQuestion(input: unknown, options: {
   promptId: string;
   providerType: string;
