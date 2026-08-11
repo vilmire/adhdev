@@ -3,8 +3,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+    SessionHostClient,
     getDefaultSessionHostEndpoint,
     sanitizeSpawnEnv,
+    type SessionHostDiagnostics,
     type SessionHostEndpoint,
     type SessionHostRequestType,
 } from '@adhdev/session-host-core';
@@ -379,6 +381,62 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return stopped;
     }
 
+    /**
+     * Ask a reachable session-host for its own entry path and stop it when it
+     * does not match this install's.
+     *
+     * Deliberately independent of every process-inspection API: the answer comes
+     * from the host itself over the socket it is already serving. That is the
+     * whole point — the boxes where this defect reproduces are exactly the ones
+     * where `getProcessCommandLine` cannot answer.
+     *
+     * Conservative by construction. It only stops the host on a POSITIVE
+     * mismatch (both paths known and different). A connect failure, a
+     * diagnostics error, or a host too old to report the field all leave the
+     * host untouched, so this can never take down a healthy setup and can never
+     * loop: the replacement host reports the current entry and matches.
+     */
+    async function stopHostRunningFromForeignEntry(): Promise<void> {
+        let currentEntry: string;
+        try {
+            currentEntry = resolveEntry();
+        } catch {
+            return; // Cannot determine our own entry — nothing to compare against.
+        }
+
+        const client = new SessionHostClient({ endpoint: getEndpoint() });
+        let reported: string | undefined;
+        try {
+            await client.connect();
+            const response = await client.request<SessionHostDiagnostics>({
+                type: 'get_host_diagnostics',
+                payload: { includeSessions: false },
+            });
+            if (!response.success || !response.result) return;
+            const value = response.result.hostEntryPath;
+            reported = typeof value === 'string' && value.trim() ? value : undefined;
+        } catch {
+            // No host listening, or it cannot answer. Either way there is nothing
+            // to stop here; the normal spawn/ready path handles it.
+            return;
+        } finally {
+            await client.close().catch(() => {});
+        }
+
+        if (!reported) return; // Pre-D5 host: unknown, not mismatched.
+        if (pathsEquivalent(reported, currentEntry)) return;
+
+        const reportedExists = fs.existsSync(reported);
+        LOG.warn(
+            'SessionHost',
+            `Reachable session-host reports it is running from ${reported}` +
+                `${reportedExists ? '' : ' (which no longer exists)'}, but this install runs from ${currentEntry}. ` +
+                'That host would fail every create_session loading node-pty from its own prefix; stopping it so a ' +
+                'current one is spawned in its place.',
+        );
+        stopManagedSessionHostProcess();
+    }
+
     async function ensureReady(): Promise<SessionHostEndpoint> {
         options.beforeEnsureReady?.();
 
@@ -433,6 +491,29 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                     stopManagedSessionHostProcess();
                 }
             }
+        }
+
+        // D5: ask the reachable host WHICH install it is running from.
+        //
+        // Every earlier stale-host guard (D1 above, `isManagedSessionHostPid`,
+        // `listOwnedNodeProcesses`) routes through `getProcessCommandLine`, which
+        // is blocked outright on the boxes this defect keeps recurring on: AV/EDR
+        // denies `Get-CimInstance`, and `wmic` no longer ships. On those boxes all
+        // three silently answer "nothing to see" and the stale host is reused.
+        //
+        // D4-b below catches the case where the CURRENT prefix lost its prebuild,
+        // but not this one: after a successful upgrade the current prefix is
+        // perfectly healthy — it is the HOST that is running from a prefix the
+        // upgrade deleted. Its lazy `require` of node-pty then fails inside
+        // create_session with `Cannot find module './prebuilds/win32-x64/
+        // conpty.node'`, in ~1ms, naming a directory that no longer exists.
+        //
+        // The host itself always knows its own path, so ask it. No privileges
+        // required, so it works exactly where the process probe does not. A host
+        // too old to report `hostEntryPath` yields undefined and is left alone —
+        // unknown is never treated as a mismatch.
+        if (process.platform === 'win32') {
+            await stopHostRunningFromForeignEntry();
         }
 
         // D4-b: re-verify conpty on the REUSE path, not just the spawn path.

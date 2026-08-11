@@ -36,7 +36,7 @@ __export(index_exports, {
 module.exports = __toCommonJS(index_exports);
 var import_crypto = require("crypto");
 var fs4 = __toESM(require("fs"));
-var path2 = __toESM(require("path"));
+var path3 = __toESM(require("path"));
 var import_session_host_core6 = require("@adhdev/session-host-core");
 
 // src/server.ts
@@ -489,8 +489,18 @@ var SessionHostStorage = class {
 };
 
 // src/session-diagnostics.ts
+var path2 = __toESM(require("path"));
 var import_session_host_core3 = require("@adhdev/session-host-core");
 var MAX_RECENT_DIAGNOSTICS = 200;
+function resolveHostEntryPath() {
+  const entry = process.argv[1];
+  if (typeof entry !== "string" || !entry.trim()) return void 0;
+  try {
+    return path2.resolve(entry);
+  } catch {
+    return entry;
+  }
+}
 function pushRecent(bucket, entry, max = MAX_RECENT_DIAGNOSTICS) {
   bucket.push(entry);
   if (bucket.length > max) {
@@ -544,6 +554,9 @@ function buildHostDiagnostics(params) {
   return {
     hostStartedAt: params.hostStartedAt,
     endpoint: params.endpointPath,
+    // Self-reported so a client can tell WHICH install this host runs from
+    // without needing process-inspection privileges. See SessionHostDiagnostics.
+    hostEntryPath: resolveHostEntryPath(),
     runtimeCount: params.runtimeCount,
     supportedRequestTypes: [...import_session_host_core3.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,
@@ -734,8 +747,8 @@ var SessionHostServer = class extends import_events.EventEmitter {
         void this.handleIncomingRequest(socket, envelope);
       }));
     });
-    await new Promise((resolve, reject) => {
-      this.ipcServer?.once("listening", () => resolve());
+    await new Promise((resolve2, reject) => {
+      this.ipcServer?.once("listening", () => resolve2());
       this.ipcServer?.once("error", reject);
       this.ipcServer?.listen(this.endpoint.path);
     });
@@ -769,7 +782,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     if (this.ipcServer) {
       const server = this.ipcServer;
       this.ipcServer = null;
-      await new Promise((resolve) => server.close(() => resolve()));
+      await new Promise((resolve2) => server.close(() => resolve2()));
     }
     if (this.endpoint.kind === "unix") {
       try {
@@ -1193,7 +1206,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     if (!this.runtimes.has(sessionId)) {
       return Promise.resolve(this.registry.getSession(sessionId)?.lifecycle === "failed" ? 1 : 0);
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const timeout = setTimeout(() => {
         const waiters2 = this.exitWaiters.get(sessionId) || [];
         this.exitWaiters.set(sessionId, waiters2.filter((waiter) => waiter !== onExit));
@@ -1201,7 +1214,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       }, timeoutMs);
       const onExit = (exitCode) => {
         clearTimeout(timeout);
-        resolve(exitCode);
+        resolve2(exitCode);
       };
       const waiters = this.exitWaiters.get(sessionId) || [];
       waiters.push(onExit);
@@ -1420,12 +1433,12 @@ function getSessionHostEndpoint() {
   return (0, import_session_host_core6.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
 }
 function getSessionHostStorageRoot() {
-  return path2.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
+  return path3.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
 }
 function getSessionHostPidFile(appName) {
   const dir = INSTANCE_CONFIG_DIR;
   if (!fs4.existsSync(dir)) fs4.mkdirSync(dir, { recursive: true });
-  return path2.join(dir, `${appName}-session-host.pid`);
+  return path3.join(dir, `${appName}-session-host.pid`);
 }
 function writeSessionHostPid(appName) {
   fs4.writeFileSync(getSessionHostPidFile(appName), String(process.pid), "utf8");

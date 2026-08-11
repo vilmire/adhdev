@@ -1,3 +1,4 @@
+import * as path from 'path';
 import {
   SESSION_HOST_SUPPORTED_REQUEST_TYPES,
 } from '@adhdev/session-host-core';
@@ -10,6 +11,29 @@ import type {
 } from '@adhdev/session-host-core';
 
 export const MAX_RECENT_DIAGNOSTICS = 200;
+
+/**
+ * Absolute path of the running host script, for `SessionHostDiagnostics.hostEntryPath`.
+ *
+ * `process.argv[1]` is what the parent daemon actually spawned
+ * (`spawn(node, [entry])` in managed-host's `spawnHost`), so it is exactly the
+ * value a client wants to compare against its own `resolveEntry()`. It is used
+ * in preference to `__filename` because the shipped artifact is a single
+ * bundled file whose `__filename` is the same path anyway, while `argv[1]`
+ * additionally survives the ESM build with no CJS-only globals.
+ *
+ * Returns undefined rather than guessing when argv[1] is absent (e.g. an
+ * embedded/test host), so callers see "unknown" instead of a wrong path.
+ */
+function resolveHostEntryPath(): string | undefined {
+  const entry = process.argv[1];
+  if (typeof entry !== 'string' || !entry.trim()) return undefined;
+  try {
+    return path.resolve(entry);
+  } catch {
+    return entry;
+  }
+}
 
 export function pushRecent<T>(bucket: T[], entry: T, max = MAX_RECENT_DIAGNOSTICS): void {
   bucket.push(entry);
@@ -90,6 +114,9 @@ export function buildHostDiagnostics(params: BuildHostDiagnosticsParams): Sessio
   return {
     hostStartedAt: params.hostStartedAt,
     endpoint: params.endpointPath,
+    // Self-reported so a client can tell WHICH install this host runs from
+    // without needing process-inspection privileges. See SessionHostDiagnostics.
+    hostEntryPath: resolveHostEntryPath(),
     runtimeCount: params.runtimeCount,
     supportedRequestTypes: [...SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,

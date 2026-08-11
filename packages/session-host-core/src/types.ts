@@ -270,6 +270,23 @@ export interface SessionHostRuntimeTransition {
 export interface SessionHostDiagnostics {
   hostStartedAt: number;
   endpoint: string;
+  /**
+   * Absolute path of the script this host process is running (its own
+   * `__filename`), self-reported.
+   *
+   * This is the only way a client can learn WHICH install a reachable host came
+   * from without process inspection. On Windows the daemon's PowerShell/wmic
+   * command-line probe is blocked outright on some boxes (AV/EDR, and `wmic` is
+   * removed by default in Win11 24H2+), so identity checks that depend on it
+   * fail silently — which let a host from a DELETED install prefix keep serving
+   * its socket while every `create_session` died loading node-pty's conpty.node
+   * from the missing tree. The host answering with its own path needs no
+   * privileges and always works.
+   *
+   * Optional: an older host predating this field simply omits it, and callers
+   * must treat `undefined` as "unknown", never as a match.
+   */
+  hostEntryPath?: string;
   runtimeCount: number;
   supportedRequestTypes?: SessionHostRequestType[];
   sessions?: SessionHostRecord[];

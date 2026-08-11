@@ -9,6 +9,21 @@ const POINTER_NAME = '.adhdev-current';
 const STABLE_FILES = [POINTER_NAME, 'adhdev.cmd', 'adhdev.ps1', 'adhdev'] as const;
 
 /**
+ * The platform this process is genuinely running on, captured before anything
+ * can stub it.
+ *
+ * The Windows-layout tests drive this module with `process.platform` redefined
+ * to 'win32' while running on darwin/linux. That is the right way to exercise
+ * the layout logic, but it makes the live `process.platform` useless for the
+ * one question that is about the REAL machine: "did that write actually land?"
+ * `atomicWrite`'s win32 branch spawns powershell.exe, which silently does
+ * nothing off-Windows, so a readback verification keyed on the stubbed value
+ * would fail on every non-Windows CI run. Keyed on this constant it runs only
+ * where the write is real.
+ */
+const REAL_PLATFORM: NodeJS.Platform = process.platform;
+
+/**
  * Default loopback port the health gate probes: the CURRENT TRACK's daemon port
  * (19222 stable / 19223 preview), never a hard-coded literal.
  *
@@ -398,7 +413,15 @@ function snapshotStableFiles(stablePrefix: string): Map<string, FileSnapshot> {
 function restoreStableFiles(snapshots: Map<string, FileSnapshot>, layout: WindowsInstallerLayout): void {
   const shims = stableShimContents();
   for (const [target, snapshot] of snapshots) {
-    if (snapshot.exists && snapshot.data) {
+    // A zero-length snapshot must NOT be restored verbatim. `Buffer.alloc(0)` is
+    // truthy and `.toString()` yields '', so the original condition happily
+    // rewrote an empty file — turning every rollback into a propagator of a
+    // corrupt pointer/shim rather than the repair the branch below intends. An
+    // empty `.adhdev-current` is especially destructive: `install.ps1` reads it
+    // as "no active prefix" and its stale-install sweep then treats EVERY
+    // version-* directory — including the live one — as garbage to delete.
+    // Falling through re-issues canonical content instead.
+    if (snapshot.exists && snapshot.data && snapshot.data.length > 0) {
       atomicWrite(target, snapshot.data.toString('binary'), 'binary');
       continue;
     }
@@ -410,12 +433,49 @@ function restoreStableFiles(snapshots: Map<string, FileSnapshot>, layout: Window
     } else if (name === POINTER_NAME) {
       // Preserve the last-successful (currently active) version so the redirect
       // launchers still reach a real prefix. Only fall back to deleting when we
-      // have no active version to point at.
-      if (layout.activeVersionName) atomicWrite(target, layout.activeVersionName, 'ascii');
+      // have no active version to point at — never leave an EMPTY pointer, which
+      // install.ps1 reads as "protect nothing" when sweeping stale installs.
+      if (layout.activeVersionName) writePointerVerified(target, layout.activeVersionName);
       else try { fs.unlinkSync(target); } catch { /* noop */ }
     } else {
       try { fs.unlinkSync(target); } catch { /* noop */ }
     }
+  }
+}
+
+/**
+ * Write the version pointer and verify it reads back intact.
+ *
+ * The pointer is the single most load-bearing string in the Windows layout —
+ * every launcher shim resolves the active install through it, and an EMPTY
+ * pointer is worse than a missing one: `install.ps1`'s `Get-AdhdevActiveVersionPrefix`
+ * returns `$null`, and its stale-install sweep then protects nothing and queues
+ * every version-* prefix (the live one included) for deletion. Every other
+ * validated artifact here is read back after writing (`pinStagedShims`); the
+ * pointer was the one exception. Close it.
+ */
+function writePointerVerified(pointerPath: string, versionName: string): void {
+  // Platform-independent: an empty pointer must never be written, whoever asks.
+  if (!versionName || !versionName.trim()) {
+    throw new Error(`refusing to write an empty version pointer to ${pointerPath}`);
+  }
+  atomicWrite(pointerPath, versionName, 'ascii');
+
+  // The readback only means something where the write actually happened — see
+  // REAL_PLATFORM. Off-Windows the win32 atomicWrite branch no-ops, so verifying
+  // there would report a phantom mismatch on every non-Windows CI run.
+  if (REAL_PLATFORM !== 'win32') return;
+
+  let readback = '';
+  try {
+    readback = fs.readFileSync(pointerPath, 'utf8').trim();
+  } catch (error: any) {
+    throw new Error(`version pointer readback failed for ${pointerPath}: ${error?.message || String(error)}`);
+  }
+  if (readback !== versionName.trim()) {
+    throw new Error(
+      `version pointer verification failed for ${pointerPath}: expected "${versionName.trim()}", read "${readback}"`,
+    );
   }
 }
 
@@ -425,7 +485,7 @@ function publishStableShimsAndPointer(layout: WindowsInstallerLayout, versionNam
     atomicWrite(path.join(layout.stablePrefix, name), shims[name].content, shims[name].encoding);
   }
   // Pointer last: until this rename, every stable launcher still reaches the old prefix.
-  atomicWrite(layout.pointerPath, versionName, 'ascii');
+  writePointerVerified(layout.pointerPath, versionName);
 }
 
 /**
@@ -740,6 +800,20 @@ export async function cleanupInactivePrefixesWithGuard(options: {
     });
     if (stopResult.survivors.length > 0) {
       log?.(`Skipping cleanup of ${candidate}: ${stopResult.survivors.length} owned process(es) could not be stopped`);
+      continue;
+    }
+    // Deleting a prefix is irreversible and a live process running from it is
+    // silently maimed by the deletion (its already-loaded code keeps running,
+    // but every lazy `require` — node-pty → conpty.node above all — resolves
+    // into a tree that no longer exists). An UNVERIFIED sweep is therefore not
+    // good enough: only delete when we positively established nothing is running
+    // under this prefix. Leaving an orphan prefix on disk is cheap; the next
+    // upgrade retries it, and install.ps1's sweep reclaims it.
+    if (stopResult.probeFailed) {
+      log?.(
+        `Skipping cleanup of ${candidate}: could not verify that no process is running from it `
+        + `(${stopResult.probeFailureReason}). Refusing to delete an install directory on an unverified sweep.`,
+      );
       continue;
     }
     removeInactivePrefix(candidate, log);

@@ -422,29 +422,101 @@ export function resolveNpmPublishedVersion(
   return String(execNpmCommandSync(args, execOptions, surface)).trim();
 }
 
-function isManagedSessionHostPid(pid: number): boolean {
+/**
+ * Three-valued identity check for a session-host pid.
+ *
+ * `getProcessCommandLine` shells out to PowerShell (Get-CimInstance) with a wmic
+ * fallback. On a box where AV/EDR blocks the former and the latter is absent
+ * (wmic is removed by default in Windows 11 24H2+) BOTH fail, structurally, on
+ * every call. Collapsing that into a boolean is what made the upgrade path
+ * unsafe: `unknown` was indistinguishable from `proven not ours`.
+ */
+type SessionHostPidIdentity = 'managed' | 'unrelated' | 'unknown';
+
+function classifySessionHostPid(pid: number): SessionHostPidIdentity {
   const commandLine = getProcessCommandLine(pid);
-  return !!commandLine && /session-host-daemon/i.test(commandLine);
+  if (!commandLine) return 'unknown';
+  return /session-host-daemon/i.test(commandLine) ? 'managed' : 'unrelated';
 }
 
-export async function stopSessionHostProcesses(appName: string, configDir: string = getConfigDir()): Promise<void> {
+/**
+ * Stop the session-host recorded in THIS instance's pidfile before an upgrade.
+ *
+ * The pidfile is written by the daemon for its own child, so the pid in it is
+ * authoritative evidence that a host exists — evidence that needs no process
+ * inspection at all. The previous implementation nonetheless required a
+ * command-line match before killing (`isManagedSessionHostPid`) and then
+ * deleted the pidfile unconditionally in `finally`. On a box where the
+ * command-line probe is structurally broken that combination is the root cause
+ * of the win32 stale-host outage:
+ *
+ *   1. probe returns null  → the kill is SKIPPED, the host keeps running;
+ *   2. the pidfile is deleted anyway → the only non-probe evidence is destroyed;
+ *   3. every downstream guard (`stopOwnedProcessesForPrefixes` in the helper and
+ *      in `performWindowsAtomicUpgrade`, plus `cleanupInactivePrefixesWithGuard`)
+ *      depends on that same broken probe, reports zero survivors, and the OLD
+ *      prefix is deleted out from under the still-running host;
+ *   4. the host answers its socket fine, so the next daemon reuses it, and every
+ *      `create_session` dies in ~1ms requiring node-pty's conpty.node from the
+ *      deleted tree.
+ *
+ * So: an `unknown` pid is now treated as OURS (the pidfile says so) and killed.
+ * A wrong kill costs one respawn of a process we are about to replace anyway; a
+ * missed kill costs the outage above. Only a pid POSITIVELY identified as
+ * something else is spared — that is a recycled pid now owned by a stranger.
+ *
+ * Returns what happened so the caller can fail closed when a host survived.
+ */
+export interface SessionHostStopOutcome {
+  /** Pid found in the pidfile, if any. */
+  pid: number | null;
+  /** Identity verdict for that pid. */
+  identity: SessionHostPidIdentity | null;
+  /** True when a kill was issued AND the pid left the process table. */
+  stopped: boolean;
+  /** True when a host was found but is still alive after the stop attempt. */
+  survived: boolean;
+}
+
+export async function stopSessionHostProcesses(
+  appName: string,
+  configDir: string = getConfigDir(),
+): Promise<SessionHostStopOutcome> {
   const pidFile = path.join(configDir, `${appName}-session-host.pid`);
+  const outcome: SessionHostStopOutcome = { pid: null, identity: null, stopped: false, survived: false };
   let killedPid: number | null = null;
+  // Retain the pidfile when a tracked host survived: it is the only evidence the
+  // downstream guards can use that does not depend on the broken probe. Deleting
+  // it here is what disarmed them in production.
+  let keepPidFile = false;
   try {
     if (fs.existsSync(pidFile)) {
       const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-      if (Number.isFinite(pid) && pid !== process.pid && isManagedSessionHostPid(pid)) {
-        if (killProcess(pid)) killedPid = pid;
+      if (Number.isFinite(pid) && pid !== process.pid) {
+        outcome.pid = pid;
+        const identity = classifySessionHostPid(pid);
+        outcome.identity = identity;
+        if (identity === 'unrelated') {
+          appendUpgradeLog(
+            `Session-host pidfile names pid ${pid}, which is positively identified as an unrelated process; `
+            + 'treating the pidfile as stale and not killing it.',
+            configDir,
+          );
+        } else {
+          if (identity === 'unknown') {
+            appendUpgradeLog(
+              `Could not read the command line of session-host pid ${pid} (process-inspection unavailable). `
+              + 'The pidfile is this daemon\'s own record, so the pid is treated as ours and stopped — a stale host '
+              + 'surviving an upgrade breaks every create_session with a conpty.node load failure.',
+              configDir,
+            );
+          }
+          if (killProcess(pid)) killedPid = pid;
+        }
       }
     }
   } catch {
     // noop
-  } finally {
-    try {
-      fs.unlinkSync(pidFile);
-    } catch {
-      // noop
-    }
   }
 
   // The session-host process keeps node-pty's `conpty.node` memory-mapped. On
@@ -458,7 +530,50 @@ export async function stopSessionHostProcesses(appName: string, configDir: strin
   // file handle is released before the install runs. (POSIX can replace an open
   // file freely, so the wait is harmless there.)
   if (killedPid !== null) {
-    await waitForPidExit(killedPid, 15000);
+    outcome.stopped = await waitForPidExit(killedPid, 15000);
+    if (!outcome.stopped) {
+      outcome.survived = true;
+      appendUpgradeLog(
+        `Session-host pid ${killedPid} did not exit within 15000ms of the stop request.`,
+        configDir,
+      );
+    }
+  } else if (outcome.pid !== null && outcome.identity !== 'unrelated') {
+    // The kill request itself failed (permissions, taskkill unavailable). If the
+    // process is still there, it is a survivor.
+    outcome.survived = isPidAlive(outcome.pid);
+  }
+
+  keepPidFile = outcome.survived;
+  if (!keepPidFile) {
+    try {
+      fs.unlinkSync(pidFile);
+    } catch {
+      // noop
+    }
+  } else {
+    appendUpgradeLog(
+      `Keeping ${pidFile} so the remaining upgrade guards can still see the surviving host.`,
+      configDir,
+    );
+  }
+
+  return outcome;
+}
+
+/**
+ * Is `pid` still alive? Signal 0 performs the permission/existence check without
+ * delivering a signal. Unlike `getProcessCommandLine` this is a plain kernel
+ * call that always answers, so it works on exactly the boxes where the
+ * PowerShell/wmic probe does not. `EPERM` means the process exists but belongs
+ * to someone else — alive for our purposes.
+ */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'EPERM';
   }
 }
 
@@ -871,7 +986,24 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // killSessionHost is an explicit opt-in hard refresh (mesh restart_daemon_node
   // kill_session_host) that forces the same teardown on any platform.
   if (process.platform === 'win32' || payload.killSessionHost === true) {
-    await stopSessionHostProcesses(sessionHostAppName);
+    const hostStop = await stopSessionHostProcesses(sessionHostAppName);
+    // Fail closed on a surviving host. Continuing would install a new prefix and
+    // then delete the old one while a live session-host still resolves its lazy
+    // `require`s (node-pty → conpty.node) against that tree — the exact state
+    // that leaves every create_session failing after a "successful" upgrade.
+    // Aborting keeps the working install intact and tells the user what to do.
+    if (process.platform === 'win32' && hostStop.survived && hostStop.pid !== null) {
+      const message =
+        `Cannot upgrade: the session-host process (pid ${hostStop.pid}) is still running and could not be stopped. `
+        + 'Upgrading now would delete the install it is running from and break every new session.';
+      emitUpgradeFailureNotice([
+        message,
+        'To recover, stop it and retry the update:',
+        `  Stop-Process -Id ${hostStop.pid} -Force`,
+        `  ${IDENTITY.binaryName} update`,
+      ], getConfigDir(), { targetVersion: payload.targetVersion });
+      throw new Error(message);
+    }
   } else {
     appendUpgradeLog('POSIX — session-host left running (survives upgrade; sessions rebind on next boot)');
   }

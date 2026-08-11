@@ -192,8 +192,42 @@ export function listOwnedNodeProcesses(options: {
     excludePids?: readonly number[];
     markers?: readonly string[];
 } & ProcessLifecycleOptions): OwnedProcessInfo[] {
+    return inspectOwnedNodeProcesses(options).processes;
+}
+
+/**
+ * Result of a process sweep, distinguishing "verified clean" from "could not
+ * verify".
+ *
+ * `listOwnedNodeProcesses` returns a bare array, so its callers could not tell
+ * an empty result caused by "no such processes exist" from one caused by "the
+ * process-inspection probe is broken and told us nothing". Both render as `[]`.
+ * Every caller read that as permission to proceed — which is how a live
+ * session-host survived an upgrade and then had its install directory deleted
+ * out from under it. This shape makes the difference explicit so the destructive
+ * callers can fail closed.
+ */
+export interface OwnedProcessSweep {
+    processes: OwnedProcessInfo[];
+    /**
+     * True when the sweep could not establish the truth: the pid enumeration
+     * threw, or at least one enumerated pid's command line was unreadable. An
+     * empty `processes` with `probeFailed: true` means UNKNOWN, not clean.
+     */
+    probeFailed: boolean;
+    /** Human-readable cause, for logs. Null when the probe worked. */
+    probeFailureReason: string | null;
+}
+
+export function inspectOwnedNodeProcesses(options: {
+    prefixes: readonly string[];
+    excludePids?: readonly number[];
+    markers?: readonly string[];
+} & ProcessLifecycleOptions): OwnedProcessSweep {
     const platform = options.platform ?? process.platform;
-    if (platform !== 'win32') return [];
+    // POSIX has no versioned-prefix lifecycle, so there is nothing to sweep and
+    // nothing unverified — a genuine clean result, not a failed probe.
+    if (platform !== 'win32') return { processes: [], probeFailed: false, probeFailureReason: null };
 
     const exec = options.execFileSync ?? defaultExecFileSync();
     const prefixes = options.prefixes.map((p) => normalizeWindowsPath(p));
@@ -215,22 +249,40 @@ export function listOwnedNodeProcesses(options: {
             const parsed = JSON.parse(out);
             pids = Array.isArray(parsed) ? parsed : [parsed];
         }
-    } catch {
-        return [];
+    } catch (error) {
+        // Cannot even enumerate node processes: AV/EDR blocking powershell.exe, a
+        // restrictive execution policy, or the 8s timeout. Nothing was verified.
+        return {
+            processes: [],
+            probeFailed: true,
+            probeFailureReason: `node process enumeration failed: ${errorText(error)}`,
+        };
     }
 
     const results: OwnedProcessInfo[] = [];
+    let unreadable = 0;
     for (const pid of pids) {
         if (!Number.isFinite(pid) || pid <= 0 || exclude.has(pid)) continue;
         const commandLine = getProcessCommandLine(pid, { platform, execFileSync: exec });
-        if (!commandLine) continue;
+        if (!commandLine) {
+            // The pid exists but we cannot see what it is running. It may well be
+            // a session-host under one of our prefixes; we simply cannot tell.
+            unreadable += 1;
+            continue;
+        }
         const lower = commandLine.toLowerCase();
         const underPrefix = prefixes.some((prefix) => lower.includes(prefix));
         if (!underPrefix) continue;
         if (markers.length > 0 && !markers.some((marker) => lower.includes(marker))) continue;
         results.push({ pid, commandLine });
     }
-    return results;
+    return {
+        processes: results,
+        probeFailed: unreadable > 0,
+        probeFailureReason: unreadable > 0
+            ? `${unreadable} node process(es) had an unreadable command line; their prefix could not be determined`
+            : null,
+    };
 }
 
 export async function stopOwnedProcesses(options: {
@@ -265,13 +317,32 @@ export async function stopOwnedProcessesForPrefixes(options: {
     markers?: readonly string[];
     waitMs?: number;
     log?: (message: string) => void;
-} & ProcessLifecycleOptions): Promise<{ stopped: number; survivors: OwnedProcessInfo[] }> {
-    const processes = listOwnedNodeProcesses(options);
-    if (processes.length === 0) return { stopped: 0, survivors: [] };
+} & ProcessLifecycleOptions): Promise<{
+    stopped: number;
+    survivors: OwnedProcessInfo[];
+    /**
+     * True when the sweep could not prove the prefixes are clear. Callers that
+     * are about to do something destructive (activate a new prefix, delete an
+     * old one) must treat this exactly like a survivor: not knowing whether a
+     * process is running under a tree is not a licence to delete that tree.
+     */
+    probeFailed: boolean;
+    probeFailureReason: string | null;
+}> {
+    const sweep = inspectOwnedNodeProcesses(options);
+    if (sweep.probeFailed) {
+        options.log?.(
+            `Process-inspection probe could not verify prefixes ${options.prefixes.join(', ')}: ${sweep.probeFailureReason}. `
+            + 'Treating the result as UNVERIFIED rather than clean.',
+        );
+    }
+    if (sweep.processes.length === 0) {
+        return { stopped: 0, survivors: [], probeFailed: sweep.probeFailed, probeFailureReason: sweep.probeFailureReason };
+    }
 
-    options.log?.(`Stopping ${processes.length} owned process(es) under prefixes: ${options.prefixes.join(', ')}`);
+    options.log?.(`Stopping ${sweep.processes.length} owned process(es) under prefixes: ${options.prefixes.join(', ')}`);
     const result = await stopOwnedProcesses({
-        processes,
+        processes: sweep.processes,
         waitMs: options.waitMs,
         platform: options.platform,
         execFileSync: options.execFileSync,
@@ -280,5 +351,5 @@ export async function stopOwnedProcessesForPrefixes(options: {
     if (result.survivors.length > 0) {
         options.log?.(`Could not stop ${result.survivors.length} owned process(es): ${result.survivors.map((s) => s.pid).join(', ')}`);
     }
-    return result;
+    return { ...result, probeFailed: sweep.probeFailed, probeFailureReason: sweep.probeFailureReason };
 }
