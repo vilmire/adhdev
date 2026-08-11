@@ -1,0 +1,264 @@
+/**
+ * Chat Commands — read side: presentation.
+ *
+ * The last mile of read_chat: status normalization, streaming finalization,
+ * adjacent-duplicate collapsing, tail windowing, and assembly of the validated
+ * read_chat CommandResult. These helpers depend on neither the provider-session
+ * pin map nor native-history resolution state, which is what makes them safe to
+ * lift out on their own.
+ *
+ * Split out of chat-commands-read.ts verbatim — no behaviour change.
+ */
+
+import type { CommandResult, CommandHelpers } from './handler.js';
+import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
+import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
+import type { ChatMessage } from '../types.js';
+import { filterUserFacingChatMessages, isActivityChatMessage, isUserFacingChatMessage } from '../providers/chat-message-normalization.js';
+import {
+    maybeHideCoordinatorPromptMessage,
+    normalizeReadChatMessages,
+    normalizeReadChatTailLimit,
+} from './read-chat-message-filters.js';
+
+function shouldPreserveReadChatPayloadField(key: string): boolean {
+    return key === 'messageSource' || key === 'transcriptProvenance';
+}
+
+function updateMessageSourceReturnedCount(value: unknown, returnedMessageCount: number): unknown {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const record = value as Record<string, unknown>;
+    const coverage = record.coverage && typeof record.coverage === 'object' && !Array.isArray(record.coverage)
+        ? record.coverage as Record<string, unknown>
+        : undefined;
+    if (!coverage) return value;
+    return {
+        ...record,
+        coverage: {
+            ...coverage,
+            returnedMessageCount,
+        },
+    };
+}
+
+export function buildFullTail(messages: ChatMessage[], tailLimit: number): {
+    messages: ChatMessage[];
+    totalMessages: number;
+} {
+    const totalMessages = messages.length;
+    const tailMessages = tailLimit > 0 ? messages.slice(-tailLimit) : messages;
+    return {
+        messages: tailMessages,
+        totalMessages,
+    };
+}
+
+export function hasNonEmptyModalButtons(activeModal: unknown): boolean {
+    if (!activeModal || typeof activeModal !== 'object') return false;
+    const buttons = (activeModal as { buttons?: unknown }).buttons;
+    return Array.isArray(buttons) && buttons.some((button) => typeof button === 'string' && button.trim().length > 0);
+}
+
+export function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): string {
+    const raw = typeof status === 'string' ? status.trim() : '';
+    if (!raw) {
+        return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'idle';
+    }
+    switch (raw) {
+        case 'starting':
+            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'starting';
+        case 'stopped':
+        case 'disconnected':
+        case 'not_monitored':
+            return 'error';
+        case 'waiting_approval':
+            // The contract validator requires activeModal+buttons whenever
+            // status is waiting_approval. If a producer/coercer set this
+            // status without staging the modal yet (a race we hit with
+            // codex-cli during tool approval setup), downgrade to a
+            // generating-like status so readChat still returns successfully.
+            // The next poll will pick up the modal once the provider has
+            // emitted it.
+            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'generating';
+        default:
+            return raw;
+    }
+}
+
+export function finalizeStreamingMessagesWhenIdle(messages: ChatMessage[], status: string): ChatMessage[] {
+    if (status !== 'idle') return messages;
+    return messages.map((message) => {
+        const meta = message.meta && typeof message.meta === 'object'
+            ? message.meta as Record<string, unknown>
+            : undefined;
+        const hasStreamingMeta = meta?.streaming === true;
+        if (message.bubbleState !== 'streaming' && !hasStreamingMeta) return message;
+        return {
+            ...message,
+            ...(message.bubbleState === 'streaming' ? { bubbleState: 'final' as const } : {}),
+            ...(hasStreamingMeta ? { meta: { ...meta, streaming: false } } : {}),
+        };
+    });
+}
+
+/**
+ * Collapse adjacent PTY messages whose canonical (whitespace-stripped)
+ * content is identical, OR whose turn key + role/kind match.
+ *
+ * The PTY parser of some providers (hermes-cli observed in the wild)
+ * emits the same logical assistant turn twice when the terminal re-wraps
+ * the text at a different column. The two emissions differ in newline
+ * position — and sometimes in a single inserted space next to punctuation
+ * (e.g. `(수정 2개), upstream` vs `(수정 2개 ), upstream`), so a simple
+ * `\s+ -> ' '` normalize cannot collapse them.
+ *
+ * Strategy:
+ *   1. If both messages carry the same _turnKey + role + kind, they are
+ *      the same logical turn by construction. Collapse.
+ *   2. Otherwise compare with all whitespace stripped — wrap variants
+ *      collapse to identical strings.
+ *
+ * Native-history paths run through pageHistoryRecords and already
+ * collapse on a normalized signature; this helper is the PTY equivalent
+ * the readChat sync path was missing.
+ */
+export function collapseAdjacentDuplicateChatMessages(messages: ChatMessage[]): ChatMessage[] {
+    if (!Array.isArray(messages) || messages.length <= 1) return messages;
+    const result: ChatMessage[] = [];
+    let prevRoleKind = '';
+    let prevStripped = '';
+    for (const message of messages) {
+        const role = typeof message.role === 'string' ? message.role : '';
+        const kind = typeof message.kind === 'string' ? message.kind : 'standard';
+        const content = typeof message.content === 'string'
+            ? message.content
+            : (Array.isArray(message.content) ? message.content.map((p: any) => typeof p?.text === 'string' ? p.text : '').join('') : '');
+        const strippedContent = content.replace(/\s+/g, '');
+        // Empty content or system messages are passed through untouched.
+        if (!strippedContent || role === 'system') {
+            result.push(message);
+            prevRoleKind = '';
+            prevStripped = '';
+            continue;
+        }
+        const roleKind = `${role}:${kind}`;
+        const sameStripped = strippedContent === prevStripped && roleKind === prevRoleKind;
+        if (result.length > 0 && sameStripped) {
+            // Adjacent duplicate after stripping all whitespace. Keep the
+            // *later* copy because PTY's last emission usually has the most
+            // complete formatting.
+            result[result.length - 1] = message;
+            prevRoleKind = roleKind;
+            prevStripped = strippedContent;
+            continue;
+        }
+        result.push(message);
+        prevRoleKind = roleKind;
+        prevStripped = strippedContent;
+    }
+    return result;
+}
+
+export function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?: CommandHelpers): CommandResult {
+    let validatedPayload: Record<string, any>;
+    const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
+        ? payload.debugReadChat
+        : undefined;
+    // TURN-PRESENTATION (Stage 6): for a session with a mesh turn attempt, the
+    // reducer projection is the status authority — the legacy point-sample /
+    // null→idle derivations above still run (they feed the shadow comparator and
+    // remain the fallback for sessions with no attempt), but they can no longer
+    // override the projected execution state on this surface.
+    const presentationSessionIdHint = typeof args?.targetSessionId === 'string' && args.targetSessionId.trim()
+        ? args.targetSessionId.trim()
+        : typeof args?.sessionId === 'string' && args.sessionId.trim()
+            ? args.sessionId.trim()
+            : typeof (h?.currentSession as any)?.sessionId === 'string' ? String((h!.currentSession as any).sessionId) : '';
+    const providerHint = typeof args?.cliType === 'string' ? args.cliType
+        : typeof args?.providerType === 'string' ? args.providerType
+        : typeof args?.agentType === 'string' ? args.agentType
+        : '';
+    const legacyStatus = normalizeReadChatCommandStatus(payload?.status, payload?.activeModal);
+    const turnPresentation = resolveSessionTurnPresentation({
+        sessionId: presentationSessionIdHint || undefined,
+        legacyStatus,
+        providerType: providerHint || undefined,
+        surface: 'read_chat',
+    });
+    let effectiveStatus = legacyStatus;
+    if (turnPresentation.authority === 'turn_reducer') {
+        effectiveStatus = turnPresentation.status;
+        // Contract safety: waiting_approval requires activeModal buttons. If the
+        // reducer parked the attempt but the modal is not staged on THIS read yet,
+        // present generating rather than failing the read (the next poll surfaces
+        // the modal) — same rule the legacy path applies.
+        if (effectiveStatus === 'waiting_approval' && !hasNonEmptyModalButtons(payload?.activeModal)) {
+            effectiveStatus = 'generating';
+        }
+    }
+    try {
+        validatedPayload = validateReadChatResultPayload({
+            ...payload,
+            status: effectiveStatus,
+        }, 'read_chat command result') as Record<string, any>;
+    } catch (error: any) {
+        return { success: false, error: error?.message || String(error) };
+    }
+    const messages = normalizeReadChatMessages(validatedPayload);
+    // Last-mile coordinator-prompt filter. Different read_chat code paths
+    // produce the final messages array (native-history main path, codex
+    // exact-runtime-mirror fallback, daemon-side pty-parser, etc), so
+    // applying it here means we don't have to thread the filter through
+    // every one. Driven by the provider setting `showCoordinatorSystemPrompt`
+    // + the coordinator-registry entry for the target session.
+    // (sessionIdHint keeps its ORIGINAL semantics for the coordinator-prompt
+    // filter — no current-session fallback — so message content filtering is
+    // unchanged by the Stage 6 status-authority work.)
+    const sessionIdHint = typeof args?.targetSessionId === 'string' ? args.targetSessionId
+        : typeof args?.sessionId === 'string' ? args.sessionId
+        : '';
+    const filteredMessages = h
+        ? maybeHideCoordinatorPromptMessage(h, providerHint, sessionIdHint, messages)
+        : messages;
+    // By default read_chat returns only user-facing prose turns. When the
+    // caller opts in with `includeActivity`, tool/terminal/thought activity
+    // bubbles (e.g. the native transcript's tool calls and results) are kept
+    // inline too, in chronological order, so a restored conversation can show
+    // what the agent actually did — not just the prose around it.
+    const includeActivity = args?.includeActivity === true || args?.includeActivity === 'true';
+    const visibleMessages = includeActivity
+        ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m))
+        : filterUserFacingChatMessages(filteredMessages);
+    const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
+    const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
+    const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key)));
+    if (preservedPayloadFields.messageSource) {
+        preservedPayloadFields.messageSource = updateMessageSourceReturnedCount(preservedPayloadFields.messageSource, sync.messages.length);
+    }
+    if (preservedPayloadFields.transcriptProvenance) {
+        preservedPayloadFields.transcriptProvenance = updateMessageSourceReturnedCount(preservedPayloadFields.transcriptProvenance, sync.messages.length);
+    }
+    const returnedDebugReadChat = debugReadChat
+        ? {
+            ...debugReadChat,
+            fullMsgCount: typeof debugReadChat.fullMsgCount === 'number'
+                ? debugReadChat.fullMsgCount
+                : messages.length,
+            visibleMsgCount: visibleMessages.length,
+            hiddenMsgCount,
+            returnedMsgCount: sync.messages.length,
+        }
+        : undefined;
+    return {
+        success: true,
+        ...validatedPayload,
+        ...preservedPayloadFields,
+        messages: sync.messages,
+        totalMessages: sync.totalMessages,
+        // Stage 6: the authoritative turn presentation rides the read_chat
+        // payload for mesh-owned sessions (identity + stage + evidence
+        // timestamps; the `status` field above already reflects it).
+        ...(turnPresentation.authority === 'turn_reducer' ? { turn: turnPresentation } : {}),
+        ...(returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}),
+    };
+}

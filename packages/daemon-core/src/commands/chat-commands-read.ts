@@ -11,21 +11,11 @@ import { flattenContent, type ProviderModule, type ProviderScripts } from '../pr
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { clearPersistedProviderSessionPins, loadPersistedProviderSessionPins, recordPersistedProviderSessionPin } from '../config/state-store.js';
-import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
-import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { hashSignatureParts } from '../chat/chat-signatures.js';
-import {
-    CHAT_SOURCE_REGISTRY,
-    buildV1NativePresentObservation,
-    chatSourceSessionKey,
-    type ChatSourceDecision,
-    type ChatSourceObservation,
-    type ChatSourceTransitionCause,
-} from '../chat/source-resolver.js';
 import type { ChatMessage } from '../types.js';
-import { filterUserFacingChatMessages, isActivityChatMessage, isUserFacingChatMessage, normalizeChatMessages, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
+import { filterUserFacingChatMessages, normalizeChatMessages, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
     type RuntimeChatMessageMerger,
@@ -38,6 +28,18 @@ import {
     parseMaybeJson,
 } from './chat-commands-shared.js';
 import { evaluateReadChatNodeWorkspaceScope, resolveTargetSessionActualWorkspace } from './chat-commands-scope.js';
+import {
+    maybeHideCoordinatorPromptMessage,
+    normalizeReadChatMessages,
+    normalizeReadChatTailLimit,
+} from './read-chat-message-filters.js';
+import { decideCliReadChatSource, supportsCliNativeTranscript } from './read-chat-source-decision.js';
+import {
+    buildReadChatCommandResult,
+    collapseAdjacentDuplicateChatMessages,
+    finalizeStreamingMessagesWhenIdle,
+    hasNonEmptyModalButtons,
+} from './read-chat-presentation.js';
 
 // Minimum tail floor for hot-path history/mirror reads. The dashboard requests a
 // bounded tail (~60); we keep a small floor so a tiny requested tailLimit still
@@ -46,13 +48,6 @@ import { evaluateReadChatNodeWorkspaceScope, resolveTargetSessionActualWorkspace
 // readChatHistory now serves this as an O(tail) bounded read, so the cost scales
 // with this floor, not with total accumulated history.
 const HOT_TAIL_MIN_LIMIT = 60;
-// (A2.2) CLI_NATIVE_HISTORY_FRESH_MS removed with isNativeHistoryFreshEnough.
-// Hardcoded native-transcript provider allow-list. Deprecated. Kept only as a
-// last-resort fallback when ProviderModule is not yet loaded; on every hit we
-// warn so the dependency on this set is visible. A2 deletes the set entirely
-// and routes solely through canonicalHistory.contractVersion +
-// isNativeSourceCanonicalHistory().
-const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'hermes-cli', 'antigravity-cli']);
 
 // Last successfully-bound provider-native session id, keyed by the mesh session
 // id (targetSessionId) the read was scoped to. The live pin lives on the
@@ -147,18 +142,6 @@ export function __getProviderSessionPinForTest(meshSessionId: string): string | 
     return getBoundProviderSessionIdPin(meshSessionId);
 }
 
-const warnedLegacyNativeAllowlistHits = new Set<string>();
-function warnLegacyNativeAllowlistHit(providerType: string): void {
-    if (warnedLegacyNativeAllowlistHits.has(providerType)) return;
-    warnedLegacyNativeAllowlistHits.add(providerType);
-    // eslint-disable-next-line no-console
-    console.warn(
-        `[chat-commands] supportsCliNativeTranscript fell back to the hardcoded `
-        + `CLI_NATIVE_TRANSCRIPT_PROVIDERS set for "${providerType}". `
-        + `The provider module was unavailable or did not declare canonicalHistory. `
-        + `Set canonicalHistory.contractVersion in the provider.json to remove this dependency.`,
-    );
-}
 function getExplicitHistorySessionId(args: any): string | undefined {
     const explicit = typeof args?.historySessionId === 'string' ? args.historySessionId.trim() : '';
     if (explicit) return explicit;
@@ -354,25 +337,6 @@ function traceProviderEvent(
         payload: options.payload,
     });
 }
-function normalizeReadChatTailLimit(args: any): number {
-    const value = Number(args?.tailLimit || 0);
-    return Number.isFinite(value) ? Math.max(0, value) : 0;
-}
-
-function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] {
-    const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
-    return normalizeChatMessages(messages);
-}
-
-function getMessageNewestReceivedAt(messages: Array<{ receivedAt?: unknown; timestamp?: unknown }>): number {
-    let newest = 0;
-    for (const message of messages) {
-        const receivedAt = Number(message?.receivedAt ?? message?.timestamp ?? 0);
-        if (Number.isFinite(receivedAt) && receivedAt > newest) newest = receivedAt;
-    }
-    return newest;
-}
-
 function readHistorySessionIdFromMessages(messages: ChatMessage[]): string | undefined {
     for (const message of messages as Array<ChatMessage & { historySessionId?: unknown }>) {
         const historySessionId = typeof message?.historySessionId === 'string' ? message.historySessionId.trim() : '';
@@ -401,63 +365,6 @@ function shouldPreserveNativeIdentity(providerType: string, sessionId: string, m
             && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
     }
     return true;
-}
-
-/**
- * Drop the synthetic "user" message some CLIs surface in their native
- * transcript when the daemon injects a coordinator system prompt
- * (codex puts the AGENTS.md / developer_instructions block in as
- * role=user; agy/claude/hermes have similar artifacts). The user can
- * opt back into seeing it via the provider setting
- * `showCoordinatorSystemPrompt`. Default is off — the prompt is still
- * fully visible from the chat-header ⓘ "Session info" dialog.
- *
- * Matching rules:
- *   1. Setting must be off (default).
- *   2. There must be a registered coordinator entry for the session.
- *   3. The candidate message is filtered when its role is user OR
- *      system and its content either contains the prompt body verbatim,
- *      OR contains the well-known coordinator marker
- *      `adhdev-mesh-coordinator-prompt`. The marker covers context-file
- *      cases (agy AGENTS.md / gemini GEMINI.md) where the CLI may wrap
- *      its own preamble around our block. Verbatim-content covers
- *      codex's developer_instructions echo.
- *
- * Returns the messages array unchanged when none of the rules match,
- * so this is safe to apply unconditionally to every read_chat result.
- */
-function maybeHideCoordinatorPromptMessage(
-    h: CommandHelpers,
-    providerType: string,
-    sessionId: string | undefined,
-    messages: ChatMessage[],
-): ChatMessage[] {
-    if (!Array.isArray(messages) || messages.length === 0) return messages;
-    if (!sessionId) return messages;
-    const loader = h.ctx?.providerLoader;
-    if (!loader) return messages;
-    let showSetting: unknown = undefined;
-    try {
-        showSetting = (loader as any).getSettingValue?.(providerType, 'showCoordinatorSystemPrompt');
-    } catch { /* unknown setting key for this provider — fall through */ }
-    if (showSetting === true) return messages;
-    const coord = getCoordinatorForSession(sessionId);
-    if (!coord) return messages;
-    const promptBody = typeof coord.systemPrompt === 'string' ? coord.systemPrompt : '';
-    const MARKER = 'adhdev-mesh-coordinator-prompt';
-    const filtered = messages.filter(m => {
-        const role = String((m as any)?.role || '').toLowerCase();
-        if (role !== 'user' && role !== 'system') return true;
-        const content = flattenContent((m as any)?.content);
-        if (!content) return true;
-        if (content.includes(MARKER)) return false;
-        if (promptBody && content.includes(promptBody.slice(0, Math.min(400, promptBody.length)))) return false;
-        return true;
-    });
-    if (filtered.length !== messages.length) {
-        LOG.debug('ChatFilter', `[${providerType}] hid ${messages.length - filtered.length} coordinator-prompt message(s) from ${sessionId}`);
-    }
-    return filtered;
 }
 
 /**
@@ -596,420 +503,6 @@ export function normalizeNativeHistoryMessages(providerType: string, messages: C
             }),
         } as ChatMessage;
     });
-}
-
-function buildCliMessageSourceProvenance(args: {
-    selected: 'native-history' | 'pty-parser';
-    provider: string;
-    nativeHandle?: string;
-    sessionWorkspace?: string;
-    intendedWorkspace?: string;
-    transcriptWorkspace?: string;
-    fallbackReason?: string;
-    nativeSource?: string;
-    sourcePath?: string;
-    sourceMtimeMs?: number;
-    nativeHistoryCoverage?: string;
-    partialReason?: string;
-    unavailableReason?: string;
-    nativeMessages?: ChatMessage[];
-    ptyMessages?: ChatMessage[];
-    returnedMessages?: ChatMessage[];
-    safeMapping?: boolean;
-    freshEnough?: boolean;
-    ptyStatusApprovalOnly?: boolean;
-}): Record<string, unknown> {
-    const sourceMtimeMs = Number(args.sourceMtimeMs || 0);
-    const sourceMtimeAgeMs = sourceMtimeMs > 0 ? Math.max(0, Date.now() - sourceMtimeMs) : undefined;
-    const nativeMessages = args.nativeMessages || [];
-    const ptyMessages = args.ptyMessages || [];
-    const returnedMessages = args.returnedMessages || [];
-    const identityStatus = args.selected === 'native-history'
-        ? 'safe'
-        : args.fallbackReason === 'native_history_not_safely_mapped'
-            ? 'ambiguous_session_identity'
-            : args.fallbackReason?.startsWith('native_history_unavailable')
-                ? 'transcript_unmapped'
-                : undefined;
-    return {
-        selected: args.selected,
-        provider: args.provider,
-        providerType: args.provider,
-        ...(identityStatus ? { identityStatus } : {}),
-        ...(args.nativeHandle ? { nativeHandle: args.nativeHandle } : {}),
-        ...(args.nativeHandle ? { nativeSessionId: args.nativeHandle } : {}),
-        ...(args.sessionWorkspace ? { sessionWorkspace: args.sessionWorkspace } : {}),
-        ...(args.intendedWorkspace ? { intendedWorkspace: args.intendedWorkspace } : {}),
-        ...(args.transcriptWorkspace ? { transcriptWorkspace: args.transcriptWorkspace } : {}),
-        ...(args.fallbackReason ? { fallbackReason: args.fallbackReason } : {}),
-        ...(args.nativeSource ? { nativeSource: args.nativeSource } : {}),
-        ...(args.sourcePath ? { sourcePath: args.sourcePath } : {}),
-        ...(args.nativeHistoryCoverage ? { nativeHistoryCoverage: args.nativeHistoryCoverage } : {}),
-        ...(args.partialReason ? { partialReason: args.partialReason } : {}),
-        ...(args.unavailableReason ? { unavailableReason: args.unavailableReason } : {}),
-        ptyStatusApprovalOnly: args.ptyStatusApprovalOnly === true,
-        staleness: {
-            sourceMtimeMs: sourceMtimeMs || undefined,
-            sourceMtimeAgeMs,
-            nativeNewestMessageAt: getMessageNewestReceivedAt(nativeMessages),
-            ptyNewestMessageAt: getMessageNewestReceivedAt(ptyMessages),
-            freshEnough: args.freshEnough === true,
-        },
-        coverage: {
-            nativeMessageCount: nativeMessages.length,
-            ptyMessageCount: ptyMessages.length,
-            returnedMessageCount: returnedMessages.length,
-            safeMapping: args.safeMapping === true,
-            // true when PTY message bodies are suppressed and must not be treated as
-            // chat content. PTY may still contribute status/approval/screen evidence.
-            ptyMessagesSuppressed: args.selected === 'native-history' || args.ptyStatusApprovalOnly === true,
-        },
-    };
-}
-
-/**
- * Map a ChatSourceMachine transition cause back to the v1 messageSource
- * `fallbackReason` vocabulary so legacy consumers (web-cloud, tests, mesh
- * debug bundles) keep parsing strings they already know. A3 replaces the
- * caller surface with stateTransition/lockState, after which this map can be
- * deleted.
- *
- * Returns undefined when the cause does not correspond to a fallback (i.e.
- * the source is native-history and there is nothing to explain).
- */
-function causeToLegacyFallbackReason(
-    cause: ChatSourceTransitionCause,
-    selected: 'native-history' | 'pty-parser',
-    extraDetail?: { unavailableReason?: string; nativeSource?: string },
-): string | undefined {
-    if (selected === 'native-history') return undefined;
-    switch (cause) {
-        case 'initial':
-            return 'native_history_not_checked';
-        case 'native_progressed':
-            // Selected pty-parser despite a progressed observation — that
-            // means we held PtyOnly stickily (peak unmet or non-superset).
-            return 'native_history_not_selected';
-        case 'native_regressed_shrunk':
-            return 'native_history_empty';
-        case 'native_regressed_unsafe_mapping':
-            return 'native_history_not_safely_mapped';
-        case 'native_regressed_coverage_partial':
-            return 'native_history_partial';
-        case 'native_regressed_coverage_unavailable':
-            return 'native_history_unavailable';
-        case 'native_unavailable_read_error':
-            return extraDetail?.unavailableReason
-                ? `native_history_unavailable:${extraDetail.unavailableReason}`
-                : 'native_history_unavailable';
-        case 'native_unavailable_provider_unsupported':
-            return 'provider_native_transcript_not_supported';
-        case 'native_unavailable_empty':
-            return 'native_history_empty';
-        case 'native_unavailable_not_native_source':
-            return extraDetail?.nativeSource
-                ? `native_history_source_${extraDetail.nativeSource}`
-                : 'native_history_unavailable';
-    }
-}
-
-/**
- * Translate a native-history fetch result + provider/adapter context into a
- * ChatSourceObservation and drive ChatSourceRegistry. Returns the decision
- * together with the legacy messageSource payload so call sites can produce
- * a v1-compatible response without duplicating the registry plumbing.
- *
- * This is the replacement for the 300-line if-ladder that previously lived
- * inline in handleReadChat. It is intentionally split out for two reasons:
- * (1) we will call it from two places (CLI adapter branch + history-only
- * branch) instead of duplicating the ladder, (2) tests can drive it with
- * synthetic native-history results to verify the cause→fallbackReason
- * mapping without booting the whole readChat pipeline.
- */
-function decideCliReadChatSource(args: {
-    providerType: string;
-    provider?: ProviderModule;
-    sessionId: string;
-    nativeHistoryResult: any | null;
-    nativeHistoryError?: unknown;
-    safeMapping: boolean;
-    trustedExactNativeIdentity?: boolean;
-    sessionWorkspace?: string;
-    intendedWorkspace?: string;
-    ptyMessages: ChatMessage[];
-    ptyStatusApprovalOnly: boolean;
-}): {
-    decision: ChatSourceDecision;
-    messageSource: Record<string, unknown>;
-    nativeMessages: ChatMessage[];
-    nativeSelected: boolean;
-} {
-    const supportsNative = supportsCliNativeTranscript(args.providerType, args.provider);
-    const observation = buildObservationForCli(args, supportsNative);
-    const sessionKey = chatSourceSessionKey(args.providerType, args.sessionId);
-
-    // STICKY-NATIVE: once a session's transcript is bound to native-history via
-    // a TRUSTED EXACT provider-session identity (the on-disk uuid == this
-    // session's own transcript file, not a recency/mtime guess), a single read
-    // that momentarily fails to reproduce the full native slice is a TRANSIENT
-    // gap, NOT evidence native regressed or vanished. Concretely, cursor-agent
-    // rewrites its JSONL tail mid-turn — the file is briefly empty, or exposes a
-    // SHRUNK slice (old assistant row dropped while the new turn is streamed) —
-    // so a per-read observation sees either `native_unavailable/empty` or a
-    // `native_regressed_shrunk`. Either one flips a NativeLocked machine to
-    // `pty-parser` for that read (and, after enough misses, permanently to
-    // PtyOnly). That is exactly the reported symptom: cursor chat provenance
-    // "flips back and forth between PTY and native-history".
-    //
-    // Fix: for a session that (a) resolved via a trusted EXACT identity and
-    // (b) is already committed to native (NativeLocked/Recovering), speculatively
-    // observe, and if the machine WOULD flip to pty-parser, roll the machine
-    // state back and HOLD native-history as authoritative for this read. Exact
-    // identity means the read is provably against THIS session's own transcript
-    // file, so a transient gap on it can only be a mid-write artifact — never a
-    // genuine session switch or data loss (cursor's file is cumulative). A
-    // workspace-heuristic (non-exact) read is never eligible, so a real session
-    // switch still flips normally.
-    //
-    // HOLD ELIGIBILITY (zero-bubble fix): the hold may only pin a NON-EMPTY,
-    // safely-mapped native slice (the shrunk mid-write rewrite case above).
-    // Holding an EMPTY/unavailable observation restored a NativeLocked selection
-    // with zero rows and forced ptyStatusApprovalOnly — an "authoritative" empty
-    // native tail that suppressed the very PTY rows that could have rendered
-    // (the coordinator zero-bubble bug: messages=[] with selected=native-history,
-    // ptyMessageCount=6, ptyMessagesSuppressed=true). An empty/unavailable or
-    // unsafe observation therefore does NOT hold: the machine's own decision
-    // stands (NativeLocked → Recovering on a transient miss — the watermark
-    // survives and the next progressed read re-locks; → PtyOnly on unsafe
-    // mapping), PTY stays visible, and the normal PTY/live-workspace recovery
-    // below remains reachable.
-    const priorSnapshot = CHAT_SOURCE_REGISTRY.snapshotRecord(sessionKey);
-    const priorState = priorSnapshot?.state ?? CHAT_SOURCE_REGISTRY.getState(sessionKey);
-    const eligibleForStickyHold = args.trustedExactNativeIdentity === true
-        && (priorState.name === 'NativeLocked' || priorState.name === 'Recovering');
-
-    let decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
-
-    const heldNativeMessages: ChatMessage[] = observation.kind === 'native_present'
-        ? extractNativeMessagesFromResult(args.providerType, args.nativeHistoryResult)
-        : [];
-    const mayHoldNativeSlice = heldNativeMessages.length > 0 && args.safeMapping === true;
-
-    if (eligibleForStickyHold && decision.selected === 'pty-parser' && mayHoldNativeSlice) {
-        // The machine flipped a native-committed, exact-identity session to PTY
-        // on this read even though a non-empty, safely-mapped native slice was
-        // observed (a shrunk mid-write rewrite). Treat it as a transient native
-        // gap: undo the observe and report native-history held with the shrunk
-        // slice. The streaming/tail delivery layer already suppresses a thin
-        // tail from clobbering the last real tail, so holding native with the
-        // mapped rows is strictly safer than emitting PTY under a
-        // native-authority session.
-        CHAT_SOURCE_REGISTRY.restoreRecord(sessionKey, priorSnapshot);
-        const messageSource = buildCliMessageSourceProvenance({
-            selected: 'native-history',
-            provider: args.providerType,
-            nativeHandle: typeof args.nativeHistoryResult?.providerSessionId === 'string'
-                ? args.nativeHistoryResult.providerSessionId
-                : undefined,
-            sessionWorkspace: args.sessionWorkspace,
-            intendedWorkspace: args.intendedWorkspace,
-            transcriptWorkspace: undefined,
-            fallbackReason: 'native_history_transient_gap_held',
-            nativeSource: 'provider-native',
-            sourcePath: typeof args.nativeHistoryResult?.sourcePath === 'string' ? args.nativeHistoryResult.sourcePath : undefined,
-            sourceMtimeMs: typeof args.nativeHistoryResult?.sourceMtimeMs === 'number' ? args.nativeHistoryResult.sourceMtimeMs : undefined,
-            nativeHistoryCoverage: undefined,
-            partialReason: undefined,
-            unavailableReason: observation.kind === 'native_unavailable' ? observation.reason : undefined,
-            nativeMessages: heldNativeMessages,
-            ptyMessages: args.ptyMessages,
-            returnedMessages: heldNativeMessages,
-            safeMapping: args.safeMapping,
-            freshEnough: true,
-            ptyStatusApprovalOnly: true,
-        });
-        return {
-            decision: {
-                selected: 'native-history',
-                nextState: priorState,
-                transition: {
-                    fromState: priorState.name,
-                    toState: priorState.name,
-                    event: 'NoOp',
-                    cause: decision.transition.cause,
-                    at: Date.now(),
-                },
-                lockState: { locked: priorState.name === 'NativeLocked' },
-            },
-            messageSource,
-            nativeMessages: heldNativeMessages,
-            nativeSelected: true,
-        };
-    }
-
-    // A restored runtime can briefly expose different native slices while the
-    // provider transcript settles (for example, startup/system rows may be
-    // filtered after the first read). The source machine correctly treats a
-    // shrinking slice as regression, but an exact provider-session lookup with
-    // no PTY transcript has no safer fallback. Re-bootstrap only this proven
-    // identity so the chat does not disappear after daemon restart.
-    if (
-        decision.selected === 'pty-parser'
-        && args.trustedExactNativeIdentity === true
-        && args.safeMapping
-        && args.ptyMessages.length === 0
-        && observation.kind === 'native_present'
-        && observation.coverage !== 'partial'
-        && observation.messages.length > 0
-    ) {
-        CHAT_SOURCE_REGISTRY.clear(sessionKey);
-        decision = CHAT_SOURCE_REGISTRY.observe(sessionKey, observation);
-    }
-
-    const nativeMessages: ChatMessage[] = observation.kind === 'native_present'
-        ? extractNativeMessagesFromResult(args.providerType, args.nativeHistoryResult)
-        : [];
-
-    const nativeSource = typeof args.nativeHistoryResult?.source === 'string'
-        ? args.nativeHistoryResult.source
-        : undefined;
-    const sourcePath = typeof args.nativeHistoryResult?.sourcePath === 'string'
-        ? args.nativeHistoryResult.sourcePath
-        : undefined;
-    const sourceMtimeMs = typeof args.nativeHistoryResult?.sourceMtimeMs === 'number'
-        ? args.nativeHistoryResult.sourceMtimeMs
-        : undefined;
-    const coverageHint = typeof args.nativeHistoryResult?.nativeHistoryCoverage === 'string'
-        ? args.nativeHistoryResult.nativeHistoryCoverage
-        : undefined;
-    const partialReason = typeof args.nativeHistoryResult?.partialReason === 'string'
-        ? args.nativeHistoryResult.partialReason
-        : undefined;
-    const unavailableReason = typeof args.nativeHistoryResult?.unavailableReason === 'string'
-        ? args.nativeHistoryResult.unavailableReason
-        : args.nativeHistoryError
-            ? `error:${(args.nativeHistoryError as any)?.message || String(args.nativeHistoryError)}`
-            : undefined;
-    const nativeHandle = typeof args.nativeHistoryResult?.providerSessionId === 'string'
-        ? args.nativeHistoryResult.providerSessionId
-        : undefined;
-    const transcriptWorkspace = typeof args.nativeHistoryResult?.workspace === 'string'
-        ? args.nativeHistoryResult.workspace
-        : nativeMessages.map((m: any) => typeof m?.workspace === 'string' ? m.workspace.trim() : '').find(Boolean);
-
-    const fallbackReason = causeToLegacyFallbackReason(decision.transition.cause, decision.selected, {
-        unavailableReason,
-        nativeSource: nativeSource && nativeSource !== 'provider-native' ? nativeSource : undefined,
-    });
-
-    // ptyStatusApprovalOnly: when the machine selected native-history we
-    // suppress PTY content so the dashboard does not double-show messages
-    // already in the native transcript. When the machine selected
-    // pty-parser, PTY is the authoritative source — do NOT suppress it.
-    // Callers used to hard-code this to `nativeSelected first = true` which
-    // suppressed PTY content even when native was empty/unavailable, leaving
-    // the dashboard with zero visible messages (the codex generating/waiting
-    // approval stuck state). Trust the machine here, not the caller hint.
-    const ptyStatusApprovalOnly = decision.selected === 'native-history'
-        ? true
-        : args.ptyStatusApprovalOnly;
-
-    const messageSource = buildCliMessageSourceProvenance({
-        selected: decision.selected,
-        provider: args.providerType,
-        nativeHandle,
-        sessionWorkspace: args.sessionWorkspace,
-        intendedWorkspace: args.intendedWorkspace,
-        transcriptWorkspace,
-        fallbackReason,
-        nativeSource,
-        sourcePath,
-        sourceMtimeMs,
-        nativeHistoryCoverage: coverageHint,
-        partialReason,
-        unavailableReason,
-        nativeMessages,
-        ptyMessages: args.ptyMessages,
-        returnedMessages: decision.selected === 'native-history' ? nativeMessages : args.ptyMessages,
-        safeMapping: args.safeMapping,
-        // freshEnough is a v1 concept the machine does not model directly.
-        // We surface lockState.locked here so v1 consumers reading
-        // staleness.freshEnough still get a meaningful boolean.
-        freshEnough: decision.lockState.locked,
-        ptyStatusApprovalOnly,
-    });
-
-    return {
-        decision,
-        messageSource,
-        nativeMessages,
-        nativeSelected: decision.selected === 'native-history',
-    };
-}
-
-function buildObservationForCli(
-    args: {
-        providerType: string;
-        sessionId: string;
-        nativeHistoryResult: any | null;
-        nativeHistoryError?: unknown;
-        safeMapping: boolean;
-    },
-    supportsNative: boolean,
-): ChatSourceObservation {
-    if (!supportsNative) {
-        return { kind: 'native_unavailable', reason: 'provider_not_supported' };
-    }
-    if (args.nativeHistoryError) {
-        return { kind: 'native_unavailable', reason: 'read_error' };
-    }
-    const result = args.nativeHistoryResult;
-    if (!result || typeof result !== 'object') {
-        return { kind: 'native_unavailable', reason: 'read_error' };
-    }
-    const source = typeof result.source === 'string' ? result.source : '';
-    if (source && source !== 'provider-native') {
-        // 'native-unavailable' or other producer-side declined source.
-        return { kind: 'native_unavailable', reason: source === 'native-unavailable' ? 'empty' : 'not_native_source' };
-    }
-    const messages = Array.isArray(result.messages) ? result.messages : [];
-    if (messages.length === 0) {
-        return { kind: 'native_unavailable', reason: 'empty' };
-    }
-    const coverage = typeof result.nativeHistoryCoverage === 'string'
-        ? result.nativeHistoryCoverage
-        : 'tail';
-    if (coverage === 'unavailable') {
-        return { kind: 'native_unavailable', reason: 'coverage_unavailable' };
-    }
-    return buildV1NativePresentObservation({
-        providerType: args.providerType,
-        sessionId: args.sessionId,
-        messages,
-        coverage: coverage === 'full' || coverage === 'tail' || coverage === 'current-turn' || coverage === 'partial'
-            ? coverage
-            : 'tail',
-        safeMapping: args.safeMapping,
-    });
-}
-
-function extractNativeMessagesFromResult(providerType: string, result: any): ChatMessage[] {
-    if (!result || !Array.isArray(result.messages)) return [];
-    return normalizeNativeHistoryMessages(
-        providerType,
-        result.messages as ChatMessage[],
-        typeof result.providerSessionId === 'string' ? result.providerSessionId : undefined,
-    );
-}
-
-/**
- * ptyStatusApprovalOnly is true when the daemon should treat PTY content as
- * status/approval signal only (not as chat messages). v1 set this to `true`
- * whenever native-history was selected as the source, and `false` otherwise.
- * The machine equivalent: when native is the source we want PTY suppressed.
- */
-function primaryPtyApprovalOnlyFor(_cliType: string, nativeSelected: boolean): boolean {
-    return nativeSelected;
 }
 
 /**
@@ -1302,24 +795,6 @@ function readSafeSessionPtyHistoryPage(args: {
     const end = Math.max(0, ptyMessages.length - args.excludeRecentCount - args.offset);
     const start = Math.max(0, end - args.limit);
     return { messages: ptyMessages.slice(start, end), hasMore: start > 0 };
-}
-
-function supportsCliNativeTranscript(providerType: string, provider?: ProviderModule): boolean {
-    // Preferred path: the provider module declares canonicalHistory in its
-    // provider.json. We trust that declaration regardless of the legacy
-    // allow-list. A2 will additionally require canonicalHistory.contractVersion
-    // to be a supported value (transcript-v2.ts).
-    if (provider?.category === 'cli' && isNativeSourceCanonicalHistory(provider?.nativeHistory)) {
-        return true;
-    }
-    // Last-resort fallback for early call sites where the provider module is
-    // not yet loaded. Warn once per provider type so this dependency is visible
-    // and can be removed in A2.
-    if (CLI_NATIVE_TRANSCRIPT_PROVIDERS.has(providerType)) {
-        warnLegacyNativeAllowlistHit(providerType);
-        return true;
-    }
-    return false;
 }
 
 function getComparableVisibleText(message: ChatMessage | undefined): string {
@@ -1621,26 +1096,6 @@ function readLiveCodexWorkspaceNativeHistory(agentStr: string, args: {
 // freshness — the lock holds across arbitrary PTY arrival. See
 // chat/source-machine.ts for the new semantics.
 
-function shouldPreserveReadChatPayloadField(key: string): boolean {
-    return key === 'messageSource' || key === 'transcriptProvenance';
-}
-
-function updateMessageSourceReturnedCount(value: unknown, returnedMessageCount: number): unknown {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-    const record = value as Record<string, unknown>;
-    const coverage = record.coverage && typeof record.coverage === 'object' && !Array.isArray(record.coverage)
-        ? record.coverage as Record<string, unknown>
-        : undefined;
-    if (!coverage) return value;
-    return {
-        ...record,
-        coverage: {
-            ...coverage,
-            returnedMessageCount,
-        },
-    };
-}
-
 function deriveHistoryDedupKey(message: ChatMessage & { _unitKey?: string; _turnKey?: string }): string | undefined {
     const unitKey = typeof message._unitKey === 'string' ? message._unitKey.trim() : '';
     if (unitKey) return `read_chat:${unitKey}`;
@@ -1673,50 +1128,6 @@ function toHistoryPersistedMessages(messages: ChatMessage[]): Array<{
         senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
         historyDedupKey: deriveHistoryDedupKey(message as ChatMessage & { _unitKey?: string; _turnKey?: string }),
     }));
-}
-
-function buildFullTail(messages: ChatMessage[], tailLimit: number): {
-    messages: ChatMessage[];
-    totalMessages: number;
-} {
-    const totalMessages = messages.length;
-    const tailMessages = tailLimit > 0 ? messages.slice(-tailLimit) : messages;
-    return {
-        messages: tailMessages,
-        totalMessages,
-    };
-}
-
-function hasNonEmptyModalButtons(activeModal: unknown): boolean {
-    if (!activeModal || typeof activeModal !== 'object') return false;
-    const buttons = (activeModal as { buttons?: unknown }).buttons;
-    return Array.isArray(buttons) && buttons.some((button) => typeof button === 'string' && button.trim().length > 0);
-}
-
-function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): string {
-    const raw = typeof status === 'string' ? status.trim() : '';
-    if (!raw) {
-        return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'idle';
-    }
-    switch (raw) {
-        case 'starting':
-            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'starting';
-        case 'stopped':
-        case 'disconnected':
-        case 'not_monitored':
-            return 'error';
-        case 'waiting_approval':
-            // The contract validator requires activeModal+buttons whenever
-            // status is waiting_approval. If a producer/coercer set this
-            // status without staging the modal yet (a race we hit with
-            // codex-cli during tool approval setup), downgrade to a
-            // generating-like status so readChat still returns successfully.
-            // The next poll will pick up the modal once the provider has
-            // emitted it.
-            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'generating';
-        default:
-            return raw;
-    }
 }
 
 function isGeneratingLikeStatus(status: unknown): boolean {
@@ -1773,184 +1184,6 @@ function normalizeCliReadChatStatus(parsedStatus: unknown, activeModal: unknown,
     }
     if (shouldTrustCliAdapterTerminalStatus(parsedStatus, activeModal, adapter, adapterStatus)) return 'idle';
     return typeof parsedStatus === 'string' && parsedStatus.trim() ? parsedStatus : 'idle';
-}
-
-function finalizeStreamingMessagesWhenIdle(messages: ChatMessage[], status: string): ChatMessage[] {
-    if (status !== 'idle') return messages;
-    return messages.map((message) => {
-        const meta = message.meta && typeof message.meta === 'object'
-            ? message.meta as Record<string, unknown>
-            : undefined;
-        const hasStreamingMeta = meta?.streaming === true;
-        if (message.bubbleState !== 'streaming' && !hasStreamingMeta) return message;
-        return {
-            ...message,
-            ...(message.bubbleState === 'streaming' ? { bubbleState: 'final' as const } : {}),
-            ...(hasStreamingMeta ? { meta: { ...meta, streaming: false } } : {}),
-        };
-    });
-}
-
-/**
- * Collapse adjacent PTY messages whose canonical (whitespace-stripped)
- * content is identical, OR whose turn key + role/kind match.
- *
- * The PTY parser of some providers (hermes-cli observed in the wild)
- * emits the same logical assistant turn twice when the terminal re-wraps
- * the text at a different column. The two emissions differ in newline
- * position — and sometimes in a single inserted space next to punctuation
- * (e.g. `(수정 2개), upstream` vs `(수정 2개 ), upstream`), so a simple
- * `\s+ -> ' '` normalize cannot collapse them.
- *
- * Strategy:
- *   1. If both messages carry the same _turnKey + role + kind, they are
- *      the same logical turn by construction. Collapse.
- *   2. Otherwise compare with all whitespace stripped — wrap variants
- *      collapse to identical strings.
- *
- * Native-history paths run through pageHistoryRecords and already
- * collapse on a normalized signature; this helper is the PTY equivalent
- * the readChat sync path was missing.
- */
-function collapseAdjacentDuplicateChatMessages(messages: ChatMessage[]): ChatMessage[] {
-    if (!Array.isArray(messages) || messages.length <= 1) return messages;
-    const result: ChatMessage[] = [];
-    let prevRoleKind = '';
-    let prevStripped = '';
-    for (const message of messages) {
-        const role = typeof message.role === 'string' ? message.role : '';
-        const kind = typeof message.kind === 'string' ? message.kind : 'standard';
-        const content = typeof message.content === 'string'
-            ? message.content
-            : (Array.isArray(message.content) ? message.content.map((p: any) => typeof p?.text === 'string' ? p.text : '').join('') : '');
-        const strippedContent = content.replace(/\s+/g, '');
-        // Empty content or system messages are passed through untouched.
-        if (!strippedContent || role === 'system') {
-            result.push(message);
-            prevRoleKind = '';
-            prevStripped = '';
-            continue;
-        }
-        const roleKind = `${role}:${kind}`;
-        const sameStripped = strippedContent === prevStripped && roleKind === prevRoleKind;
-        if (result.length > 0 && sameStripped) {
-            // Adjacent duplicate after stripping all whitespace. Keep the
-            // *later* copy because PTY's last emission usually has the most
-            // complete formatting.
-            result[result.length - 1] = message;
-            prevRoleKind = roleKind;
-            prevStripped = strippedContent;
-            continue;
-        }
-        result.push(message);
-        prevRoleKind = roleKind;
-        prevStripped = strippedContent;
-    }
-    return result;
-}
-
-function buildReadChatCommandResult(payload: Record<string, any>, args: any, h?: CommandHelpers): CommandResult {
-    let validatedPayload: Record<string, any>;
-    const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
-        ? payload.debugReadChat
-        : undefined;
-    // TURN-PRESENTATION (Stage 6): for a session with a mesh turn attempt, the
-    // reducer projection is the status authority — the legacy point-sample /
-    // null→idle derivations above still run (they feed the shadow comparator and
-    // remain the fallback for sessions with no attempt), but they can no longer
-    // override the projected execution state on this surface.
-    const presentationSessionIdHint = typeof args?.targetSessionId === 'string' && args.targetSessionId.trim()
-        ? args.targetSessionId.trim()
-        : typeof args?.sessionId === 'string' && args.sessionId.trim()
-            ? args.sessionId.trim()
-            : typeof (h?.currentSession as any)?.sessionId === 'string' ? String((h!.currentSession as any).sessionId) : '';
-    const providerHint = typeof args?.cliType === 'string' ? args.cliType
-        : typeof args?.providerType === 'string' ? args.providerType
-        : typeof args?.agentType === 'string' ? args.agentType
-        : '';
-    const legacyStatus = normalizeReadChatCommandStatus(payload?.status, payload?.activeModal);
-    const turnPresentation = resolveSessionTurnPresentation({
-        sessionId: presentationSessionIdHint || undefined,
-        legacyStatus,
-        providerType: providerHint || undefined,
-        surface: 'read_chat',
-    });
-    let effectiveStatus = legacyStatus;
-    if (turnPresentation.authority === 'turn_reducer') {
-        effectiveStatus = turnPresentation.status;
-        // Contract safety: waiting_approval requires activeModal buttons. If the
-        // reducer parked the attempt but the modal is not staged on THIS read yet,
-        // present generating rather than failing the read (the next poll surfaces
-        // the modal) — same rule the legacy path applies.
-        if (effectiveStatus === 'waiting_approval' && !hasNonEmptyModalButtons(payload?.activeModal)) {
-            effectiveStatus = 'generating';
-        }
-    }
-    try {
-        validatedPayload = validateReadChatResultPayload({
-            ...payload,
-            status: effectiveStatus,
-        }, 'read_chat command result') as Record<string, any>;
-    } catch (error: any) {
-        return { success: false, error: error?.message || String(error) };
-    }
-    const messages = normalizeReadChatMessages(validatedPayload);
-    // Last-mile coordinator-prompt filter. Different read_chat code paths
-    // produce the final messages array (native-history main path, codex
-    // exact-runtime-mirror fallback, daemon-side pty-parser, etc), so
-    // applying it here means we don't have to thread the filter through
-    // every one. Driven by the provider setting `showCoordinatorSystemPrompt`
-    // + the coordinator-registry entry for the target session.
-    // (sessionIdHint keeps its ORIGINAL semantics for the coordinator-prompt
-    // filter — no current-session fallback — so message content filtering is
-    // unchanged by the Stage 6 status-authority work.)
-    const sessionIdHint = typeof args?.targetSessionId === 'string' ? args.targetSessionId
-        : typeof args?.sessionId === 'string' ? args.sessionId
-        : '';
-    const filteredMessages = h
-        ? maybeHideCoordinatorPromptMessage(h, providerHint, sessionIdHint, messages)
-        : messages;
-    // By default read_chat returns only user-facing prose turns. When the
-    // caller opts in with `includeActivity`, tool/terminal/thought activity
-    // bubbles (e.g. the native transcript's tool calls and results) are kept
-    // inline too, in chronological order, so a restored conversation can show
-    // what the agent actually did — not just the prose around it.
-    const includeActivity = args?.includeActivity === true || args?.includeActivity === 'true';
-    const visibleMessages = includeActivity
-        ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m))
-        : filterUserFacingChatMessages(filteredMessages);
-    const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
-    const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
-    const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key)));
-    if (preservedPayloadFields.messageSource) {
-        preservedPayloadFields.messageSource = updateMessageSourceReturnedCount(preservedPayloadFields.messageSource, sync.messages.length);
-    }
-    if (preservedPayloadFields.transcriptProvenance) {
-        preservedPayloadFields.transcriptProvenance = updateMessageSourceReturnedCount(preservedPayloadFields.transcriptProvenance, sync.messages.length);
-    }
-    const returnedDebugReadChat = debugReadChat
-        ? {
-            ...debugReadChat,
-            fullMsgCount: typeof debugReadChat.fullMsgCount === 'number'
-                ? debugReadChat.fullMsgCount
-                : messages.length,
-            visibleMsgCount: visibleMessages.length,
-            hiddenMsgCount,
-            returnedMsgCount: sync.messages.length,
-        }
-        : undefined;
-    return {
-        success: true,
-        ...validatedPayload,
-        ...preservedPayloadFields,
-        messages: sync.messages,
-        totalMessages: sync.totalMessages,
-        // Stage 6: the authoritative turn presentation rides the read_chat
-        // payload for mesh-owned sessions (identity + stage + evidence
-        // timestamps; the `status` field above already reflects it).
-        ...(turnPresentation.authority === 'turn_reducer' ? { turn: turnPresentation } : {}),
-        ...(returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}),
-    };
 }
 
 
