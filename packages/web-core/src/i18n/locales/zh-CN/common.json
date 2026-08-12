@@ -3195,5 +3195,31 @@
         "pending": "待处理",
         "loading": "正在加载审批…",
         "emptyHint": "任何已连接机器的审批请求都会自动显示在这里。"
+    },
+    "setupWizard": {
+        "quotaPolicy": {
+            "title": "基于配额的路由",
+            "description": "当节点上报其 AI 提供方的剩余配额时，协调器可以跳过接近耗尽的节点，并优先选择余量更多的节点。下列阈值决定何时生效。缺失或过期的读数始终会被忽略，因此不会因为陈旧数据而排除节点。",
+            "sessionMin": "会话下限",
+            "sessionMinHint": "跳过短滚动窗口剩余量低于此值的提供方。",
+            "weeklyMin": "每周下限",
+            "weeklyMinHint": "跳过每周窗口剩余量低于此值的提供方。",
+            "resetImminent": "重置宽限",
+            "resetImminentHint": "若会话窗口将在此时间内重置，则忽略其余量不足。",
+            "staleAfter": "读数有效期",
+            "staleAfterHint": "忽略早于此时长的配额读数。",
+            "spreadBonus": "余量偏好",
+            "spreadBonusHint": "对剩余配额更多者的偏好强度。不会覆盖任务难度匹配。",
+            "minutes": "分钟",
+            "blankMeansDefault": "留空则使用默认值（显示为灰色的数值）。",
+            "useDefaults": "使用默认值",
+            "saving": "保存中…",
+            "save": "保存阈值",
+            "errors": {
+                "notANumber": "请输入数字。",
+                "percentRange": "必须介于 0 和 100 之间。",
+                "negative": "不能为负数。"
+            }
+        }
     }
 }

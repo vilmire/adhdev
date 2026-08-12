@@ -10,6 +10,7 @@
  * cleanup and aggregate-status collaborators come from ctx.
  */
 import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, deriveProviderPriorityFromSlots, normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
+import { DEFAULT_QUOTA_ROUTING_POLICY, resolveQuotaRoutingPolicy } from '../../repo-mesh-types.js';
 import { resolveMeshHostStatus, normalizeMeshDaemonRole } from '../../mesh/mesh-host-ownership.js';
 import {
     getRegisteredSubmodulePaths,
@@ -774,6 +775,70 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             const difficultyBrains = setDifficultyBrains(args?.difficultyBrains, requestedMeshId || undefined);
             const meshId = requestedMeshId || resolveScopedMeshId();
             return { success: true, difficultyBrains, meshId: meshId ?? null };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    // ─── Quota-aware routing thresholds (PER MESH, machine-local) ───
+    // The dedicated write path for RepoMeshPolicy.quotaRouting — previously only
+    // reachable as a raw JSON patch through update_mesh's general `policy`
+    // passthrough. The launch gate / fitness spread read the EFFECTIVE thresholds
+    // through resolveQuotaRoutingPolicy, so `resolved` below is exactly what the
+    // gate will apply; `quotaRouting` is the persisted overrides-only view
+    // (fields equal to the defaults are never persisted — persistence economy).
+    mesh_quota_routing_get: async (_ctx: MedFamilyContext, args: any) => {
+        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        try {
+            const { getMeshQuotaRouting, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const overrides = getMeshQuotaRouting(requestedMeshId || undefined);
+            const meshId = requestedMeshId || resolveScopedMeshId();
+            return {
+                success: true,
+                quotaRouting: overrides,
+                resolved: resolveQuotaRoutingPolicy(overrides),
+                defaults: DEFAULT_QUOTA_ROUTING_POLICY,
+                scope: {
+                    kind: 'mesh',
+                    storage: 'machine_local',
+                    meshId: meshId ?? null,
+                    resolvedFrom: requestedMeshId ? 'explicit' : (meshId ? 'sole_mesh' : 'ambiguous'),
+                    ...(requestedMeshId || meshId ? {} : {
+                        note: 'Several meshes are configured and no meshId was given, so these are the shipped defaults, not any mesh\'s saved thresholds. Pass meshId.',
+                    }),
+                },
+            };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    },
+
+    mesh_quota_routing_set: async (ctx: MedFamilyContext, args: any) => {
+        const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        try {
+            const { setMeshQuotaRouting, getMesh, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            // setMeshQuotaRouting validates STRICTLY (unknown field / non-number /
+            // percent outside 0..100 / negative duration → invalid_quota_routing)
+            // and replaces the sub-policy wholesale; an all-default or empty input
+            // clears the override so the gate falls back to the defaults.
+            const quotaRouting = setMeshQuotaRouting(args?.quotaRouting, requestedMeshId || undefined);
+            const meshId = requestedMeshId || resolveScopedMeshId();
+            // Keep the live views coherent: once any command has warmed the inline
+            // cache, mesh_status / get_mesh serve from it — without refreshing it
+            // here the dashboard would keep showing the pre-write thresholds (the
+            // claim/launch gate itself reads meshes.json fresh via getMeshWithCache,
+            // so it picks the new thresholds up on the next drain tick regardless).
+            if (meshId) {
+                const fresh = getMesh(meshId);
+                if (fresh && ctx.getCachedInlineMesh(meshId)) ctx.inlineMeshCache.set(meshId, fresh);
+                ctx.invalidateAggregateMeshStatus(meshId);
+            }
+            return {
+                success: true,
+                quotaRouting,
+                resolved: resolveQuotaRoutingPolicy(quotaRouting),
+                meshId: meshId ?? null,
+            };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

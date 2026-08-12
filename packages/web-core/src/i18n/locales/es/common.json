@@ -3195,5 +3195,31 @@
         "pending": "Pendientes",
         "loading": "Cargando aprobaciones…",
         "emptyHint": "Las solicitudes de aprobación de cualquier máquina conectada aparecerán aquí automáticamente."
+    },
+    "setupWizard": {
+        "quotaPolicy": {
+            "title": "Enrutamiento según la cuota",
+            "description": "Cuando un nodo informa cuánta cuota le queda con su proveedor de IA, el coordinador puede omitir los nodos casi agotados y preferir los que tienen más margen. Estos umbrales deciden cuándo ocurre. Las lecturas ausentes o desactualizadas siempre se ignoran, así que ningún nodo queda excluido por datos obsoletos.",
+            "sessionMin": "Mínimo de sesión",
+            "sessionMinHint": "Omitir un proveedor cuya ventana corta tenga menos de esto disponible.",
+            "weeklyMin": "Mínimo semanal",
+            "weeklyMinHint": "Omitir un proveedor cuya ventana semanal tenga menos de esto disponible.",
+            "resetImminent": "Margen de reinicio",
+            "resetImminentHint": "Ignorar una ventana de sesión baja si se reinicia dentro de este tiempo.",
+            "staleAfter": "Caducidad de la lectura",
+            "staleAfterHint": "Ignorar lecturas de cuota más antiguas que esto.",
+            "spreadBonus": "Preferencia por margen",
+            "spreadBonusHint": "Cuánto se prefiere tener más cuota restante. Nunca anula una coincidencia de dificultad.",
+            "minutes": "min",
+            "blankMeansDefault": "Deja un campo vacío para usar su valor predeterminado (el que aparece atenuado).",
+            "useDefaults": "Usar predeterminados",
+            "saving": "Guardando…",
+            "save": "Guardar umbrales",
+            "errors": {
+                "notANumber": "Introduce un número.",
+                "percentRange": "Debe estar entre 0 y 100.",
+                "negative": "No puede ser negativo."
+            }
+        }
     }
 }

@@ -3192,5 +3192,31 @@
         "pending": "Pending",
         "loading": "Loading approvals…",
         "emptyHint": "Approvals from any connected machine will appear here automatically."
+    },
+    "setupWizard": {
+        "quotaPolicy": {
+            "title": "Quota-aware routing",
+            "description": "When a node reports how much of its AI provider quota is left, the coordinator can skip nodes that are nearly exhausted and prefer nodes with more headroom. These thresholds decide when that happens. Missing or outdated readings are always ignored, so a node is never excluded on stale data.",
+            "sessionMin": "Session floor",
+            "sessionMinHint": "Skip a provider whose short rolling window has less than this left.",
+            "weeklyMin": "Weekly floor",
+            "weeklyMinHint": "Skip a provider whose weekly window has less than this left.",
+            "resetImminent": "Reset grace",
+            "resetImminentHint": "Ignore a low session window when it resets within this long.",
+            "staleAfter": "Reading expiry",
+            "staleAfterHint": "Ignore quota readings older than this.",
+            "spreadBonus": "Headroom preference",
+            "spreadBonusHint": "How strongly more remaining quota is preferred. Never overrides a task-difficulty match.",
+            "minutes": "min",
+            "blankMeansDefault": "Leave a field blank to use its default (shown as the greyed-out value).",
+            "useDefaults": "Use defaults",
+            "saving": "Saving…",
+            "save": "Save thresholds",
+            "errors": {
+                "notANumber": "Enter a number.",
+                "percentRange": "Must be between 0 and 100.",
+                "negative": "Cannot be negative."
+            }
+        }
     }
 }

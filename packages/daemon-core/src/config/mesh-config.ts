@@ -21,11 +21,12 @@ import type {
     RepoMeshCoordinatorConfig,
     RepoMeshHostMetadata,
     RepoMeshDaemonRole,
+    RepoMeshQuotaRoutingPolicy,
     MeshReportedMemberState,
 } from '../repo-mesh-types.js';
 import type { MagiKindPanelMap, MagiSlot, MagiTaskKind, DifficultyBrainMap, NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCapabilitySlots, deriveSlotsFromLegacy, daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
+import { mergeAndNormalizePolicy, normalizeQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 
 // ─── Persistence ────────────────────────────────
@@ -1266,4 +1267,101 @@ export function setDifficultyBrains(map: unknown, meshId?: string): DifficultyBr
     mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(stored);
     return normalized;
+}
+
+// ─── Quota-aware routing thresholds (PER MESH, machine-local) ───
+//
+// The write path for RepoMeshPolicy.quotaRouting (the launch GATE / SPREAD
+// thresholds — see mesh/mesh-quota-routing.ts). Scoped exactly like the
+// difficulty-brain presets above: the overrides live on the mesh entry's
+// policy in meshes.json, `meshId` is optional and resolves to the sole mesh,
+// and an ambiguous write fails loud rather than silently re-tuning another
+// mesh's routing.
+//
+// Validation is STRICT here at the writer (unknown field / non-number /
+// out-of-range → throw) even though resolveQuotaRoutingPolicy already clamps
+// defensively at read time: a setup-wizard typo must surface as an error the
+// user can fix, not as a silently clamped threshold that gates the mesh in a
+// way nobody configured. The read-side clamp stays as the second line of
+// defense so even a hand-edited meshes.json can never wedge the gate (a
+// clamped percent is bounded 0..100 and stale/missing data still fails open).
+
+/** quotaRouting fields expressed as percentages (0..100). */
+const QUOTA_ROUTING_PERCENT_FIELDS = new Set(['sessionMinRemainingPercent', 'weeklyMinRemainingPercent']);
+/** quotaRouting fields that just need to be finite, non-negative numbers. */
+const QUOTA_ROUTING_NONNEGATIVE_FIELDS = new Set(['staleAfterMs', 'sessionResetImminentMs', 'spreadBonusMax']);
+
+/**
+ * Strictly validate a quotaRouting overrides object from an external caller
+ * (tool / UI). Returns a clean RepoMeshQuotaRoutingPolicy carrying only the
+ * known fields; throws `invalid_quota_routing: ...` on anything else. An
+ * absent/null input validates to `{}` (clear-all-overrides semantics for the
+ * setter).
+ */
+function validateQuotaRoutingOverrides(input: unknown): RepoMeshQuotaRoutingPolicy {
+    if (input === undefined || input === null) return {};
+    if (typeof input !== 'object' || Array.isArray(input)) {
+        throw new Error('invalid_quota_routing: quotaRouting must be an object of threshold overrides');
+    }
+    const out: RepoMeshQuotaRoutingPolicy = {};
+    for (const [key, raw] of Object.entries(input as Record<string, unknown>)) {
+        const isPercent = QUOTA_ROUTING_PERCENT_FIELDS.has(key);
+        if (!isPercent && !QUOTA_ROUTING_NONNEGATIVE_FIELDS.has(key)) {
+            throw new Error(
+                `invalid_quota_routing: unknown field '${key}' (known fields: `
+                + [...QUOTA_ROUTING_PERCENT_FIELDS, ...QUOTA_ROUTING_NONNEGATIVE_FIELDS].join(', ') + ')',
+            );
+        }
+        if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+            throw new Error(`invalid_quota_routing: ${key} must be a finite number (got ${JSON.stringify(raw)})`);
+        }
+        if (isPercent && (raw < 0 || raw > 100)) {
+            throw new Error(`invalid_quota_routing: ${key} must be between 0 and 100 (got ${raw})`);
+        }
+        if (!isPercent && raw < 0) {
+            throw new Error(`invalid_quota_routing: ${key} must be >= 0 (got ${raw})`);
+        }
+        (out as Record<string, number>)[key] = raw;
+    }
+    return out;
+}
+
+/**
+ * The stored quotaRouting overrides for one mesh (normalized; `{}` when the
+ * mesh has none, is unknown, or is ambiguous). Readers that need the EFFECTIVE
+ * thresholds resolve these through resolveQuotaRoutingPolicy — never read the
+ * defaults from here.
+ */
+export function getMeshQuotaRouting(meshId?: string): RepoMeshQuotaRoutingPolicy {
+    const config = loadMeshConfig();
+    const stored = resolveScopedMesh(config, meshId)?.policy?.quotaRouting;
+    return normalizeQuotaRoutingPolicy(stored) ?? {};
+}
+
+/**
+ * Replace one mesh's quotaRouting overrides WHOLESALE (the editor pushes the
+ * full sub-policy, same contract as setDifficultyBrains). Passing an empty
+ * object (or one whose fields all equal the defaults) clears the override
+ * entirely — mergeAndNormalizePolicy's persistence economy drops the key, so
+ * readers fall back to DEFAULT_QUOTA_ROUTING_POLICY. Returns the normalized,
+ * persisted overrides.
+ */
+export function setMeshQuotaRouting(input: unknown, meshId?: string): RepoMeshQuotaRoutingPolicy {
+    const overrides = validateQuotaRoutingOverrides(input);
+    const stored = loadMeshConfig();
+    const mesh = resolveScopedMesh(stored, meshId);
+    if (!mesh) {
+        throw new Error(
+            meshId?.trim()
+                ? `invalid_quota_routing: mesh '${meshId.trim()}' not found`
+                : `quota_routing_mesh_ambiguous: this machine hosts ${stored.meshes.length} meshes, `
+                  + `so a quota-routing write must name its mesh explicitly (meshId). Thresholds are per mesh — `
+                  + `they decide which (node, provider) pairs the launch gate skips, so writing to the wrong `
+                  + `mesh changes what work that mesh refuses.`,
+        );
+    }
+    mesh.policy = mergeAndNormalizePolicy(mesh.policy, { quotaRouting: overrides });
+    mesh.updatedAt = new Date().toISOString();
+    saveMeshConfig(stored);
+    return normalizeQuotaRoutingPolicy(overrides) ?? {};
 }
