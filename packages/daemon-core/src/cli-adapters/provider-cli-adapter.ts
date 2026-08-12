@@ -19,7 +19,7 @@ import { createHash } from 'crypto';
 import type { CliAdapter, CliLaunchInfo } from '../cli-adapter-types.js';
 import type { InteractivePrompt, InteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { buildKimiInteractiveTuiAnswerSteps } from '../providers/types/interactive-prompt.js';
-import { detectKimiPendingQuestion } from '../providers/kimi-pending-question.js';
+import { detectKimiPendingQuestion, detectKimiIdleSelectorPrompt, buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX } from '../providers/kimi-pending-question.js';
 import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
@@ -257,12 +257,13 @@ export class ProviderCliAdapter implements CliAdapter {
     private staticIdlePollStreak = 0;
 
     /**
-     * kimi AskUserQuestion picker hold (wire.jsonl authority). kimi renders
-     * AskUserQuestion as a TUI picker the modal/spinner matchers do NOT
-     * classify, so the session reads 'generating' while parked on the
-     * question. Refreshed from the session's own wire.jsonl on each
-     * getScriptParsedStatus() poll (refreshKimiPendingQuestion — same
-     * cadence/rationale as the background-task passthrough), surfaced on
+     * kimi interactive-picker hold. Covers (a) the AskUserQuestion picker
+     * (wire.jsonl authority — kimi renders it as a TUI picker the modal/spinner
+     * matchers do NOT classify, so the session reads 'generating' while parked)
+     * and (b) kimi's built-in idle/cache-expired selector (screen authority —
+     * a TUI built-in the wire never carries). Refreshed on each
+     * getScriptParsedStatus()/getStatus() poll (refreshKimiPendingQuestion —
+     * same cadence/rationale as the background-task passthrough), surfaced on
      * getStatus() as activeInteractivePrompt so CliProviderInstance overlays
      * waiting_choice and the status-transition layer emits agent:waiting_choice,
      * and consumed by setInteractivePromptResponse (mesh_answer_question) to
@@ -1561,23 +1562,36 @@ export class ProviderCliAdapter implements CliAdapter {
      */
     private refreshKimiPendingQuestion(): void {
         if (this.cliType !== 'kimi') return;
-        const nativeHistory = (this.provider as { nativeHistory?: NativeHistoryConfig } | null | undefined)?.nativeHistory;
-        if (!nativeHistory?.source) return;
         try {
-            const prompt = detectKimiPendingQuestion(nativeHistory, {
-                agentType: this.cliType,
-                providerSessionId: this.providerSessionId || undefined,
-                sessionStartedAtMs: this.spawnAt,
-                envOverrides: this.extraEnv,
-                workspace: this.workingDir,
-                // Sidecar-claim owner token (== session registry sessionId ==
-                // the read path's targetSessionId). WITHOUT it claiming is
-                // skipped and the sidecar resolution fails closed on
-                // ambiguity — any second kimi session dir in the workspace
-                // (e.g. a probe session) made detection silently dead
-                // (live: coordinator AskUserQuestion never surfaced).
-                instanceId: this.owningSessionId || undefined,
-            });
+            const nativeHistory = (this.provider as { nativeHistory?: NativeHistoryConfig } | null | undefined)?.nativeHistory;
+            let prompt: InteractivePrompt | null = null;
+            if (nativeHistory?.source) {
+                prompt = detectKimiPendingQuestion(nativeHistory, {
+                    agentType: this.cliType,
+                    providerSessionId: this.providerSessionId || undefined,
+                    sessionStartedAtMs: this.spawnAt,
+                    envOverrides: this.extraEnv,
+                    workspace: this.workingDir,
+                    // Sidecar-claim owner token (== session registry sessionId ==
+                    // the read path's targetSessionId). WITHOUT it claiming is
+                    // skipped and the sidecar resolution fails closed on
+                    // ambiguity — any second kimi session dir in the workspace
+                    // (e.g. a probe session) made detection silently dead
+                    // (live: coordinator AskUserQuestion never surfaced).
+                    instanceId: this.owningSessionId || undefined,
+                });
+            }
+            if (!prompt && this.engine.currentStatus !== 'generating') {
+                // kimi's built-in idle/cache-expired selector ("This session has
+                // been idle for Nm… / Compact and continue?"): a TUI built-in,
+                // NOT an AskUserQuestion tool call, so the wire detector never
+                // sees it and the approval matchers never fire — a parked
+                // session read as plain `idle` while the selector ate input.
+                // Screen-based detection fills that blind spot; it only appears
+                // at idle, so skip it while a turn is generating (a quoted
+                // snapshot in scrolling output must never parse as the picker).
+                prompt = detectKimiIdleSelectorPrompt(this.terminalScreen.getText());
+            }
             if ((prompt?.promptId ?? null) !== (this.activeInteractivePrompt?.promptId ?? null)) {
                 this.activeInteractivePrompt = prompt;
                 // Notify so the status poll re-reads getStatus() promptly and
@@ -1650,7 +1664,12 @@ export class ProviderCliAdapter implements CliAdapter {
             if (!prompt || prompt.promptId !== response.promptId) {
                 throw new Error('Interactive prompt response does not match active prompt');
             }
-            const steps = buildKimiInteractiveTuiAnswerSteps(prompt, response);
+            // Built-in selector (idle/cache-expired) renders no numbered rows,
+            // so it takes the arrow-key protocol with the cursor re-read live;
+            // AskUserQuestion keeps the measured digit/Tab/Enter protocol.
+            const steps = prompt.promptId.startsWith(KIMI_TUI_SELECTOR_PROMPT_PREFIX)
+                ? buildKimiSelectorAnswerSteps(prompt, response, this.terminalScreen.getText())
+                : buildKimiInteractiveTuiAnswerSteps(prompt, response);
             for (const step of steps) {
                 await this.writeToPty(step);
                 // Same ~180ms inter-key gap as the claude TUI answer path —

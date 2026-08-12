@@ -35,6 +35,16 @@
  * `multi_select` (snake_case) in the question args; `multiSelect` is also
  * accepted defensively (no live capture of either — see tests).
  *
+ * This module ALSO covers kimi's built-in idle/cache-expired selector
+ * ("This session has been idle for Nm… / Cache expired — …" with rows like
+ * "Compact and continue" / "Start a new session"). That picker is a TUI
+ * built-in, NOT an AskUserQuestion tool call, so the wire never carries it
+ * and the approval modal matchers never fire — a parked session read as
+ * plain `idle` while the selector ate input (live defect, 2026-08-12). It is
+ * detected from the live PTY screen (detectKimiIdleSelectorPrompt) and
+ * answered with arrow keys (buildKimiSelectorAnswerSteps) — the selector
+ * renders no numbered rows, so the digit protocol does not apply.
+ *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
 'use strict';
@@ -47,8 +57,10 @@ import {
 import { readTailJsonlLines } from './spec/background-task-detector.js';
 import type { NativeHistoryConfig } from './spec/types.js';
 import {
+    interactivePromptContentFingerprint,
     normalizeInteractivePrompt,
     type InteractivePrompt,
+    type InteractivePromptResponse,
 } from './types/interactive-prompt.js';
 
 /**
@@ -178,4 +190,167 @@ function loopEvent(record: unknown): Record<string, unknown> | null {
     const event = r.event;
     if (!event || typeof event !== 'object') return null;
     return event as Record<string, unknown>;
+}
+
+// ─── Built-in idle/cache-expired selector (screen-based) ─────────────────────
+
+/**
+ * promptId prefix for kimi's built-in TUI selectors (as opposed to
+ * AskUserQuestion wire promptIds, which are toolCallIds). The answer path
+ * branches on this prefix: the built-in selector renders NO numbered option
+ * rows, so the AskUserQuestion digit protocol does not apply — navigation is
+ * arrow keys + Enter ("↑↓ navigate · Enter select · Esc cancel").
+ */
+export const KIMI_TUI_SELECTOR_PROMPT_PREFIX = 'kimi-tui-selector-';
+
+/** "This session has been idle for 32m and is ~392k tokens." */
+const IDLE_SELECTOR_TITLE = /This session has been idle for/i;
+/** Picker hint line: "↑↓ navigate · Enter select · Esc cancel". */
+const IDLE_SELECTOR_HINT = /↑↓\s*navigate\s*·\s*Enter\s+select/i;
+
+/**
+ * One option row of the built-in selector: optional ❯ cursor, the label, then
+ * an optional description separated from the label by 2+ spaces (the live
+ * layout pads descriptions into a column; a label's own words are single-spaced,
+ * and a row without a description — "Don't ask me again" — stays single-part).
+ */
+function parseSelectorRow(line: string): { label: string; description?: string } | null {
+    const m = line.match(/^\s*(?:❯\s*)?(\S[\s\S]*?)\s*$/);
+    if (!m) return null;
+    const parts = m[1].split(/\s{2,}/);
+    const label = (parts[0] ?? '').trim();
+    if (!label) return null;
+    const description = parts.length > 1 ? parts.slice(1).join(' ').trim() : undefined;
+    return { label, ...(description ? { description } : {}) };
+}
+
+/**
+ * Detect kimi's built-in idle/cache-expired selector on the live PTY screen
+ * and build its InteractivePrompt. Layout (kimi 0.34 live capture):
+ *
+ *   ────────────────────────────────────────────────────────────
+ *    This session has been idle for 32m and is ~392k tokens.
+ *    ↑↓ navigate · Enter select · Esc cancel
+ *
+ *    Cache expired — the next message re-sends the entire history at full price.
+ *     ❯ Compact and continue    one-time compact cost · cheapest way to keep th...
+ *       Start a new session     zero context cost · best for a new task
+ *       Continue as-is          full history kept · highest cost per turn
+ *       Don't ask me again
+ *   ────────────────────────────────────────────────────────────
+ *
+ * Anchors: the title line AND the hint line AND a ❯ cursor row with ≥2 option
+ * rows — quoted prose mentioning one cue alone never parses. The question is
+ * the body line between the hint and the option block ("Cache expired — …"),
+ * so the volatile "idle for Nm" title is kept out of the question and only
+ * rides along as the header: the content-fingerprint promptId stays stable
+ * while the minutes tick up across polls.
+ *
+ * Returns null when the selector is not on screen (answered, dismissed, or
+ * scrolled away — the caller clears any held prompt on null, same contract as
+ * the wire detector).
+ */
+export function detectKimiIdleSelectorPrompt(screenText: string): InteractivePrompt | null {
+    if (!screenText) return null;
+    const lines = screenText.split('\n');
+
+    let titleIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+        if (IDLE_SELECTOR_TITLE.test(lines[i])) { titleIdx = i; break; }
+    }
+    if (titleIdx < 0) return null;
+
+    let hintIdx = -1;
+    for (let i = titleIdx + 1; i <= Math.min(lines.length - 1, titleIdx + 4); i += 1) {
+        if (IDLE_SELECTOR_HINT.test(lines[i])) { hintIdx = i; break; }
+    }
+    if (hintIdx < 0) return null;
+
+    // The ❯ cursor row is the first option row; the question body sits between
+    // the hint and it. Stop at the closing separator — no cursor row visible.
+    let cursorIdx = -1;
+    for (let i = hintIdx + 1; i < lines.length; i += 1) {
+        const t = lines[i].trim();
+        if (!t) continue;
+        if (/^─+$/.test(t)) break;
+        if (t.startsWith('❯')) { cursorIdx = i; break; }
+    }
+    if (cursorIdx < 0) return null;
+
+    const options: { label: string; description?: string }[] = [];
+    for (let i = cursorIdx; i < lines.length; i += 1) {
+        const t = lines[i].trim();
+        if (!t || /^─+$/.test(t)) break;
+        const row = parseSelectorRow(lines[i]);
+        if (!row) break;
+        options.push(row);
+    }
+    if (options.length < 2) return null;
+
+    let question = '';
+    for (let i = cursorIdx - 1; i > hintIdx; i -= 1) {
+        const t = lines[i].trim();
+        if (!t || /^─+$/.test(t)) continue;
+        question = t;
+        break;
+    }
+    if (!question) return null;
+
+    const questions = [{
+        questionId: 'q1',
+        question,
+        header: lines[titleIdx].trim(),
+        multiSelect: false,
+        options,
+    }];
+    return {
+        promptId: `${KIMI_TUI_SELECTOR_PROMPT_PREFIX}${interactivePromptContentFingerprint(questions)}`,
+        origin: 'cli',
+        providerType: 'kimi',
+        createdAt: Date.now(),
+        questions,
+    };
+}
+
+/**
+ * Answer steps for the built-in selector: arrow keys relative to the ❯ cursor
+ * row CURRENTLY on screen (re-read live at answer time), then Enter. The
+ * selector has no digit shortcuts and no review screen, so this is exactly
+ * |target − cursor| arrows + '\r' — the AskUserQuestion builder's digit
+ * protocol and trailing review-screen Enter do NOT apply here.
+ *
+ * Fail-closed, same as the wire path: a single-select answer naming one known
+ * option label or it throws (no index/default fallback, no freeform — the
+ * selector renders no freeform row).
+ */
+export function buildKimiSelectorAnswerSteps(
+    prompt: InteractivePrompt,
+    response: InteractivePromptResponse,
+    screenText: string,
+): string[] {
+    if (response.promptId !== prompt.promptId) throw new Error('Interactive prompt response does not match active prompt');
+    if (prompt.questions.length !== 1) throw new Error('kimi built-in selector prompt must have exactly one question');
+    const question = prompt.questions[0];
+    const answer = response.answers[question.questionId];
+    if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
+    if (answer.freeformText?.trim()) throw new Error('kimi built-in selector has no freeform input');
+    if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+    const target = question.options.findIndex((o) => o.label === answer.selectedLabels[0]);
+    if (target < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+
+    let cursor = 0;
+    for (const line of (screenText ?? '').split('\n')) {
+        if (!line.trim().startsWith('❯')) continue;
+        const row = parseSelectorRow(line);
+        if (!row) continue;
+        const idx = question.options.findIndex((o) => o.label === row.label);
+        if (idx >= 0) { cursor = idx; break; }
+    }
+
+    const steps: string[] = [];
+    const diff = target - cursor;
+    const key = diff > 0 ? '\x1b[B' : '\x1b[A';
+    for (let i = 0; i < Math.abs(diff); i += 1) steps.push(key);
+    steps.push('\r');
+    return steps;
 }

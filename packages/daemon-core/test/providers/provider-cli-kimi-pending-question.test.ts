@@ -222,3 +222,52 @@ maybe('ProviderCliAdapter.setInteractivePromptResponse — kimi keystrokes', () 
         expect((adapter.getStatus() as any).activeInteractivePrompt).toBeNull()
     }, 15000)
 })
+
+// ── built-in idle/cache-expired selector (screen authority) ──────────────────
+
+// Literal live capture shape (kimi 0.34 Spec Debug screen, 2026-08-12). This
+// picker is a TUI built-in — the wire.jsonl never carries it, and before the
+// screen detector the session read as plain `idle` while it ate input.
+const IDLE_SELECTOR_SCREEN = [
+    '  prior assistant output line',
+    ' ──────────────────────────────────────────────────────────────────────────────',
+    '  This session has been idle for 32m and is ~392k tokens.',
+    '  ↑↓ navigate · Enter select · Esc cancel',
+    '',
+    '  Cache expired — the next message re-sends the entire history at full price.',
+    '   ❯ Compact and continue    one-time compact cost · cheapest way to keep th...',
+    '     Start a new session     zero context cost · best for a new task',
+    '     Continue as-is          full history kept · highest cost per turn',
+    "     Don't ask me again",
+    '',
+    ' ──────────────────────────────────────────────────────────────────────────────',
+    ' yolo  K3 thinking: high  ~/Work/adhdev  main [±]',
+].join('\r\n')
+
+maybe('ProviderCliAdapter — kimi built-in idle selector (screen-based)', () => {
+    it('surfaces a waiting_choice prompt from the live screen and answers with arrows + Enter', async () => {
+        writeWire([]) // the wire never carries this picker
+        const adapter = makeAdapter(makeProvider(loadShippedManifest()))
+        ;(adapter as any).terminalScreen.write(IDLE_SELECTOR_SCREEN)
+        adapter.getScriptParsedStatus()
+        const status: any = adapter.getStatus()
+        const prompt = status.activeInteractivePrompt
+        expect(prompt?.promptId.startsWith('kimi-tui-selector-')).toBe(true)
+        expect(prompt.questions[0].options.map((o: any) => o.label)).toEqual([
+            'Compact and continue', 'Start a new session', 'Continue as-is', "Don't ask me again",
+        ])
+
+        const writes: string[] = []
+        ;(adapter as any).writeToPty = async (d: string) => { writes.push(d) }
+        await adapter.setInteractivePromptResponse({
+            promptId: prompt.promptId,
+            answers: { q1: { selectedLabels: ['Continue as-is'] } },
+        })
+        // No digit shortcuts on this picker: arrows from the live ❯ row + Enter.
+        expect(writes).toEqual(['\x1b[B', '\x1b[B', '\r'])
+
+        // Selector dismissed (screen cleared) → the hold clears on the next poll.
+        ;(adapter as any).terminalScreen.write('\x1b[2J\x1b[H')
+        expect((adapter.getStatus() as any).activeInteractivePrompt).toBeNull()
+    }, 15000)
+})
