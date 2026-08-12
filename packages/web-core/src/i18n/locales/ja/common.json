@@ -1218,7 +1218,8 @@
             "dashboard": "ダッシュボード",
             "settings": "設定",
             "docs": "ドキュメント",
-            "about": "概要"
+            "about": "概要",
+            "setupWizard": "セットアップ"
         },
         "layout": {
             "expandSidebar": "サイドバーを展開",
@@ -1586,6 +1587,7 @@
             "navSettings": "Settings",
             "navDocs": "Docs",
             "navAbout": "About",
+            "navSetupWizard": "セットアップ",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3197,6 +3199,67 @@
         "emptyHint": "接続中のマシンからの承認リクエストがここに自動で表示されます。"
     },
     "setupWizard": {
+        "title": "ガイド付きメッシュセットアップ",
+        "stepOf": "全{{total}}ステップ中 {{current}}ステップ目",
+        "steps": {
+            "machines": "マシン",
+            "slots": "機能スロット",
+            "scheduling": "スケジューリング",
+            "quota": "クォータポリシー",
+            "approvals": "承認"
+        },
+        "back": "戻る",
+        "skip": "スキップ",
+        "next": "次へ",
+        "close": "閉じる",
+        "staged": "ステージ済み",
+        "stagedNote": "このステップの変更はステージされ、ウィザード完了時にまとめて適用されます。",
+        "machines": {
+            "title": "マシンを選択",
+            "description": "セットアップするメッシュを選び、作業を実行するマシンを接続してください。メッシュを新規作成すると、選択したワークスペースが最初のノードとして接続されます。",
+            "noMachinesDescription": "まだ登録されたマシンがありません。先にマシンにデーモンをインストールしてください。サインインすると自動でペアリングされます。",
+            "noMachinesFallback": "ローカルデーモンを起動してからここに戻ってください。",
+            "nodeCount": "{{count}} ノード",
+            "createNew": "新しいメッシュを作成",
+            "loadingMeshes": "メッシュを読み込み中…",
+            "meshName": "メッシュ名",
+            "machine": "マシン",
+            "machineSelectPlaceholder": "マシンを選択",
+            "workspace": "ワークスペース（リポジトリパス）",
+            "workspacePlaceholder": "/path/to/repo",
+            "workspaceSelectPlaceholder": "ワークスペースを選択",
+            "workspaceCustom": "パスを手動で入力…",
+            "pickFromKnown": "既知のワークスペースから選択",
+            "planChecking": "ワークスペースを確認中…",
+            "planOk": "ワークスペースは問題ありません: {{identity}}",
+            "creating": "作成中…",
+            "create": "メッシュを作成",
+            "createFailed": "作成に失敗しました",
+            "attachTitle": "別のマシンを接続",
+            "allMachinesAttached": "登録済みのすべてのマシンがすでにこのメッシュに接続されています。",
+            "attaching": "接続中…",
+            "addMachine": "マシンを追加"
+        },
+        "slots": {
+            "title": "機能スロット",
+            "description": "各ノードが得意なことを記述してください: どの AI プロバイダー、モデル、タスク難易度を担当するか。各ノードを保存するとスロットがステージされ、完了時にすべて適用されます。",
+            "empty": "まだノードがありません。戻って先にマシンを接続するか、このステップをスキップしてください。"
+        },
+        "scheduling": {
+            "title": "スケジューリング",
+            "description": "コーディネーターがターゲット未指定のタスクをメッシュのノードにどう分散するかを選択してください。"
+        },
+        "approvals": {
+            "title": "承認",
+            "description": "メッシュが実行する前に承認が必要なアクションを決めてください。"
+        },
+        "finish": {
+            "apply": "セットアップを完了",
+            "applying": "適用中…",
+            "applied": "セットアップが適用されました（{{count}} グループを保存）。",
+            "nothingToApply": "ステージされた変更はありません。現在の設定が維持されます。",
+            "partialFailure": "一部の変更を適用できませんでした:"
+        },
         "quotaPolicy": {
             "title": "クォータ対応ルーティング",
             "description": "ノードが AI プロバイダーのクォータ残量を報告すると、コーディネーターは残量の少ないノードを回避し、余裕のあるノードを優先できます。以下のしきい値がその基準です。未報告や古い値は常に無視されるため、古いデータでノードが除外されることはありません。",
