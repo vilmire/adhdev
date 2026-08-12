@@ -292,6 +292,165 @@ describe('git repo status parser', () => {
     expect(status.dirty).toBe(true);
   });
 
+  describe('submodule probe accuracy regression (merged porcelain probe + batched ls-tree)', () => {
+    // The submodule probe was rewritten to cut git spawns: the per-submodule
+    // `rev-parse HEAD` was folded into the one porcelain read (`# branch.oid`)
+    // and the per-submodule `ls-tree HEAD <path>` probes were batched into a
+    // single `ls-tree -z HEAD -- <paths...>`. These tests pin the EXACT statuses
+    // the pre-merge implementation produced, against ground truth computed with
+    // independent git commands — a cost cut that changes any verdict is a
+    // regression, not an optimization.
+
+    function addSubmodule(repo: string, source: string, path: string): void {
+      git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', source, path]);
+    }
+
+    function makeChild(name: string): string {
+      const child = tempRepo(name);
+      writeFileSync(join(child, 'child.txt'), 'child\n');
+      commit(child, 'child init');
+      return child;
+    }
+
+    it('reports path/commit/dirty/outOfSync identically to ground truth across clean, dirty, and out-of-sync submodules', async () => {
+      const cleanChild = makeChild('matrix-clean-child');
+      const dirtyChild = makeChild('matrix-dirty-child');
+      const oosChild = makeChild('matrix-oos-child');
+
+      const repo = tempRepo('matrix-parent');
+      writeFileSync(join(repo, 'README.md'), 'parent\n');
+      commit(repo, 'parent init');
+      addSubmodule(repo, cleanChild, 'clean-sub');
+      addSubmodule(repo, dirtyChild, 'dirty-sub');
+      addSubmodule(repo, oosChild, 'oos-sub');
+      commit(repo, 'add submodules');
+
+      // dirty-sub: nested working-tree change (untracked file).
+      writeFileSync(join(repo, 'dirty-sub', 'untracked.txt'), 'dirty\n');
+
+      // oos-sub: advance the submodule HEAD past the recorded gitlink.
+      writeFileSync(join(repo, 'oos-sub', 'child.txt'), 'child\nadvanced\n');
+      git(join(repo, 'oos-sub'), ['add', '.']);
+      git(join(repo, 'oos-sub'), ['commit', '-m', 'advance submodule HEAD']);
+
+      // Ground truth via independent commands.
+      const recorded = (path: string) => git(repo, ['rev-parse', `HEAD:${path}`]);
+      const checkedOut = (path: string) => git(join(repo, path), ['rev-parse', 'HEAD']);
+
+      const status = await getGitRepoStatus(repo);
+      const byPath = new Map((status.submodules ?? []).map((s) => [s.path, s]));
+      expect([...byPath.keys()].sort()).toEqual(['clean-sub', 'dirty-sub', 'oos-sub']);
+
+      for (const path of ['clean-sub', 'dirty-sub', 'oos-sub']) {
+        const entry = byPath.get(path);
+        // commit prefers the gitlink recorded in the superproject HEAD tree.
+        expect(entry?.commit, `${path} commit`).toBe(recorded(path));
+        expect(entry?.repoPath, `${path} repoPath`).toBe(join(repo, path));
+        // outOfSync ⇔ checked-out HEAD differs from the recorded gitlink.
+        expect(entry?.outOfSync, `${path} outOfSync`).toBe(checkedOut(path) !== recorded(path));
+      }
+      expect(byPath.get('clean-sub')?.dirty).toBe(false);
+      expect(byPath.get('dirty-sub')?.dirty).toBe(true);
+      expect(byPath.get('oos-sub')?.dirty).toBe(false);
+
+      // Root-repo fields are untouched by the submodule probe merge.
+      expect(status.isGitRepo).toBe(true);
+      expect(status.branch).toBeTruthy();
+      expect(status.dirty).toBe(true); // dirty-sub + oos-sub drift bubbles up
+      expect(status.stashCount).toBe(0);
+    });
+
+    it('reproduces the legacy verdict for an uninitialized (deinit) submodule', async () => {
+      const child = makeChild('matrix-uninit-child');
+      const repo = tempRepo('matrix-uninit-parent');
+      writeFileSync(join(repo, 'README.md'), 'parent\n');
+      commit(repo, 'parent init');
+      addSubmodule(repo, child, 'oss');
+      commit(repo, 'add oss submodule');
+      const recordedSha = git(repo, ['rev-parse', 'HEAD:oss']);
+
+      // Deinitialize: the worktree is emptied — `git submodule status` would
+      // print the `-` prefix. Note the walk-up subtlety (identical in the legacy
+      // rev-parse implementation and the merged porcelain one): git run inside
+      // the emptied dir resolves the SUPERPROJECT, so the probe sees the
+      // parent's HEAD (≠ the recorded gitlink → outOfSync) and the parent's
+      // (clean) dirty verdict rather than an error.
+      git(repo, ['submodule', 'deinit', '-f', 'oss']);
+
+      const status = await getGitRepoStatus(repo);
+      expect(status.submodules).toHaveLength(1);
+      expect(status.submodules?.[0]).toMatchObject({
+        path: 'oss',
+        // commit still reflects the gitlink the superproject HEAD records.
+        commit: recordedSha,
+        outOfSync: true,
+        dirty: false,
+      });
+      expect(status.submodules?.[0]?.error).toBeUndefined();
+    });
+
+    it('surfaces dirty + error when the submodule worktree cannot be read at all', async () => {
+      const child = makeChild('matrix-gone-child');
+      const repo = tempRepo('matrix-gone-parent');
+      writeFileSync(join(repo, 'README.md'), 'parent\n');
+      commit(repo, 'parent init');
+      addSubmodule(repo, child, 'oss');
+      commit(repo, 'add oss submodule');
+
+      // Remove the worktree directory entirely: the porcelain read fails
+      // outright (no walk-up possible), reproducing the legacy enrich-failure
+      // verdict — dirty with a surfaced error, outOfSync via unknown HEAD.
+      rmSync(join(repo, 'oss'), { recursive: true, force: true });
+
+      const status = await getGitRepoStatus(repo);
+      expect(status.submodules).toHaveLength(1);
+      expect(status.submodules?.[0]).toMatchObject({
+        path: 'oss',
+        outOfSync: true,
+        dirty: true,
+      });
+      expect(status.submodules?.[0]?.error).toBeTruthy();
+    });
+
+    it('collects a 2-submodule status with the reduced spawn budget (1 batched ls-tree, no per-submodule rev-parse)', async () => {
+      const childA = makeChild('cost-child-a');
+      const childB = makeChild('cost-child-b');
+      const repo = tempRepo('cost-parent');
+      writeFileSync(join(repo, 'README.md'), 'parent\n');
+      commit(repo, 'parent init');
+      addSubmodule(repo, childA, 'sub-a');
+      addSubmodule(repo, childB, 'sub-b');
+      commit(repo, 'add submodules');
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      try {
+        const status = await getGitRepoStatus(repo, { forceFresh: true });
+        expect(status.submodules).toHaveLength(2);
+
+        const calls = spy.mock.calls;
+        const count = (pred: (argv: string[]) => boolean) =>
+          calls.filter((c) => pred(c[1] as string[])).length;
+
+        // Note: the repo-resolve spawn (`rev-parse --show-toplevel`) goes
+        // through execGitRaw directly, so this spy sees only the runGit calls.
+        expect(count((a) => a[0] === 'rev-parse')).toBe(0); // no per-submodule HEAD probe
+        expect(count((a) => a[0] === 'log')).toBe(1);
+        expect(count((a) => a[0] === 'stash')).toBe(1);
+        expect(count((a) => a[0] === 'config')).toBe(1);
+        // Batched: exactly ONE ls-tree for both submodules' gitlinks.
+        expect(count((a) => a[0] === 'ls-tree')).toBe(1);
+        // Porcelain: root + one per submodule (the merged HEAD+dirty probe).
+        expect(count((a) => a[0] === 'status')).toBe(3);
+        // Total runGit calls: 7 (+1 resolve spawn) — the pre-merge
+        // implementation paid 10 (+1) for this shape: 2 per-submodule
+        // rev-parse HEAD probes and 2 per-submodule ls-tree probes extra.
+        expect(calls.length).toBe(7);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it('marks tracked upstream state as unchecked until refreshed and updates behind counts after a bounded fetch', async () => {
     const repo = tempRepo('status-upstream-refresh');
     writeFileSync(join(repo, 'tracked.txt'), 'base\n');

@@ -1145,52 +1145,37 @@ async function getSubmoduleStatuses(
     // `git` processes; on Windows the wrapper + per-spawn cost alone measured
     // 6.9–62.4s under AV, which dominated the whole collectGitRepoStatus budget
     // and stalled the mesh graph cold-open. The information it gives us — the
-    // gitlink sync state (path / recorded SHA / +/-/U prefix) — is fully
-    // derivable from plumbing commands that don't go through the shell wrapper:
+    // gitlink sync state (path / recorded SHA / +/-/U prefix) and the dirty
+    // verdict — is fully derivable from plumbing/porcelain commands that don't
+    // go through the shell wrapper:
     //   • paths           ← `.gitmodules` (git config --file, plumbing)
-    //   • expected SHA     ← `git ls-tree HEAD <path>` (the gitlink the super-
-    //                        project's HEAD tree records)
-    //   • actual SHA       ← `git -C <sub> rev-parse HEAD` (already paid below by
-    //                        enrichSubmoduleWorktreeStatus for the dirty check)
+    //   • expected SHA     ← ONE batched `git ls-tree -z HEAD -- <paths...>` (the
+    //                        gitlinks the superproject's HEAD tree records)
+    //   • actual SHA       ← `# branch.oid` of the per-submodule porcelain read
+    //                        (previously a separate `rev-parse HEAD` spawn)
+    //   • dirty            ← the same per-submodule porcelain read
     // Comparing expected vs actual reproduces `+` (out of sync); a checked-out
     // submodule whose worktree is absent/uninitialized reproduces `-`. The `U`
     // (conflict) prefix is surfaced separately via the superproject porcelain
     // status that the caller already parses, and a conflicted submodule's own
     // status read here also flags it dirty — so no row is lost.
-    const { submodules, headOidByPath } = await deriveSubmoduleGitlinkStatuses(repo, options);
-    await Promise.all(submodules.map(submodule => enrichSubmoduleWorktreeStatus(repo, submodule, options)));
-    return { submodules, headOidByPath };
-  } catch {
-    return { submodules: [], headOidByPath: new Map() };
-  }
-}
+    const paths = await readSubmodulePaths(repo, options);
+    const ignoreSet = new Set(options.submoduleIgnorePaths || []);
+    const visiblePaths = paths.filter(path => !ignoreSet.has(path));
+    const expectedByPath = await readGitlinkExpectedShas(repo, visiblePaths, options);
+    const lastCheckedAt = Date.now();
+    const headOidByPath = new Map<string, string>();
 
-/**
- * Enumerate the superproject's submodules and their gitlink sync state without the
- * slow `git submodule status` shell wrapper. Pure plumbing: read paths from
- * `.gitmodules`, the expected (recorded) gitlink SHA from `ls-tree HEAD`, and the
- * actual checked-out SHA from the submodule's own `rev-parse HEAD`.
- */
-async function deriveSubmoduleGitlinkStatuses(
-  repo: ResolvedGitRepo,
-  options: GitStatusOptions,
-): Promise<SubmoduleStatusResult> {
-  if (!repo.repoRoot) return { submodules: [], headOidByPath: new Map() };
-  const paths = await readSubmodulePaths(repo, options);
-  const ignoreSet = new Set(options.submoduleIgnorePaths || []);
-  const lastCheckedAt = Date.now();
-  const headOidByPath = new Map<string, string>();
-
-  const entries = await Promise.all(
-    paths
-      .filter(path => !ignoreSet.has(path))
-      .map(async (path): Promise<GitSubmoduleStatus> => {
+    const submodules = await Promise.all(
+      visiblePaths.map(async (path): Promise<GitSubmoduleStatus> => {
         const repoPath = repo.repoRoot + '/' + path;
-        const expected = await readGitlinkExpectedSha(repo, path, options);
-        const actual = await readSubmoduleHeadSha(repo, repoPath, options);
-        // Reuse the actual checked-out HEAD oid for the C3 build-behind ancestry cache
-        // key — it's the submodule HEAD the daemon build commit is tested against, and
-        // we already paid this rev-parse for the outOfSync check, so no extra spawn.
+        const expected = expectedByPath.get(path) ?? null;
+        const worktree = await readSubmoduleWorktreeStatus(repo, repoPath, options);
+        const actual = worktree.headOid;
+        // Reuse the actual checked-out HEAD oid for the C3 build-behind ancestry
+        // cache key — it's the submodule HEAD the daemon build commit is tested
+        // against, and it now rides the porcelain read the dirty check already
+        // paid for (no separate rev-parse spawn).
         if (actual) headOidByPath.set(path, actual);
         // Uninitialized / no checked-out HEAD reproduces `git submodule status`'s
         // `-` prefix; a present-but-divergent HEAD reproduces the `+` prefix.
@@ -1203,13 +1188,17 @@ async function deriveSubmoduleGitlinkStatuses(
           // to the checked-out SHA so the field is never empty when both are known.
           commit: expected ?? actual ?? '',
           repoPath,
-          dirty: false,
+          dirty: worktree.dirty,
           outOfSync,
           lastCheckedAt,
+          ...(worktree.error ? { error: worktree.error } : {}),
         };
       }),
-  );
-  return { submodules: entries, headOidByPath };
+    );
+    return { submodules, headOidByPath };
+  } catch {
+    return { submodules: [], headOidByPath: new Map() };
+  }
 }
 
 /** Read submodule paths from `.gitmodules` via plumbing (no shell wrapper). */
@@ -1237,60 +1226,70 @@ async function readSubmodulePaths(repo: ResolvedGitRepo, options: GitStatusOptio
   }
 }
 
-/** Expected gitlink SHA recorded in the superproject HEAD tree for this submodule path. */
-async function readGitlinkExpectedSha(
+/**
+ * Expected gitlink SHAs recorded in the superproject HEAD tree for every given
+ * submodule path, from ONE `git ls-tree -z HEAD -- <paths...>` spawn — constant
+ * process cost no matter how many submodules the superproject has (previously
+ * one ls-tree per submodule). `-z` keeps paths raw (no core.quotePath rewriting)
+ * so they key the result map verbatim.
+ */
+async function readGitlinkExpectedShas(
   repo: ResolvedGitRepo,
-  submodulePath: string,
+  submodulePaths: string[],
   options: GitStatusOptions,
-): Promise<string | null> {
+): Promise<Map<string, string>> {
+  const expectedByPath = new Map<string, string>();
+  if (submodulePaths.length === 0 || !repo.repoRoot) return expectedByPath;
   try {
-    // `ls-tree HEAD <path>` prints: `<mode> commit <sha>\t<path>` for a gitlink.
-    const result = await runGit(repo, ['ls-tree', 'HEAD', submodulePath], options);
-    const line = result.stdout.split('\n').find(l => l.trim().length > 0);
-    if (!line) return null;
-    const match = line.match(/^\s*\d+\s+commit\s+([0-9a-f]{40})\b/);
-    return match ? match[1] : null;
+    // Each NUL-terminated entry: `<mode> commit <sha>\t<path>` for a gitlink;
+    // paths that are absent or not gitlinks print nothing.
+    const result = await runGit(repo, ['ls-tree', '-z', 'HEAD', '--', ...submodulePaths], options);
+    for (const entry of result.stdout.split('\0')) {
+      const match = entry.match(/^\d{6} commit ([0-9a-f]{40,64})\t(.+)$/s);
+      if (match) expectedByPath.set(match[2], match[1]);
+    }
   } catch {
-    return null;
+    // Unreadable tree → no expected SHAs. Same verdict the per-path probes
+    // produced when they failed individually: outOfSync falls back to the
+    // actual-HEAD comparison (expected === null).
   }
+  return expectedByPath;
 }
 
-/** Actual checked-out HEAD SHA of a submodule, or null if uninitialized/unreadable. */
-async function readSubmoduleHeadSha(
+interface SubmoduleWorktreeProbe {
+  /** Checked-out HEAD oid from the porcelain `# branch.oid` header (null when absent/unborn/unreadable). */
+  headOid: string | null;
+  dirty: boolean;
+  error?: string;
+}
+
+/**
+ * ONE `git status --porcelain=v2 --branch` inside the submodule worktree yields
+ * BOTH facts the legacy implementation paid two spawns for: the checked-out HEAD
+ * oid (`# branch.oid`, replacing a separate `rev-parse HEAD`) and the dirty
+ * verdict. Run via cwd (inside the superproject root, so the executor's
+ * path-inside-repo guard is satisfied) rather than resolving the submodule as a
+ * fresh repo — that would cost an extra `rev-parse --show-toplevel` spawn per
+ * submodule, which is exactly the Windows spawn cost this path avoids.
+ */
+async function readSubmoduleWorktreeStatus(
   repo: ResolvedGitRepo,
   repoPath: string,
   options: GitStatusOptions,
-): Promise<string | null> {
-  try {
-    // Run in the submodule worktree via cwd (inside the superproject root, so the
-    // executor's path-inside-repo guard is satisfied) rather than resolving the
-    // submodule as a fresh repo — that would cost an extra `rev-parse --show-toplevel`
-    // spawn per submodule, which is exactly the Windows spawn cost this fix removes.
-    const result = await runGit(repo, ['rev-parse', 'HEAD'], { ...options, cwd: repoPath });
-    const sha = result.stdout.trim();
-    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
-  } catch {
-    return null;
-  }
-}
-
-async function enrichSubmoduleWorktreeStatus(
-  repo: ResolvedGitRepo,
-  submodule: GitSubmoduleStatus,
-  options: GitStatusOptions,
-): Promise<void> {
+): Promise<SubmoduleWorktreeProbe> {
   try {
     const result = await runGit(repo, ['status', '--porcelain=v2', '--branch'], {
       ...options,
-      cwd: submodule.repoPath,
+      cwd: repoPath,
     });
     const parsed = parsePorcelainV2Status(result.stdout);
     const dirty = parsed.staged + parsed.modified + parsed.untracked + parsed.deleted + parsed.renamed > 0
       || parsed.conflictFiles.length > 0;
-    submodule.dirty = submodule.dirty || dirty;
+    return { headOid: parsed.headOid, dirty };
   } catch (error) {
-    submodule.dirty = true;
-    submodule.error = formatGitError(error);
+    // Unreadable worktree (uninitialized, missing, locked): reproduces the legacy
+    // verdict pair — no known HEAD (→ outOfSync via actual === null) + dirty with
+    // the surfaced error.
+    return { headOid: null, dirty: true, error: formatGitError(error) };
   }
 }
-
