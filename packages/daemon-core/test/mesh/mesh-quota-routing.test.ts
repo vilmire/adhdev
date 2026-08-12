@@ -62,6 +62,7 @@ describe('quota routing policy — resolution & persistence economy', () => {
         expect(resolveQuotaRoutingPolicy(undefined)).toEqual({
             staleAfterMs: 30 * MIN,
             sessionMinRemainingPercent: 10,
+            sessionResetImminentMs: 5 * MIN,
             weeklyMinRemainingPercent: 15,
             spreadBonusMax: 30,
         });
@@ -76,6 +77,7 @@ describe('quota routing policy — resolution & persistence economy', () => {
         // >100% thresholds clamp to 100; a negative stale window falls back to default.
         expect(resolveQuotaRoutingPolicy({ weeklyMinRemainingPercent: 250 }).weeklyMinRemainingPercent).toBe(100);
         expect(resolveQuotaRoutingPolicy({ staleAfterMs: -5 }).staleAfterMs).toBe(DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs);
+        expect(resolveQuotaRoutingPolicy({ sessionResetImminentMs: -1 }).sessionResetImminentMs).toBe(DEFAULT_QUOTA_ROUTING_POLICY.sessionResetImminentMs);
     });
 
     it('drops an absent or all-default quotaRouting from the persisted policy', () => {
@@ -180,6 +182,13 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
             }),
         });
         expect(evaluateProviderQuotaGate(errored, 'claude-cli', null, NOW)).toBeNull();
+        const unavailable = nodeWithQuota({
+            'claude-cli': okQuota({
+                status: 'unavailable',
+                session: { usedPercent: 99, windowMinutes: 300, resetsAt: null },
+            }),
+        });
+        expect(evaluateProviderQuotaGate(unavailable, 'claude-cli', null, NOW)).toBeNull();
     });
 
     it('still gates when the reporter clock runs ahead (skew absorbed by same-clock diff)', () => {
@@ -197,6 +206,67 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
             'claude-cli': okQuota({ session: { usedPercent: 99, windowMinutes: 300, resetsAt: null } }),
         });
         expect(evaluateProviderQuotaGate(node, 'codex-cli', null, NOW)).toBeNull();
+    });
+});
+
+describe('evaluateProviderQuotaGate — session reset-imminent relaxation', () => {
+    // In every case below reportedAt = NOW and updatedAt = NOW - MIN, so the
+    // skew-safe reporter-now estimate is exactly NOW (age = MIN, reporterNow
+    // = updatedAt + age). resetsAt values are therefore plain NOW-relative.
+    const lowSession = (resetsAt: number | null) => okQuota({
+        session: { usedPercent: 95, windowMinutes: 300, resetsAt },
+    });
+
+    it('WAIVES the session block when the reset is less than sessionResetImminentMs away', () => {
+        const node = nodeWithQuota({ 'claude-cli': lowSession(NOW + 4 * MIN) });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
+    });
+
+    it('keeps the block when the reset is further than sessionResetImminentMs away', () => {
+        const node = nodeWithQuota({ 'claude-cli': lowSession(NOW + 30 * MIN) });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)?.reason)
+            .toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
+    });
+
+    it('treats an already-past reset as recovered — the low reading is about to be replaced', () => {
+        const node = nodeWithQuota({ 'claude-cli': lowSession(NOW - 2 * MIN) });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
+    });
+
+    it('is conservative when the window carries NO resetsAt stamp — block kept', () => {
+        const node = nodeWithQuota({ 'claude-cli': lowSession(null) });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)?.reason)
+            .toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
+    });
+
+    it('honours a configured sessionResetImminentMs', () => {
+        const node = nodeWithQuota({ 'claude-cli': lowSession(NOW + 8 * MIN) });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', { sessionResetImminentMs: 10 * MIN }, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', { sessionResetImminentMs: 2 * MIN }, NOW)?.reason)
+            .toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
+    });
+
+    it('NEVER relaxes the weekly gate, even with an imminent weekly reset', () => {
+        const node = nodeWithQuota({
+            'claude-cli': okQuota({
+                weekly: { usedPercent: 90, windowMinutes: 10080, resetsAt: NOW + MIN },
+            }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)?.reason)
+            .toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
+    });
+
+    it('compares resetsAt on the REPORTER clock — skew cancels out of the estimate', () => {
+        // Reporter clock runs 10 min AHEAD of the coordinator: reportedAt =
+        // NOW + 10min, updatedAt = NOW + 9min → reporter-now estimate lands on
+        // the reporter's actual NOW + 10min, so a reset 3 min out on the
+        // reporter clock reads as imminent.
+        const quota = okQuota({
+            session: { usedPercent: 95, windowMinutes: 300, resetsAt: NOW + 13 * MIN },
+            updatedAt: NOW + 9 * MIN,
+        });
+        const node = nodeWithQuota({ 'claude-cli': quota }, NOW + 10 * MIN);
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
     });
 });
 

@@ -588,9 +588,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // every event still queued at upgrade time.
     try { migratePendingEventsJsonlToSqlite(); } catch { /* best-effort — never block boot */ }
     components.meshReconcileLoop = setupMeshReconcileLoop(components);
-    // 11b. Periodic quota refresh (observation only — nothing routes on it).
-    // Writes the cache that buildLocalNodeFacts reads; the builder never
-    // fetches, so mesh_status stays as cheap as it was.
+    // 11b. Periodic quota refresh. Writes the cache that buildLocalNodeFacts
+    // reads; the builder never fetches, so mesh_status stays as cheap as it
+    // was. The snapshots are no longer observation-only: quota-aware routing
+    // (mesh-quota-routing.ts) consumes them for the launch/claim GATE and the
+    // fitness SPREAD bonus — always from this cache, never by fetching inline.
     components.quotaRefreshLoop = setupQuotaRefreshLoop(components);
     // 11b-2. Event-driven complement: refetch JUST the provider whose agent
     // finished a turn, so the post-turn reading lands within seconds instead

@@ -173,7 +173,7 @@ test('reads through a wrapped command payload, like extractDaemonBuildInfo does'
 function buildStatusCtx(upgradeFailure: unknown) {
   const mesh = {
     id: 'mesh-upgradefail', name: 'Mesh', repoIdentity: 'vilmire/adhdev',
-    policy: { schedulingStrategy: 'least_loaded' },
+    policy: { schedulingStrategy: 'fitness' },
     coordinator: {},
     defaultBranch: 'main', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     nodes: [

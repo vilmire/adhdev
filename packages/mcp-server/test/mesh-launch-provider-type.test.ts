@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshLaunchSession, meshListNodes } from '../src/tools/mesh-tools.js';
+import { getNodeLaunchReadiness, readProviderPriority } from '../src/tools/mesh-tools-internal.js';
 import { buildMeshNodeCapabilityTags } from '@adhdev/daemon-core';
 
 // CURSOR-CLI-GENERATING-STUCK-SELFHOST precondition — mesh_launch_session must honor
@@ -91,6 +92,41 @@ test('explicit type omitted resolves from providerPriority order', async () => {
   const launch = launchCalls.find(c => c.command === 'launch_cli');
   assert.ok(launch, 'launch_cli was issued');
   assert.equal(launch!.args.cliType, 'claude-cli');
+});
+
+// PROVIDER-PRIORITY-FROM-SLOTS: a node with capability slots but no explicit
+// providerPriority must still resolve a type-omitted launch (slot order =
+// preference) and report launchReady — previously it fail-closed with
+// missing_provider_priority even though the slots fully determine the order.
+test('explicit type omitted, no providerPriority → resolves from slots order', async () => {
+  const { ctx, launchCalls } = makeCtx({
+    slots: [{ provider: 'codex-cli' }, { provider: 'claude-cli' }],
+  });
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac' }));
+  assert.equal(result.success !== false, true, `launch should succeed: ${JSON.stringify(result)}`);
+  const launch = launchCalls.find(c => c.command === 'launch_cli');
+  assert.ok(launch, 'launch_cli was issued');
+  assert.equal(launch!.args.cliType, 'codex-cli');
+});
+
+test('readiness: slots-only node is launchReady via the slots-derived priority', () => {
+  const node = { id: 'n', policy: { slots: [{ provider: 'claude-cli' }, { provider: 'codex-cli' }] } } as any;
+  const readiness = getNodeLaunchReadiness(node);
+  assert.equal(readiness.launchReady, true);
+  assert.deepEqual(readiness.providerPriority, ['claude-cli', 'codex-cli']);
+});
+
+test('readiness: explicit providerPriority wins over the slots-derived order', () => {
+  const node = { id: 'n', policy: { providerPriority: ['codex-cli'], slots: [{ provider: 'claude-cli' }] } } as any;
+  assert.deepEqual(readProviderPriority(node.policy), ['codex-cli']);
+  assert.equal(getNodeLaunchReadiness(node).launchReady, true);
+});
+
+test('readiness: no providerPriority and no slots → still missing_provider_priority', () => {
+  const node = { id: 'n', policy: {} } as any;
+  const readiness = getNodeLaunchReadiness(node);
+  assert.equal(readiness.launchReady, false);
+  assert.equal(readiness.launchBlockedReason, 'missing_provider_priority');
 });
 
 test('explicit type requested but no slot → fail closed (no silent fallback)', async () => {

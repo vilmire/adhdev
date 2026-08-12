@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared'
 
 import { Section } from '../../components/ui/Section'
 import { EmptyState } from '../../components/ui/EmptyState'
@@ -40,15 +41,19 @@ function readNodeProviderPriority(node: MeshNode): string[] {
             ? node.policy.providerPriority
             : []
     const seen = new Set<string>()
-    return raw
+    const explicit = raw
         .map(type => typeof type === 'string' ? type.trim() : '')
         .filter(Boolean)
         .filter(type => { if (seen.has(type)) return false; seen.add(type); return true })
+    if (explicit.length) return explicit
+    // Slots order = preference: derive the priority from capability slots when no
+    // explicit providerPriority is set (same fallback as the daemon read paths).
+    return deriveProviderPriorityFromSlots(node.policy?.slots)
 }
 
 function describeNodeProviderPriority(node: MeshNode): { configured: boolean; label: string; launchBlockedMessage?: string } {
     const pp = readNodeProviderPriority(node)
-    if (!pp.length) return { configured: false, label: 'not configured', launchBlockedMessage: 'No provider detected on this node — task launch is blocked until a provider is selected or installed. (Empty capability slots alone do not block launch; this means no provider was found.)' }
+    if (!pp.length) return { configured: false, label: 'not configured', launchBlockedMessage: 'No provider configured on this node — task launch is blocked until a capability slot or provider priority is set.' }
     return { configured: true, label: pp.join(' → ') }
 }
 

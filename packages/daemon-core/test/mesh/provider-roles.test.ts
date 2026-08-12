@@ -77,11 +77,12 @@ describe('normalizeMeshSchedulingStrategy', () => {
     expect(normalizeMeshSchedulingStrategy(42 as any)).toBe('first_eligible');
   });
 
-  it('accepts every valid strategy (trimmed)', () => {
-    expect(normalizeMeshSchedulingStrategy('least_loaded')).toBe('least_loaded');
-    expect(normalizeMeshSchedulingStrategy('round_robin')).toBe('round_robin');
+  it('maps the deprecated least_loaded/round_robin aliases to fitness (trimmed), keeps the rest verbatim', () => {
+    expect(normalizeMeshSchedulingStrategy('least_loaded')).toBe('fitness');
+    expect(normalizeMeshSchedulingStrategy('round_robin')).toBe('fitness');
+    expect(normalizeMeshSchedulingStrategy('  least_loaded  ')).toBe('fitness');
+    expect(normalizeMeshSchedulingStrategy('fitness')).toBe('fitness');
     expect(normalizeMeshSchedulingStrategy('priority_only')).toBe('priority_only');
-    expect(normalizeMeshSchedulingStrategy('  least_loaded  ')).toBe('least_loaded');
   });
 });
 

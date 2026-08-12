@@ -242,7 +242,7 @@ export function MeshDetailView({
         [nodes, daemons],
     )
     // Drives the priority_only → distribution display: a legacy 'priority_only' mesh
-    // shows as Spread only when a node priority is actually set (otherwise it is
+    // shows as Smart only when a node priority is actually set (otherwise it is
     // behaviorally identical to 'in_order').
     const anyNodePriorityConfigured = nodes.some(n => {
         const p = Number(n.policy?.schedulingPriority)
@@ -253,7 +253,8 @@ export function MeshDetailView({
     // hasn't explicitly chosen a strategy (schedulingStrategy still unset):
     //  • any node with capability slots → Smart (the daemon already auto-routes by
     //    fitness; the badge just makes the active behavior visible), else
-    //  • multiple nodes → Spread (In order would pin everything to the first node).
+    //  • multiple nodes → Smart (it spreads by priority/load even without slots —
+    //    In order would pin everything to the first node).
     // Once the operator picks a strategy, no nudge.
     const distributionUnset = !policy.schedulingStrategy
     const anyNodeHasSlots = useMemo(
@@ -262,7 +263,7 @@ export function MeshDetailView({
     )
     const recommendedDistribution: MeshDistribution | null = !distributionUnset
         ? null
-        : anyNodeHasSlots ? 'smart' : (nodes.length >= 2 ? 'spread' : null)
+        : (anyNodeHasSlots || nodes.length >= 2) ? 'smart' : null
 
     // Graph/detail observability is now a launched dialog (DashboardMeshGraphDialog),
     // not an embedded surface on the page — the page is the mesh SETTINGS surface.

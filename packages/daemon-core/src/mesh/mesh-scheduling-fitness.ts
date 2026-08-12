@@ -37,8 +37,8 @@ export function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean
     return getQueue(meshId, { status: ['assigned'] as any }).some(task => daemonIdsEquivalent(task.assignedNodeId, nodeId));
 }
 
-/** Active (status='assigned') task count for a node — the load metric for
- *  least-loaded / round-robin ranking. Lower = preferred. */
+/** Active (status='assigned') task count for a node — the load metric for the
+ *  fitness strategy's no-task (spread) ranking. Lower = preferred. */
 export function nodeActiveLoad(meshId: string, nodeId: string): number {
     return MeshRuntimeStore.getInstance().nodeActiveAssignmentCount(meshId, nodeId);
 }
@@ -83,21 +83,25 @@ export function resolveSchedulingStrategy(mesh: any): RepoMeshSchedulingStrategy
  * MAX-ALLOC capacity gate (the per-node launch/claim checks). This function only
  * decides the *preference order* among nodes that are otherwise eligible.
  *
+ * The strategy arriving here is already normalized (resolveSchedulingStrategy →
+ * normalizeMeshSchedulingStrategy), so only 'first_eligible', 'priority_only',
+ * and 'fitness' are reachable — the deprecated 'least_loaded'/'round_robin'
+ * aliases have already folded into 'fitness'.
+ *
  * - 'first_eligible' (default): returns the input order verbatim and does NOT touch
  *   the round-robin cursor — byte-for-byte the pre-feature behavior.
- * - 'priority_only': schedulingPriority desc, then input order (load ignored).
- * - 'least_loaded' (the user-facing 'spread' mode): schedulingPriority desc, then
- *   active load asc, then — among nodes still tied at (priority, load) — the input
- *   order is rotated by a per-mesh cursor that advances once per pass. The rotation
- *   tie-break is ALWAYS on for least_loaded so a single 'spread' mode subsumes the
- *   former separate 'round_robin' strategy (two equal-load nodes still alternate
- *   fairly across passes instead of the lower index always winning).
- * - 'round_robin': retained as an escape-hatch alias; behaves identically to
- *   'least_loaded' now that least_loaded carries the rotation.
+ * - 'priority_only' (escape-hatch): schedulingPriority desc, then input order
+ *   (load ignored).
+ * - 'fitness' (the user-facing 'smart' mode): with a task in scope, task→slot
+ *   fitness desc, then priority desc, then load asc, then input order. Without a
+ *   task (idle-session drain ranks task-independently) fitness is inert and the
+ *   ordering degrades to priority desc → load asc → round-robin rotation among
+ *   full ties — byte-for-byte the former 'least_loaded' behavior (which had
+ *   already absorbed the 'round_robin' rotation as its tie-break).
  *
  * `nodes` carries the original config/array index so the tie-break can fall back to
  * deterministic input order. `bumpCursor` advances the round-robin cursor exactly
- * once per scheduling pass (consulted for both 'least_loaded' and 'round_robin').
+ * once per scheduling pass (consulted only by the no-task 'fitness' path).
  */
 
 export interface RankableNode { nodeId: string; node: any; index: number }
@@ -337,10 +341,11 @@ export function orderEligibleNodes(
     // Fitness strategy: rank by task→slot fit first (when a task is in scope —
     // auto-launch drains per-task), then fall through to priority/load/rotation for
     // ties. Without a task (idle-session drain ranks task-independently) fitness is
-    // inert and this behaves like least_loaded. The QUOTA SPREAD axis rides the
-    // fitness score here: each node's per-provider headroom bonus is computed once
-    // per pass from its reported facts (fail-open: missing/stale quota scores the
-    // pre-feature 0) and folded in via nodeFitnessForTask.
+    // inert and the generic path below applies — priority/load/rotation, i.e. the
+    // former least_loaded ('spread') behavior fitness subsumes. The QUOTA SPREAD
+    // axis rides the fitness score here: each node's per-provider headroom bonus is
+    // computed once per pass from its reported facts (fail-open: missing/stale quota
+    // scores the pre-feature 0) and folded in via nodeFitnessForTask.
     if (strategy === 'fitness' && opts?.task) {
         const task = opts.task;
         const bonusCache = new Map<string, Record<string, number>>();
@@ -367,11 +372,10 @@ export function orderEligibleNodes(
 
     // Round-robin rotation offset: rotate the deterministic input order by a
     // per-mesh cursor so the tie-break winner among equal (priority, load) nodes
-    // cycles across passes. The cursor advances once per scheduling pass. Applied
-    // to both 'least_loaded' (the 'spread' mode — rotation absorbed as its
-    // tie-break) and the legacy 'round_robin' alias.
+    // cycles across passes. The cursor advances once per scheduling pass. Only the
+    // no-task 'fitness' path (the former 'spread' behavior) uses the rotation.
     let rotation = 0;
-    if (strategy === 'least_loaded' || strategy === 'round_robin') {
+    if (strategy === 'fitness') {
         const cursor = opts?.bumpCursor
             ? MeshRuntimeStore.getInstance().bumpSchedulerCursor(meshId)
             : MeshRuntimeStore.getInstance().getSchedulerCursor(meshId);
@@ -379,13 +383,13 @@ export function orderEligibleNodes(
     }
 
     // Rotation rank: position of each node after rotating input order by `rotation`.
-    // For non-round-robin strategies rotation is 0, so this is just the input index.
+    // For 'priority_only' rotation is 0, so this is just the input index.
     const rotationRank = (index: number) => (index - rotation + nodes.length) % nodes.length;
 
     return [...nodes].sort((a, b) => {
         const prioDelta = priorityOf(b) - priorityOf(a); // higher priority first
         if (prioDelta !== 0) return prioDelta;
-        if (strategy === 'least_loaded' || strategy === 'round_robin') {
+        if (strategy === 'fitness') {
             const loadDelta = nodeActiveLoad(meshId, a.nodeId) - nodeActiveLoad(meshId, b.nodeId);
             if (loadDelta !== 0) return loadDelta;
         }

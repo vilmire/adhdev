@@ -9,7 +9,7 @@
  * Extracted verbatim from executeDaemonCommand; the inline-cache, session/worktree
  * cleanup and aggregate-status collaborators come from ctx.
  */
-import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, deriveProviderPriorityFromSlots, normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
 import { resolveMeshHostStatus, normalizeMeshDaemonRole } from '../../mesh/mesh-host-ownership.js';
 import {
     getRegisteredSubmodulePaths,
@@ -80,6 +80,26 @@ export async function decideOssCloneSync(
     if (await isAncestor(worktreeOssSha, sourceSha)) return 'advance';
     // Neither is an ancestor → diverged → keep the fresh worktree HEAD.
     return 'skip_diverged';
+}
+
+/**
+ * PROVIDER-PRIORITY-FROM-SLOTS write-path sync: slots order = preference
+ * (ORCHESTRATION_NODE_SLOTS.md), and the read paths already fall back to the
+ * slots-derived order when `policy.providerPriority` is unset
+ * (readProviderPriorityFromPolicy). Persist that same derived order on node
+ * writes so the stored policy agrees with what the read paths compute — a node
+ * saved with slots but no providerPriority no longer sits in the "broken"
+ * missing-priority state for legacy readers of the raw field.
+ *
+ * Call ONLY when the caller did not state providerPriority (neither the
+ * top-level arg nor a `providerPriority` key inside the policy patch): an
+ * explicit value always wins, and an explicit empty array means "delete".
+ * Never invents a priority for a slotless node, and never clears an existing
+ * providerPriority when there are no slots to derive from.
+ */
+function syncProviderPriorityFromSlots(policy: Record<string, unknown>, slots: unknown = policy.slots): void {
+    const derived = deriveProviderPriorityFromSlots(slots);
+    if (derived.length) policy.providerPriority = derived;
 }
 
 /**
@@ -775,12 +795,17 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             // Back-compat: an incoming `providerRoles` arg (legacy callers) is folded
             // into `slots[].maxParallel` — the field itself is no longer persisted.
             const providerRoles = normalizeProviderRoles(args?.providerRoles);
+            const slots = normalizeNodeCapabilitySlots(args?.slots);
             const policy: Record<string, unknown> = {
                 ...(readOnly ? { readOnly: true } : {}),
                 ...(providerPriority.length ? { providerPriority } : {}),
                 ...(providerRoles.length ? { providerRoles } : {}),
+                ...(slots.length ? { slots } : {}),
             };
             if (providerRoles.length) migrateProviderRolesToSlots(policy);
+            // Slots given without an explicit providerPriority → persist the
+            // slots-derived order too (see syncProviderPriorityFromSlots).
+            if (!providerPriority.length) syncProviderPriorityFromSlots(policy);
             const role = normalizeMeshDaemonRole(args?.role);
             const daemonId = typeof args?.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : undefined;
             const machineId = typeof args?.machineId === 'string' && args.machineId.trim() ? args.machineId.trim() : undefined;
@@ -834,7 +859,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node update');
         if (ownerFailure) return ownerFailure;
         try {
-            const { updateNode, normalizeCapabilityTags, migrateProviderRolesToSlots } = await import('../../config/mesh-config.js');
+            const { updateNode, normalizeCapabilityTags, migrateProviderRolesToSlots, getMesh } = await import('../../config/mesh-config.js');
             const policy = args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)
                 ? { ...(args.policy as Record<string, unknown>) }
                 : {};
@@ -860,6 +885,16 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 else delete (policy as any).providerRoles;
             }
             migrateProviderRolesToSlots(policy);
+            // providerPriority unstated (no top-level arg, no key inside the policy
+            // patch) → persist the order derived from the node's FINAL slots (the
+            // patch's slots when given, else the stored ones), so the written policy
+            // agrees with the read-path slots fallback. A slotless node is untouched.
+            if (!Array.isArray(args?.providerPriority) && !Object.prototype.hasOwnProperty.call(policy, 'providerPriority')) {
+                const finalSlots = Object.prototype.hasOwnProperty.call(policy, 'slots')
+                    ? policy.slots
+                    : (getMesh(meshId)?.nodes.find(n => n.id === nodeId)?.policy as Record<string, unknown> | undefined)?.slots;
+                syncProviderPriorityFromSlots(policy, finalSlots);
+            }
             const patch: Record<string, unknown> = { policy: policy as any };
             if (typeof args?.systemPrompt === 'string') {
                 const trimmed = (args.systemPrompt as string).trim();
@@ -909,6 +944,12 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     : {}),
                 ...(patch.policy as Record<string, unknown>),
             };
+            // Same providerPriority-from-slots sync as the local-config path above,
+            // applied to the merged inline policy.
+            if (!Array.isArray(args?.providerPriority)
+                && !Object.prototype.hasOwnProperty.call(patch.policy as Record<string, unknown>, 'providerPriority')) {
+                syncProviderPriorityFromSlots(inlineNode.policy as Record<string, unknown>);
+            }
             if (Object.prototype.hasOwnProperty.call(patch, 'systemPrompt')) {
                 const sp = (patch as any).systemPrompt;
                 if (typeof sp === 'string' && sp.trim()) inlineNode.systemPrompt = sp;

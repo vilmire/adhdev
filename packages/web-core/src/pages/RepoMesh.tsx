@@ -181,7 +181,6 @@ export default function RepoMesh() {
     // ─── Node actions ───
 
     const {
-        setNodeProviderPriorityDrafts,
         selectedNodeId, setSelectedNodeId,
         showAddNode, setShowAddNode,
         nodeWorkspace, setNodeWorkspace,
@@ -375,13 +374,6 @@ export default function RepoMesh() {
     })
 
     // ─── Effects ────────────────────────────────────────────────
-
-    // Sync node provider priority drafts when selected mesh changes
-    useEffect(() => {
-        setNodeProviderPriorityDrafts(Object.fromEntries(
-            (selectedMesh?.nodes || []).map(node => [node.id, readNodeProviderPriority(node)]),
-        ))
-    }, [selectedMesh])
 
     // Sync coordinator + node system prompt drafts when selected mesh changes
     useEffect(() => {
@@ -752,17 +744,4 @@ export default function RepoMesh() {
 function daemonDisplayLabel(daemon: RepoMeshDaemonEntry | undefined): string {
     if (!daemon) return 'Unknown'
     return daemon.machineNickname || daemon.nickname || daemon.hostname || daemon.id || 'Unknown'
-}
-
-function readNodeProviderPriority(node: MeshNode): string[] {
-    const raw = Array.isArray(node.providerPriority)
-        ? node.providerPriority
-        : Array.isArray(node.policy?.providerPriority)
-            ? node.policy.providerPriority
-            : []
-    const seen = new Set<string>()
-    return raw
-        .map(type => typeof type === 'string' ? type.trim() : '')
-        .filter(Boolean)
-        .filter(type => { if (seen.has(type)) return false; seen.add(type); return true })
 }

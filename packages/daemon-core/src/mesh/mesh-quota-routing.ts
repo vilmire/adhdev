@@ -121,6 +121,35 @@ export interface ProviderQuotaGateBlock {
 }
 
 /**
+ * RESET-IMMINENT relaxation (session window only): should a session-low block
+ * be WAIVED because the window resets within `imminentMs`? The session window
+ * is short (~5h) and a task claimed just before the reset runs on quota that
+ * reappears mid-turn, so holding the claim would idle the mesh for no benefit.
+ * The weekly window gets no such relaxation — its reset is days away by
+ * construction, so "imminent" never legitimately applies there.
+ *
+ * Clock-skew: resetsAt is stamped on the REPORTER's clock, so it is compared
+ * against a reporter-clock estimate of now — the snapshot's own updatedAt aged
+ * forward by the skew-safe snapshot age (the same same-clock-difference trick
+ * as quotaSnapshotAgeMs). Conservative on missing data: no resetsAt stamp or
+ * no usable reference time keeps the block.
+ */
+function isSessionResetImminent(
+    session: { resetsAt?: number | null } | null | undefined,
+    facts: { reportedAt: number },
+    quota: { updatedAt: number },
+    imminentMs: number,
+    now: number,
+): boolean {
+    const resetsAt = Number(session?.resetsAt);
+    if (!Number.isFinite(resetsAt) || resetsAt <= 0) return false; // no reset stamp → keep the block
+    const ageMs = quotaSnapshotAgeMs(facts, quota, now);
+    if (!Number.isFinite(ageMs)) return false; // no usable reference time → keep the block
+    const reporterNowMs = Number(quota.updatedAt) + ageMs;
+    return resetsAt - reporterNowMs < imminentMs;
+}
+
+/**
  * The launch GATE: should this (node, provider) pair be skipped because the
  * provider's reported quota is nearly exhausted? Returns null (launch may
  * proceed) when the quota is unknown, unmeasurable, stale, or above every
@@ -130,6 +159,11 @@ export interface ProviderQuotaGateBlock {
  * the provider-agnostic vocabulary every fetcher normalizes into, so no
  * provider-specific schema is needed. A window the provider does not report
  * (null) is simply not gated on.
+ *
+ * One relaxation: a session-low block is WAIVED when the session window's
+ * reset is imminent (within sessionResetImminentMs, default 5 min) — the
+ * quota reappears on its own momentarily, so holding the claim would just
+ * idle the mesh (isSessionResetImminent). The weekly gate never relaxes.
  */
 export function evaluateProviderQuotaGate(
     node: any,
@@ -144,7 +178,8 @@ export function evaluateProviderQuotaGate(
     if (!isQuotaSnapshotFresh(facts, quota, policy, now)) return null; // fail-open on stale
     const resolved = resolveQuotaRoutingPolicy(policy);
     const session = remainingPercent(quota.session);
-    if (session !== undefined && session < resolved.sessionMinRemainingPercent) {
+    if (session !== undefined && session < resolved.sessionMinRemainingPercent
+        && !isSessionResetImminent(quota.session, facts, quota, resolved.sessionResetImminentMs, now)) {
         return {
             reason: PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
             window: 'session',

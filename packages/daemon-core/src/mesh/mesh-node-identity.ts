@@ -15,7 +15,7 @@ import type { ProviderLoader } from '../providers/provider-loader.js';
 import { detectCLI, getCachedProviderVersions } from '../detection/cli-detector.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { getGitRepoStatus } from '../git/git-status.js';
-import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, normalizeMeshNodeFacts, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
+import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, normalizeMeshNodeFacts, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker, deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared';
 import { buildLocalNodeFacts } from './node-facts.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 import type { MeshReportedMemberState } from '../repo-mesh-types.js';
@@ -31,16 +31,22 @@ export function readProviderPriorityFromPolicy(policy: unknown): string[] {
         ? policy as Record<string, unknown>
         : {};
     const raw = record.providerPriority;
-    if (!Array.isArray(raw)) return [];
-    const seen = new Set<string>();
-    return raw
-        .map(type => typeof type === 'string' ? type.trim() : '')
-        .filter(Boolean)
-        .filter(type => {
-            if (seen.has(type)) return false;
-            seen.add(type);
-            return true;
-        });
+    if (Array.isArray(raw)) {
+        const seen = new Set<string>();
+        const explicit = raw
+            .map(type => typeof type === 'string' ? type.trim() : '')
+            .filter(Boolean)
+            .filter(type => {
+                if (seen.has(type)) return false;
+                seen.add(type);
+                return true;
+            });
+        if (explicit.length) return explicit;
+    }
+    // Slots order = preference (ORCHESTRATION_NODE_SLOTS.md): a node that declares
+    // capability slots but no usable providerPriority still has a fully determined
+    // preference order — derive it from the slots instead of reading as launch-blocked.
+    return deriveProviderPriorityFromSlots(record.slots);
 }
 
 /**

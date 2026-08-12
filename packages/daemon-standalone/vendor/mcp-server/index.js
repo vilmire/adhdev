@@ -407,6 +407,16 @@ function normalizeNodeCapabilitySlots(raw) {
   }
   return out;
 }
+function deriveProviderPriorityFromSlots(slots) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const slot of normalizeNodeCapabilitySlots(slots)) {
+    if (seen.has(slot.provider)) continue;
+    seen.add(slot.provider);
+    out.push(slot.provider);
+  }
+  return out;
+}
 var CLI_SLOT_RECIPES = Object.freeze({
   "claude-cli": [
     {
@@ -3049,7 +3059,7 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
   const daemonId = node.daemonId;
   const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || "";
   let sessionId = args.session_id?.trim() || "";
-  const providerPriorityList = Array.isArray(node.policy?.providerPriority) ? node.policy.providerPriority : [];
+  const providerPriorityList = readProviderPriority(node.policy);
   let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || "";
   if (sessionId && args.verifiedSession) {
     const explicitSession = args.verifiedSession;
@@ -3333,7 +3343,9 @@ async function collectRelatedRepoStatuses(ctx, node) {
 }
 function readProviderPriority(policy) {
   const raw = policy?.providerPriority;
-  return Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
+  const explicit = Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
+  if (explicit.length) return explicit;
+  return deriveProviderPriorityFromSlots(policy?.slots);
 }
 function readNodeSupportedProviders(policy) {
   const seen = /* @__PURE__ */ new Set();

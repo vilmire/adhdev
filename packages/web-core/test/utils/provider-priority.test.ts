@@ -142,4 +142,22 @@ describe('repo mesh node provider priority', () => {
       launchBlockedMessage: 'launch not ready unless an explicit provider is selected',
     })
   })
+
+  it('falls back to the slots-derived order when no explicit providerPriority is set', () => {
+    // Slot order = preference: a slots-only node reads as configured/launch-ready.
+    expect(readRepoMeshNodeProviderPriority({ policy: { slots: [{ provider: 'codex-cli' }, { provider: 'claude-cli' }] } }))
+      .toEqual(['codex-cli', 'claude-cli'])
+    expect(describeRepoMeshNodeProviderPriority({ policy: { slots: [{ provider: 'claude-cli' }] } })).toEqual({
+      configured: true,
+      label: 'claude-cli',
+      launchReady: true,
+    })
+    // An explicit providerPriority always wins over the slots-derived order.
+    expect(readRepoMeshNodeProviderPriority({
+      providerPriority: ['hermes-cli'],
+      policy: { slots: [{ provider: 'claude-cli' }] },
+    })).toEqual(['hermes-cli'])
+    // Slots alone never fabricate a priority when they carry no usable provider.
+    expect(readRepoMeshNodeProviderPriority({ policy: { slots: [] } })).toEqual([])
+  })
 })

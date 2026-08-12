@@ -9,6 +9,7 @@ import {
     normalizeNodeCapabilitySlot,
     normalizeNodeCapabilitySlots,
     deriveSlotsFromLegacy,
+    deriveProviderPriorityFromSlots,
 } from '../src/brain-routing'
 
 describe('brain-routing', () => {
@@ -142,5 +143,30 @@ describe('node capability slots', () => {
         // codex has no specific brain and no shared → no difficulty/model
         expect(codex.difficulty).toBeUndefined()
         expect(codex.model).toBeUndefined()
+    })
+})
+
+describe('deriveProviderPriorityFromSlots', () => {
+    it('derives provider order from slots, first-appearance deduped', () => {
+        expect(deriveProviderPriorityFromSlots([
+            { provider: 'claude-cli', model: 'opus' },
+            { provider: 'codex-cli' },
+            { provider: 'claude-cli', difficulty: ['easy'] },
+        ])).toEqual(['claude-cli', 'codex-cli'])
+    })
+
+    it('returns [] when there is nothing to derive', () => {
+        expect(deriveProviderPriorityFromSlots(undefined)).toEqual([])
+        expect(deriveProviderPriorityFromSlots(null)).toEqual([])
+        expect(deriveProviderPriorityFromSlots([])).toEqual([])
+        expect(deriveProviderPriorityFromSlots('claude-cli')).toEqual([])
+        // provider-less entries are dropped by slot normalization
+        expect(deriveProviderPriorityFromSlots([{ model: 'opus' }, {}])).toEqual([])
+    })
+
+    it('round-trips with deriveSlotsFromLegacy (providers only)', () => {
+        const priority = ['hermes-cli', 'claude-cli']
+        expect(deriveProviderPriorityFromSlots(deriveSlotsFromLegacy({ providerPriority: priority })))
+            .toEqual(priority)
     })
 })

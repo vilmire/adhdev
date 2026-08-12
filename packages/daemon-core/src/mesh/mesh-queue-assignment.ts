@@ -794,6 +794,23 @@ export function tryAssignQueueTask(
         return false;
     }
 
+    // QUOTA GATE (claim path): the same evaluateProviderQuotaGate the auto-launch
+    // loop applies before SPAWNING a session also gates an idle session's CLAIM —
+    // otherwise an idle session on a quota-exhausted node would pull the pending
+    // task the launch gate deliberately left queued. Same WAIT semantics: the
+    // window resets, so the block is not actionable — the task stays pending
+    // (return false without touching its status) and the drain simply moves on to
+    // the next candidate / re-fires on the next tick. Reads only the in-memory
+    // nodeFacts bundle (synchronous; never triggers a quota fetch), and missing /
+    // stale / non-'ok' snapshots fail OPEN exactly as in the launch path. Log-only
+    // like the lease defer above — no ledger entry, so a repeatedly gated claim
+    // does not flood the ledger every drain tick.
+    const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null);
+    if (quotaClaimBlock) {
+        LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${nodeId} (${sessionId}): provider '${providerType}' has ${quotaClaimBlock.remainingPercent.toFixed(1)}% ${quotaClaimBlock.window} quota remaining (< ${quotaClaimBlock.thresholdPercent}% threshold) — task left pending until the window resets`);
+        return false;
+    }
+
     // WORKTREE-CLAIM-GATE-BYPASS: the SINGLE claim-time gate for the worktree-bootstrap defer.
     // tryAssignQueueTask is the one funnel every claim path flows through — the event-driven
     // agent:ready drain, the triggerMeshQueue idle-session drain (local + remote), the
@@ -2706,8 +2723,9 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
                 if (aPrio !== bPrio) return bPrio - aPrio;
                 // The idle-session drain ranks task-independently (a session pulls
                 // whatever task matches), so 'fitness' here reduces to load-aware
-                // ordering — the same tiebreak as least_loaded/round_robin.
-                if (strategy === 'least_loaded' || strategy === 'round_robin' || strategy === 'fitness') {
+                // ordering — the former least_loaded/round_robin tiebreak, which
+                // normalize has already folded into 'fitness'.
+                if (strategy === 'fitness') {
                     const loadDelta = nodeActiveLoad(meshId, a.nodeId) - nodeActiveLoad(meshId, b.nodeId);
                     if (loadDelta !== 0) return loadDelta;
                 }

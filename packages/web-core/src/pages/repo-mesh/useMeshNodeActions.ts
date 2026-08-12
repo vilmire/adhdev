@@ -10,7 +10,7 @@ import {
     type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
 import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
-import type { MeshEntry, MeshNode, ProviderPriorityDrafts, NodeCapabilitySlot } from './types'
+import type { MeshEntry, MeshNode, NodeCapabilitySlot } from './types'
 import { readMeshPolicy } from './types'
 
 interface UseMeshNodeActionsOptions {
@@ -51,10 +51,6 @@ export function useMeshNodeActions({
     queueSection,
     setError,
 }: UseMeshNodeActionsOptions) {
-    // Per-node provider priority drafts
-    const [nodeProviderPriorityDrafts, setNodeProviderPriorityDrafts] = useState<ProviderPriorityDrafts>({})
-    const [savingNodePolicyId, setSavingNodePolicyId] = useState<string | null>(null)
-
     // Selected node in the node list
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
@@ -160,8 +156,8 @@ export function useMeshNodeActions({
                 repoRoot: plan?.discovery?.repoRoot,
                 isLocalWorktree: plan?.discovery?.isLinkedWorktree === true,
             }
-            // Persist the full chosen order (dedup only), same rationale as the
-            // per-node save path — don't strip providers not detected right now.
+            // Persist the full chosen order (dedup only) — don't strip providers
+            // not detected right now; the daemon skips undetected providers at launch.
             if (features.addNodeDaemonPicker && nodeDaemonId) {
                 payload.daemonId = nodeDaemonId
                 payload.machineId = selectedNodeDaemon?.machineId
@@ -216,31 +212,6 @@ export function useMeshNodeActions({
             await loadMeshes()
         } catch (e: any) { setError(e?.message || 'Policy update failed') }
         finally { setSavingPolicy(false) }
-    }
-
-    async function handleUpdateNodeProviderPriority(node: MeshNode) {
-        if (!selectedMeshId) return
-        const targetDaemonId = (selectedMesh as any)?.__sourceDaemonId || primaryDaemonId
-        const requested = nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node)
-        // Persist the FULL requested order (dedup only) — do NOT filter to the
-        // inventory detected on this machine. Filtering on save was destructive:
-        // opening the editor where a provider isn't detected and saving would
-        // silently drop it from the policy. The daemon already skips undetected
-        // providers at launch, so keeping them in the saved order is safe.
-        const providerPriority = normalizeProviderPriority(requested)
-        const nextPolicy = { ...(node.policy || {}) }
-        delete (nextPolicy as any).provider_priority
-        if (providerPriority.length) nextPolicy.providerPriority = providerPriority
-        else delete nextPolicy.providerPriority
-        try {
-            setSavingNodePolicyId(node.id)
-            setError(null)
-            const raw = await sendCommand(targetDaemonId, 'update_mesh_node', { meshId: selectedMeshId, nodeId: node.id, policy: nextPolicy, providerPriority })
-            const result = unwrapResult(raw)
-            if (result?.success === false) { setError(result.error || 'Node policy update failed'); return }
-            await loadMeshes()
-        } catch (e: any) { setError(e?.message || 'Node policy update failed') }
-        finally { setSavingNodePolicyId(null) }
     }
 
     // Per-node scheduling settings (priority / provider roles). Saved as a minimal
@@ -375,10 +346,6 @@ export function useMeshNodeActions({
     }
 
     return {
-        // per-node provider priority drafts
-        nodeProviderPriorityDrafts,
-        setNodeProviderPriorityDrafts,
-        savingNodePolicyId,
         // selected node
         selectedNodeId,
         setSelectedNodeId,
@@ -422,7 +389,6 @@ export function useMeshNodeActions({
         handleAddNode,
         handleRemoveNode,
         handleUpdatePolicy,
-        handleUpdateNodeProviderPriority,
         handleUpdateNodeSlots,
         handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt,
@@ -430,19 +396,4 @@ export function useMeshNodeActions({
         handleLaunchCoordinator,
         handleSetMeshHost,
     }
-}
-
-// ─── Helper (also used internally) ──────────────────────────────
-
-function readNodeProviderPriority(node: MeshNode): string[] {
-    const raw = Array.isArray(node.providerPriority)
-        ? node.providerPriority
-        : Array.isArray(node.policy?.providerPriority)
-            ? node.policy.providerPriority
-            : []
-    const seen = new Set<string>()
-    return raw
-        .map(type => typeof type === 'string' ? type.trim() : '')
-        .filter(Boolean)
-        .filter(type => { if (seen.has(type)) return false; seen.add(type); return true })
 }

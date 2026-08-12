@@ -11,7 +11,6 @@ export type {
     MeshQueueEntry,
     MeshQueueSummary,
     AvailableCliAgent,
-    ProviderPriorityDrafts,
     MeshListViewFeatures,
     MeshNodeListFeatures,
     MeshDetailViewFeatures,

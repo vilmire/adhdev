@@ -25,10 +25,10 @@ describe('buildMeshSchedulingRuntime', () => {
 
     it('clamps maxParallelTasks and honors an explicit strategy', () => {
         const rt = buildMeshSchedulingRuntime(
-            { policy: { schedulingStrategy: 'least_loaded', maxParallelTasks: 99 }, nodes: [] },
+            { policy: { schedulingStrategy: 'fitness', maxParallelTasks: 99 }, nodes: [] },
             [],
         );
-        expect(rt.strategy).toBe('least_loaded');
+        expect(rt.strategy).toBe('fitness');
         expect(rt.maxParallelTasks).toBe(64); // clamp to MESH_MAX_PARALLEL_TASKS_MAX
         expect(rt.maxReadonlyParallelTasks).toBe(128); // 2× the write cap
     });

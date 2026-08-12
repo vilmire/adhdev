@@ -365,14 +365,16 @@ export function shortMachineKey(machineKey: string): string {
     return core.length <= 20 ? core : `${core.slice(0, 17)}…`
 }
 
-// Maps the raw daemon-reported strategy to the 2-mode product vocabulary (Spread /
-// In order). The legacy round_robin / priority_only values still surface (an
-// escape-hatch meshes.json may set them) and are labelled as Spread variants.
+// Maps the raw daemon-reported strategy to the 2-mode product vocabulary (Smart /
+// In order). The legacy least_loaded / round_robin / priority_only values can still
+// surface from a hand-edited meshes.json (or an older daemon) and are labelled as
+// Smart variants — current daemons normalize the first two to 'fitness'.
 export const SCHEDULING_STRATEGY_LABELS: Record<string, string> = {
     first_eligible: 'In order',
-    least_loaded: 'Spread',
-    round_robin: 'Spread (round-robin)',
-    priority_only: 'Spread (priority)',
+    fitness: 'Smart',
+    least_loaded: 'Smart',
+    round_robin: 'Smart (round-robin)',
+    priority_only: 'Smart (priority)',
 }
 
 /** Human-readable label for a structured claim-block reason code. */

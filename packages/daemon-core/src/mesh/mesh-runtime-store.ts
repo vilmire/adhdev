@@ -404,11 +404,12 @@ export class MeshRuntimeStore {
                 ON mesh_missions(mesh_id, status, updated_at);
 
             -- Load-balancing scheduler: per-mesh round-robin rotation cursor. When
-            -- the schedulingStrategy is 'round_robin', several eligible nodes tied at
-            -- the least load are rotated by this cursor so the tie-break winner cycles
-            -- across scheduling passes instead of always favouring the same array-order
-            -- node. Persisted (not a module Map) so rotation survives daemon restarts
-            -- and stays a single source of truth across scheduling entry points.
+            -- the schedulingStrategy spreads work ('fitness' with no task in scope),
+            -- eligible nodes tied at the same (priority, load) are rotated by this
+            -- cursor so the tie-break winner cycles across scheduling passes instead
+            -- of always favouring the same array-order node. Persisted (not a module
+            -- Map) so rotation survives daemon restarts and stays a single source of
+            -- truth across scheduling entry points.
             CREATE TABLE IF NOT EXISTS mesh_scheduler_cursor (
                 mesh_id TEXT PRIMARY KEY,
                 cursor INTEGER NOT NULL DEFAULT 0

@@ -73,13 +73,13 @@ describe('mesh scheduling pipeline — orderEligibleNodes', () => {
         __clearMeshQueueForTests(meshId);
     });
 
-    it('least_loaded prefers the node with the fewest active assignments', () => {
+    it('fitness without a task prefers the node with the fewest active assignments (former least_loaded)', () => {
         const meshId = `m-ll-${randomUUID().slice(0, 8)}`;
         const db = MeshRuntimeStore.getInstance();
         loadNode(db, meshId, 'a', 3);
         loadNode(db, meshId, 'b', 1);
         // c has 0 load
-        const result = order(meshId, 'least_loaded', [{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+        const result = order(meshId, 'fitness', [{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
         expect(result).toEqual(['c', 'b', 'a']);
         __clearMeshQueueForTests(meshId);
     });
@@ -98,12 +98,12 @@ describe('mesh scheduling pipeline — orderEligibleNodes', () => {
         __clearMeshQueueForTests(meshId);
     });
 
-    it('least_loaded uses priority as the primary key, then load', () => {
+    it('fitness without a task uses priority as the primary key, then load', () => {
         const meshId = `m-llp-${randomUUID().slice(0, 8)}`;
         const db = MeshRuntimeStore.getInstance();
         // b has higher priority but more load; priority wins first, load breaks ties.
         loadNode(db, meshId, 'b', 4);
-        const result = order(meshId, 'least_loaded', [
+        const result = order(meshId, 'fitness', [
             { id: 'a', priority: 0 },
             { id: 'b', priority: 5 },
         ]);
@@ -111,15 +111,16 @@ describe('mesh scheduling pipeline — orderEligibleNodes', () => {
         __clearMeshQueueForTests(meshId);
     });
 
-    it('round_robin rotates the tie-break winner across passes (equal priority + load)', () => {
+    it('fitness without a task rotates the tie-break winner across passes (subsumes least_loaded + round_robin)', () => {
         const meshId = `m-rr-${randomUUID().slice(0, 8)}`;
         // All three nodes are equal (priority 0, load 0). Each bumped pass should
-        // rotate which node sorts first.
+        // rotate which node sorts first — exactly the behavior the deprecated
+        // least_loaded/round_robin strategies had before folding into fitness.
         const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-        const p1 = order(meshId, 'round_robin', specs, { bumpCursor: true });
-        const p2 = order(meshId, 'round_robin', specs, { bumpCursor: true });
-        const p3 = order(meshId, 'round_robin', specs, { bumpCursor: true });
-        const p4 = order(meshId, 'round_robin', specs, { bumpCursor: true });
+        const p1 = order(meshId, 'fitness', specs, { bumpCursor: true });
+        const p2 = order(meshId, 'fitness', specs, { bumpCursor: true });
+        const p3 = order(meshId, 'fitness', specs, { bumpCursor: true });
+        const p4 = order(meshId, 'fitness', specs, { bumpCursor: true });
         // Cursor starts at 0 → first pass keeps input order, then rotates each pass.
         expect(p1).toEqual(['a', 'b', 'c']);
         expect(p2).toEqual(['b', 'c', 'a']);
@@ -128,55 +129,29 @@ describe('mesh scheduling pipeline — orderEligibleNodes', () => {
         __clearMeshQueueForTests(meshId);
     });
 
-    it('least_loaded (the spread mode) absorbs round_robin rotation among equal ties', () => {
-        const meshId = `m-llrr-${randomUUID().slice(0, 8)}`;
-        // All three nodes equal (priority 0, load 0) — Spread must rotate the tie-break
-        // winner across bumped passes exactly like the legacy round_robin strategy, so a
-        // single 'spread' mode subsumes both former load-spreading strategies.
-        const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-        const p1 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
-        const p2 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
-        const p3 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
-        expect(p1).toEqual(['a', 'b', 'c']);
-        expect(p2).toEqual(['b', 'c', 'a']);
-        expect(p3).toEqual(['c', 'a', 'b']);
-        __clearMeshQueueForTests(meshId);
-    });
-
-    it('least_loaded still ranks load before rotating ties', () => {
+    it('fitness without a task still ranks load before rotating ties', () => {
         const meshId = `m-llrr2-${randomUUID().slice(0, 8)}`;
         const db = MeshRuntimeStore.getInstance();
         loadNode(db, meshId, 'a', 2); // a is busy → always last regardless of rotation
         const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-        const p1 = order(meshId, 'least_loaded', specs, { bumpCursor: true });
+        const p1 = order(meshId, 'fitness', specs, { bumpCursor: true });
         expect(p1[2]).toBe('a');
         __clearMeshQueueForTests(meshId);
     });
 
-    it('round_robin does NOT rotate within a single pass (no bump)', () => {
+    it('fitness does NOT rotate within a single pass (no bump)', () => {
         const meshId = `m-rr2-${randomUUID().slice(0, 8)}`;
         const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
         // No bump: repeated reads at the same cursor give the same order.
-        const a = order(meshId, 'round_robin', specs, { bumpCursor: false });
-        const b = order(meshId, 'round_robin', specs, { bumpCursor: false });
+        const a = order(meshId, 'fitness', specs, { bumpCursor: false });
+        const b = order(meshId, 'fitness', specs, { bumpCursor: false });
         expect(a).toEqual(b);
-        __clearMeshQueueForTests(meshId);
-    });
-
-    it('round_robin still respects load before rotating ties', () => {
-        const meshId = `m-rr3-${randomUUID().slice(0, 8)}`;
-        const db = MeshRuntimeStore.getInstance();
-        loadNode(db, meshId, 'a', 2); // a is busy
-        // b and c are empty and tied — rotation only applies between them; a is last.
-        const specs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-        const p1 = order(meshId, 'round_robin', specs, { bumpCursor: true });
-        expect(p1[2]).toBe('a'); // most-loaded node always ranks last
         __clearMeshQueueForTests(meshId);
     });
 
     it('single-node input is returned as-is for every strategy (no cursor work)', () => {
         const meshId = `m-single-${randomUUID().slice(0, 8)}`;
-        for (const s of ['first_eligible', 'least_loaded', 'round_robin', 'priority_only'] as const) {
+        for (const s of ['first_eligible', 'priority_only', 'fitness'] as const) {
             expect(order(meshId, s, [{ id: 'only' }], { bumpCursor: true })).toEqual(['only']);
         }
         __clearMeshQueueForTests(meshId);
@@ -298,11 +273,17 @@ describe('resolveSchedulingStrategy — slot-driven auto-fitness', () => {
 
     it('an EXPLICIT strategy always wins over slot auto-upgrade', () => {
         const mesh = {
-            policy: { schedulingStrategy: 'least_loaded' },
+            policy: { schedulingStrategy: 'first_eligible' },
             nodes: [{ id: 'a', policy: { slots: [{ provider: 'codex-cli' }] } }],
         };
-        // Operator chose spread → respect it, don't silently switch to fitness.
-        expect(__resolveSchedulingStrategyForTests(mesh)).toBe('least_loaded');
+        // Operator chose in-order → respect it, don't silently switch to fitness.
+        expect(__resolveSchedulingStrategyForTests(mesh)).toBe('first_eligible');
+    });
+
+    it('a stored least_loaded/round_robin resolves to fitness (alias migration, no file rewrite)', () => {
+        const base = { nodes: [{ id: 'a', policy: {} }] };
+        expect(__resolveSchedulingStrategyForTests({ ...base, policy: { schedulingStrategy: 'least_loaded' } })).toBe('fitness');
+        expect(__resolveSchedulingStrategyForTests({ ...base, policy: { schedulingStrategy: 'round_robin' } })).toBe('fitness');
     });
 
     it('legacy-derived slots do NOT trigger auto-fitness — only explicit policy.slots do', () => {

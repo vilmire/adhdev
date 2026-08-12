@@ -50,10 +50,13 @@ describe('scheduling strategy resolution (machine-local policy only)', () => {
         try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     });
 
-    it('the stored policy strategy is honored', () => {
+    it('the stored policy strategy is honored (legacy spread aliases resolve to fitness)', () => {
         const root = trackRoot();
-        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'least_loaded'))).toBe('least_loaded');
-        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'round_robin'))).toBe('round_robin');
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'fitness'))).toBe('fitness');
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'priority_only'))).toBe('priority_only');
+        // Deprecated aliases are absorbed by normalize — honored, as fitness.
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'least_loaded'))).toBe('fitness');
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'round_robin'))).toBe('fitness');
     });
 
     it('defaults to first_eligible when no strategy is stored', () => {
@@ -68,20 +71,22 @@ describe('scheduling strategy resolution (machine-local policy only)', () => {
         writeLegacyScheduling(root, { distribution: 'spread', maxParallel: 4 });
         expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root))).toBe('first_eligible');
         // And a stored strategy still wins regardless of what the repo file says.
-        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'round_robin'))).toBe('round_robin');
+        expect(__resolveSchedulingStrategyForTests(meshWithRepoRoot(root, 'fitness'))).toBe('fitness');
     });
 
     it('the resolved strategy drives orderEligibleNodes correctly end-to-end', () => {
         const root = trackRoot();
+        // A legacy 'least_loaded' meshes.json normalizes to fitness with no rewrite.
         const mesh = meshWithRepoRoot(root, 'least_loaded');
         const strategy = __resolveSchedulingStrategyForTests(mesh);
-        expect(strategy).toBe('least_loaded');
+        expect(strategy).toBe('fitness');
         const nodes = [
             { nodeId: 'a', node: { id: 'a', policy: {} }, index: 0 },
             { nodeId: 'b', node: { id: 'b', policy: {} }, index: 1 },
             { nodeId: 'c', node: { id: 'c', policy: {} }, index: 2 },
         ];
-        // least_loaded; all equal load → rotation absorbed, advances per pass.
+        // No task in scope → fitness degrades to the former least_loaded ordering;
+        // all equal load → rotation absorbed, advances per pass.
         const p1 = __orderEligibleNodesForTests(mesh.id, strategy, nodes, { bumpCursor: true }).map(n => n.nodeId);
         const p2 = __orderEligibleNodesForTests(mesh.id, strategy, nodes, { bumpCursor: true }).map(n => n.nodeId);
         expect(p1).toEqual(['a', 'b', 'c']);

@@ -246,3 +246,26 @@ export function deriveSlotsFromLegacy(input: {
         }
     })
 }
+
+/**
+ * The reverse direction of deriveSlotsFromLegacy: derive the legacy
+ * `providerPriority` order from capability slots — each slot's provider, in
+ * first-appearance order, de-duplicated. Slot order = preference is the settled
+ * slots semantics (ORCHESTRATION_NODE_SLOTS.md), so this is what readers of the
+ * legacy `policy.providerPriority` field must fall back to when a node declares
+ * slots but no explicit providerPriority (otherwise such a node reads as
+ * unlaunchable even though its slots fully determine the preference order).
+ *
+ * Accepts the raw `policy.slots` value (normalized internally). Returns [] when
+ * there's nothing to derive (caller then keeps legacy behavior: no priority).
+ */
+export function deriveProviderPriorityFromSlots(slots: unknown): string[] {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const slot of normalizeNodeCapabilitySlots(slots)) {
+        if (seen.has(slot.provider)) continue
+        seen.add(slot.provider)
+        out.push(slot.provider)
+    }
+    return out
+}

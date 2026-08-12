@@ -19,7 +19,7 @@ import { meshStatus } from '../src/tools/mesh-tools.js';
 function buildCtx(policyOverrides: Record<string, unknown> = {}) {
   const mesh = {
     id: 'mesh-capsurface', name: 'Mesh', repoIdentity: 'vilmire/adhdev',
-    policy: { maxParallelTasks: 8, schedulingStrategy: 'least_loaded', ...policyOverrides },
+    policy: { maxParallelTasks: 8, schedulingStrategy: 'fitness', ...policyOverrides },
     coordinator: {},
     defaultBranch: 'main', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     nodes: [
@@ -46,14 +46,14 @@ test('mesh_status: policy.maxParallelTasks is stripped from the echoed policy', 
   assert.ok(res.policy, 'policy object is still present');
   assert.equal(res.policy.maxParallelTasks, undefined, 'maxParallelTasks must not be echoed');
   // Other policy fields are preserved — this is a targeted omission, not a wholesale drop.
-  assert.equal(res.policy.schedulingStrategy, 'least_loaded');
+  assert.equal(res.policy.schedulingStrategy, 'fitness');
 });
 
 test('mesh_status: scheduling block carries only strategy, no global-cap numbers', async () => {
   const { ctx } = buildCtx();
   const res = JSON.parse(await meshStatus(ctx as any));
   assert.ok(res.scheduling, 'scheduling object is still present');
-  assert.equal(res.scheduling.strategy, 'least_loaded');
+  assert.equal(res.scheduling.strategy, 'fitness');
   assert.equal(res.scheduling.maxParallelTasks, undefined);
   assert.equal(res.scheduling.maxReadonlyParallelTasks, undefined);
   assert.equal(res.scheduling.activeWriteAssigned, undefined);

@@ -20,7 +20,7 @@ import { IpcTransport } from '../transports/ipc.js';
 import type { CommandTransport } from '../transports/mode.js';
 import { compactChatPayload, isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
-import { withStatusProbeMarker, normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
+import { withStatusProbeMarker, normalizeNodeCapabilitySlots, deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     daemonIdsEquivalent,
@@ -1597,10 +1597,9 @@ export async function ipcDispatchToRemoteAgent(
     const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || '';
 
     let sessionId = args.session_id?.trim() || '';
-    // Resolve provider type: caller arg > node policy providerPriority > empty (fuzzy fallback)
-    const providerPriorityList: string[] = Array.isArray((node.policy as any)?.providerPriority)
-        ? (node.policy as any).providerPriority
-        : [];
+    // Resolve provider type: caller arg > node policy providerPriority (slots-derived
+    // when unset — readProviderPriority applies the fallback) > empty (fuzzy fallback)
+    const providerPriorityList: string[] = readProviderPriority(node.policy);
     let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || '';
 
     // Ask the remote daemon for live session truth when we need to auto-pick a
@@ -1991,9 +1990,14 @@ export function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): Lo
 
 export function readProviderPriority(policy: unknown): string[] {
     const raw = (policy as any)?.providerPriority;
-    return Array.isArray(raw)
+    const explicit = Array.isArray(raw)
         ? raw.map((type: unknown) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
         : [];
+    if (explicit.length) return explicit;
+    // Slots order = preference (ORCHESTRATION_NODE_SLOTS.md): a node that declares
+    // capability slots but no explicit providerPriority is still launchable — derive
+    // the priority order from the slots rather than reporting missing_provider_priority.
+    return deriveProviderPriorityFromSlots((policy as any)?.slots);
 }
 
 /**

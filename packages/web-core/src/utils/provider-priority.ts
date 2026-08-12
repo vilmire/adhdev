@@ -1,4 +1,4 @@
-import { parseJsonRecord } from '@adhdev/mesh-shared'
+import { parseJsonRecord, deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared'
 
 export interface ProviderPrioritySnapshot {
   type?: string
@@ -215,8 +215,14 @@ export function readRepoMeshNodeProviderPriority(node: unknown): string[] {
   const record = node && typeof node === 'object' ? node as Record<string, unknown> : {}
   const policy = readRepoMeshNodePolicy(node)
   const raw = record.providerPriority ?? record.provider_priority ?? policy.providerPriority
-  if (!Array.isArray(raw)) return []
-  return normalizeProviderPriority(raw)
+  if (Array.isArray(raw)) {
+    const explicit = normalizeProviderPriority(raw)
+    if (explicit.length) return explicit
+  }
+  // Slots order = preference: a node with capability slots but no explicit
+  // providerPriority still has a determined order — derive it (same fallback as
+  // the daemon/MCP read paths).
+  return deriveProviderPriorityFromSlots(policy.slots)
 }
 
 export function formatRepoMeshNodeProviderPriority(node: unknown): string {

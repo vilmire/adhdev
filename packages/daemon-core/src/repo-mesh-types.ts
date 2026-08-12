@@ -140,12 +140,17 @@ export type RepoMeshMagiSessionCleanupMode = 'preserve' | 'stop_and_delete';
  *   visited in config/array order and the first that can launch wins. No
  *   load-spreading. This is the strict no-change default — a mesh that never
  *   sets schedulingStrategy behaves identically to before this feature.
- * - 'least_loaded': prefer the eligible node with the fewest active assignments,
- *   so untargeted work spreads instead of piling onto whichever node asks first.
- * - 'round_robin': among nodes tied at the least load, rotate the winner using a
- *   per-mesh cursor so distribution stays fair across passes.
- * - 'priority_only': rank purely by schedulingPriority (then config order),
- *   ignoring load — always send to the highest-priority eligible node.
+ * - 'fitness': rank nodes by task→capability-slot fitness (task
+ *   difficulty/requiredTags vs the node's slots), then priority/load/order.
+ *   Falls back to priority/load ordering when no task is in scope (idle-session
+ *   drain) — exactly the old 'least_loaded' behavior, so fitness subsumes it.
+ * - 'least_loaded' / 'round_robin' (DEPRECATED aliases): absorbed into 'fitness'.
+ *   normalizeMeshSchedulingStrategy maps both to 'fitness', so a meshes.json that
+ *   still stores either value behaves as Smart with no file rewrite. They remain
+ *   in the union only so those persisted escape-hatch values keep validating.
+ * - 'priority_only' (DEPRECATED alias, escape-hatch only): rank purely by
+ *   schedulingPriority (then config order), ignoring load. Not exposed in the
+ *   UI, but honored verbatim for hand-edited configs.
  *
  * Distribution is explicit opt-in: a strategy other than 'first_eligible' must be
  * configured for any load-spreading to occur.
@@ -159,7 +164,6 @@ export type RepoMeshSchedulingStrategy =
     // (task difficulty/requiredTags vs the node's slots), then priority/load/order.
     // Falls back to load ordering when no task is in scope (idle-session drain).
     | 'fitness';
-
 export const MESH_SCHEDULING_STRATEGIES: RepoMeshSchedulingStrategy[] = [
     'first_eligible',
     'least_loaded',
@@ -173,79 +177,26 @@ export const DEFAULT_MESH_SCHEDULING_STRATEGY: RepoMeshSchedulingStrategy = 'fir
 /**
  * Normalize an unknown scheduling-strategy value to a valid strategy, defaulting
  * to 'first_eligible' (strict no-change) for anything missing/blank/unrecognized.
+ *
+ * MIGRATION: the deprecated spread aliases 'least_loaded' / 'round_robin' map to
+ * 'fitness' — with no task in scope fitness degrades to the same priority/load
+ * (plus rotation) ordering they had, so a meshes.json still storing either value
+ * behaves identically to Smart without any file rewrite.
  */
 export function normalizeMeshSchedulingStrategy(value: unknown): RepoMeshSchedulingStrategy {
     if (typeof value !== 'string') return DEFAULT_MESH_SCHEDULING_STRATEGY;
-    const trimmed = value.trim() as RepoMeshSchedulingStrategy;
+    const trimmed = value.trim();
+    if (trimmed === 'least_loaded' || trimmed === 'round_robin') return 'fitness';
     return (MESH_SCHEDULING_STRATEGIES as string[]).includes(trimmed)
-        ? trimmed
+        ? (trimmed as RepoMeshSchedulingStrategy)
         : DEFAULT_MESH_SCHEDULING_STRATEGY;
 }
 
-// ─── User-facing distribution mode (2-mode façade over the 4-union) ──────────
-//
-// The raw RepoMeshSchedulingStrategy 4-union stays the persisted, escape-hatch
-// truth (a hand-edited meshes.json / .adhdev/mesh.json may write any of the four
-// and it is honored verbatim). The PRODUCT surface is just two modes:
-//
-//   - 'spread'   → distribute work evenly. Maps to 'least_loaded', which now also
-//                  absorbs the round_robin rotation as its internal tie-break (see
-//                  orderEligibleNodes), so a single mode covers both former
-//                  load-spreading strategies. schedulingPriority still acts as the
-//                  primary rank key automatically when set — no separate mode.
-//   - 'in_order' → assign in the order nodes were added. Maps to 'first_eligible'
-//                  (the strict no-change default).
-//
-// distributionToStrategy / strategyToDistribution are the canonical bridge the UI
-// and the .adhdev/mesh.json loader share so the 2-mode↔4-union mapping is defined
-// exactly once.
-export type RepoMeshDistribution = 'spread' | 'in_order';
-
-export const MESH_DISTRIBUTIONS: RepoMeshDistribution[] = ['spread', 'in_order'];
-
-/**
- * Product default for the user-facing toggle. Note this is the *recommended* mode
- * shown first, NOT the persisted default: a mesh that never sets schedulingStrategy
- * stays 'first_eligible' (→ displays as 'in_order'), preserving strict no-change.
- */
-export const DEFAULT_MESH_DISTRIBUTION: RepoMeshDistribution = 'spread';
-
-/** Normalize an unknown value to a valid distribution mode (defaults to 'spread'). */
-export function normalizeMeshDistribution(value: unknown): RepoMeshDistribution {
-    if (typeof value !== 'string') return DEFAULT_MESH_DISTRIBUTION;
-    const trimmed = value.trim();
-    return (MESH_DISTRIBUTIONS as string[]).includes(trimmed)
-        ? (trimmed as RepoMeshDistribution)
-        : DEFAULT_MESH_DISTRIBUTION;
-}
-
-/**
- * Map a user-facing distribution mode to the raw scheduling strategy the scheduler
- * acts on. 'spread' → 'least_loaded' (which absorbs round_robin rotation as its
- * tie-break); 'in_order' → 'first_eligible'.
- */
-export function distributionToStrategy(distribution: RepoMeshDistribution): RepoMeshSchedulingStrategy {
-    return distribution === 'spread' ? 'least_loaded' : 'first_eligible';
-}
-
-/**
- * Map a raw scheduling strategy back to the 2-mode façade for display/migration.
- *   - 'first_eligible'           → 'in_order'
- *   - 'least_loaded'/'round_robin' → 'spread'
- *   - 'priority_only'            → 'spread' when a node priority is actually
- *     configured (priority ordering IS a spread behavior), else 'in_order'
- *     (priority_only with no priorities is behaviorally identical to
- *     first_eligible, so it must not flip a mesh into load-spreading on migration).
- */
-export function strategyToDistribution(
-    strategy: unknown,
-    opts?: { priorityConfigured?: boolean },
-): RepoMeshDistribution {
-    const normalized = normalizeMeshSchedulingStrategy(strategy);
-    if (normalized === 'first_eligible') return 'in_order';
-    if (normalized === 'priority_only') return opts?.priorityConfigured ? 'spread' : 'in_order';
-    return 'spread';
-}
+// The user-facing 2-mode distribution façade (Smart ↔ 'fitness' / In order ↔
+// 'first_eligible') lives in web-core (pages/repo-mesh/types.ts) — the daemon
+// only ever acts on the raw strategy union above. The former daemon-side
+// RepoMeshDistribution façade was removed: it had no production consumer (only
+// its own test) and its 'spread' mapping predated the fitness strategy.
 
 /**
  * Resolve a node's soft scheduling priority — a single scalar used as the PRIORITY
@@ -332,9 +283,10 @@ export interface RepoMeshPolicy {
     /**
      * Mesh-wide tie-break strategy for distributing untargeted queue work across
      * eligible nodes. Defaults to 'first_eligible' (today's exact behavior — no
-     * load-spreading). Set to 'least_loaded' / 'round_robin' / 'priority_only' to
-     * opt into distribution. Only governs the final tie-break stage; eligibility,
-     * capacity, and priority are evaluated identically regardless of strategy.
+     * load-spreading). Set to 'fitness' to opt into distribution (the UI's Smart
+     * mode; the deprecated 'least_loaded'/'round_robin' aliases normalize to it).
+     * Only governs the final tie-break stage; eligibility, capacity, and priority
+     * are evaluated identically regardless of strategy.
      */
     schedulingStrategy?: RepoMeshSchedulingStrategy;
     /**
@@ -482,6 +434,15 @@ export interface RepoMeshQuotaRoutingPolicy {
      * window recovers quickly, so the bar is low.
      */
     sessionMinRemainingPercent?: number;
+    /**
+     * RESET-IMMINENT relaxation for the session gate: when the session
+     * window's reset is less than this far away, a session-low block is waived
+     * — the quota the task needs is about to reappear, so holding the claim
+     * would just idle the mesh. Defaults to 5 min. Applies ONLY to the session
+     * window: a weekly reset is days away by construction, so the weekly gate
+     * never relaxes.
+     */
+    sessionResetImminentMs?: number;
     /**
      * Skip a (node, provider) whose WEEKLY window (the ~7d rolling window) has
      * less than this percent remaining. Defaults to 15 — an exhausted weekly
@@ -655,6 +616,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
 export const DEFAULT_QUOTA_ROUTING_POLICY: Required<RepoMeshQuotaRoutingPolicy> = {
     staleAfterMs: 30 * 60 * 1000,
     sessionMinRemainingPercent: 10,
+    sessionResetImminentMs: 5 * 60 * 1000,
     weeklyMinRemainingPercent: 15,
     spreadBonusMax: 30,
 };
@@ -670,6 +632,7 @@ export function resolveQuotaRoutingPolicy(
 ): Required<RepoMeshQuotaRoutingPolicy> {
     const staleAfterMs = Number(value?.staleAfterMs);
     const sessionMin = Number(value?.sessionMinRemainingPercent);
+    const sessionResetImminentMs = Number(value?.sessionResetImminentMs);
     const weeklyMin = Number(value?.weeklyMinRemainingPercent);
     const spreadMax = Number(value?.spreadBonusMax);
     const clampPercentField = (n: number, fallback: number) =>
@@ -679,6 +642,9 @@ export function resolveQuotaRoutingPolicy(
             ? Math.floor(staleAfterMs)
             : DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs,
         sessionMinRemainingPercent: clampPercentField(sessionMin, DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent),
+        sessionResetImminentMs: Number.isFinite(sessionResetImminentMs) && sessionResetImminentMs >= 0
+            ? Math.floor(sessionResetImminentMs)
+            : DEFAULT_QUOTA_ROUTING_POLICY.sessionResetImminentMs,
         weeklyMinRemainingPercent: clampPercentField(weeklyMin, DEFAULT_QUOTA_ROUTING_POLICY.weeklyMinRemainingPercent),
         spreadBonusMax: Number.isFinite(spreadMax) && spreadMax >= 0
             ? spreadMax
@@ -703,6 +669,9 @@ export function normalizeQuotaRoutingPolicy(value: unknown): RepoMeshQuotaRoutin
     }
     if (record.sessionMinRemainingPercent !== undefined && resolved.sessionMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent) {
         out.sessionMinRemainingPercent = resolved.sessionMinRemainingPercent;
+    }
+    if (record.sessionResetImminentMs !== undefined && resolved.sessionResetImminentMs !== DEFAULT_QUOTA_ROUTING_POLICY.sessionResetImminentMs) {
+        out.sessionResetImminentMs = resolved.sessionResetImminentMs;
     }
     if (record.weeklyMinRemainingPercent !== undefined && resolved.weeklyMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY.weeklyMinRemainingPercent) {
         out.weeklyMinRemainingPercent = resolved.weeklyMinRemainingPercent;
