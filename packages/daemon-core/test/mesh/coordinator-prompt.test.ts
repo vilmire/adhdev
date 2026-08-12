@@ -1099,4 +1099,33 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Don\'t split investigation from the fix')
     expect(prompt).toContain('code_change')
   })
+
+  // ─── Destructive-git approval — Rules section hard statement ───
+  // requireApprovalForDestructiveGit has no code-level enforcement anywhere in the
+  // mesh command path (no handler blocks force push / reset --hard / history
+  // rewrite); the prompt is the only mitigation. These tests pin that the Rules
+  // section states it as an explicit rule reflecting the LIVE policy value, and
+  // that the wording never claims a code backstop that doesn't exist.
+  it('states the destructive-git approval rule explicitly when the policy requires it (default)', () => {
+    const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+
+    expect(prompt).toContain('Never run destructive git operations without explicit user approval')
+    expect(prompt).toContain('push --force')
+    expect(prompt).toContain('reset --hard')
+    expect(prompt).toContain('history rewrite')
+    // Must not overclaim a code-level backstop that doesn't exist.
+    expect(prompt).toContain('no code-level gate backing this up')
+  })
+
+  it('reflects the live policy value when requireApprovalForDestructiveGit is turned off', () => {
+    const mesh = {
+      ...baseMesh(),
+      policy: { requireApprovalForDestructiveGit: false },
+    }
+    const prompt = buildCoordinatorSystemPrompt({ mesh: mesh as any })
+
+    expect(prompt).toContain('does not require approval for destructive git operations')
+    // The unconditional "never without approval" wording must not also appear.
+    expect(prompt).not.toContain('Never run destructive git operations without explicit user approval')
+  })
 })
