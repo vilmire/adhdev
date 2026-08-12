@@ -35,7 +35,7 @@ import { adhdevHome } from './statusline/paths.js';
  */
 export const QUOTA_CACHE_VERSION = 1;
 
-/** `$ADHDEV_HOME/quota/` — honours the same override as the statusline bridge. */
+/** `<configDir>/quota/` — honours the same track-aware root as the statusline bridge. */
 export function quotaCacheDir(env: NodeJS.ProcessEnv = process.env): string {
     return path.join(adhdevHome(env), 'quota');
 }

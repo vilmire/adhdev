@@ -3,7 +3,7 @@
  *
  * Everything the bridge owns lives under one directory so `uninstall` can
  * remove our footprint without guessing, and so a user can inspect or delete it
- * by hand. Nothing here is written outside `$ADHDEV_HOME/claude-statusline/`
+ * by hand. Nothing here is written outside `<configDir>/claude-statusline/`
  * except the single `statusLine` key in Claude Code's own settings file, which
  * install/uninstall treat as borrowed rather than owned.
  */
@@ -12,10 +12,19 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-/** Root of ADHDev's own state, honouring the standard override. */
+import { resolveConfigDir } from '../../config/config-dir.js';
+
+/**
+ * Root of ADHDev's own state for this track.
+ *
+ * Delegates to the single source of truth (`config/config-dir.ts`) so the
+ * bridge lands in `~/.adhdev-preview` on a preview build and honours
+ * `ADHDEV_CONFIG_DIR` — previously this read a dead `ADHDEV_HOME` override and
+ * hardcoded `~/.adhdev`, which made a preview daemon read the STABLE track's
+ * statusline snapshot.
+ */
 export function adhdevHome(env: NodeJS.ProcessEnv = process.env): string {
-    const override = env.ADHDEV_HOME?.trim();
-    return override ? override : path.join(os.homedir(), '.adhdev');
+    return resolveConfigDir(env);
 }
 
 /** Directory holding the wrapper, the captured snapshot and the backup. */

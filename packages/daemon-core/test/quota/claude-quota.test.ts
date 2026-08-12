@@ -16,7 +16,7 @@ let env: NodeJS.ProcessEnv;
 beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-claude-quota-'));
     env = {
-        ADHDEV_HOME: path.join(tempRoot, 'adhdev'),
+        ADHDEV_CONFIG_DIR: path.join(tempRoot, 'adhdev'),
         CLAUDE_CONFIG_DIR: path.join(tempRoot, 'claude'),
     } as NodeJS.ProcessEnv;
     fs.mkdirSync(path.join(tempRoot, 'claude'), { recursive: true });

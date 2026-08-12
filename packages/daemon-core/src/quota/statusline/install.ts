@@ -20,6 +20,7 @@
 'use strict';
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
@@ -63,6 +64,56 @@ export function resolveInstallPaths(env: NodeJS.ProcessEnv = process.env): Statu
         backupFile: defaultBackupPath(env),
         stateDir: defaultStatuslineDir(env),
     };
+}
+
+/**
+ * Snapshot files of the OTHER adhdev tracks present on this machine.
+ *
+ * Why fan-out is needed: Claude Code's `statusLine` is one machine-global
+ * slot, while each adhdev track's daemon reads only its OWN config dir
+ * (`~/.adhdev` stable, `~/.adhdev-preview` preview). Measured against Claude
+ * Code 2.1.220, the statusline hook process inherits the env of whatever
+ * launched the session — a track's session-host pins that track's
+ * `ADHDEV_CONFIG_DIR`, but a session opened from a plain terminal or the
+ * desktop app carries none — so the wrapper cannot reliably tell which track
+ * a capture belongs to. The only correct behaviour is to record it for every
+ * track.
+ *
+ * Why discovery happens at INSTALL time (baked into the wrapper) rather than
+ * at runtime: the wrapper's tests spawn it with the real `$HOME`, and a
+ * runtime home-dir scan would write test fixtures into real track dirs. The
+ * cost is that a track first installed AFTER this install is not fed until
+ * `claude:install` re-runs — acceptable, because re-install is idempotent and
+ * this whole feature is opt-in to begin with.
+ *
+ * The scan is name-based (`$HOME/.adhdev*` directories that exist right now)
+ * with no marker-file requirement: a track's daemon creates its config dir at
+ * first boot, so existence is the only signal that is ever available.
+ */
+export function discoverSiblingSnapshotPaths(
+    env: NodeJS.ProcessEnv = process.env,
+    homeDir: string = os.homedir(),
+): string[] {
+    const own = defaultSnapshotPath(env);
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(homeDir, { withFileTypes: true });
+    } catch {
+        // An unreadable home dir leaves the wrapper single-target, which is
+        // exactly the pre-fan-out behaviour — degraded, not broken.
+        return [];
+    }
+    const targets = new Set<string>();
+    for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.startsWith('.adhdev')) {
+            continue;
+        }
+        const candidate = path.join(homeDir, entry.name, 'claude-statusline', 'quota.json');
+        if (candidate !== own) {
+            targets.add(candidate);
+        }
+    }
+    return [...targets].sort();
 }
 
 /**
@@ -195,6 +246,7 @@ export function installClaudeStatusline(env: NodeJS.ProcessEnv = process.env): I
 
     const script = renderWrapperScript({
         snapshotPath: paths.snapshotFile,
+        additionalSnapshotPaths: discoverSiblingSnapshotPaths(env),
         originalCommand,
         snapshotVersion: SNAPSHOT_VERSION,
         minWriteIntervalMs: MIN_WRITE_INTERVAL_MS,

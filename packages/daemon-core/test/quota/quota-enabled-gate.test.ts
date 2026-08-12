@@ -120,7 +120,7 @@ describe('quota enable gate — hydration', () => {
     })
 
     it('does not restore snapshots of disabled providers from the on-disk cache', () => {
-        const env = { ADHDEV_HOME: home }
+        const env = { ADHDEV_CONFIG_DIR: home }
         saveQuotaCache(
             {
                 'claude-cli': okQuota('claude-cli') as any,

@@ -52,15 +52,15 @@ let previousHome: string | undefined
 beforeEach(() => {
     // refreshQuotaCacheOnce persists after every refresh — keep that off the
     // real $HOME.
-    previousHome = process.env.ADHDEV_HOME
+    previousHome = process.env.ADHDEV_CONFIG_DIR
     home = mkdtempSync(join(tmpdir(), 'adhdev-quota-retry-'))
-    process.env.ADHDEV_HOME = home
+    process.env.ADHDEV_CONFIG_DIR = home
 })
 
 afterEach(() => {
     vi.useRealTimers()
-    if (previousHome === undefined) delete process.env.ADHDEV_HOME
-    else process.env.ADHDEV_HOME = previousHome
+    if (previousHome === undefined) delete process.env.ADHDEV_CONFIG_DIR
+    else process.env.ADHDEV_CONFIG_DIR = previousHome
     rmSync(home, { recursive: true, force: true })
     clearQuotaCache()
     __resetQuotaBootRefreshForTests()
@@ -228,8 +228,8 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
                 ...quotaFailure('kimi', 'error', 'Kimi access token expired', { failureKind: 'expired-token' }),
                 metadata: { failureKind: 'expired-token', retryAtMs: Date.now() - 1000 },
             } as any,
-        }, { ADHDEV_HOME: home })
-        hydrateQuotaCacheFromDisk({ ADHDEV_HOME: home }, allEnabled)
+        }, { ADHDEV_CONFIG_DIR: home })
+        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled)
         expect(isFailureRetryDue('kimi')).toBe(true)
 
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
@@ -260,8 +260,8 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
             kimi: quotaFailure('kimi', 'unavailable', 'Not signed in to Kimi Code', {
                 failureKind: 'missing-credentials',
             }) as any,
-        }, { ADHDEV_HOME: home })
-        hydrateQuotaCacheFromDisk({ ADHDEV_HOME: home }, allEnabled)
+        }, { ADHDEV_CONFIG_DIR: home })
+        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled)
         expect(isFailureRetryDue('kimi')).toBe(false)
 
         const loop = startQuotaRefreshLoop({
