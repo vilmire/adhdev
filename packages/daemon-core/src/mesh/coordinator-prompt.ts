@@ -350,7 +350,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     sections.push(ONBOARDING_SECTION);
 
     // ── Rules ──
-    sections.push(buildRulesSection(coordinatorCliType));
+    sections.push(buildRulesSection(coordinatorCliType, mergeAndNormalizePolicy(undefined, mesh.policy)));
 
     return sections.join('\n\n');
 }
@@ -425,7 +425,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         tools: TOOLS_SECTION,
         workflow: WORKFLOW_SECTION,
         onboarding: ONBOARDING_SECTION,
-        rules: buildRulesSection(coordinatorCliType),
+        rules: buildRulesSection(coordinatorCliType, mergeAndNormalizePolicy(undefined, mesh.policy)),
         toolExposurePreflight: TOOL_EXPOSURE_PREFLIGHT_SECTION,
     };
     return template.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, key) => {
@@ -1119,14 +1119,25 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 
 `;
 
-function buildRulesSection(coordinatorCliType?: string): string {
+function buildRulesSection(coordinatorCliType?: string, policy?: RepoMeshPolicy): string {
     const coordinatorNote = coordinatorCliType
         ? `\n- **Coordinator runtime is not a delegation default.** This coordinator is running as \`${coordinatorCliType}\`, but delegated node sessions must follow the user's requested provider, not the coordinator's own runtime.`
         : '';
 
+    // Destructive-git approval is a prompt-level convention, not a code-enforced
+    // gate — no handler in the mesh command path blocks force push / reset --hard /
+    // history rewrite. This bullet is the only thing standing between a coordinator
+    // and running one unasked; it must state the current policy value (not a fixed
+    // claim) so it stays honest if a mesh operator turns the toggle off, and must not
+    // read as "the system prevents this" when it's actually "please don't."
+    const destructiveGitRequiresApproval = policy ? policy.requireApprovalForDestructiveGit : true;
+    const destructiveGitRule = destructiveGitRequiresApproval
+        ? '\n- **Never run destructive git operations without explicit user approval.** Force push (`push --force`/`--force-with-lease`), `git reset --hard`, and any history rewrite (`rebase`, `filter-branch`, `commit --amend` on already-pushed work) can destroy work that is not recoverable from the mesh ledger. This mesh\'s policy currently requires approval for these (see Policy above). Ask first and wait for a yes — there is no code-level gate backing this up, so skipping the ask is the only thing that can lose the user\'s work.'
+        : '\n- **This mesh\'s policy does not require approval for destructive git operations** (`requireApprovalForDestructiveGit` is off). Still treat force push, `git reset --hard`, and history rewrites as high-risk: prefer a non-destructive alternative when one exists, and mention what you did in your summary so the user can catch a mistake quickly.';
+
     return `## Rules
 
-- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator — keep context lean. See also: **Never use local sub-agents** below.
+- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator — keep context lean. See also: **Never use local sub-agents** below.${destructiveGitRule}
 - **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh — they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no \`mesh_task_history\` record. ALL code reading, analysis, RCA, and implementation must be delegated to mesh nodes via \`mesh_enqueue_task\` / \`mesh_send_task\` (use \`task_mode: "live_debug_readonly"\` for read-only investigation), or cross-verified via \`mesh_magi_review\` for read-only fan-out. The coordinator's own actions are limited to \`mesh_*\` tool orchestration and synthesizing results.
 - **Front-load task messages.** Include everything the agent needs (files, problem, expected fix) in \`mesh_enqueue_task\` / \`mesh_send_task\`. Append a structured result request at the end: ask the worker to conclude with a JSON block containing \`status\`, \`changedFiles\`, \`gitStatus\`, \`validationResults\`, \`errors\`, \`nextAction\`. The daemon parses this automatically; you can read it from \`mesh_task_history\`.
 - **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** — a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred — this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.
