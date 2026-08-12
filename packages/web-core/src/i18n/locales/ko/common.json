@@ -3192,5 +3192,31 @@
         "pending": "대기 중",
         "loading": "승인 목록을 불러오는 중…",
         "emptyHint": "연결된 머신의 승인 요청이 여기에 자동으로 표시됩니다."
+    },
+    "setupWizard": {
+        "quotaPolicy": {
+            "title": "쿼터 기반 라우팅",
+            "description": "노드가 AI 제공자 쿼터 잔량을 보고하면, 코디네이터는 거의 소진된 노드를 건너뛰고 여유가 많은 노드를 선호할 수 있습니다. 아래 임계값이 그 기준입니다. 보고가 없거나 오래된 값은 항상 무시되므로, 낡은 데이터 때문에 노드가 제외되는 일은 없습니다.",
+            "sessionMin": "세션 하한",
+            "sessionMinHint": "짧은 롤링 윈도우 잔량이 이 값 미만인 제공자를 건너뜁니다.",
+            "weeklyMin": "주간 하한",
+            "weeklyMinHint": "주간 윈도우 잔량이 이 값 미만인 제공자를 건너뜁니다.",
+            "resetImminent": "리셋 유예",
+            "resetImminentHint": "이 시간 안에 세션 윈도우가 리셋되면 잔량 부족을 무시합니다.",
+            "staleAfter": "측정값 만료",
+            "staleAfterHint": "이보다 오래된 쿼터 측정값은 무시합니다.",
+            "spreadBonus": "여유량 선호도",
+            "spreadBonusHint": "잔량이 많은 쪽을 얼마나 선호할지. 작업 난이도 매칭을 뒤집지는 않습니다.",
+            "minutes": "분",
+            "blankMeansDefault": "비워 두면 기본값(흐리게 표시된 값)이 적용됩니다.",
+            "useDefaults": "기본값 사용",
+            "saving": "저장 중…",
+            "save": "임계값 저장",
+            "errors": {
+                "notANumber": "숫자를 입력하세요.",
+                "percentRange": "0에서 100 사이여야 합니다.",
+                "negative": "음수는 사용할 수 없습니다."
+            }
+        }
     }
 }

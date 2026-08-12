@@ -111,6 +111,7 @@ export type {
   RepoMeshNode,
   RepoMeshNodeHealth,
   RepoMeshPolicy,
+  RepoMeshQuotaRoutingPolicy,
   RepoMeshMagiSessionCleanupMode,
   RepoMeshNodePolicy,
   RepoMeshRelatedRepo,

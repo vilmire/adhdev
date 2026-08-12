@@ -305,5 +305,9 @@ export {
 } from './components/dashboard/git-system-bubbles'
 export type { BuildGitSystemBubbleOptions } from './components/dashboard/git-system-bubbles'
 
+// ── Setup Wizard ──
+export { default as QuotaPolicyStep, quotaPolicyDraftToOverrides } from './components/setup-wizard/QuotaPolicyStep'
+export type { QuotaPolicyStepProps } from './components/setup-wizard/QuotaPolicyStep'
+
 // ── CSS ──
 // Import '@adhdev/web-core/index.css' in your app entry
