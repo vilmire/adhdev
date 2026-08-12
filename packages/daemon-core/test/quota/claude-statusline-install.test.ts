@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
     StatuslineInstallError,
+    discoverSiblingSnapshotPaths,
     installClaudeStatusline,
     readStatuslineStatus,
     resolveInstallPaths,
@@ -29,7 +30,7 @@ let env: NodeJS.ProcessEnv;
 beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-statusline-'));
     env = {
-        ADHDEV_HOME: path.join(tempRoot, 'adhdev'),
+        ADHDEV_CONFIG_DIR: path.join(tempRoot, 'adhdev'),
         CLAUDE_CONFIG_DIR: path.join(tempRoot, 'claude'),
     } as NodeJS.ProcessEnv;
     fs.mkdirSync(path.join(tempRoot, 'claude'), { recursive: true });
@@ -274,5 +275,72 @@ describe('readStatuslineStatus', () => {
         readStatuslineStatus(env);
 
         expect(fs.readFileSync(settingsFile(), 'utf-8')).toBe(before);
+    });
+});
+
+describe('discoverSiblingSnapshotPaths', () => {
+    function fakeHome(...names: string[]): string {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-tracks-'));
+        for (const name of names) {
+            fs.mkdirSync(path.join(home, name), { recursive: true });
+        }
+        return home;
+    }
+
+    it('finds existing .adhdev* sibling dirs and excludes the own track', () => {
+        const home = fakeHome('.adhdev', '.adhdev-preview', '.unrelated');
+        const ownEnv = { ADHDEV_CONFIG_DIR: path.join(home, '.adhdev') } as NodeJS.ProcessEnv;
+
+        expect(discoverSiblingSnapshotPaths(ownEnv, home)).toEqual([
+            path.join(home, '.adhdev-preview', 'claude-statusline', 'quota.json'),
+        ]);
+    });
+
+    it('ignores files whose names merely start with .adhdev', () => {
+        const home = fakeHome('.adhdev');
+        fs.writeFileSync(path.join(home, '.adhdev-notes'), 'not a dir', 'utf-8');
+        const ownEnv = { ADHDEV_CONFIG_DIR: path.join(home, '.adhdev') } as NodeJS.ProcessEnv;
+
+        expect(discoverSiblingSnapshotPaths(ownEnv, home)).toEqual([]);
+    });
+
+    it('returns nothing for an unreadable home dir', () => {
+        const ownEnv = { ADHDEV_CONFIG_DIR: path.join(tempRoot, 'adhdev') } as NodeJS.ProcessEnv;
+
+        expect(discoverSiblingSnapshotPaths(ownEnv, path.join(tempRoot, 'does-not-exist'))).toEqual([]);
+    });
+
+    it('install bakes the discovered siblings into the wrapper', () => {
+        // The installing track lives under a fake home next to a sibling track,
+        // which is the dual-track machine this feature exists for. Discovery
+        // scans os.homedir(), which honours HOME (POSIX) / USERPROFILE
+        // (Windows), so point both at the fake home for the install call.
+        const home = fakeHome('.adhdev', '.adhdev-preview');
+        const dualEnv = {
+            ADHDEV_CONFIG_DIR: path.join(home, '.adhdev'),
+            CLAUDE_CONFIG_DIR: path.join(tempRoot, 'claude'),
+        } as NodeJS.ProcessEnv;
+
+        const previousHome = process.env.HOME;
+        const previousProfile = process.env.USERPROFILE;
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        let wrapper: string;
+        let snapshotFile: string;
+        try {
+            const { paths } = installClaudeStatusline(dualEnv);
+            wrapper = fs.readFileSync(paths.wrapperFile, 'utf-8');
+            snapshotFile = paths.snapshotFile;
+        } finally {
+            if (previousHome === undefined) delete process.env.HOME;
+            else process.env.HOME = previousHome;
+            if (previousProfile === undefined) delete process.env.USERPROFILE;
+            else process.env.USERPROFILE = previousProfile;
+        }
+
+        const siblingSnapshot = path.join(home, '.adhdev-preview', 'claude-statusline', 'quota.json');
+        expect(wrapper).toContain(JSON.stringify(siblingSnapshot));
+        // ...while the own-track snapshot stays the primary write target.
+        expect(wrapper).toContain(JSON.stringify(snapshotFile));
     });
 });

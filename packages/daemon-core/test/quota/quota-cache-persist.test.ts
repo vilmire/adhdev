@@ -50,7 +50,7 @@ function makeQuota(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
     home = join(tmpdir(), `adhdev-quota-cache-${randomUUID().slice(0, 8)}`);
     mkdirSync(home, { recursive: true });
-    env = { ADHDEV_HOME: home } as NodeJS.ProcessEnv;
+    env = { ADHDEV_CONFIG_DIR: home } as NodeJS.ProcessEnv;
     clearQuotaCache();
     __resetQuotaHydrationForTests();
 });
@@ -78,7 +78,7 @@ describe('quota cache storage', () => {
         expect(readQuotaCache()?.['codex-cli']).toMatchObject({ provider: 'codex-cli', status: 'ok' });
     });
 
-    it('honours ADHDEV_HOME for the cache location', () => {
+    it('honours ADHDEV_CONFIG_DIR for the cache location', () => {
         expect(quotaCachePath(env)).toBe(join(home, 'quota', 'cache.json'));
         saveQuotaCache({ 'codex-cli': makeQuota() }, env);
         expect(existsSync(join(home, 'quota', 'cache.json'))).toBe(true);
@@ -153,7 +153,7 @@ describe('quota cache storage', () => {
     it('does not throw when the file cannot be written', () => {
         // Unwritable location: the refresh that produced the numbers must not
         // fail just because the cache could not be saved.
-        const blocked = { ADHDEV_HOME: join(home, 'nope', '\0invalid') } as NodeJS.ProcessEnv;
+        const blocked = { ADHDEV_CONFIG_DIR: join(home, 'nope', '\0invalid') } as NodeJS.ProcessEnv;
         expect(() => saveQuotaCache({ 'codex-cli': makeQuota() }, blocked)).not.toThrow();
         expect(saveQuotaCache({ 'codex-cli': makeQuota() }, blocked)).toBe(false);
     });
@@ -199,10 +199,10 @@ describe('quota cache storage', () => {
     it('a refresh WRITES the cache file, including per-provider failures', async () => {
         // The wiring test: without it, deleting the save call from
         // refreshQuotaCacheOnce would leave every other case here green.
-        // ADHDEV_HOME is pointed at the temp home for the duration so the real
-        // save path (process.env) lands where this test can read it.
-        const previous = process.env.ADHDEV_HOME;
-        process.env.ADHDEV_HOME = home;
+        // ADHDEV_CONFIG_DIR is pointed at the temp home for the duration so the
+        // real save path (process.env) lands where this test can read it.
+        const previous = process.env.ADHDEV_CONFIG_DIR;
+        process.env.ADHDEV_CONFIG_DIR = home;
         try {
             await refreshQuotaCacheOnce([
                 { provider: 'codex-cli' as const, fetch: async () => makeQuota() },
@@ -216,8 +216,8 @@ describe('quota cache storage', () => {
             expect(persisted.kimi.status).toBe('error');
             expect(persisted.kimi.metadata?.failureKind).toBe('unknown');
         } finally {
-            if (previous === undefined) delete process.env.ADHDEV_HOME;
-            else process.env.ADHDEV_HOME = previous;
+            if (previous === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+            else process.env.ADHDEV_CONFIG_DIR = previous;
         }
     });
 });

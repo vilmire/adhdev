@@ -46,12 +46,17 @@ afterEach(() => {
 function runWrapper(
     originalCommand: string | null,
     input: unknown = STATUSLINE_INPUT,
-    options: { minWriteIntervalMs?: number; maxWriteIntervalMs?: number } = {},
+    options: {
+        minWriteIntervalMs?: number;
+        maxWriteIntervalMs?: number;
+        additionalSnapshotPaths?: string[];
+    } = {},
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
     fs.writeFileSync(
         wrapperFile,
         renderWrapperScript({
             snapshotPath: snapshotFile,
+            additionalSnapshotPaths: options.additionalSnapshotPaths,
             originalCommand,
             snapshotVersion: SNAPSHOT_VERSION,
             minWriteIntervalMs: options.minWriteIntervalMs ?? 15_000,
@@ -244,5 +249,56 @@ describe('statusline wrapper capture', () => {
         await runWrapper('printf ok', 'garbage');
 
         expect(readSnapshot()).toEqual(good);
+    });
+});
+
+describe('statusline wrapper multi-track fan-out', () => {
+    it('writes the same snapshot to every additional track path', async () => {
+        const siblingA = path.join(tempRoot, 'track-a', 'quota.json');
+        const siblingB = path.join(tempRoot, 'track-b', 'nested', 'quota.json');
+
+        const result = await runWrapper('printf ok', STATUSLINE_INPUT, {
+            additionalSnapshotPaths: [siblingA, siblingB],
+        });
+
+        expect(result.code).toBe(0);
+        const primary = readSnapshot();
+        for (const sibling of [siblingA, siblingB]) {
+            expect(JSON.parse(fs.readFileSync(sibling, 'utf-8'))).toEqual(primary);
+        }
+    });
+
+    it('an unwritable sibling blocks neither the primary nor the prompt', async () => {
+        // A sibling path whose parent is a FILE can never be created.
+        const blocker = path.join(tempRoot, 'blocker');
+        fs.writeFileSync(blocker, 'x', 'utf-8');
+
+        const result = await runWrapper('printf prompt-here', STATUSLINE_INPUT, {
+            additionalSnapshotPaths: [path.join(blocker, 'quota.json')],
+        });
+
+        expect(result.stdout).toBe('prompt-here');
+        expect(result.code).toBe(0);
+        expect(readSnapshot().fiveHour).toEqual({ usedPercent: 23.5, resetsAt: 1786337423 * 1000 });
+    });
+
+    it('throttle still keys on the primary snapshot only', async () => {
+        const sibling = path.join(tempRoot, 'sibling', 'quota.json');
+        const options = { additionalSnapshotPaths: [sibling] };
+
+        await runWrapper('printf ok', STATUSLINE_INPUT, options);
+        const firstSibling = JSON.parse(fs.readFileSync(sibling, 'utf-8'));
+
+        // An immediate second run is throttled everywhere, siblings included.
+        await runWrapper(
+            'printf ok',
+            {
+                ...STATUSLINE_INPUT,
+                rate_limits: { five_hour: { used_percentage: 99, resets_at: 1786337423 } },
+            },
+            options,
+        );
+
+        expect(JSON.parse(fs.readFileSync(sibling, 'utf-8'))).toEqual(firstSibling);
     });
 });

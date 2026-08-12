@@ -83,7 +83,7 @@ let env: NodeJS.ProcessEnv;
 beforeEach(() => {
     home = join(tmpdir(), `adhdev-quota-optin-${randomUUID().slice(0, 8)}`);
     mkdirSync(home, { recursive: true });
-    env = { ADHDEV_HOME: home } as NodeJS.ProcessEnv;
+    env = { ADHDEV_CONFIG_DIR: home } as NodeJS.ProcessEnv;
     clearQuotaCache();
 });
 
@@ -126,8 +126,8 @@ describe('account email opt-in — OFF (the default)', () => {
 
     // ── Contract 2: nothing reaches the cache file ──────────────────────────
     it('writes no email to the on-disk cache', async () => {
-        const previous = process.env.ADHDEV_HOME;
-        process.env.ADHDEV_HOME = home;
+        const previous = process.env.ADHDEV_CONFIG_DIR;
+        process.env.ADHDEV_CONFIG_DIR = home;
         try {
             const { promise } = runFetch(false);
             const quota = await promise;
@@ -138,16 +138,16 @@ describe('account email opt-in — OFF (the default)', () => {
             expect(persisted['codex-cli'].metadata?.planType).toBe('plus');
             expect(JSON.stringify(persisted)).not.toContain('user@example.com');
         } finally {
-            if (previous === undefined) delete process.env.ADHDEV_HOME;
-            else process.env.ADHDEV_HOME = previous;
+            if (previous === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+            else process.env.ADHDEV_CONFIG_DIR = previous;
         }
     });
 
     // ── Contract 4 (cleanup): an email stored while the option was ON is
     //    overwritten by the next tick, so turning the option off is enough.
     it('purges an email left in the cache from when the option was on', async () => {
-        const previous = process.env.ADHDEV_HOME;
-        process.env.ADHDEV_HOME = home;
+        const previous = process.env.ADHDEV_CONFIG_DIR;
+        process.env.ADHDEV_CONFIG_DIR = home;
         try {
             // Simulate a cache written while the option was enabled.
             saveQuotaCache({
@@ -168,8 +168,8 @@ describe('account email opt-in — OFF (the default)', () => {
             expect(persisted['codex-cli'].metadata?.accountEmail).toBeUndefined();
             expect(JSON.stringify(persisted)).not.toContain('user@example.com');
         } finally {
-            if (previous === undefined) delete process.env.ADHDEV_HOME;
-            else process.env.ADHDEV_HOME = previous;
+            if (previous === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+            else process.env.ADHDEV_CONFIG_DIR = previous;
         }
     });
 });
