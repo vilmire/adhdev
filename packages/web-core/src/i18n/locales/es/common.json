@@ -2902,7 +2902,7 @@
             "subtitleAsk": "para pedirle a <coordinator></coordinator> que envíe a <worker></worker> a <verb></verb> tu repositorio.",
             "subtitleFrom": "desde <place></place>",
             "anywhere": "donde sea",
-            "subtitleLand": "El trabajo terminado aterriza en main automáticamente.",
+            "subtitleLand": "Diez agentes a la vez, y ninguno pisa al otro.",
             "axes": {
                 "os": [
                     "Mac",
@@ -2948,10 +2948,10 @@
             "selfHost": "Autoaloja si quieres",
             "demoDesktop": "Centro de mando de ADHDev controlando sesiones de agentes en vivo en varias máquinas",
             "demoPush": "Notificación push móvil de ADHDev y aprobación con un toque",
-            "scenarioPill": "Sesión típica: asignar misión → agentes desplegados en worktrees de Mac + Windows → Refinery aterriza ambos en main, sin supervisión."
+            "scenarioPill": "Sesión típica: asignar misión → agentes desplegados en worktrees de Mac + Windows, sin colisiones → la Refinery fusiona lo que pasa las verificaciones."
         },
         "mesh": {
-            "sectionTitle": "Ellos paralelizan. Nosotros aterrizamos.",
+            "sectionTitle": "Agentes en paralelo que no se pisan entre sí.",
             "sectionSubtitle": "Lanzar agentes en paralelo es la parte fácil: ahora lo hace cualquier herramienta. Lo difícil es lo que viene después: diez ramas que todavía hay que verificar y fusionar. Refinery lo hace por ti, de forma desatendida, para que el trabajo terminado llegue a main en lugar de a tu cola de revisión.",
             "refineryHighlight": "Refinery",
             "refineryTitle": "El trabajo terminado aterriza en main, de forma desatendida",
@@ -2976,7 +2976,7 @@
             "graphAlt": "Observabilidad del mesh tras un workstream convergido real: historial de misiones, actividad del ledger append-only, la cola de tareas y los trabajos del Refinery — feat/get-todo-by-id integrado en main por fast-forward"
         },
         "compare": {
-            "sectionTitle": "Los agentes en paralelo están por todas partes ahora. ¿Dónde aterriza realmente el trabajo?",
+            "sectionTitle": "Los agentes en paralelo están por todas partes. Evitar que se pisen es otra historia.",
             "sectionSubtitle": "Una pregunta justa. Las CLI locales lanzan subagentes; los orquestadores de escritorio distribuyen el trabajo por worktrees con una elegante interfaz nativa. Ambos se detienen en la rama. Aquí está la línea honesta —incluido dónde cada uno de ellos nos supera— sin rodeos.",
             "colLocalCli": "CLI local + subagentes",
             "colDesktop": "Orquestador de escritorio",

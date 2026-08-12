@@ -2902,7 +2902,7 @@
             "subtitleAsk": "让<coordinator></coordinator>把<worker></worker>派去<verb></verb>你的仓库。",
             "subtitleFrom": "在<place></place>",
             "anywhere": "随处",
-            "subtitleLand": "完成的工作会自动落地到 main。",
+            "subtitleLand": "十个智能体同时运行，互不干扰。",
             "axes": {
                 "os": [
                     "Mac",
@@ -2948,10 +2948,10 @@
             "selfHost": "支持自托管",
             "demoDesktop": "ADHDev 指挥中心跨多台机器驱动实时智能体会话",
             "demoPush": "ADHDev 移动推送通知与一键批准",
-            "scenarioPill": "典型场景：分配任务 → 智能体分发到Mac + Windows工作树 → Refinery将两者都自动落地到main。"
+            "scenarioPill": "典型场景：分配任务 → 智能体分发到Mac + Windows工作树，互不冲突 → 通过校验的改动由Refinery合并。"
         },
         "mesh": {
-            "sectionTitle": "他们负责并行。我们负责落地。",
+            "sectionTitle": "互不干扰的并行智能体。",
             "sectionSubtitle": "启动并行智能体是简单的部分 —— 如今每个工具都能做到。难的是之后：十个分支仍需验证和合并。Refinery 无人值守地替你完成这些，让完成的工作抵达 main，而不是堆在你的审阅队列中。",
             "refineryHighlight": "Refinery",
             "refineryTitle": "完成的工作落地到 main —— 无人值守",
@@ -2976,7 +2976,7 @@
             "graphAlt": "真实收敛工作流之后的网格可观测性:任务史、只追加账本活动、任务队列与 Refinery 作业 —— feat/get-todo-by-id 已 fast-forward 进 main"
         },
         "compare": {
-            "sectionTitle": "如今并行智能体无处不在。工作究竟落地在哪里？",
+            "sectionTitle": "如今并行智能体无处不在，让它们互不冲突才是难点。",
             "sectionSubtitle": "这是个中肯的问题。本地 CLI 会启动子智能体；桌面编排器以精美的原生 UI 跨工作树分发工作。两者都止步于分支。以下是诚实的界定 —— 包括它们各自胜过我们之处 —— 绝不含糊其辞。",
             "colLocalCli": "本地 CLI + 子智能体",
             "colDesktop": "桌面编排器",

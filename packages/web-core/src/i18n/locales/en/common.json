@@ -2902,7 +2902,7 @@
             "subtitleAsk": "to ask <coordinator></coordinator> to send <worker></worker> to <verb></verb> your repo.",
             "subtitleFrom": "from <place></place>",
             "anywhere": "anywhere",
-            "subtitleLand": "Finished work lands on main automatically.",
+            "subtitleLand": "Ten agents at once — none of them step on each other.",
             "axes": {
                 "os": [
                     "Mac",
@@ -2949,10 +2949,10 @@
             "selfHost": "Self-host it",
             "demoDesktop": "ADHDev command center driving live agent sessions across multiple machines",
             "demoPush": "ADHDev mobile push notification and one-tap approval",
-            "scenarioPill": "Typical session: assign a mission → agents fan out across Mac + Windows worktrees → the Refinery lands both on main, unattended."
+            "scenarioPill": "Typical session: assign a mission → agents fan out across Mac + Windows worktrees, no collisions → the Refinery merges what passes."
         },
         "mesh": {
-            "sectionTitle": "They run in parallel. We land the work.",
+            "sectionTitle": "Parallel agents that don't step on each other.",
             "sectionSubtitle": "Running agents in parallel is the easy part — every tool does it now. The hard part is what comes after: a pile of branches that still have to be checked and merged. ADHDev does that for you, so finished work arrives on main instead of in your review queue.",
             "refineryHighlight": "Automatic landing",
             "refineryTitle": "Finished work merges to main on its own",
@@ -2977,7 +2977,7 @@
             "graphAlt": "Mesh observability after a real converged workstream: mission history, append-only ledger activity, the task queue, and Refinery jobs — feat/get-todo-by-id fast-forwarded into main"
         },
         "compare": {
-            "sectionTitle": "Parallel agents are everywhere now. Where does the work actually land?",
+            "sectionTitle": "Everyone runs agents in parallel. Not everyone keeps them out of each other's way.",
             "sectionSubtitle": "A fair question. Local CLIs spawn subagents; desktop orchestrators fan work across worktrees with a slick native UI. Both stop at the branch. Here's the honest line — including where each of them beats us — with no hand-waving.",
             "colLocalCli": "Local CLI + subagents",
             "colDesktop": "Desktop orchestrator",

@@ -2902,7 +2902,7 @@
             "subtitleAsk": "<coordinator></coordinator>に<worker></worker>を送ってリポジトリを<verb></verb>してもらいましょう。",
             "subtitleFrom": "<place></place>から",
             "anywhere": "どこでも",
-            "subtitleLand": "完了した作業は自動で main に着地します。",
+            "subtitleLand": "10体同時に動かしても、互いに踏み合いません。",
             "axes": {
                 "os": [
                     "Mac",
@@ -2948,10 +2948,10 @@
             "selfHost": "セルフホスト可能",
             "demoDesktop": "複数のマシンにまたがるライブエージェントセッションを操作する ADHDev コマンドセンター",
             "demoPush": "ADHDev モバイルプッシュ通知とワンタップ承認",
-            "scenarioPill": "典型的なセッション: ミッション割り当て → エージェントがMac + Windowsワークツリーに展開 → RefineryがどちらもmainにAUTO着地。"
+            "scenarioPill": "典型的なセッション: ミッション割り当て → エージェントがMac + Windowsワークツリーに展開、衝突なし → 検証を通ったものだけRefineryがマージ。"
         },
         "mesh": {
-            "sectionTitle": "彼らは並列化する。私たちは着地させる。",
+            "sectionTitle": "互いに踏み合わない並列エージェント。",
             "sectionSubtitle": "並列エージェントの起動は簡単な部分で、いまやどのツールでもできます。難しいのはその後です。検証してマージしなければならない 10 個のブランチ。Refinery がそれを無人で代行するので、完了した作業はレビュー待ち行列ではなく main に届きます。",
             "refineryHighlight": "Refinery",
             "refineryTitle": "完了した作業が main に着地します — 無人で",
@@ -2976,7 +2976,7 @@
             "graphAlt": "実際に収束したワークストリーム直後のメッシュ可観測性: ミッション履歴、追記専用の台帳アクティビティ、タスクキュー、Refinery ジョブ — feat/get-todo-by-id が main に fast-forward 済み"
         },
         "compare": {
-            "sectionTitle": "並列エージェントはいまやどこにでもあります。作業は実際どこに着地するのでしょう？",
+            "sectionTitle": "並列エージェントはもう当たり前。衝突させないのは別の話です。",
             "sectionSubtitle": "もっともな疑問です。ローカル CLI はサブエージェントを起動し、デスクトップオーケストレーターは洗練されたネイティブ UI でワークツリーに作業を分散します。どちらもブランチで止まります。ここに正直な線引きを示します — 各ツールが私たちに勝る点も含めて、ごまかしなく。",
             "colLocalCli": "ローカル CLI + サブエージェント",
             "colDesktop": "デスクトップオーケストレーター",

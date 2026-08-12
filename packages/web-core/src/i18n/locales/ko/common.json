@@ -2902,7 +2902,7 @@
             "subtitleAsk": "<coordinator></coordinator>에게 <worker></worker>를 보내 리포지토리를 <verb></verb>하게 해보세요.",
             "subtitleFrom": "<place></place>에서",
             "anywhere": "어디서든",
-            "subtitleLand": "완료된 작업은 자동으로 main에 착지합니다.",
+            "subtitleLand": "열 개를 동시에 돌려도 서로 밟지 않습니다.",
             "axes": {
                 "os": [
                     "Mac",
@@ -2949,10 +2949,10 @@
             "selfHost": "셀프 호스팅 가능",
             "demoDesktop": "ADHDev 커맨드 센터가 여러 머신의 에이전트 세션을 실시간으로 구동하는 모습",
             "demoPush": "ADHDev 모바일 푸시 알림 및 원탭 승인",
-            "scenarioPill": "일반 세션: 미션 할당 → 에이전트들이 Mac + Windows 워크트리로 분산 → Refinery가 둘 다 main에 자동 착지."
+            "scenarioPill": "일반 세션: 미션 할당 → 에이전트들이 Mac + Windows 워크트리로 분산, 충돌 없음 → 검증을 통과한 것만 Refinery가 병합."
         },
         "mesh": {
-            "sectionTitle": "병렬 실행은 기본. 우리는 작업을 착지시킵니다.",
+            "sectionTitle": "서로 밟지 않는 병렬 에이전트.",
             "sectionSubtitle": "에이전트를 병렬로 돌리는 건 쉬운 부분입니다 — 이제 모든 도구가 그걸 합니다. 어려운 건 그 이후입니다: 확인하고 머지해야 할 브랜치 더미. ADHDev가 그걸 대신 처리해서, 검토 큐가 아니라 main에 완성된 작업이 도착합니다.",
             "refineryHighlight": "자동 착지",
             "refineryTitle": "완료된 작업이 스스로 main에 머지됩니다",
@@ -2977,7 +2977,7 @@
             "graphAlt": "실제 수렴 워크스트림 직후의 메시 옵저버빌리티: 미션 히스토리, append-only 원장 활동, 태스크 큐, Refinery 잡 — feat/get-todo-by-id가 main으로 fast-forward됨"
         },
         "compare": {
-            "sectionTitle": "병렬 에이전트는 이제 어디에나 있습니다. 그 결과물은 실제로 어디에 착지하나요?",
+            "sectionTitle": "병렬 에이전트는 이제 어디에나 있습니다. 서로 안 꼬이게 하는 건 다른 문제죠.",
             "sectionSubtitle": "합당한 질문입니다. 로컬 CLI는 서브에이전트를 생성하고, 데스크톱 오케스트레이터는 세련된 네이티브 UI로 워크트리에 작업을 분배합니다. 둘 다 브랜치에서 멈춥니다. 각 도구 대비 나은 점과 부족한 점을 솔직하게 정리했습니다.",
             "colLocalCli": "로컬 CLI + 서브에이전트",
             "colDesktop": "데스크톱 오케스트레이터",
