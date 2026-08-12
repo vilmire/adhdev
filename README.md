@@ -2,16 +2,16 @@
 
 # ADHDev
 
-**Control your AI coding agents from the web — and let them land on `main` on their own.**
+**Ten coding agents on one repo, none of them stepping on each other — driven from your browser or phone.**
 
 [![npm](https://img.shields.io/npm/v/adhdev?label=npm%20i%20-g%20adhdev)](https://www.npmjs.com/package/adhdev)
 [![npm standalone](https://img.shields.io/npm/v/@adhdev/daemon-standalone?label=%40adhdev%2Fdaemon-standalone)](https://www.npmjs.com/package/@adhdev/daemon-standalone)
 [![CI](https://github.com/vilmire/adhdev/actions/workflows/ci.yml/badge.svg)](https://github.com/vilmire/adhdev/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-AI coding agents have become long-running background workers. ADHDev is the control plane for them: launch, watch, approve, and steer agent sessions from a web or mobile dashboard — across every machine you own — and hand off convergence to an unattended pipeline that merges finished work into `main`.
+AI coding agents have become long-running background workers. ADHDev is the control plane for them: launch, watch, approve, and steer agent sessions from a web or mobile dashboard — Claude Code, Codex, Kimi, Cursor CLI, Antigravity CLI side by side, across every machine you own — and hand off convergence to an unattended pipeline that merges finished work into `main`.
 
-**They parallelize. We land.** Fan out a task across worktrees and machines, then let the Refinery gate, verify, and fast-forward the results home — no merge-day hangover.
+**Parallel agents without the collisions.** Every task runs in its own git worktree; the Refinery gates, verifies, and fast-forwards finished work home — no merge-day hangover.
 
 Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://docs.adhf.dev)**
 
@@ -19,12 +19,16 @@ Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://doc
   <img src="docs/assets/readme/landing-command-center-demo-poster.jpg" alt="ADHDev desktop dashboard switching between chat and terminal views, floating a panel, and splitting the workspace" width="100%" />
 </p>
 
+**The loop:** describe a task in chat → the coordinator files it, tags it, queues it → an idle machine claims it into a fresh worktree → your repo's own gates decide → ff-merge to `main`, worktree gone. Your phone only buzzed if something needed approving.
+
+This repo is built that way: about a third of recent commits on its `main` are `Auto-merge via Refinery` commits. Don't take our word for it — clone it and run `git log --oneline -60 | grep -c "via Refinery"`.
+
 ---
 
 ## Why ADHDev
 
 ### 🌐 Web-first control
-Your agents run locally; you drive them from anywhere. The dashboard is a real control surface — inspect active sessions, read chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from a browser or your phone. No terminal babysitting.
+Your agents run locally; you drive them from anywhere. The dashboard is a real control surface — inspect active sessions, read chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from a browser or your phone. No terminal babysitting. Approval notifications carry the command text itself, because approving `rm -rf build/` and approving `git push --force` deserve different reaction times (push-to-phone ships with the cloud edition).
 
 <table>
   <tr>
@@ -49,6 +53,7 @@ A mesh is bound to one git repository and owns the moving parts you'd otherwise 
 | **Worktree nodes** | An isolated branch checkout per parallel task, bootstrapped automatically (install, native rebuilds, gitignored build outputs) before any work is dispatched to it. |
 | **Append-only ledger** | Every dispatch, completion, failure, stall, and checkpoint as a JSONL event — the audit trail that makes "what actually happened" answerable after the fact. |
 | **Operating notes** | Lessons recorded at runtime (a provider quirk, a recovery procedure) are injected into every future coordinator prompt, so knowledge outlives the session that learned it. |
+| **Live-state prompt** | The coordinator's system prompt isn't static text — at launch it's a render of live mesh state (node health, active mission, recent failures, accumulated notes), and at runtime events are injected into its session instead of it polling. |
 | **Difficulty routing** | Map easy work to cheap models and hard work to expensive ones with deep thinking, per node capability — the token bill scales with difficulty, not with task count. |
 
 <p align="center">
@@ -69,7 +74,7 @@ Parallel worktrees and unattended merges get fragile the moment git submodules e
 - **Atomic pointer bumps** — the submodule pointer bump converges together with the root change, so an unattended merge never leaves the root pointing at a broken or dangling submodule commit.
 
 ### 🔺 MAGI — cross-verified results
-Run a read-only investigation (a bug RCA, a design review, an audit) through several independent agents at once, then read where they *disagree*.
+MAGI — Multi-Agent Ground-truth Insight, and yes, the Evangelion reference came first and the backronym took a while — runs a read-only investigation (a bug RCA, a design review, an audit) through several independent agents at once, then you read where they *disagree*.
 
 The premise is that **high agreement is not the same as being right**: the same model, given the same prompt and the same context, produces the same hallucination. So MAGI fans the question out across different machines *and* different providers, and weighs consensus by how independent the sources actually were:
 
