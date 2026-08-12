@@ -404,6 +404,14 @@ export interface ProviderMeshCoordinatorConfig {
    */
   systemPromptInjection?: MeshCoordinatorSystemPromptInjection;
   /**
+   * Extra spawn args appended ONLY for coordinator launches (never worker or
+   * interactive sessions). Use for CLI flags that pre-answer daemon-written
+   * setup prompts — e.g. cursor-agent's `--approve-mcps`, which accepts the
+   * daemon-written .cursor/mcp.json without parking the session on the
+   * "MCP servers need to be approved" modal at coordinator startup.
+   */
+  launchArgs?: string[];
+  /**
    * How coordinator-launched worker sessions are isolated from coordinator-only
    * MCP/tools/config. Provider-specific CLI quirks belong here, not in daemon
    * launch code.
@@ -449,6 +457,8 @@ export type MeshCoordinatorDelegatedWorkerArgRule =
  *   - context_file     → write prompt into a workspace markdown the CLI
  *                        auto-loads as project context                       (Gemini, Antigravity)
  *   - env_var          → expose prompt to the spawned process as $name       (Hermes)
+ *   - agent_file       → write prompt to a daemon-owned temp agent file and
+ *                        pass its path via `flag`                            (Kimi --agent-file)
  *
  * The prompt text is templated with `{prompt}` (raw) or `{prompt_json}`
  * (JSON-encoded for embedding inside config-override strings).
@@ -476,11 +486,30 @@ export type MeshCoordinatorSystemPromptInjection =
        * a coordinator doesn't pile up copies. If omitted, the prompt is appended raw.
        */
       wrapper?: string;
+      /**
+       * When true the daemon owns the whole file (a dedicated, daemon-named
+       * file such as `.cursor/rules/adhdev-mesh-coordinator.mdc`), so cleanup
+       * DELETES the file outright instead of stripping the wrapper block out
+       * of user-authored content. Default false (shared user file — strip).
+       */
+      owned?: boolean;
     }
   | {
       mode: 'env_var';
       /** Env-var name, e.g. 'HERMES_EPHEMERAL_SYSTEM_PROMPT'. */
       name: string;
+    }
+  | {
+      mode: 'agent_file';
+      /** Spawn-args flag that accepts an agent-file path, e.g. '--agent-file' (kimi). */
+      flag: string;
+      /**
+       * Agent-file body template using the {prompt} placeholder; defaults to
+       * '{prompt}'. CLI-native template variables (e.g. kimi's ${base_prompt})
+       * pass through verbatim — only {prompt} is substituted by the daemon.
+       * The file is written under a daemon-owned temp dir, never the workspace.
+       */
+      template?: string;
     };
 
 export interface ProviderCompatibilityEntry {

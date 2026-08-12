@@ -488,6 +488,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         const cliCmdArgs: string[] = [];
                         const cliCmdEnv: Record<string, string> = {};
                         let cliCmdContextFilePath: string | undefined;
+                        let cliCmdContextFileOwned = false;
+                        let cliCmdAgentFilePath: string | undefined;
                         if (cliCmdSystemPrompt) {
                             const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
                             const effect = applyMeshCoordinatorSystemPromptInjection(
@@ -496,6 +498,15 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                 { cliArgs: cliCmdArgs, launchEnv: cliCmdEnv, workspace, cliType },
                             );
                             cliCmdContextFilePath = effect.contextFilePath;
+                            cliCmdContextFileOwned = effect.contextFileOwned === true;
+                            cliCmdAgentFilePath = effect.agentFilePath;
+                        }
+                        // Provider-declared coordinator-only launch args (e.g.
+                        // cursor-agent --approve-mcps: accept the daemon-written
+                        // .cursor/mcp.json without parking on the approval modal).
+                        const cliCmdProviderLaunchArgs = providerMeta?.meshCoordinator?.launchArgs;
+                        if (Array.isArray(cliCmdProviderLaunchArgs)) {
+                            cliCmdArgs.push(...cliCmdProviderLaunchArgs.filter((a: unknown) => typeof a === 'string' && a.trim()));
                         }
 
                         const cliCmdLaunch: any = await ctx.deps.cliManager.handleCliCommand('launch_cli', {
@@ -536,10 +547,23 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // picking up our wrapper block.
                         if (cliCmdLaunch?.success && cliCmdContextFilePath) {
                             const stripPath = cliCmdContextFilePath;
+                            const stripOwned = cliCmdContextFileOwned;
                             setTimeout(() => {
                                 void import('../mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
-                                    stripCoordinatorWrapperFile(stripPath);
+                                    stripCoordinatorWrapperFile(stripPath, stripOwned);
                                     LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (cli_command)`);
+                                }).catch(() => { /* best-effort */ });
+                            }, 5000);
+                        }
+
+                        // agent_file inject-then-remove: the CLI (kimi --agent-file)
+                        // reads the temp agent file once at startup and binds it to
+                        // the session, so delete our temp copy after launch settles.
+                        if (cliCmdLaunch?.success && cliCmdAgentFilePath) {
+                            const agentPath = cliCmdAgentFilePath;
+                            setTimeout(() => {
+                                void import('../mesh-coordinator.js').then(({ cleanupCoordinatorAgentFile }) => {
+                                    cleanupCoordinatorAgentFile(agentPath);
                                 }).catch(() => { /* best-effort */ });
                             }, 5000);
                         }
@@ -566,6 +590,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                         : 'name' in cliCmdInjectionDecl ? cliCmdInjectionDecl.name
                                         : 'path' in cliCmdInjectionDecl ? cliCmdInjectionDecl.path
                                         : undefined,
+                                    ...('owned' in cliCmdInjectionDecl ? { owned: cliCmdInjectionDecl.owned === true } : {}),
                                 } : undefined,
                             });
                         }
@@ -737,6 +762,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         launchEnv.HERMES_IGNORE_USER_CONFIG = '';
                     }
                     let autoImportContextFilePath: string | undefined;
+                    let autoImportContextFileOwned = false;
+                    let autoImportAgentFilePath: string | undefined;
                     if (systemPrompt) {
                         const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
                         const effect = applyMeshCoordinatorSystemPromptInjection(
@@ -745,6 +772,14 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             { cliArgs, launchEnv, workspace, cliType },
                         );
                         autoImportContextFilePath = effect.contextFilePath;
+                        autoImportContextFileOwned = effect.contextFileOwned === true;
+                        autoImportAgentFilePath = effect.agentFilePath;
+                    }
+                    // Provider-declared coordinator-only launch args (see the
+                    // cli_command branch for the rationale).
+                    const autoImportProviderLaunchArgs = providerMeta?.meshCoordinator?.launchArgs;
+                    if (Array.isArray(autoImportProviderLaunchArgs)) {
+                        cliArgs.push(...autoImportProviderLaunchArgs.filter((a: unknown) => typeof a === 'string' && a.trim()));
                     }
                     if (cliType === 'claude-cli') {
                         cliArgs.push('--mcp-config', coordinatorSetup.configPath);
@@ -783,10 +818,21 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // worker session opens up in the same workspace.
                     if (launchResult?.success && autoImportContextFilePath) {
                         const stripPath = autoImportContextFilePath;
+                        const stripOwned = autoImportContextFileOwned;
                         setTimeout(() => {
                             void import('../mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
-                                stripCoordinatorWrapperFile(stripPath);
+                                stripCoordinatorWrapperFile(stripPath, stripOwned);
                                 LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (auto_import)`);
+                            }).catch(() => { /* best-effort */ });
+                        }, 5000);
+                    }
+
+                    // agent_file inject-then-remove (see the cli_command branch).
+                    if (launchResult?.success && autoImportAgentFilePath) {
+                        const agentPath = autoImportAgentFilePath;
+                        setTimeout(() => {
+                            void import('../mesh-coordinator.js').then(({ cleanupCoordinatorAgentFile }) => {
+                                cleanupCoordinatorAgentFile(agentPath);
                             }).catch(() => { /* best-effort */ });
                         }, 5000);
                     }
@@ -814,6 +860,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                     : 'name' in autoImportInjectionDecl ? autoImportInjectionDecl.name
                                     : 'path' in autoImportInjectionDecl ? autoImportInjectionDecl.path
                                     : undefined,
+                                ...('owned' in autoImportInjectionDecl ? { owned: autoImportInjectionDecl.owned === true } : {}),
                             } : undefined,
                         });
                     }

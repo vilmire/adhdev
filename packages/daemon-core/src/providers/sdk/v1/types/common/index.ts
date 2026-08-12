@@ -170,14 +170,17 @@ export interface MeshCoordinatorDef {
   supported: boolean;
   mcpConfig?: McpConfigDef;
   systemPromptInjection?: MeshCoordinatorSystemPromptInjectionDef;
+  /** Coordinator-only extra spawn args (e.g. cursor's --approve-mcps). */
+  launchArgs?: string[];
   delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolationDef;
 }
 
 export type MeshCoordinatorSystemPromptInjectionDef =
   | { mode: 'cli_arg'; flag: string }
   | { mode: 'config_override'; flag: string; template: string }
-  | { mode: 'context_file'; path: string; wrapper?: string }
-  | { mode: 'env_var'; name: string };
+  | { mode: 'context_file'; path: string; wrapper?: string; owned?: boolean }
+  | { mode: 'env_var'; name: string }
+  | { mode: 'agent_file'; flag: string; template?: string };
 
 export interface MeshCoordinatorDelegatedWorkerIsolationDef {
   env?: {

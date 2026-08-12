@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { LOG } from '../logging/logger.js'
 import { shortHash } from '../system/hash.js'
 import { IDENTITY } from '../track-identity.js'
@@ -352,6 +352,14 @@ export interface CoordinatorInjectionEffect {
    *  don't see the wrapper on disk; R47's unregister cleanup uses it as a
    *  fallback if the timer never fires (process crash, etc). */
   contextFilePath?: string
+  /** context_file with owned:true — cleanup deletes the whole file rather
+   *  than stripping the wrapper block (daemon-named file, no user content). */
+  contextFileOwned?: boolean
+  /** Absolute path of the daemon-owned temp agent file. Only set for
+   *  agent_file injection. The CLI reads it once at startup, so the launch
+   *  path schedules a delete after the spawn settles; leftovers in the temp
+   *  dir are harmless (OS-reaped) but we still best-effort clean up. */
+  agentFilePath?: string
 }
 
 export function applyMeshCoordinatorSystemPromptInjection(
@@ -387,6 +395,24 @@ function applyInjectionRule(
       ctx.launchEnv[injection.name] = systemPrompt
       return {}
     }
+    case 'agent_file': {
+      if (!injection.flag) return {}
+      const template = injection.template && injection.template.includes('{prompt}')
+        ? injection.template
+        : '{prompt}'
+      const body = template.replace(/\{prompt\}/g, systemPrompt)
+      try {
+        const dir = mkdtempSync(join(os.tmpdir(), `adhdev-coord-${ctx.cliType}-`))
+        const filePath = join(dir, 'coordinator-agent.md')
+        writeFileSync(filePath, body, 'utf-8')
+        ctx.cliArgs.push(injection.flag, filePath)
+        LOG.info('MeshCoordinator', `Wrote coordinator agent file to ${filePath} (${ctx.cliType})`)
+        return { agentFilePath: filePath }
+      } catch (error: any) {
+        LOG.warn('MeshCoordinator', `Could not write coordinator agent file: ${error?.message || error}`)
+        return {}
+      }
+    }
     case 'context_file': {
       if (!injection.path) return {}
       const target = isAbsolute(injection.path)
@@ -413,6 +439,9 @@ function applyInjectionRule(
       // without forcing spec authors to declare an explicit marker.
       const sentinel = wrapper.split('{prompt}')[0].trim()
       try {
+        // The declared path may live in a subdirectory the workspace doesn't
+        // have yet (e.g. cursor's `.cursor/rules/*.mdc`) — create parents.
+        mkdirSync(dirname(target), { recursive: true })
         if (existsSync(target)) {
           const existing = readFileSync(target, 'utf-8')
           if (sentinel && existing.includes(sentinel)) {
@@ -432,7 +461,7 @@ function applyInjectionRule(
           writeFileSync(target, rendered, 'utf-8')
         }
         LOG.info('MeshCoordinator', `Wrote coordinator prompt to ${target} (${ctx.cliType})`)
-        return { contextFilePath: target }
+        return { contextFilePath: target, contextFileOwned: injection.owned === true }
       } catch (error: any) {
         LOG.warn('MeshCoordinator', `Could not write ${target}: ${error?.message || error}`)
         return {}
@@ -462,11 +491,21 @@ function applyInjectionRule(
  * silently. Leaves user-authored content outside the sentinels intact.
  * Deletes the file outright if our wrapper was the only content.
  */
-export function stripCoordinatorWrapperFile(filePath: string): void {
+export function stripCoordinatorWrapperFile(filePath: string, owned = false): void {
   const OPEN = '<!-- adhdev-mesh-coordinator-prompt -->'
   const CLOSE = '<!-- /adhdev-mesh-coordinator-prompt -->'
   try {
     if (!existsSync(filePath)) return
+    // Daemon-owned whole file (dedicated name, e.g. cursor's rules .mdc) —
+    // delete outright instead of stripping sentinels out of user content.
+    if (owned) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const fs = require('node:fs')
+        fs.unlinkSync(filePath)
+      } catch { /* best-effort */ }
+      return
+    }
     const existing = readFileSync(filePath, 'utf-8')
     const openIdx = existing.indexOf(OPEN)
     if (openIdx < 0) return
@@ -484,6 +523,20 @@ export function stripCoordinatorWrapperFile(filePath: string): void {
     } else {
       writeFileSync(filePath, remaining + '\n', 'utf-8')
     }
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Delete a daemon-owned temp agent file written by agent_file injection,
+ * together with the mkdtemp directory that holds it. The CLI (kimi
+ * --agent-file) reads the file exactly once at startup and binds the agent
+ * to the session, so after the spawn settles the file is dead weight.
+ * Idempotent and best-effort: leftovers in os.tmpdir() are harmless.
+ */
+export function cleanupCoordinatorAgentFile(filePath: string): void {
+  try {
+    if (!existsSync(filePath)) return
+    rmSync(dirname(filePath), { recursive: true, force: true })
   } catch { /* best-effort */ }
 }
 

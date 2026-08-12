@@ -40,6 +40,9 @@ export interface NormalizedSpecSnapshot {
     screen: string
     sections: Record<string, string> | undefined
     stateHistory: Array<Record<string, unknown>>
+    /** Legacy ProviderCliAdapter engine transitions ({status, at, trigger}).
+     *  Empty for spec-driven providers — they report stateHistory instead. */
+    statusHistory: Array<{ status: string; at: number; trigger?: string | null }>
     idleHoldPending: boolean
     lastBusyAt: number
     cursorPosition?: { row: number; col: number } | null
@@ -138,6 +141,7 @@ export function normalizeSpecSnapshot(raw: unknown): NormalizedSpecSnapshot | nu
             screen: str(r.screen),
             sections: (r.sections as Record<string, string> | undefined) ?? undefined,
             stateHistory: Array.isArray(r.stateHistory) ? (r.stateHistory as Array<Record<string, unknown>>) : [],
+            statusHistory: [],
             idleHoldPending: r.idleHoldPending === true,
             lastBusyAt: typeof r.lastBusyAt === 'number' ? r.lastBusyAt : 0,
             cursorPosition: (r.cursorPosition as NormalizedSpecSnapshot['cursorPosition']) ?? null,
@@ -157,7 +161,9 @@ export function normalizeSpecSnapshot(raw: unknown): NormalizedSpecSnapshot | nu
 
     // ── Native-source / legacy diagnostics shape (e.g. kimi provider.v1.json).
     //    Map whatever is available; state-machine sections stay empty and the
-    //    nativeSource flag tells the panel to render them as N/A.
+    //    nativeSource flag tells the panel to render them as N/A. The legacy
+    //    engine DOES keep a status transition log ({status, at, trigger}) —
+    //    pass it through so the panel can show it in place of State History.
     const terminal = asRecord(r.terminal)
     const parser = asRecord(r.parser)
     const parsedCache = asRecord(parser.parsedStatusCache)
@@ -167,6 +173,14 @@ export function normalizeSpecSnapshot(raw: unknown): NormalizedSpecSnapshot | nu
     const status = str(parsedCache.status) || str(r.currentStatus) || str(r.status)
     const providerSessionId = str(parsedCache.providerSessionId) || str(runtimeMeta.providerSessionId) || null
     const transcriptAuthority = str(parsedCache.transcriptAuthority) || str(r.transcriptAuthority) || undefined
+    const statusHistory = (Array.isArray(r.statusHistory) ? r.statusHistory : [])
+        .map(e => asRecord(e))
+        .filter(e => typeof e.status === 'string' && typeof e.at === 'number')
+        .map(e => ({
+            status: e.status as string,
+            at: e.at as number,
+            trigger: typeof e.trigger === 'string' ? e.trigger : null,
+        }))
 
     return {
         cliType: str(r.cliType) || str(r.type),
@@ -181,6 +195,7 @@ export function normalizeSpecSnapshot(raw: unknown): NormalizedSpecSnapshot | nu
         screen,
         sections: undefined,
         stateHistory: [],
+        statusHistory,
         idleHoldPending: false,
         lastBusyAt: typeof r.lastBusyAt === 'number' ? r.lastBusyAt : 0,
         cursorPosition: null,

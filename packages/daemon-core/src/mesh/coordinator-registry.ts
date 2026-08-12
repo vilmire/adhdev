@@ -28,7 +28,7 @@ export interface CoordinatorRegistryEntry {
      *  added vs. what the daemon's default template produced. */
     extraSystemPrompt?: string;
     /** How the prompt was actually injected (cli_arg / context_file / …). */
-    injection?: { mode: string; target?: string };
+    injection?: { mode: string; target?: string; owned?: boolean };
     /** Path of the MCP config file the daemon wrote for this session. */
     mcpConfigPath?: string;
 }
@@ -95,6 +95,7 @@ export function unregisterMeshCoordinator(sessionId: string): void {
     saveRegistry();
     if (!entry) return;
     const workspace = entry.workspace;
+    const owned = entry.injection?.owned === true;
     const target = entry.injection?.mode === 'context_file' && typeof entry.injection.target === 'string'
         ? entry.injection.target
         : '';
@@ -106,7 +107,7 @@ export function unregisterMeshCoordinator(sessionId: string): void {
     try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { stripCoordinatorWrapperFile } = require('../commands/mesh-coordinator.js');
-        stripCoordinatorWrapperFile(filePath);
+        stripCoordinatorWrapperFile(filePath, owned);
     } catch { /* best-effort cleanup; never throw out of unregister */ }
 }
 

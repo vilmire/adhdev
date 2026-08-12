@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { resolveMeshCoordinatorSetup, applyMeshCoordinatorSystemPromptInjection } from '../../src/commands/mesh-coordinator.js';
+import { resolveMeshCoordinatorSetup, applyMeshCoordinatorSystemPromptInjection, cleanupCoordinatorAgentFile } from '../../src/commands/mesh-coordinator.js';
 import { validateProviderDefinition } from '../../src/providers/provider-schema.js';
 
 // ALL-CLI-COORDINATOR end-to-end (minus process spawn): drive the EXACT gates
@@ -51,27 +51,63 @@ describe.each(['kimi', 'opencode'] as const)('%s mesh coordinator declaration', 
         }
     });
 
-    it('injects the coordinator prompt into workspace AGENTS.md with the marker wrapper', () => {
-        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `coord-${type}-`));
-        try {
-            const cliArgs: string[] = [];
-            const launchEnv: Record<string, string> = {};
-            const effect = applyMeshCoordinatorSystemPromptInjection(
-                'COORDINATOR PROMPT BODY',
-                (manifest as any).meshCoordinator.systemPromptInjection,
-                { cliArgs, launchEnv, workspace, cliType: type },
-            );
-            const agentsPath = path.join(workspace, 'AGENTS.md');
-            expect(effect.contextFilePath).toBe(agentsPath);
-            const written = fs.readFileSync(agentsPath, 'utf-8');
-            expect(written).toContain('<!-- adhdev-mesh-coordinator-prompt -->');
-            expect(written).toContain('COORDINATOR PROMPT BODY');
-            expect(written).toContain('<!-- /adhdev-mesh-coordinator-prompt -->');
-            // Prompt travels via the context file — never argv/env for these CLIs.
-            expect(cliArgs).toEqual([]);
-            expect(launchEnv).toEqual({});
-        } finally {
-            fs.rmSync(workspace, { recursive: true, force: true });
-        }
-    });
+    if (type === 'kimi') {
+        it('injects the coordinator prompt via a daemon-owned temp agent file (--agent-file)', () => {
+            const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `coord-${type}-`));
+            let agentFilePath: string | undefined;
+            try {
+                const cliArgs: string[] = [];
+                const launchEnv: Record<string, string> = {};
+                const effect = applyMeshCoordinatorSystemPromptInjection(
+                    'COORDINATOR PROMPT BODY',
+                    (manifest as any).meshCoordinator.systemPromptInjection,
+                    { cliArgs, launchEnv, workspace, cliType: type },
+                );
+                agentFilePath = effect.agentFilePath;
+                // Prompt travels via a temp agent file path on argv — never the
+                // workspace, never env.
+                expect(agentFilePath).toBeTruthy();
+                expect(cliArgs).toEqual(['--agent-file', agentFilePath]);
+                expect(launchEnv).toEqual({});
+                const written = fs.readFileSync(agentFilePath!, 'utf-8');
+                // kimi renders ${base_prompt} itself; the daemon only substitutes {prompt}.
+                expect(written).toContain('${base_prompt}');
+                expect(written).toContain('COORDINATOR PROMPT BODY');
+                // The file lives outside the workspace and the workspace is untouched.
+                expect(agentFilePath!.startsWith(workspace)).toBe(false);
+                expect(fs.existsSync(path.join(workspace, 'AGENTS.md'))).toBe(false);
+                // Cleanup removes the file and its temp dir, and is idempotent.
+                cleanupCoordinatorAgentFile(agentFilePath!);
+                expect(fs.existsSync(agentFilePath!)).toBe(false);
+                cleanupCoordinatorAgentFile(agentFilePath!);
+            } finally {
+                fs.rmSync(workspace, { recursive: true, force: true });
+                if (agentFilePath) cleanupCoordinatorAgentFile(agentFilePath);
+            }
+        });
+    } else {
+        it('injects the coordinator prompt into workspace AGENTS.md with the marker wrapper', () => {
+            const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `coord-${type}-`));
+            try {
+                const cliArgs: string[] = [];
+                const launchEnv: Record<string, string> = {};
+                const effect = applyMeshCoordinatorSystemPromptInjection(
+                    'COORDINATOR PROMPT BODY',
+                    (manifest as any).meshCoordinator.systemPromptInjection,
+                    { cliArgs, launchEnv, workspace, cliType: type },
+                );
+                const agentsPath = path.join(workspace, 'AGENTS.md');
+                expect(effect.contextFilePath).toBe(agentsPath);
+                const written = fs.readFileSync(agentsPath, 'utf-8');
+                expect(written).toContain('<!-- adhdev-mesh-coordinator-prompt -->');
+                expect(written).toContain('COORDINATOR PROMPT BODY');
+                expect(written).toContain('<!-- /adhdev-mesh-coordinator-prompt -->');
+                // Prompt travels via the context file — never argv/env for these CLIs.
+                expect(cliArgs).toEqual([]);
+                expect(launchEnv).toEqual({});
+            } finally {
+                fs.rmSync(workspace, { recursive: true, force: true });
+            }
+        });
+    }
 });

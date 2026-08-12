@@ -517,6 +517,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
  * v1 spec schema.
  */
 function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines: any[]): NativeTurnTerminalMarker[] {
+    if (agentType === 'kimi') return extractKimiTurnTerminalMarkers(lines);
     if (agentType !== 'codex-cli') return [];
     const markers: NativeTurnTerminalMarker[] = [];
     for (const rec of lines) {
@@ -535,6 +536,36 @@ function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines:
             receivedAt,
             outcome: isAbort ? 'aborted' : 'completed',
             summary,
+            ...(turnId ? { turnId } : {}),
+        });
+    }
+    return markers;
+}
+
+/**
+ * kimi wire.jsonl turn-terminal records. Every turn ends with exactly one
+ * `{"type":"turn.ended","turnId":<n>,"reason":"completed"|"cancelled",
+ * "durationMs":<n>,"time":<epoch ms>}` record (a user cancel also writes a
+ * separate turn.cancel first, but turn.ended is always the terminal one).
+ * The record carries no final text, so summary stays empty and the existing
+ * summary-provenance chain keeps reconstructing it from assistant messages —
+ * the marker's job here is only to prove THIS turn ended (turn-scoped by
+ * selectTurnTerminalMarker via turnStartedAt).
+ */
+function extractKimiTurnTerminalMarkers(lines: any[]): NativeTurnTerminalMarker[] {
+    const markers: NativeTurnTerminalMarker[] = [];
+    for (const rec of lines) {
+        if (String(rec?.type ?? '') !== 'turn.ended') continue;
+        const receivedAt = parseTimestamp(rec?.time) ?? Date.now();
+        const reason = String(rec?.reason ?? '').trim();
+        const rawTurnId = rec?.turnId;
+        const turnId = typeof rawTurnId === 'number' && Number.isFinite(rawTurnId)
+            ? String(rawTurnId)
+            : typeof rawTurnId === 'string' && rawTurnId.trim() ? rawTurnId.trim() : '';
+        markers.push({
+            receivedAt,
+            outcome: reason === 'cancelled' ? 'aborted' : 'completed',
+            summary: '',
             ...(turnId ? { turnId } : {}),
         });
     }

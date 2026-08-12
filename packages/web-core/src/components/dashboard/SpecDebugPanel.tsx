@@ -59,6 +59,9 @@ interface SpecSnapshot {
     screen: string
     sections: Record<string, string> | undefined
     stateHistory: StateHistoryEntry[]
+    /** Legacy engine (CliStateEngine) transitions for native-source providers
+     *  like kimi — {status, at, trigger}. Shown in place of State History. */
+    statusHistory?: Array<{ status: string; at: number; trigger?: string | null }>
     idleHoldPending: boolean
     lastBusyAt: number
     cursorPosition?: { row: number; col: number } | null
@@ -425,7 +428,13 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
         }
         lines.push('')
         lines.push('## State History (last 20)')
-        if (nativeSource) lines.push('N/A (native-source provider — no state-machine rules)')
+        if (nativeSource && !(s?.statusHistory && s.statusHistory.length > 0)) lines.push('N/A (native-source provider — no state-machine rules)')
+        if (nativeSource && s?.statusHistory && s.statusHistory.length > 0) {
+            lines.push('(legacy engine status transitions — native-source provider has no state-machine rules)')
+            for (const entry of [...s.statusHistory].reverse().slice(0, 20)) {
+                lines.push(`- ${entry.status} @ ${new Date(entry.at).toISOString()}${entry.trigger ? ` | trigger: ${entry.trigger}` : ''}`)
+            }
+        }
         const history = s?.stateHistory ? [...s.stateHistory].reverse().slice(0, 20) : []
         for (const entry of history) {
             const reason = entry.reason != null ? (typeof entry.reason === 'string' ? entry.reason : JSON.stringify(entry.reason)) : ''
@@ -792,8 +801,30 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             {/* State history */}
                             {snap.nativeSource && (
                                 <div>
-                                    <SectionLabel>State History</SectionLabel>
-                                    <div className="text-text-muted text-[11px] italic px-1">N/A (native-source provider — no state-machine rules)</div>
+                                    <SectionLabel>Status History{snap.statusHistory && snap.statusHistory.length > 0 ? ` (${snap.statusHistory.length})` : ''}</SectionLabel>
+                                    {snap.statusHistory && snap.statusHistory.length > 0 ? (
+                                        <div className="space-y-px">
+                                            {[...snap.statusHistory].reverse().slice(0, 20).map((entry, i) => (
+                                                <div key={i} className="rounded px-2 py-1 hover:bg-bg-glass-hover transition-colors">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className={`font-mono text-[11px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${stateBadge(entry.status)}`}>
+                                                            {entry.status}
+                                                        </span>
+                                                        <span className="text-text-secondary text-[11px] shrink-0 tabular-nums">
+                                                            {formatAgo(entry.at)}
+                                                        </span>
+                                                        {entry.trigger && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0 text-text-secondary bg-bg-glass border border-border-default">
+                                                                {entry.trigger}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-text-muted text-[11px] italic px-1">N/A (native-source provider — no state-machine rules)</div>
+                                    )}
                                 </div>
                             )}
                             {!snap.nativeSource && snap.stateHistory && snap.stateHistory.length > 0 && (
