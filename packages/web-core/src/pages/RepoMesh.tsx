@@ -30,6 +30,12 @@ import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph, getCachedMeshGraphStatus } from './repo-mesh/useMeshGraph'
 import { resolveFirstSetupSeedDaemonId, readAuthoritativeMeshHostPin } from './repo-mesh/host-seed'
+import {
+    createGraphPollBackoffState,
+    recordGraphSnapshot,
+    resetGraphPollBackoff,
+    resolvePollIntervalMs,
+} from './repo-mesh/graph-poll-backoff'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
 
 // Re-export types that cloud/standalone wrappers may reference
@@ -43,12 +49,21 @@ export { getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from './r
 // a git probe that is heavy on win32, and we never want to pile reloads onto a
 // coordinator's own in-flight refresh. Polling only runs while the tab is
 // visible and the detail view is open.
+//
+// This is the FAST rate — deliberately unchanged from the original conservative
+// choice (see commit 12d206c1). What changed is that it no longer runs forever:
+// once several consecutive ticks report an identical graph (repo-mesh/graph-poll-
+// backoff.ts), the effective interval backs off to BACKOFF_SLOW_INTERVAL_MS. Any
+// detected change — or an explicit reload (mesh switch, manual Refresh) — snaps
+// straight back to this rate, since that's exactly when the operator is watching
+// for convergence.
 const GRAPH_AUTO_REVALIDATE_INTERVAL_MS = 7000
 
 // When the daemon pushes per-mesh revision counters (cloud), the graph refreshes
 // event-driven on push, so the interval poll is demoted to a slow safety net that
 // only catches a dropped/missed push. Kept well above the push cadence so it never
-// competes with the event-driven path.
+// competes with the event-driven path. Backoff (above) still applies on top of
+// this — an already-slow cloud safety net can back off further when stable.
 const GRAPH_PUSH_FALLBACK_INTERVAL_MS = 45000
 
 // ─── Main page ───────────────────────────────────────────────────
@@ -488,11 +503,27 @@ export default function RepoMesh() {
     // (refresh=true → no spinner, no white flash). This is the flicker the operator
     // saw when the coordinator's own activity nudged resolvedActiveDaemonId.
     const graphLoadedForMeshRef = useRef<string | null>(null)
+    // Poll-rate backoff state (repo-mesh/graph-poll-backoff.ts). A mesh switch is
+    // exactly the "operator just acted, watch closely" moment, so it also resets
+    // the backoff to the fast rate below.
+    const pollBackoffRef = useRef(createGraphPollBackoffState())
+    // Fast rate: cloud demotes to the push-fallback safety-net rate; standalone
+    // (no push) uses the original conservative interval directly.
+    const fastPollIntervalMs = features.meshStatePushRefresh
+        ? GRAPH_PUSH_FALLBACK_INTERVAL_MS
+        : GRAPH_AUTO_REVALIDATE_INTERVAL_MS
+    // Effective interval for the auto-revalidate timer, widened once the graph has
+    // been observed stable for BACKOFF_STABLE_TICKS_THRESHOLD consecutive snapshots.
+    // Held in state (not a ref) so flipping it re-subscribes the setInterval below
+    // with the new period instead of silently drifting.
+    const [pollIntervalMs, setPollIntervalMs] = useState(fastPollIntervalMs)
     useEffect(() => {
         if (!selectedMeshId) return
         const meshChanged = graphLoadedForMeshRef.current !== selectedMeshId
         graphLoadedForMeshRef.current = selectedMeshId
         if (meshChanged) {
+            resetGraphPollBackoff(pollBackoffRef.current)
+            setPollIntervalMs(fastPollIntervalMs)
             // Seed from the last-good module cache for THIS mesh (if any) instead of
             // blanking to null — a previously-viewed mesh paints instantly and
             // freshens in the background (refresh=true). Only a never-seen mesh with
@@ -535,13 +566,19 @@ export default function RepoMesh() {
             .finally(() => { autoRevalidateInFlight.current = false })
     }
 
+    // Every committed graph snapshot — regardless of which path produced it
+    // (interval tick, event-driven push refresh, mesh switch, manual Refresh) —
+    // feeds the backoff comparison (graph-poll-backoff.ts) so a real change
+    // anywhere snaps the poll rate back to fast.
+    useEffect(() => {
+        recordGraphSnapshot(pollBackoffRef.current, meshGraphStatus)
+        setPollIntervalMs(resolvePollIntervalMs(pollBackoffRef.current, fastPollIntervalMs))
+    }, [meshGraphStatus, fastPollIntervalMs])
+
     // Event-driven refresh: re-fetch mesh_status the moment the daemon reports the
     // viewed mesh's state advanced, instead of waiting out the poll interval. No-op
     // on standalone (revision counters absent → hook never fires) and harmless when
     // the tab is hidden (loadGraph is cheap and the git probe is peer-gated).
-    const pollIntervalMs = features.meshStatePushRefresh
-        ? GRAPH_PUSH_FALLBACK_INTERVAL_MS
-        : GRAPH_AUTO_REVALIDATE_INTERVAL_MS
     useMeshStateRevisionRefresh({
         daemonIds: useMemo(
             () => [resolvedActiveDaemonId, ...meshNodeDaemonIds].filter(Boolean),
@@ -669,7 +706,10 @@ export default function RepoMesh() {
             displayedMeshStatus={displayedMeshStatus}
             graphLoading={graphLoading}
             graphError={graphError}
-            onRefreshGraph={() => loadGraph(resolvedActiveDaemonId, selectedMeshId, true)}
+            onRefreshGraph={() => {
+                resetGraphPollBackoff(pollBackoffRef.current)
+                void loadGraph(resolvedActiveDaemonId, selectedMeshId, true)
+            }}
             savingPolicy={savingPolicy}
             onUpdatePolicy={handleUpdatePolicy}
             coordinatorPromptDraft={coordinatorPromptDraft}
