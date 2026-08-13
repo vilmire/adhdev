@@ -145,9 +145,13 @@ function seedAssignedAttempt(meshId: string, opts: {
 } = {}) {
   const nowMs = opts.nowMs ?? Date.now()
   const providerType = opts.providerType ?? 'generic-floor-provider'
-  const task = enqueueTask(meshId, 'primary task', { taskMode: 'code_change' })
+  const task = enqueueTask(meshId, 'primary task', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
   const dependent = opts.withDependent
-    ? enqueueTask(meshId, 'dependent task', { taskMode: 'code_change', dependsOn: [task.id] })
+    ? enqueueTask(meshId, 'dependent task', { taskMode: 'code_change', dependsOn: [task.id],
+    difficulty: 'medium',
+})
     : null
   const claimed = claimNextTask(meshId, NODE_ID, SESSION_ID, [], { providerType })!
   const nonce = claimed.dispatchNonce ?? 1
@@ -343,7 +347,9 @@ describe('MID-TURN-LIVE-STATE-GATE — ordering vs. the autoLaunch causal gate (
     try {
       mockMesh(meshId)
       // Seed an in-window, unclaimed autoLaunch task naming this session (the Fix A scenario).
-      const task = enqueueTask(meshId, 'do worktree work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       const store = MeshRuntimeStore.getInstance()
       const entry = store.findQueueEntryById(meshId, task.id)!
       entry.autoLaunch = { status: 'completed', nodeId: NODE_ID, providerType: 'codex-cli', sessionId: SESSION_ID, updatedAt: new Date().toISOString() }
@@ -368,7 +374,9 @@ describe('MID-TURN-LIVE-STATE-GATE — ordering vs. the autoLaunch causal gate (
     const meshId = `mesh_midturn_autolaunch_regression_${Date.now()}`
     try {
       mockMesh(meshId)
-      const task = enqueueTask(meshId, 'do worktree work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       const store = MeshRuntimeStore.getInstance()
       const entry = store.findQueueEntryById(meshId, task.id)!
       entry.autoLaunch = { status: 'completed', nodeId: NODE_ID, providerType: 'codex-cli', sessionId: SESSION_ID, updatedAt: new Date().toISOString() }

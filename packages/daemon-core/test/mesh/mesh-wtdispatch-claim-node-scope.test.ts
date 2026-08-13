@@ -111,8 +111,12 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
         { sessionId: 'sess-A', workspace: WS_A },
         { sessionId: 'sess-B', workspace: WS_B },
       ])
-      const taskA = enqueueTask(meshId, 'MARKER-ALPHA', { targetNodeId: NODE_A, taskMode: 'code_change' })
-      const taskB = enqueueTask(meshId, 'MARKER-BRAVO', { targetNodeId: NODE_B, taskMode: 'code_change' })
+      const taskA = enqueueTask(meshId, 'MARKER-ALPHA', { targetNodeId: NODE_A, taskMode: 'code_change',
+    difficulty: 'medium',
+})
+      const taskB = enqueueTask(meshId, 'MARKER-BRAVO', { targetNodeId: NODE_B, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       // Session A (real workspace WS_A) is driven toward node B — the cross-claim that leaked B
       // onto A in the live repro. It MUST be refused, and B MUST stay pending for B's own session.
@@ -138,7 +142,9 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       const components = createComponents(meshId, [
         { sessionId: 'sess-A', workspace: WS_A, meshNodeId: NODE_A },
       ])
-      const taskB = enqueueTask(meshId, 'MARKER-BRAVO', { targetNodeId: NODE_B, taskMode: 'code_change' })
+      const taskB = enqueueTask(meshId, 'MARKER-BRAVO', { targetNodeId: NODE_B, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       // Session A is bound (stamped) to node A; a claim for node B is a cross-node leak.
       expect(tryAssignQueueTask(components, meshId, NODE_B, 'sess-A', 'claude-cli')).toBe(false)
@@ -154,8 +160,12 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
       setMesh(meshId, [node(NODE_A, WS_A, { isLocalWorktree: true }), node(NODE_B, WS_B, { isLocalWorktree: true })])
       // Only node B's session exists; node A's target task has no correctly-scoped session.
       const components = createComponents(meshId, [{ sessionId: 'sess-B', workspace: WS_B }])
-      const taskA = enqueueTask(meshId, 'MARKER-ALPHA', { targetNodeId: NODE_A, taskMode: 'code_change' })
-      const taskB = enqueueTask(meshId, 'MARKER-BRAVO', { targetNodeId: NODE_B, taskMode: 'code_change' })
+      const taskA = enqueueTask(meshId, 'MARKER-ALPHA', { targetNodeId: NODE_A, taskMode: 'code_change',
+    difficulty: 'medium',
+})
+      const taskB = enqueueTask(meshId, 'MARKER-BRAVO', { targetNodeId: NODE_B, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       // Node B's session must NOT absorb node A's task; A waits for its own node.
       expect(tryAssignQueueTask(components, meshId, NODE_A, 'sess-B', 'claude-cli')).toBe(false)
@@ -174,7 +184,9 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
     try {
       setMesh(meshId, [node(BASE_NODE, WS_BASE)])
       const components = createComponents(meshId, [{ sessionId: 'sess-base', workspace: WS_BASE, meshNodeId: BASE_NODE }])
-      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       expect(tryAssignQueueTask(components, meshId, BASE_NODE, 'sess-base', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-base')
@@ -188,7 +200,9 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
     try {
       setMesh(meshId, [node(BASE_NODE)]) // no workspace declared
       const components = createComponents(meshId, [{ sessionId: 'sess-x', workspace: WS_A }]) // no meshNodeId stamp
-      const task = enqueueTask(meshId, 'do work', { targetNodeId: BASE_NODE, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do work', { targetNodeId: BASE_NODE, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       // Neither the node workspace nor a stamp is resolvable → fall through to prior behavior.
       expect(tryAssignQueueTask(components, meshId, BASE_NODE, 'sess-x', 'claude-cli')).toBe(true)

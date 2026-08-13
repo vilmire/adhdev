@@ -343,7 +343,7 @@ test('mesh_view_queue compact payload stays under the token budget with many act
   const { ctx } = buildManyNodeCtx(meshId, 3);
   const bigMessage = 'Implement the requested feature with full validation and tests. '.repeat(20);
   try {
-    for (let i = 0; i < 80; i++) enqueueTask(meshId, `${bigMessage} task #${i}`);
+    for (let i = 0; i < 80; i++) enqueueTask(meshId, `${bigMessage} task #${i}`, { difficulty: 'medium' });
 
     const compactStr = await meshViewQueue(ctx as any, { view: 'active' });
     const compact = JSON.parse(compactStr);

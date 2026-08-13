@@ -123,7 +123,9 @@ describe('WTDISPATCH-SELFDIAL — local worktree node must not be dispatched as 
         daemonId: LOCAL_DAEMON_ID,
       }])
       const components = createComponents(meshId, [{ sessionId: 'sess-wt', workspace: WS_WT, meshNodeId: WT_NODE }])
-      const task = enqueueTask(meshId, 'MARKER-SELFDIAL', { targetNodeId: WT_NODE, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'MARKER-SELFDIAL', { targetNodeId: WT_NODE, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       expect(tryAssignQueueTask(components, meshId, WT_NODE, 'sess-wt', 'claude-cli')).toBe(true)
 
@@ -153,7 +155,9 @@ describe('WTDISPATCH-SELFDIAL — local worktree node must not be dispatched as 
         daemonId: REMOTE_DAEMON_ID, // a DIFFERENT machine
       }])
       const components = createComponents(meshId, [{ sessionId: 'sess-remote', workspace: WS_WT, meshNodeId: WT_NODE }])
-      enqueueTask(meshId, 'MARKER-REMOTE', { targetNodeId: WT_NODE, taskMode: 'code_change' })
+      enqueueTask(meshId, 'MARKER-REMOTE', { targetNodeId: WT_NODE, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       expect(tryAssignQueueTask(components, meshId, WT_NODE, 'sess-remote', 'claude-cli')).toBe(true)
 
@@ -179,7 +183,9 @@ describe('WTDISPATCH-SELFDIAL — local worktree node must not be dispatched as 
         daemonId: LOCAL_MACHINE_ID,
       }])
       const components = createComponents(meshId, [{ sessionId: 'sess-bare', workspace: WS_WT, meshNodeId: WT_NODE }])
-      enqueueTask(meshId, 'MARKER-BARE', { targetNodeId: WT_NODE, taskMode: 'code_change' })
+      enqueueTask(meshId, 'MARKER-BARE', { targetNodeId: WT_NODE, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       expect(tryAssignQueueTask(components, meshId, WT_NODE, 'sess-bare', 'claude-cli')).toBe(true)
       expect(components.dispatchMeshCommand).not.toHaveBeenCalled()

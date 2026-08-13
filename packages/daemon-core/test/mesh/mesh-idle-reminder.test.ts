@@ -131,7 +131,7 @@ describe('mesh idle-active-mission reminder', () => {
 
     it('no-op when the mesh is NOT idle (a queue task is in flight)', () => {
         upsertMeshMission(meshId, { title: 'Active work', goal: 'x' });
-        enqueueTask(meshId, 'do the thing'); // pending queue task → totalActiveCount > 0
+        enqueueTask(meshId, 'do the thing', { difficulty: 'medium' }); // pending queue task → totalActiveCount > 0
         const coord = makeCoordinator();
 
         const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);

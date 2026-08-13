@@ -108,7 +108,9 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
     try {
       setMesh(meshId, 'running')
       const components = createComponents()
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -126,7 +128,9 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
     try {
       setMesh(meshId, undefined)
       const components = createComponents()
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -142,7 +146,9 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
     try {
       setMesh(meshId, 'complete')
       const components = createComponents()
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -162,6 +168,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — auto-launch excludes a node mid workt
         targetNodeId: NODE_ID,
         taskMode: 'code_change',
         requiredTags: ['provider=codex-cli'],
+        difficulty: 'medium',
       })
 
       await triggerMeshQueue(components, meshId)

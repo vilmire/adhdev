@@ -62,7 +62,7 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             priority: { type: 'string', enum: ['low', 'normal', 'high'], description: 'G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) — distinct from a node\'s schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue.' },
             model: { type: 'string', description: 'Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default.' },
             thinkingLevel: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning.' },
-            difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'Optional task execution difficulty — a ROUTING HINT, not a model selector. It is matched against each node\'s capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT\'s own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node\'s slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins.' },
+            difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED task execution difficulty — a ROUTING HINT, not a model selector. It is matched against each node\'s capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT\'s own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node\'s slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins.' },
             notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
             max_retries: { type: 'number', description: 'P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1).' },
             maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
@@ -71,7 +71,7 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             allow_duplicate: { type: 'boolean', description: 'G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction.' },
             allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
         },
-        required: ['message'],
+        required: ['message', 'difficulty'],
     },
 };
 
@@ -143,8 +143,9 @@ export const MESH_SEND_TASK_TOOL = {
             read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
             mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
+            difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE — it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry.' },
         },
-        required: ['node_id', 'session_id', 'message'],
+        required: ['node_id', 'session_id', 'message', 'difficulty'],
     },
 };
 

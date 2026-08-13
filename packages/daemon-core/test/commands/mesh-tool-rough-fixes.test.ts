@@ -144,6 +144,7 @@ describe('(2b) task_mode is undefined-safe end to end', () => {
     try {
       const task = enqueueTask(meshId, 'untargeted task without task_mode', {
         targetNodeId: 'node-x',
+        difficulty: 'medium',
       })
       expect(task).toBeDefined()
       expect(task.message).toBe('untargeted task without task_mode')

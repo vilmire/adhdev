@@ -1411,7 +1411,7 @@ describe('mesh_status', () => {
       expect(initial.sourceOfTruth.aggregateSnapshot.cached).toBe(false)
 
       sessionHostControl.listSessions.mockClear()
-      enqueueTask(mesh.id, 'queue task created by another mesh process')
+      enqueueTask(mesh.id, 'queue task created by another mesh process', { difficulty: 'medium' })
 
       const afterQueueChange = await router.execute('mesh_status', { meshId: mesh.id }) as any
 

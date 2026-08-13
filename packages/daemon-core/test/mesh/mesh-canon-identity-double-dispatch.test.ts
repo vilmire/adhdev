@@ -34,8 +34,8 @@ describe('CANON-IDENTITY — cross-form node dedup at the claim layer (B)', () =
     afterEach(() => { __clearMeshQueueForTests(meshId); __resetMeshRuntimeStoreForTests(); });
 
     it('a node assigned under daemon_mach_ form is seen BUSY when re-checked under bare mach_ form (one write per node)', () => {
-        enqueueTask(meshId, 'task 1');
-        enqueueTask(meshId, 'task 2');
+        enqueueTask(meshId, 'task 1', { difficulty: 'medium' });
+        enqueueTask(meshId, 'task 2', { difficulty: 'medium' });
 
         // First write claim stamps the node in the cloud `daemon_mach_` form.
         const c1 = claimNextTask(meshId, `daemon_${MACH}`, 'sessA', [], { providerType: 'claude-cli' });
@@ -53,7 +53,9 @@ describe('CANON-IDENTITY — cross-form node dedup at the claim layer (B)', () =
     });
 
     it('a node-pinned task stamped daemon_mach_ is claimable by the same node arriving bare mach_', () => {
-        const t = enqueueTask(meshId, 'pinned', { targetNodeId: `daemon_${MACH}` });
+        const t = enqueueTask(meshId, 'pinned', { targetNodeId: `daemon_${MACH}`,
+    difficulty: 'medium',
+});
         // The claiming session presents the bare form — it must still resolve the pin.
         const claimed = claimNextTask(meshId, MACH, 'sessA', [], { providerType: 'claude-cli' });
         expect(claimed?.id).toBe(t.id);
@@ -70,7 +72,7 @@ describe('CANON-IDENTITY — single-flight requeue guard (C)', () => {
     });
 
     it('refuses to requeue an in-flight (dispatched/generating) task — closes the requeue-while-generating double-dispatch', () => {
-        const t = enqueueTask(meshId, 'work');
+        const t = enqueueTask(meshId, 'work', { difficulty: 'medium' });
         const claimed = claimNextTask(meshId, 'node1', 'sessA');
         expect(claimed?.status).toBe('assigned');
 
@@ -91,7 +93,7 @@ describe('CANON-IDENTITY — single-flight requeue guard (C)', () => {
     });
 
     it('a stale assigned task (claimed but never dispatched → not in-flight) still requeues by default (no regression)', () => {
-        const t = enqueueTask(meshId, 'work');
+        const t = enqueueTask(meshId, 'work', { difficulty: 'medium' });
         // Claimed but the dispatch never began (dead session) — NOT in-flight.
         claimNextTask(meshId, 'node1', 'dead-session');
         const requeued = requeueTask(meshId, t.id, { reason: 'retry on another session' });
@@ -102,7 +104,7 @@ describe('CANON-IDENTITY — single-flight requeue guard (C)', () => {
     });
 
     it('a terminal completion clears the in-flight mark so a later requeue is allowed', () => {
-        const t = enqueueTask(meshId, 'work');
+        const t = enqueueTask(meshId, 'work', { difficulty: 'medium' });
         claimNextTask(meshId, 'node1', 'sessA');
         beginTaskDispatchInFlight(meshId, t.id);
         expect(isTaskDispatchInFlight(meshId, t.id)).toBe(true);
@@ -114,7 +116,7 @@ describe('CANON-IDENTITY — single-flight requeue guard (C)', () => {
     });
 
     it('cancel clears the in-flight mark', () => {
-        const t = enqueueTask(meshId, 'work');
+        const t = enqueueTask(meshId, 'work', { difficulty: 'medium' });
         claimNextTask(meshId, 'node1', 'sessA');
         beginTaskDispatchInFlight(meshId, t.id);
         cancelTask(meshId, t.id, { reason: 'operator cancel' });
@@ -122,7 +124,9 @@ describe('CANON-IDENTITY — single-flight requeue guard (C)', () => {
     });
 
     it('reclaiming a stranded assigned row clears the in-flight mark', () => {
-        const t = enqueueTask(meshId, 'work', { targetNodeId: 'n' });
+        const t = enqueueTask(meshId, 'work', { targetNodeId: 'n',
+    difficulty: 'medium',
+});
         claimNextTask(meshId, 'n', 'sessA', [], { providerType: 'claude-cli' });
         beginTaskDispatchInFlight(meshId, t.id);
         reclaimStrandedAssignedTask(meshId, t.id, { reason: 'assigned_stranded_dispatch_unconfirmed' });

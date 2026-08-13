@@ -108,7 +108,9 @@ function setupReboundTask(meshId: string, nodeId: string) {
  * attempt, so open it here the same way to reproduce the real post-dispatch state.
  */
 function setupClaimedTask(meshId: string, nodeId: string) {
-  enqueueTask(meshId, 'investigate the failure', { targetNodeId: nodeId })
+  enqueueTask(meshId, 'investigate the failure', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
   const claimed = claimNextTask(meshId, nodeId, REFUSED, [])!
   backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
   const store = MeshRuntimeStore.getInstance()
@@ -217,7 +219,9 @@ describe('DUP-CLAIM-REBIND rc.35 — the watchdogs must read the ATTEMPT session
     it('★4 is byte-identical on the never-rebound path (attempt session === row stamp)', () => {
       const meshId = `mesh_normal_${Date.now()}`
       try {
-        enqueueTask(meshId, 'ordinary task', { targetNodeId: 'node_w' })
+        enqueueTask(meshId, 'ordinary task', { targetNodeId: 'node_w',
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, 'node_w', HOLDER, [])!
         const row = getQueue(meshId).find(t => t.id === claimed.id)!
 

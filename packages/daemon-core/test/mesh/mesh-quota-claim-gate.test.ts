@@ -140,7 +140,9 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
       const components = createComponents(meshId, [
         { sessionId: 'sess-quota', workingDir: NODE_WS, meshNodeId: NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -167,7 +169,9 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
       const components = createComponents(meshId, [
         { sessionId: 'sess-quota', workingDir: NODE_WS, meshNodeId: NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const first = await triggerMeshQueue(components, meshId)
       expect(first.claimed).toBe(false)
@@ -197,7 +201,9 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
       const components = createComponents(meshId, [
         { sessionId: 'sess-quota', workingDir: NODE_WS, meshNodeId: NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -224,7 +230,9 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
       const components = createComponents(meshId, [
         { sessionId: 'sess-quota', workingDir: NODE_WS, meshNodeId: NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do quota-gated work', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 

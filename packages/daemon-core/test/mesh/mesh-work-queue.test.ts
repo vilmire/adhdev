@@ -47,18 +47,20 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('(3) persists sourceCoordinatorSessionId in the queue payload (round-trips; legacy omit is undefined)', () => {
-        const task = enqueueTask(meshId, 'session-anchored task', { sourceCoordinatorSessionId: 'coord-A' });
+        const task = enqueueTask(meshId, 'session-anchored task', { sourceCoordinatorSessionId: 'coord-A',
+    difficulty: 'medium',
+});
         expect(task.sourceCoordinatorSessionId).to.equal('coord-A');
         // Round-trips through the SQLite payload JSON (no column migration).
         const fromQueue = getQueue(meshId).find(t => t.id === task.id);
         expect(fromQueue?.sourceCoordinatorSessionId).to.equal('coord-A');
         // Omitted → undefined (legacy / single-coordinator → daemon-level routing fallback).
-        const legacy = enqueueTask(meshId, 'legacy task');
+        const legacy = enqueueTask(meshId, 'legacy task', { difficulty: 'medium' });
         expect(legacy.sourceCoordinatorSessionId).to.equal(undefined);
     });
 
     it('should enqueue tasks and list them', () => {
-        const task = enqueueTask(meshId, 'test task 1');
+        const task = enqueueTask(meshId, 'test task 1', { difficulty: 'medium' });
         expect(task.status).to.equal('pending');
         expect(task.message).to.equal('test task 1');
 
@@ -91,17 +93,21 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('blocks queue ownership mutations from member daemons when ownership is declared', () => {
-        expect(() => enqueueTask(meshId, 'member task', { ownerRole: 'member' } as any))
+        expect(() => enqueueTask(meshId, 'member task', { ownerRole: 'member',
+    difficulty: 'medium',
+} as any))
             .to.throw(/Mesh Host/);
 
-        const hostTask = enqueueTask(meshId, 'host task', { ownerRole: 'host' } as any);
+        const hostTask = enqueueTask(meshId, 'host task', { ownerRole: 'host',
+    difficulty: 'medium',
+} as any);
         expect(hostTask.status).to.equal('pending');
         expect(getQueue(meshId)).to.have.length(1);
     });
 
     it('should claim the oldest pending task', () => {
-        const t1 = enqueueTask(meshId, 'task 1');
-        const t2 = enqueueTask(meshId, 'task 2');
+        const t1 = enqueueTask(meshId, 'task 1', { difficulty: 'medium' });
+        const t2 = enqueueTask(meshId, 'task 2', { difficulty: 'medium' });
 
         const claimed = claimNextTask(meshId, 'node1', 'session1');
         expect(claimed).to.not.be.null;
@@ -115,9 +121,9 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('does not let a node/session claim another task while one is still assigned', () => {
-        const t1 = enqueueTask(meshId, 'task 1');
-        const t2 = enqueueTask(meshId, 'task 2');
-        const t3 = enqueueTask(meshId, 'task 3');
+        const t1 = enqueueTask(meshId, 'task 1', { difficulty: 'medium' });
+        const t2 = enqueueTask(meshId, 'task 2', { difficulty: 'medium' });
+        const t3 = enqueueTask(meshId, 'task 3', { difficulty: 'medium' });
 
         const first = claimNextTask(meshId, 'node1', 'session1');
         expect(first?.id).to.equal(t1.id);
@@ -142,7 +148,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         it('marks the queue row completed even when the worker clock is 5min behind', () => {
             // Exact live repro: assign at coordinator updated_at = T0, then complete
             // with the worker's clock (occurredAt = T0 − 5min). Old code left it `assigned`.
-            const t1 = enqueueTask(meshId, 'remote task');
+            const t1 = enqueueTask(meshId, 'remote task', { difficulty: 'medium' });
             const claimed = claimNextTask(meshId, 'node1', 'session-skew');
             expect(claimed?.id).to.equal(t1.id);
             expect(claimed?.status).to.equal('assigned');
@@ -157,10 +163,10 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
 
         it('a late completion carrying taskId=A does not complete the live B row', () => {
-            const a = enqueueTask(meshId, 'task A');
+            const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' });
             claimNextTask(meshId, 'node1', 'session1');
             updateSessionTaskStatus(meshId, 'session1', 'completed'); // close A so B can claim
-            const b = enqueueTask(meshId, 'task B');
+            const b = enqueueTask(meshId, 'task B', { difficulty: 'medium' });
             const claimedB = claimNextTask(meshId, 'node1', 'session1');
             expect(claimedB?.id).to.equal(b.id);
 
@@ -185,7 +191,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         it('warns when an assigned row exists for the session but lookup still fails to resolve', () => {
             // Insert an assigned row whose session matches getActiveAssignmentDetails but
             // make findAssignedBySession miss by stubbing it to null — proves the warn fires.
-            const t1 = enqueueTask(meshId, 'stuck task');
+            const t1 = enqueueTask(meshId, 'stuck task', { difficulty: 'medium' });
             claimNextTask(meshId, 'node1', 'session-stuck');
             const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
             const findSpy = vi.spyOn(MeshRuntimeStore.getInstance(), 'findAssignedBySession').mockReturnValue(null);
@@ -205,7 +211,7 @@ describe('Mesh Work Queue (GUPP)', () => {
     // stale inject to the original node carries a now-lower nonce and is rejectable.
     describe('REDRIVE-DUP dispatch nonce', () => {
         it('stamps a monotonic dispatch nonce on claim', () => {
-            enqueueTask(meshId, 'task 1');
+            enqueueTask(meshId, 'task 1', { difficulty: 'medium' });
             const claimed = claimNextTask(meshId, 'node1', 'session1');
             expect(claimed?.dispatchNonce).to.equal(1);
             // The nonce round-trips through the SQLite payload JSON.
@@ -214,7 +220,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
 
         it('reclaimStrandedAssignedTask bumps the nonce so a stale inject is rejectable', () => {
-            const t1 = enqueueTask(meshId, 'stranded task');
+            const t1 = enqueueTask(meshId, 'stranded task', { difficulty: 'medium' });
             const claimed = claimNextTask(meshId, 'nodeA', 'sessionA');
             expect(claimed?.dispatchNonce).to.equal(1);
             const nonceAtDispatch = claimed!.dispatchNonce!;
@@ -238,8 +244,12 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
 
         it('preserves readonly parallelism: two DIFFERENT readonly tasks both claim on one node', () => {
-            const r1 = enqueueTask(meshId, 'readonly diagnose 1', { readonly: true } as any);
-            const r2 = enqueueTask(meshId, 'readonly diagnose 2', { readonly: true } as any);
+            const r1 = enqueueTask(meshId, 'readonly diagnose 1', { readonly: true,
+    difficulty: 'medium',
+} as any);
+            const r2 = enqueueTask(meshId, 'readonly diagnose 2', { readonly: true,
+    difficulty: 'medium',
+} as any);
 
             // Both readonly tasks claim concurrently on the SAME node (different sessions) —
             // the node-busy gate is bypassed for readonly work; the nonce change does not
@@ -256,7 +266,9 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('should only claim targeted tasks if node matches', () => {
-        const t1 = enqueueTask(meshId, 'targeted task', { targetNodeId: 'node-target' });
+        const t1 = enqueueTask(meshId, 'targeted task', { targetNodeId: 'node-target',
+    difficulty: 'medium',
+});
 
         // node1 cannot claim it
         const c1 = claimNextTask(meshId, 'node1', 'session1');
@@ -271,8 +283,9 @@ describe('Mesh Work Queue (GUPP)', () => {
     it('only lets nodes claim tasks whose required tags are satisfied', () => {
         const gpuTask = enqueueTask(meshId, 'gpu task', {
             requiredTags: ['gpu', 'provider=codex-cli', 'gpu'],
+            difficulty: 'medium',
         });
-        const generalTask = enqueueTask(meshId, 'general task');
+        const generalTask = enqueueTask(meshId, 'general task', { difficulty: 'medium' });
 
         expect(gpuTask.requiredTags).to.deep.equal(['gpu', 'provider=codex-cli']);
 
@@ -288,6 +301,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         const t1 = enqueueTask(meshId, 'session targeted task', {
             targetNodeId: 'node-target',
             targetSessionId: 'session-target',
+            difficulty: 'medium',
         });
 
         // Another idle session on the same node must not steal the task.
@@ -301,10 +315,13 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('prioritizes session-targeted tasks and waits to claim broader node work until the node is idle', () => {
-        const nodeTask = enqueueTask(meshId, 'node targeted task', { targetNodeId: 'node-target' });
+        const nodeTask = enqueueTask(meshId, 'node targeted task', { targetNodeId: 'node-target',
+    difficulty: 'medium',
+});
         const sessionTask = enqueueTask(meshId, 'session targeted task', {
             targetNodeId: 'node-target',
             targetSessionId: 'session-target',
+            difficulty: 'medium',
         });
 
         const c1 = claimNextTask(meshId, 'node-target', 'session-target');
@@ -318,7 +335,7 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('should update task status', () => {
-        const task = enqueueTask(meshId, 'status task');
+        const task = enqueueTask(meshId, 'status task', { difficulty: 'medium' });
         expect(task.status).to.equal('pending');
 
         const claimed = claimNextTask(meshId, 'node1', 'session1');
@@ -331,7 +348,7 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('should update task status by session id', () => {
-        const task = enqueueTask(meshId, 'session task');
+        const task = enqueueTask(meshId, 'session task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node1', 'session1');
         
         updateSessionTaskStatus(meshId, 'session1', 'failed');
@@ -342,8 +359,8 @@ describe('Mesh Work Queue (GUPP)', () => {
 
     it('selects the most recently dispatched task when multiple tasks are assigned to the same session', () => {
         // Simulate a rare edge case where a session somehow has multiple assigned tasks
-        const t1 = enqueueTask(meshId, 'older task');
-        const t2 = enqueueTask(meshId, 'newer task');
+        const t1 = enqueueTask(meshId, 'older task', { difficulty: 'medium' });
+        const t2 = enqueueTask(meshId, 'newer task', { difficulty: 'medium' });
 
         // Manually assign both tasks to the same session (bypassing claimNextTask guard)
         // to simulate the edge case where assignment tracking drifts
@@ -378,8 +395,8 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('falls back to updatedAt when dispatchTimestamp is missing (legacy entries)', () => {
-        const t1 = enqueueTask(meshId, 'legacy task 1');
-        const t2 = enqueueTask(meshId, 'legacy task 2');
+        const t1 = enqueueTask(meshId, 'legacy task 1', { difficulty: 'medium' });
+        const t2 = enqueueTask(meshId, 'legacy task 2', { difficulty: 'medium' });
 
         const queue = getQueue(meshId);
         const now = Date.now();
@@ -410,8 +427,8 @@ describe('Mesh Work Queue (GUPP)', () => {
         // how a remote worker whose clock is behind the coordinator stranded a finished
         // task. With a single live assigned row and no contradicting taskId, the
         // completion belongs to that row — resolve it instead of dropping to null.
-        const olderTask = enqueueTask(meshId, 'older task');
-        const newerTask = enqueueTask(meshId, 'newer continuation task');
+        const olderTask = enqueueTask(meshId, 'older task', { difficulty: 'medium' });
+        const newerTask = enqueueTask(meshId, 'newer continuation task', { difficulty: 'medium' });
 
         const queue = getQueue(meshId);
         const now = Date.now();
@@ -440,7 +457,7 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('exposes active assignment details in queue stats for status/UI surfaces', () => {
-        const task = enqueueTask(meshId, 'visible active task');
+        const task = enqueueTask(meshId, 'visible active task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-active', 'session-active');
 
         const stats = getMeshQueueStats(meshId);
@@ -461,9 +478,9 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('releases a node/session after failed or cancelled assignments', () => {
-        const failedTask = enqueueTask(meshId, 'will fail');
-        const cancelledTask = enqueueTask(meshId, 'will cancel');
-        const nextTask = enqueueTask(meshId, 'next task');
+        const failedTask = enqueueTask(meshId, 'will fail', { difficulty: 'medium' });
+        const cancelledTask = enqueueTask(meshId, 'will cancel', { difficulty: 'medium' });
+        const nextTask = enqueueTask(meshId, 'next task', { difficulty: 'medium' });
 
         expect(claimNextTask(meshId, 'node-release', 'session-release')?.id).to.equal(failedTask.id);
         updateSessionTaskStatus(meshId, 'session-release', 'failed');
@@ -476,6 +493,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         const task = enqueueTask(meshId, 'stale pending task', {
             targetNodeId: 'node1',
             targetSessionId: 'dead-session',
+            difficulty: 'medium',
         });
 
         const cancelled = cancelTask(meshId, task.id, { reason: 'dead session target' });
@@ -491,7 +509,7 @@ describe('Mesh Work Queue (GUPP)', () => {
 
     describe('CANCEL-STICKY-TERMINAL (cancel < reclaim)', () => {
         it('(a) refuses to resurrect a cancelled row via updateTaskStatus(..., pending)', () => {
-            const task = enqueueTask(meshId, 'cancel then late requeue');
+            const task = enqueueTask(meshId, 'cancel then late requeue', { difficulty: 'medium' });
             cancelTask(meshId, task.id, { reason: 'operator cancelled' });
             expect(getQueue(meshId).find(t => t.id === task.id)?.status).to.equal('cancelled');
 
@@ -503,20 +521,20 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
 
         it('(a2) protects completed / failed rows from non-terminal resurrection too', () => {
-            const done = enqueueTask(meshId, 'completed row');
+            const done = enqueueTask(meshId, 'completed row', { difficulty: 'medium' });
             claimNextTask(meshId, 'node1', 'session-done');
             updateTaskStatus(meshId, done.id, 'completed');
             expect(updateTaskStatus(meshId, done.id, 'assigned')?.status).to.equal('completed');
             expect(updateTaskStatus(meshId, done.id, 'pending')?.status).to.equal('completed');
 
-            const failed = enqueueTask(meshId, 'failed row');
+            const failed = enqueueTask(meshId, 'failed row', { difficulty: 'medium' });
             claimNextTask(meshId, 'node1', 'session-fail');
             updateTaskStatus(meshId, failed.id, 'failed');
             expect(updateTaskStatus(meshId, failed.id, 'pending')?.status).to.equal('failed');
         });
 
         it('(a3) still allows terminal→terminal transitions and honors force override', () => {
-            const t = enqueueTask(meshId, 'terminal to terminal');
+            const t = enqueueTask(meshId, 'terminal to terminal', { difficulty: 'medium' });
             cancelTask(meshId, t.id, { reason: 'cancelled' });
             // cancelled → failed is a terminal→terminal move; permitted.
             expect(updateTaskStatus(meshId, t.id, 'failed')?.status).to.equal('failed');
@@ -525,7 +543,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
 
         it('(b) a late dispatch-failure requeue cannot revive a cancelled task into a re-claim', () => {
-            const task = enqueueTask(meshId, 'race cancel vs dispatch-failure');
+            const task = enqueueTask(meshId, 'race cancel vs dispatch-failure', { difficulty: 'medium' });
             claimNextTask(meshId, 'node1', 'session-live');
             cancelTask(meshId, task.id, { reason: 'operator cancelled mid-dispatch' });
 
@@ -538,7 +556,9 @@ describe('Mesh Work Queue (GUPP)', () => {
         });
 
         it('(c) cancelTask clears assignment ownership and surfaces the prior binding to stop the worker', () => {
-            const task = enqueueTask(meshId, 'assigned then cancelled', { targetNodeId: 'nodeW' });
+            const task = enqueueTask(meshId, 'assigned then cancelled', { targetNodeId: 'nodeW',
+    difficulty: 'medium',
+});
             const claimed = claimNextTask(meshId, 'nodeW', 'session-worker', undefined, { providerType: 'claude-cli' });
             expect(claimed?.id).to.equal(task.id);
             expect(claimed?.assignedSessionId).to.equal('session-worker');
@@ -564,6 +584,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         const task = enqueueTask(meshId, 'stale assigned task', {
             targetNodeId: 'node1',
             targetSessionId: 'dead-session',
+            difficulty: 'medium',
         });
         const claimed = claimNextTask(meshId, 'node1', 'dead-session');
         expect(claimed?.id).to.equal(task.id);
@@ -581,10 +602,10 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('keeps historical terminal rows out of active assignment counters', () => {
-        const failedTask = enqueueTask(meshId, 'failed historical task');
+        const failedTask = enqueueTask(meshId, 'failed historical task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-history', 'session-history');
         updateTaskStatus(meshId, failedTask.id, 'failed');
-        const pendingTask = enqueueTask(meshId, 'pending active task');
+        const pendingTask = enqueueTask(meshId, 'pending active task', { difficulty: 'medium' });
 
         const stats = getMeshQueueStats(meshId);
 
@@ -599,9 +620,9 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('getQueue filters by status via SQL — only returns matching entries', () => {
-        const t1 = enqueueTask(meshId, 'will be assigned');
-        const t2 = enqueueTask(meshId, 'pending task');
-        const t3 = enqueueTask(meshId, 'will be cancelled');
+        const t1 = enqueueTask(meshId, 'will be assigned', { difficulty: 'medium' });
+        const t2 = enqueueTask(meshId, 'pending task', { difficulty: 'medium' });
+        const t3 = enqueueTask(meshId, 'will be cancelled', { difficulty: 'medium' });
 
         // Claim t1 (oldest pending) to make it assigned
         claimNextTask(meshId, 'node-filter', 'session-filter');
@@ -624,10 +645,10 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('getMeshQueueStats uses SQL GROUP BY — counts all status buckets correctly', () => {
-        enqueueTask(meshId, 'task pending');
-        const assignedTask = enqueueTask(meshId, 'task to assign');
-        const completedTask = enqueueTask(meshId, 'task to complete');
-        const cancelledTask = enqueueTask(meshId, 'task to cancel');
+        enqueueTask(meshId, 'task pending', { difficulty: 'medium' });
+        const assignedTask = enqueueTask(meshId, 'task to assign', { difficulty: 'medium' });
+        const completedTask = enqueueTask(meshId, 'task to complete', { difficulty: 'medium' });
+        const cancelledTask = enqueueTask(meshId, 'task to cancel', { difficulty: 'medium' });
 
         // Claim assignedTask (second oldest)
         claimNextTask(meshId, 'node-stats-a', 'session-stats-a');
@@ -663,8 +684,10 @@ describe('M1 — task dependencies + mission grouping', () => {
     });
 
     it('claim skips a task until all dependencies are completed', () => {
-        const a = enqueueTask(meshId, 'task A');
-        const b = enqueueTask(meshId, 'task B', { dependsOn: [a.id] });
+        const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' });
+        const b = enqueueTask(meshId, 'task B', { dependsOn: [a.id],
+    difficulty: 'medium',
+});
 
         // First claim must pick A (B's dependency unmet), second claim finds nothing.
         const first = claimNextTask(meshId, 'node-1', 'session-1');
@@ -679,8 +702,10 @@ describe('M1 — task dependencies + mission grouping', () => {
     });
 
     it('dependency failure under default block policy holds dependents pending with blockedReason', () => {
-        const a = enqueueTask(meshId, 'task A');
-        const b = enqueueTask(meshId, 'task B', { dependsOn: [a.id] });
+        const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' });
+        const b = enqueueTask(meshId, 'task B', { dependsOn: [a.id],
+    difficulty: 'medium',
+});
 
         updateTaskStatus(meshId, a.id, 'failed');
 
@@ -699,36 +724,50 @@ describe('M1 — task dependencies + mission grouping', () => {
     it('self-cycle and 2-node cycle enqueues are rejected with clear errors', () => {
         const idA = 'cycle-task-a';
         const idB = 'cycle-task-b';
-        expect(() => enqueueTask(meshId, 'self cycle', { id: idA, dependsOn: [idA] }))
+        expect(() => enqueueTask(meshId, 'self cycle', { id: idA, dependsOn: [idA],
+    difficulty: 'medium',
+}))
             .to.throw(/dependency_cycle_detected/);
 
         // A depends on (future) B, then B depending on A closes the cycle.
-        enqueueTask(meshId, 'task A', { id: idA, dependsOn: [idB] });
-        expect(() => enqueueTask(meshId, 'task B', { id: idB, dependsOn: [idA] }))
+        enqueueTask(meshId, 'task A', { id: idA, dependsOn: [idB],
+    difficulty: 'medium',
+});
+        expect(() => enqueueTask(meshId, 'task B', { id: idB, dependsOn: [idA],
+    difficulty: 'medium',
+}))
             .to.throw(/dependency_cycle_detected/);
     });
 
     it('duplicate explicit task id is rejected', () => {
-        enqueueTask(meshId, 'task A', { id: 'dup-id' });
-        expect(() => enqueueTask(meshId, 'task B', { id: 'dup-id' })).to.throw(/duplicate_task_id/);
+        enqueueTask(meshId, 'task A', { id: 'dup-id',
+    difficulty: 'medium',
+});
+        expect(() => enqueueTask(meshId, 'task B', { id: 'dup-id',
+    difficulty: 'medium',
+})).to.throw(/duplicate_task_id/);
     });
 
     it('tasks without dependsOn claim exactly as before (no regression)', () => {
-        const a = enqueueTask(meshId, 'plain task');
+        const a = enqueueTask(meshId, 'plain task', { difficulty: 'medium' });
         const claimed = claimNextTask(meshId, 'node-1', 'session-1');
         expect(claimed?.id).to.equal(a.id);
         expect(claimed?.status).to.equal('assigned');
     });
 
     it('missionId is persisted on the queue entry', () => {
-        const task = enqueueTask(meshId, 'mission task', { missionId: 'mission-1' });
+        const task = enqueueTask(meshId, 'mission task', { missionId: 'mission-1',
+    difficulty: 'medium',
+});
         const stored = getQueue(meshId).find(t => t.id === task.id);
         expect(stored?.missionId).to.equal('mission-1');
     });
 
     it('hasPendingDependents reflects waiting tasks', () => {
-        const a = enqueueTask(meshId, 'task A');
-        enqueueTask(meshId, 'task B', { dependsOn: [a.id] });
+        const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' });
+        enqueueTask(meshId, 'task B', { dependsOn: [a.id],
+    difficulty: 'medium',
+});
         expect(hasPendingDependents(meshId, a.id)).to.equal(true);
         expect(hasPendingDependents(meshId, 'unrelated')).to.equal(false);
     });
@@ -745,8 +784,10 @@ describe('M1 — task dependencies + mission grouping', () => {
     });
 
     it('session terminal failure propagates to dependents of the assigned task', () => {
-        const a = enqueueTask(meshId, 'task A');
-        const b = enqueueTask(meshId, 'task B', { dependsOn: [a.id] });
+        const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' });
+        const b = enqueueTask(meshId, 'task B', { dependsOn: [a.id],
+    difficulty: 'medium',
+});
         const claimed = claimNextTask(meshId, 'node-1', 'session-1');
         expect(claimed?.id).to.equal(a.id);
 
@@ -784,7 +825,9 @@ describe('buildMeshNodeCapabilityTags — worktree tag auto-registration', () =>
     it('claimNextTask with required_tags worktree= is claimed only by matching worktree session', () => {
         const meshId = `test-worktree-claim-${Date.now()}`;
         // Enqueue a task targeted at the worktree node
-        enqueueTask(meshId, 'fix task', { requiredTags: ['worktree=fix-branch'] });
+        enqueueTask(meshId, 'fix task', { requiredTags: ['worktree=fix-branch'],
+    difficulty: 'medium',
+});
 
         // Main node (no worktree tag) should NOT claim it
         const mainTags = buildMeshNodeCapabilityTags({ isLocalWorktree: false }, 'claude-cli');
@@ -930,7 +973,9 @@ describe('buildMeshNodeCapabilityTags — no role= advertising (role affinity re
 describe('required_tags hard routing — unmatched tasks stay pending, matching node claims', () => {
     it('a task whose required_tags no node satisfies stays pending (claim returns null)', () => {
         const meshId = `test-hard-pending-${Date.now()}`;
-        enqueueTask(meshId, 'gpu-only work', { requiredTags: ['gpu'] });
+        enqueueTask(meshId, 'gpu-only work', { requiredTags: ['gpu'],
+    difficulty: 'medium',
+});
 
         // A node WITHOUT the required tag cannot claim — task stays pending (hard, no fallback).
         const nonMatchingTags = buildMeshNodeCapabilityTags(
@@ -945,7 +990,9 @@ describe('required_tags hard routing — unmatched tasks stay pending, matching 
 
     it('only a node advertising all required_tags claims the task', () => {
         const meshId = `test-hard-match-${Date.now()}`;
-        enqueueTask(meshId, 'gpu-only work', { requiredTags: ['gpu'] });
+        enqueueTask(meshId, 'gpu-only work', { requiredTags: ['gpu'],
+    difficulty: 'medium',
+});
 
         // Non-matching node first — must not claim.
         const cpuTags = buildMeshNodeCapabilityTags(
@@ -964,7 +1011,7 @@ describe('required_tags hard routing — unmatched tasks stay pending, matching 
 
     it('a task with no required_tags is claimable by any node', () => {
         const meshId = `test-hard-noreq-${Date.now()}`;
-        enqueueTask(meshId, 'anything', {});
+        enqueueTask(meshId, 'anything', { difficulty: 'medium' });
         const tags = buildMeshNodeCapabilityTags(
             { capabilities: ['cpu'], policy: { providerPriority: ['claude-cli'] } }, 'claude-cli');
         const claim = claimNextTask(meshId, 'node-a', 'sess-a', tags);
@@ -1242,7 +1289,9 @@ describe('reclaimStrandedAssignedTask (Bug B)', () => {
     afterEach(() => { __clearMeshQueueForTests(meshId); __resetMeshRuntimeStoreForTests(); });
 
     it('returns an assigned row to pending, clears ownership, and records a task_reclaimed ledger entry', () => {
-        enqueueTask(meshId, 'work', { targetNodeId: 'n' });
+        enqueueTask(meshId, 'work', { targetNodeId: 'n',
+    difficulty: 'medium',
+});
         const claimed = claimNextTask(meshId, 'n', 'sess-x', [], { providerType: 'claude-cli' })!;
         expect(claimed.status).toBe('assigned');
 
@@ -1263,13 +1312,15 @@ describe('reclaimStrandedAssignedTask (Bug B)', () => {
     });
 
     it('is a no-op on a non-assigned (pending) row — never resurrects a terminal/idle row', () => {
-        const entry = enqueueTask(meshId, 'work');
+        const entry = enqueueTask(meshId, 'work', { difficulty: 'medium' });
         expect(reclaimStrandedAssignedTask(meshId, entry.id, {})).toBeNull();
         expect(getQueue(meshId)[0].status).toBe('pending');
     });
 
     it('is bounded: after MAX_STRANDED_RECLAIMS reclaims the task is failed, not requeued forever', () => {
-        enqueueTask(meshId, 'work', { targetNodeId: 'n' });
+        enqueueTask(meshId, 'work', { targetNodeId: 'n',
+    difficulty: 'medium',
+});
         let outcome: any = null;
         // Each iteration: claim (→ assigned) then reclaim. The 4th reclaim crosses the
         // cap (MAX_STRANDED_RECLAIMS=3) and fails the task instead of cycling.

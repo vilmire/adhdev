@@ -10,7 +10,7 @@ import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { closeAttemptForReassignment, openTurnAttempt, proposeTurnCompletion, recordTurnAck } from './mesh-turn-ledger.js';
-import { sessionIdsEquivalent, isMeshTaskDifficulty, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import { sessionIdsEquivalent, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -1157,6 +1157,47 @@ export function assertNoDependencyCycle(meshId: string, newTaskId: string, depen
 }
 
 /**
+ * DIFFICULTY-REQUIRED: validate the difficulty axis at a task-insertion boundary.
+ *
+ * Both insertion paths (enqueueTask and recordDirectDispatchTask) call this. It exists
+ * as a shared helper precisely because recordDirectDispatchTask bypasses enqueueTask —
+ * a guard in only one of them is not a requirement, it is a detour.
+ *
+ * Two distinct failures, both hard errors:
+ *
+ *  1. MISSING — the field was not supplied at all. The MCP tool schemas mark difficulty
+ *     `required`, but that is nominal: the tool dispatcher forwards raw args without
+ *     runtime schema validation (see the DELIVERY-MSG-GUARD notes on `message`, which
+ *     needed exactly this same treatment). The enforcement therefore has to live here,
+ *     at the store boundary every caller funnels through.
+ *
+ *  2. UNRECOGNIZED — e.g. 'medum', 'hard'. This previously vanished silently:
+ *     `isMeshTaskDifficulty()` returned false and the value was dropped to `undefined`,
+ *     so a typo'd task enqueued "successfully" and then routed as though the caller had
+ *     never expressed a preference. A misclassified task is worse than a rejected one —
+ *     it looks routed and is not — so a bad value is rejected as loudly as a missing one.
+ *
+ * The message names the offending field and enumerates the allowed values, so a caller
+ * (usually an LLM) can correct without reading the source.
+ */
+function assertMeshTaskDifficulty(value: unknown, callerLabel: string): MeshTaskDifficulty {
+    if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) {
+        throw new Error(
+            `missing_task_difficulty: ${callerLabel} requires a 'difficulty'. `
+            + `Allowed values: ${MESH_TASK_DIFFICULTIES.join(' | ')}. `
+            + `Classify the task by how hard the work actually is.`,
+        );
+    }
+    if (!isMeshTaskDifficulty(value)) {
+        throw new Error(
+            `invalid_task_difficulty: ${callerLabel} received an unrecognized 'difficulty' `
+            + `value ${JSON.stringify(value)}. Allowed values: ${MESH_TASK_DIFFICULTIES.join(' | ')}.`,
+        );
+    }
+    return value;
+}
+
+/**
  * Add a new task to the mesh queue.
  */
 export function enqueueTask(
@@ -1187,10 +1228,15 @@ export function enqueueTask(
         thinkingLevel?: string;
         /**
          * BRAIN-ROUTING: task execution difficulty ('easy'|'medium'|'difficult'|
-         * 'freeform'). When set, the mesh's difficulty→brain preset fills in model /
-         * thinkingLevel that were not passed explicitly (an explicit model/thinkingLevel
-         * wins). Purely a convenience resolver — the stored task still carries the
-         * resolved model/thinkingLevel, so downstream launch is unchanged.
+         * 'freeform'). REQUIRED — a missing or unrecognized value throws (see
+         * assertMeshTaskDifficulty). Typed as optional only because the value arrives
+         * from untyped MCP tool args; the guard is what enforces it at runtime.
+         *
+         * The mesh's difficulty→brain preset fills in model / thinkingLevel that were
+         * not passed explicitly (an explicit model/thinkingLevel wins). Purely a
+         * convenience resolver — the stored task still carries the resolved
+         * model/thinkingLevel, so downstream launch is unchanged. The value itself is
+         * persisted on the entry for slot matching at assignment time.
          */
         difficulty?: string;
         /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
@@ -1237,21 +1283,21 @@ export function enqueueTask(
     let thinkingLevelSource: 'explicit' | 'preset' | undefined = effectiveThinkingLevel ? 'explicit' : undefined;
     // SLOT-ROUTING: persist the difficulty class on the entry so the scheduler can
     // match it against node capability slots at assignment time (not just resolve
-    // model/thinking here). Absent/invalid → undefined (task carries no difficulty).
-    const taskDifficulty = isMeshTaskDifficulty(opts?.difficulty) ? (opts!.difficulty as MeshTaskDifficulty) : undefined;
-    if (isMeshTaskDifficulty(opts?.difficulty)) {
-        try {
-            // Scoped to the mesh the task is being enqueued into: these presets pick
-            // the MODEL the task runs on, so reading another mesh's map would stamp a
-            // model this mesh never chose (and the slot-model guard would then block
-            // or wait on it at launch).
-            const preset = getDifficultyBrains(meshId)[opts!.difficulty as MeshTaskDifficulty];
-            if (preset) {
-                if (!effectiveModel && preset.model) { effectiveModel = preset.model; modelSource = 'preset'; }
-                if (!effectiveThinkingLevel && preset.thinkingLevel) { effectiveThinkingLevel = preset.thinkingLevel; thinkingLevelSource = 'preset'; }
-            }
-        } catch { /* preset read is best-effort — never block enqueue */ }
-    }
+    // model/thinking here). Always present — a missing or unrecognized value is a hard
+    // error (see assertMeshTaskDifficulty), so this no longer silently degrades to
+    // undefined the way it did when difficulty was optional.
+    const taskDifficulty = assertMeshTaskDifficulty(opts?.difficulty, 'enqueueTask');
+    try {
+        // Scoped to the mesh the task is being enqueued into: these presets pick
+        // the MODEL the task runs on, so reading another mesh's map would stamp a
+        // model this mesh never chose (and the slot-model guard would then block
+        // or wait on it at launch).
+        const preset = getDifficultyBrains(meshId)[taskDifficulty];
+        if (preset) {
+            if (!effectiveModel && preset.model) { effectiveModel = preset.model; modelSource = 'preset'; }
+            if (!effectiveThinkingLevel && preset.thinkingLevel) { effectiveThinkingLevel = preset.thinkingLevel; thinkingLevelSource = 'preset'; }
+        }
+    } catch { /* preset read is best-effort — never block enqueue */ }
     const result = withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
@@ -1290,7 +1336,7 @@ export function enqueueTask(
             ...(typeof opts?.consensusGroupId === 'string' && opts.consensusGroupId.trim() ? { consensusGroupId: opts.consensusGroupId.trim() } : {}),
             ...(effectiveModel && modelSource ? { model: effectiveModel, modelSource } : {}),
             ...(effectiveThinkingLevel && thinkingLevelSource ? { thinkingLevel: effectiveThinkingLevel, thinkingLevelSource } : {}),
-            ...(taskDifficulty ? { difficulty: taskDifficulty } : {}),
+            difficulty: taskDifficulty,
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),
@@ -1360,6 +1406,16 @@ export function recordDirectDispatchTask(
         taskMode?: MeshTaskMode | string;
         /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
         readonly?: boolean;
+        /**
+         * DIFFICULTY-REQUIRED: task execution difficulty, same fixed axis as
+         * {@link enqueueTask}. A direct dispatch has ALREADY picked its node+session, so
+         * unlike the queue path this value never routes anything — it is recorded so the
+         * task row carries the same axis a queued task does. That matters concretely for
+         * failure recovery: the relaunch path re-reads the difficulty off the ledger's
+         * task_dispatched entry, so an unclassified direct dispatch would silently
+         * downgrade its own retry to no-difficulty routing. Required — see the guard below.
+         */
+        difficulty?: string;
         dispatchedAt?: string;
     },
 ): MeshWorkQueueEntry | null {
@@ -1376,6 +1432,11 @@ export function recordDirectDispatchTask(
     if (!message) {
         throw new Error('mesh task message must be a non-empty string');
     }
+    // DIFFICULTY-REQUIRED: recordDirectDispatchTask writes to the store WITHOUT going
+    // through enqueueTask, so enqueueTask's guard does not cover it — the two insertion
+    // paths must each enforce this or the requirement is trivially bypassable by using
+    // mesh_send_task instead of mesh_enqueue_task.
+    const taskDifficulty = assertMeshTaskDifficulty(opts.difficulty, 'recordDirectDispatchTask');
     const readonly = opts.readonly === true;
     const modeValidation = validateMeshTaskModeRequest(opts.taskMode, message, readonly);
     if (!modeValidation.valid) {
@@ -1395,6 +1456,7 @@ export function recordDirectDispatchTask(
             ...(modeValidation.taskMode ? { taskMode: modeValidation.taskMode } : {}),
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
+            difficulty: taskDifficulty,
             ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),
             ...(opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {}),
             dispatchTimestamp: now,

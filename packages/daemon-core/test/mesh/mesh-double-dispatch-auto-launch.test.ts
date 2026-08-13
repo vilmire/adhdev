@@ -138,7 +138,9 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
       // Live session in a NON-idle flip (generating) holding NO assigned task — the idle
       // drain skips it as a candidate, but it will claim the pending task on its next idle.
       const components = createComponents([liveSession(meshId, 'existing-sess', 'generating')])
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -154,7 +156,9 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
     try {
       setMesh(meshId)
       const components = createComponents([]) // dead/empty node — legitimate first spawn
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -172,12 +176,16 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
       const components = createComponents([]) // empty node — dependent would otherwise be a legitimate first spawn
       // The prerequisite is in-flight (assigned, NOT completed) so it is not itself a pending
       // auto-launch candidate, leaving the dependent as the sole pending task the loop reaches.
-      const dep = enqueueTask(meshId, 'prerequisite', { taskMode: 'code_change' })
+      const dep = enqueueTask(meshId, 'prerequisite', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       MeshRuntimeStore.getInstance().updateQueueEntry({
         ...dep, status: 'assigned', assignedNodeId: NODE_ID, assignedSessionId: 'other-sess',
         updatedAt: new Date().toISOString(),
       } as any)
-      const dependent = enqueueTask(meshId, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id] })
+      const dependent = enqueueTask(meshId, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id],
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -195,8 +203,12 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
     try {
       setMesh(meshId)
       const components = createComponents([]) // empty node → legitimate spawn when unblocked
-      const dep = enqueueTask(meshId, 'prerequisite', { taskMode: 'code_change' })
-      const dependent = enqueueTask(meshId, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id] })
+      const dep = enqueueTask(meshId, 'prerequisite', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
+      const dependent = enqueueTask(meshId, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id],
+    difficulty: 'medium',
+})
       // Complete the prerequisite so the gate opens.
       MeshRuntimeStore.getInstance().updateQueueEntry({ ...dep, status: 'completed' } as any)
 
@@ -218,7 +230,9 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
       // if the skip gate counted it as a pending claimer the task would pend forever with no
       // worker ever launching (silent deadlock). The gate must exclude it → a worker launches.
       const components = createComponents([coordinatorSession(meshId, 'coord-sess')])
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -242,7 +256,9 @@ describe('DOUBLE-DISPATCH Layer (a) — auto-launch suppressed when node has a l
         assignedNodeId: NODE_ID, assignedSessionId: busySessionId, createdAt: now, updatedAt: now,
       } as any)
       const components = createComponents([liveSession(meshId, busySessionId, 'generating')])
-      const task = enqueueTask(meshId, 'diagnose', { taskMode: 'live_debug_readonly' })
+      const task = enqueueTask(meshId, 'diagnose', { taskMode: 'live_debug_readonly',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -292,6 +308,7 @@ describe('DISPATCH-DEADLOCK-PROVIDER-MISMATCH — pending-claim gate honours pro
       const task = enqueueTask(meshId, 'do codex work', {
         taskMode: 'code_change',
         requiredTags: ['provider=codex-cli'],
+        difficulty: 'medium',
       })
 
       await triggerMeshQueue(components, meshId)
@@ -313,6 +330,7 @@ describe('DISPATCH-DEADLOCK-PROVIDER-MISMATCH — pending-claim gate honours pro
       const task = enqueueTask(meshId, 'do claude work', {
         taskMode: 'code_change',
         requiredTags: ['provider=claude-cli'],
+        difficulty: 'medium',
       })
 
       await triggerMeshQueue(components, meshId)
@@ -331,7 +349,9 @@ describe('DISPATCH-DEADLOCK-PROVIDER-MISMATCH — pending-claim gate honours pro
       // No required_tags → the provider-match gate is a no-op and the original behaviour holds:
       // any live unassigned session is a pending claimer.
       const components = createComponents([liveSession(meshId, 'any-sess', 'generating', 'claude-cli')])
-      const task = enqueueTask(meshId, 'do any work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do any work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -409,8 +429,12 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
     try {
       setRemoteMesh(meshId)
       const components = createRemoteComponents()
-      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change' })
-      const taskB = enqueueTask(meshId, 'work B', { taskMode: 'code_change' })
+      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
+      const taskB = enqueueTask(meshId, 'work B', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       seedAutoLaunch(meshId, taskA.id, 0) // fresh — inside the 90s await-claim window
 
       await triggerMeshQueue(components, meshId)
@@ -430,7 +454,9 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
     try {
       setRemoteMesh(meshId)
       const components = createRemoteComponents()
-      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change' })
+      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       seedAutoLaunch(meshId, taskA.id, 100_000) // > 90s → base window expired
 
       await triggerMeshQueue(components, meshId)
@@ -454,7 +480,9 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
     try {
       setRemoteMesh(meshId)
       const components = createRemoteComponents()
-      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change' })
+      const taskA = enqueueTask(meshId, 'work A', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       seedAutoLaunch(meshId, taskA.id, 100_000) // past window
       // Drive straight to the cap: cycles at the cap, next attempt due now.
       __seedAutoLaunchAwaitClaimBackoffForTests(meshId, taskA.id, { cycles: 2, nextAttemptAtMs: 0 })

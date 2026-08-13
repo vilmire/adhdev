@@ -57,7 +57,9 @@ function seedMissions(meshId: string, counts: { active: number; paused: number; 
   const seed = (n: number, status: string) => {
     for (let k = 0; k < n; k++, i++) {
       const m = upsertMeshMission(meshId, { title: `Mission ${i} do something important here`, goal: LONG_GOAL, status });
-      for (let t = 0; t < 3; t++) enqueueTask(meshId, `task ${t} of mission ${i}`, { missionId: m.id } as any);
+      for (let t = 0; t < 3; t++) enqueueTask(meshId, `task ${t} of mission ${i}`, { missionId: m.id,
+    difficulty: 'medium',
+} as any);
     }
   };
   seed(counts.active, 'active');

@@ -190,7 +190,9 @@ describe('NO-DISPATCH-NATIVE-COMPLETION-GATE — suppresses a never-dispatched s
     const meshId = `mesh_no_dispatch_active_queue_${Date.now()}`
     try {
       mockMesh(meshId)
-      const task = enqueueTask(meshId, 'do the work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do the work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       const store = MeshRuntimeStore.getInstance()
       const entry = store.findQueueEntryById(meshId, task.id)!
       entry.status = 'assigned'

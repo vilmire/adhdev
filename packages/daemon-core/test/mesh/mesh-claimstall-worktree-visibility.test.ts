@@ -114,7 +114,9 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       const components = createComponents({ cachedInlineMesh })
 
       // A queue task pinned to the worktree node, and an idle remote session on it.
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, WORKTREE_NODE_ID, 'sess-wt-1', 'claude-cli', Date.now() + 60_000)
 
       const result = await triggerMeshQueue(components, meshId)
@@ -144,7 +146,9 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       // local-config mesh verbatim, byte-for-byte the pre-fix behavior.
       const components = createComponents({ cachedInlineMesh: undefined })
 
-      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, BASE_NODE_ID, 'sess-base-1', 'claude-cli', Date.now() + 60_000)
 
       const result = await triggerMeshQueue(components, meshId)
@@ -194,7 +198,9 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       const cachedInlineMesh = { id: meshId, name: 'Bootstrap Mesh', policy: {}, nodes: [baseNode, worktreeNodeInline] }
       const components = createComponents({ cachedInlineMesh })
 
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, WORKTREE_NODE_ID, 'sess-wt-bs', 'claude-cli', Date.now() + 60_000)
 
       const result = await triggerMeshQueue(components, meshId)
@@ -235,7 +241,9 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       const cachedInlineMesh = { id: meshId, name: 'Bootstrap Running Mesh', policy: {}, nodes: [baseNode, { ...worktreeNodeConfig, worktreeBootstrap: { ...runningBootstrap } }] }
       const components = createComponents({ cachedInlineMesh })
 
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, WORKTREE_NODE_ID, 'sess-wt-run', 'claude-cli', Date.now() + 60_000)
 
       const result = await triggerMeshQueue(components, meshId)
@@ -257,7 +265,9 @@ describe('CLAIMSTALL — worktree node claim-time membership visibility', () => 
       // Inline cache also has ONLY the base node — no worktree node exists anywhere.
       const components = createComponents({ cachedInlineMesh: { id: meshId, name: 'Ghost Mesh', policy: {}, nodes: [baseNode] } })
 
-      enqueueTask(meshId, 'do ghost work', { targetNodeId: 'node_ghost', taskMode: 'code_change' })
+      enqueueTask(meshId, 'do ghost work', { targetNodeId: 'node_ghost', taskMode: 'code_change',
+    difficulty: 'medium',
+})
       // Idle session reported for a node that is in neither the config nor the cache view.
       MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, 'node_ghost', 'sess-ghost-1', 'claude-cli', Date.now() + 60_000)
 

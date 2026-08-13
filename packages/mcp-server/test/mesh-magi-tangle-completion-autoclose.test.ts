@@ -138,6 +138,7 @@ function seedTerminalReplicas(meshId: string, groupId: string, missionId: string
     for (const r of ['r1', 'r2']) {
         const t = enqueueTask(meshId, 'MAGI question', {
             id: `${groupId}-${r}`, readonly: true, taskMode: 'live_debug_readonly', consensusGroupId: groupId, missionId,
+            difficulty: 'medium',
         } as any);
         updateTaskStatus(meshId, t.id, 'completed');
     }

@@ -67,6 +67,7 @@ test('untargeted code_change is flagged with a worktree routing advisory', async
   const res = JSON.parse(await meshEnqueueTask(ctx, {
     message: 'refactor the status reporter',
     task_mode: 'code_change',
+    difficulty: 'medium',
   } as any));
 
   assert.equal(res.success, true, 'advisory must not block the enqueue');
@@ -82,6 +83,7 @@ test('the advisory is non-destructive: the enqueued task keeps its unpinned rout
   const res = JSON.parse(await meshEnqueueTask(ctx, {
     message: 'add a unit test for the parser',
     task_mode: 'code_change',
+    difficulty: 'medium',
   } as any));
 
   assert.ok(res.worktreeRoutingAdvisory);
@@ -99,6 +101,7 @@ test('EXEMPTION: required_tags (os=win32) suppresses the advisory — real win32
     message: 'verify the win32 PATH after a clean install',
     task_mode: 'code_change',
     required_tags: ['os=win32'],
+    difficulty: 'medium',
   } as any));
 
   assert.equal(res.success, true);
@@ -113,6 +116,7 @@ test('EXEMPTION: target_node_id suppresses the advisory — explicit machine rou
     message: 'reproduce the Homebrew state bug on this exact machine',
     task_mode: 'code_change',
     target_node_id: NODE_WIN,
+    difficulty: 'medium',
   } as any));
 
   assert.equal(res.success, true);
@@ -130,6 +134,7 @@ test('EXEMPTION: the target_node spelling also suppresses the advisory', async (
     message: 'check the installer layout on the mac node',
     task_mode: 'code_change',
     target_node: NODE_MAC,
+    difficulty: 'medium',
   } as any));
 
   assert.equal(res.success, true);
@@ -145,6 +150,7 @@ test('read-only tasks are unaffected — they need no isolation and may stack on
   const viaTaskMode = JSON.parse(await meshEnqueueTask(ctx, {
     message: 'investigate why the reporter drops events',
     task_mode: 'live_debug_readonly',
+    difficulty: 'medium',
   } as any));
   assert.equal(viaTaskMode.success, true);
   assert.equal(viaTaskMode.worktreeRoutingAdvisory, undefined,
@@ -154,6 +160,7 @@ test('read-only tasks are unaffected — they need no isolation and may stack on
     message: 'read the queue claim path and report',
     task_mode: 'code_change',
     readonly: true,
+    difficulty: 'medium',
   } as any));
   assert.equal(viaFlag.success, true);
   assert.equal(viaFlag.worktreeRoutingAdvisory, undefined,
@@ -166,6 +173,7 @@ test('convergence tasks are exempt — merge/push is base-only and must not be p
   const res = JSON.parse(await meshEnqueueTask(ctx, {
     message: 'merge the feature branch into main',
     task_mode: 'convergence',
+    difficulty: 'medium',
   } as any));
 
   assert.equal(res.success, true);
@@ -175,7 +183,9 @@ test('convergence tasks are exempt — merge/push is base-only and must not be p
 test('a task with no task_mode at all is not flagged (the advisory is scoped to declared code_change)', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'do the thing' } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'do the thing',
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.worktreeRoutingAdvisory, undefined);

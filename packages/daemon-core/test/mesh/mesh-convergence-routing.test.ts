@@ -120,14 +120,18 @@ describe('enqueueTask — converge=refine auto-injection (Part C)', () => {
     });
 
     it('does NOT inject when the mesh has not opted in (default — backward compatible)', () => {
-        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['cap=coding'] });
+        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['cap=coding'],
+    difficulty: 'medium',
+});
         expect(task.requiredTags).toEqual(['cap=coding']);
         expect(task.requiredTags).not.toContain(MESH_CONVERGE_REFINE_TAG);
     });
 
     it('injects converge=refine onto code_change once the mesh opts in', () => {
         updateMesh(meshId, { policy: { autoConvergeCodeChange: true } });
-        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['cap=coding'] });
+        const task = enqueueTask(meshId, 'edit src/foo.ts', { taskMode: 'code_change', requiredTags: ['cap=coding'],
+    difficulty: 'medium',
+});
         expect(task.requiredTags).toContain(MESH_CONVERGE_REFINE_TAG);
         expect(task.requiredTags).toContain('cap=coding');
         // Persisted so the claim transaction enforces it too.
@@ -136,27 +140,37 @@ describe('enqueueTask — converge=refine auto-injection (Part C)', () => {
 
     it('is idempotent — no duplicate tag when already present', () => {
         updateMesh(meshId, { policy: { autoConvergeCodeChange: true } });
-        const task = enqueueTask(meshId, 'edit', { taskMode: 'code_change', requiredTags: [MESH_CONVERGE_REFINE_TAG] });
+        const task = enqueueTask(meshId, 'edit', { taskMode: 'code_change', requiredTags: [MESH_CONVERGE_REFINE_TAG],
+    difficulty: 'medium',
+});
         expect(task.requiredTags.filter(t => t === MESH_CONVERGE_REFINE_TAG)).toHaveLength(1);
     });
 
     it('does NOT inject onto read-only / validation tasks even when opted in', () => {
         updateMesh(meshId, { policy: { autoConvergeCodeChange: true } });
-        const ro = enqueueTask(meshId, 'inspect logs', { taskMode: 'live_debug_readonly' });
+        const ro = enqueueTask(meshId, 'inspect logs', { taskMode: 'live_debug_readonly',
+    difficulty: 'medium',
+});
         expect(ro.requiredTags).not.toContain(MESH_CONVERGE_REFINE_TAG);
-        const val = enqueueTask(meshId, 'run tests', { taskMode: 'validation' });
+        const val = enqueueTask(meshId, 'run tests', { taskMode: 'validation',
+    difficulty: 'medium',
+});
         expect(val.requiredTags).not.toContain(MESH_CONVERGE_REFINE_TAG);
     });
 
     it('does NOT inject when the code_change task is explicitly targeted (target_node_id)', () => {
         updateMesh(meshId, { policy: { autoConvergeCodeChange: true } });
-        const task = enqueueTask(meshId, 'edit', { taskMode: 'code_change', targetNodeId: 'node-1' });
+        const task = enqueueTask(meshId, 'edit', { taskMode: 'code_change', targetNodeId: 'node-1',
+    difficulty: 'medium',
+});
         expect(task.requiredTags).not.toContain(MESH_CONVERGE_REFINE_TAG);
     });
 
     it('opt-in injection routes code_change to a worktree node and away from a machine node', () => {
         updateMesh(meshId, { policy: { autoConvergeCodeChange: true } });
-        const task = enqueueTask(meshId, 'edit', { taskMode: 'code_change' });
+        const task = enqueueTask(meshId, 'edit', { taskMode: 'code_change',
+    difficulty: 'medium',
+});
         const worktreeTags = buildMeshNodeCapabilityTags({ isLocalWorktree: true, worktreeBranch: 'b' });
         const machineTags = buildMeshNodeCapabilityTags({ isLocalWorktree: false });
         expect(nodeSatisfiesRequiredTags(task.requiredTags, worktreeTags)).toBe(true);

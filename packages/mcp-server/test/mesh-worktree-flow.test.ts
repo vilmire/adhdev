@@ -339,6 +339,7 @@ test('mesh_send_task queue response includes trigger claim state', async () => {
   } as any, {
     node_id: 'node-local',
     message: 'queued task',
+    difficulty: 'medium',
   }));
 
   assert.equal(result.success, true);
@@ -1384,7 +1385,9 @@ test('mesh_send_task preserves P2P relay recovery payload for coordinator feedba
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
-  const sendText = await meshSendTask(ctx, { node_id: 'node-remote-worker', session_id: 'session-remote', message: 'do work' });
+  const sendText = await meshSendTask(ctx, { node_id: 'node-remote-worker', session_id: 'session-remote', message: 'do work',
+    difficulty: 'medium',
+});
   const send = JSON.parse(sendText);
 
   assert.equal(send.success, false);
@@ -1454,7 +1457,9 @@ test('mesh_send_task does not reuse a remote live session that lacks mesh delega
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
-  const send = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote-worker', message: 'do work' }));
+  const send = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote-worker', message: 'do work',
+    difficulty: 'medium',
+}));
 
   assert.equal(send.success, true);
   assert.equal(send.dispatched, true);
@@ -1535,6 +1540,7 @@ test('mesh_send_task self-heals a mesh-owned remote session missing the relay an
     node_id: 'node-remote-worker',
     session_id: 'session-legacy-live',
     message: 'do work',
+    difficulty: 'medium',
   }));
 
   assert.equal(send.success, true);
@@ -1613,6 +1619,7 @@ test('mesh_send_task blocks a mesh-owned remote session missing the relay anchor
     node_id: 'node-remote-worker',
     session_id: 'session-legacy-live',
     message: 'do work',
+    difficulty: 'medium',
   }));
 
   assert.equal(send.success, false);
@@ -1687,6 +1694,7 @@ test('mesh_send_task fails closed when explicitly targeting a remote session own
     node_id: 'node-remote-worker',
     session_id: 'session-other-mesh',
     message: 'do work',
+    difficulty: 'medium',
   }));
 
   assert.equal(send.success, false);
@@ -1759,6 +1767,7 @@ test('mesh_send_task rejects remote coordinator session before worker relay disp
     session_id: 'coordinator-session',
     message: 'run validation',
     task_mode: 'validation',
+    difficulty: 'medium',
   }));
 
   assert.equal(send.success, false);
@@ -2865,8 +2874,12 @@ test('mesh_send_task dedupes rapid identical node/session/message dispatch retri
     transport,
   };
 
-  const first = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task' }));
-  const second = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task' }));
+  const first = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task',
+    difficulty: 'medium',
+}));
+  const second = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task',
+    difficulty: 'medium',
+}));
 
   assert.equal(first.success, true);
   assert.equal(second.success, true);
@@ -3716,6 +3729,7 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
     node_id: 'node-local',
     session_id: 'session-hermes',
     message: 'run targeted task',
+    difficulty: 'medium',
   });
   const result = JSON.parse(text);
   assert.equal(result.success, true);
@@ -3799,6 +3813,7 @@ test('local IPC mesh_send_task rejects coordinator session as worker target', as
     session_id: 'coordinator-session',
     message: 'implement a code change',
     task_mode: 'code_change',
+    difficulty: 'medium',
   }));
 
   assert.equal(result.success, false);
@@ -3870,6 +3885,7 @@ test('local IPC mesh_send_task preserves retryable agent busy diagnostics from d
     node_id: 'node-local',
     session_id: 'session-hermes',
     message: 'run targeted task',
+    difficulty: 'medium',
   }));
 
   assert.equal(result.success, false);
@@ -3916,8 +3932,12 @@ test('mesh queue management tools cancel and requeue stale assignments without d
     transport,
   } as any;
 
-  const cancelTarget = enqueueTask(meshId, 'cancel stale task', { targetNodeId: 'node-admin', targetSessionId: 'dead-session' });
-  const assigned = enqueueTask(meshId, 'requeue stale task', { targetNodeId: 'node-admin', targetSessionId: 'dead-session' });
+  const cancelTarget = enqueueTask(meshId, 'cancel stale task', { targetNodeId: 'node-admin', targetSessionId: 'dead-session',
+    difficulty: 'medium',
+});
+  const assigned = enqueueTask(meshId, 'requeue stale task', { targetNodeId: 'node-admin', targetSessionId: 'dead-session',
+    difficulty: 'medium',
+});
   claimNextTask(meshId, 'node-admin', 'dead-session');
 
   const cancelResult = JSON.parse(await meshQueueCancel(ctx, { task_id: cancelTarget.id, reason: 'dead session' }));
@@ -3987,6 +4007,7 @@ test('local direct mesh_send_task rejects unmanaged session missing mesh delegat
     session_id: 'session-unmanaged',
     message: 'implement a code change',
     task_mode: 'code_change',
+    difficulty: 'medium',
   }));
 
   assert.equal(result.success, false);
@@ -4052,6 +4073,7 @@ test('local direct mesh_send_task rejects coordinator session as unsafe target',
     session_id: 'session-coordinator',
     message: 'run validation',
     task_mode: 'validation',
+    difficulty: 'medium',
   }));
 
   assert.equal(result.success, false);
@@ -4118,6 +4140,7 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
     session_id: 'session-worker',
     message: 'implement the feature',
     task_mode: 'code_change',
+    difficulty: 'medium',
   }));
 
   assert.equal(result.success, true);
@@ -4663,7 +4686,9 @@ test('mesh_queue_requeue passes the task target node as preferredNodeId to trigg
 
   try {
     // A task routed to a specific (remote) node, then requeued.
-    const task = enqueueTask(meshId, 'targeted work', { targetNodeId: 'node-remote' });
+    const task = enqueueTask(meshId, 'targeted work', { targetNodeId: 'node-remote',
+    difficulty: 'medium',
+});
     const ctx = {
       mesh: {
         id: meshId,
@@ -4714,7 +4739,7 @@ test('mesh_queue_requeue omits preferredNodeId when the task has no target node'
   };
 
   try {
-    const task = enqueueTask(meshId, 'untargeted work');
+    const task = enqueueTask(meshId, 'untargeted work', { difficulty: 'medium' });
     const ctx = {
       mesh: {
         id: meshId,

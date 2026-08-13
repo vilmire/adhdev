@@ -94,7 +94,9 @@ function mockMesh(meshId: string) {
 // race state: the session was just spawned FOR this task, but the task has not yet been formally
 // claimed (status stays 'pending' until the real claim path flips it to 'assigned').
 function seedInWindowAutoLaunchTask(meshId: string, sessionId: string, ageMs = 0) {
-  const task = enqueueTask(meshId, 'do worktree work', { taskMode: 'code_change' })
+  const task = enqueueTask(meshId, 'do worktree work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
   const store = MeshRuntimeStore.getInstance()
   const entry = store.findQueueEntryById(meshId, task.id)!
   entry.autoLaunch = {
@@ -259,7 +261,9 @@ describe('CAUSAL-COMPLETION-GATE — LOCAL forwarding (setupMeshEventForwarding)
     const meshId = `mesh_causal_local_assigned_${Date.now()}`
     try {
       mockMesh(meshId)
-      const task = enqueueTask(meshId, 'assigned work', { taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'assigned work', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       const store = MeshRuntimeStore.getInstance()
       const entry = store.findQueueEntryById(meshId, task.id)!
       entry.status = 'assigned'

@@ -1342,7 +1342,9 @@ describe('runMeshReconcileTick', () => {
         // A pending task targeting the worker node, and an idle worker session that
         // already exists — exactly the state left behind when the agent:ready event
         // that would have triggered the claim was missed/dropped.
-        enqueueTask(meshId, 'do the work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do the work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
 
         const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
         const mesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/worker', daemonId: 'test-machine' }] }
@@ -1393,7 +1395,9 @@ describe('runMeshReconcileTick', () => {
       const meshId = `mesh_reconcile_phase3_nothost_${Date.now()}`
       const nodeId = 'node_remote'
       try {
-        enqueueTask(meshId, 'remote work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'remote work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
 
         const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, 'sess-x', 'claude-cli')
         // Mesh is hosted by a DIFFERENT daemon: a pinned hostDaemonId that is not one
@@ -2764,7 +2768,9 @@ describe('runMeshReconcileTick', () => {
       const meshId = `mesh_phase25_strand_${Date.now()}`
       const nodeId = 'node_w'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, 'sess-hung', [])
         expect(claimed).not.toBeNull()
         backdateDispatch(meshId, claimed!.id, STRANDED_MS)
@@ -2792,7 +2798,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-idle-worker'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, 'sess-finished', [])!
         backdateDispatch(meshId, claimed.id, STRANDED_MS)
         appendLedgerEntry(meshId, {
@@ -2827,7 +2835,9 @@ describe('runMeshReconcileTick', () => {
       const meshId = `mesh_phase25_confirmed_${Date.now()}`
       const nodeId = 'node_w'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, 'sess-live', [])!
         backdateDispatch(meshId, claimed.id, STRANDED_MS)
         // A confirmed delivery for this task → genuinely dispatched (or completion-lost):
@@ -2852,7 +2862,9 @@ describe('runMeshReconcileTick', () => {
       const sessionId = 'sess-idle-worker'
       const coordinatorCore = 'coord_form_safe'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const { components, handleCliCommand } = makeIdleWorkerComponents(meshId, nodeId, sessionId, 'claude-cli')
         Object.assign(components, { statusInstanceId: coordinatorCore })
         const mesh = {
@@ -2880,7 +2892,9 @@ describe('runMeshReconcileTick', () => {
       const sessionId = 'sess-idle-worker'
       const taskId = 'task-already-terminal'
       try {
-        enqueueTask(meshId, 'do work', { id: taskId, targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { id: taskId, targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         appendLedgerEntry(meshId, {
           kind: 'task_completed',
           nodeId,
@@ -2912,7 +2926,9 @@ describe('runMeshReconcileTick', () => {
       const meshId = `mesh_phase25_fresh_${Date.now()}`
       const nodeId = 'node_w'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, 'sess-fresh', [])!
         // dispatchTimestamp is "now" (just claimed) — well under the deadline.
         hostMesh(meshId, nodeId)
@@ -2933,7 +2949,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-idle-worker'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         // Stranded on a (now gone) session; an idle worker session is available to re-claim.
         const claimed = claimNextTask(meshId, nodeId, 'sess-dead', [])!
         backdateDispatch(meshId, claimed.id, STRANDED_MS)
@@ -2969,7 +2987,9 @@ describe('runMeshReconcileTick', () => {
       const meshId = `mesh_phase25_unconsumed_${Date.now()}`
       const nodeId = 'node_w'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         // Model the remote autoLaunch gap: the dispatch reached the worker (delivery 'delivered')
         // but the worker never emitted agent:generating_started (delivery never flips to 'acked'),
         // so the row is stranded 'assigned' with no live turn — but only 40s in, far below 15min.
@@ -3018,7 +3038,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_remote'
       const sessionId = 'sess-remote-generating'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         // Delivered-but-unconsumed remote row, past the UNKNOWN grace: without the fix the very
         // next tick would re-drive it.
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
@@ -3079,7 +3101,9 @@ describe('runMeshReconcileTick', () => {
       const meshId = `mesh_phase25_consumed_${Date.now()}`
       const nodeId = 'node_w'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, 'sess-working', [])!
         backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
         // Delivery reached 'acked' — the worker emitted generating_started, i.e. it IS consuming.
@@ -3104,7 +3128,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-generating'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
         // Delivery is 'delivered' and never 'acked' (the generating_started ack was lost/late),
@@ -3166,7 +3192,9 @@ describe('runMeshReconcileTick', () => {
         const nodeId = 'node_w'
         const sessionId = 'sess-held-picker'
         try {
-          enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
           const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
           backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
           createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -3213,7 +3241,9 @@ describe('runMeshReconcileTick', () => {
         const nodeId = 'node_w'
         const sessionId = 'sess-held-approval'
         try {
-          enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
           const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
           backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
           createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -3246,7 +3276,9 @@ describe('runMeshReconcileTick', () => {
         const deadSession = 'sess-dead-picker'
         const freshSession = 'sess-fresh-worker'
         try {
-          enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
           const claimed = claimNextTask(meshId, nodeId, deadSession, [])!
           backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
           createSessionDelivery({ meshId, nodeId, sessionId: deadSession, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -3302,7 +3334,9 @@ describe('runMeshReconcileTick', () => {
       const meshId = `mesh_phase25_unconsumed_fresh_${Date.now()}`
       const nodeId = 'node_w'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, 'sess-fresh-remote', [])!
         // Only 10s in — below ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS (25s): a slow
         // generating_started still has room to arrive.
@@ -3326,7 +3360,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-idle-worker'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         // Stranded delivered-but-unconsumed on a gone (UNKNOWN) session; an idle worker can re-claim.
         const claimed = claimNextTask(meshId, nodeId, 'sess-gone', [])!
         backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
@@ -3389,7 +3425,9 @@ describe('runMeshReconcileTick', () => {
       },
     ) => {
       const dispatchAt = Date.now()
-      enqueueTask(meshId, 'investigate the failure', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'investigate the failure', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
       backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
       createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'investigate the failure', status: 'delivered' })
@@ -3602,7 +3640,9 @@ describe('runMeshReconcileTick', () => {
       opts?: { instance?: 'idle' | 'absent' },
     ) => {
       const dispatchAt = Date.now()
-      enqueueTask(meshId, 'orchestrate the canary probes', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'orchestrate the canary probes', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, sessionId, [], {
         providerType: 'kimi',
         assignedTranscriptProfile: RC20_KIMI_FLOOR_PROFILE as any,
@@ -3824,7 +3864,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-finished-late'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
         // Confirmed delivery (delivered) but never 'acked' — the autoLaunch/worktree gap where
@@ -3891,7 +3933,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         // Confirmed delivery but never 'acked' (pure-PTY generating_started/completed lost).
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -3963,7 +4007,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
 
@@ -4046,7 +4092,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
 
@@ -4100,7 +4148,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         // Confirmed delivery but never 'acked' — native-source kimi collapsed idle→idle so
         // generating_started never emitted, exactly the class the extended arm now covers.
@@ -4171,7 +4221,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
 
@@ -4275,7 +4327,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'investigate the bug', { targetNodeId: 'node_remote' })
+        enqueueTask(meshId, 'investigate the bug', { targetNodeId: 'node_remote',
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, 'node_remote', sessionId, [])!
         // Delivered but never 'acked' (remote generating_started not yet propagated) — the exact
         // delivered≠consumed shape that used to slip through the UNKNOWN-verdict gate.
@@ -4320,7 +4374,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'investigate the bug', { targetNodeId: 'node_remote' })
+        enqueueTask(meshId, 'investigate the bug', { targetNodeId: 'node_remote',
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, 'node_remote', sessionId, [])!
         createSessionDelivery({ meshId, nodeId: 'node_remote', sessionId, taskId: claimed.id, kind: 'task', message: 'investigate the bug', status: 'delivered' })
 
@@ -4360,7 +4416,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
 
@@ -4417,7 +4475,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'investigate', { targetNodeId: 'node_remote' })
+        enqueueTask(meshId, 'investigate', { targetNodeId: 'node_remote',
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, 'node_remote', sessionId, [])!
         createSessionDelivery({ meshId, nodeId: 'node_remote', sessionId, taskId: claimed.id, kind: 'task', message: 'investigate', status: 'delivered' })
 
@@ -4469,7 +4529,9 @@ describe('runMeshReconcileTick', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         const dispatchAt = Date.now()
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
 
@@ -4542,7 +4604,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-never-produced'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -4603,7 +4667,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-remote-at-approval'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
         // Confirmed delivery, never acked — the long delivered-no-turn branch is reached.
@@ -4652,7 +4718,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-remote-was-at-approval'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         backdateDispatch(meshId, claimed.id, DELIVERED_NO_TURN_MS)
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -4725,7 +4793,9 @@ describe('runMeshReconcileTick', () => {
 
     /** A remote worker (no local instance → UNKNOWN verdict) whose live node snapshot is at an approval modal. */
     function awaitingApprovalFixture(meshId: string, nodeId: string, sessionId: string, ageMs: number) {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
       backdateDispatch(meshId, claimed.id, ageMs)
       createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -4814,7 +4884,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-attempt-stuck'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         backdateDispatch(meshId, claimed.id, PAST_HARD_DEADLINE_MS)
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -4853,7 +4925,9 @@ describe('runMeshReconcileTick', () => {
       const nodeId = 'node_w'
       const sessionId = 'sess-attempt-working'
       try {
-        enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+        enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
         const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
         backdateDispatch(meshId, claimed.id, WITHIN_HARD_DEADLINE_MS)
         createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })

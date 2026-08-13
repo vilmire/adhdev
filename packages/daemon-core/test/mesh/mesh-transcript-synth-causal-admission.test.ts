@@ -444,7 +444,9 @@ describe('MID-TURN-CAUSAL-ADMISSION: transcript-synth completion ingresses', () 
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       const dispatchAt = Date.now()
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
       createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
 

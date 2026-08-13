@@ -60,7 +60,9 @@ test.after(() => {
 test('fix1: target_node alias resolves to a hard targetNodeId pin', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId, recordingTransport());
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'pinned work', target_node: NODE_MAC } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'pinned work', target_node: NODE_MAC,
+    difficulty: 'medium',
+} as any));
   assert.equal(res.success, true);
   assert.equal(res.targetNodeId, NODE_MAC, 'target_node must resolve to a hard targetNodeId');
   // The persisted task row carries the pin so the claim tier can enforce it.
@@ -69,7 +71,9 @@ test('fix1: target_node alias resolves to a hard targetNodeId pin', async () => 
 
 test('fix1: camelCase targetNode alias also resolves', async () => {
   const ctx = makeCtx(nextMeshId(), recordingTransport());
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'pinned', targetNode: NODE_WIN } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'pinned', targetNode: NODE_WIN,
+    difficulty: 'medium',
+} as any));
   assert.equal(res.success, true);
   assert.equal(res.targetNodeId, NODE_WIN);
 });
@@ -77,7 +81,9 @@ test('fix1: camelCase targetNode alias also resolves', async () => {
 test('fix1: an unresolvable target is REJECTED, never enqueued unpinned', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId, recordingTransport());
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'oops', target_node: 'node_does_not_exist' } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'oops', target_node: 'node_does_not_exist',
+    difficulty: 'medium',
+} as any));
   assert.equal(res.success, false);
   assert.equal(res.code, 'target_node_not_found');
   // It must NOT have created a queue task (no silent unpinned fall-through).
@@ -86,7 +92,9 @@ test('fix1: an unresolvable target is REJECTED, never enqueued unpinned', async 
 
 test('fix1: no target stays unpinned (existing behavior unchanged)', async () => {
   const ctx = makeCtx(nextMeshId(), recordingTransport());
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'anyone' } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'anyone',
+    difficulty: 'medium',
+} as any));
   assert.equal(res.success, true);
   assert.equal(res.targetNodeId, undefined, 'no target → no pin');
 });
@@ -100,7 +108,9 @@ test('COORD-EVENT-MISROUTE: untargeted meshSendTask enqueue-fallback stamps the 
   // as the sibling meshEnqueueTask does.
   const COORDINATOR_SESSION = 'coordinator_sess_anchor';
   const ctx = makeCtx(meshId, recordingTransport(), COORDINATOR_SESSION);
-  const res = JSON.parse(await meshSendTask(ctx, { node_id: NODE_MAC, message: 'untargeted work' } as any));
+  const res = JSON.parse(await meshSendTask(ctx, { node_id: NODE_MAC, message: 'untargeted work',
+    difficulty: 'medium',
+} as any));
   assert.equal(res.success, true);
   assert.equal(res.source, 'queue', 'no session_id → untargeted queue-pull fallback');
   const queued = getQueue(meshId).find(t => t.id === res.taskId);
@@ -115,7 +125,9 @@ test('COORD-EVENT-MISROUTE: untargeted meshSendTask enqueue-fallback stamps the 
 test('COORD-EVENT-MISROUTE: untargeted enqueue-fallback with no coordinator session stays unanchored (no fabrication)', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId, recordingTransport()); // no coordinatorSessionId
-  const res = JSON.parse(await meshSendTask(ctx, { node_id: NODE_WIN, message: 'anon work' } as any));
+  const res = JSON.parse(await meshSendTask(ctx, { node_id: NODE_WIN, message: 'anon work',
+    difficulty: 'medium',
+} as any));
   assert.equal(res.success, true);
   const queued = getQueue(meshId).find(t => t.id === res.taskId);
   assert.ok(queued, 'the fallback enqueued a task row');
@@ -125,7 +137,7 @@ test('COORD-EVENT-MISROUTE: untargeted enqueue-fallback with no coordinator sess
 test('fix2: cancelling an ASSIGNED task stops the assigned worker session', async () => {
   const meshId = nextMeshId();
   // Genuine assignment via the real claim path: enqueue then claim onto a worker session.
-  const task = enqueueTask(meshId, 'assigned work', {});
+  const task = enqueueTask(meshId, 'assigned work', { difficulty: 'medium' });
   const claimed = claimNextTask(meshId, NODE_MAC, 'worker_sess_1', [], { providerType: 'claude-cli' });
   assert.ok(claimed, 'task must claim onto the worker session');
   assert.equal(claimed.id, task.id);
@@ -147,7 +159,7 @@ test('fix2: cancelling an ASSIGNED task stops the assigned worker session', asyn
 
 test('fix2: cancel does NOT stop the coordinator self session (guard)', async () => {
   const meshId = nextMeshId();
-  enqueueTask(meshId, 'self assigned', {});
+  enqueueTask(meshId, 'self assigned', { difficulty: 'medium' });
   // Claim onto a session whose id == the coordinator's own session id.
   const claimed = claimNextTask(meshId, NODE_MAC, 'coordinator_sess', [], { providerType: 'claude-cli' });
   assert.ok(claimed);
@@ -163,7 +175,7 @@ test('fix2: cancel does NOT stop the coordinator self session (guard)', async ()
 
 test('fix2: cancelling a PENDING task issues no worker stop', async () => {
   const meshId = nextMeshId();
-  const task = enqueueTask(meshId, 'pending work', {}); // stays pending, no assignment
+  const task = enqueueTask(meshId, 'pending work', { difficulty: 'medium' }); // stays pending, no assignment
   const transport = recordingTransport();
   const ctx = makeCtx(meshId, transport, 'coordinator_sess');
   const res = JSON.parse(await meshQueueCancel(ctx, { task_id: task.id } as any));
@@ -178,7 +190,7 @@ test('fix2: cancelling a PENDING task issues no worker stop', async () => {
 
 test('false-positive fix: a confirmed stop reflects stopped:true', async () => {
   const meshId = nextMeshId();
-  const task = enqueueTask(meshId, 'work', {});
+  const task = enqueueTask(meshId, 'work', { difficulty: 'medium' });
   const claimed = claimNextTask(meshId, NODE_WIN, 'worker_sess_ok', [], { providerType: 'claude-cli' });
   assert.ok(claimed);
   // Worker daemon confirms the stop landed.
@@ -200,7 +212,7 @@ test('false-positive fix: a confirmed stop reflects stopped:true', async () => {
 
 test('false-positive fix: an unreached worker reports stopped:false + reason (no silent attempted:true)', async () => {
   const meshId = nextMeshId();
-  const task = enqueueTask(meshId, 'work', {});
+  const task = enqueueTask(meshId, 'work', { difficulty: 'medium' });
   const claimed = claimNextTask(meshId, NODE_WIN, 'worker_sess_gone', [], { providerType: 'claude-cli' });
   assert.ok(claimed);
   // Router forward could not reach the owning worker daemon — the real failure surface.
@@ -226,7 +238,7 @@ test('false-positive fix: an unreached worker reports stopped:false + reason (no
 
 test('best-effort: a thrown stop never fails the cancel', async () => {
   const meshId = nextMeshId();
-  const task = enqueueTask(meshId, 'work', {});
+  const task = enqueueTask(meshId, 'work', { difficulty: 'medium' });
   const claimed = claimNextTask(meshId, NODE_WIN, 'worker_sess_throw', [], { providerType: 'claude-cli' });
   assert.ok(claimed);
   const transport = {

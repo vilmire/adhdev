@@ -55,11 +55,15 @@ test.after(() => {
 test('G4 default warn-only: a same-message re-enqueue still enqueues but flags duplicateSuspect', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
-  const first = JSON.parse(await meshEnqueueTask(ctx, { message: 'fix the bug' } as any));
+  const first = JSON.parse(await meshEnqueueTask(ctx, { message: 'fix the bug',
+    difficulty: 'medium',
+} as any));
   assert.equal(first.success, true);
   assert.equal(first.duplicateSuspect, undefined, 'first enqueue is not a duplicate');
 
-  const second = JSON.parse(await meshEnqueueTask(ctx, { message: '  Fix   the   bug  ' } as any));
+  const second = JSON.parse(await meshEnqueueTask(ctx, { message: '  Fix   the   bug  ',
+    difficulty: 'medium',
+} as any));
   assert.equal(second.success, true, 'warn-only: the duplicate still enqueues');
   assert.equal(second.duplicateSuspect?.taskId, first.taskId, 'flags the in-flight original (normalized match)');
   assert.equal(getQueue(meshId).length, 2, 'both tasks are present (warn-only did not drop)');
@@ -68,9 +72,13 @@ test('G4 default warn-only: a same-message re-enqueue still enqueues but flags d
 test('G4 block_duplicate: refuses the second enqueue with code duplicate_suspect', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
-  const first = JSON.parse(await meshEnqueueTask(ctx, { message: 'deploy preview' } as any));
+  const first = JSON.parse(await meshEnqueueTask(ctx, { message: 'deploy preview',
+    difficulty: 'medium',
+} as any));
   assert.equal(first.success, true);
-  const blocked = JSON.parse(await meshEnqueueTask(ctx, { message: 'deploy preview', block_duplicate: true } as any));
+  const blocked = JSON.parse(await meshEnqueueTask(ctx, { message: 'deploy preview', block_duplicate: true,
+    difficulty: 'medium',
+} as any));
   assert.equal(blocked.success, false);
   assert.equal(blocked.code, 'duplicate_suspect');
   assert.equal(blocked.duplicateOf?.taskId, first.taskId);
@@ -80,8 +88,12 @@ test('G4 block_duplicate: refuses the second enqueue with code duplicate_suspect
 test('G4 allow_duplicate: suppresses the check entirely', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
-  await meshEnqueueTask(ctx, { message: 'same task' } as any);
-  const allowed = JSON.parse(await meshEnqueueTask(ctx, { message: 'same task', allow_duplicate: true } as any));
+  await meshEnqueueTask(ctx, { message: 'same task',
+    difficulty: 'medium',
+} as any);
+  const allowed = JSON.parse(await meshEnqueueTask(ctx, { message: 'same task', allow_duplicate: true,
+    difficulty: 'medium',
+} as any));
   assert.equal(allowed.success, true);
   assert.equal(allowed.duplicateSuspect, undefined, 'allow_duplicate silences the warning');
   assert.equal(getQueue(meshId).length, 2);
@@ -90,9 +102,13 @@ test('G4 allow_duplicate: suppresses the check entirely', async () => {
 test('G4 target-scoped: same message to DIFFERENT nodes is not a duplicate', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
-  const a = JSON.parse(await meshEnqueueTask(ctx, { message: 'per-node task', target_node: NODE_MAC } as any));
+  const a = JSON.parse(await meshEnqueueTask(ctx, { message: 'per-node task', target_node: NODE_MAC,
+    difficulty: 'medium',
+} as any));
   assert.equal(a.success, true);
-  const b = JSON.parse(await meshEnqueueTask(ctx, { message: 'per-node task', target_node: NODE_WIN } as any));
+  const b = JSON.parse(await meshEnqueueTask(ctx, { message: 'per-node task', target_node: NODE_WIN,
+    difficulty: 'medium',
+} as any));
   assert.equal(b.success, true);
   assert.equal(b.duplicateSuspect, undefined, 'same message pinned to a different node is not a duplicate');
 });
@@ -100,8 +116,12 @@ test('G4 target-scoped: same message to DIFFERENT nodes is not a duplicate', asy
 test('G4 target-scoped: same message to the SAME node IS a duplicate', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
-  const a = JSON.parse(await meshEnqueueTask(ctx, { message: 'node task', target_node: NODE_MAC } as any));
-  const b = JSON.parse(await meshEnqueueTask(ctx, { message: 'node task', target_node: NODE_MAC } as any));
+  const a = JSON.parse(await meshEnqueueTask(ctx, { message: 'node task', target_node: NODE_MAC,
+    difficulty: 'medium',
+} as any));
+  const b = JSON.parse(await meshEnqueueTask(ctx, { message: 'node task', target_node: NODE_MAC,
+    difficulty: 'medium',
+} as any));
   assert.equal(b.success, true);
   assert.equal(b.duplicateSuspect?.taskId, a.taskId);
 });
@@ -114,6 +134,7 @@ test('G4/G6/G7/P3 echo: priority, notBefore, and maxRetries round-trip in the re
     priority: 'high',
     not_before: 60_000, // relative ms → held in the future
     max_retries: 3,
+    difficulty: 'medium',
   } as any));
   assert.equal(res.success, true);
   assert.equal(res.priority, 'high');

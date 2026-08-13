@@ -30,7 +30,7 @@ describe('M7 — operational stats (time/attempts)', () => {
     }
 
     it('derives duration and dispatch count from an injected event sequence', () => {
-        const task = enqueueTask(meshId, 'measured task');
+        const task = enqueueTask(meshId, 'measured task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-1', 'session-1');
         updateTaskStatus(meshId, task.id, 'completed');
         dispatchAndComplete(task.id, '2026-06-10T10:00:00.000Z', '2026-06-10T10:03:14.000Z');
@@ -43,7 +43,7 @@ describe('M7 — operational stats (time/attempts)', () => {
     });
 
     it('counts retries from the queue row', () => {
-        const task = enqueueTask(meshId, 'retried task');
+        const task = enqueueTask(meshId, 'retried task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-1', 'session-1');
         requeueTask(meshId, task.id, { force: true });
         claimNextTask(meshId, 'node-1', 'session-1');
@@ -54,7 +54,7 @@ describe('M7 — operational stats (time/attempts)', () => {
     });
 
     it('flags incomplete evidence instead of estimating when ledger events are missing', () => {
-        const task = enqueueTask(meshId, 'evidence-less task');
+        const task = enqueueTask(meshId, 'evidence-less task', { difficulty: 'medium' });
         claimNextTask(meshId, 'node-1', 'session-1');
         updateTaskStatus(meshId, task.id, 'completed');
         // No ledger entries injected — terminal status without dispatch/terminal evidence.
@@ -66,9 +66,15 @@ describe('M7 — operational stats (time/attempts)', () => {
 
     it('rolls up mission stats with wall clock and excludes incomplete tasks from sums', () => {
         const missionId = 'mission-stats-1';
-        const a = enqueueTask(meshId, 'task A', { missionId });
-        const b = enqueueTask(meshId, 'task B', { missionId });
-        const c = enqueueTask(meshId, 'task C (incomplete evidence)', { missionId });
+        const a = enqueueTask(meshId, 'task A', { missionId,
+    difficulty: 'medium',
+});
+        const b = enqueueTask(meshId, 'task B', { missionId,
+    difficulty: 'medium',
+});
+        const c = enqueueTask(meshId, 'task C (incomplete evidence)', { missionId,
+    difficulty: 'medium',
+});
         for (const task of [a, b, c]) {
             claimNextTask(meshId, 'node-1', 'session-1');
             updateTaskStatus(meshId, task.id, 'completed');

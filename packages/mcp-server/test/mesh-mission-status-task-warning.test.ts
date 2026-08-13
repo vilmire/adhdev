@@ -54,7 +54,9 @@ test('paused mission: enqueue warns missionInactive but the task still enqueues'
   const ctx = makeCtx(meshId);
   const mission = upsertMeshMission(meshId, { title: 'Paused mission', status: 'paused' });
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'follow-up work', mission_id: mission.id } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'follow-up work', mission_id: mission.id,
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true, 'task must still enqueue — warn, never block');
   assert.equal(res.missionInactive?.missionId, mission.id);
@@ -70,7 +72,9 @@ test('completed mission: warns with wording distinct from paused', async () => {
   const ctx = makeCtx(meshId);
   const mission = upsertMeshMission(meshId, { title: 'Completed mission', status: 'completed' });
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'regression fix', mission_id: mission.id } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'regression fix', mission_id: mission.id,
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.missionInactive?.status, 'completed');
@@ -82,7 +86,9 @@ test('abandoned mission: warns with wording distinct from paused/completed', asy
   const ctx = makeCtx(meshId);
   const mission = upsertMeshMission(meshId, { title: 'Abandoned mission', status: 'abandoned' });
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'revive work', mission_id: mission.id } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'revive work', mission_id: mission.id,
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.missionInactive?.status, 'abandoned');
@@ -96,9 +102,15 @@ test('the three inactive-status hints are all textually distinct from each other
   const completed = upsertMeshMission(meshId, { title: 'M completed', status: 'completed' });
   const abandoned = upsertMeshMission(meshId, { title: 'M abandoned', status: 'abandoned' });
 
-  const rPaused = JSON.parse(await meshEnqueueTask(ctx, { message: 'a', mission_id: paused.id } as any));
-  const rCompleted = JSON.parse(await meshEnqueueTask(ctx, { message: 'b', mission_id: completed.id } as any));
-  const rAbandoned = JSON.parse(await meshEnqueueTask(ctx, { message: 'c', mission_id: abandoned.id } as any));
+  const rPaused = JSON.parse(await meshEnqueueTask(ctx, { message: 'a', mission_id: paused.id,
+    difficulty: 'medium',
+} as any));
+  const rCompleted = JSON.parse(await meshEnqueueTask(ctx, { message: 'b', mission_id: completed.id,
+    difficulty: 'medium',
+} as any));
+  const rAbandoned = JSON.parse(await meshEnqueueTask(ctx, { message: 'c', mission_id: abandoned.id,
+    difficulty: 'medium',
+} as any));
 
   const hints = new Set([rPaused.missionInactiveHint, rCompleted.missionInactiveHint, rAbandoned.missionInactiveHint]);
   assert.equal(hints.size, 3, 'status-specific hints must not collapse into one shared string');
@@ -109,7 +121,9 @@ test('active mission: no warning', async () => {
   const ctx = makeCtx(meshId);
   const mission = upsertMeshMission(meshId, { title: 'Active mission', status: 'active' });
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'normal work', mission_id: mission.id } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'normal work', mission_id: mission.id,
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.missionInactive, undefined);
@@ -120,7 +134,9 @@ test('no mission_id: no warning', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId);
 
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'missionless work' } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'missionless work',
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.missionInactive, undefined);

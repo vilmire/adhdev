@@ -2197,8 +2197,30 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 if (recoveryContext.lastTaskMessage && recoveryContext.failedNodeId && recoveryContext.failedProviderType) {
                     const autoNodeId = recoveryContext.failedNodeId;
                     try {
+                        // DIFFICULTY-REQUIRED (recovery inheritance + fallback):
+                        // enqueueTask now REQUIRES a difficulty, and this path re-enqueues a
+                        // task the coordinator already classified — so inherit that
+                        // classification from the ledger (getSessionRecoveryContext reads
+                        // resolvedDifficulty off the same task_dispatched entry the message
+                        // came from) rather than re-guessing it here.
+                        //
+                        // FALLBACK IS DELIBERATE AND MUST NOT THROW. This is the failure-
+                        // RECOVERY path: it only ever runs because something already went
+                        // wrong, and losing the relaunch is strictly worse than losing the
+                        // difficulty hint. A legacy ledger entry (written before
+                        // resolvedDifficulty existed), a direct dispatch that predates the
+                        // required-difficulty guard, or an unparseable payload all yield null
+                        // here. In that case fall back to 'freeform' — the axis member meaning
+                        // "no difficulty-based constraint" — so the relaunch proceeds with
+                        // ordinary routing, exactly the behaviour this path had when difficulty
+                        // was optional. Do NOT convert this into a hard error.
+                        const inheritedDifficulty = recoveryContext.lastTaskDifficulty ?? 'freeform';
+                        if (!recoveryContext.lastTaskDifficulty) {
+                            LOG.info('MeshRecovery', `No inheritable difficulty on the failed task's dispatch entry; relaunching with 'freeform' (ordinary routing).`);
+                        }
                         const task = enqueueTask(args.meshId, recoveryContext.lastTaskMessage, {
-                            targetNodeId: autoNodeId
+                            targetNodeId: autoNodeId,
+                            difficulty: inheritedDifficulty,
                         });
                         LOG.info('MeshRecovery', `Auto-requeued failed task: ${task.id} for node ${autoNodeId}`);
 

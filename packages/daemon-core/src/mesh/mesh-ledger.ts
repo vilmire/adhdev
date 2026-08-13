@@ -18,7 +18,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getConfigDir } from '../config/config.js';
 import { resolveLedgerRotationMaxBytes, resolveLedgerRotationMaxFiles } from './mesh-retention-config.js';
-import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, sessionIdsEquivalent, isMeshTaskDifficulty, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import {
@@ -1405,6 +1405,18 @@ export function getLedgerSummary(meshId: string): MeshLedgerSummary {
 export interface SessionRecoveryContext {
     /** The original task message that was dispatched to this session/node */
     lastTaskMessage: string | null;
+    /**
+     * DIFFICULTY-REQUIRED (recovery inheritance): the difficulty the failed task ran
+     * with, recovered from the same task_dispatched entry lastTaskMessage comes from
+     * (payload.routingDecision.resolvedDifficulty, written by recordTaskDispatchedLedger).
+     *
+     * The recovery relaunch re-enqueues the failed task, and enqueueTask now REQUIRES a
+     * difficulty — without this the relaunch could not name one, and re-classifying a task
+     * the coordinator already classified would be a guess. null when the dispatch entry
+     * predates resolvedDifficulty or carries an unrecognized value; the relaunch path
+     * decides the fallback (it must never fail to relaunch over a missing difficulty).
+     */
+    lastTaskDifficulty: MeshTaskDifficulty | null;
     /** The node that was running the failed task */
     failedNodeId: string | null;
     /** Session ID of the failed session */
@@ -1478,6 +1490,20 @@ export function getSessionRecoveryContext(
         ? lastDispatch.payload.message
         : null;
 
+    // DIFFICULTY-REQUIRED (recovery inheritance): recover the difficulty the failed task
+    // ran with, from the SAME task_dispatched entry the message came from — so the
+    // relaunch re-enqueues with the coordinator's original classification instead of
+    // guessing a new one. recordTaskDispatchedLedger (mesh-queue-assignment.ts) writes it
+    // to payload.routingDecision.resolvedDifficulty. Best-effort by design: a legacy entry
+    // predating the field, or one carrying a value no longer in the axis, yields null and
+    // the caller falls back — never a throw, because this runs on the failure-recovery path.
+    let lastTaskDifficulty: MeshTaskDifficulty | null = null;
+    const routingDecision = lastDispatch?.payload?.routingDecision;
+    if (routingDecision && typeof routingDecision === 'object') {
+        const resolved = (routingDecision as Record<string, unknown>).resolvedDifficulty;
+        if (isMeshTaskDifficulty(resolved)) lastTaskDifficulty = resolved;
+    }
+
     // Count how many times the same task was attempted.
     // Prefer exact taskId match (payload.taskId) to avoid 200-char prefix collisions.
     let taskAttemptCount = 0;
@@ -1516,6 +1542,7 @@ export function getSessionRecoveryContext(
 
     return {
         lastTaskMessage,
+        lastTaskDifficulty,
         failedNodeId: opts.nodeId || null,
         failedSessionId: opts.sessionId || null,
         failedProviderType: null, // filled by caller if available

@@ -71,7 +71,7 @@ describe('COMPLETION-PROPAGATION F1: completion flip matches an equivalent-but-n
   it('flips the assigned row completed when the completion sessionId differs only by whitespace (taskId path)', () => {
     const meshId = `mesh_f1_ws_task_${Date.now()}`
     try {
-      const t1 = enqueueTask(meshId, 'work')
+      const t1 = enqueueTask(meshId, 'work', { difficulty: 'medium' })
       claimNextTask(meshId, 'node1', 'sess-1')
       // Simulate the manual-launch skew: the STORED assigned session carries a whitespace
       // form (a raw SQL `assigned_session_id = ?` on the trimmed completion id would miss),
@@ -91,7 +91,7 @@ describe('COMPLETION-PROPAGATION F1: completion flip matches an equivalent-but-n
   it('flips the assigned row completed via the session-only path under the same skew (no taskId)', () => {
     const meshId = `mesh_f1_ws_session_${Date.now()}`
     try {
-      const t1 = enqueueTask(meshId, 'work')
+      const t1 = enqueueTask(meshId, 'work', { difficulty: 'medium' })
       claimNextTask(meshId, 'node1', 'sess-A')
       const queue = getQueue(meshId)
       queue[0].assignedSessionId = 'sess-A '  // trailing-space skew
@@ -108,7 +108,7 @@ describe('COMPLETION-PROPAGATION F1: completion flip matches an equivalent-but-n
   it('still returns null (no false flip) when no assigned row is equivalent to the completion session', () => {
     const meshId = `mesh_f1_nomatch_${Date.now()}`
     try {
-      enqueueTask(meshId, 'work')
+      enqueueTask(meshId, 'work', { difficulty: 'medium' })
       claimNextTask(meshId, 'node1', 'sess-real')
       const result = updateSessionTaskStatus(meshId, 'sess-unrelated', 'completed')
       expect(result).toBeNull()
@@ -168,7 +168,9 @@ describe('COMPLETION-PROPAGATION F3/F4 + RECLAIM-FALSEPOS: delivered-no-turn tri
     const meshId = `mesh_f3_unknown_defer_${Date.now()}`
     const nodeId = 'node_w'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, 'sess-remote', [])!
       backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
       createSessionDelivery({ meshId, nodeId, sessionId: 'sess-remote', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -191,7 +193,9 @@ describe('COMPLETION-PROPAGATION F3/F4 + RECLAIM-FALSEPOS: delivered-no-turn tri
     const meshId = `mesh_f3_unknown_grace_${Date.now()}`
     const nodeId = 'node_w'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, 'sess-remote', [])!
       backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
       createSessionDelivery({ meshId, nodeId, sessionId: 'sess-remote', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -225,7 +229,9 @@ describe('COMPLETION-PROPAGATION F3/F4 + RECLAIM-FALSEPOS: delivered-no-turn tri
     const meshId = `mesh_f3_idle_${Date.now()}`
     const nodeId = 'node_w'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, 'sess-idle', [])!
       backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
       createSessionDelivery({ meshId, nodeId, sessionId: 'sess-idle', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -247,7 +253,9 @@ describe('COMPLETION-PROPAGATION F3/F4 + RECLAIM-FALSEPOS: delivered-no-turn tri
     const meshId = `mesh_f3_within_${Date.now()}`
     const nodeId = 'node_w'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, 'sess-live', [])!
       backdateDispatch(meshId, claimed.id, WITHIN_DEADLINE_MS)  // past the 5-min stranded window, under 15-min delivered window
       createSessionDelivery({ meshId, nodeId, sessionId: 'sess-live', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -271,7 +279,9 @@ describe('COMPLETION-PROPAGATION F3/F4 + RECLAIM-FALSEPOS: delivered-no-turn tri
     const nodeId = 'node_w'
     const sessionId = 'sess-busy'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
       backdateDispatch(meshId, claimed.id, DELIVERED_LOST_MS)
       createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
@@ -297,7 +307,9 @@ describe('COMPLETION-PROPAGATION F3/F4 + RECLAIM-FALSEPOS: delivered-no-turn tri
     const meshId = `mesh_f3_skew_${Date.now()}`
     const nodeId = 'node_w'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, nodeId, 'sess-skew', [])!
       // Skew the STORED assigned session id (leading space) — the live instance reports the
       // trimmed form. A raw Map.get(assignedSessionId) would miss it (→ UNKNOWN → grace reclaim);
@@ -353,7 +365,9 @@ describe('COMPLETION-PROPAGATION F6/F7: bootstrap gate reads inline-cache SSOT f
     const nodeId = 'wt_node'
     const sessionId = 'sess-wt'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       // Stale local-config view: bootstrap still 'running' (the detached persist lag).
       const configMesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w', worktreeBootstrap: { status: 'running', updatedAt: new Date().toISOString() } }] }
       meshConfigMocks.getMesh.mockReturnValue(configMesh)
@@ -377,7 +391,9 @@ describe('COMPLETION-PROPAGATION F6/F7: bootstrap gate reads inline-cache SSOT f
     const nodeId = 'wt_node'
     const sessionId = 'sess-wt'
     try {
-      const t1 = enqueueTask(meshId, 'do work', { targetNodeId: nodeId })
+      const t1 = enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})
       const configMesh = { id: meshId, nodes: [{ id: nodeId, workspace: '/repo/w', worktreeBootstrap: { status: 'running', updatedAt: new Date().toISOString() } }] }
       meshConfigMocks.getMesh.mockReturnValue(configMesh)
       meshConfigMocks.listMeshes.mockReturnValue([configMesh])
@@ -428,7 +444,9 @@ describe('COMPLETION-PROPAGATION F5: claim-adopt coordinator session anchor', ()
     const nodeId = 'node_a'
     const sessionId = 'sess-adopt'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId, sourceCoordinatorSessionId: 'coord-A' })
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId, sourceCoordinatorSessionId: 'coord-A',
+    difficulty: 'medium',
+})
       const { components, updateSettings } = makeLocalWorker(meshId, nodeId, sessionId)
 
       const assigned = tryAssignQueueTask(components, meshId, nodeId, sessionId, 'claude-cli')
@@ -447,7 +465,9 @@ describe('COMPLETION-PROPAGATION F5: claim-adopt coordinator session anchor', ()
     const nodeId = 'node_a'
     const sessionId = 'sess-adopt'
     try {
-      enqueueTask(meshId, 'do work', { targetNodeId: nodeId })  // no sourceCoordinatorSessionId
+      enqueueTask(meshId, 'do work', { targetNodeId: nodeId,
+    difficulty: 'medium',
+})  // no sourceCoordinatorSessionId
       const { components, updateSettings } = makeLocalWorker(meshId, nodeId, sessionId)
 
       const assigned = tryAssignQueueTask(components, meshId, nodeId, sessionId, 'claude-cli')

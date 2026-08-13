@@ -81,7 +81,9 @@ describe('DISPATCH-ACK-EVIDENCE — pin-expiry guidance must not claim a delta w
   it('does NOT recommend re-sending when the worker demonstrably consumed the message', () => {
     const meshId = `mesh_pin_consumed_${randomUUID().slice(0, 8)}`
     try {
-      const task = enqueueTask(meshId, 'DELTA-CONSUMED', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'DELTA-CONSUMED', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       // 'acked' == the worker emitted agent:generating_started — it HAS the message.
       seedDelivery(meshId, task.id, 'acked')
 
@@ -100,7 +102,9 @@ describe('DISPATCH-ACK-EVIDENCE — pin-expiry guidance must not claim a delta w
   it('asks the coordinator to VERIFY (not assume) when the message was delivered but unconfirmed', () => {
     const meshId = `mesh_pin_delivered_${randomUUID().slice(0, 8)}`
     try {
-      const task = enqueueTask(meshId, 'DELTA-DELIVERED', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'DELTA-DELIVERED', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       // Handed to the transport, but the worker never echoed a turn start.
       seedDelivery(meshId, task.id, 'delivered')
 
@@ -117,7 +121,9 @@ describe('DISPATCH-ACK-EVIDENCE — pin-expiry guidance must not claim a delta w
   it('STILL recommends a re-send when no delivery was ever recorded (the genuine lost-delta case)', () => {
     const meshId = `mesh_pin_never_${randomUUID().slice(0, 8)}`
     try {
-      const task = enqueueTask(meshId, 'DELTA-NEVER', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'DELTA-NEVER', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       // No delivery row at all — nothing was ever handed to a transport.
 
       const msg = notifiedMessage(meshId, task.id)
@@ -134,7 +140,9 @@ describe('DISPATCH-ACK-EVIDENCE — pin-expiry guidance must not claim a delta w
   it('drops the false "stays pending until you resolve it" clause (the pin is already cleared)', () => {
     const meshId = `mesh_pin_closing_${randomUUID().slice(0, 8)}`
     try {
-      const task = enqueueTask(meshId, 'DELTA-CLOSING', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'DELTA-CLOSING', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const msg = notifiedMessage(meshId, task.id)
 
@@ -151,7 +159,9 @@ describe('DISPATCH-ACK-EVIDENCE — pin-expiry guidance must not claim a delta w
   it('leaves an unrelated actionable reason untouched (guidance change is scoped to pin expiry)', () => {
     const meshId = `mesh_pin_other_${randomUUID().slice(0, 8)}`
     try {
-      const task = enqueueTask(meshId, 'DELTA-OTHER', { targetNodeId: NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'DELTA-OTHER', { targetNodeId: NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
       notifyCoordinatorOfActionableSkip(meshId, task.id, 'no_node_satisfies_required_tags', NODE_ID)
       const events = drainPendingMeshCoordinatorEvents(meshId, COORDINATOR_DAEMON_ID) as any[]
       const msg = String((events || []).find(e => (e?.metadataEvent?.taskId ?? e?.taskId) === task.id)?.coordinatorMessage ?? '')

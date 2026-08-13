@@ -62,9 +62,13 @@ describe('M3 — mission persistence', () => {
 
     it('derives task aggregates from queue state at query time', () => {
         const mission = upsertMeshMission(meshId, { title: 'Aggregate test' });
-        const a = enqueueTask(meshId, 'task A', { missionId: mission.id });
-        enqueueTask(meshId, 'task B', { missionId: mission.id, dependsOn: [a.id] });
-        enqueueTask(meshId, 'unrelated task');
+        const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
+    difficulty: 'medium',
+});
+        enqueueTask(meshId, 'task B', { missionId: mission.id, dependsOn: [a.id],
+    difficulty: 'medium',
+});
+        enqueueTask(meshId, 'unrelated task', { difficulty: 'medium' });
 
         claimNextTask(meshId, 'node-1', 'session-1');
         updateTaskStatus(meshId, a.id, 'failed'); // blocks B under default policy
@@ -88,6 +92,7 @@ describe('M3 — mission persistence', () => {
             assignedNodeId: 'node-1',
             assignedSessionId: 'session-direct',
             dispatchedAt,
+            difficulty: 'medium',
         });
         expect(entry).not.toBeNull();
         expect(entry!.status).toBe('assigned');
@@ -139,6 +144,7 @@ describe('M3 — mission persistence', () => {
             missionId: '   ',
             assignedNodeId: 'node-1',
             assignedSessionId: 'session-x',
+            difficulty: 'medium',
         });
         expect(entry).not.toBeNull();
         expect(entry!.missionId).toBeUndefined();
@@ -152,9 +158,15 @@ describe('M3 — mission persistence', () => {
 
     it('injects the active mission summary into the coordinator prompt', () => {
         const mission = upsertMeshMission(meshId, { title: 'Nightly refactor', goal: 'Split the monolith' });
-        const a = enqueueTask(meshId, 'step 1', { missionId: mission.id });
-        enqueueTask(meshId, 'step 2', { missionId: mission.id, dependsOn: [a.id] });
-        enqueueTask(meshId, 'step 3', { missionId: mission.id, dependsOn: [a.id] });
+        const a = enqueueTask(meshId, 'step 1', { missionId: mission.id,
+    difficulty: 'medium',
+});
+        enqueueTask(meshId, 'step 2', { missionId: mission.id, dependsOn: [a.id],
+    difficulty: 'medium',
+});
+        enqueueTask(meshId, 'step 3', { missionId: mission.id, dependsOn: [a.id],
+    difficulty: 'medium',
+});
 
         const section = buildMissionPromptSection(meshId);
         expect(section).toContain('Active Mission');
@@ -271,7 +283,9 @@ describe('getMeshStatusMissionSummaries — withStats merges operational rollups
 
     it('omits stats by default; includes the rollup when withStats:true', () => {
         const mission = upsertMeshMission(meshId, { title: 'Stats mission', goal: 'do work' });
-        const a = enqueueTask(meshId, 'task A', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
+    difficulty: 'medium',
+});
         updateTaskStatus(meshId, a.id, 'completed');
         dispatchAndComplete(a.id, '2026-06-17T10:00:00.000Z', '2026-06-17T10:00:30.000Z');
 
@@ -292,7 +306,9 @@ describe('getMeshStatusMissionSummaries — withStats merges operational rollups
 
     it('matches computeMeshMissionStats and survives the slim (compact) projection', () => {
         const mission = upsertMeshMission(meshId, { title: 'Compact stats', goal: 'G'.repeat(GOAL_PREVIEW_MAX + 50) });
-        const a = enqueueTask(meshId, 'task A', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
+    difficulty: 'medium',
+});
         updateTaskStatus(meshId, a.id, 'completed');
         dispatchAndComplete(a.id, '2026-06-17T10:00:00.000Z', '2026-06-17T10:00:10.000Z');
 

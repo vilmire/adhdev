@@ -77,8 +77,12 @@ describe('G3 — mission_close_candidate detection', () => {
     it('emits one mission_close_candidate when all tasks become terminal, and is idempotent', () => {
         setMesh(meshId);
         const mission = upsertMeshMission(meshId, { title: 'Close me' });
-        const a = enqueueTask(meshId, 'task A', { missionId: mission.id });
-        const b = enqueueTask(meshId, 'task B', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
+    difficulty: 'medium',
+});
+        const b = enqueueTask(meshId, 'task B', { missionId: mission.id,
+    difficulty: 'medium',
+});
 
         // Not all-terminal yet — no emit.
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(false);
@@ -106,7 +110,9 @@ describe('G3 — mission_close_candidate detection', () => {
     it('does NOT auto-transition the mission — status stays active', () => {
         setMesh(meshId);
         const mission = upsertMeshMission(meshId, { title: 'Stay active' });
-        const a = enqueueTask(meshId, 'only task', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'only task', { missionId: mission.id,
+    difficulty: 'medium',
+});
         updateTaskStatus(meshId, a.id, 'completed');
         maybeEmitMissionCloseCandidate(meshId, mission.id);
         expect(getMeshMission(meshId, mission.id)?.status).toBe('active');
@@ -115,7 +121,9 @@ describe('G3 — mission_close_candidate detection', () => {
     it('does not emit for a non-active mission', () => {
         setMesh(meshId);
         const mission = upsertMeshMission(meshId, { title: 'Paused', status: 'paused' });
-        const a = enqueueTask(meshId, 'task', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'task', { missionId: mission.id,
+    difficulty: 'medium',
+});
         updateTaskStatus(meshId, a.id, 'completed');
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(false);
         expect(closeCandidateEvents(meshId)).toHaveLength(0);
@@ -131,13 +139,17 @@ describe('G3 — mission_close_candidate detection', () => {
     it('resets the marker when the mission returns to a non-terminal state, so a re-completion nudges again', () => {
         setMesh(meshId);
         const mission = upsertMeshMission(meshId, { title: 'Re-open' });
-        const a = enqueueTask(meshId, 'task A', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'task A', { missionId: mission.id,
+    difficulty: 'medium',
+});
         updateTaskStatus(meshId, a.id, 'completed');
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(true);
         expect(getMeshMission(meshId, mission.id)?.closeCandidateEmittedAt).toBeTruthy();
 
         // A new pending task returns the mission to a non-terminal state → marker cleared.
-        const b = enqueueTask(meshId, 'task B', { missionId: mission.id });
+        const b = enqueueTask(meshId, 'task B', { missionId: mission.id,
+    difficulty: 'medium',
+});
         expect(maybeEmitMissionCloseCandidate(meshId, mission.id)).toBe(false);
         expect(getMeshMission(meshId, mission.id)?.closeCandidateEmittedAt).toBeFalsy();
 
@@ -152,9 +164,15 @@ describe('G3 — mission_close_candidate detection', () => {
     it('all-terminal via mixed terminal statuses (completed + failed + cancelled)', () => {
         setMesh(meshId);
         const mission = upsertMeshMission(meshId, { title: 'Mixed' });
-        const a = enqueueTask(meshId, 'A', { missionId: mission.id });
-        const b = enqueueTask(meshId, 'B', { missionId: mission.id });
-        const c = enqueueTask(meshId, 'C', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'A', { missionId: mission.id,
+    difficulty: 'medium',
+});
+        const b = enqueueTask(meshId, 'B', { missionId: mission.id,
+    difficulty: 'medium',
+});
+        const c = enqueueTask(meshId, 'C', { missionId: mission.id,
+    difficulty: 'medium',
+});
         updateTaskStatus(meshId, a.id, 'completed');
         updateTaskStatus(meshId, b.id, 'failed');
         updateTaskStatus(meshId, c.id, 'cancelled');
@@ -168,7 +186,9 @@ describe('G3 — mission_close_candidate detection', () => {
     it('queue terminal transition triggers the check via the fire-and-forget path', async () => {
         setMesh(meshId);
         const mission = upsertMeshMission(meshId, { title: 'Via queue' });
-        const a = enqueueTask(meshId, 'only task', { missionId: mission.id });
+        const a = enqueueTask(meshId, 'only task', { missionId: mission.id,
+    difficulty: 'medium',
+});
         claimNextTask(meshId, 'node-1', 'session-1');
         // Terminal transition through updateTaskStatus schedules the async detection.
         updateTaskStatus(meshId, a.id, 'completed');

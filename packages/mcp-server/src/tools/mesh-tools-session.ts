@@ -76,7 +76,7 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
-import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 
 
 /**
@@ -194,6 +194,7 @@ export async function meshSendTask(
         task_mode?: string; taskMode?: string;
         readonly?: boolean; read_only?: boolean;
         mission_id?: string; missionId?: string;
+        difficulty?: string;
     },
 ): Promise<string> {
     // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
@@ -216,6 +217,22 @@ export async function meshSendTask(
     // task aggregates — see recordDirectDispatchTask. Absent → unattributed
     // direct dispatch as before (backward compatible).
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
+    // DIFFICULTY-REQUIRED: like `message` above, the schema's `required` is nominal —
+    // the dispatcher forwards raw args without runtime validation. Reject at the tool
+    // boundary so the caller gets a teaching error naming the field and its allowed
+    // values, rather than the bare throw the daemon-core guard would raise.
+    const difficultyRaw = readString(args.difficulty);
+    if (!difficultyRaw || !isMeshTaskDifficulty(difficultyRaw)) {
+        return JSON.stringify({
+            success: false,
+            code: difficultyRaw ? 'invalid_difficulty' : 'missing_difficulty',
+            error: difficultyRaw
+                ? `mesh_send_task received an unrecognized \`difficulty\` value '${difficultyRaw}'. Allowed: ${MESH_TASK_DIFFICULTIES.join(' | ')}.`
+                : `mesh_send_task requires a \`difficulty\`. Allowed: ${MESH_TASK_DIFFICULTIES.join(' | ')}. Classify the task by how hard the work actually is.`,
+            allowedDifficulties: MESH_TASK_DIFFICULTIES,
+        });
+    }
+    const difficulty = difficultyRaw;
     const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, message, readonly);
     if (!modeValidation.valid) {
         return JSON.stringify({
@@ -415,6 +432,7 @@ export async function meshSendTask(
                         assignedNodeId: args.node_id,
                         assignedSessionId: dispatchedSessionId,
                         taskMode,
+                        difficulty,
                         ...(readonly ? { readonly: true } : {}),
                         dispatchedAt,
                     });
@@ -549,6 +567,7 @@ export async function meshSendTask(
                         targetNodeId: args.node_id,
                         targetSessionId: args.session_id,
                         taskMode,
+                        difficulty,
                         ...(readonly ? { readonly: true } : {}),
                         ...(missionId ? { missionId } : {}),
                         ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
@@ -691,6 +710,7 @@ export async function meshSendTask(
                     assignedNodeId: args.node_id,
                     assignedSessionId: args.session_id,
                     taskMode,
+                    difficulty,
                     ...(readonly ? { readonly: true } : {}),
                     dispatchedAt,
                 });
@@ -741,6 +761,7 @@ export async function meshSendTask(
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
             taskMode,
+            difficulty,
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),

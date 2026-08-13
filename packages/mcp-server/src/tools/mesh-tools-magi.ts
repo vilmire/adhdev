@@ -1645,6 +1645,22 @@ export async function meshMagiReview(
             const task = enqueueTask(ctx.mesh.id, prompt, {
                 readonly: true,
                 taskMode: 'live_debug_readonly',
+                // DIFFICULTY-REQUIRED (MAGI decision): a fixed 'freeform' sentinel, NOT an
+                // exemption from the guard. MAGI routes on a different axis entirely — each
+                // replica is already hard-pinned to a (node, provider) slot by the kind-panel
+                // via requiredTags (`provider=<X>`) and often an explicit targetNodeId, and
+                // its model comes from that slot. Difficulty exists to MATCH a task against
+                // node capability slots at assignment time; here the slot is already chosen,
+                // so any difficulty we stamped would be inert at best and would fight the
+                // panel's own slot selection at worst.
+                //
+                // 'freeform' is the correct sentinel rather than a guard bypass: it is a real
+                // member of the axis meaning "no difficulty-based constraint", so the fan-out
+                // satisfies the required-difficulty invariant honestly instead of carving out
+                // a hole that a future non-MAGI caller could slip through. Deliberately NOT
+                // caller-configurable — exposing a difficulty knob on mesh_magi_review would
+                // imply it influences replica placement, which it does not.
+                difficulty: 'freeform',
                 requiredTags: replica.requiredTags,
                 missionId: mission.id,
                 consensusGroupId,

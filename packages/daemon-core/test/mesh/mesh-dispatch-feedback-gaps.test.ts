@@ -96,7 +96,9 @@ describe('Fix (2) — convergence-onto-worktree auto-launch skip reason', () => 
         node(WT_B, { isLocalWorktree: true }),
       ])
       const components = createComponents(meshId)
-      const task = enqueueTask(meshId, 'MERGE+PUSH+DEPLOY', { taskMode: 'convergence' })
+      const task = enqueueTask(meshId, 'MERGE+PUSH+DEPLOY', { taskMode: 'convergence',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -111,7 +113,9 @@ describe('Fix (2) — convergence-onto-worktree auto-launch skip reason', () => 
     try {
       setMesh(meshId, [node(WT_A, { isLocalWorktree: true }), node(BASE_NODE)])
       const components = createComponents(meshId)
-      const task = enqueueTask(meshId, 'converge', { taskMode: 'convergence', targetNodeId: WT_A })
+      const task = enqueueTask(meshId, 'converge', { taskMode: 'convergence', targetNodeId: WT_A,
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -126,7 +130,9 @@ describe('Fix (2) — convergence-onto-worktree auto-launch skip reason', () => 
     try {
       setMesh(meshId, [node(BASE_NODE)])
       const components = createComponents(meshId)
-      const task = enqueueTask(meshId, 'converge', { taskMode: 'convergence', targetNodeId: 'node_missing' })
+      const task = enqueueTask(meshId, 'converge', { taskMode: 'convergence', targetNodeId: 'node_missing',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -145,7 +151,9 @@ describe('Fix (1) — actionable dispatch-skip coordinator notification', () => 
     try {
       setMesh(meshId, [node(BASE_NODE)])
       const components = createComponents(meshId)
-      enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: 'node_missing' })
+      enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: 'node_missing',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -167,7 +175,9 @@ describe('Fix (1) — actionable dispatch-skip coordinator notification', () => 
       const components = createComponents(meshId)
       // targetSessionId → skip reason 'target_session_constraint', a transient/non-actionable
       // reason that clears on its own; it must not page the coordinator.
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetSessionId: 'sess-x' })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetSessionId: 'sess-x',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -183,7 +193,9 @@ describe('Fix (1) — actionable dispatch-skip coordinator notification', () => 
     try {
       setMesh(meshId, [node(BASE_NODE)])
       const components = createComponents(meshId)
-      enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: 'node_missing' })
+      enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: 'node_missing',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
       await triggerMeshQueue(components, meshId)
@@ -208,7 +220,9 @@ describe('FALSE-BLOCKER-CLONE-QUEUE — transient clone/bootstrap skip is NOT an
       setMesh(meshId, [node(BASE_NODE)])
       noteRecentlyClonedNode(WT_A)
       const components = createComponents(meshId)
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A,
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -224,7 +238,9 @@ describe('FALSE-BLOCKER-CLONE-QUEUE — transient clone/bootstrap skip is NOT an
     try {
       setMesh(meshId, [node(BASE_NODE)])
       const components = createComponents(meshId)
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: 'node_dead' })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: 'node_dead',
+    difficulty: 'medium',
+})
 
       await triggerMeshQueue(components, meshId)
 
@@ -240,7 +256,9 @@ describe('FALSE-BLOCKER-CLONE-QUEUE — transient clone/bootstrap skip is NOT an
     try {
       setMesh(meshId, [node(BASE_NODE)])
       const components = createComponents(meshId)
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A,
+    difficulty: 'medium',
+})
 
       // Tick 1: node absent and NOT yet in grace → actionable blocker paged.
       await triggerMeshQueue(components, meshId)

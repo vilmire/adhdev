@@ -246,6 +246,7 @@ test('direct mesh_send_task projects exactly one active work row in status and a
       node_id: 'node-remote',
       session_id: 'sess-direct',
       message: 'Implement direct active work visibility',
+      difficulty: 'medium',
     } as any));
     assert.equal(send.success, true);
     assert.equal(send.source, 'direct');
@@ -362,6 +363,7 @@ test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose k
       node_id: 'node-remote',
       session_id: 'sess-direct',
       message: longPrompt,
+      difficulty: 'medium',
     } as any));
     assert.equal(send.success, true);
 
@@ -530,9 +532,9 @@ test('active queue view keeps historical queue rows out while direct work is exp
   const { ctx } = createRemoteCtx(meshId);
 
   try {
-    const pending = enqueueTask(meshId, 'pending queue task');
-    const completed = enqueueTask(meshId, 'completed queue task');
-    const failed = enqueueTask(meshId, 'failed queue task');
+    const pending = enqueueTask(meshId, 'pending queue task', { difficulty: 'medium' });
+    const completed = enqueueTask(meshId, 'completed queue task', { difficulty: 'medium' });
+    const failed = enqueueTask(meshId, 'failed queue task', { difficulty: 'medium' });
     updateTaskStatus(meshId, completed.id, 'completed');
     updateTaskStatus(meshId, failed.id, 'failed');
     appendLedgerEntry(meshId, {
@@ -709,9 +711,9 @@ test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork 
   try {
     // Seed 1 pending (active) + 40 completed/failed (historical) queue rows so the
     // historical row arrays dominate the full payload.
-    const pending = enqueueTask(meshId, 'the only active pending task');
+    const pending = enqueueTask(meshId, 'the only active pending task', { difficulty: 'medium' });
     for (let i = 0; i < 40; i++) {
-      const t = enqueueTask(meshId, `historical task ${i} with a reasonably long descriptive title to add payload weight`);
+      const t = enqueueTask(meshId, `historical task ${i} with a reasonably long descriptive title to add payload weight`, { difficulty: 'medium' });
       updateTaskStatus(meshId, t.id, i % 2 === 0 ? 'completed' : 'failed');
     }
     // Seed 20 orphaned direct dispatches (node has no live sessions) -> staleDirectWork.
@@ -858,6 +860,7 @@ test('mesh_enqueue_task enqueue-and-push remains queue-sourced active work', asy
   try {
     const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
       message: 'Queue-backed task that may be pushed to a remote idle session',
+      difficulty: 'medium',
     } as any));
     assert.equal(enqueued.success, true);
     assert.equal(enqueued.source, 'queue');
@@ -917,6 +920,7 @@ test('mesh_enqueue_task prefer_worktree routes the task to the most recently clo
     const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
       message: 'Isolated work that must not be claimed by the base node',
       prefer_worktree: true,
+      difficulty: 'medium',
     } as any));
     assert.equal(enqueued.success, true);
     // Most recently appended worktree node wins.
@@ -939,6 +943,7 @@ test('mesh_enqueue_task explicit target_node_id overrides prefer_worktree', asyn
       message: 'Target the first worktree specifically',
       prefer_worktree: true,
       target_node_id: 'node-wt-1',
+      difficulty: 'medium',
     } as any));
     assert.equal(enqueued.success, true);
     assert.equal(enqueued.targetNodeId, 'node-wt-1');
@@ -957,6 +962,7 @@ test('mesh_enqueue_task prefer_worktree is a no-op when no worktree node exists'
     const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
       message: 'No worktree to prefer',
       prefer_worktree: true,
+      difficulty: 'medium',
     } as any));
     assert.equal(enqueued.success, true);
     assert.equal(enqueued.targetNodeId, undefined);
@@ -1012,6 +1018,7 @@ test('live_debug_readonly mode rejects obvious write/commit/push dispatches but 
       session_id: 'sess-direct',
       task_mode: 'live_debug_readonly',
       message: 'Inspect logs, then edit src/index.ts, git commit, and push the fix.',
+      difficulty: 'medium',
     } as any));
     assert.equal(rejected.success, false);
     assert.equal(rejected.code, 'live_debug_readonly_guardrail_violation');
@@ -1020,6 +1027,7 @@ test('live_debug_readonly mode rejects obvious write/commit/push dispatches but 
     const allowed = JSON.parse(await meshEnqueueTask(ctx as any, {
       task_mode: 'live_debug_readonly',
       message: 'Inspect live process logs, open ports, windows, and session status; report keep-running handles only.',
+      difficulty: 'medium',
     } as any));
     assert.equal(allowed.success, true);
     assert.equal(allowed.source, 'queue');

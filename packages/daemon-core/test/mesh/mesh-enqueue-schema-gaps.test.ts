@@ -49,19 +49,25 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
         });
 
         it('persists a non-default priority and omits normal to keep rows minimal', () => {
-            const high = enqueueTask(meshId, 'urgent', { priority: 'high' });
+            const high = enqueueTask(meshId, 'urgent', { priority: 'high',
+    difficulty: 'medium',
+});
             expect(high.priority).to.equal('high');
-            const normal = enqueueTask(meshId, 'ordinary', { priority: 'normal' });
+            const normal = enqueueTask(meshId, 'ordinary', { priority: 'normal',
+    difficulty: 'medium',
+});
             expect(normal.priority).to.equal(undefined); // normal is the default → not stored
-            const legacy = enqueueTask(meshId, 'legacy');
+            const legacy = enqueueTask(meshId, 'legacy', { difficulty: 'medium' });
             expect(legacy.priority).to.equal(undefined);
             // Round-trips through the SQLite payload JSON.
             expect(getQueue(meshId).find(t => t.id === high.id)?.priority).to.equal('high');
         });
 
         it('claims a higher-priority task ahead of an older normal task', () => {
-            const older = enqueueTask(meshId, 'older normal task');
-            const urgent = enqueueTask(meshId, 'urgent fix', { priority: 'high' });
+            const older = enqueueTask(meshId, 'older normal task', { difficulty: 'medium' });
+            const urgent = enqueueTask(meshId, 'urgent fix', { priority: 'high',
+    difficulty: 'medium',
+});
             expect(older.createdAt <= urgent.createdAt).to.equal(true);
             // High priority is pulled first despite being enqueued later.
             const first = claimNextTask(meshId, 'node1', 'session1');
@@ -72,8 +78,12 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
         });
 
         it('keeps FIFO order among equal-priority tasks (stable)', () => {
-            const a = enqueueTask(meshId, 'A high', { priority: 'high' });
-            const b = enqueueTask(meshId, 'B high', { priority: 'high' });
+            const a = enqueueTask(meshId, 'A high', { priority: 'high',
+    difficulty: 'medium',
+});
+            const b = enqueueTask(meshId, 'B high', { priority: 'high',
+    difficulty: 'medium',
+});
             const first = claimNextTask(meshId, 'node1', 'session1');
             expect(first?.id).to.equal(a.id); // older high wins the tie-break
             updateSessionTaskStatus(meshId, 'session1', 'completed');
@@ -82,8 +92,10 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
         });
 
         it('pulls a low-priority task last', () => {
-            const low = enqueueTask(meshId, 'low task', { priority: 'low' });
-            const normal = enqueueTask(meshId, 'normal task');
+            const low = enqueueTask(meshId, 'low task', { priority: 'low',
+    difficulty: 'medium',
+});
+            const normal = enqueueTask(meshId, 'normal task', { difficulty: 'medium' });
             const first = claimNextTask(meshId, 'node1', 'session1');
             expect(first?.id).to.equal(normal.id);
             updateSessionTaskStatus(meshId, 'session1', 'completed');
@@ -114,13 +126,17 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
 
         it('holds a task pending until not_before, then allows the claim', () => {
             const future = Date.now() + 60_000;
-            const delayed = enqueueTask(meshId, 'delayed task', { notBefore: future });
+            const delayed = enqueueTask(meshId, 'delayed task', { notBefore: future,
+    difficulty: 'medium',
+});
             expect(delayed.notBefore).to.not.equal(undefined);
             expect(meshTaskNotBeforeReady(delayed)).to.equal(false);
             // Not claimable while held.
             expect(claimNextTask(meshId, 'node1', 'session1')).to.be.null;
             // Simulate the gate passing: a not_before already in the past is ready.
-            const readyNow = enqueueTask(meshId, 'ready task', { notBefore: Date.now() - 1_000 });
+            const readyNow = enqueueTask(meshId, 'ready task', { notBefore: Date.now() - 1_000,
+    difficulty: 'medium',
+});
             expect(meshTaskNotBeforeReady(readyNow)).to.equal(true);
             const claimed = claimNextTask(meshId, 'node1', 'session1');
             expect(claimed?.id).to.equal(readyNow.id); // the ready one is pulled; the delayed one stays pending
@@ -128,7 +144,7 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
         });
 
         it('a task with no not_before is immediately claimable', () => {
-            const t = enqueueTask(meshId, 'immediate');
+            const t = enqueueTask(meshId, 'immediate', { difficulty: 'medium' });
             expect(t.notBefore).to.equal(undefined);
             expect(meshTaskNotBeforeReady(t)).to.equal(true);
             expect(claimNextTask(meshId, 'node1', 'session1')?.id).to.equal(t.id);
@@ -141,18 +157,28 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
 
     describe('P3 — maxRetries exposure', () => {
         it('persists an explicit maxRetries and omits it when absent', () => {
-            const capped = enqueueTask(meshId, 'capped task', { maxRetries: 3 });
+            const capped = enqueueTask(meshId, 'capped task', { maxRetries: 3,
+    difficulty: 'medium',
+});
             expect(capped.maxRetries).to.equal(3);
             expect(getQueue(meshId).find(t => t.id === capped.id)?.maxRetries).to.equal(3);
-            const legacy = enqueueTask(meshId, 'legacy task');
+            const legacy = enqueueTask(meshId, 'legacy task', { difficulty: 'medium' });
             expect(legacy.maxRetries).to.equal(undefined);
         });
 
         it('floors and rejects negative/invalid maxRetries', () => {
-            expect(enqueueTask(meshId, 't1', { maxRetries: 2.9 }).maxRetries).to.equal(2);
-            expect(enqueueTask(meshId, 't2', { maxRetries: -1 }).maxRetries).to.equal(undefined);
-            expect(enqueueTask(meshId, 't3', { maxRetries: NaN }).maxRetries).to.equal(undefined);
-            expect(enqueueTask(meshId, 't4', { maxRetries: 0 }).maxRetries).to.equal(0);
+            expect(enqueueTask(meshId, 't1', { maxRetries: 2.9,
+    difficulty: 'medium',
+}).maxRetries).to.equal(2);
+            expect(enqueueTask(meshId, 't2', { maxRetries: -1,
+    difficulty: 'medium',
+}).maxRetries).to.equal(undefined);
+            expect(enqueueTask(meshId, 't3', { maxRetries: NaN,
+    difficulty: 'medium',
+}).maxRetries).to.equal(undefined);
+            expect(enqueueTask(meshId, 't4', { maxRetries: 0,
+    difficulty: 'medium',
+}).maxRetries).to.equal(0);
         });
     });
 
@@ -161,10 +187,10 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
     // enqueueTask + recordDirectDispatchTask both normalize + hard-reject a blank message.
     describe('DELIVERY-MSG-GUARD — non-empty message required', () => {
         it('enqueueTask rejects undefined / null / blank messages', () => {
-            expect(() => enqueueTask(meshId, undefined as unknown as string)).to.throw(/non-empty string/);
-            expect(() => enqueueTask(meshId, null as unknown as string)).to.throw(/non-empty string/);
-            expect(() => enqueueTask(meshId, '' as string)).to.throw(/non-empty string/);
-            expect(() => enqueueTask(meshId, '   ' as string)).to.throw(/non-empty string/);
+            expect(() => enqueueTask(meshId, undefined as unknown as string, { difficulty: 'medium' })).to.throw(/non-empty string/);
+            expect(() => enqueueTask(meshId, null as unknown as string, { difficulty: 'medium' })).to.throw(/non-empty string/);
+            expect(() => enqueueTask(meshId, '' as string, { difficulty: 'medium' })).to.throw(/non-empty string/);
+            expect(() => enqueueTask(meshId, '   ' as string, { difficulty: 'medium' })).to.throw(/non-empty string/);
             // The crash class is undefined/blank; a non-string that stringifies to a
             // non-empty value (e.g. a number) is coerced to that string rather than rejected —
             // it never reaches insertSessionDelivery as a NULL, which is the invariant we protect.
@@ -172,7 +198,7 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
         });
 
         it('enqueueTask accepts a valid message and trims surrounding whitespace', () => {
-            const t = enqueueTask(meshId, '  real work  ');
+            const t = enqueueTask(meshId, '  real work  ', { difficulty: 'medium' });
             expect(t.message).to.equal('real work');
             expect(getQueue(meshId).find(e => e.id === t.id)?.message).to.equal('real work');
         });
@@ -180,9 +206,11 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
         it('recordDirectDispatchTask rejects blank/undefined messages', () => {
             expect(() => recordDirectDispatchTask(meshId, undefined as unknown as string, {
                 id: `dd_${Date.now()}_a`, missionId: 'mission_x',
+                difficulty: 'medium',
             })).to.throw(/non-empty string/);
             expect(() => recordDirectDispatchTask(meshId, '   ' as string, {
                 id: `dd_${Date.now()}_b`, missionId: 'mission_x',
+                difficulty: 'medium',
             })).to.throw(/non-empty string/);
             expect(getQueue(meshId).length).to.equal(0);
         });
@@ -191,6 +219,7 @@ describe('mesh enqueue schema gaps (WT-C: G6/G7/P3)', () => {
             const taskId = `dd_${Date.now()}_ok`;
             const entry = recordDirectDispatchTask(meshId, '  direct dispatch  ', {
                 id: taskId, missionId: 'mission_y', assignedNodeId: 'node1', assignedSessionId: 'session1',
+                difficulty: 'medium',
             });
             expect(entry?.message).to.equal('direct dispatch');
             expect(getQueue(meshId).find(e => e.id === taskId)?.message).to.equal('direct dispatch');

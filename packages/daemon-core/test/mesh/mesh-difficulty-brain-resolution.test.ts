@@ -90,20 +90,33 @@ describe('difficulty → brain resolution at enqueue', () => {
         expect(task.model).toBeUndefined();
     });
 
-    it('no difficulty → no preset-derived model/thinkingLevel', () => {
+    // DIFFICULTY-REQUIRED: 'freeform' is the axis member meaning "no difficulty-based
+    // constraint" — it has no preset, so it is how a caller expresses what an omitted
+    // difficulty used to express. Omitting the field entirely now throws (below).
+    it('freeform difficulty → no preset-derived model/thinkingLevel', () => {
         const meshId = freshMesh();
-        enqueueTask(meshId, 'plain task', {});
+        enqueueTask(meshId, 'plain task', { difficulty: 'freeform' });
         const [task] = getQueue(meshId);
         expect(task.model).toBeUndefined();
         expect(task.thinkingLevel).toBeUndefined();
     });
 
-    it('an unknown difficulty is ignored (no resolution, no throw)', () => {
+    // DIFFICULTY-REQUIRED (typo rejection): an unrecognized difficulty used to be
+    // SILENTLY dropped to undefined — 'medum' enqueued "successfully" and then routed as
+    // though the caller had expressed no preference at all. A misclassified task is worse
+    // than a rejected one (it looks routed and is not), so a bad value is now a hard error.
+    it('an unknown difficulty is REJECTED, not silently ignored', () => {
         const meshId = freshMesh();
-        enqueueTask(meshId, 'task', { difficulty: 'nonsense' as any });
-        const [task] = getQueue(meshId);
-        expect(task.model).toBeUndefined();
-        expect(task.thinkingLevel).toBeUndefined();
+        expect(() => enqueueTask(meshId, 'task', { difficulty: 'nonsense' as any }))
+            .toThrow(/invalid_task_difficulty/);
+        // A near-miss typo of a real value is rejected just as loudly.
+        expect(() => enqueueTask(meshId, 'task', { difficulty: 'medum' as any }))
+            .toThrow(/invalid_task_difficulty/);
+        // The message must name the allowed values so the caller can self-correct.
+        expect(() => enqueueTask(meshId, 'task', { difficulty: 'medum' as any }))
+            .toThrow(/easy \| medium \| difficult \| freeform/);
+        // Nothing was persisted by any of the rejected attempts.
+        expect(getQueue(meshId)).toHaveLength(0);
     });
 
     it('freeform has no default preset → leaves model/thinking unset', () => {

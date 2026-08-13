@@ -119,7 +119,9 @@ describe('WTCLAIM — enqueue→claim workspace cross-check (local idle drain)',
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt', workingDir: WORKTREE_WS, nodeId: BASE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -141,7 +143,9 @@ describe('WTCLAIM — enqueue→claim workspace cross-check (local idle drain)',
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt2', workingDir: WORKTREE_WS, meshNodeId: WORKTREE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -161,7 +165,9 @@ describe('WTCLAIM — enqueue→claim workspace cross-check (local idle drain)',
       const components = createComponents(meshId, [
         { sessionId: 'sess-base', workingDir: BASE_WS, meshNodeId: BASE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do base work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -183,7 +189,9 @@ describe('WTCLAIM — enqueue→claim workspace cross-check (local idle drain)',
       const components = createComponents(meshId, [
         { sessionId: 'sess-x', workingDir: WORKTREE_WS, meshNodeId: BASE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -205,7 +213,9 @@ describe('WTCLAIM — enqueue→claim workspace cross-check (local idle drain)',
       const components = createComponents(meshId, [
         { sessionId: 'sess-norm', workingDir: 'c:/repo/main', meshNodeId: BASE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do work', { targetNodeId: BASE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 

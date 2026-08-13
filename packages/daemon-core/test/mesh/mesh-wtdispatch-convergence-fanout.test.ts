@@ -118,7 +118,9 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
         { sessionId: 'sess-B', workspace: WS_B, meshNodeId: WT_B },
         { sessionId: 'sess-base', workspace: WS_BASE, meshNodeId: BASE_NODE },
       ])
-      const task = enqueueTask(meshId, 'MERGE+PUSH+DEPLOY', { taskMode: 'convergence' })
+      const task = enqueueTask(meshId, 'MERGE+PUSH+DEPLOY', { taskMode: 'convergence',
+    difficulty: 'medium',
+})
 
       // Both worktree sessions, each driven toward its OWN node, MUST be refused — the
       // fan-out that put one convergence intent into 4 sibling worktree sessions.
@@ -146,7 +148,9 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
         { sessionId: 'sess-A', workspace: WS_A, meshNodeId: WT_A },
         { sessionId: 'sess-base', workspace: WS_BASE, meshNodeId: BASE_NODE },
       ])
-      const task = enqueueTask(meshId, 'converge', { taskMode: 'convergence', targetNodeId: BASE_NODE })
+      const task = enqueueTask(meshId, 'converge', { taskMode: 'convergence', targetNodeId: BASE_NODE,
+    difficulty: 'medium',
+})
 
       // Worktree session can never claim a base-pinned convergence task.
       expect(tryAssignQueueTask(components, meshId, WT_A, 'sess-A', 'claude-cli')).toBe(false)
@@ -164,7 +168,9 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
     try {
       setMesh(meshId, [node(WT_A, WS_A, { isLocalWorktree: true })])
       const components = createComponents(meshId, [{ sessionId: 'sess-A', workspace: WS_A, meshNodeId: WT_A }])
-      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A })
+      const task = enqueueTask(meshId, 'do work', { taskMode: 'code_change', targetNodeId: WT_A,
+    difficulty: 'medium',
+})
 
       expect(tryAssignQueueTask(components, meshId, WT_A, 'sess-A', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-A')
@@ -178,7 +184,9 @@ describe('WTDISPATCH-FANOUT — convergence task is base-only (worktree claim re
     try {
       setMesh(meshId, [node(BASE_NODE, WS_BASE)])
       const components = createComponents(meshId, [{ sessionId: 'sess-base', workspace: WS_BASE, meshNodeId: BASE_NODE }])
-      const task = enqueueTask(meshId, 'land it', { taskMode: 'convergence', targetNodeId: BASE_NODE })
+      const task = enqueueTask(meshId, 'land it', { taskMode: 'convergence', targetNodeId: BASE_NODE,
+    difficulty: 'medium',
+})
 
       expect(tryAssignQueueTask(components, meshId, BASE_NODE, 'sess-base', 'claude-cli')).toBe(true)
       expect(statusOf(meshId, task.id)?.assignedSessionId).toBe('sess-base')

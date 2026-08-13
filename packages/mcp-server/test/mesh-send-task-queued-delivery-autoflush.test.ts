@@ -94,6 +94,7 @@ test('a task sent to a busy (generating) explicit session enqueues a session-pin
       node_id: 'node-local',
       session_id: 'sess-busy-codex',
       message: 'Do the follow-up work once idle',
+      difficulty: 'medium',
     } as any));
 
     assert.equal(send.success, true);
@@ -124,6 +125,7 @@ test('the queued task auto-claims onto the SAME session once it goes idle — th
       node_id: 'node-local',
       session_id: 'sess-busy-codex',
       message: 'Do the follow-up work once idle',
+      difficulty: 'medium',
     } as any));
     assert.equal(send.success, true);
     assert.equal(send.decision, 'queued_delivery');

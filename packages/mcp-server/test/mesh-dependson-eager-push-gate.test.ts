@@ -75,12 +75,14 @@ test.after(() => {
 test('Fix A: a task with an UNMET dependency is NOT eager-pushed (0 injections)', async () => {
   const meshId = nextMeshId();
   // A prerequisite that is still pending (never completed).
-  const dep = enqueueTask(meshId, 'prerequisite', {});
+  const dep = enqueueTask(meshId, 'prerequisite', { difficulty: 'medium' });
   assert.equal(dep.status, 'pending');
 
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport);
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'dependent work', depends_on: [dep.id] } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'dependent work', depends_on: [dep.id],
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.eagerPushDeferred, true, 'eager push must be deferred while the dependency is unmet');
@@ -98,7 +100,9 @@ test('Fix A: a task with NO dependencies is eager-pushed as before (conservative
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport);
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'independent work' } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'independent work',
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.eagerPushDeferred, undefined, 'a task with no dependsOn must not be gated');
@@ -106,14 +110,16 @@ test('Fix A: a task with NO dependencies is eager-pushed as before (conservative
 
 test('Fix A: a task whose dependency is COMPLETED is eager-pushed (gate opens)', async () => {
   const meshId = nextMeshId();
-  const dep = enqueueTask(meshId, 'prerequisite done', {});
+  const dep = enqueueTask(meshId, 'prerequisite done', { difficulty: 'medium' });
   // Drive the dep to a terminal completed state through the host queue API.
   updateTaskStatus(meshId, dep.id, 'completed');
   assert.equal(getQueue(meshId).find(t => t.id === dep.id)?.status, 'completed');
 
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport);
-  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'dependent, dep done', depends_on: [dep.id] } as any));
+  const res = JSON.parse(await meshEnqueueTask(ctx, { message: 'dependent, dep done', depends_on: [dep.id],
+    difficulty: 'medium',
+} as any));
 
   assert.equal(res.success, true);
   assert.equal(res.eagerPushDeferred, undefined, 'a satisfied dependency must not defer the eager push');

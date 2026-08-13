@@ -207,7 +207,9 @@ describe('setupMeshEventForwarding', () => {
 
       // A task claimed by the worker session, then RE-DRIVEN by the assigned-stranded watchdog's
       // long delivered-no-turn deadline (reclaim → pending, requeueReason set, requeuedAt = now).
-      enqueueTask(meshId, 'do work', { targetNodeId: 'node_child_1' })
+      enqueueTask(meshId, 'do work', { targetNodeId: 'node_child_1',
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, 'node_child_1', 'runtime-session-1', [])!
       const reclaimed = reclaimStrandedAssignedTask(meshId, claimed.id, { reason: 'delivered_no_turn_deadline' })!
       expect(reclaimed.status).toBe('pending')
@@ -256,7 +258,9 @@ describe('setupMeshEventForwarding', () => {
       meshConfigMocks.getMeshByRepo.mockReturnValue(mesh)
       meshConfigMocks.listMeshes.mockReturnValue([mesh])
 
-      enqueueTask(meshId, 'do work', { targetNodeId: 'node_child_1' })
+      enqueueTask(meshId, 'do work', { targetNodeId: 'node_child_1',
+    difficulty: 'medium',
+})
       const claimed = claimNextTask(meshId, 'node_child_1', 'runtime-session-1', [])!
       // Reclaimed as NEVER-delivered (nothing ran) — a completion for it is not a late race and
       // must NOT be superseded into a terminal flip by this path.
@@ -682,7 +686,9 @@ describe('setupMeshEventForwarding', () => {
 
       // A subsequent enqueue's triggerMeshQueue now SEES the live-idle remote session
       // (remoteIdleSessionsChecked >= 1) rather than reporting 0 and auto-launching.
-      enqueueTask(meshId, 'reuse-vs-autolaunch task', { targetNodeId: 'node_child_1' })
+      enqueueTask(meshId, 'reuse-vs-autolaunch task', { targetNodeId: 'node_child_1',
+    difficulty: 'medium',
+})
       const trigger = await triggerMeshQueue(components, meshId)
       expect(trigger.remoteIdleSessionsChecked).toBeGreaterThanOrEqual(1)
     } finally {
@@ -991,7 +997,7 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const queued = enqueueTask(meshId, 'queued task')
+      const queued = enqueueTask(meshId, 'queued task', { difficulty: 'medium' })
       const claimed = claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       expect(claimed?.id).toBe(queued.id)
       expect(getQueue(meshId)[0].status).toBe('assigned')
@@ -1052,7 +1058,7 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const queued = enqueueTask(meshId, 'short-generating task')
+      const queued = enqueueTask(meshId, 'short-generating task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       expect(getQueue(meshId)[0].status).toBe('assigned')
 
@@ -1121,7 +1127,7 @@ describe('setupMeshEventForwarding', () => {
           executed: true,
         })
 
-      const nextTask = enqueueTask(meshId, 'next queued task')
+      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium' })
       const { components, emit } = createComponents(meshId)
       components.cliManager = {
         handleCliCommand: vi.fn(async () => ({ success: true })),
@@ -1193,7 +1199,7 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const nextTask = enqueueTask(meshId, 'next queued task')
+      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium' })
       const { components, emit } = createComponents(meshId)
       components.cliManager = {
         handleCliCommand: vi.fn(async () => ({ success: true })),
@@ -1238,7 +1244,7 @@ describe('setupMeshEventForwarding', () => {
         current: { ahead: 0, behind: 3, submodules: [] },
       })
 
-      const nextTask = enqueueTask(meshId, 'next queued task')
+      const nextTask = enqueueTask(meshId, 'next queued task', { difficulty: 'medium' })
       const { components, emit } = createComponents(meshId)
       components.cliManager = {
         handleCliCommand: vi.fn(async () => ({ success: true })),
@@ -1498,7 +1504,7 @@ describe('setupMeshEventForwarding', () => {
       const { components, emit, coordinator } = createComponents(meshId)
       setupMeshEventForwarding(components)
 
-      const firstQueued = enqueueTask(meshId, 'first delegated task')
+      const firstQueued = enqueueTask(meshId, 'first delegated task', { difficulty: 'medium' })
       expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(firstQueued.id)
       const firstCompletionAt = Date.now() + 1_000
       emit({
@@ -1511,7 +1517,7 @@ describe('setupMeshEventForwarding', () => {
         timestamp: firstCompletionAt,
       })
 
-      const secondQueued = enqueueTask(meshId, 'same-session continuation task')
+      const secondQueued = enqueueTask(meshId, 'same-session continuation task', { difficulty: 'medium' })
       expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(secondQueued.id)
       emit({
         event: 'agent:generating_completed',
@@ -1570,7 +1576,7 @@ describe('setupMeshEventForwarding', () => {
       const { components, emit } = createComponents(meshId)
       setupMeshEventForwarding(components)
 
-      const queued = enqueueTask(meshId, 'weak-completion task')
+      const queued = enqueueTask(meshId, 'weak-completion task', { difficulty: 'medium' })
       expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(queued.id)
       emit({
         event: 'agent:generating_completed',
@@ -1611,7 +1617,7 @@ describe('setupMeshEventForwarding', () => {
       const { components, emit } = createComponents(meshId)
       setupMeshEventForwarding(components)
 
-      const queued = enqueueTask(meshId, 'timed-out weak-completion task')
+      const queued = enqueueTask(meshId, 'timed-out weak-completion task', { difficulty: 'medium' })
       expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(queued.id)
       emit({
         event: 'agent:generating_completed',
@@ -1650,7 +1656,7 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const queued = enqueueTask(meshId, 'local task that transiently fails to dispatch')
+      const queued = enqueueTask(meshId, 'local task that transiently fails to dispatch', { difficulty: 'medium' })
 
       const components = {
         instanceManager: {
@@ -1695,7 +1701,7 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const queued = enqueueTask(meshId, 'queued task')
+      const queued = enqueueTask(meshId, 'queued task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
 
       const { components, emit } = createComponents(meshId)
@@ -1741,7 +1747,9 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const queued = enqueueTask(meshId, 'queued code change task', { taskMode: 'code_change' })
+      const queued = enqueueTask(meshId, 'queued code change task', { taskMode: 'code_change',
+    difficulty: 'medium',
+})
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
 
       const { components, emit } = createComponents(meshId)
@@ -2135,7 +2143,7 @@ describe('setupMeshEventForwarding', () => {
     const meshId = `mesh_long_gen_reconcile_${Date.now()}`
     try {
       const { components, coordinator } = createComponents(meshId)
-      const queued = enqueueTask(meshId, 'finish delegated task')
+      const queued = enqueueTask(meshId, 'finish delegated task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
 
       const result = handleMeshForwardEvent(components, {
@@ -2281,7 +2289,7 @@ describe('setupMeshEventForwarding', () => {
         nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
         policy: { maxTaskRetries: 1 },
       })
-      const queued = enqueueTask(meshId, 'retryable failed task')
+      const queued = enqueueTask(meshId, 'retryable failed task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       appendLedgerEntry(meshId, {
         kind: 'task_dispatched',
@@ -2339,7 +2347,7 @@ describe('setupMeshEventForwarding', () => {
       })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      const queued = enqueueTask(meshId, 'queued task')
+      const queued = enqueueTask(meshId, 'queued task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
 
       const { components, emit, coordinator } = createComponents(meshId)
@@ -2387,7 +2395,7 @@ describe('setupMeshEventForwarding', () => {
         nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
         policy: { maxTaskRetries: 1 },
       })
-      enqueueTask(meshId, 'duplicate session task')
+      enqueueTask(meshId, 'duplicate session task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       appendLedgerEntry(meshId, {
         kind: 'session_stopped',
@@ -2444,6 +2452,7 @@ describe('setupMeshEventForwarding', () => {
       const queued = enqueueTask(meshId, 'targeted task for stopped session', {
         targetNodeId: 'node_child_1',
         targetSessionId: 'runtime-session-stopped',
+        difficulty: 'medium',
       })
       const stoppedSource = {
         category: 'cli',
@@ -2493,6 +2502,7 @@ describe('setupMeshEventForwarding', () => {
       enqueueTask(meshId, 'targeted task waiting for stopped session', {
         targetNodeId: 'node_child_1',
         targetSessionId: 'runtime-session-stopped',
+        difficulty: 'medium',
       })
       const stoppedSource = {
         category: 'cli',
@@ -2551,7 +2561,7 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      const queued = enqueueTask(meshId, 'queued task')
+      const queued = enqueueTask(meshId, 'queued task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -2601,7 +2611,7 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      const queued = enqueueTask(meshId, 'queued task awaiting booting session')
+      const queued = enqueueTask(meshId, 'queued task awaiting booting session', { difficulty: 'medium' })
       // Simulate the prior tick's successful launch: a session was spun up and we are
       // within the await-claim window (recordTaskAutoLaunch stamps updatedAt = now).
       recordTaskAutoLaunch(meshId, queued.id, {
@@ -2645,7 +2655,9 @@ describe('setupMeshEventForwarding', () => {
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/antigravity' })
       // Exactly the live ledger shape: target_node_id set, requiredTags = [].
-      const queued = enqueueTask(meshId, 'queued worktree task', { targetNodeId: 'node_worktree_1', requiredTags: [] })
+      const queued = enqueueTask(meshId, 'queued worktree task', { targetNodeId: 'node_worktree_1', requiredTags: [],
+    difficulty: 'medium',
+})
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -2683,7 +2695,9 @@ describe('setupMeshEventForwarding', () => {
         nodes: [{ id: 'node_present', workspace: '/repo/present', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
         policy: { maxParallelTasks: 2 },
       })
-      enqueueTask(meshId, 'task for a missing node', { targetNodeId: 'node_MISSING', requiredTags: [] })
+      enqueueTask(meshId, 'task for a missing node', { targetNodeId: 'node_MISSING', requiredTags: [],
+    difficulty: 'medium',
+})
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -2710,7 +2724,9 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 2 },
       })
       // Target node_x exists, but no provider on it can produce os=plan9 → tag miss.
-      enqueueTask(meshId, 'tag-impossible task', { targetNodeId: 'node_x', requiredTags: ['os=plan9'] })
+      enqueueTask(meshId, 'tag-impossible task', { targetNodeId: 'node_x', requiredTags: ['os=plan9'],
+    difficulty: 'medium',
+})
       const { components } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -2739,7 +2755,9 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 2 },
       }
       meshConfigMocks.getMesh.mockReturnValue(mesh)
-      enqueueTask(meshId, 'remote queued task', { targetNodeId: 'node_remote_wt' })
+      enqueueTask(meshId, 'remote queued task', { targetNodeId: 'node_remote_wt',
+    difficulty: 'medium',
+})
 
       // A remote idle session the coordinator registered (e.g. from a forwarded
       // agent:ready), keyed by the node's inline-cache id form.
@@ -2774,9 +2792,9 @@ describe('setupMeshEventForwarding', () => {
         nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
         policy: { maxParallelTasks: 1 },
       })
-      enqueueTask(meshId, 'already running')
+      enqueueTask(meshId, 'already running', { difficulty: 'medium' })
       claimNextTask(meshId, 'other_node', 'other_session')
-      enqueueTask(meshId, 'pending task')
+      enqueueTask(meshId, 'pending task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -2798,7 +2816,7 @@ describe('setupMeshEventForwarding', () => {
         nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'dirty', git: { dirty: true }, policy: { providerPriority: ['hermes-cli'] } }],
         policy: { maxParallelTasks: 2 },
       })
-      enqueueTask(meshId, 'pending task')
+      enqueueTask(meshId, 'pending task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -2820,9 +2838,9 @@ describe('setupMeshEventForwarding', () => {
         nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
         policy: { maxParallelTasks: 2 },
       })
-      enqueueTask(meshId, 'already running')
+      enqueueTask(meshId, 'already running', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'busy_session')
-      enqueueTask(meshId, 'pending task')
+      enqueueTask(meshId, 'pending task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -2854,7 +2872,7 @@ describe('setupMeshEventForwarding', () => {
         }],
         policy: { maxParallelTasks: 2 },
       })
-      enqueueTask(meshId, 'pending remote task')
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
       // No components.dispatchMeshCommand → remote launch impossible.
 
@@ -2889,7 +2907,7 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      const queued = enqueueTask(meshId, 'pending remote task')
+      const queued = enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
       const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
       components.dispatchMeshCommand = dispatchMeshCommand
@@ -2952,7 +2970,7 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      enqueueTask(meshId, 'pending remote task')
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
       const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
       components.dispatchMeshCommand = dispatchMeshCommand
@@ -2996,7 +3014,7 @@ describe('setupMeshEventForwarding', () => {
         }],
         policy: { maxParallelTasks: 2 },
       })
-      enqueueTask(meshId, 'pending remote task')
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
       const { components } = createQueueAutoLaunchComponents()
       // No dispatchMeshCommand → skips every time with remote_auto_launch_unsupported.
 
@@ -3033,7 +3051,7 @@ describe('setupMeshEventForwarding', () => {
         }],
         policy: { maxParallelTasks: 2 },
       })
-      enqueueTask(meshId, 'pending remote task')
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
       components.dispatchMeshCommand = vi.fn(async () => ({ success: true }))
       // Force loadConfig().machineId to be empty so no coordinator id resolves.
@@ -3066,9 +3084,9 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 3 },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      enqueueTask(meshId, 'task 1')
-      enqueueTask(meshId, 'task 2')
-      enqueueTask(meshId, 'task 3')
+      enqueueTask(meshId, 'task 1', { difficulty: 'medium' })
+      enqueueTask(meshId, 'task 2', { difficulty: 'medium' })
+      enqueueTask(meshId, 'task 3', { difficulty: 'medium' })
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -3092,7 +3110,9 @@ describe('setupMeshEventForwarding', () => {
         policy: { maxParallelTasks: 2 },
       })
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/claude' })
-      enqueueTask(meshId, 'hermes-only task', { requiredTags: ['provider=hermes-cli'] })
+      enqueueTask(meshId, 'hermes-only task', { requiredTags: ['provider=hermes-cli'],
+    difficulty: 'medium',
+})
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -3117,7 +3137,9 @@ describe('setupMeshEventForwarding', () => {
       })
       // Both providers are detected; hermes-cli must be selected (not claude-cli)
       detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
-      const queued = enqueueTask(meshId, 'hermes task', { requiredTags: ['provider=hermes-cli'] })
+      const queued = enqueueTask(meshId, 'hermes task', { requiredTags: ['provider=hermes-cli'],
+    difficulty: 'medium',
+})
       const { components, cliManager } = createQueueAutoLaunchComponents()
 
       await triggerMeshQueue(components, meshId)
@@ -3412,7 +3434,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       setupMeshEventForwarding(components)
 
       // Step 1: a queue task completes first (via emit, which updates queue status correctly).
-      const queuedTask = enqueueTask(meshId, 'first queue task')
+      const queuedTask = enqueueTask(meshId, 'first queue task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       emit({
         event: 'agent:generating_completed',
@@ -3563,7 +3585,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       const { components, emit } = createComponents(meshId)
       setupMeshEventForwarding(components)
 
-      const queuedTask = enqueueTask(meshId, 'first queue task')
+      const queuedTask = enqueueTask(meshId, 'first queue task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       emit({
         event: 'agent:generating_completed',
@@ -3622,7 +3644,7 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       const { components, emit } = createComponents(meshId)
       setupMeshEventForwarding(components)
 
-      const queued = enqueueTask(meshId, 'dedupe queue task')
+      const queued = enqueueTask(meshId, 'dedupe queue task', { difficulty: 'medium' })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       const completionAt = Date.now() + 1_000
       emit({
@@ -4027,10 +4049,12 @@ describe('M1-3 — dependent wake on completion (event-based, no polling)', () =
       } as any
 
       // Task A assigned to session-1; B depends on A and targets session-2.
-      const a = enqueueTask(meshId, 'task A')
+      const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' })
       const claimedA = claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
       expect(claimedA?.id).toBe(a.id)
-      const b = enqueueTask(meshId, 'task B after A', { dependsOn: [a.id], targetSessionId: 'runtime-session-2' })
+      const b = enqueueTask(meshId, 'task B after A', { dependsOn: [a.id], targetSessionId: 'runtime-session-2',
+    difficulty: 'medium',
+})
 
       setupMeshEventForwarding(components)
       listener!({

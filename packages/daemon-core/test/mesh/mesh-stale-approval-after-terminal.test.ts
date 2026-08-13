@@ -97,7 +97,9 @@ function mockMesh(meshId: string) {
 
 // Seed an ASSIGNED queue task bound to SESSION_ID (the claim already happened).
 function seedAssignedTask(meshId: string, message = 'do the queued work') {
-  const task = enqueueTask(meshId, message, { taskMode: 'code_change' })
+  const task = enqueueTask(meshId, message, { taskMode: 'code_change',
+    difficulty: 'medium',
+})
   const store = MeshRuntimeStore.getInstance()
   const entry = store.findQueueEntryById(meshId, task.id)!
   entry.status = 'assigned'

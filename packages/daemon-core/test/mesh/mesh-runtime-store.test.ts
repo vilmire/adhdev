@@ -1251,7 +1251,7 @@ describe('mesh-runtime-store', () => {
 
         it('E1.1 — requeueTask fails task when requeueCount reaches maxRetries (default 1)', () => {
             const meshId = `mesh-e1-cap-${randomUUID().slice(0, 8)}`;
-            const task = enqueueTask(meshId, 'test task');
+            const task = enqueueTask(meshId, 'test task', { difficulty: 'medium' });
             claimNextTask(meshId, 'node-1', 'sess-1');
 
             // First requeue: count 0 → 1 (under cap, succeeds)
@@ -1271,7 +1271,7 @@ describe('mesh-runtime-store', () => {
 
         it('E1.2 — requeueTask succeeds when under cap', () => {
             const meshId = `mesh-e1-under-${randomUUID().slice(0, 8)}`;
-            const task = enqueueTask(meshId, 'test task');
+            const task = enqueueTask(meshId, 'test task', { difficulty: 'medium' });
             claimNextTask(meshId, 'node-1', 'sess-1');
 
             // maxRetries=2: first requeue should succeed (0 → 1 < 2)
@@ -1283,7 +1283,7 @@ describe('mesh-runtime-store', () => {
 
         it('E1.3 — force=true bypasses retry cap', () => {
             const meshId = `mesh-e1-force-${randomUUID().slice(0, 8)}`;
-            const task = enqueueTask(meshId, 'test task');
+            const task = enqueueTask(meshId, 'test task', { difficulty: 'medium' });
             claimNextTask(meshId, 'node-1', 'sess-1');
 
             // Exhaust cap: requeue until failed
@@ -1300,7 +1300,7 @@ describe('mesh-runtime-store', () => {
 
         it('E1.4 — failed task from cap has descriptive cancelReason', () => {
             const meshId = `mesh-e1-reason-${randomUUID().slice(0, 8)}`;
-            const task = enqueueTask(meshId, 'test task');
+            const task = enqueueTask(meshId, 'test task', { difficulty: 'medium' });
             claimNextTask(meshId, 'node-1', 'sess-1');
 
             // First requeue succeeds (0 < 1)
@@ -1673,6 +1673,7 @@ describe('mesh-runtime-store', () => {
                 assignedNodeId: 'node_w',
                 assignedSessionId: 'sess_w',
                 dispatchedAt: new Date().toISOString(),
+                difficulty: 'medium',
             });
             expect(entry).not.toBeNull();
             expect(entry?.status).toBe('assigned');
@@ -1694,6 +1695,7 @@ describe('mesh-runtime-store', () => {
                 missionId: '',
                 assignedNodeId: 'node_w',
                 assignedSessionId: 'sess_w',
+                difficulty: 'medium',
             });
             expect(entry).not.toBeNull();
             const store = MeshRuntimeStore.getInstance();

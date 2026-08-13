@@ -129,7 +129,9 @@ describe('WORKTREE-CLAIM-GATE-BYPASS — bootstrap gate in the single claim funn
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt', workingDir: WORKTREE_WS, meshNodeId: WORKTREE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -154,7 +156,9 @@ describe('WORKTREE-CLAIM-GATE-BYPASS — bootstrap gate in the single claim funn
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt', workingDir: WORKTREE_WS, meshNodeId: WORKTREE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const first = await triggerMeshQueue(components, meshId)
       expect(first.claimed).toBe(false)
@@ -180,7 +184,9 @@ describe('WORKTREE-CLAIM-GATE-BYPASS — bootstrap gate in the single claim funn
       const components = createComponents(meshId, [
         { sessionId: 'sess-wt', workingDir: WORKTREE_WS, meshNodeId: WORKTREE_NODE_ID },
       ])
-      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change' })
+      const task = enqueueTask(meshId, 'do worktree work', { targetNodeId: WORKTREE_NODE_ID, taskMode: 'code_change',
+    difficulty: 'medium',
+})
 
       const result = await triggerMeshQueue(components, meshId)
 

@@ -100,9 +100,12 @@ describe('enqueue stamps the model/thinkingLevel source marker', () => {
         expect(task.thinkingLevelSource).toBe('explicit');
     });
 
+    // DIFFICULTY-REQUIRED: difficulty is now mandatory at enqueue, so "no model" is
+    // expressed with 'freeform' — the one difficulty freshMesh() leaves unconfigured,
+    // hence the only one that resolves no preset model/thinkingLevel to mark.
     it('a task with no model carries no marker', () => {
         const meshId = freshMesh();
-        enqueueTask(meshId, 'plain task', {});
+        enqueueTask(meshId, 'plain task', { difficulty: 'freeform' });
         const [task] = getQueue(meshId);
         expect(task.model).toBeUndefined();
         expect(task.modelSource).toBeUndefined();

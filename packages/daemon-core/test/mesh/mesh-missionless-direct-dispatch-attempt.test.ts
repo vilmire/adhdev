@@ -56,6 +56,7 @@ describe('missionless direct dispatch opens a real turn attempt', () => {
             assignedNodeId: NODE,
             assignedSessionId: SESSION,
             dispatchedAt: new Date().toISOString(),
+            difficulty: 'medium',
         });
         return { taskId, entry };
     };
