@@ -305,7 +305,16 @@ export {
 } from './components/dashboard/git-system-bubbles'
 export type { BuildGitSystemBubbleOptions } from './components/dashboard/git-system-bubbles'
 
+// ── Mesh onboarding (shared by the mesh page and the setup wizard) ──
+export { default as MeshCreateForm, isMeshCreateDisabled } from './components/mesh-onboarding/MeshCreateForm'
+export type { MeshCreateFormProps } from './components/mesh-onboarding/MeshCreateForm'
+export { default as MeshWorkspacePicker, PlanStatus as MeshPlanStatus } from './components/mesh-onboarding/WorkspacePicker'
+export type { WorkspaceOption as MeshWorkspaceOption } from './components/mesh-onboarding/WorkspacePicker'
+
 // ── Setup Wizard ──
+// The wizard is now one step (create/attach) that hands off to the mesh page.
+// SlotsStep/SchedulingStep/ApprovalsStep are no longer mounted by it; they stay
+// exported for the pending port of those controls onto the mesh page.
 export { default as QuotaPolicyStep, quotaPolicyDraftToOverrides } from './components/setup-wizard/QuotaPolicyStep'
 export type { QuotaPolicyStepProps } from './components/setup-wizard/QuotaPolicyStep'
 export { default as SetupWizard } from './components/setup-wizard/SetupWizard'

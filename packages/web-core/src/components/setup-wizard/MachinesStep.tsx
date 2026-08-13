@@ -1,5 +1,5 @@
 /**
- * MachinesStep — the setup wizard's machine-selection step.
+ * MachinesStep — the setup wizard's only step: get a mesh with machines on it.
  *
  * Three states:
  *  - No registered machines: renders the platform-injected install/pair
@@ -7,20 +7,19 @@
  *    web-cloud, so it arrives as the renderInstallOnboarding prop).
  *  - Existing meshes: pick the mesh to configure; the attach form below adds
  *    more machines to it (plan_mesh_onboarding → add_mesh_node — the same
- *    command sequence as MeshNodeList's add-node flow, committed immediately
- *    so later steps see real node ids).
- *  - No mesh yet: the create form (name + machine + workspace) drives
- *    runMeshCreateSequence — mesh + first node in one go.
+ *    command sequence as MeshNodeList's add-node flow, committed immediately).
+ *  - No mesh yet: MeshCreateForm — the same create form the mesh page renders,
+ *    driving runMeshCreateSequence (mesh + first node in one go).
  *
  * Deliberately DUMB: every handler and piece of state lives in the wizard
  * shell; this component only renders and reports user intent upward.
  */
-import { useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry, RepoMeshFeatures } from '../../context/RepoMeshContext'
 import type { MeshEntry, MeshNode } from '../../pages/repo-mesh/types'
-
-interface WorkspaceOption { id?: string; path: string; label?: string | null }
+import MeshCreateForm from '../mesh-onboarding/MeshCreateForm'
+import WorkspacePicker, { PlanStatus, type WorkspaceOption } from '../mesh-onboarding/WorkspacePicker'
 
 export interface MachinesStepProps {
     daemons: RepoMeshDaemonEntry[]
@@ -47,6 +46,13 @@ export interface MachinesStepProps {
     creating: boolean
     createWarning: string | null
     onCreate: () => void
+    /** Manual identity fallback for repos git discovery cannot describe. */
+    createRepoRemoteUrl: string
+    onCreateRepoRemoteUrlChange: (v: string) => void
+    createRepoIdentity: string
+    onCreateRepoIdentityChange: (v: string) => void
+    createManualOpen: boolean
+    onCreateManualOpenChange: (v: boolean) => void
 
     // Attach-another-machine form (existing mesh)
     nodes: MeshNode[]
@@ -67,71 +73,6 @@ export interface MachinesStepProps {
     daemonLabel: (d: RepoMeshDaemonEntry) => string
 }
 
-const inputCls = 'w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-2.5 py-1.5 text-xs'
-
-/** Workspace picker: a select over the daemon's known workspaces, with a custom-path escape hatch. */
-function WorkspacePicker({ workspaces, value, onChange }: {
-    workspaces: WorkspaceOption[]
-    value: string
-    onChange: (v: string) => void
-}) {
-    const { t } = useTranslation('common')
-    // Pure UI state: whether the free-text input is shown. The committed value
-    // always flows through `value`.
-    const [custom, setCustom] = useState(false)
-    const knownPaths = new Set(workspaces.map(w => w.path))
-    const selectValue = custom ? '__custom' : (knownPaths.has(value) ? value : '')
-
-    if (workspaces.length === 0 || custom) {
-        return (
-            <div className="flex flex-col gap-1">
-                <input
-                    type="text"
-                    className={inputCls}
-                    value={value}
-                    placeholder={t('setupWizard.machines.workspacePlaceholder')}
-                    onChange={e => onChange(e.target.value)}
-                />
-                {workspaces.length > 0 && (
-                    <button type="button" className="self-start text-[10px] text-accent-primary hover:underline" onClick={() => setCustom(false)}>
-                        {t('setupWizard.machines.pickFromKnown')}
-                    </button>
-                )}
-            </div>
-        )
-    }
-    return (
-        <select
-            className={inputCls}
-            value={selectValue}
-            onChange={e => {
-                if (e.target.value === '__custom') {
-                    setCustom(true)
-                    onChange('')
-                } else {
-                    onChange(e.target.value)
-                }
-            }}
-        >
-            <option value="">{t('setupWizard.machines.workspaceSelectPlaceholder')}</option>
-            {workspaces.map(w => <option key={w.path} value={w.path}>{w.label || w.path}</option>)}
-            <option value="__custom">{t('setupWizard.machines.workspaceCustom')}</option>
-        </select>
-    )
-}
-
-/** Plan-probe status line (plan_mesh_onboarding dry-run result). */
-function PlanStatus({ plan, loading }: { plan: any; loading: boolean }) {
-    const { t } = useTranslation('common')
-    if (loading) return <p className="text-[11px] text-text-muted">{t('setupWizard.machines.planChecking')}</p>
-    if (!plan) return null
-    if (plan.success === false) {
-        return <p className="text-[11px] text-red-400">{plan.error}{plan.action ? ` ${plan.action}` : ''}</p>
-    }
-    const identity = plan.discovery?.repoIdentity || plan.discovery?.repoRoot || ''
-    return <p className="text-[11px] text-emerald-400">{t('setupWizard.machines.planOk', { identity })}</p>
-}
-
 export default function MachinesStep(props: MachinesStepProps) {
     const {
         daemons, features, meshes, meshesLoading,
@@ -140,6 +81,9 @@ export default function MachinesStep(props: MachinesStepProps) {
         createName, onCreateNameChange, createDaemonId, onCreateDaemonIdChange,
         createWorkspace, onCreateWorkspaceChange, createPickerWorkspaces,
         createPlan, createPlanLoading, creating, createWarning, onCreate,
+        createRepoRemoteUrl, onCreateRepoRemoteUrlChange,
+        createRepoIdentity, onCreateRepoIdentityChange,
+        createManualOpen, onCreateManualOpenChange,
         nodes, attachableDaemons,
         attachDaemonId, onAttachDaemonIdChange, attachWorkspace, onAttachWorkspaceChange,
         attachPickerWorkspaces, attachPlan, attachPlanLoading, attaching, onAttach,
@@ -163,9 +107,6 @@ export default function MachinesStep(props: MachinesStepProps) {
         )
     }
 
-    const createDisabled = creating || createPlanLoading || createPlan?.success === false
-        || !createName.trim() || !createWorkspace.trim()
-        || (features.createDaemonPicker && !createDaemonId)
     const attachDisabled = attaching || attachPlanLoading || attachPlan?.success === false
         || !attachWorkspace.trim()
         || (features.addNodeDaemonPicker && !attachDaemonId)
@@ -211,38 +152,32 @@ export default function MachinesStep(props: MachinesStepProps) {
                 )}
             </div>
 
-            {/* ── Create form ── */}
+            {/* ── Create form (shared with the mesh page) ── */}
             {createMode && (
-                <div className="flex flex-col gap-2.5 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2.5">
-                    <label className="flex flex-col gap-1">
-                        <span className="text-[11px] text-text-muted">{t('setupWizard.machines.meshName')}</span>
-                        <input type="text" className={inputCls} value={createName} onChange={e => onCreateNameChange(e.target.value)} />
-                    </label>
-
-                    {features.createDaemonPicker && daemons.length > 1 && (
-                        <label className="flex flex-col gap-1">
-                            <span className="text-[11px] text-text-muted">{t('setupWizard.machines.machine')}</span>
-                            <select className={inputCls} value={createDaemonId} onChange={e => onCreateDaemonIdChange(e.target.value)}>
-                                <option value="">{t('setupWizard.machines.machineSelectPlaceholder')}</option>
-                                {daemons.map(d => <option key={d.id} value={d.id}>{daemonLabel(d)}</option>)}
-                            </select>
-                        </label>
-                    )}
-
-                    <label className="flex flex-col gap-1">
-                        <span className="text-[11px] text-text-muted">{t('setupWizard.machines.workspace')}</span>
-                        <WorkspacePicker workspaces={createPickerWorkspaces} value={createWorkspace} onChange={onCreateWorkspaceChange} />
-                    </label>
-
-                    <PlanStatus plan={createPlan} loading={createPlanLoading} />
-                    {createWarning && <p className="text-[11px] text-amber-400">{createWarning}</p>}
-
-                    <div className="flex justify-end">
-                        <button type="button" className="btn btn-primary btn-sm" onClick={onCreate} disabled={createDisabled}>
-                            {creating ? t('setupWizard.machines.creating') : t('setupWizard.machines.create')}
-                        </button>
-                    </div>
-                </div>
+                <MeshCreateForm
+                    variant="wizard"
+                    showDaemonPicker={features.createDaemonPicker}
+                    daemons={daemons}
+                    daemonLabel={daemonLabel}
+                    name={createName}
+                    onNameChange={onCreateNameChange}
+                    daemonId={createDaemonId}
+                    onDaemonIdChange={onCreateDaemonIdChange}
+                    workspace={createWorkspace}
+                    onWorkspaceChange={onCreateWorkspaceChange}
+                    workspaces={createPickerWorkspaces}
+                    plan={createPlan}
+                    planLoading={createPlanLoading}
+                    repoRemoteUrl={createRepoRemoteUrl}
+                    onRepoRemoteUrlChange={onCreateRepoRemoteUrlChange}
+                    repoIdentity={createRepoIdentity}
+                    onRepoIdentityChange={onCreateRepoIdentityChange}
+                    manualOpen={createManualOpen}
+                    onManualOpenChange={onCreateManualOpenChange}
+                    creating={creating}
+                    warning={createWarning}
+                    onCreate={onCreate}
+                />
             )}
 
             {/* ── Attach form (existing mesh) ── */}

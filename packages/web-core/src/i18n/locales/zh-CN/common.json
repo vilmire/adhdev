@@ -1218,8 +1218,7 @@
             "dashboard": "仪表板",
             "settings": "设置",
             "docs": "文档",
-            "about": "关于",
-            "setupWizard": "设置"
+            "about": "关于"
         },
         "layout": {
             "expandSidebar": "展开侧边栏",
@@ -1587,7 +1586,6 @@
             "navSettings": "Settings",
             "navDocs": "Docs",
             "navAbout": "About",
-            "navSetupWizard": "设置",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3200,20 +3198,7 @@
     },
     "setupWizard": {
         "title": "引导式 Mesh 设置",
-        "stepOf": "第 {{current}} 步，共 {{total}} 步",
-        "steps": {
-            "machines": "机器",
-            "slots": "能力槽位",
-            "scheduling": "调度",
-            "quota": "配额策略",
-            "approvals": "审批"
-        },
-        "back": "上一步",
-        "skip": "跳过",
-        "next": "下一步",
         "close": "关闭",
-        "staged": "已暂存",
-        "stagedNote": "此步骤的更改会被暂存，并在你完成向导时一并应用。",
         "machines": {
             "title": "选择机器",
             "description": "选择要设置的 Mesh，并连接应运行其任务的机器。新建 Mesh 也会将所选工作区作为第一个节点连接进来。",
@@ -3240,26 +3225,6 @@
             "attaching": "连接中…",
             "addMachine": "添加机器"
         },
-        "slots": {
-            "title": "能力槽位",
-            "description": "描述每个节点擅长什么：应使用哪个 AI 提供方、模型以及任务难度。保存每个节点即可暂存其槽位——完成向导时全部生效。",
-            "empty": "还没有节点——请返回并先连接一台机器，或跳过此步骤。"
-        },
-        "scheduling": {
-            "title": "调度",
-            "description": "选择协调器如何在 Mesh 的节点之间分配未指定目标的任务。"
-        },
-        "approvals": {
-            "title": "审批",
-            "description": "决定哪些操作需要你的审批，Mesh 才能执行。"
-        },
-        "finish": {
-            "apply": "完成设置",
-            "applying": "应用中…",
-            "applied": "设置已应用（已保存 {{count}} 个组）。",
-            "nothingToApply": "没有暂存的更改——保留当前设置。",
-            "partialFailure": "部分更改无法应用："
-        },
         "quotaPolicy": {
             "title": "基于配额的路由",
             "description": "当节点上报其 AI 提供方的剩余配额时，协调器可以跳过接近耗尽的节点，并优先选择余量更多的节点。下列阈值决定何时生效。缺失或过期的读数始终会被忽略，因此不会因为陈旧数据而排除节点。",
@@ -3283,6 +3248,7 @@
                 "percentRange": "必须介于 0 和 100 之间。",
                 "negative": "不能为负数。"
             }
-        }
+        },
+        "continueToMesh": "前往 Mesh"
     }
 }

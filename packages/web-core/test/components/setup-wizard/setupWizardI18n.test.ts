@@ -32,11 +32,21 @@ describe('setupWizard i18n parity', () => {
     const paths = leafPaths(en.setupWizard, 'setupWizard')
 
     it('the en locale actually carries the wizard keys (guard against a vacuous pass)', () => {
-        // quotaPolicy alone is ~18 keys; the shell + 4 new steps push this well past 50.
-        expect(paths.length).toBeGreaterThan(50)
+        // The wizard is one step (create/attach) that hands off to the mesh page;
+        // the staged steps 2-5 and their shell/finish keys are gone. quotaPolicy is
+        // retained for the pending port of quota routing onto the mesh page.
+        expect(paths.length).toBeGreaterThan(30)
         expect(en.setupWizard?.title).toBeTruthy()
-        expect(en.setupWizard?.steps?.machines).toBeTruthy()
-        expect(en.setupWizard?.finish?.apply).toBeTruthy()
+        expect(en.setupWizard?.machines?.title).toBeTruthy()
+        expect(en.setupWizard?.continueToMesh).toBeTruthy()
+    })
+
+    it('does not retain keys for the removed staged steps', () => {
+        // These rendered the multi-step shell and the Finish commit. Leaving them
+        // behind is how a locale accumulates strings no code can reach.
+        for (const dead of ['steps', 'stepOf', 'back', 'skip', 'next', 'finish', 'staged', 'slots', 'scheduling', 'approvals']) {
+            expect(en.setupWizard?.[dead], `setupWizard.${dead} is orphaned`).toBeUndefined()
+        }
     })
 
     for (const lang of LOCALES.filter(l => l !== 'en')) {
@@ -48,11 +58,14 @@ describe('setupWizard i18n parity', () => {
         })
     }
 
-    it('wizard nav labels exist in all shipped locales', () => {
+    it('no locale still carries the removed sidebar nav labels', () => {
+        // Setup lost its sidebar entry (onboarding hands off to Mesh), so these two
+        // labels have no renderer left. Pinned as absent so they are not resurrected
+        // as dead strings.
         for (const lang of LOCALES) {
             const dict = loadLocale(lang)
-            expect(dict.standalone?.nav?.setupWizard, `${lang} is missing standalone.nav.setupWizard`).toBeTruthy()
-            expect(dict.cloud?.layout?.navSetupWizard, `${lang} is missing cloud.layout.navSetupWizard`).toBeTruthy()
+            expect(dict.standalone?.nav?.setupWizard, `${lang} still has standalone.nav.setupWizard`).toBeUndefined()
+            expect(dict.cloud?.layout?.navSetupWizard, `${lang} still has cloud.layout.navSetupWizard`).toBeUndefined()
         }
     })
 })

@@ -1218,8 +1218,7 @@
             "dashboard": "대시보드",
             "settings": "설정",
             "docs": "문서",
-            "about": "정보",
-            "setupWizard": "설정"
+            "about": "정보"
         },
         "layout": {
             "expandSidebar": "사이드바 펼치기",
@@ -1587,7 +1586,6 @@
             "navSettings": "Settings",
             "navDocs": "Docs",
             "navAbout": "About",
-            "navSetupWizard": "설정",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3197,20 +3195,7 @@
     },
     "setupWizard": {
         "title": "가이드 메시 설정",
-        "stepOf": "전체 {{total}}단계 중 {{current}}단계",
-        "steps": {
-            "machines": "머신",
-            "slots": "기능 슬롯",
-            "scheduling": "스케줄링",
-            "quota": "쿼터 정책",
-            "approvals": "승인"
-        },
-        "back": "뒤로",
-        "skip": "건너뛰기",
-        "next": "다음",
         "close": "닫기",
-        "staged": "스테이징됨",
-        "stagedNote": "이 단계의 변경 사항은 스테이징되어 마법사를 완료할 때 함께 적용됩니다.",
         "machines": {
             "title": "머신 선택",
             "description": "설정할 메시를 고르고 작업을 실행할 머신을 연결하세요. 메시를 새로 만들면 선택한 워크스페이스가 첫 번째 노드로 함께 연결됩니다.",
@@ -3237,26 +3222,6 @@
             "attaching": "연결 중…",
             "addMachine": "머신 추가"
         },
-        "slots": {
-            "title": "기능 슬롯",
-            "description": "각 노드가 잘하는 일을 설명하세요: 어떤 AI 제공자, 모델, 작업 난이도를 맡을지. 각 노드를 저장하면 슬롯이 스테이징되며, 완료할 때 모두 적용됩니다.",
-            "empty": "아직 노드가 없습니다. 돌아가서 먼저 머신을 연결하거나 이 단계를 건너뛰세요."
-        },
-        "scheduling": {
-            "title": "스케줄링",
-            "description": "코디네이터가 대상이 지정되지 않은 작업을 메시의 노드들에 어떻게 분배할지 선택하세요."
-        },
-        "approvals": {
-            "title": "승인",
-            "description": "메시가 실행하기 전에 승인이 필요한 작업을 정하세요."
-        },
-        "finish": {
-            "apply": "설정 완료",
-            "applying": "적용 중…",
-            "applied": "설정이 적용되었습니다(그룹 {{count}}개 저장됨).",
-            "nothingToApply": "스테이징된 변경 사항이 없습니다. 현재 설정이 유지됩니다.",
-            "partialFailure": "일부 변경 사항을 적용할 수 없습니다:"
-        },
         "quotaPolicy": {
             "title": "쿼터 기반 라우팅",
             "description": "노드가 AI 제공자 쿼터 잔량을 보고하면, 코디네이터는 거의 소진된 노드를 건너뛰고 여유가 많은 노드를 선호할 수 있습니다. 아래 임계값이 그 기준입니다. 보고가 없거나 오래된 값은 항상 무시되므로, 낡은 데이터 때문에 노드가 제외되는 일은 없습니다.",
@@ -3280,6 +3245,7 @@
                 "percentRange": "0에서 100 사이여야 합니다.",
                 "negative": "음수는 사용할 수 없습니다."
             }
-        }
+        },
+        "continueToMesh": "메시로 이동"
     }
 }

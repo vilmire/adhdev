@@ -201,9 +201,13 @@ export function useMeshList({
     const [createOnboardingPlan, setCreateOnboardingPlan] = useState<any>(null)
     const [createPlanLoading, setCreatePlanLoading] = useState(false)
 
+    // The daemon the create form targets. Cloud picks one explicitly; standalone has
+    // exactly one, so fall back to it — otherwise standalone's workspace picker and
+    // discovery probe have no daemon to read from and stay empty.
+    const createTargetDaemonId = features.createDaemonPicker ? newMeshDaemonId : primaryDaemonId
     const selectedCreateDaemon = useMemo(
-        () => daemons.find(d => d.id === newMeshDaemonId),
-        [daemons, newMeshDaemonId],
+        () => daemons.find(d => d.id === createTargetDaemonId),
+        [daemons, createTargetDaemonId],
     )
     const createPickerWorkspaces = selectedCreateDaemon?.workspaces || []
     const createPickerProviders: AvailableCliProviderOption[] = useMemo(
@@ -217,24 +221,24 @@ export function useMeshList({
     // the previous code left the picker empty until an unrelated status snapshot
     // happened to arrive.
     useEffect(() => {
-        if (!features.createDaemonPicker || !loadDaemonMetadata) return
-        if (!newMeshDaemonId || !selectedCreateDaemon) return
+        if (!loadDaemonMetadata) return
+        if (!createTargetDaemonId || !selectedCreateDaemon) return
         const missingMetadata = !selectedCreateDaemon.workspaces
             || !(selectedCreateDaemon as any).availableProviders
         if (!missingMetadata) return
-        void Promise.resolve(loadDaemonMetadata(newMeshDaemonId, { minFreshMs: 30_000 })).catch(() => {})
-    }, [features.createDaemonPicker, loadDaemonMetadata, newMeshDaemonId, selectedCreateDaemon])
+        void Promise.resolve(loadDaemonMetadata(createTargetDaemonId, { minFreshMs: 30_000 })).catch(() => {})
+    }, [loadDaemonMetadata, createTargetDaemonId, selectedCreateDaemon])
 
     // Git-aware dry-run preview for the selected workspace. The owning daemon
     // performs all discovery; the browser never tries to infer repository truth.
     useEffect(() => {
-        if (!showCreate || !newMeshDaemonId || !newMeshWorkspace) {
+        if (!showCreate || !createTargetDaemonId || !newMeshWorkspace) {
             setCreateOnboardingPlan(null)
             return
         }
         let cancelled = false
         setCreatePlanLoading(true)
-        void sendCommand(newMeshDaemonId, 'plan_mesh_onboarding', {
+        void sendCommand(createTargetDaemonId, 'plan_mesh_onboarding', {
             workspace: newMeshWorkspace,
             operation: 'auto',
             meshInventory: meshes,
@@ -253,7 +257,7 @@ export function useMeshList({
             if (!cancelled) setCreatePlanLoading(false)
         })
         return () => { cancelled = true }
-    }, [showCreate, newMeshDaemonId, newMeshWorkspace, meshes, sendCommand, unwrapResult])
+    }, [showCreate, createTargetDaemonId, newMeshWorkspace, meshes, sendCommand, unwrapResult])
 
     // Stable identity for the daemon set so loadMeshes' useCallback (and the
     // effect that depends on it) is not re-created on every parent re-render just
@@ -326,7 +330,12 @@ export function useMeshList({
         if (!targetDaemonId || !createName.trim()) return
         const remoteUrl = createRepoRemoteUrl.trim()
         const identity = createRepoIdentity.trim()
-        if (!remoteUrl && !identity) return
+        const workspace = newMeshWorkspace.trim()
+        // Repo identity comes from ONE of two places: git discovery on the picked
+        // workspace, or the manual identity/URL fallback. Requiring the typed fields
+        // unconditionally (the old rule) rejected the discovery flow the setup wizard
+        // has always used, so a mesh creatable from /setup was refused here.
+        if (!workspace && !remoteUrl && !identity) return
         // Double-submit guard: a second click must not start a parallel create.
         if (creating) return
         setCreating(true)
@@ -337,8 +346,10 @@ export function useMeshList({
                 name: createName,
                 repoRemoteUrl: remoteUrl,
                 repoIdentity: identity,
-                workspace: newMeshWorkspace,
-                attachWorkspace: features.createDaemonPicker,
+                workspace,
+                // Attach whenever we actually have a workspace to attach. Gating this on
+                // the cloud-only daemon picker meant standalone created node-less meshes.
+                attachWorkspace: !!workspace,
                 machineId: selectedCreateDaemon?.machineId,
                 providerPriority: defaultProviderPriorityFromInventory(createPickerProviders),
                 meshInventory: meshes,
@@ -382,6 +393,8 @@ export function useMeshList({
         setCreateName('')
         setCreateRepoIdentity('')
         setCreateRepoRemoteUrl('')
+        setNewMeshWorkspace('')
+        setCreateOnboardingPlan(null)
         setCreateWarning(null)
     }
 
