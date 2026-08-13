@@ -670,9 +670,9 @@ export function MeshDetailView({
                         {/* ── Integrations: Cloud MCP hint ── */}
                         {features.meshHostDaemonSection && (
                             <AlertBanner variant="info" className="mt-4">
-                                <strong>MCP Mode:</strong>{' '}
+                                <strong>{t('repoMesh.detail.mcpMode')}</strong>{' '}
                                 <code className="bg-bg-secondary px-1 rounded text-xs">adhdev mcp --repo-mesh {selectedMesh.id}</code>
-                                {' · The mesh MCP server can be used directly from your CLI agent.'}
+                                {' '}{t('repoMesh.detail.mcpDescription')}
                             </AlertBanner>
                         )}
                     </>
