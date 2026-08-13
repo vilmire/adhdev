@@ -55,6 +55,7 @@ import {
     sanitizeTerminalText,
     truncateToByteTailByLine,
     encodeMeshSendKeys,
+    MESH_SEND_KEY_ENCODING,
     TerminalTranscriptAccumulator,
     type MeshSendKeyItem,
     type MeshSendKeyName,
@@ -188,6 +189,30 @@ function warnMissingBackgroundSourceOnce(cliType: string): void {
 // text). FORCE_SUBMIT_SETTLE_MS is that minimum pre-submit gap.
 const FORCE_SUBMIT_SETTLE_MS = 150;
 
+// WIN32-INJECT-ENTER-RETRY (mesh_send_keys): on win32 ConPTY the ENTER that
+// terminates an injected text+ENTER sequence can be lost — or absorbed as a
+// literal newline by an Ink-style composer that reads the fused write as a
+// paste — leaving the injected text typed-but-unsent. The PTY write layer is
+// fire-and-forget (no ack that the CLI consumed the submit), so the loss is
+// silent — the same structural root as M-MESH-DUPLICATE-INJECTION. Owner
+// decision: keep it simple — resend the bare ENTER up to
+// WIN32_INJECT_ENTER_MAX_RETRIES more times on a fixed delay, with ONE cheap
+// safeguard: before each resend, look at the composer region (the bottom
+// WIN32_INJECT_COMPOSER_TAIL_LINES of the rendered viewport — a submitted
+// message scrolls UP into the transcript, so text still standing there is
+// unsubmitted). If the injected text is gone from that region the submit
+// already landed — the original ENTER was delayed, not lost — and resending
+// would double-submit, so stop. The 300ms cadence clears the win32
+// Ink/ConPTY render+echo cycle so the screen reflects the previous ENTER's
+// effect before the next one fires (cf. the 350ms floor of the send-path
+// stuck-submit retryDelayMs in sendMessage). Worst case: 3 ENTERs over
+// ~900ms. A sequence with NO literal text (a bare ENTER) gets no retry:
+// without a text snippet there is no cheap already-submitted check, and a
+// blind resend could submit unrelated composer content.
+const WIN32_INJECT_ENTER_MAX_RETRIES = 2;
+const WIN32_INJECT_ENTER_RETRY_DELAY_MS = 300;
+const WIN32_INJECT_COMPOSER_TAIL_LINES = 8;
+
 // ─── Adapter ────────────────────────────────────────
 
 export class ProviderCliAdapter implements CliAdapter {
@@ -284,6 +309,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private pendingOutboundStaleTimer: NodeJS.Timeout | null = null;
     // Submit retry timer — PTY-level, not state machine
     private submitRetryTimer: NodeJS.Timeout | null = null;
+    // WIN32-INJECT-ENTER-RETRY: pending bare-ENTER resend for a mesh_send_keys
+    // injection whose submit may have been swallowed by win32 ConPTY.
+    private injectEnterRetryTimer: NodeJS.Timeout | null = null;
 
     // PTY-WRITE-SERIALIZE: a single per-session tail promise that serializes every
     // PTY write. Each writeToPty() call chains its actual write after the previous
@@ -1062,6 +1090,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private clearAllTimers(): void {
         if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.injectEnterRetryTimer) { clearTimeout(this.injectEnterRetryTimer); this.injectEnterRetryTimer = null; }
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.engine.clearAllTimers();
@@ -2228,6 +2257,12 @@ export class ProviderCliAdapter implements CliAdapter {
             clearTimeout(this.submitRetryTimer);
             this.submitRetryTimer = null;
         }
+        // A new send supersedes any armed inject ENTER retry — its bare CR must
+        // not fire into (and prematurely submit) this turn's freshly typed body.
+        if (this.injectEnterRetryTimer) {
+            clearTimeout(this.injectEnterRetryTimer);
+            this.injectEnterRetryTimer = null;
+        }
         this.engine.onTurnStarted(turnScope);
         this.engine.submitRetryPromptSnippet = extractPromptRetrySnippet(text);
         const normalizedPromptSnippet = normalizePromptText(this.engine.submitRetryPromptSnippet);
@@ -2768,7 +2803,26 @@ export class ProviderCliAdapter implements CliAdapter {
         // Atomic write: the full encoded sequence goes out in ONE writeToPty (which
         // chains onto the write FIFO). text+ENTER is already one contiguous string,
         // so the submit key can never be separated from the text it submits.
+        //
+        // A fresh injection supersedes any armed ENTER retry from a PREVIOUS
+        // injection: cancel it so its bare CR cannot land on top of this write
+        // (double-submit) — this call arms its own retry below if needed.
+        if (this.injectEnterRetryTimer) {
+            clearTimeout(this.injectEnterRetryTimer);
+            this.injectEnterRetryTimer = null;
+        }
         await this.writeToPty(encoded.sequence);
+        // win32 ConPTY can silently swallow the trailing ENTER (see
+        // WIN32_INJECT_ENTER_MAX_RETRIES). Resend the bare ENTER on a fixed
+        // cadence while the injected text still stands in the composer. Only a
+        // sequence that SUBMITS and carries literal text qualifies — the text
+        // snippet powers the cheap already-submitted stop check.
+        if (process.platform === 'win32' && encoded.submits) {
+            const snippet = extractPromptRetrySnippet(
+                items.map(it => ('text' in it ? it.text : '')).join('\n'),
+            );
+            if (snippet) this.scheduleWin32InjectEnterRetry(snippet, 1);
+        }
         LOG.info('CLI', `[${this.cliType}] send_keys injected keys=${encoded.keys.join(',') || '(text-only)'} bytes=${Buffer.byteLength(encoded.sequence, 'utf8')} destructive=${encoded.hasDestructive}`);
         return {
             ok: true,
@@ -2784,6 +2838,34 @@ export class ProviderCliAdapter implements CliAdapter {
     async writeRaw(data: string | Buffer): Promise<void> {
         const str = Buffer.isBuffer(data) ? data.toString('utf8') : data;
         await this.writeToPty(str);
+    }
+
+    /**
+     * WIN32-INJECT-ENTER-RETRY: resend the bare submit key while the injected
+     * text still stands in the composer (bottom viewport lines). Stops the
+     * instant the text leaves that region — proof the submit was consumed —
+     * so a delayed (not lost) original ENTER is never doubled. Bounded by
+     * WIN32_INJECT_ENTER_MAX_RETRIES; see the constants' comment for the
+     * rationale. Never logs the snippet (it is user text).
+     */
+    private scheduleWin32InjectEnterRetry(snippet: string, attempt: number): void {
+        this.injectEnterRetryTimer = setTimeout(() => {
+            this.injectEnterRetryTimer = null;
+            if (!this.ptyProcess) return;
+            // Cheap already-submitted check: the composer lives at the BOTTOM of
+            // the viewport; a submitted message scrolls up into the transcript.
+            // Text no longer standing in the bottom lines = the ENTER landed.
+            const screenLines = this.terminalScreen.getText().split('\n');
+            const composerRegion = screenLines.slice(-WIN32_INJECT_COMPOSER_TAIL_LINES).join('\n');
+            if (!promptLikelyVisible(composerRegion, snippet)) return;
+            LOG.info('CLI', `[${this.cliType}] send_keys ENTER retry (attempt ${attempt}/${WIN32_INJECT_ENTER_MAX_RETRIES}): injected text still in composer`);
+            void this.writeToPty(MESH_SEND_KEY_ENCODING.ENTER).catch((error) => {
+                LOG.warn('CLI', `[${this.cliType}] send_keys ENTER retry write failed: ${error?.message || error}`);
+            });
+            if (attempt < WIN32_INJECT_ENTER_MAX_RETRIES) {
+                this.scheduleWin32InjectEnterRetry(snippet, attempt + 1);
+            }
+        }, WIN32_INJECT_ENTER_RETRY_DELAY_MS);
     }
 
     resolveModal(buttonIndex: number): void {
