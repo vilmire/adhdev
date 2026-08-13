@@ -479,17 +479,37 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
             const isSubmoduleGuard = /working trees containing submodules cannot be moved or removed/i.test(message);
             const submoduleForceBlocked = isSubmoduleGuard && !forceFallbackConvergence.allow;
 
-            // Fallback 1: submodule guard on --force path — deinit submodules first, then retry remove
-            if (isSubmoduleGuard && forceFallbackConvergence.allow) {
+            // Fallback path — gated on the CALLER's force/convergence authorization, not
+            // on the specific error text. Previously this required the submodule-guard
+            // regex, so any other removal failure (most importantly a live delegate
+            // session holding a lock on the worktree directory) skipped the fallback
+            // entirely and fell straight through to the generic failure below — the
+            // best-effort fs removal was never once attempted for those. `.allow` is the
+            // real precondition: it means the caller passed force, or convergence was
+            // independently verified, so the worktree is safe to drop. Branch-ref
+            // deletion still keys off `mergeConvergence` (see deleteBranchIfMerged), NOT
+            // this flag, so widening the gate cannot delete an unmerged branch ref.
+            // A `dirty` worktree without force still fails below: force:false leaves
+            // .allow false unless convergence was verified.
+            if (forceFallbackConvergence.allow && !dirty) {
                 const { execFile } = await import('node:child_process');
                 const { promisify } = await import('node:util');
                 const execFileAsync = promisify(execFile);
                 const GIT_TIMEOUT_CLEANUP = 30_000;
                 const GIT_MAX_BUFFER_CLEANUP = 4 * 1024 * 1024;
+                // The reason label reflects what actually blocked removal, so a
+                // session-lock failure is no longer misreported as a submodule guard.
+                const fallbackReason = isSubmoduleGuard
+                    ? 'working_trees_containing_submodules' as const
+                    : 'worktree_remove_failed' as const;
                 try {
-                    await execFileAsync('git', ['-C', workspace, 'submodule', 'deinit', '--all', '-f'], {
-                        encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true, env: gitChildEnv(),
-                    });
+                    // `submodule deinit` is only meaningful for the submodule guard;
+                    // for any other failure go straight to a forced worktree remove.
+                    if (isSubmoduleGuard) {
+                        await execFileAsync('git', ['-C', workspace, 'submodule', 'deinit', '--all', '-f'], {
+                            encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true, env: gitChildEnv(),
+                        });
+                    }
                     await execFileAsync('git', ['worktree', 'remove', '--force', workspace], {
                         cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true, env: gitChildEnv(),
                     });
@@ -499,17 +519,20 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
                         removedPath: workspace,
                         repoRoot,
                         ...branchOutcome,
-                        fallback: 'git_worktree_remove_submodule_deinit' as const,
+                        fallback: isSubmoduleGuard
+                            ? 'git_worktree_remove_submodule_deinit' as const
+                            : 'git_worktree_remove_force' as const,
                         forced: true,
-                        reason: 'working_trees_containing_submodules' as const,
+                        reason: fallbackReason,
                         convergence: forceFallbackConvergence,
                     };
                 } catch (deinitError: any) {
-                    // Fallback 2: deinit+remove still failed — best-effort directory
-                    // removal + prune. The path is already proven managed/converged
-                    // here, and a leftover directory must NOT gate dropping the node
-                    // from the mesh, so absorb Windows EINVAL/EPERM and report success
-                    // with a residue warning instead of failing the whole removal.
+                    // Final fallback: the forced remove still failed — best-effort
+                    // directory removal + prune. The path is already proven
+                    // managed/converged here, and a leftover directory must NOT gate
+                    // dropping the node from the mesh, so absorb Windows EINVAL/EPERM
+                    // (and a still-held session lock) and report success with a residue
+                    // warning instead of failing the whole removal.
                     const rm = await self.bestEffortRemoveWorktreeDir(workspace);
                     try {
                         await execFileAsync('git', ['worktree', 'prune'], {
@@ -524,11 +547,11 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
                         ...branchOutcome,
                         fallback: 'fs_rm_worktree_prune' as const,
                         forced: true,
-                        reason: 'working_trees_containing_submodules' as const,
+                        reason: fallbackReason,
                         convergence: forceFallbackConvergence,
                         ...(rm.residue ? {
                             residue: true,
-                            residueWarning: `Worktree was de-registered from git but the directory could not be fully removed (leftover residue at '${workspace}'): ${rm.error || 'unknown error'}; deinit+remove first failed with: ${deinitError?.message || deinitError}. The node will be dropped from the mesh; remove the directory manually if needed.`,
+                            residueWarning: `Worktree was de-registered from git but the directory could not be fully removed (leftover residue at '${workspace}'): ${rm.error || 'unknown error'}; the forced remove first failed with: ${deinitError?.message || deinitError}. The node will be dropped from the mesh; remove the directory manually if needed.`,
                             residueError: rm.error,
                         } : {}),
                     };

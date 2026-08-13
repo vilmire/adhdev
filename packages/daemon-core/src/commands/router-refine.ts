@@ -1720,17 +1720,30 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             const cleanupStarted = Date.now();
             // Honor the mesh policy for delegated-session cleanup on the auto-removed
             // worktree node (previously hardcoded to 'preserve', which orphaned the
-            // delegate session as an idle record on the coordinator daemon). Fall back
-            // to 'preserve' when no policy is set.
-            const refineSessionCleanupMode = self.normalizeMeshSessionCleanupMode(
-                mesh?.policy?.sessionCleanupOnNodeRemove,
-            );
+            // delegate session as an idle record on the coordinator daemon).
+            //
+            // REFINE-CLEANUP-DEFAULT: pass sessionCleanupMode ONLY when the policy sets
+            // it explicitly, and OMIT the key otherwise — mirroring mcp-server's
+            // buildRemoveNodeArgs. Always computing the mode meant an unset policy
+            // resolved to DEFAULT_MESH_POLICY's 'preserve', which is a *string* and so
+            // won the `??` chain in remove_mesh_node, suppressing the worktree default
+            // ('stop_and_delete'). The delegate session then stayed alive and held a
+            // lock on the worktree directory, so the whole cleanup failed — while a
+            // manual mesh_remove_node (which omits the key) succeeded on the identical
+            // code path. Omitting restores that default; an explicitly configured
+            // policy (including an explicit 'preserve') is still honored verbatim.
+            const explicitRefineSessionCleanupPolicy = mesh?.policy?.sessionCleanupOnNodeRemove;
+            const refineSessionCleanupMode = explicitRefineSessionCleanupPolicy
+                ? self.normalizeMeshSessionCleanupMode(explicitRefineSessionCleanupPolicy)
+                : undefined;
             // The delegate session launched for a clone worktree is frequently matched
             // by workspace ONLY (no meta.meshNodeId binding), which remove_mesh_node's
             // shared-daemon guard skips. Since refine knows exactly which workspace it
             // just merged, collect that workspace's live session ids explicitly and pass
             // them through — explicit sessionIds bypass the workspace-only-match guard so
-            // the policy-driven stop/delete actually runs.
+            // the policy-driven stop/delete actually runs. An omitted mode resolves to
+            // the worktree default 'stop_and_delete' downstream, so collect the ids in
+            // that case too — only an explicit 'preserve' skips the sweep.
             let refineSessionIds: string[] | undefined;
             if (refineSessionCleanupMode !== 'preserve' && self.deps.sessionHostControl) {
                 try {
@@ -1756,7 +1769,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             const removeResult = await self.execute('remove_mesh_node', {
                 meshId,
                 nodeId,
-                sessionCleanupMode: refineSessionCleanupMode,
+                ...(refineSessionCleanupMode ? { sessionCleanupMode: refineSessionCleanupMode } : {}),
                 ...(refineSessionIds && refineSessionIds.length > 0 ? { sessionIds: refineSessionIds } : {}),
                 inlineMesh: args?.inlineMesh,
                 // REFINE-CLEANUP: refine reaches cleanup only AFTER a verified merge AND a
