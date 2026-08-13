@@ -87,6 +87,19 @@ type CommandResult = { success: boolean;[key: string]: unknown };
 
 const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'no_progress', 'long_generating']);
 const ZERO_MESSAGE_STARTING_SEND_WAIT_MS = 2_000;
+// PTY-SUBMIT-IDEMPOTENCY: window for the mesh-dispatch duplicate-submission guard
+// (see DaemonCliManager.beginMeshDispatchSubmission). Observed machine-driven
+// redeliveries of one dispatch landed 8.5s / 18s / 96s after the first inject —
+// the 96s case already outruns the 60s chat-bubble ack dedup window
+// (USER_INPUT_ACK_DEDUP_WINDOW_MS). The window must outlast the slowest automatic
+// re-dispatch source: a dispatch-confirm timeout (120s,
+// mesh-queue-assignment DISPATCH_CONFIRM_TIMEOUT_MS) plus a reconcile tick (~4s)
+// before the re-claimed dispatch arrives, so 300s gives >2x headroom over that
+// ~124s worst case. It stays finite so a genuinely re-issued turn of the same
+// task text much later is never permanently blocked — and because the guard key
+// includes the taskId, a deliberate resend (a handoff/retry mints a NEW task row,
+// hence a new taskId) is unaffected by the window at any length.
+const MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS = 300_000;
 
 function normalizeAgentStatus(value: unknown): string {
     return typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -668,10 +681,43 @@ export class DaemonCliManager {
     readonly adapters = new Map<string, CliAdapter>();
     private deps: CliManagerDeps;
     private providerLoader: ProviderLoader;
+    // PTY-SUBMIT-IDEMPOTENCY: (sessionKey:taskId:contentHash) → first-submission
+    // timestamp for mesh task dispatches already handed to the adapter. Entries
+    // older than MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS are pruned lazily on check.
+    private meshDispatchSubmissions = new Map<string, number>();
 
     constructor(deps: CliManagerDeps, providerLoader: ProviderLoader) {
         this.deps = deps;
         this.providerLoader = providerLoader;
+    }
+
+    /**
+     * PTY-SUBMIT-IDEMPOTENCY guard. recordAcknowledgedUserInput runs AFTER
+     * adapter.sendMessage, so it only collapses the duplicate chat bubble — the
+     * second PTY write has already happened. And the attachMeshAssignment stamp
+     * guard (findLiveWorkingTaskHolder) deliberately excludes the TARGET instance,
+     * so a redelivery onto the SAME session (dispatch-confirm-timeout requeue,
+     * reconcile re-dispatch, delivered-not-consumed redrive) was never caught.
+     * This guard runs BEFORE the submit and keys on session + taskId + content:
+     *   - same task, same text, inside the window → a machine redelivery → suppress;
+     *   - same task, DIFFERENT text → a legitimate follow-up delta → allowed;
+     *   - different taskId (a deliberate resend/handoff mints a fresh task row) → allowed;
+     *   - same task+text AFTER the window → a genuinely re-issued turn → allowed;
+     *   - a prior attempt whose submit FAILED releases its key (see the catch in
+     *     the send_chat branch), so failure retries are never blocked;
+     *   - forceSend bypasses the guard entirely (explicit operator intent).
+     * Returns the guard key on admission, or null when the submission is a
+     * duplicate and must be suppressed.
+     */
+    private beginMeshDispatchSubmission(sessionKey: string, taskId: string, content: string): string | null {
+        const now = Date.now();
+        for (const [k, at] of this.meshDispatchSubmissions) {
+            if (now - at > MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS) this.meshDispatchSubmissions.delete(k);
+        }
+        const guardKey = `${sessionKey}:${taskId}:${shortHash(content, 24)}`;
+        if (this.meshDispatchSubmissions.has(guardKey)) return null;
+        this.meshDispatchSubmissions.set(guardKey, now);
+        return guardKey;
     }
 
  // ─── Key create ─────────────────────────────────
@@ -1965,18 +2011,41 @@ export class DaemonCliManager {
                         ? (meshContext as any).taskId as string
                         : undefined;
                     const forceSend = args?.force === true || args?.forceSend === true;
+                    // PTY-SUBMIT-IDEMPOTENCY: run the duplicate-submission guard BEFORE the
+                    // adapter write — this is the last funnel before the PTY. forceSend is an
+                    // explicit operator/coordinator override and bypasses the guard.
+                    let submissionGuardKey: string | null = null;
+                    if (meshTaskId && !forceSend) {
+                        submissionGuardKey = this.beginMeshDispatchSubmission(key, meshTaskId, message);
+                        if (submissionGuardKey === null) {
+                            LOG.warn('MeshDispatch', `Suppressed duplicate PTY submission on session ${key}: task ${meshTaskId} with identical content was already submitted within the last ${Math.round(MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS / 1000)}s — the prompt is already sent/buffered on this session, not re-injecting`);
+                            return {
+                                success: true,
+                                status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
+                                duplicateSuppressed: true,
+                            };
+                        }
+                    }
                     // Preserve the exact prior call shape when there is no taskId (plain
                     // ad-hoc chat / non-mesh dispatch); only thread the per-turn taskId when
                     // present, so existing non-mesh callers and their contracts are unchanged.
-                    if (forceSend && typeof (adapter as any).forceSendMessage === 'function') {
-                        if (meshTaskId) await (adapter as any).forceSendMessage(message, meshTaskId);
-                        else await (adapter as any).forceSendMessage(message);
-                    } else if (forceSend) {
-                        await adapter.sendMessage(message, meshTaskId ? { force: true, meshTaskId } : { force: true });
-                    } else if (meshTaskId) {
-                        await adapter.sendMessage(message, { meshTaskId });
-                    } else {
-                        await adapter.sendMessage(message);
+                    try {
+                        if (forceSend && typeof (adapter as any).forceSendMessage === 'function') {
+                            if (meshTaskId) await (adapter as any).forceSendMessage(message, meshTaskId);
+                            else await (adapter as any).forceSendMessage(message);
+                        } else if (forceSend) {
+                            await adapter.sendMessage(message, meshTaskId ? { force: true, meshTaskId } : { force: true });
+                        } else if (meshTaskId) {
+                            await adapter.sendMessage(message, { meshTaskId });
+                        } else {
+                            await adapter.sendMessage(message);
+                        }
+                    } catch (e) {
+                        // PTY-SUBMIT-IDEMPOTENCY: the submit never landed — release the guard
+                        // key so the requeue/redrive retry of this dispatch is NOT suppressed
+                        // as a duplicate (a legitimate resend after a failure must go through).
+                        if (submissionGuardKey) this.meshDispatchSubmissions.delete(submissionGuardKey);
+                        throw e;
                     }
                     const targetInstance = this.deps.getInstanceManager()?.getInstance(key) as
                         | { recordAcknowledgedUserInput?: (input: unknown) => void }
