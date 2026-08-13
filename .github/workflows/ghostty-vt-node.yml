@@ -60,10 +60,17 @@ jobs:
             platform: darwin
             arch: arm64
             node-version: 25
-          - runner: windows-latest
-            platform: win32
-            arch: x64
-            node-version: 20
+          # win32 builds on node 22 only. Node 20 was dropped because its
+          # `npm ci` fails on windows-latest: better-sqlite3 (a daemon-core
+          # dependency, unrelated to ghostty) ships no prebuilt for node 20's
+          # ABI, so npm falls back to a node-gyp source build and the runner
+          # has no Visual Studio C++ toolchain. node 22 gets a prebuilt and
+          # installs fine on the same runner.
+          #
+          # Dropping it loses no coverage: the loader's tier-4 fallback accepts
+          # ANY prebuilt for the same platform-arch (the .node files are
+          # byte-identical per platform/arch), so the win32-x64 artifact built
+          # here serves every Node ABI on Windows. Node 20 is also EOL.
           - runner: windows-latest
             platform: win32
             arch: x64
