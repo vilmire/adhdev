@@ -528,6 +528,7 @@ export class DaemonCommandRouter {
             requireMeshHostMutationOwner: this.requireMeshHostMutationOwner.bind(this),
             invalidateAggregateMeshStatus: this.invalidateAggregateMeshStatus.bind(this),
             updateInlineMeshNode: this.updateInlineMeshNode.bind(this),
+            seedRemoteClonedWorktreeNode: this.seedRemoteClonedWorktreeNode.bind(this),
             removeInlineMeshNode: this.removeInlineMeshNode.bind(this),
             normalizeMeshSessionCleanupMode: this.normalizeMeshSessionCleanupMode.bind(this),
             cleanupMeshSessions: this.cleanupMeshSessions.bind(this),
@@ -705,6 +706,71 @@ export class DaemonCommandRouter {
                 }
             })
             .catch(() => { /* persistence is best-effort */ });
+    }
+
+    /**
+     * REMOTE-CLONE-CACHE-SEED: register a worktree node produced by a clone that ran on
+     * ANOTHER machine into THIS (coordinator) daemon's inline mesh cache.
+     *
+     * Root cause this fixes: clone_mesh_node forwards to the source node's daemon when the
+     * source lives on a different machine. The local clone branch writes the new node into
+     * the coordinator's own cache synchronously (updateInlineMeshNode / addNode), but the
+     * remote-forward branch only returned the reply — it never seeded the local cache. The
+     * scheduler is a PURELY PASSIVE cache reader (mesh-queue-assignment getMeshWithCache:
+     * no network call), whereas the read tools actively refresh (refreshMeshFromDaemon) and
+     * mesh_git_status fans out over P2P — which is exactly why the node was visible to every
+     * tool yet permanently invisible to the queue (`target_node_id_unmatched` /
+     * `no_node_satisfies_required_tags`). Cache reflection depended solely on the one-shot
+     * `worktree_bootstrap_complete` P2P push, which has no retry and no periodic resync, so
+     * a single dropped event stranded the node forever.
+     *
+     * ORDER-INDEPENDENT BY CONSTRUCTION. This races the bootstrap-complete event's
+     * hydrate-on-miss upsert (markWorktreeBootstrapTerminalState) in BOTH directions, and
+     * updateInlineMeshNode REPLACES the entry wholesale rather than merging, so neither
+     * writer may blindly overwrite the other:
+     *   - seed-then-event: the node now exists, so hydrate-on-miss does not fire; the event
+     *     takes the `stamp()` path, which mutates ONLY worktreeBootstrap and preserves every
+     *     scheduling field seeded here.
+     *   - event-then-seed (the dangerous order): the event already hydrated a MINIMAL node
+     *     carrying a TERMINAL bootstrap status. Overwriting it with this reply's 'running'
+     *     state would re-close the claim gate permanently (shouldDeferDispatchForBootstrap
+     *     defers on 'running'), reproducing the very stall this fixes. So an existing
+     *     terminal worktreeBootstrap always wins over the reply's non-terminal one.
+     * The merge is field-directional, never a wholesale pick of one side: the reply is
+     * authoritative for the STATIC scheduling identity it alone carries (daemonId, machineId,
+     * policy, userOverrides, capabilities, workspace, worktreeBranch) — the hydrated shell has
+     * none of these — while the existing entry is authoritative for DYNAMIC runtime state that
+     * has already advanced past the reply (terminal worktreeBootstrap).
+     *
+     * Seeding daemonId/machineId is not cosmetic: isLocalAutoLaunchNode treats a node with
+     * NEITHER field as LOCAL, so the minimal hydrated shell would make the coordinator try to
+     * auto-launch a remote worktree session on its own machine. Likewise required-tags matching
+     * derives tags from policy/capabilities/platform, so a shell node satisfies no tag filter.
+     */
+    public seedRemoteClonedWorktreeNode(meshId: string, node: any): boolean {
+        if (!meshId || !node || typeof node !== 'object') return false;
+        const nodeId = normalizeMeshNodeId(node);
+        if (!nodeId) return false;
+        try {
+            const cached = this.getCachedInlineMesh(meshId);
+            const shell = (cached && typeof cached === 'object')
+                ? cached
+                : { id: meshId, nodes: [] as any[], updatedAt: new Date().toISOString() };
+            if (!Array.isArray(shell.nodes)) shell.nodes = [];
+            const existing = shell.nodes.find((entry: any) => meshNodeIdMatches(entry, nodeId));
+            // Start from the reply (authoritative for static scheduling identity), then let
+            // any already-advanced dynamic state on the existing entry win — see the
+            // event-then-seed ordering note above.
+            const merged: any = { ...(existing && typeof existing === 'object' ? existing : {}), ...node };
+            const existingBootstrapStatus = readStringValue(existing?.worktreeBootstrap?.status);
+            if (existingBootstrapStatus === 'complete' || existingBootstrapStatus === 'failed') {
+                merged.worktreeBootstrap = existing.worktreeBootstrap;
+            }
+            this.updateInlineMeshNode(meshId, shell, merged);
+            return true;
+        } catch {
+            return false; /* best-effort: a failed seed degrades to the pre-fix behavior */
+        }
     }
 
     private tombstoneRemovedInlineMeshNode(meshId: string, nodeId: string): void {

@@ -70,6 +70,14 @@ export interface MedFamilyContext {
     /** Bound `DaemonCommandRouter.updateInlineMeshNode`. */
     updateInlineMeshNode: (meshId: string, mesh: any, node: any) => void;
 
+    /**
+     * Bound `DaemonCommandRouter.seedRemoteClonedWorktreeNode` — seed a worktree node
+     * cloned on another machine into this coordinator's inline cache, merging
+     * order-independently against a bootstrap-event hydrate. Returns false when the
+     * node carries no resolvable id (or the seed failed); best-effort by contract.
+     */
+    seedRemoteClonedWorktreeNode: (meshId: string, node: any) => boolean;
+
     /** Bound `DaemonCommandRouter.removeInlineMeshNode`. */
     removeInlineMeshNode: (meshId: string, mesh: any, nodeId: string) => boolean;
 

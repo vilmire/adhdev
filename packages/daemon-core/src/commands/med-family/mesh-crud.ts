@@ -1441,13 +1441,33 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
                     _meshDirectDispatch: true,
                 });
-                // FALSE-BLOCKER-CLONE-QUEUE: open the transient grace window for the freshly
-                // cloned node on THIS coordinator daemon. The clone ran (and wrote the inline-
-                // cache node) on the remote source daemon; its inline entry has not propagated
-                // here yet, so a queue task pinned to it would transiently look like a permanent
-                // 'target_node_id_unmatched'. Recording its id marks the unmatch as transient.
-                const forwardedNodeId = (forwarded as { node?: { id?: unknown } } | null | undefined)?.node?.id;
-                if (typeof forwardedNodeId === 'string' && forwardedNodeId) noteRecentlyClonedNode(forwardedNodeId);
+                // REMOTE-CLONE-CACHE-SEED: register the remotely-created node in THIS
+                // coordinator's inline cache immediately, mirroring what the local clone branch
+                // below already does via updateInlineMeshNode/addNode.
+                //
+                // Without this the node was visible to every read TOOL yet permanently invisible
+                // to the QUEUE: the scheduler (mesh-queue-assignment getMeshWithCache) is a purely
+                // passive cache reader with no network call, while the read tools actively refresh
+                // (refreshMeshFromDaemon) and mesh_git_status fans out over P2P. Cache reflection
+                // therefore rested entirely on the one-shot `worktree_bootstrap_complete` P2P push,
+                // which has neither retry nor periodic resync — a single dropped event stranded the
+                // node forever (`target_node_id_unmatched` / `no_node_satisfies_required_tags`),
+                // observed on two machines including one that had already finished bootstrap.
+                //
+                // The forwarded reply carries the FULL node the remote daemon registered — the
+                // scheduling identity (daemonId, machineId, policy, userOverrides, workspace,
+                // worktreeBranch) that the bootstrap event's minimal hydrate-on-miss shell lacks.
+                // seedRemoteClonedWorktreeNode merges order-independently with that hydrate, so
+                // whichever of the two lands first, the node ends up both addressable and
+                // correctly gated (see its doc comment for the ordering argument).
+                const forwardedNode = (forwarded as { node?: unknown } | null | undefined)?.node;
+                const forwardedNodeId = normalizeMeshNodeId(forwardedNode as any);
+                if (forwardedNode && forwardedNodeId) ctx.seedRemoteClonedWorktreeNode(meshId, forwardedNode);
+                // FALSE-BLOCKER-CLONE-QUEUE: also open the transient grace window. The seed above
+                // makes the node addressable, but its bootstrap may still be 'running' on the
+                // remote machine, so a task pinned to it can still transiently defer — that skip
+                // must stay classified as transient rather than a permanent actionable blocker.
+                if (forwardedNodeId) noteRecentlyClonedNode(forwardedNodeId);
                 return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
             }
 
