@@ -101,9 +101,9 @@ export type MeshSchedulingStrategy = 'first_eligible' | 'least_loaded' | 'round_
  */
 export type MeshDistribution = 'smart' | 'in_order'
 
-export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; label: string; description: string }> = [
-    { value: 'smart', label: 'Smart', description: 'Match each task to the node whose capability slot best fits it (task difficulty + capability tags), then spread by priority and load. Without capability slots it still spreads work evenly — Smart subsumes the old Spread mode. Auto-enabled when any node has capability slots.' },
-    { value: 'in_order', label: 'In order', description: 'Assign to nodes in the order they were added — the first eligible node takes the work. No load-spreading.' },
+export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; labelKey: string; descriptionKey: string }> = [
+    { value: 'smart', labelKey: 'repoMesh.detail.distributionSmart', descriptionKey: 'repoMesh.detail.distributionSmartDescription' },
+    { value: 'in_order', labelKey: 'repoMesh.detail.distributionInOrder', descriptionKey: 'repoMesh.detail.distributionInOrderDescription' },
 ]
 
 /** Map a distribution mode to the raw scheduling strategy persisted in policy. */
