@@ -20,6 +20,7 @@ import type { CliAdapter, CliLaunchInfo } from '../cli-adapter-types.js';
 import type { InteractivePrompt, InteractivePromptResponse } from '../providers/types/interactive-prompt.js';
 import { buildKimiInteractiveTuiAnswerSteps } from '../providers/types/interactive-prompt.js';
 import { detectKimiPendingQuestion, detectKimiIdleSelectorPrompt, buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX } from '../providers/kimi-pending-question.js';
+import { applyKimiWorkspaceTrust } from '../providers/kimi-workspace-trust.js';
 import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
@@ -725,6 +726,13 @@ export class ProviderCliAdapter implements CliAdapter {
 
     async spawn(): Promise<void> {
         if (this.ptyProcess) return;
+
+        // Pre-trust the workspace before spawning so kimi's first-run
+        // folder-trust TUI prompt never appears — an unanswered prompt makes
+        // kimi exit(0) immediately (best-effort; see kimi-workspace-trust.ts).
+        if (this.cliType === 'kimi') {
+            applyKimiWorkspaceTrust(this.workingDir);
+        }
 
         const spawnPlan = resolveCliSpawnPlan({
             provider: this.provider,
