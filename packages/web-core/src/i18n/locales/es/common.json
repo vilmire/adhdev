@@ -1218,7 +1218,8 @@
             "dashboard": "Panel",
             "settings": "Configuración",
             "docs": "Documentación",
-            "about": "Acerca de"
+            "about": "Acerca de",
+            "setupWizard": "Configuración"
         },
         "layout": {
             "expandSidebar": "Expandir barra lateral",
@@ -1586,6 +1587,7 @@
             "navSettings": "Settings",
             "navDocs": "Docs",
             "navAbout": "About",
+            "navSetupWizard": "Configuración",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3197,6 +3199,67 @@
         "emptyHint": "Las solicitudes de aprobación de cualquier máquina conectada aparecerán aquí automáticamente."
     },
     "setupWizard": {
+        "title": "Configuración guiada de la malla",
+        "stepOf": "Paso {{current}} de {{total}}",
+        "steps": {
+            "machines": "Máquinas",
+            "slots": "Ranuras de capacidad",
+            "scheduling": "Planificación",
+            "quota": "Política de cuota",
+            "approvals": "Aprobaciones"
+        },
+        "back": "Atrás",
+        "skip": "Omitir",
+        "next": "Siguiente",
+        "close": "Cerrar",
+        "staged": "Preparado",
+        "stagedNote": "Los cambios de este paso se preparan y se aplican juntos al finalizar el asistente.",
+        "machines": {
+            "title": "Seleccionar máquinas",
+            "description": "Elige la malla a configurar y conecta las máquinas que ejecutarán su trabajo. Crear una malla también conecta el espacio de trabajo elegido como su primer nodo.",
+            "noMachinesDescription": "Aún no hay ninguna máquina registrada. Instala primero el daemon en una máquina: se empareja automáticamente al iniciar sesión.",
+            "noMachinesFallback": "Inicia el daemon local y vuelve aquí.",
+            "nodeCount": "{{count}} nodos",
+            "createNew": "Crear nueva malla",
+            "loadingMeshes": "Cargando mallas…",
+            "meshName": "Nombre de la malla",
+            "machine": "Máquina",
+            "machineSelectPlaceholder": "Selecciona una máquina",
+            "workspace": "Espacio de trabajo (ruta del repositorio)",
+            "workspacePlaceholder": "/path/to/repo",
+            "workspaceSelectPlaceholder": "Selecciona un espacio de trabajo",
+            "workspaceCustom": "Introducir una ruta manualmente…",
+            "pickFromKnown": "Elegir entre espacios de trabajo conocidos",
+            "planChecking": "Comprobando el espacio de trabajo…",
+            "planOk": "El espacio de trabajo se ve bien: {{identity}}",
+            "creating": "Creando…",
+            "create": "Crear malla",
+            "createFailed": "Error al crear",
+            "attachTitle": "Conectar otra máquina",
+            "allMachinesAttached": "Todas las máquinas registradas ya están conectadas a esta malla.",
+            "attaching": "Conectando…",
+            "addMachine": "Añadir máquina"
+        },
+        "slots": {
+            "title": "Ranuras de capacidad",
+            "description": "Describe en qué destaca cada nodo: qué proveedor de IA, modelo y dificultad de tarea debe aceptar. Guarda cada nodo para preparar sus ranuras; todo se aplica al finalizar.",
+            "empty": "Aún no hay nodos: vuelve atrás y conecta una máquina primero, u omite este paso."
+        },
+        "scheduling": {
+            "title": "Planificación",
+            "description": "Elige cómo distribuye el coordinador las tareas sin destino entre los nodos de la malla."
+        },
+        "approvals": {
+            "title": "Aprobaciones",
+            "description": "Decide qué acciones necesitan tu aprobación antes de que la malla las ejecute."
+        },
+        "finish": {
+            "apply": "Finalizar configuración",
+            "applying": "Aplicando…",
+            "applied": "Configuración aplicada ({{count}} grupo(s) guardados).",
+            "nothingToApply": "Nada preparado: se mantienen los ajustes actuales.",
+            "partialFailure": "Algunos cambios no se pudieron aplicar:"
+        },
         "quotaPolicy": {
             "title": "Enrutamiento según la cuota",
             "description": "Cuando un nodo informa cuánta cuota le queda con su proveedor de IA, el coordinador puede omitir los nodos casi agotados y preferir los que tienen más margen. Estos umbrales deciden cuándo ocurre. Las lecturas ausentes o desactualizadas siempre se ignoran, así que ningún nodo queda excluido por datos obsoletos.",

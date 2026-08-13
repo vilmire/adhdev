@@ -308,6 +308,19 @@ export type { BuildGitSystemBubbleOptions } from './components/dashboard/git-sys
 // ── Setup Wizard ──
 export { default as QuotaPolicyStep, quotaPolicyDraftToOverrides } from './components/setup-wizard/QuotaPolicyStep'
 export type { QuotaPolicyStepProps } from './components/setup-wizard/QuotaPolicyStep'
+export { default as SetupWizard } from './components/setup-wizard/SetupWizard'
+export type { SetupWizardProps } from './components/setup-wizard/SetupWizard'
+export { default as MachinesStep } from './components/setup-wizard/MachinesStep'
+export { default as SlotsStep } from './components/setup-wizard/SlotsStep'
+export { default as SchedulingStep } from './components/setup-wizard/SchedulingStep'
+export { default as ApprovalsStep } from './components/setup-wizard/ApprovalsStep'
+export { runWizardPolicyCommit } from './components/setup-wizard/wizardCommit'
+export type {
+    WizardCommitStage,
+    WizardCommitStageError,
+    WizardPolicyCommitOptions,
+    WizardPolicyCommitResult,
+} from './components/setup-wizard/wizardCommit'
 
 // ── CSS ──
 // Import '@adhdev/web-core/index.css' in your app entry

@@ -6,7 +6,7 @@
 import { useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconMesh } from '@adhdev/web-core'
+import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconMesh, IconRocket } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -21,6 +21,7 @@ export default function StandaloneLayout({ children }: LayoutProps) {
         { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: t('standalone.nav.dashboard'), active: location.pathname.startsWith('/dashboard'), onSelect: () => navigate('/dashboard') },
         { id: 'machine', path: '/machines', icon: <IconServer />, label: 'Burrow', active: location.pathname.startsWith('/machines'), onSelect: () => navigate('/machines') },
         { id: 'mesh', path: '/mesh', icon: <IconMesh />, label: 'Mesh', active: location.pathname.startsWith('/mesh'), onSelect: () => navigate('/mesh') },
+        { id: 'setup', path: '/setup', icon: <IconRocket />, label: t('standalone.nav.setupWizard'), active: location.pathname.startsWith('/setup'), onSelect: () => navigate('/setup') },
         { id: 'settings', path: '/settings', icon: <IconSettings />, label: t('standalone.nav.settings'), active: location.pathname.startsWith('/settings'), onSelect: () => navigate('/settings') },
     ]), [location.pathname, navigate, t])
 

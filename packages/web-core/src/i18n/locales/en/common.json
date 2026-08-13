@@ -1218,7 +1218,8 @@
             "dashboard": "Dashboard",
             "settings": "Settings",
             "docs": "Docs",
-            "about": "About"
+            "about": "About",
+            "setupWizard": "Setup"
         },
         "layout": {
             "expandSidebar": "Expand sidebar",
@@ -1586,6 +1587,7 @@
             "navSettings": "Settings",
             "navDocs": "Docs",
             "navAbout": "About",
+            "navSetupWizard": "Setup",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3194,6 +3196,67 @@
         "emptyHint": "Approvals from any connected machine will appear here automatically."
     },
     "setupWizard": {
+        "title": "Guided mesh setup",
+        "stepOf": "Step {{current}} of {{total}}",
+        "steps": {
+            "machines": "Machines",
+            "slots": "Capability slots",
+            "scheduling": "Scheduling",
+            "quota": "Quota policy",
+            "approvals": "Approvals"
+        },
+        "back": "Back",
+        "skip": "Skip",
+        "next": "Next",
+        "close": "Close",
+        "staged": "Staged",
+        "stagedNote": "Changes on this step are staged and applied together when you finish the wizard.",
+        "machines": {
+            "title": "Select machines",
+            "description": "Pick the mesh to set up and attach the machines that should run its work. Creating a mesh also attaches the chosen workspace as its first node.",
+            "noMachinesDescription": "No machine is registered yet. Install the daemon on a machine first — it pairs automatically once signed in.",
+            "noMachinesFallback": "Start the local daemon and return here.",
+            "nodeCount": "{{count}} nodes",
+            "createNew": "Create new mesh",
+            "loadingMeshes": "Loading meshes…",
+            "meshName": "Mesh name",
+            "machine": "Machine",
+            "machineSelectPlaceholder": "Select a machine",
+            "workspace": "Workspace (repo path)",
+            "workspacePlaceholder": "/path/to/repo",
+            "workspaceSelectPlaceholder": "Select a workspace",
+            "workspaceCustom": "Enter a path manually…",
+            "pickFromKnown": "Pick from known workspaces",
+            "planChecking": "Checking the workspace…",
+            "planOk": "Workspace looks good: {{identity}}",
+            "creating": "Creating…",
+            "create": "Create mesh",
+            "createFailed": "Create failed",
+            "attachTitle": "Attach another machine",
+            "allMachinesAttached": "Every registered machine is already attached to this mesh.",
+            "attaching": "Attaching…",
+            "addMachine": "Add machine"
+        },
+        "slots": {
+            "title": "Capability slots",
+            "description": "Describe what each node is good at: which AI provider, model, and task difficulty it should take. Save each node to stage its slots — everything is applied when you finish.",
+            "empty": "No nodes yet — go back and attach a machine first, or skip this step."
+        },
+        "scheduling": {
+            "title": "Scheduling",
+            "description": "Choose how the coordinator distributes untargeted tasks across the mesh's nodes."
+        },
+        "approvals": {
+            "title": "Approvals",
+            "description": "Decide which actions need your approval before the mesh runs them."
+        },
+        "finish": {
+            "apply": "Finish setup",
+            "applying": "Applying…",
+            "applied": "Setup applied ({{count}} group(s) saved).",
+            "nothingToApply": "Nothing staged — current settings kept.",
+            "partialFailure": "Some changes could not be applied:"
+        },
         "quotaPolicy": {
             "title": "Quota-aware routing",
             "description": "When a node reports how much of its AI provider quota is left, the coordinator can skip nodes that are nearly exhausted and prefer nodes with more headroom. These thresholds decide when that happens. Missing or outdated readings are always ignored, so a node is never excluded on stale data.",

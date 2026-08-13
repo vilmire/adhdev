@@ -17,6 +17,7 @@ import {
 import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input } from '@adhdev/web-core'
 import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
+import SetupWizardPage from './SetupWizardPage'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
 import StandaloneOnboarding, { hasCompletedOnboarding } from './StandaloneOnboarding'
@@ -272,6 +273,7 @@ export default function App() {
                                     <Route path="/about" element={<StandaloneAbout />} />
                                     <Route path="/settings" element={<StandaloneSettings />} />
                                     <Route path="/mesh" element={<StandaloneRepoMeshProvider><RepoMesh /></StandaloneRepoMeshProvider>} />
+                                    <Route path="/setup" element={<SetupWizardPage />} />
                                     <Route path="*" element={<Navigate to="/dashboard" replace />} />
                                 </Routes>
                             </StandaloneLayout>
