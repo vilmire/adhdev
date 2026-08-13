@@ -21,6 +21,8 @@ import {
     quotaSnapshotAgeMs,
     quotaSpreadBonusByProvider,
     rankProvidersByQuotaGate,
+    describeRecoveryRelaunchDecision,
+    resolveRecoveryRelaunchProvider,
     ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON,
     PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
     PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
@@ -533,5 +535,197 @@ describe('scoreSlotForTask — quota axis never overturns fitness', () => {
         expect(__scoreSlotForTaskForTests(exact, easyTask)).toBe(101);
         expect(__scoreSlotForTaskForTests(general, easyTask)).toBe(21);
         expect(__scoreSlotForTaskForTests(exact, {})).toBe(1);
+    });
+});
+
+describe('resolveRecoveryRelaunchProvider — the recovery-relaunch gate', () => {
+    // The failure-recovery path re-queues a dead session's task and relaunches.
+    // Before this gate it relaunched the SAME provider unconditionally, so a
+    // quota-caused death repeated itself. Every assertion below turns on the
+    // provider's QUOTA SNAPSHOT — never on the fact that a session died.
+
+    it('BLOCKS a same-provider relaunch when the provider reported its quota exhausted', () => {
+        const node = nodeWithQuota({
+            'kimi': okQuota({
+                provider: 'kimi',
+                status: 'error',
+                session: null,
+                weekly: null,
+                metadata: { failureKind: 'quota-exhausted' },
+            }),
+        });
+        const d = resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi'], null, NOW);
+        expect(d.action).toBe('block');
+        expect(d.providerType).toBeUndefined();
+        expect(d.block?.reason).toBe(PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON);
+    });
+
+    it('BLOCKS when the failed provider is below a window threshold', () => {
+        const node = nodeWithQuota({
+            'claude-cli': okQuota({ weekly: { usedPercent: 97, windowMinutes: 10080, resetsAt: null } }),
+        });
+        const d = resolveRecoveryRelaunchProvider(node, 'claude-cli', ['claude-cli'], null, NOW);
+        expect(d.action).toBe('block');
+        expect(d.block?.reason).toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
+    });
+
+    // ★DEADLOCK REGRESSION GUARD. 'expired-token' is self-healing — the CLI
+    // refreshes its own token on its next run — so blocking the relaunch would
+    // mean the CLI never runs and the token never refreshes. It must fail open,
+    // and it must do so even on a node with no alternative provider.
+    it('does NOT block on expired-token, even on a single-provider node', () => {
+        const node = nodeWithQuota({
+            'kimi': okQuota({
+                provider: 'kimi',
+                status: 'error',
+                session: null,
+                weekly: null,
+                metadata: { failureKind: 'expired-token' },
+            }),
+        });
+        const d = resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi'], null, NOW);
+        expect(d.action).toBe('keep');
+        expect(d.providerType).toBe('kimi');
+    });
+
+    it('does not block on any other transient failure kind', () => {
+        for (const failureKind of ['unauthorized', 'network', 'server', 'rate-limited', 'cli-unavailable', 'parse', 'unknown']) {
+            const node = nodeWithQuota({
+                'kimi': okQuota({ provider: 'kimi', status: 'error', session: null, weekly: null, metadata: { failureKind } }),
+            });
+            expect(resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi'], null, NOW).action).toBe('keep');
+        }
+    });
+
+    // ★MISCLASSIFICATION REGRESSION GUARD. Observed live: a kimi CLI exited 0
+    // within ~20ms, six consecutive times, because it prompts to trust an
+    // unseen folder and a worktree is always a new path. Quota was perfectly
+    // healthy. A gate that read "died repeatedly" as a quota signal would have
+    // blacklisted a working provider over an environment problem — this gate
+    // reads only the snapshot, so such a death relaunches untouched.
+    it('relaunches normally when the session died with HEALTHY quota', () => {
+        const node = nodeWithQuota({ 'kimi': okQuota({ provider: 'kimi' }) });
+        const d = resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi'], null, NOW);
+        expect(d.action).toBe('keep');
+        expect(d.providerType).toBe('kimi');
+        expect(d.block).toBeUndefined();
+    });
+
+    it('relaunches normally when quota is unknown, opted-out, or stale', () => {
+        // No snapshot at all (never reported / quotaEnabled === false).
+        expect(resolveRecoveryRelaunchProvider(nodeWithQuota(undefined), 'kimi', ['kimi'], null, NOW).action).toBe('keep');
+        expect(resolveRecoveryRelaunchProvider(nodeWithQuota({}), 'kimi', ['kimi'], null, NOW).action).toBe('keep');
+        // A STALE exhaustion reading must fail open like everything else —
+        // routing on an old reading would exclude a provider that has since reset.
+        const staleExhausted = nodeWithQuota({
+            'kimi': okQuota({
+                provider: 'kimi', status: 'error', session: null, weekly: null,
+                updatedAt: NOW - 90 * MIN,
+                metadata: { failureKind: 'quota-exhausted' },
+            }),
+        });
+        expect(resolveRecoveryRelaunchProvider(staleExhausted, 'kimi', ['kimi'], null, NOW).action).toBe('keep');
+    });
+
+    it('FALLS THROUGH to the node\'s next gate-clear provider instead of stalling', () => {
+        const node = nodeWithQuota({
+            'kimi': okQuota({
+                provider: 'kimi', status: 'error', session: null, weekly: null,
+                metadata: { failureKind: 'quota-exhausted' },
+            }),
+            'claude-cli': okQuota({ provider: 'claude-cli' }),
+        });
+        const d = resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi', 'claude-cli'], null, NOW);
+        expect(d.action).toBe('fallback');
+        expect(d.providerType).toBe('claude-cli');
+        // The block that caused the diversion is reported for the log line.
+        expect(d.block?.reason).toBe(PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON);
+    });
+
+    it('orders fall-through candidates by the same weekly expiry risk as the launch loop', () => {
+        // Both alternatives are gate-clear; 'b' has the same remainder but a
+        // window nearly elapsed, so its remainder is the one about to evaporate.
+        const node = nodeWithQuota({
+            'kimi': okQuota({
+                provider: 'kimi', status: 'error', session: null, weekly: null,
+                metadata: { failureKind: 'quota-exhausted' },
+            }),
+            'a': okQuota({ provider: 'a', weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: NOW + 10000 * MIN } }),
+            'b': okQuota({ provider: 'b', weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: NOW + 10 * MIN } }),
+        });
+        const d = resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi', 'a', 'b'], null, NOW);
+        expect(d.action).toBe('fallback');
+        expect(d.providerType).toBe('b');
+        expect(rankProvidersByQuotaGate(node, ['a', 'b'], null, NOW).clear).toEqual(['b', 'a']);
+    });
+
+    // ★NO-DEAD-END GUARD. When every alternative is ALSO gated there is nothing
+    // to relaunch, so the decision is 'block' — but the caller has already
+    // re-queued the task, so blocking leaves it PENDING for the ordinary drain
+    // (another node, or this one once a window resets). It is never failed or
+    // cancelled here, and no phantom provider is invented.
+    it('blocks rather than trading one exhausted provider for another', () => {
+        const exhausted = (provider: string) => okQuota({
+            provider, status: 'error', session: null, weekly: null,
+            metadata: { failureKind: 'quota-exhausted' },
+        });
+        const node = nodeWithQuota({ 'kimi': exhausted('kimi'), 'claude-cli': exhausted('claude-cli') });
+        const d = resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi', 'claude-cli'], null, NOW);
+        expect(d.action).toBe('block');
+        expect(d.providerType).toBeUndefined();
+    });
+
+    it('blocks a single-provider node with no alternative to offer', () => {
+        const node = nodeWithQuota({
+            'kimi': okQuota({
+                provider: 'kimi', status: 'error', session: null, weekly: null,
+                metadata: { failureKind: 'quota-exhausted' },
+            }),
+        });
+        // No candidate list at all, and a list naming only the failed provider,
+        // both resolve to block — never to a relaunch of the exhausted provider.
+        expect(resolveRecoveryRelaunchProvider(node, 'kimi', [], null, NOW).action).toBe('block');
+        expect(resolveRecoveryRelaunchProvider(node, 'kimi', ['kimi'], null, NOW).action).toBe('block');
+    });
+
+    it('honours tunable thresholds rather than hardcoded ones', () => {
+        const node = nodeWithQuota({
+            'claude-cli': okQuota({ weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: null } }),
+        });
+        // 20% remaining clears the default 15% threshold...
+        expect(resolveRecoveryRelaunchProvider(node, 'claude-cli', ['claude-cli'], null, NOW).action).toBe('keep');
+        // ...and is blocked once the operator raises it.
+        expect(resolveRecoveryRelaunchProvider(node, 'claude-cli', ['claude-cli'], { weeklyMinRemainingPercent: 30 }, NOW).action).toBe('block');
+    });
+
+    it('blocks defensively when the failed provider type is missing', () => {
+        expect(resolveRecoveryRelaunchProvider(nodeWithQuota({}), '', [], null, NOW).action).toBe('block');
+    });
+});
+
+describe('describeRecoveryRelaunchDecision — recovery-relaunch observability', () => {
+    it('stays SILENT on keep, so a normal death gains no log line', () => {
+        expect(describeRecoveryRelaunchDecision(
+            { action: 'keep', providerType: 'kimi' }, 'n1', 'kimi', 't1',
+        )).toBeNull();
+    });
+
+    it('names the cause and the substitute on a fall-through', () => {
+        const msg = describeRecoveryRelaunchDecision(
+            { action: 'fallback', providerType: 'claude-cli', block: { reason: PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, window: 'unknown', remainingPercent: 0, thresholdPercent: 0 } },
+            'n1', 'kimi', 't1',
+        );
+        expect(msg).toContain('kimi');
+        expect(msg).toContain(PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON);
+        expect(msg).toContain('claude-cli');
+    });
+
+    it('says the task stays queued when nothing is relaunched', () => {
+        const msg = describeRecoveryRelaunchDecision(
+            { action: 'block', block: { reason: PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON, window: 'weekly', remainingPercent: 3, thresholdPercent: 15 } },
+            'n1', 'kimi', 'task-9',
+        );
+        expect(msg).toContain('task-9');
+        expect(msg).toContain('stays queued');
     });
 });

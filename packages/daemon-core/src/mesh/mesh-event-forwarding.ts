@@ -18,6 +18,8 @@ import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
+import { describeRecoveryRelaunchDecision, resolveRecoveryRelaunchProvider } from './mesh-quota-routing.js';
+import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -2201,9 +2203,34 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         LOG.info('MeshRecovery', `Auto-requeued failed task: ${task.id} for node ${autoNodeId}`);
 
                         const node = mesh?.nodes.find((n: any) => meshNodeIdMatches(n, autoNodeId));
+                        // QUOTA GATE (recovery-relaunch path): the launch and claim paths both
+                        // consult evaluateProviderQuotaGate; this one did not — it relaunched
+                        // whatever provider had just died, so a quota-caused death repeated
+                        // itself. The gate reads the provider's quota SNAPSHOT and never the
+                        // death itself: a session that died with healthy quota (e.g. a CLI
+                        // exiting 0 on an un-trusted worktree path) is not a quota signal, fails
+                        // open, and relaunches exactly as before — as does 'expired-token' and
+                        // every other transient kind, so a single-provider node can still
+                        // relaunch the CLI that owns its own token refresh (no self-healing
+                        // deadlock). Only a measured block diverts: to another gate-clear
+                        // provider on this node, else to no relaunch, leaving the task ALREADY
+                        // re-queued above pending for the drain. See resolveRecoveryRelaunchProvider.
+                        const relaunch = node
+                            ? resolveRecoveryRelaunchProvider(
+                                node,
+                                recoveryContext.failedProviderType,
+                                resolveNodeCapabilitySlots(node, args.meshId).map((s: any) => s.provider),
+                                mesh?.policy?.quotaRouting ?? null,
+                            )
+                            : { action: 'block' as const };
+                        const relaunchProviderType = relaunch.action === 'block' ? null : relaunch.providerType;
                         if (node) {
+                            const gateLog = describeRecoveryRelaunchDecision(relaunch, autoNodeId, recoveryContext.failedProviderType, task.id);
+                            if (gateLog) LOG.info('MeshRecovery', gateLog);
+                        }
+                        if (node && relaunchProviderType) {
                             components.cliManager.handleCliCommand('launch_cli', {
-                                cliType: recoveryContext.failedProviderType,
+                                cliType: relaunchProviderType,
                                 dir: node.workspace,
                                 settings: {
                                     role: 'worker',
@@ -2215,7 +2242,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                     ...delegatedWorkerAutoApproveSettings(
                                         mesh?.policy,
                                         node?.policy,
-                                        components.providerLoader?.getMeta(recoveryContext.failedProviderType),
+                                        components.providerLoader?.getMeta(relaunchProviderType),
                                         // Recovery relaunch: same repo-declared requested mode as the
                                         // primary path. node.workspace missing → null → provider default.
                                         (() => {
@@ -2226,7 +2253,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                                 return r.sourceType === 'repo_file' && r.config ? r.config : null;
                                             } catch { return null; }
                                         })(),
-                                        recoveryContext.failedProviderType,
+                                        relaunchProviderType,
                                     ),
                                     launchedByCoordinator: true,
                                 }

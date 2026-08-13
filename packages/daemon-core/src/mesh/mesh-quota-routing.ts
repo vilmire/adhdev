@@ -398,6 +398,123 @@ export function rankProvidersByQuotaGate(
 }
 
 /**
+ * RECOVERY RELAUNCH resolution: after a worker session DIES, the recovery path
+ * re-queues the task and immediately relaunches the SAME provider that just
+ * died. When the death was caused by an exhausted quota, that relaunch dies
+ * again for the identical reason — the observed "죽음 1회는 claim 이 만들었지만,
+ * 2·3회는 relaunch 가 만들었다" loop. This resolves what the relaunch should
+ * actually do instead.
+ *
+ * ★THE DECIDING INPUT IS THE QUOTA SNAPSHOT, NEVER THE DEATH ITSELF.
+ * This function is not told, and deliberately cannot ask, WHY the session died.
+ * It re-uses evaluateProviderQuotaGate verbatim, which blocks on exactly two
+ * measured quota readings (a fresh 'quota-exhausted' error, or a fresh 'ok'
+ * snapshot below a window threshold) and fails OPEN on everything else. So a
+ * death with a healthy quota — the kimi trust-prompt case, where six
+ * consecutive sessions exited 0 within ~20ms in a fresh worktree while quota was
+ * perfectly fine — reads `keep` and relaunches exactly as before. Inferring
+ * "died repeatedly ⇒ out of quota" would have quota-blacklisted a provider over
+ * an environment problem; that inference is not made anywhere here, which is why
+ * no consecutive-death counter is introduced (see the module-level note on the
+ * commit).
+ *
+ * ★DEADLOCK SAFETY. The self-healing deadlock that got the CLAIM-path gate
+ * debated — token expires → claim blocked → CLI never runs → token never
+ * refreshes, because the CLI owns its own token lifecycle (quota/fetchers/
+ * kimi.ts) — cannot arise here for the same structural reason it cannot arise
+ * in the launch gate: 'expired-token' is a TRANSIENT failure kind and
+ * evaluateProviderQuotaGate fails OPEN on it. Only 'quota-exhausted' — which no
+ * relaunch can heal, and which resets on a timer regardless of whether anything
+ * runs — blocks. A single-provider node whose token expired therefore still
+ * relaunches and still refreshes its token.
+ *
+ * ★BLOCKING IS NEVER A DEAD END. The recovery path re-queues the task BEFORE it
+ * relaunches, and this resolver never touches the queue: a blocked relaunch
+ * leaves a PENDING task that the ordinary drain re-claims — through the claim
+ * gate, another node, or this same node once the window resets. `fallbackTo`
+ * additionally lets the caller relaunch the node's NEXT gate-clear provider
+ * rather than nothing at all, so a node that has somewhere else to go goes
+ * there immediately instead of waiting for a reset.
+ */
+export interface RecoveryRelaunchDecision {
+    /** 'keep': relaunch the failed provider (the pre-gate behaviour, and the
+     *  outcome for every non-quota death). 'fallback': relaunch a DIFFERENT,
+     *  gate-clear provider on the same node. 'block': do not relaunch; the
+     *  re-queued task waits for the drain. */
+    action: 'keep' | 'fallback' | 'block';
+    /** The provider to launch. Set for 'keep' and 'fallback' only. */
+    providerType?: string;
+    /** Why the failed provider was gated — set whenever the failed provider
+     *  was blocked (i.e. for 'fallback' and 'block'). */
+    block?: ProviderQuotaGateBlock;
+}
+
+/**
+ * Decide whether a recovery relaunch may reuse the provider that just died.
+ *
+ * `nodeProviderTypes` is the node's other candidate providers in the caller's
+ * preferred order; pass an empty list when the node has no alternative (a
+ * single-provider node then resolves to 'block', never to a phantom provider).
+ * Fall-through candidates are ordered by rankProvidersByQuotaGate, the same
+ * weekly-expiry-risk ranking the auto-launch selection loop uses, so recovery
+ * and normal dispatch agree on which provider to spend next.
+ *
+ * Deliberately synchronous and side-effect free: it reads the in-memory
+ * nodeFacts bundle only, never triggers a fetch, and never mutates the queue.
+ */
+export function resolveRecoveryRelaunchProvider(
+    node: any,
+    failedProviderType: string,
+    nodeProviderTypes: string[] = [],
+    policy?: RepoMeshQuotaRoutingPolicy | null,
+    now: number = Date.now(),
+): RecoveryRelaunchDecision {
+    if (!failedProviderType) return { action: 'block' };
+    // The ONLY quota question asked: is the failed provider's own snapshot
+    // blocking RIGHT NOW? Fail-open covers unknown/stale/transient/opted-out.
+    const block = evaluateProviderQuotaGate(node, failedProviderType, policy, now);
+    if (!block) return { action: 'keep', providerType: failedProviderType };
+
+    // The failed provider is measurably out of quota. Prefer another provider
+    // on the same node over stalling — ranked by the same expiry-risk order as
+    // the auto-launch loop, and gate-checked so we never trade one exhausted
+    // provider for another.
+    const alternatives = nodeProviderTypes.filter(p => p && p !== failedProviderType);
+    if (alternatives.length) {
+        const ranked = rankProvidersByQuotaGate(node, alternatives, policy, now);
+        if (ranked.clear.length) {
+            return { action: 'fallback', providerType: ranked.clear[0], block };
+        }
+    }
+    // Nowhere to fall through to. The task was already re-queued by the caller
+    // and stays pending — the drain re-claims it when a window resets or
+    // another node picks it up. Not actionable (a quota WAIT), same semantics
+    // as the launch/claim gates.
+    return { action: 'block', block };
+}
+
+/**
+ * OBSERVABILITY (recovery-relaunch): the log line for a gate decision that
+ * DIVERTED, or null for 'keep' (the overwhelmingly common outcome — every
+ * non-quota death — which must stay silent so the recovery path does not
+ * gain a log line per session death). Lives here rather than at the call site
+ * so mesh-event-forwarding.ts carries only the branch, not the formatting.
+ */
+export function describeRecoveryRelaunchDecision(
+    decision: RecoveryRelaunchDecision,
+    nodeId: string,
+    failedProviderType: string,
+    taskId?: string,
+): string | null {
+    if (decision.action === 'keep') return null;
+    const cause = `provider '${failedProviderType}' is quota-blocked (${decision.block?.reason ?? 'unknown'})`;
+    if (decision.action === 'fallback') {
+        return `QUOTA GATE: recovery relaunch for node ${nodeId} falls through — ${cause} — relaunching '${decision.providerType}' instead`;
+    }
+    return `QUOTA GATE: skipping recovery relaunch for node ${nodeId} — ${cause} and the node has no gate-clear alternative${taskId ? `; task ${taskId}` : ''} stays queued until a quota window resets`;
+}
+
+/**
  * OBSERVABILITY (quota-ranking): per-provider expiry-risk snapshot for every
  * candidate the ranking loop considered, clear or gated. Order-preserving
  * (caller's candidate order, not the sorted rank) so a log line or a
