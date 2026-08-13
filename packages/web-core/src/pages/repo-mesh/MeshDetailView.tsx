@@ -475,7 +475,7 @@ export function MeshDetailView({
                  policy field on this page), not the dedicated
                  mesh_quota_routing_set command — quotaRouting is just a field on
                  RepoMeshPolicy, so the shallow-merge patch here is sufficient. */}
-            <Section title={t('setupWizard.quotaPolicy.title')} description={t('setupWizard.quotaPolicy.description')}>
+            <Section>
                 <QuotaPolicyStep
                     quotaRouting={(policy.quotaRouting as RepoMeshQuotaRoutingPolicy | undefined) ?? null}
                     saving={savingPolicy}
