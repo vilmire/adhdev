@@ -136,7 +136,7 @@ function lifecyclePillClass(lifecycle: string): string {
         case 'failed':
             return 'bg-red-500/[0.08] text-red-500'
         default:
-            return 'bg-[#ffffff0a] text-text-muted'
+            return 'bg-bg-glass text-text-muted'
     }
 }
 

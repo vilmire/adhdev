@@ -494,10 +494,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     return (
         <div className="flex flex-col h-full">
             {/* ═══ Header ═══ */}
-            <div className="flex flex-col w-full bg-bg-surface px-4 md:px-8 pt-6 pb-0 shrink-0 border-b border-[#ffffff0a]">
+            <div className="flex flex-col w-full bg-bg-surface px-4 md:px-8 pt-6 pb-0 shrink-0 border-b border-border-subtle">
                 <div className="flex items-center justify-between w-full">
                     <div className="flex items-center gap-3 w-full min-w-0">
-                        <button onClick={handleBack} className="flex items-center justify-center w-8 h-8 rounded-full bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary transition-colors shrink-0">
+                        <button onClick={handleBack} className="flex items-center justify-center w-8 h-8 rounded-full bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary transition-colors shrink-0">
                             ←
                         </button>
                         <div className="flex flex-col min-w-0">
@@ -521,7 +521,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                             className="px-2.5 py-1 rounded-md border border-violet-500/30 bg-bg-secondary text-text-primary text-sm font-semibold w-[140px] md:w-[200px]"
                                         />
                                         <button onClick={actions.handleSaveNickname} className="flex items-center justify-center px-3 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 text-sm font-medium transition-colors">{t('machine.detail.save')}</button>
-                                        <button onClick={() => actions.setEditingNickname(false)} className="flex items-center justify-center px-3 py-1 rounded bg-[#ffffff0a] text-text-muted hover:bg-[#ffffff14] hover:text-text-primary text-sm font-medium transition-colors">{t('machine.detail.cancel')}</button>
+                                        <button onClick={() => actions.setEditingNickname(false)} className="flex items-center justify-center px-3 py-1 rounded bg-bg-glass text-text-muted hover:bg-bg-glass-hover hover:text-text-primary text-sm font-medium transition-colors">{t('machine.detail.cancel')}</button>
                                     </div>
                                 )}
                                 {isMachineBlocked ? (
@@ -541,7 +541,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 )}
                             </div>
                             <div className="flex flex-wrap gap-x-3 gap-y-1 items-center mt-1.5 text-xs text-text-secondary opacity-80">
-                                <span className="font-mono bg-[#ffffff08] px-1.5 py-0.5 rounded">{machine.platform} · {machine.arch}</span>
+                                <span className="font-mono bg-bg-glass px-1.5 py-0.5 rounded">{machine.platform} · {machine.arch}</span>
                                 <span>{t('machine.detail.coresCount', { count: machine.cpus })}</span>
                                 {machineEntry?.version && <span>v{machineEntry.version}</span>}
                                 {machine.p2p.available && (
@@ -557,7 +557,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
                 {/* Tabs */}
                 {/* Tabs */}
-                <div className="flex overflow-x-auto overflow-y-hidden mt-4 gap-6 px-1 border-b border-[#ffffff0a]">
+                <div className="flex overflow-x-auto overflow-y-hidden mt-4 gap-6 px-1 border-b border-border-subtle">
                     {TABS.map(tab => (
                         <button
                             key={tab.id}
@@ -571,7 +571,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                             {tab.label}
                             {tab.count !== undefined && (
                                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] ml-1 ${
-                                    activeTab === tab.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-[#ffffff10] text-text-muted'
+                                    activeTab === tab.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-glass-hover text-text-muted'
                                 }`}>
                                     {tab.count}
                                 </span>
