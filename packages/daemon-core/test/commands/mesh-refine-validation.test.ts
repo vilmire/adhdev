@@ -61,6 +61,28 @@ function createRouter(meshId?: string, messages?: string[], statusInstanceId?: s
     } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
+    // A real daemon ALWAYS has a session host control plane: both production
+    // wirings (daemon-cloud adhdev-daemon.ts, daemon-standalone index.ts) await
+    // ensureSessionHostReady() and then pass it unconditionally into
+    // initDaemonComponents; it is only reset to null on shutdown. Omitting it
+    // here modelled a state no live daemon can be in, and mesh_remove_node's
+    // worktree default ('stop_and_delete') then hit the
+    // 'Session host control unavailable' guard and aborted removal — turning
+    // every refine E2E that expects a completed run into cleanup_failed.
+    // Stub shape mirrors test/commands/mesh-session-cleanup.test.ts.
+    sessionHostControl: {
+      listSessions: vi.fn(async () => []),
+      stopSession: vi.fn(async (sessionId: string) => ({ sessionId })),
+      deleteSession: vi.fn(async (sessionId: string) => ({ sessionId, deleted: true })),
+      getDiagnostics: vi.fn(async () => ({})),
+      resumeSession: vi.fn(async (sessionId: string) => ({ sessionId })),
+      restartSession: vi.fn(async (sessionId: string) => ({ sessionId })),
+      sendSignal: vi.fn(async (sessionId: string) => ({ sessionId })),
+      forceDetachClient: vi.fn(async (sessionId: string) => ({ sessionId })),
+      pruneDuplicateSessions: vi.fn(async () => ({ prunedSessionIds: [] })),
+      acquireWrite: vi.fn(async () => ({ sessionId: 'session-write' })),
+      releaseWrite: vi.fn(async () => ({ sessionId: 'session-release' })),
+    } as any,
     packageName: 'adhdev',
     statusVersion: '0.9.76',
     // DS3: identify this daemon so requestCoordinatorLocalCatchup can resolve the
