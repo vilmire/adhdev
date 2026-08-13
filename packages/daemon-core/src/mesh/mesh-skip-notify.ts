@@ -55,10 +55,12 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     // that one clears on its own when the slot goes idle.
     SLOT_MODEL_ABSENT_SKIP_REASON,
     // QUOTA GATE: 'provider_quota_session_low' / 'provider_quota_weekly_low' /
-    // 'provider_quota_exhausted' are deliberately NOT listed either — an
-    // exhausted quota window RESETS, so the block self-resolves exactly like
-    // the slot-busy case; the task waits in the queue and the coordinator is
-    // not paged (mesh-quota-routing.ts).
+    // 'provider_quota_exhausted' / 'all_providers_quota_gated' are deliberately
+    // NOT listed either — an exhausted quota window RESETS, so the block
+    // self-resolves exactly like the slot-busy case; the task waits in the
+    // queue and the coordinator is not paged (mesh-quota-routing.ts). The
+    // all-gated reason exists precisely so this WAIT is never conflated with
+    // the actionable 'provider_priority_unusable' above.
 ];
 
 // FALSE-BLOCKER-CLONE-QUEUE: the TRANSIENT counterpart of 'target_node_id_unmatched'. A

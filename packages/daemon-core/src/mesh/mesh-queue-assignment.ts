@@ -20,7 +20,7 @@ import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -1842,6 +1842,16 @@ async function resolveUsableProvider(
         : slots;
 
     const failed: string[] = [];
+    // DYNAMIC PROVIDER PRIORITY BY QUOTA: the loop no longer returns the FIRST
+    // detected slot. It enumerates EVERY usable (detected) candidate so the
+    // quota gate can be applied INSIDE the selection loop — a quota-gated first
+    // choice must fall through to the node's next provider, not skip the whole
+    // node (previously the gate ran after this function returned a single pair,
+    // so a gated provider sent the task to the next NODE even when this node
+    // had another provider with quota to spare). Candidates are de-duped per
+    // provider, keeping the first — best-ordered — slot for that provider.
+    const candidates: Array<{ slot: NodeCapabilitySlot; providerType: string }> = [];
+    const seenProviders = new Set<string>();
     for (const slot of orderedSlots) {
         const requestedType = slot.provider;
         const normalizedType = typeof providerLoader.resolveAlias === 'function'
@@ -1873,21 +1883,49 @@ async function resolveUsableProvider(
         }
         (components as any).onStatusChange?.();
         if (detected) {
-            return {
-                providerType: normalizedType,
-                ...(slot.model ? { model: slot.model } : {}),
-                ...(slot.thinkingLevel ? { thinkingLevel: slot.thinkingLevel } : {}),
-                // The slot that won selection. Returned so the caller can enforce
-                // "the launch model must be one this slot declares" — a preset
-                // model must not widen what the operator configured. See
-                // slot-model-enforcement.ts.
-                slot,
-            };
+            if (!seenProviders.has(normalizedType)) {
+                seenProviders.add(normalizedType);
+                candidates.push({ slot, providerType: normalizedType });
+            }
+            continue;
         }
         failed.push(`${requestedType}: not detected`);
     }
-    return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
+    if (!candidates.length) {
+        return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
+    }
+
+    // QUOTA GATE, inside the loop: split the usable candidates by the gate and
+    // order the survivors by weekly (7d) remaining headroom, descending — the
+    // owner-confirmed dynamic priority (spread the 7-day budget evenly across
+    // provider accounts). Fail-open is inherited from evaluateProviderQuotaGate
+    // unchanged: missing / stale / expired-token / transient readings are never
+    // BLOCKED, they only sort into the unknown-weekly group (see
+    // rankProvidersByQuotaGate). ALL-gated is reported under its own reason so
+    // a quota WAIT (self-resolving, non-actionable) is never conflated with
+    // 'provider_priority_unusable' (a slot configuration error, actionable).
+    const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting);
+    if (!ranked.clear.length) {
+        const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
+        LOG.info('MeshQueue', `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
+        return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}` };
+    }
+    const winner = candidates.find(c => c.providerType === ranked.clear[0]) ?? candidates[0];
+    return {
+        providerType: winner.providerType,
+        ...(winner.slot.model ? { model: winner.slot.model } : {}),
+        ...(winner.slot.thinkingLevel ? { thinkingLevel: winner.slot.thinkingLevel } : {}),
+        // The slot that won selection. Returned so the caller can enforce
+        // "the launch model must be one this slot declares" — a preset
+        // model must not widen what the operator configured. See
+        // slot-model-enforcement.ts.
+        slot: winner.slot,
+    };
 }
+
+/** Test hook: provider selection with the quota gate applied inside the loop
+ *  (dynamic provider priority by quota). */
+export const __resolveUsableProviderForTests = resolveUsableProvider;
 
 
 
@@ -2324,26 +2362,15 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             try {
                 const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null);
                 if (!resolved.providerType) {
+                    // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
+                    // loop (a gated first-choice provider falls through to the node's
+                    // next provider instead of skipping the whole node), so a quota
+                    // refusal arrives here as the reason: the non-actionable
+                    // ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON when every usable provider
+                    // is gated (WAIT — the window resets, the task stays queued, the
+                    // coordinator is not paged), never the actionable
+                    // 'provider_priority_unusable' (slot configuration error).
                     markSkip(nodeId, resolved.reason || 'provider_unusable');
-                    continue;
-                }
-                // QUOTA GATE: the (node, provider) pair is now definitive — the only
-                // point where a per-provider quota verdict can be applied. A fresh,
-                // 'ok' snapshot showing the session/weekly window below the mesh's
-                // quotaRouting threshold skips the pair. This is WAIT semantics (the
-                // window resets, so the block clears on its own): the reason is NOT
-                // actionable, the task stays queued, and the coordinator is not
-                // paged. Missing/unreadable/STALE snapshots fail OPEN — routing on
-                // an old reading would exclude nodes on data that no longer
-                // describes them (see mesh-quota-routing.ts).
-                const quotaBlock = evaluateProviderQuotaGate(node, resolved.providerType, mesh?.policy?.quotaRouting ?? null);
-                if (quotaBlock) {
-                    if (quotaBlock.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
-                        LOG.info('MeshQueue', `QUOTA GATE: provider '${resolved.providerType}' on node ${nodeId} reported its quota EXHAUSTED (task ${task.id}); leaving the task queued until the quota resets`);
-                    } else {
-                        LOG.info('MeshQueue', `QUOTA GATE: provider '${resolved.providerType}' on node ${nodeId} has ${quotaBlock.remainingPercent.toFixed(1)}% ${quotaBlock.window} quota remaining (< ${quotaBlock.thresholdPercent}% threshold, task ${task.id}); leaving the task queued until the window resets`);
-                    }
-                    markSkip(nodeId, quotaBlock.reason, { providerType: resolved.providerType });
                     continue;
                 }
                 // Slot-derived model/thinking precedence (see resolveLaunchAxis):

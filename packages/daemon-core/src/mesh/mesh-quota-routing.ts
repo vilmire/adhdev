@@ -11,6 +11,10 @@
  *      the session or weekly window nearly exhausted. The skip is a WAIT —
  *      quota recovers when the window resets — so the reasons are deliberately
  *      NOT actionable (the coordinator is not paged; the 4s reconcile retries).
+ *      rankProvidersByQuotaGate is the gate's SELECTION-LOOP form: it evaluates
+ *      every usable candidate of a node and orders the survivors by weekly
+ *      remaining headroom, so a gated first choice falls through to the node's
+ *      next provider (dynamic provider priority by quota).
  *
  *   2. SPREAD (quotaSpreadBonusByProvider): a bounded 0..spreadBonusMax bonus
  *      the caller folds into task→slot fitness, proportional to remaining
@@ -78,6 +82,17 @@ export const PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON = 'provider_quota_weekly_low'
  *  semantics as the window gates — the quota resets on its own — so this is
  *  deliberately NOT actionable either. */
 export const PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = 'provider_quota_exhausted';
+
+/** Skip reason reported when a node HAS usable provider candidates but EVERY
+ *  one of them is quota-gated. Kept distinct from 'provider_priority_unusable'
+ *  on purpose: that reason means a slot/CONFIGURATION problem (actionable —
+ *  the coordinator is paged), while an all-gated node is a quota WAIT — the
+ *  window resets on its own, the task stays pending, and re-driving the task
+ *  to another node is pointless when every node shares the same provider
+ *  accounts. Deliberately NOT listed in ACTIONABLE_SKIP_REASON_PREFIXES
+ *  (mesh-skip-notify.ts), same WAIT semantics as the per-provider gate
+ *  reasons above. */
+export const ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = 'all_providers_quota_gated';
 
 /** Read the reported quota entry for a provider off a node's facts bundle. */
 function quotaEntryFor(node: any, providerType: string): { facts: { reportedAt: number }; quota: MeshNodeFactsProviderQuota } | null {
@@ -234,6 +249,96 @@ export function evaluateProviderQuotaGate(
         };
     }
     return null;
+}
+
+/**
+ * Weekly-window remaining headroom (0–100) usable as a RANKING key, or
+ * undefined when the weekly reading is unknown: no snapshot, a non-'ok'
+ * status, a stale snapshot, or a provider that simply does not report a
+ * weekly window. Same freshness discipline as the gate — an old reading must
+ * not steer routing either (stale-quota misexclusion works both ways).
+ */
+function weeklyRemainingForRanking(
+    node: any,
+    providerType: string,
+    policy?: RepoMeshQuotaRoutingPolicy | null,
+    now: number = Date.now(),
+): number | undefined {
+    const entry = quotaEntryFor(node, providerType);
+    if (!entry) return undefined;
+    const { facts, quota } = entry;
+    if (quota.status !== 'ok') return undefined;
+    if (!isQuotaSnapshotFresh(facts, quota, policy, now)) return undefined;
+    return remainingPercent(quota.weekly);
+}
+
+export interface ProviderQuotaGateRanking {
+    /** Gate-clear providers, best first: weekly remaining DESC, providers
+     *  whose weekly reading is unknown LAST, and the caller's original order
+     *  preserved within each group (stable sort). */
+    clear: string[];
+    /** Gate-blocked providers with their blocks, in the caller's order. */
+    gated: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
+}
+
+/**
+ * The SELECTION-LOOP form of the gate: evaluate every usable provider
+ * candidate of a node (not just the first one selection would have picked)
+ * and split them into gate-clear vs gate-blocked, so a gated first-choice
+ * provider falls through to the node's NEXT provider instead of skipping the
+ * whole node. Owner-confirmed sort: gate-clear candidates are ordered by
+ * WEEKLY (7d) remaining headroom, descending — the goal is to spread the
+ * 7-day budget evenly across provider accounts rather than always draining
+ * the static first priority.
+ *
+ * UNKNOWN-WEEKLY PLACEMENT (deliberate): candidates whose weekly remaining
+ * cannot be read sort BELOW every measured candidate, never above. Two
+ * directions were rejected:
+ *   - unknown-first ("assumed full") would let an unmeasurable provider win
+ *     every contest — the sort becomes meaningless AND it preferentially
+ *     overloads the one provider that declined to be measured, the exact
+ *     failure mode the module header bans.
+ *   - treating unknown as blocked would silently strand opted-out providers
+ *     (quotaEnabled === false), violating the fail-open contract.
+ * Unknown-last does NOT strand anyone: unknown candidates stay gate-CLEAR,
+ * so they are picked whenever every measured provider is gated — or whenever
+ * nothing on the node is measured at all (pre-feature behaviour preserved).
+ * It also matches the SPREAD bonus precedent, which scores unmeasured
+ * providers 0 — measured-with-headroom already outranked unknown there.
+ *
+ * Tie-break: the caller's candidate order (capacity → task fitness → slot/
+ * providerPriority order) is preserved within both the known and the unknown
+ * group by the stable sort, so whenever quota has nothing to add the
+ * selection is byte-identical to what it was before.
+ *
+ * Being out-ranked and being BLOCKED are different things: a fail-open
+ * candidate (missing / stale / expired-token / any transient reading) is
+ * never blocked — it only lands in the unknown group. The fail-open contract
+ * of evaluateProviderQuotaGate is inherited unchanged.
+ */
+export function rankProvidersByQuotaGate(
+    node: any,
+    orderedProviderTypes: string[],
+    policy?: RepoMeshQuotaRoutingPolicy | null,
+    now: number = Date.now(),
+): ProviderQuotaGateRanking {
+    const clear: string[] = [];
+    const gated: ProviderQuotaGateRanking['gated'] = [];
+    for (const providerType of orderedProviderTypes) {
+        const block = evaluateProviderQuotaGate(node, providerType, policy, now);
+        if (block) gated.push({ providerType, block });
+        else clear.push(providerType);
+    }
+    const weeklyByProvider = new Map(clear.map(p => [p, weeklyRemainingForRanking(node, p, policy, now)]));
+    clear.sort((a, b) => {
+        const wa = weeklyByProvider.get(a);
+        const wb = weeklyByProvider.get(b);
+        if (wa === undefined && wb === undefined) return 0; // both unknown: keep caller order
+        if (wa === undefined) return 1;  // unknown sorts below every measured candidate
+        if (wb === undefined) return -1;
+        return wb - wa; // weekly remaining DESC; ties keep caller order (stable sort)
+    });
+    return { clear, gated };
 }
 
 /**

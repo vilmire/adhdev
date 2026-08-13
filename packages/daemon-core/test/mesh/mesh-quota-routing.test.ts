@@ -20,6 +20,8 @@ import {
     isQuotaSnapshotFresh,
     quotaSnapshotAgeMs,
     quotaSpreadBonusByProvider,
+    rankProvidersByQuotaGate,
+    ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON,
     PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
     PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
     PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
@@ -316,6 +318,87 @@ describe('evaluateProviderQuotaGate — session reset-imminent relaxation', () =
         });
         const node = nodeWithQuota({ 'claude-cli': quota }, NOW + 10 * MIN);
         expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
+    });
+});
+
+describe('rankProvidersByQuotaGate — selection-loop gate + weekly-remaining priority', () => {
+    const exhausted = (over: Record<string, any> = {}) => okQuota({
+        status: 'error',
+        session: null,
+        weekly: null,
+        error: 'usage limit reached (HTTP 403)',
+        metadata: { source: 'oauth', failureKind: 'quota-exhausted' },
+        ...over,
+    });
+
+    it('orders gate-clear candidates by WEEKLY remaining headroom, descending', () => {
+        const node = nodeWithQuota({
+            // kimi listed first by the caller but only 20% weekly remaining...
+            kimi: okQuota({ provider: 'kimi', weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: null } }),
+            // ...claude-cli has 60% weekly remaining and must win the sort.
+            'claude-cli': okQuota({ weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: null } }),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW);
+        expect(ranked.gated).toEqual([]);
+        expect(ranked.clear).toEqual(['claude-cli', 'kimi']);
+    });
+
+    it('keeps the caller order on a weekly tie (stable sort)', () => {
+        const node = nodeWithQuota({
+            kimi: okQuota({ provider: 'kimi' }),          // weekly 60 remaining
+            'claude-cli': okQuota(),                      // weekly 60 remaining
+        });
+        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['kimi', 'claude-cli']);
+    });
+
+    it('sorts UNKNOWN-weekly candidates below every measured one, caller order among themselves', () => {
+        const node = nodeWithQuota({
+            // measured: only 20% weekly remaining — still outranks the unmeasured.
+            'claude-cli': okQuota({ weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: null } }),
+            // kimi: no quota entry at all; codex-cli: fresh but no weekly window.
+            codex: okQuota({ provider: 'codex', weekly: null }),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'codex', 'claude-cli'], null, NOW);
+        expect(ranked.clear).toEqual(['claude-cli', 'kimi', 'codex']);
+    });
+
+    it('excludes gated providers from clear and reports their blocks in caller order', () => {
+        const node = nodeWithQuota({
+            kimi: exhausted(),
+            'claude-cli': okQuota({ weekly: { usedPercent: 88, windowMinutes: 10080, resetsAt: null } }), // 12% < 15% → weekly-low
+            codex: okQuota({ provider: 'codex' }),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli', 'codex'], null, NOW);
+        expect(ranked.clear).toEqual(['codex']);
+        expect(ranked.gated.map(g => g.providerType)).toEqual(['kimi', 'claude-cli']);
+        expect(ranked.gated[0].block.reason).toBe(PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON);
+        expect(ranked.gated[1].block.reason).toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
+    });
+
+    it('returns an empty clear list when EVERY candidate is quota-gated', () => {
+        const node = nodeWithQuota({
+            kimi: exhausted(),
+            'claude-cli': exhausted(),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW);
+        expect(ranked.clear).toEqual([]);
+        expect(ranked.gated).toHaveLength(2);
+    });
+
+    it('FAIL-OPEN regression guard: expired-token / stale / missing readings are never blocked', () => {
+        const node = nodeWithQuota({
+            kimi: exhausted({ metadata: { source: 'oauth', failureKind: 'expired-token' } }),
+            'claude-cli': exhausted({ updatedAt: NOW - 45 * MIN }), // stale exhaustion fails open
+            // codex: no entry at all
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli', 'codex'], null, NOW);
+        expect(ranked.gated).toEqual([]);
+        expect(ranked.clear).toEqual(['kimi', 'claude-cli', 'codex']); // all unknown-weekly, caller order
+    });
+
+    it('exposes the dedicated all-gated skip reason constant (non-actionable WAIT)', () => {
+        expect(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON).toBe('all_providers_quota_gated');
     });
 });
 
