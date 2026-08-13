@@ -54,10 +54,11 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     // busy counterpart SLOT_MODEL_BUSY_SKIP_REASON is deliberately NOT listed:
     // that one clears on its own when the slot goes idle.
     SLOT_MODEL_ABSENT_SKIP_REASON,
-    // QUOTA GATE: 'provider_quota_session_low' / 'provider_quota_weekly_low' are
-    // deliberately NOT listed either — an exhausted quota window RESETS, so the
-    // block self-resolves exactly like the slot-busy case; the task waits in the
-    // queue and the coordinator is not paged (mesh-quota-routing.ts).
+    // QUOTA GATE: 'provider_quota_session_low' / 'provider_quota_weekly_low' /
+    // 'provider_quota_exhausted' are deliberately NOT listed either — an
+    // exhausted quota window RESETS, so the block self-resolves exactly like
+    // the slot-busy case; the task waits in the queue and the coordinator is
+    // not paged (mesh-quota-routing.ts).
 ];
 
 // FALSE-BLOCKER-CLONE-QUEUE: the TRANSIENT counterpart of 'target_node_id_unmatched'. A

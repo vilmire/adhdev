@@ -30,6 +30,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
         status,
         headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
         json: async () => body,
+        text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
     };
 }
 
@@ -166,6 +167,44 @@ describe('fetchKimiQuota', () => {
         const quota = await fetchKimiQuota(deps(home, stubFetch(jsonResponse({}, 401)).fetch));
 
         expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('unauthorized');
+    });
+
+    it('classifies a 403 carrying the usage-limit body as quota-exhausted, NOT unauthorized', async () => {
+        const home = makeKimiHome({ access_token: 'tok', expires_at: FRESH_EXPIRY });
+        // Body text per Kimi's own error reference for an exhausted plan.
+        const body = {
+            error: {
+                message: "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle.",
+                type: 'quota_exceeded_error',
+            },
+        };
+        const quota = await fetchKimiQuota(deps(home, stubFetch(jsonResponse(body, 403)).fetch));
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('quota-exhausted');
+        // Persistent: no short retry is stamped — the quota is gone until the reset.
+        expect(quota.metadata?.retryAtMs).toBeUndefined();
+    });
+
+    it('keeps a 403 WITHOUT usage-limit markers as unauthorized (403 is not always exhaustion)', async () => {
+        const home = makeKimiHome({ access_token: 'tok', expires_at: FRESH_EXPIRY });
+        const body = {
+            error: {
+                message: 'Kimi For Coding is currently only available for Coding Agents such as Kimi CLI, Claude Code, Roo Code, Kilo Code, etc.',
+                type: 'access_terminated_error',
+            },
+        };
+        const quota = await fetchKimiQuota(deps(home, stubFetch(jsonResponse(body, 403)).fetch));
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('unauthorized');
+    });
+
+    it('keeps a 403 with an unreadable/empty body as unauthorized', async () => {
+        const home = makeKimiHome({ access_token: 'tok', expires_at: FRESH_EXPIRY });
+        const quota = await fetchKimiQuota(deps(home, stubFetch(jsonResponse({}, 403)).fetch));
+
         expect(quota.metadata?.failureKind).toBe('unauthorized');
     });
 

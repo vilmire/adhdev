@@ -110,7 +110,7 @@ describe('quotaFailure retry classification', () => {
             const failure = quotaFailure('kimi', 'error', 'x', { failureKind })
             expect(failure.metadata?.retryAtMs).toBeGreaterThanOrEqual(before + QUOTA_TRANSIENT_RETRY_DELAY_MS)
         }
-        for (const failureKind of ['missing-credentials', 'parse', 'cli-unavailable', 'unsupported', 'unknown'] as const) {
+        for (const failureKind of ['missing-credentials', 'parse', 'cli-unavailable', 'unsupported', 'quota-exhausted', 'unknown'] as const) {
             const failure = quotaFailure('kimi', 'error', 'x', { failureKind })
             expect(failure.metadata?.retryAtMs).toBeUndefined()
         }

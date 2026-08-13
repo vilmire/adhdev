@@ -20,7 +20,7 @@ import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -807,7 +807,11 @@ export function tryAssignQueueTask(
     // does not flood the ledger every drain tick.
     const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null);
     if (quotaClaimBlock) {
-        LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${nodeId} (${sessionId}): provider '${providerType}' has ${quotaClaimBlock.remainingPercent.toFixed(1)}% ${quotaClaimBlock.window} quota remaining (< ${quotaClaimBlock.thresholdPercent}% threshold) — task left pending until the window resets`);
+        if (quotaClaimBlock.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
+            LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${nodeId} (${sessionId}): provider '${providerType}' reported its quota EXHAUSTED — task left pending until the quota resets`);
+        } else {
+            LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${nodeId} (${sessionId}): provider '${providerType}' has ${quotaClaimBlock.remainingPercent.toFixed(1)}% ${quotaClaimBlock.window} quota remaining (< ${quotaClaimBlock.thresholdPercent}% threshold) — task left pending until the window resets`);
+        }
         return false;
     }
 
@@ -2330,7 +2334,11 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // describes them (see mesh-quota-routing.ts).
                 const quotaBlock = evaluateProviderQuotaGate(node, resolved.providerType, mesh?.policy?.quotaRouting ?? null);
                 if (quotaBlock) {
-                    LOG.info('MeshQueue', `QUOTA GATE: provider '${resolved.providerType}' on node ${nodeId} has ${quotaBlock.remainingPercent.toFixed(1)}% ${quotaBlock.window} quota remaining (< ${quotaBlock.thresholdPercent}% threshold, task ${task.id}); leaving the task queued until the window resets`);
+                    if (quotaBlock.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
+                        LOG.info('MeshQueue', `QUOTA GATE: provider '${resolved.providerType}' on node ${nodeId} reported its quota EXHAUSTED (task ${task.id}); leaving the task queued until the quota resets`);
+                    } else {
+                        LOG.info('MeshQueue', `QUOTA GATE: provider '${resolved.providerType}' on node ${nodeId} has ${quotaBlock.remainingPercent.toFixed(1)}% ${quotaBlock.window} quota remaining (< ${quotaBlock.thresholdPercent}% threshold, task ${task.id}); leaving the task queued until the window resets`);
+                    }
                     markSkip(nodeId, quotaBlock.reason, { providerType: resolved.providerType });
                     continue;
                 }

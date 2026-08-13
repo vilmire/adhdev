@@ -39,6 +39,15 @@ export type QuotaFailureKind =
     | 'missing-credentials'
     | 'expired-token'
     | 'unauthorized'
+    /**
+     * The provider says the plan's usage is exhausted until the next reset /
+     * billing cycle (Kimi answers 403 with "You've reached your usage limit
+     * for this billing cycle..."). Distinct from 'unauthorized': nothing is
+     * wrong with the credentials, and NO retry — short or long — helps until
+     * the window resets. The mesh quota gate hard-blocks on this kind
+     * (mesh-quota-routing.ts); every other failure kind still fails open.
+     */
+    | 'quota-exhausted'
     | 'rate-limited'
     | 'network'
     | 'server'
@@ -77,7 +86,9 @@ export type QuotaFailureKind =
  * `missing-credentials`, `cli-unavailable` or `unsupported` re-learns the same
  * answer until the user acts; `parse` re-reads the same bytes; `unknown` marks
  * a fetcher that broke its never-throw contract — broken code, not a transient
- * condition — and fast-retrying it would just spin.
+ * condition — and fast-retrying it would just spin. `quota-exhausted` is
+ * persistent for a different reason: the quota is gone until the window
+ * resets, so a 2-minute retry only re-hears "exhausted".
  */
 export const TRANSIENT_QUOTA_FAILURE_KINDS: ReadonlySet<QuotaFailureKind> = new Set([
     'expired-token',

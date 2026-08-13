@@ -22,6 +22,7 @@ import {
     quotaSpreadBonusByProvider,
     PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
     PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
+    PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
 } from '../../src/mesh/mesh-quota-routing.js';
 import {
     DEFAULT_QUOTA_ROUTING_POLICY,
@@ -206,6 +207,54 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
             'claude-cli': okQuota({ session: { usedPercent: 99, windowMinutes: 300, resetsAt: null } }),
         });
         expect(evaluateProviderQuotaGate(node, 'codex-cli', null, NOW)).toBeNull();
+    });
+});
+
+describe('evaluateProviderQuotaGate — quota-exhausted hard block', () => {
+    const exhaustedQuota = (over: Record<string, any> = {}) => okQuota({
+        status: 'error',
+        session: null,
+        weekly: null,
+        error: 'Kimi usage limit reached (HTTP 403) — quota refreshes at the next reset/billing cycle',
+        metadata: { source: 'oauth', failureKind: 'quota-exhausted' },
+        ...over,
+    });
+
+    // The reason this fix exists: a provider that reported its plan exhausted
+    // must NOT be assigned a task.
+    it('BLOCKS on a fresh error snapshot whose failureKind is quota-exhausted', () => {
+        const node = nodeWithQuota({ kimi: exhaustedQuota() });
+        const block = evaluateProviderQuotaGate(node, 'kimi', null, NOW);
+        expect(block?.reason).toBe(PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON);
+        expect(block?.window).toBe('unknown');
+    });
+
+    // The maximum-risk counterpart: every other non-ok reading must still pass.
+    it('fails OPEN on any other failureKind, even on a fresh error snapshot', () => {
+        for (const failureKind of ['unauthorized', 'expired-token', 'rate-limited', 'network', 'server', 'parse', 'missing-credentials', 'no-data', 'unknown']) {
+            const node = nodeWithQuota({ kimi: exhaustedQuota({ metadata: { failureKind } }) });
+            expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW), failureKind).toBeNull();
+        }
+    });
+
+    it('fails OPEN on a STALE quota-exhausted snapshot — old data must not exclude a node', () => {
+        const node = nodeWithQuota({ kimi: exhaustedQuota({ updatedAt: NOW - 45 * MIN }) }, NOW);
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
+    });
+
+    it('fails OPEN on quota-exhausted when the bundle itself is old', () => {
+        const node = nodeWithQuota({ kimi: exhaustedQuota() }, NOW - 31 * MIN);
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
+    });
+
+    it('fails OPEN on unavailable status even with a quota-exhausted kind', () => {
+        const node = nodeWithQuota({ kimi: exhaustedQuota({ status: 'unavailable' }) });
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
+    });
+
+    it('an ok snapshot with full headroom still passes (exhaustion kind only rides errors)', () => {
+        const node = nodeWithQuota({ kimi: okQuota() });
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
     });
 });
 
