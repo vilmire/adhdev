@@ -3159,6 +3159,8 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
       cliType: resolvedProviderType,
       action: "send_chat",
       message: args.message,
+      // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+      dispatchSource: "mesh-tools-internal:ipcDispatchToRemoteAgent",
       // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
       // scoped to THIS node's session on the worker (findAdapter dir match /
       // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
@@ -6686,6 +6688,8 @@ ${magiOutputContractFor(kind)}`;
         agentType: task.assignedProviderType,
         action: "send_chat",
         message,
+        // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+        dispatchSource: "mesh-tools-magi:sendKindRetry",
         meshContext: {
           meshId: ctx.mesh.id,
           nodeId: task.assignedNodeId,
@@ -7423,6 +7427,8 @@ async function meshSendTask(ctx, args) {
         providerType: resolvedProviderType,
         action: "send_chat",
         message,
+        // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+        dispatchSource: "mesh-tools-session:mesh_send_task:direct",
         meshContext: {
           meshId: ctx.mesh.id,
           nodeId: args.node_id,
