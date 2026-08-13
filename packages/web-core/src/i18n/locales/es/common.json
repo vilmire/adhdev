@@ -3238,6 +3238,8 @@
             "staleAfterHint": "Ignorar lecturas de cuota más antiguas que esto.",
             "spreadBonus": "Preferencia por margen",
             "spreadBonusHint": "Cuánto se prefiere tener más cuota restante. Nunca anula una coincidencia de dificultad.",
+            "sessionAxisWeeklyHeadroom": "Margen semanal para la urgencia de sesión",
+            "sessionAxisWeeklyHeadroomHint": "Solo priorizar un reinicio inminente de la ventana de sesión de 5 horas cuando la cuota semanal restante sea igual o superior a esto. La cuota de 5 horas no usada se pierde para siempre, pero consumirla cuando la ventana semanal ya está ajustada cuesta más de lo que ahorra.",
             "minutes": "min",
             "blankMeansDefault": "Deja un campo vacío para usar su valor predeterminado (el que aparece atenuado).",
             "useDefaults": "Usar predeterminados",

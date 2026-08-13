@@ -34,6 +34,7 @@ interface QuotaPolicyDraft {
     sessionResetImminentMinutes: string
     staleAfterMinutes: string
     spreadBonusMax: string
+    sessionAxisWeeklyHeadroomPercent: string
 }
 
 /**
@@ -49,6 +50,7 @@ const DISPLAY_DEFAULTS = {
     sessionResetImminentMinutes: 5,
     staleAfterMinutes: 30,
     spreadBonusMax: 30,
+    sessionAxisWeeklyHeadroomPercent: 40,
 } as const
 
 const MS_PER_MINUTE = 60 * 1000
@@ -66,6 +68,7 @@ function policyToDraft(policy: RepoMeshQuotaRoutingPolicy | null | undefined): Q
         sessionResetImminentMinutes: msToMinutes(p.sessionResetImminentMs),
         staleAfterMinutes: msToMinutes(p.staleAfterMs),
         spreadBonusMax: p.spreadBonusMax !== undefined ? String(p.spreadBonusMax) : '',
+        sessionAxisWeeklyHeadroomPercent: p.sessionAxisWeeklyHeadroomPercent !== undefined ? String(p.sessionAxisWeeklyHeadroomPercent) : '',
     }
 }
 
@@ -80,7 +83,7 @@ function validateField(key: FieldKey, raw: string): string | null {
     if (!trimmed) return null
     const num = Number(trimmed)
     if (!Number.isFinite(num)) return 'notANumber'
-    const isPercent = key === 'sessionMinRemainingPercent' || key === 'weeklyMinRemainingPercent'
+    const isPercent = key === 'sessionMinRemainingPercent' || key === 'weeklyMinRemainingPercent' || key === 'sessionAxisWeeklyHeadroomPercent'
     if (isPercent && (num < 0 || num > 100)) return 'percentRange'
     if (!isPercent && num < 0) return 'negative'
     return null
@@ -109,6 +112,8 @@ export function quotaPolicyDraftToOverrides(draft: QuotaPolicyDraft): RepoMeshQu
     if (stale !== undefined) out.staleAfterMs = stale * MS_PER_MINUTE
     const spread = num(draft.spreadBonusMax)
     if (spread !== undefined) out.spreadBonusMax = spread
+    const sessionAxisWeeklyHeadroom = num(draft.sessionAxisWeeklyHeadroomPercent)
+    if (sessionAxisWeeklyHeadroom !== undefined) out.sessionAxisWeeklyHeadroomPercent = sessionAxisWeeklyHeadroom
     return out
 }
 
@@ -194,6 +199,13 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }:
             hint: t('setupWizard.quotaPolicy.spreadBonusHint'),
             placeholder: DISPLAY_DEFAULTS.spreadBonusMax,
             unit: '',
+        },
+        {
+            key: 'sessionAxisWeeklyHeadroomPercent',
+            label: t('setupWizard.quotaPolicy.sessionAxisWeeklyHeadroom'),
+            hint: t('setupWizard.quotaPolicy.sessionAxisWeeklyHeadroomHint'),
+            placeholder: DISPLAY_DEFAULTS.sessionAxisWeeklyHeadroomPercent,
+            unit: '%',
         },
     ]
 

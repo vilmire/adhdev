@@ -3238,6 +3238,8 @@
             "staleAfterHint": "これより古いクォータ測定値は無視します。",
             "spreadBonus": "残量の優先度",
             "spreadBonusHint": "残量の多さをどれだけ優先するか。タスク難易度の一致を覆すことはありません。",
+            "sessionAxisWeeklyHeadroom": "セッション緊急度のための週次余裕",
+            "sessionAxisWeeklyHeadroomHint": "週次残量がこの値以上のときのみ、5時間セッションウィンドウの差し迫ったリセットを優先します。未使用の5時間分は永久に失われますが、週次ウィンドウが既に逼迫している場合はそれを消費する方が損になります。",
             "minutes": "分",
             "blankMeansDefault": "空欄にすると既定値（淡色で表示された値）が使われます。",
             "useDefaults": "既定値を使う",

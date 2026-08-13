@@ -3238,6 +3238,8 @@
             "staleAfterHint": "忽略早于此时长的配额读数。",
             "spreadBonus": "余量偏好",
             "spreadBonusHint": "对剩余配额更多者的偏好强度。不会覆盖任务难度匹配。",
+            "sessionAxisWeeklyHeadroom": "会话紧迫度的每周余量",
+            "sessionAxisWeeklyHeadroomHint": "仅当每周剩余配额达到或超过此值时，才优先处理即将重置的 5 小时会话窗口。未使用的 5 小时配额会永久失效，但在每周窗口已经吃紧时消耗它得不偿失。",
             "minutes": "分钟",
             "blankMeansDefault": "留空则使用默认值（显示为灰色的数值）。",
             "useDefaults": "使用默认值",

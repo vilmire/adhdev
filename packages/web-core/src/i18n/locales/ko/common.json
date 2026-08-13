@@ -3235,6 +3235,8 @@
             "staleAfterHint": "이보다 오래된 쿼터 측정값은 무시합니다.",
             "spreadBonus": "여유량 선호도",
             "spreadBonusHint": "잔량이 많은 쪽을 얼마나 선호할지. 작업 난이도 매칭을 뒤집지는 않습니다.",
+            "sessionAxisWeeklyHeadroom": "세션 긴급도용 주간 여유량",
+            "sessionAxisWeeklyHeadroomHint": "주간 잔량이 이 값 이상일 때만 5시간 세션 윈도우의 임박한 리셋을 우선합니다. 5시간 미사용분은 영구히 소멸하지만, 주간 윈도우가 이미 빠듯할 때 이를 태우는 것은 절약보다 손해가 큽니다.",
             "minutes": "분",
             "blankMeansDefault": "비워 두면 기본값(흐리게 표시된 값)이 적용됩니다.",
             "useDefaults": "기본값 사용",

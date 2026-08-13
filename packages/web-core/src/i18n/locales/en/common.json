@@ -3235,6 +3235,8 @@
             "staleAfterHint": "Ignore quota readings older than this.",
             "spreadBonus": "Headroom preference",
             "spreadBonusHint": "How strongly more remaining quota is preferred. Never overrides a task-difficulty match.",
+            "sessionAxisWeeklyHeadroom": "Weekly headroom for session urgency",
+            "sessionAxisWeeklyHeadroomHint": "Only prioritize an imminent 5-hour session-window reset when weekly quota remaining is at or above this. Unused 5-hour quota is lost forever, but burning it when the weekly window is already tight costs more than it saves.",
             "minutes": "min",
             "blankMeansDefault": "Leave a field blank to use its default (shown as the greyed-out value).",
             "useDefaults": "Use defaults",

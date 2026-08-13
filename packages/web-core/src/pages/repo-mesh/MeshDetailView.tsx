@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { RepoMeshStatus } from '@adhdev/daemon-core'
+import type { RepoMeshStatus, RepoMeshQuotaRoutingPolicy } from '@adhdev/daemon-core'
 import AppPage from '../../components/ui/AppPage'
 import { Section } from '../../components/ui/Section'
 import { AlertBanner } from '../../components/ui/AlertBanner'
@@ -10,6 +10,7 @@ import { IconMesh } from '../../components/Icons'
 // The task_kind → panel binding editor (MagiKindPanelEditor) is the sole MAGI panel
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
+import QuotaPolicyStep from '../../components/setup-wizard/QuotaPolicyStep'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
@@ -466,6 +467,22 @@ export function MeshDetailView({
                     />
                 </Section>
             )}
+
+            {/* ── Quota-aware routing thresholds (policy.quotaRouting) ──
+                 Placed next to MAGI: both are coordinator-side routing knobs that
+                 read the same mesh status/provider surface. Saved through the
+                 generic onUpdatePolicy → update_mesh path (same as every other
+                 policy field on this page), not the dedicated
+                 mesh_quota_routing_set command — quotaRouting is just a field on
+                 RepoMeshPolicy, so the shallow-merge patch here is sufficient. */}
+            <Section title={t('setupWizard.quotaPolicy.title')} description={t('setupWizard.quotaPolicy.description')}>
+                <QuotaPolicyStep
+                    quotaRouting={(policy.quotaRouting as RepoMeshQuotaRoutingPolicy | undefined) ?? null}
+                    saving={savingPolicy}
+                    error={error}
+                    onSave={quotaRouting => onUpdatePolicy({ quotaRouting })}
+                />
+            </Section>
 
             {/* ── Provider auto-approve defaults (repo mesh.json providerDefaults) ──
                  Three-section surface: repo default (committed) / this machine's

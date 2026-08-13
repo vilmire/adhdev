@@ -17,6 +17,7 @@ const BLANK = {
     sessionResetImminentMinutes: '',
     staleAfterMinutes: '',
     spreadBonusMax: '',
+    sessionAxisWeeklyHeadroomPercent: '',
 }
 
 describe('quotaPolicyDraftToOverrides', () => {
@@ -60,6 +61,7 @@ describe('quotaPolicyDraftToOverrides', () => {
             sessionResetImminentMinutes: '10',
             staleAfterMinutes: '60',
             spreadBonusMax: '50',
+            sessionAxisWeeklyHeadroomPercent: '35',
         })
         expect(out).toEqual({
             sessionMinRemainingPercent: 25,
@@ -67,6 +69,7 @@ describe('quotaPolicyDraftToOverrides', () => {
             sessionResetImminentMs: 10 * 60 * 1000,
             staleAfterMs: 60 * 60 * 1000,
             spreadBonusMax: 50,
+            sessionAxisWeeklyHeadroomPercent: 35,
         })
     })
 })
