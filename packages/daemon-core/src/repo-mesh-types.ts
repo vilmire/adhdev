@@ -457,6 +457,21 @@ export interface RepoMeshQuotaRoutingPolicy {
      * among equally-fit slots but can never overturn a difficulty match.
      */
     spreadBonusMax?: number;
+    /**
+     * SESSION-AXIS ACTIVATION threshold (the conditional gate in
+     * rankProvidersByQuotaGate): the candidate ranking switches from weekly
+     * expiry risk to SESSION (5h) expiry risk only while EVERY weekly-measured
+     * candidate has more than this percent of its weekly window left. An
+     * unused session remainder evaporates permanently at the 5h reset, so when
+     * the weekly budget is comfortable the scheduler spends the provider whose
+     * session remainder is about to be lost. At or below this threshold the
+     * weekly axis governs unchanged — when the weekly budget is the binding
+     * constraint, chasing session expiry would drain the weekly remainder
+     * early. Defaults to 40: it must sit clearly above the weekly GATE floor
+     * (weeklyMinRemainingPercent, 15) for "headroom" to mean anything — a
+     * candidate only just above the gate is protected, not harvested.
+     */
+    sessionAxisWeeklyHeadroomPercent?: number;
 }
 
 export interface RepoMeshRelatedRepo {
@@ -619,6 +634,7 @@ export const DEFAULT_QUOTA_ROUTING_POLICY: Required<RepoMeshQuotaRoutingPolicy> 
     sessionResetImminentMs: 5 * 60 * 1000,
     weeklyMinRemainingPercent: 15,
     spreadBonusMax: 30,
+    sessionAxisWeeklyHeadroomPercent: 40,
 };
 
 /**
@@ -635,6 +651,7 @@ export function resolveQuotaRoutingPolicy(
     const sessionResetImminentMs = Number(value?.sessionResetImminentMs);
     const weeklyMin = Number(value?.weeklyMinRemainingPercent);
     const spreadMax = Number(value?.spreadBonusMax);
+    const sessionAxisHeadroom = Number(value?.sessionAxisWeeklyHeadroomPercent);
     const clampPercentField = (n: number, fallback: number) =>
         Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback;
     return {
@@ -649,6 +666,7 @@ export function resolveQuotaRoutingPolicy(
         spreadBonusMax: Number.isFinite(spreadMax) && spreadMax >= 0
             ? spreadMax
             : DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax,
+        sessionAxisWeeklyHeadroomPercent: clampPercentField(sessionAxisHeadroom, DEFAULT_QUOTA_ROUTING_POLICY.sessionAxisWeeklyHeadroomPercent),
     };
 }
 
@@ -678,6 +696,9 @@ export function normalizeQuotaRoutingPolicy(value: unknown): RepoMeshQuotaRoutin
     }
     if (record.spreadBonusMax !== undefined && resolved.spreadBonusMax !== DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax) {
         out.spreadBonusMax = resolved.spreadBonusMax;
+    }
+    if (record.sessionAxisWeeklyHeadroomPercent !== undefined && resolved.sessionAxisWeeklyHeadroomPercent !== DEFAULT_QUOTA_ROUTING_POLICY.sessionAxisWeeklyHeadroomPercent) {
+        out.sessionAxisWeeklyHeadroomPercent = resolved.sessionAxisWeeklyHeadroomPercent;
     }
     return Object.keys(out).length ? out : undefined;
 }

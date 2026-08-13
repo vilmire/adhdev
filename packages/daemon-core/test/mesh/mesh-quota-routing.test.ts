@@ -70,6 +70,7 @@ describe('quota routing policy — resolution & persistence economy', () => {
             sessionResetImminentMs: 5 * MIN,
             weeklyMinRemainingPercent: 15,
             spreadBonusMax: 30,
+            sessionAxisWeeklyHeadroomPercent: 40,
         });
         expect(resolveQuotaRoutingPolicy(null)).toEqual(DEFAULT_QUOTA_ROUTING_POLICY);
     });
@@ -81,6 +82,9 @@ describe('quota routing policy — resolution & persistence economy', () => {
         });
         // >100% thresholds clamp to 100; a negative stale window falls back to default.
         expect(resolveQuotaRoutingPolicy({ weeklyMinRemainingPercent: 250 }).weeklyMinRemainingPercent).toBe(100);
+        expect(resolveQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: 250 }).sessionAxisWeeklyHeadroomPercent).toBe(100);
+        // Percent fields clamp into 0..100 (same convention as the gate thresholds).
+        expect(resolveQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: -1 }).sessionAxisWeeklyHeadroomPercent).toBe(0);
         expect(resolveQuotaRoutingPolicy({ staleAfterMs: -5 }).staleAfterMs).toBe(DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs);
         expect(resolveQuotaRoutingPolicy({ sessionResetImminentMs: -1 }).sessionResetImminentMs).toBe(DEFAULT_QUOTA_ROUTING_POLICY.sessionResetImminentMs);
     });
@@ -91,6 +95,9 @@ describe('quota routing policy — resolution & persistence economy', () => {
             quotaRouting: { sessionMinRemainingPercent: 10, weeklyMinRemainingPercent: 15 },
         } as any).quotaRouting).toBeUndefined();
         expect(normalizeQuotaRoutingPolicy({ staleAfterMs: 30 * MIN })).toBeUndefined();
+        expect(normalizeQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: 40 })).toBeUndefined();
+        expect(normalizeQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: 55 }))
+            .toEqual({ sessionAxisWeeklyHeadroomPercent: 55 });
         expect(normalizeQuotaRoutingPolicy('junk')).toBeUndefined();
     });
 
@@ -454,6 +461,171 @@ describe('rankProvidersByQuotaGate — selection-loop gate + weekly expiry-risk 
 
     it('exposes the dedicated all-gated skip reason constant (non-actionable WAIT)', () => {
         expect(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON).toBe('all_providers_quota_gated');
+    });
+});
+
+describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ conditional gate', () => {
+    const DAY = 24 * 60 * MIN;
+    const weeklyWindow = (usedPercent: number, resetsAt: number | null) =>
+        ({ usedPercent, windowMinutes: 10080, resetsAt });
+    const sessionWindow = (usedPercent: number, resetsAt: number | null) =>
+        ({ usedPercent, windowMinutes: 300, resetsAt });
+    // In every case below reportedAt = NOW and updatedAt = NOW - MIN, so the
+    // skew-safe reporter-now estimate is exactly NOW and resetsAt values are
+    // plain NOW-relative.
+
+    // Comfortable weekly headroom (> 40) on every candidate: the session axis
+    // ranks. Both weekly readings are identical, so the weekly axis alone
+    // would keep the caller order — only the 5h axis can flip it.
+    it('weekly-comfortable: prefers the provider whose SESSION remainder is about to evaporate', () => {
+        const node = nodeWithQuota({
+            'claude-cli': okQuota({
+                session: sessionWindow(30, NOW + 270 * MIN),       // 70% left, 4.5h to reset → risk ~7
+                weekly: weeklyWindow(40, NOW + 5 * DAY),           // 60% left — comfortable
+            }),
+            kimi: okQuota({
+                provider: 'kimi',
+                session: sessionWindow(30, NOW + 20 * MIN),        // 70% left, 20min to reset → risk ~65
+                weekly: weeklyWindow(40, NOW + 5 * DAY),           // identical weekly reading
+            }),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['claude-cli', 'kimi'], null, NOW);
+        expect(ranked.gated).toEqual([]);
+        expect(ranked.clear).toEqual(['kimi', 'claude-cli']);
+    });
+
+    // Weekly-tight candidate present (30 ≤ 40): the 5h axis is IGNORED and the
+    // weekly axis governs — spending kimi's expiring session first would drain
+    // its tight weekly budget early.
+    it('weekly-tight: keeps the weekly order even when a session remainder is about to evaporate', () => {
+        const node = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                session: sessionWindow(30, NOW + 20 * MIN),        // expiring-in-20min session
+                weekly: weeklyWindow(70, NOW + 5 * DAY),           // 30% left — tight
+            }),
+            'claude-cli': okQuota({
+                session: sessionWindow(30, NOW + 270 * MIN),
+                weekly: weeklyWindow(40, NOW + 5 * DAY),           // 60% left — wins the weekly tie-break
+            }),
+        });
+        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['claude-cli', 'kimi']);
+    });
+
+    // Fail-open on the 5h axis: sessions unreadable → the decision is exactly
+    // what the weekly axis would have made.
+    it('session reading missing: falls back to the weekly order (fail-open)', () => {
+        const node = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                session: null,                                     // 5h axis unreadable
+                weekly: weeklyWindow(40, NOW + 5 * DAY),
+            }),
+            'claude-cli': okQuota({
+                session: null,
+                weekly: weeklyWindow(40, NOW + 2 * 60 * MIN),      // same remaining, reset in 2h → higher risk
+            }),
+        });
+        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['claude-cli', 'kimi']);
+    });
+
+    it('session reading STALE: the whole snapshot fails open to the weekly order', () => {
+        const staleSession = okQuota({
+            session: sessionWindow(30, NOW + 20 * MIN),
+            weekly: weeklyWindow(40, NOW + 5 * DAY),
+            updatedAt: NOW - 45 * MIN,                             // stale → neither axis reads it
+        });
+        const node = nodeWithQuota({
+            kimi: staleSession,
+            'claude-cli': okQuota({
+                session: sessionWindow(30, NOW + 270 * MIN),
+                weekly: weeklyWindow(40, NOW + 5 * DAY),
+            }),
+        });
+        // kimi's snapshot is stale → weekly-unknown → sorts LAST; claude-cli's
+        // comfortable weekly reading activates the session axis for itself.
+        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['claude-cli', 'kimi']);
+    });
+
+    // Unknown-last on the 5h axis too: a session-measured candidate outranks a
+    // session-unreadable one when the session axis is active.
+    it('session-axis mode sorts session-unreadable below session-measured (unknown-last)', () => {
+        const node = nodeWithQuota({
+            'claude-cli': okQuota({
+                session: null,                                     // 5h unreadable
+                weekly: weeklyWindow(40, NOW + 5 * DAY),
+            }),
+            kimi: okQuota({
+                provider: 'kimi',
+                session: sessionWindow(30, NOW + 20 * MIN),        // expiring session
+                weekly: weeklyWindow(40, NOW + 5 * DAY),
+            }),
+        });
+        expect(rankProvidersByQuotaGate(node, ['claude-cli', 'kimi'], null, NOW).clear)
+            .toEqual(['kimi', 'claude-cli']);
+    });
+
+    // ★Boundary pin: the activation test is STRICTLY greater-than. A weekly
+    // remaining of exactly the threshold stays weekly-protected; one point
+    // above it switches to the session axis.
+    it('activates on weekly remaining > threshold only — exactly AT the threshold stays weekly', () => {
+        const atThreshold = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                session: sessionWindow(30, NOW + 20 * MIN),        // expiring session
+                weekly: weeklyWindow(60, NOW + 5 * DAY),           // exactly 40% left = threshold
+            }),
+            'claude-cli': okQuota({
+                session: sessionWindow(30, NOW + 270 * MIN),
+                weekly: weeklyWindow(40, NOW + 5 * DAY),           // 60% left
+            }),
+        });
+        // Weekly mode: claude-cli's larger weekly remainder wins the tie-break
+        // — the expiring session is deliberately NOT harvested.
+        expect(rankProvidersByQuotaGate(atThreshold, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['claude-cli', 'kimi']);
+
+        const oneAbove = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                session: sessionWindow(30, NOW + 20 * MIN),
+                weekly: weeklyWindow(59, NOW + 5 * DAY),           // 41% left > threshold
+            }),
+            'claude-cli': okQuota({
+                session: sessionWindow(30, NOW + 270 * MIN),
+                weekly: weeklyWindow(40, NOW + 5 * DAY),
+            }),
+        });
+        expect(rankProvidersByQuotaGate(oneAbove, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['kimi', 'claude-cli']);
+    });
+
+    it('honours a configured sessionAxisWeeklyHeadroomPercent', () => {
+        const node = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                session: sessionWindow(30, NOW + 20 * MIN),
+                weekly: weeklyWindow(40, NOW + 5 * DAY),           // 60% left
+            }),
+            'claude-cli': okQuota({
+                session: sessionWindow(30, NOW + 270 * MIN),
+                weekly: weeklyWindow(40, NOW + 5 * DAY),
+            }),
+        });
+        // 60 > 70 is false → weekly mode → tie → caller order.
+        expect(rankProvidersByQuotaGate(node, ['claude-cli', 'kimi'], { sessionAxisWeeklyHeadroomPercent: 70 }, NOW).clear)
+            .toEqual(['claude-cli', 'kimi']);
+        // 60 > 50 → session mode → kimi's expiring session wins.
+        expect(rankProvidersByQuotaGate(node, ['claude-cli', 'kimi'], { sessionAxisWeeklyHeadroomPercent: 50 }, NOW).clear)
+            .toEqual(['kimi', 'claude-cli']);
+    });
+
+    it('no quota information at all: caller order preserved byte-for-byte', () => {
+        expect(rankProvidersByQuotaGate(nodeWithQuota(undefined), ['kimi', 'claude-cli', 'codex'], null, NOW))
+            .toEqual({ clear: ['kimi', 'claude-cli', 'codex'], gated: [] });
     });
 });
 

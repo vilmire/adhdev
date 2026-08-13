@@ -15,7 +15,12 @@
  *      every usable candidate of a node and orders the survivors by weekly
  *      EXPIRY RISK (unused remainder evaporates at the window reset), so a
  *      gated first choice falls through to the node's next provider (dynamic
- *      provider priority by quota).
+ *      provider priority by quota). While EVERY weekly-measured survivor has
+ *      comfortable weekly headroom (sessionAxisWeeklyHeadroomPercent), the
+ *      ordering axis switches to the SESSION (5h) window's expiry risk — the
+ *      5h remainder evaporates permanently too, and a weekly-only ranking
+ *      would let it. When any candidate's weekly window is tight, the weekly
+ *      axis governs unchanged (weekly protection beats session harvest).
  *
  *   2. SPREAD (quotaSpreadBonusByProvider): a bounded 0..spreadBonusMax bonus
  *      the caller folds into task→slot fitness, proportional to remaining
@@ -257,9 +262,14 @@ export function evaluateProviderQuotaGate(
  *  guards malformed/foreign bundles). */
 const DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
 
-/** Ranking metric for one candidate, or undefined when even the weekly
- *  REMAINING is unknown (no snapshot / non-'ok' / stale / no weekly window). */
-interface WeeklyExpiryRisk {
+/** Fallback session-window length (~5h), same malformed-bundle guard as the
+ *  weekly one. */
+const DEFAULT_SESSION_WINDOW_MINUTES = 5 * 60;
+
+/** Ranking metric for one candidate on one window axis, or undefined when even
+ *  the axis's REMAINING is unknown (no snapshot / non-'ok' / stale / no such
+ *  window reported). */
+interface ExpiryRisk {
     remainingPercent: number;
     /** Expiry-risk score — see rankProvidersByQuotaGate. Bounded by
      *  remainingPercent, so it can never diverge. */
@@ -267,8 +277,9 @@ interface WeeklyExpiryRisk {
 }
 
 /**
- * Expiry-risk metric: how much of this provider's weekly remainder is likely
- * to EVAPORATE unused at the window reset if it is not consumed now.
+ * Expiry-risk metric: how much of this provider's remainder on one window axis
+ * ('weekly' or 'session') is likely to EVAPORATE unused at the window reset if
+ * it is not consumed now.
  *
  *   risk = remainingPercent × elapsedFraction
  *   elapsedFraction = clamp(1 − timeLeft/windowMs, 0, 1)
@@ -284,6 +295,10 @@ interface WeeklyExpiryRisk {
  * literally just reset (elapsedFraction < 1/90) — where deferring it is
  * correct anyway.
  *
+ * ONE formula, both axes: the session (~5h) and weekly (~7d) windows report
+ * the same shape (usedPercent/windowMinutes/resetsAt), so the axis selects
+ * only which window is read — the math is not duplicated.
+ *
  * Clock-skew: resetsAt is stamped on the REPORTER's clock, so timeLeft is
  * computed against the skew-safe reporter-now estimate (updatedAt + snapshot
  * age — the same same-clock-difference trick as isSessionResetImminent).
@@ -294,36 +309,41 @@ interface WeeklyExpiryRisk {
  * Such candidates still rank by their known remaining, above the
  * remaining-unknown group, below every candidate with positive risk.
  */
-function weeklyExpiryRiskForRanking(
+function expiryRiskForRanking(
     node: any,
     providerType: string,
+    axis: 'session' | 'weekly',
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
-): WeeklyExpiryRisk | undefined {
+): ExpiryRisk | undefined {
     const entry = quotaEntryFor(node, providerType);
     if (!entry) return undefined;
     const { facts, quota } = entry;
     if (quota.status !== 'ok') return undefined;
     if (!isQuotaSnapshotFresh(facts, quota, policy, now)) return undefined;
-    const remaining = remainingPercent(quota.weekly);
+    const window = axis === 'session' ? quota.session : quota.weekly;
+    const remaining = remainingPercent(window);
     if (remaining === undefined) return undefined;
-    const resetsAt = Number(quota.weekly?.resetsAt);
+    const resetsAt = Number(window?.resetsAt);
     if (!Number.isFinite(resetsAt) || resetsAt <= 0) return { remainingPercent: remaining, risk: 0 };
     const ageMs = quotaSnapshotAgeMs(facts, quota, now);
     if (!Number.isFinite(ageMs)) return { remainingPercent: remaining, risk: 0 };
     const reporterNowMs = Number(quota.updatedAt) + ageMs;
-    const windowMinutes = Number(quota.weekly?.windowMinutes);
+    const windowMinutes = Number(window?.windowMinutes);
+    const fallbackMinutes = axis === 'session' ? DEFAULT_SESSION_WINDOW_MINUTES : DEFAULT_WEEKLY_WINDOW_MINUTES;
     const windowMs = (Number.isFinite(windowMinutes) && windowMinutes > 0
-        ? windowMinutes : DEFAULT_WEEKLY_WINDOW_MINUTES) * 60 * 1000;
+        ? windowMinutes : fallbackMinutes) * 60 * 1000;
     const elapsedFraction = Math.min(1, Math.max(0, 1 - (resetsAt - reporterNowMs) / windowMs));
     return { remainingPercent: remaining, risk: remaining * elapsedFraction };
 }
 
 export interface ProviderQuotaGateRanking {
     /** Gate-clear providers, best first: weekly EXPIRY-RISK DESC (remaining ×
-     *  elapsed window fraction), weekly remaining DESC on a risk tie,
-     *  providers whose weekly reading is unknown LAST, and the caller's
-     *  original order preserved within each group (stable sort). */
+     *  elapsed window fraction) — or SESSION (5h) expiry-risk DESC while every
+     *  weekly-measured candidate clears sessionAxisWeeklyHeadroomPercent —
+     *  remaining DESC on a risk tie, providers whose ranking-axis reading is
+     *  unknown LAST, and the caller's original order preserved within each
+     *  group (stable sort). */
     clear: string[];
     /** Gate-blocked providers with their blocks, in the caller's order. */
     gated: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
@@ -342,6 +362,23 @@ export interface ProviderQuotaGateRanking {
  * wins (risk is proportional to remaining at equal elapsed fraction, and
  * remaining is the explicit risk-tie breaker), so the original
  * "spread the 7-day budget evenly" axis is preserved as a special case.
+ *
+ * SESSION-AXIS CONDITIONAL GATE (owner-confirmed 2′ design): the weekly axis
+ * governs only while the weekly budget is the binding constraint. When EVERY
+ * weekly-measured candidate has more than sessionAxisWeeklyHeadroomPercent
+ * (default 40) of its weekly window left, the ranking axis switches to the
+ * SESSION (5h) expiry risk — the same formula on the session window — because
+ * an unused 5h remainder evaporates permanently at the session reset and a
+ * weekly-only ranking would let it. The moment any measured candidate's
+ * weekly remaining is at or below the threshold, the weekly axis governs
+ * unchanged: chasing session expiry there would drain a tight weekly budget
+ * early. This is deliberately NOT a weekly-risk tie-break — risk is a
+ * continuous float, so weekly ties effectively never occur and a tie-break
+ * would be dead code; the axis switch is an all-measured-candidates gate.
+ * Session-unreadable candidates in session-axis mode sort below every
+ * session-measured one (the same unknown-last rule as the weekly axis) and
+ * fall back to the weekly order among themselves — an unreadable 5h axis
+ * never blocks or promotes anyone (fail-open).
  *
  * UNKNOWN-WEEKLY PLACEMENT (deliberate): candidates whose weekly remaining
  * cannot be read sort BELOW every measured candidate, never above. Two
@@ -381,13 +418,39 @@ export function rankProvidersByQuotaGate(
         if (block) gated.push({ providerType, block });
         else clear.push(providerType);
     }
-    const weeklyByProvider = new Map(clear.map(p => [p, weeklyExpiryRiskForRanking(node, p, policy, now)]));
+    const weeklyByProvider = new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'weekly', policy, now)]));
+    // 2′ conditional gate: the session (5h) axis ranks ONLY while every
+    // weekly-measured candidate has weekly headroom to spare (strictly above
+    // the threshold — a candidate AT it stays weekly-protected). With no
+    // weekly-measured candidate at all there is nothing to rank on either
+    // axis and the caller order survives untouched.
+    const headroomPercent = resolveQuotaRoutingPolicy(policy).sessionAxisWeeklyHeadroomPercent;
+    const weeklyMeasured = [...weeklyByProvider.values()].filter((w): w is ExpiryRisk => w !== undefined);
+    const sessionAxisActive = weeklyMeasured.length > 0
+        && weeklyMeasured.every(w => w.remainingPercent > headroomPercent);
+    const sessionByProvider = sessionAxisActive
+        ? new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'session', policy, now)]))
+        : undefined;
     clear.sort((a, b) => {
         const wa = weeklyByProvider.get(a);
         const wb = weeklyByProvider.get(b);
         if (wa === undefined && wb === undefined) return 0; // both unknown: keep caller order
         if (wa === undefined) return 1;  // unknown sorts below every measured candidate
         if (wb === undefined) return -1;
+        if (sessionByProvider) {
+            const sa = sessionByProvider.get(a);
+            const sb = sessionByProvider.get(b);
+            if (sa !== undefined && sb !== undefined) {
+                if (sb.risk !== sa.risk) return sb.risk - sa.risk; // session expiry risk DESC
+                if (sb.remainingPercent !== sa.remainingPercent) {
+                    return sb.remainingPercent - sa.remainingPercent; // session remaining tie-break
+                }
+            } else if (sa !== undefined) return -1; // session-unknown sorts below session-measured
+            else if (sb !== undefined) return 1;
+            // Both session-unknown (or a full session tie): the weekly order
+            // below is the fail-open fallback — an unreadable 5h axis never
+            // changes what the weekly axis would have decided.
+        }
         if (wb.risk !== wa.risk) return wb.risk - wa.risk; // expiry risk DESC
         // Risk tie (e.g. equal reset time): the larger weekly remainder wins —
         // the original even-spend axis, preserved as the tie-break. A further
@@ -519,8 +582,8 @@ export function describeRecoveryRelaunchDecision(
  * candidate the ranking loop considered, clear or gated. Order-preserving
  * (caller's candidate order, not the sorted rank) so a log line or a
  * mesh_status reader can show "here is what each candidate looked like"
- * without re-deriving weeklyExpiryRiskForRanking itself (kept module-private
- * — this is the one sanctioned way to read it from outside the module).
+ * without re-deriving expiryRiskForRanking itself (kept module-private — this
+ * is the one sanctioned way to read it from outside the module).
  * remainingPercent/risk are undefined for the same reasons rankProvidersByQuotaGate's
  * unknown group exists: no snapshot, non-'ok', stale, or no weekly window.
  */
@@ -537,7 +600,7 @@ export function quotaRiskSnapshotForCandidates(
     now: number = Date.now(),
 ): ProviderQuotaRiskSnapshot[] {
     return orderedProviderTypes.map(providerType => {
-        const w = weeklyExpiryRiskForRanking(node, providerType, policy, now);
+        const w = expiryRiskForRanking(node, providerType, 'weekly', policy, now);
         return {
             providerType,
             ...(w ? { remainingPercent: w.remainingPercent, risk: w.risk } : {}),
