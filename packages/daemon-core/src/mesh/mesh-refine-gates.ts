@@ -167,6 +167,14 @@ type MeshRefineSubmoduleReachabilityEntry = {
     commit: string;
     reachable: boolean;
     publishRequired?: boolean;
+    /**
+     * Gap #2 (parallel-refine twin): set when the gitlink commit is NOT reachable
+     * from origin/<default> but a commit with an IDENTICAL tree already is — a
+     * sibling job published the same content under a different SHA. Publishing
+     * this commit would mint duplicate history; the remedy is to converge the
+     * gitlink to this published commit, so `publishRequired` is false.
+     */
+    equivalentPublishedCommit?: string;
     autoPublishAllowed?: boolean;
     autoPublishAttempted?: boolean;
     autoPublishSucceeded?: boolean;
@@ -463,10 +471,23 @@ export function recordMeshRefineStage(
 }
 
 export function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReachabilityEntry[]): string {
-    const refs = entries
-        .map(entry => `${entry.path}@${entry.commit}`)
-        .join(', ');
-    return `Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to the configured submodule remote main branch, then rerun mesh_refine_node. Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.`;
+    const convergeable = entries.filter(entry => entry.equivalentPublishedCommit);
+    const publishable = entries.filter(entry => !entry.equivalentPublishedCommit);
+    const parts: string[] = [];
+    if (convergeable.length > 0) {
+        const refs = convergeable
+            .map(entry => `${entry.path}: ${entry.commit} → ${entry.equivalentPublishedCommit}`)
+            .join(', ');
+        parts.push(`Converge the submodule gitlink(s) to the already-published equivalent commit(s) (${refs}): a commit with an identical tree already exists on the submodule remote main branch, so publishing the local same-content twin is wrong. Retarget the gitlink to the published commit, commit the root pointer update, then rerun mesh_refine_node.`);
+    }
+    if (publishable.length > 0) {
+        const refs = publishable
+            .map(entry => `${entry.path}@${entry.commit}`)
+            .join(', ');
+        parts.push(`Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to the configured submodule remote main branch, then rerun mesh_refine_node.`);
+    }
+    parts.push('Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.');
+    return parts.join(' ');
 }
 
 /**
@@ -1431,6 +1452,78 @@ function isSubmoduleDivergedSibling(submoduleRepoPath: string, baseCommit: strin
     }
 }
 
+/**
+ * Resolve the submodule's remote-tracking ref for its default branch
+ * (`refs/remotes/origin/<branch>`). Sync, best-effort: the origin/HEAD symref
+ * first, then the conventional main/master names. Undefined when none exists
+ * locally — the published-equivalence short-circuit then simply does not
+ * engage and the caller falls through to the rewrite path.
+ */
+function resolveSubmoduleRemoteMainRef(submoduleRepoPath: string): string | undefined {
+    try {
+        const sym = execFileSync(GIT, ['symbolic-ref', '-q', 'refs/remotes/origin/HEAD'], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+        if (sym) return sym;
+    } catch { /* no origin/HEAD symref */ }
+    for (const branch of ['main', 'master']) {
+        try {
+            execFileSync(GIT, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}`], { cwd: submoduleRepoPath, stdio: ['ignore', 'pipe', 'pipe'] });
+            return `refs/remotes/origin/${branch}`;
+        } catch { /* try the next conventional name */ }
+    }
+    return undefined;
+}
+
+/**
+ * Gap #1 (parallel-refine twin): when base and branch diverged a submodule
+ * gitlink, the usual remedy is to rebase the branch-side submodule commit onto
+ * the base-side one. But when a SIBLING job already merged the same content and
+ * pushed it to the submodule's origin/<default> (same tree, different SHA — the
+ * "published twin"), rewriting again mints a THIRD same-content commit that the
+ * reachability gate then cannot find on the remote and (wrongly) demands be
+ * published. Real case: origin/main=83ea6c68, sibling published 67dab44d, the
+ * Refinery rewrote the branch commit into d8e3acb7 — d8e3acb7's tree was
+ * byte-identical to 67dab44d's, yet it was not reachable from origin/main.
+ *
+ * This helper detects that case BEFORE any rewrite: it computes the tree the
+ * rebase would produce (`merge-tree --write-tree`) and looks for a published
+ * commit on the remote main ref that (a) descends from the base-side commit and
+ * (b) has exactly that tree. Both conditions together make converging the
+ * gitlink to the published commit strictly equivalent to rewriting it — a
+ * genuine divergence (different content) never matches, so legitimate rewrites
+ * are untouched. Any git failure returns undefined (fail-safe: the caller falls
+ * through to the historical rebase path).
+ */
+export function findEquivalentPublishedSubmoduleCommit(
+    submoduleRepoPath: string,
+    baseCommit: string,
+    branchCommit: string,
+    remoteRef: string,
+): string | undefined {
+    try {
+        const mergeTreeOut = execFileSync(GIT, ['merge-tree', '--write-tree', baseCommit, branchCommit], {
+            cwd: submoduleRepoPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const mergedTree = mergeTreeOut.trim().split(/\s+/)[0] || '';
+        if (!mergedTree) return undefined;
+        const candidates = execFileSync(GIT, ['rev-list', '--max-count=100', remoteRef, '--not', baseCommit], {
+            cwd: submoduleRepoPath, encoding: 'utf8',
+        }).split('\n').map(s => s.trim()).filter(Boolean);
+        for (const candidate of candidates) {
+            // The published commit must descend from the base side, or converging
+            // the gitlink to it would break the linear history the downstream
+            // patch-equivalence gate relies on.
+            try {
+                execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, candidate], { cwd: submoduleRepoPath, stdio: 'ignore' });
+            } catch {
+                continue;
+            }
+            const tree = execFileSync(GIT, ['rev-parse', `${candidate}^{tree}`], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+            if (tree === mergedTree) return candidate;
+        }
+    } catch { /* conflicted merge-tree / missing objects → no equivalence evidence */ }
+    return undefined;
+}
+
 export type SubmoduleGitlinkConvergeResult = {
     /** True when at least one diverged gitlink submodule was rebased onto its base-side commit. */
     converged: boolean;
@@ -1459,7 +1552,7 @@ export type SubmoduleGitlinkConvergeResult = {
         baseCommit?: string;
         branchCommit?: string;
         rebasedCommit?: string;
-        action: 'rebased' | 'skipped_not_diverged' | 'rebase_conflict' | 'rebase_dropped_branch_commits';
+        action: 'rebased' | 'converged_to_published' | 'skipped_not_diverged' | 'rebase_conflict' | 'rebase_dropped_branch_commits';
     }>;
 };
 
@@ -1498,6 +1591,12 @@ function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmoduleRepo
  * {@link rootRebaseResolvingGitlinks}). This automates the documented manual
  * strict-fast-forward bypass and keeps the landed submodule history linear rather
  * than masking a divergence.
+ *
+ * Gap #1 short-circuit: before rewriting, each diverged submodule's origin is
+ * fetched and checked for an ALREADY-PUBLISHED equivalent commit (identical
+ * merged tree, descending from the base side — the parallel-refine twin). When
+ * one exists the gitlink converges to the published commit (`converged_to_published`)
+ * and no rewrite happens; see {@link findEquivalentPublishedSubmoduleCommit}.
  *
  * Fail-safe by construction: it only touches gitlinks that are a genuine sibling
  * divergence (both commits local, neither an ancestor of the other, shared merge
@@ -1547,6 +1646,28 @@ export function convergeDivergedSubmoduleGitlinks(
             continue;
         }
         sawDiverged = true;
+
+        // Gap #1 (parallel-refine twin): BEFORE rewriting the branch side, check
+        // whether the submodule's published origin already carries an equivalent
+        // commit — a sibling job may have merged the same content and pushed it
+        // (same tree, different SHA). Converging the gitlink to that published
+        // commit keeps the landed history on public commits instead of minting a
+        // local same-content twin that the reachability gate would then (wrongly)
+        // demand be pushed. Best-effort fetch; any failure leaves no evidence and
+        // the rewrite path below runs unchanged.
+        try {
+            execFileSync(GIT, ['-c', 'protocol.file.allow=always', 'fetch', '-q', 'origin'], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'] });
+        } catch { /* offline / no origin → no published-equivalence evidence */ }
+        const remoteMainRef = resolveSubmoduleRemoteMainRef(submoduleRepoPath);
+        const publishedEquivalent = remoteMainRef
+            ? findEquivalentPublishedSubmoduleCommit(submoduleRepoPath, baseCommit, branchCommit, remoteMainRef)
+            : undefined;
+        if (publishedEquivalent) {
+            try { execFileSync(GIT, ['checkout', '-q', '--detach', publishedEquivalent], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'] }); } catch { /* the root rebase re-detaches when resolving the gitlink */ }
+            gitlinks.push({ path, baseCommit, branchCommit, rebasedCommit: publishedEquivalent, action: 'converged_to_published' });
+            resolutions.push({ path, baseCommit, branchCommit, rebasedCommit: publishedEquivalent });
+            continue;
+        }
 
         // Rebase the branch-side submodule commit(s) onto the base-side commit in a
         // DETACHED HEAD (never move a submodule branch ref). A conflict aborts and
@@ -2101,6 +2222,30 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             await runGit(submodulePath, ['cat-file', '-e', `${commit}^{commit}`]);
             return true;
         };
+        /**
+         * Gap #2 (parallel-refine twin): a gitlink commit can be unreachable from
+         * origin/<default> yet have an EQUIVALENT commit already published there —
+         * a sibling job merged the same content and pushed it (same tree, different
+         * SHA; real case: local twin d8e3acb7 vs published 67dab44d, identical
+         * trees). Publishing the twin would mint duplicate history; the remedy is
+         * to converge the gitlink to the published commit. Detected by tree
+         * equality against recent commits on the freshly-fetched remote ref.
+         * Fail-safe: any git error (commit not local, ref missing) returns
+         * undefined and the historical publish-required path runs unchanged.
+         */
+        const findEquivalentPublishedCommit = async (submodulePath: string, commit: string, remoteRef: string): Promise<string | undefined> => {
+            try {
+                const targetTree = (await runGit(submodulePath, ['rev-parse', `${commit}^{tree}`])).trim();
+                if (!targetTree) return undefined;
+                const candidates = (await runGit(submodulePath, ['rev-list', '--max-count=100', remoteRef]))
+                    .split('\n').map(s => s.trim()).filter(Boolean);
+                for (const candidate of candidates) {
+                    const tree = (await runGit(submodulePath, ['rev-parse', `${candidate}^{tree}`])).trim();
+                    if (tree === targetTree) return candidate;
+                }
+            } catch { /* no equivalence evidence */ }
+            return undefined;
+        };
 
         const treeOutput = await runGit(repoRoot, ['ls-tree', '-r', '-z', mergedTree]);
         const gitlinks = treeOutput
@@ -2197,6 +2342,28 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                     } catch (e: any) {
                         entry.remoteReachable = false;
                         entry.remoteMainReachable = false;
+                        // Gap #2: before prescribing "publish", check whether the freshly
+                        // fetched origin/<default> already carries an EQUIVALENT commit
+                        // (identical tree) — the parallel-refine twin case. Publishing a
+                        // same-content twin is wrong; converging the gitlink to the
+                        // published commit is the remedy. Only the ancestry-only verdict
+                        // ("not an ancestor") reaches here, so this is exactly the stale /
+                        // twin misjudgment the publish prescription got wrong.
+                        const equivalentPublished = await findEquivalentPublishedCommit(
+                            submodulePath,
+                            gitlink.commit,
+                            `refs/remotes/origin/${submoduleDefaultBranch}`,
+                        );
+                        if (equivalentPublished) {
+                            entry.equivalentPublishedCommit = equivalentPublished;
+                            entry.publishRequired = false;
+                            entry.error = `Submodule commit ${gitlink.commit} is not reachable from origin/${submoduleDefaultBranch}, but an equivalent commit ${equivalentPublished} (identical tree) is already published there; converge the gitlink to the published commit instead of publishing a same-content twin.`;
+                            if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                                entry.autoPublishAllowed = true;
+                                entry.autoPublishAttempted = false;
+                                entry.autoPublishSkippedReason = `an equivalent commit (${equivalentPublished}) is already published on origin/${submoduleDefaultBranch}; publishing a same-content twin is wrong — converge the gitlink to the published commit instead`;
+                            }
+                        } else {
                         entry.publishRequired = true;
                         const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
                         entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
@@ -2228,6 +2395,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                             entry.autoPublishAttempted = false;
                             entry.autoPublishSkippedReason = entry.autoPublishSkippedReason
                                 || `candidate commit is not reachable in the source checkout or worktree submodule, so Refinery cannot push it to origin/${submoduleDefaultBranch}`;
+                        }
                         }
                     }
                 } catch (e: any) {

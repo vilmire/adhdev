@@ -387,6 +387,36 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             if (resolved.kind === 'terminal') return resolved.result;
             const ctx = resolved.ctx;
 
+            // DS2 (widened): acquire the repoRoot+baseBranch refinement lease for the
+            // WHOLE pipeline, not just the merge window. Previously the lease covered
+            // only merge/finalize, so a sibling job could move the base while this job
+            // was still in sync_base/validation/patch_equivalence/submodule_reachability
+            // — the second job then validated against a base that no longer existed and
+            // died with a ghost needs_rebase_with_conflicts. A contender now terminates
+            // retryable (base_locked) up front and the coordinator retries after the
+            // holder frees. The merge stage re-checks the same holder re-entrantly.
+            const leaseKey = `${ctx.repoRoot}::${ctx.baseBranch}`;
+            const leaseHolder = buildRefineJobKey(self, meshId, nodeId);
+            if (self.refineBaseLeases.has(leaseKey) && self.refineBaseLeases.get(leaseKey) !== leaseHolder) {
+                recordMeshRefineStage(refineStages, 'base_lease', 'skipped', Date.now(), {
+                    leaseKey, heldBy: self.refineBaseLeases.get(leaseKey), retryable: true,
+                });
+                return {
+                    success: false,
+                    code: 'base_locked',
+                    convergenceStatus: 'blocked_review',
+                    retryable: true,
+                    error: `Another refine holds the base lease for ${ctx.baseBranch} in this repo; retry after it completes.`,
+                    branch: ctx.branch,
+                    into: ctx.baseBranch,
+                    refineStages,
+                    finalBranchConvergenceState: {
+                        branch: ctx.branch, baseBranch: ctx.baseBranch, merged: false, removed: false, status: 'blocked_review',
+                    },
+                };
+            }
+            self.refineBaseLeases.set(leaseKey, leaseHolder);
+            try {
             // DS2: sync_base runs BEFORE validation. A branch that is behind base — whether
             // strictly behind (fast-forwardable) or DIVERGED (ahead>0 AND behind>0, the
             // laggard the old ancestor-only rebase missed) — is auto-rebased onto the pinned
@@ -408,6 +438,9 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
 
             const merge = await refineMergeAndFinalizeStage(self, ctx);
             return (merge as { kind: 'terminal'; result: CommandRouterResult }).result;
+            } finally {
+                if (self.refineBaseLeases.get(leaseKey) === leaseHolder) self.refineBaseLeases.delete(leaseKey);
+            }
         } catch (e: any) {
             return { success: false, error: e.message, refineStages };
         }
@@ -1117,6 +1150,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 unreachable: submoduleReachability.unreachable.map(entry => ({
                     path: entry.path,
                     commit: entry.commit,
+                    equivalentPublishedCommit: entry.equivalentPublishedCommit,
                     publishRequired: entry.publishRequired === true,
                     autoPublishAllowed: entry.autoPublishAllowed,
                     autoPublishAttempted: entry.autoPublishAttempted,
@@ -1135,15 +1169,30 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
             });
             if (submoduleReachability.status === 'failed') {
                 const nextStep = buildSubmodulePublishRequiredNextStep(submoduleReachability.unreachable);
+                // Gap #2: when EVERY unreachable gitlink has an already-published
+                // equivalent (identical tree) on the submodule remote main, the
+                // blockage is not "publish needed" but "converge to the published
+                // twin" — surface that distinct reason and guidance.
+                const convergeToPublished = submoduleReachability.unreachable.length > 0
+                    && submoduleReachability.unreachable.every(entry => !!entry.equivalentPublishedCommit);
+                const blockedReason = convergeToPublished ? 'submodule_converge_to_published' : 'submodule_publish_required';
                 return { kind: 'terminal', result: {
                     success: false,
                     code: 'submodule_reachability_failed',
                     convergenceStatus: 'blocked_review',
-                    publishRequired: true,
-                    blockedReason: 'submodule_publish_required',
-                    error: 'Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote main branch; merge/refine cleanup was not attempted.',
+                    publishRequired: !convergeToPublished,
+                    ...(convergeToPublished ? { convergeToPublished: true } : {}),
+                    blockedReason,
+                    error: convergeToPublished
+                        ? 'Refinery submodule reachability preflight found submodule gitlink commit(s) that are not reachable from their configured remote main branch, but each has an equivalent commit (identical tree) already published there; converge the gitlink(s) to the published commit(s) instead of publishing same-content twins. Merge/refine cleanup was not attempted.'
+                        : 'Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote main branch; merge/refine cleanup was not attempted.',
                     nextStep,
-                    nextSteps: [
+                    nextSteps: convergeToPublished ? [
+                        'Do NOT publish the local submodule commit(s): an equivalent commit (identical tree) is already published on the submodule remote main branch for every unreachable gitlink.',
+                        'Retarget each submodule gitlink to the already-published equivalent commit shown in the evidence (equivalentPublishedCommit), commit the root pointer update, and push the submodule checkout to that commit.',
+                        'Rerun mesh_refine_node after the gitlink points at the published commit.',
+                        'Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.',
+                    ] : [
                         'Ask the user for explicit approval before pushing or publishing any submodule commit.',
                         'Push/publish each unreachable submodule commit to the configured submodule remote main branch shown in the evidence.',
                         'Rerun mesh_refine_node after remote reachability is confirmed.',
@@ -1152,6 +1201,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                     unreachableSubmoduleCommits: submoduleReachability.unreachable.map(entry => ({
                         path: entry.path,
                         commit: entry.commit,
+                        equivalentPublishedCommit: entry.equivalentPublishedCommit,
                         remote: entry.remote,
                         remoteUrl: entry.remoteUrl,
                         remoteReachable: entry.remoteReachable,
@@ -1180,7 +1230,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 patchEquivalence: 'passed',
                 submoduleReachability: 'failed',
                 status: 'blocked_review',
-                reason: 'submodule_publish_required',
+                reason: blockedReason,
                 nextStep,
                     },
                 } };
@@ -1362,10 +1412,17 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
             // baseHead and then race their merges. The batch path is already sequential, so
             // this only contends across independent async jobs. If another refine holds it,
             // terminate retryable (base_locked) — the coordinator/batch retries after it
-            // frees. Released in the finally below.
+            // frees. Released in the finally below. Note the pipeline-level lease (acquired
+            // in executeMeshRefineNodeSynchronously right after resolve_refs) already covers
+            // this window; this stage-level acquire is the fallback for direct stage callers
+            // and is re-entrant for the same holder.
             const leaseKey = `${repoRoot}::${baseBranch}`;
             const leaseHolder = buildRefineJobKey(self, meshId, nodeId);
-            if (self.refineBaseLeases.has(leaseKey) && self.refineBaseLeases.get(leaseKey) !== leaseHolder) {
+            // Re-entrant: executeMeshRefineNodeSynchronously already holds this lease
+            // for the whole pipeline (DS2 widened) — a same-holder arrival just runs
+            // the locked core without re-acquiring (and must NOT release it here).
+            const alreadyHeld = self.refineBaseLeases.get(leaseKey) === leaseHolder;
+            if (!alreadyHeld && self.refineBaseLeases.has(leaseKey)) {
                 recordMeshRefineStage(refineStages, 'base_lease', 'skipped', Date.now(), {
                     leaseKey, heldBy: self.refineBaseLeases.get(leaseKey), retryable: true,
                 });
@@ -1386,11 +1443,11 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
                     },
                 } };
             }
-            self.refineBaseLeases.set(leaseKey, leaseHolder);
+            if (!alreadyHeld) self.refineBaseLeases.set(leaseKey, leaseHolder);
             try {
                 return await runRefineMergeAndFinalizeLocked(self, ctx);
             } finally {
-                if (self.refineBaseLeases.get(leaseKey) === leaseHolder) self.refineBaseLeases.delete(leaseKey);
+                if (!alreadyHeld && self.refineBaseLeases.get(leaseKey) === leaseHolder) self.refineBaseLeases.delete(leaseKey);
             }
     }
 
