@@ -2289,11 +2289,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                     entry.localReachable = false;
                     if (options.allowAutoPublishSubmoduleMainCommits === true && options.worktreeRoot) {
                         try {
-                            const imported = await importCommitFromWorktreeSubmodule(
-                                submodulePath,
-                                pathResolve(options.worktreeRoot, gitlink.path),
-                                gitlink.commit,
-                            );
+                            const imported = await importCommitFromWorktreeSubmodule(submodulePath, pathResolve(options.worktreeRoot, gitlink.path), gitlink.commit);
                             if (imported) {
                                 entry.localReachable = true;
                                 entry.importedFromWorktree = true;
@@ -2349,11 +2345,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                         // published commit is the remedy. Only the ancestry-only verdict
                         // ("not an ancestor") reaches here, so this is exactly the stale /
                         // twin misjudgment the publish prescription got wrong.
-                        const equivalentPublished = await findEquivalentPublishedCommit(
-                            submodulePath,
-                            gitlink.commit,
-                            `refs/remotes/origin/${submoduleDefaultBranch}`,
-                        );
+                        const equivalentPublished = await findEquivalentPublishedCommit(submodulePath, gitlink.commit, `refs/remotes/origin/${submoduleDefaultBranch}`);
                         if (equivalentPublished) {
                             entry.equivalentPublishedCommit = equivalentPublished;
                             entry.publishRequired = false;
@@ -2364,38 +2356,38 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                                 entry.autoPublishSkippedReason = `an equivalent commit (${equivalentPublished}) is already published on origin/${submoduleDefaultBranch}; publishing a same-content twin is wrong — converge the gitlink to the published commit instead`;
                             }
                         } else {
-                        entry.publishRequired = true;
-                        const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
-                        entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
-                        if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
-                            entry.autoPublishAllowed = true;
-                            entry.autoPublishAttempted = true;
-                            try {
-                                const publish = await publishCommitToRemoteMain(submodulePath, gitlink.commit, submoduleDefaultBranch);
-                                entry.autoPublishRefspec = publish.refspec;
-                                entry.publishStdout = truncateValidationOutput(publish.stdout);
-                                entry.publishStderr = truncateValidationOutput(publish.stderr);
-                                entry.autoPublishSucceeded = true;
-                                await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
-                                entry.fetchedFromOrigin = true;
-                                entry.remoteReachable = true;
-                                entry.remoteMainReachable = true;
-                                entry.autoPublishVerified = true;
-                                entry.publishRequired = false;
-                                entry.reachable = true;
-                                entry.error = undefined;
-                            } catch (publishError: any) {
-                                entry.autoPublishSucceeded = false;
-                                entry.autoPublishVerified = false;
-                                const publishDetails = truncateValidationOutput(publishError?.stderr || publishError?.message || String(publishError));
-                                entry.error = `Submodule auto-publish to origin/${submoduleDefaultBranch} failed or could not be verified: ${publishDetails}`;
+                            entry.publishRequired = true;
+                            const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                            entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
+                            if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
+                                entry.autoPublishAllowed = true;
+                                entry.autoPublishAttempted = true;
+                                try {
+                                    const publish = await publishCommitToRemoteMain(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                                    entry.autoPublishRefspec = publish.refspec;
+                                    entry.publishStdout = truncateValidationOutput(publish.stdout);
+                                    entry.publishStderr = truncateValidationOutput(publish.stderr);
+                                    entry.autoPublishSucceeded = true;
+                                    await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                                    entry.fetchedFromOrigin = true;
+                                    entry.remoteReachable = true;
+                                    entry.remoteMainReachable = true;
+                                    entry.autoPublishVerified = true;
+                                    entry.publishRequired = false;
+                                    entry.reachable = true;
+                                    entry.error = undefined;
+                                } catch (publishError: any) {
+                                    entry.autoPublishSucceeded = false;
+                                    entry.autoPublishVerified = false;
+                                    const publishDetails = truncateValidationOutput(publishError?.stderr || publishError?.message || String(publishError));
+                                    entry.error = `Submodule auto-publish to origin/${submoduleDefaultBranch} failed or could not be verified: ${publishDetails}`;
+                                }
+                            } else if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                                entry.autoPublishAllowed = true;
+                                entry.autoPublishAttempted = false;
+                                entry.autoPublishSkippedReason = entry.autoPublishSkippedReason
+                                    || `candidate commit is not reachable in the source checkout or worktree submodule, so Refinery cannot push it to origin/${submoduleDefaultBranch}`;
                             }
-                        } else if (options.allowAutoPublishSubmoduleMainCommits === true) {
-                            entry.autoPublishAllowed = true;
-                            entry.autoPublishAttempted = false;
-                            entry.autoPublishSkippedReason = entry.autoPublishSkippedReason
-                                || `candidate commit is not reachable in the source checkout or worktree submodule, so Refinery cannot push it to origin/${submoduleDefaultBranch}`;
-                        }
                         }
                     }
                 } catch (e: any) {
