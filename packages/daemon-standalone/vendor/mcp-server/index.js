@@ -3345,10 +3345,10 @@ async function collectRelatedRepoStatuses(ctx, node) {
   return results;
 }
 function readProviderPriority(policy) {
+  const fromSlots = deriveProviderPriorityFromSlots(policy?.slots);
+  if (fromSlots.length) return fromSlots;
   const raw = policy?.providerPriority;
-  const explicit = Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
-  if (explicit.length) return explicit;
-  return deriveProviderPriorityFromSlots(policy?.slots);
+  return Array.isArray(raw) ? raw.map((type) => typeof type === "string" ? type.trim() : "").filter(Boolean) : [];
 }
 function readNodeSupportedProviders(policy) {
   const seen = /* @__PURE__ */ new Set();
@@ -7060,6 +7060,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
 }
 
 // src/tools/mesh-tools-session.ts
+var import_daemon_core7 = require("@adhdev/daemon-core");
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
   return {
@@ -7733,6 +7734,7 @@ async function meshLaunchSession(ctx, args) {
   {
     const requestedType = typeof args.type === "string" && args.type.trim() ? args.type.trim() : "";
     let resolvedProviderType = requestedType;
+    let explicitTypeQuotaWarning = null;
     if (requestedType) {
       const slotProviders = normalizeNodeCapabilitySlots(node.policy?.slots).map((s) => s.provider);
       if (slotProviders.length && !slotProviders.includes(requestedType)) {
@@ -7745,6 +7747,19 @@ async function meshLaunchSession(ctx, args) {
           supportedProviders: slotProviders
         }, null, 2);
       }
+      const explicitBlock = (0, import_daemon_core7.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+      if (explicitBlock) {
+        explicitTypeQuotaWarning = {
+          quotaWarning: `Provider '${requestedType}' on node '${args.node_id}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly \u2014 the session may fail immediately if the provider rejects on quota.`,
+          quotaBlock: {
+            providerType: requestedType,
+            reason: explicitBlock.reason,
+            window: explicitBlock.window,
+            remainingPercent: explicitBlock.remainingPercent,
+            thresholdPercent: explicitBlock.thresholdPercent
+          }
+        };
+      }
     }
     if (!resolvedProviderType) {
       const providerPriority = readProviderPriority(node.policy);
@@ -7752,6 +7767,7 @@ async function meshLaunchSession(ctx, args) {
         return JSON.stringify({ success: false, error: missingProviderPriorityMessage(args.node_id) });
       }
       const failed = [];
+      const detectedCandidates = [];
       let unreachableError = null;
       for (const providerType of providerPriority) {
         let detectedPayload;
@@ -7763,10 +7779,32 @@ async function meshLaunchSession(ctx, args) {
           break;
         }
         if (detectedPayload?.success && detectedPayload?.detected) {
-          resolvedProviderType = providerType;
-          break;
+          if (!detectedCandidates.includes(providerType)) detectedCandidates.push(providerType);
+          continue;
         }
         failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
+      }
+      if (detectedCandidates.length) {
+        const ranked = (0, import_daemon_core7.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+        if (ranked.clear.length) {
+          resolvedProviderType = ranked.clear[0];
+        } else {
+          const detail = ranked.gated.map((g) => `${g.providerType}: ${g.block.reason}`).join("; ");
+          return JSON.stringify({
+            success: false,
+            code: "mesh_all_providers_quota_gated",
+            error: `Every detected provider on node '${args.node_id}' is quota-gated (${detail}). This is a WAIT, not a misconfiguration \u2014 the quota windows reset on their own.`,
+            nodeId: args.node_id,
+            gated: ranked.gated.map((g) => ({
+              providerType: g.providerType,
+              reason: g.block.reason,
+              window: g.block.window,
+              remainingPercent: g.block.remainingPercent,
+              thresholdPercent: g.block.thresholdPercent
+            })),
+            nextAction: `Enqueue the work (mesh_enqueue_task) so the drain claims it when a window resets, or launch on a node whose providers still have quota. Retrying mesh_launch_session immediately will hit the same gate.`
+          }, null, 2);
+        }
       }
       if (!resolvedProviderType) {
         if (unreachableError) {
@@ -7896,6 +7934,7 @@ async function meshLaunchSession(ctx, args) {
       ...launchPayload,
       resolvedProviderType,
       ...providerSessionId ? { providerSessionId } : {},
+      ...explicitTypeQuotaWarning ?? {},
       queueTrigger,
       ...buildQueueTriggerGuidance(queueTrigger)
     }, null, 2);

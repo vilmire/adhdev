@@ -77,6 +77,12 @@ import type {
     MeshContext,
 } from './mesh-tools-internal.js';
 import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
+// QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
+// queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
+// rather than reimplemented, so the two dispatch paths can never disagree about
+// what "out of quota" means, and so the fail-open contract has exactly one
+// definition. See mesh-quota-routing.ts.
+import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '@adhdev/daemon-core';
 
 
 /**
@@ -1057,6 +1063,9 @@ export async function meshLaunchSession(
     {
         const requestedType = typeof args.type === 'string' && args.type.trim() ? args.type.trim() : '';
         let resolvedProviderType = requestedType;
+        // Set when an EXPLICITLY requested provider is quota-blocked: the launch still
+        // proceeds (operator override) but the response carries the warning.
+        let explicitTypeQuotaWarning: Record<string, unknown> | null = null;
         if (requestedType) {
             // PROVIDER-TYPE-HONORED: an explicit type is validated ONLY against the node's
             // capability slots (policy.slots) — the single authoritative capability list
@@ -1079,6 +1088,28 @@ export async function meshLaunchSession(
                     supportedProviders: slotProviders,
                 }, null, 2);
             }
+            // QUOTA GATE (explicit type). An explicitly requested provider is an
+            // operator OVERRIDE, so a measured block does not fail the launch closed —
+            // it is surfaced as a WARNING on an otherwise normal launch. Fail-closing
+            // here would contradict the contract directly above (an explicit type may
+            // name any provider on a slots-less node; the daemon-side launch is the
+            // real gate) and would leave an operator no way to run a provider whose
+            // snapshot is wrong. But launching SILENTLY is what produced the 403: the
+            // caller could not tell an exhausted provider from a healthy one. Fail-open
+            // is inherited unchanged — only a fresh measured block warns at all.
+            const explicitBlock = evaluateProviderQuotaGate(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+            if (explicitBlock) {
+                explicitTypeQuotaWarning = {
+                    quotaWarning: `Provider '${requestedType}' on node '${args.node_id}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly — the session may fail immediately if the provider rejects on quota.`,
+                    quotaBlock: {
+                        providerType: requestedType,
+                        reason: explicitBlock.reason,
+                        window: explicitBlock.window,
+                        remainingPercent: explicitBlock.remainingPercent,
+                        thresholdPercent: explicitBlock.thresholdPercent,
+                    },
+                };
+            }
         }
         if (!resolvedProviderType) {
             const providerPriority = readProviderPriority(node.policy);
@@ -1098,7 +1129,30 @@ export async function meshLaunchSession(
             //       the next provider); a THROW means the node itself is unreachable (peer not
             //       connected / offline / relay timeout) — every remaining provider would fail
             //       identically, so break immediately and fail fast with a node-unreachable error.
+            // QUOTA GATE (manual-launch path). The auto-launch/queue-drain path
+            // (daemon-core resolveUsableProvider) has always run the gate; THIS path
+            // never did — it consulted detect_provider (PATH/install probe) alone and
+            // never read nodeFacts, so a provider whose account was measurably out of
+            // quota was launched anyway and died immediately (kimi at 1% weekly → 403).
+            // The same node reached through the queue drain was correctly diverted, so
+            // which path dispatched decided whether the quota was honoured.
+            //
+            // Structured exactly like the auto-launch loop: enumerate EVERY detected
+            // candidate first, then let the gate split and rank them, so a gated first
+            // choice falls THROUGH to the node's next provider instead of failing the
+            // launch (the "dynamic provider priority by quota" behaviour).
+            //
+            // FAIL-OPEN is inherited from evaluateProviderQuotaGate unchanged: a missing
+            // snapshot, a stale one, quota tracking switched off, 'expired-token' and
+            // every other transient failure kind are NEVER blocked — they merely sort
+            // into the unknown group and stay launchable. Only a FRESH measured block
+            // (an 'ok' snapshot under a window threshold, or the provider's own
+            // 'quota-exhausted' verdict) diverts. That is what keeps a single-provider
+            // node off the self-healing deadlock: a CLI owning its own token refresh
+            // must still launch when its token has expired, or the token can never be
+            // refreshed. See mesh-quota-routing.ts's module header.
             const failed: string[] = [];
+            const detectedCandidates: string[] = [];
             let unreachableError: string | null = null;
             for (const providerType of providerPriority) {
                 let detectedPayload: any;
@@ -1112,10 +1166,38 @@ export async function meshLaunchSession(
                     break;
                 }
                 if (detectedPayload?.success && detectedPayload?.detected) {
-                    resolvedProviderType = providerType;
-                    break;
+                    if (!detectedCandidates.includes(providerType)) detectedCandidates.push(providerType);
+                    continue;
                 }
                 failed.push(`${providerType}: ${detectedPayload?.error || 'not detected'}`);
+            }
+            if (detectedCandidates.length) {
+                const ranked = rankProvidersByQuotaGate(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+                if (ranked.clear.length) {
+                    resolvedProviderType = ranked.clear[0];
+                } else {
+                    // Every detected provider is measurably out of quota. This is a WAIT,
+                    // not a configuration error: the windows reset on their own, so the
+                    // response says so rather than presenting the node as broken. Reported
+                    // distinctly from "not detected" so a coordinator can tell "no quota
+                    // right now" from "nothing installed" — conflating them would send a
+                    // coordinator chasing an install problem that does not exist.
+                    const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
+                    return JSON.stringify({
+                        success: false,
+                        code: 'mesh_all_providers_quota_gated',
+                        error: `Every detected provider on node '${args.node_id}' is quota-gated (${detail}). This is a WAIT, not a misconfiguration — the quota windows reset on their own.`,
+                        nodeId: args.node_id,
+                        gated: ranked.gated.map(g => ({
+                            providerType: g.providerType,
+                            reason: g.block.reason,
+                            window: g.block.window,
+                            remainingPercent: g.block.remainingPercent,
+                            thresholdPercent: g.block.thresholdPercent,
+                        })),
+                        nextAction: `Enqueue the work (mesh_enqueue_task) so the drain claims it when a window resets, or launch on a node whose providers still have quota. Retrying mesh_launch_session immediately will hit the same gate.`,
+                    }, null, 2);
+                }
             }
             if (!resolvedProviderType) {
                 if (unreachableError) {
@@ -1302,6 +1384,7 @@ export async function meshLaunchSession(
             ...launchPayload,
             resolvedProviderType,
             ...(providerSessionId ? { providerSessionId } : {}),
+            ...(explicitTypeQuotaWarning ?? {}),
             queueTrigger,
             ...buildQueueTriggerGuidance(queueTrigger),
         }, null, 2);

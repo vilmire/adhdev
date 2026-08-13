@@ -116,9 +116,25 @@ test('readiness: slots-only node is launchReady via the slots-derived priority',
   assert.deepEqual(readiness.providerPriority, ['claude-cli', 'codex-cli']);
 });
 
-test('readiness: explicit providerPriority wins over the slots-derived order', () => {
+// PRECEDENCE FLIPPED (launch/auto-launch path agreement): slots are the
+// authoritative capability list (ORCHESTRATION_NODE_SLOTS.md) and the auto-launch
+// path resolves from them, so the manual path must too — otherwise the two
+// dispatch paths pick DIFFERENT first providers for the same node. This test
+// previously asserted the opposite precedence; the assertion was the pin on the
+// mismatch, so it flips with the behaviour. providerPriority survives as the
+// legacy fallback (covered by the next test).
+test('readiness: slots win over the legacy providerPriority order', () => {
   const node = { id: 'n', policy: { providerPriority: ['codex-cli'], slots: [{ provider: 'claude-cli' }] } } as any;
-  assert.deepEqual(readProviderPriority(node.policy), ['codex-cli']);
+  assert.deepEqual(readProviderPriority(node.policy), ['claude-cli']);
+  assert.equal(getNodeLaunchReadiness(node).launchReady, true);
+});
+
+// LEGACY-NODE FALLBACK: providerPriority is NOT removed. A node that declares no
+// slots has it as its only preference signal — dropping the fallback would report
+// such a node as missing_provider_priority (unlaunchable).
+test('readiness: slots-less legacy node still resolves from providerPriority', () => {
+  const node = { id: 'n', policy: { providerPriority: ['codex-cli', 'claude-cli'] } } as any;
+  assert.deepEqual(readProviderPriority(node.policy), ['codex-cli', 'claude-cli']);
   assert.equal(getNodeLaunchReadiness(node).launchReady, true);
 });
 

@@ -1992,16 +1992,35 @@ export function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): Lo
     return node;
 }
 
+/**
+ * The node's provider preference order for a type-omitted manual launch.
+ *
+ * SLOTS FIRST, providerPriority as the LEGACY FALLBACK — deliberately aligned
+ * with the auto-launch/queue-drain path (daemon-core resolveUsableProvider →
+ * resolveNodeCapabilitySlots), which reads `policy.slots` as the authoritative
+ * capability list (ORCHESTRATION_NODE_SLOTS.md) and only derives from
+ * providerPriority when a node declares no slots at all.
+ *
+ * WHY THE ORDER WAS FLIPPED: this function used to prefer providerPriority, so
+ * on a node declaring BOTH, the two dispatch paths could pick a DIFFERENT first
+ * provider for the same node — auto-launch honouring the slot order, a manual
+ * mesh_launch_session honouring the legacy hint. Slots are also the surface the
+ * fail-closed explicit-type gate above validates against, so resolving a
+ * type-omitted launch from a different list than the one that authorizes an
+ * explicit type was incoherent.
+ *
+ * providerPriority is NOT removed: a legacy node that declares no slots has it
+ * as its only preference signal, and dropping the fallback would report such a
+ * node as missing_provider_priority (unlaunchable). Slots absent → behaviour is
+ * byte-identical to before.
+ */
 export function readProviderPriority(policy: unknown): string[] {
+    const fromSlots = deriveProviderPriorityFromSlots((policy as any)?.slots);
+    if (fromSlots.length) return fromSlots;
     const raw = (policy as any)?.providerPriority;
-    const explicit = Array.isArray(raw)
+    return Array.isArray(raw)
         ? raw.map((type: unknown) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
         : [];
-    if (explicit.length) return explicit;
-    // Slots order = preference (ORCHESTRATION_NODE_SLOTS.md): a node that declares
-    // capability slots but no explicit providerPriority is still launchable — derive
-    // the priority order from the slots rather than reporting missing_provider_priority.
-    return deriveProviderPriorityFromSlots((policy as any)?.slots);
 }
 
 /**

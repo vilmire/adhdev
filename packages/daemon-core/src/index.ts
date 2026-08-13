@@ -341,6 +341,15 @@ export type { MeshSchedulingRuntime, MeshNodeSchedulingRuntime, MeshNodeProvider
 // ── Mesh Quota Routing (observability: last ranking decision per node) ──
 export { getLastQuotaRanking } from './mesh/mesh-quota-routing.js';
 export type { LastQuotaRankingRecord, ProviderQuotaRiskSnapshot } from './mesh/mesh-quota-routing.js';
+// The GATE itself, for the MANUAL launch path (mcp-server mesh_launch_session).
+// The auto-launch/queue-drain path calls these in-process; the MCP coordinator
+// runs in a SEPARATE process and reaches them only through this barrel, so a
+// missing export here is what let the manual path launch onto an exhausted
+// provider (the kimi 403). Both dispatch paths must consume the same judgement
+// module — see mesh-quota-routing.ts's fail-open contract, which the manual
+// path inherits verbatim.
+export { evaluateProviderQuotaGate, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates } from './mesh/mesh-quota-routing.js';
+export type { ProviderQuotaGateBlock, ProviderQuotaGateRanking } from './mesh/mesh-quota-routing.js';
 
 // ── Mesh Host Ownership ──
 export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';
