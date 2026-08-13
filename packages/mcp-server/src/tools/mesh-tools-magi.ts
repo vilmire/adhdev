@@ -2399,6 +2399,8 @@ async function collectMagiResponses(
                 agentType: task.assignedProviderType,
                 action: 'send_chat',
                 message,
+                // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+                dispatchSource: 'mesh-tools-magi:sendKindRetry',
                 meshContext: {
                     meshId: ctx.mesh.id,
                     nodeId: task.assignedNodeId,

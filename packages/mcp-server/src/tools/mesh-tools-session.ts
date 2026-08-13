@@ -653,6 +653,8 @@ export async function meshSendTask(
                 providerType: resolvedProviderType,
                 action: 'send_chat',
                 message: message,
+                // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+                dispatchSource: 'mesh-tools-session:mesh_send_task:direct',
                 meshContext: {
                     meshId: ctx.mesh.id,
                     nodeId: args.node_id,

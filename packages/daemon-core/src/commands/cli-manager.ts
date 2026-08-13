@@ -2011,6 +2011,14 @@ export class DaemonCliManager {
                         ? (meshContext as any).taskId as string
                         : undefined;
                     const forceSend = args?.force === true || args?.forceSend === true;
+                    // DISPATCH-SOURCE-TRACE: every agent_command send_chat issuer tags its
+                    // call site (args.dispatchSource) so a duplicate/unexpected inject can
+                    // be attributed from the daemon log WITHOUT timing inference. Logged
+                    // before the idempotency guard so suppressed duplicates are traced too.
+                    // 'untagged' itself is a signal: an issuer this change did not cover.
+                    const dispatchSource = typeof (args as any)?.dispatchSource === 'string' && (args as any).dispatchSource.trim()
+                        ? (args as any).dispatchSource.trim() : 'untagged';
+                    LOG.info('MeshDispatch', `agent_command send_chat on session ${key}${meshTaskId ? ` task=${meshTaskId}` : ''} dispatchSource=${dispatchSource}`);
                     // PTY-SUBMIT-IDEMPOTENCY: run the duplicate-submission guard BEFORE the
                     // adapter write — this is the last funnel before the PTY. forceSend is an
                     // explicit operator/coordinator override and bypasses the guard.

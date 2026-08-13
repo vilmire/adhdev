@@ -1716,6 +1716,8 @@ export async function ipcDispatchToRemoteAgent(
             cliType: resolvedProviderType,
             action: 'send_chat',
             message: args.message,
+            // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+            dispatchSource: 'mesh-tools-internal:ipcDispatchToRemoteAgent',
             // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
             // scoped to THIS node's session on the worker (findAdapter dir match /
             // findMeshNodeAdapter). Without it, a worker hosting both a base node and a

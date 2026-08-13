@@ -1132,6 +1132,8 @@ export function tryAssignQueueTask(
                     cliType: providerType,
                     action: 'send_chat',
                     message: task.message,
+                    // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
+                    dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:remote',
                     meshContext: {
                         meshId,
                         nodeId,
@@ -1227,6 +1229,8 @@ export function tryAssignQueueTask(
             cliType: providerType,
             action: 'send_chat',
             message: task.message,
+            // DISPATCH-SOURCE-TRACE: call-site tag echoed in the daemon log.
+            dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:local',
             meshContext: {
                 meshId,
                 nodeId,
