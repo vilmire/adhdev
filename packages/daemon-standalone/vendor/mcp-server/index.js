@@ -996,7 +996,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
       priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) \u2014 distinct from a node's schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue." },
       model: { type: "string", description: "Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default." },
       thinkingLevel: { type: "string", enum: ["low", "medium", "high"], description: "Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning." },
-      difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "Optional task execution difficulty \u2014 a ROUTING HINT, not a model selector. It is matched against each node's capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT's own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node's slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins." },
+      difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED task execution difficulty \u2014 a ROUTING HINT, not a model selector. It is matched against each node's capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT's own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node's slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins." },
       notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
       max_retries: { type: "number", description: "P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1)." },
       maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
@@ -1005,7 +1005,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
       allow_duplicate: { type: "boolean", description: "G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction." },
       allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." }
     },
-    required: ["message"]
+    required: ["message", "difficulty"]
   }
 };
 var MESH_VIEW_QUEUE_TOOL = {
@@ -1072,9 +1072,10 @@ var MESH_SEND_TASK_TOOL = {
       readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
       read_only: { type: "boolean", description: "Snake-case alias for readonly." },
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch." },
-      missionId: { type: "string", description: "CamelCase alias for mission_id." }
+      missionId: { type: "string", description: "CamelCase alias for mission_id." },
+      difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." }
     },
-    required: ["node_id", "session_id", "message"]
+    required: ["node_id", "session_id", "message", "difficulty"]
   }
 };
 var MESH_READ_CHAT_TOOL = {
@@ -6242,6 +6243,22 @@ Target: ${args.target}` : ""}`,
       const task = (0, import_daemon_core5.enqueueTask)(ctx.mesh.id, prompt, {
         readonly: true,
         taskMode: "live_debug_readonly",
+        // DIFFICULTY-REQUIRED (MAGI decision): a fixed 'freeform' sentinel, NOT an
+        // exemption from the guard. MAGI routes on a different axis entirely — each
+        // replica is already hard-pinned to a (node, provider) slot by the kind-panel
+        // via requiredTags (`provider=<X>`) and often an explicit targetNodeId, and
+        // its model comes from that slot. Difficulty exists to MATCH a task against
+        // node capability slots at assignment time; here the slot is already chosen,
+        // so any difficulty we stamped would be inert at best and would fight the
+        // panel's own slot selection at worst.
+        //
+        // 'freeform' is the correct sentinel rather than a guard bypass: it is a real
+        // member of the axis meaning "no difficulty-based constraint", so the fan-out
+        // satisfies the required-difficulty invariant honestly instead of carving out
+        // a hole that a future non-MAGI caller could slip through. Deliberately NOT
+        // caller-configurable — exposing a difficulty knob on mesh_magi_review would
+        // imply it influences replica placement, which it does not.
+        difficulty: "freeform",
         requiredTags: replica.requiredTags,
         missionId: mission.id,
         consensusGroupId,
@@ -7111,6 +7128,16 @@ async function meshSendTask(ctx, args) {
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  const difficultyRaw = readString(args.difficulty);
+  if (!difficultyRaw || !isMeshTaskDifficulty(difficultyRaw)) {
+    return JSON.stringify({
+      success: false,
+      code: difficultyRaw ? "invalid_difficulty" : "missing_difficulty",
+      error: difficultyRaw ? `mesh_send_task received an unrecognized \`difficulty\` value '${difficultyRaw}'. Allowed: ${MESH_TASK_DIFFICULTIES.join(" | ")}.` : `mesh_send_task requires a \`difficulty\`. Allowed: ${MESH_TASK_DIFFICULTIES.join(" | ")}. Classify the task by how hard the work actually is.`,
+      allowedDifficulties: MESH_TASK_DIFFICULTIES
+    });
+  }
+  const difficulty = difficultyRaw;
   const modeValidation = (0, import_daemon_core5.validateMeshTaskModeRequest)(requestedTaskMode, message, readonly);
   if (!modeValidation.valid) {
     return JSON.stringify({
@@ -7260,6 +7287,7 @@ async function meshSendTask(ctx, args) {
             assignedNodeId: args.node_id,
             assignedSessionId: dispatchedSessionId,
             taskMode,
+            difficulty,
             ...readonly ? { readonly: true } : {},
             dispatchedAt
           });
@@ -7362,6 +7390,7 @@ async function meshSendTask(ctx, args) {
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
             taskMode,
+            difficulty,
             ...readonly ? { readonly: true } : {},
             ...missionId ? { missionId } : {},
             ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
@@ -7465,6 +7494,7 @@ async function meshSendTask(ctx, args) {
           assignedNodeId: args.node_id,
           assignedSessionId: args.session_id,
           taskMode,
+          difficulty,
           ...readonly ? { readonly: true } : {},
           dispatchedAt
         });
@@ -7508,6 +7538,7 @@ async function meshSendTask(ctx, args) {
       targetNodeId: args.node_id,
       targetSessionId: args.session_id,
       taskMode,
+      difficulty,
       ...readonly ? { readonly: true } : {},
       ...missionId ? { missionId } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
