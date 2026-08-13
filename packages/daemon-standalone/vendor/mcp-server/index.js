@@ -3931,6 +3931,10 @@ async function meshStatus(ctx, args = {}) {
       const { nodeId: _omit, ...rest } = nodeScheduling;
       entry.scheduling = compact ? { load: rest.load, capReached: rest.capReached } : rest;
     }
+    const lastQuotaRanking = (0, import_daemon_core5.getLastQuotaRanking)(node.id);
+    if (lastQuotaRanking) {
+      entry.scheduling = { ...entry.scheduling ?? {}, lastQuotaRanking };
+    }
     let liveTruthProbed = false;
     try {
       const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
