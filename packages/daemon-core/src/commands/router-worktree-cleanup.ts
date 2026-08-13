@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import { resolve as pathResolve, dirname as pathDirname, join as pathJoin, sep as pathSep } from 'path';
 import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
+import { gitChildEnv } from '../git/git-locale.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { readStringValue, readObjectRecord, readBooleanValue } from '../mesh/mesh-node-identity.js';
 import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentSummary } from '../mesh/mesh-refine-gates.js';
@@ -277,7 +278,7 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
             const execFileAsync = promisify(execFile);
             try {
                 const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
-                    cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+                    cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gitChildEnv(),
                 });
                 if (stdout.trim()) {
                     return {
@@ -383,7 +384,7 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
                 const { promisify } = await import('node:util');
                 const execFileAsync = promisify(execFile);
                 await execFileAsync('git', ['worktree', 'prune'], {
-                    cwd: repoRoot, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+                    cwd: repoRoot, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gitChildEnv(),
                 });
             } catch { /* prune is best-effort */ }
             const rm = await self.bestEffortRemoveWorktreeDir(workspace);
@@ -487,10 +488,10 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
                 const GIT_MAX_BUFFER_CLEANUP = 4 * 1024 * 1024;
                 try {
                     await execFileAsync('git', ['-C', workspace, 'submodule', 'deinit', '--all', '-f'], {
-                        encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
+                        encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true, env: gitChildEnv(),
                     });
                     await execFileAsync('git', ['worktree', 'remove', '--force', workspace], {
-                        cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
+                        cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true, env: gitChildEnv(),
                     });
                     const branchOutcome = await deleteBranchIfMerged();
                     return {
@@ -512,7 +513,7 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
                     const rm = await self.bestEffortRemoveWorktreeDir(workspace);
                     try {
                         await execFileAsync('git', ['worktree', 'prune'], {
-                            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true,
+                            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_CLEANUP, maxBuffer: GIT_MAX_BUFFER_CLEANUP, windowsHide: true, env: gitChildEnv(),
                         });
                     } catch { /* prune is best-effort */ }
                     const branchOutcome = await deleteBranchIfMerged();
@@ -586,6 +587,7 @@ export async function getWorktreeForceCleanupConvergence(self: DaemonCommandRout
                 timeout: 30_000,
                 maxBuffer: 4 * 1024 * 1024,
                 windowsHide: true,
+                env: gitChildEnv(),
             });
             return String(stdout || '').trim();
         };

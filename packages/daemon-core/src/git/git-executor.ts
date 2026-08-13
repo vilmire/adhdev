@@ -4,6 +4,7 @@ import { access, realpath, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import type { GitFailureReason, GitRepoIdentity } from './git-types.js';
+import { gitChildEnv } from './git-locale.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -203,6 +204,10 @@ async function execGitRaw(
       timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBuffer: options.maxBuffer ?? DEFAULT_MAX_BUFFER,
       windowsHide: true,
+      // Pin the child locale so stderr stays English for the phrase matchers
+      // downstream (mapExecError's "not a git repository", gitCheckpoint's
+      // "nothing to commit", …). See git-locale.ts.
+      env: gitChildEnv(),
     });
     return {
       stdout: normalizeGitOutput(result.stdout),

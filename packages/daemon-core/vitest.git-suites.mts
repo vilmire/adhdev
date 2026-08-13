@@ -35,6 +35,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/git/git-checkpoint-integration.test.ts',
   'test/git/git-diff.test.ts',
   'test/git/git-executor.test.ts',
+  'test/git/git-locale.test.ts',
   'test/git/git-status.test.ts',
   'test/mesh/mesh-onboarding-plan.test.ts',
   'test/mesh/preview-freshness.test.ts',

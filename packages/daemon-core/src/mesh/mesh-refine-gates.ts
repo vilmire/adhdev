@@ -495,7 +495,7 @@ export function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmodu
  * once in the orchestrator and threaded through RefineContext so every stage runs
  * git the same way (execFile + promisify, utf8). Returns the child's stdout/stderr.
  */
-export type RefineExecFileAsync = (file: string, args: string[], options: { cwd: string; encoding: 'utf8' }) => Promise<{ stdout: string; stderr: string }>;
+export type RefineExecFileAsync = (file: string, args: string[], options: { cwd: string; encoding: 'utf8'; env?: NodeJS.ProcessEnv }) => Promise<{ stdout: string; stderr: string }>;
 
 /**
  * Accumulated state shared by the synchronous-refine stages. The orchestrator

@@ -11,6 +11,7 @@ import { realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
+import { gitChildEnv } from '../git/git-locale.js';
 import type { CLIInfo } from '../detection/cli-detector.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry } from '../repo-mesh-types.js';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
@@ -156,6 +157,7 @@ async function git(cwd: string, args: string[], allowFailure = false): Promise<s
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: 4 * 1024 * 1024,
             windowsHide: true,
+            env: gitChildEnv(),
         });
         return (stdout || '').trim();
     } catch (error: any) {

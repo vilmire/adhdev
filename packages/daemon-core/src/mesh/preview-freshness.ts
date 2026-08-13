@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { gitChildEnv } from '../git/git-locale.js';
 import { resolve } from 'node:path';
 
 export type PreviewFreshnessStatus = 'fresh' | 'stale' | 'unknown' | 'not_configured';
@@ -70,6 +71,7 @@ function runGit(repoRoot: string, args: readonly string[]): string {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 5000,
+            env: gitChildEnv(),
         }).trim();
     } catch {
         return '';

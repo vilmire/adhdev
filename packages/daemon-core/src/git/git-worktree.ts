@@ -20,6 +20,7 @@ import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveConfigDir } from '../config/config-dir.js';
+import { gitChildEnv } from './git-locale.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -194,6 +195,7 @@ async function tryGit(cwd: string, args: string[]): Promise<{ ok: boolean; stdou
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: GIT_MAX_BUFFER,
             windowsHide: true,
+            env: gitChildEnv(),
         });
         return { ok: true, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() };
     } catch (error: any) {
@@ -344,6 +346,7 @@ export async function createWorktree(opts: WorktreeCreateOptions): Promise<Workt
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: GIT_MAX_BUFFER,
             windowsHide: true,
+            env: gitChildEnv(),
         });
     } catch (error: any) {
         const stderr = typeof error.stderr === 'string' ? error.stderr : '';
@@ -386,6 +389,7 @@ export async function removeWorktree(repoRoot: string, worktreePath: string, opt
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: GIT_MAX_BUFFER,
             windowsHide: true,
+            env: gitChildEnv(),
         });
         if (stdout.trim()) {
             throw new Error(`Refusing to remove dirty worktree: ${worktreePath}`);
@@ -399,6 +403,7 @@ export async function removeWorktree(repoRoot: string, worktreePath: string, opt
             timeout: GIT_TIMEOUT_MS,
             maxBuffer: GIT_MAX_BUFFER,
             windowsHide: true,
+            env: gitChildEnv(),
         });
     } catch (error: any) {
         const stderr = typeof error.stderr === 'string' ? error.stderr : '';
@@ -416,6 +421,7 @@ export async function removeWorktree(repoRoot: string, worktreePath: string, opt
                     timeout: GIT_TIMEOUT_MS,
                     maxBuffer: GIT_MAX_BUFFER,
                     windowsHide: true,
+                    env: gitChildEnv(),
                 });
             } catch (forceError: any) {
                 const forceStderr = typeof forceError.stderr === 'string' ? forceError.stderr : '';
@@ -450,6 +456,7 @@ export async function listWorktrees(repoRoot: string): Promise<WorktreeEntry[]> 
         timeout: GIT_TIMEOUT_MS,
         maxBuffer: GIT_MAX_BUFFER,
         windowsHide: true,
+        env: gitChildEnv(),
     });
 
     return parseWorktreeListOutput(stdout);
@@ -522,7 +529,7 @@ export async function deleteBranchRef(
     // Idempotent: nothing to delete if the ref does not exist.
     try {
         await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], {
-            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true,
+            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true, env: gitChildEnv(),
         });
     } catch {
         return { deleted: true, reason: 'branch_ref_absent' };
@@ -531,7 +538,7 @@ export async function deleteBranchRef(
     // Try the safe delete first — git refuses if it cannot see the branch as merged.
     try {
         await execFileAsync('git', ['branch', '-d', name], {
-            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true,
+            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true, env: gitChildEnv(),
         });
         return { deleted: true, reason: 'safe_deleted_merged_branch' };
     } catch (error: any) {
@@ -547,7 +554,7 @@ export async function deleteBranchRef(
         }
         try {
             await execFileAsync('git', ['branch', '-D', name], {
-                cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true,
+                cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true, env: gitChildEnv(),
             });
             return { deleted: true, reason: 'force_deleted_patch_equivalent_branch', forced: true };
         } catch (forceError: any) {
@@ -566,6 +573,7 @@ async function pruneWorktrees(repoRoot: string): Promise<void> {
             encoding: 'utf8',
             timeout: GIT_TIMEOUT_MS,
             windowsHide: true,
+            env: gitChildEnv(),
         });
     } catch {
         // Prune is best-effort
