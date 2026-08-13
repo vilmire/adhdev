@@ -158,6 +158,17 @@ export interface QuotaMetadata {
      * Never persisted alongside a token, and never logged.
      */
     accountEmail?: string | null;
+    /**
+     * True when `session`/`weekly` on this same snapshot are NOT this tick's
+     * own reading but a retained last-good reading carried forward by
+     * `carryForwardLastGoodWindows` (./refresh.ts) after a TRANSIENT fetch
+     * failure. `status` on this snapshot is the fresh failure, not 'ok' — set
+     * by the carry-forward, never by a fetcher. Consumed by the CLI
+     * (./cli.ts printQuota) and mirrored in web-core's quota-format.ts so
+     * both surfaces render the same "· refreshing" cue instead of presenting
+     * a stale number as freshly measured.
+     */
+    lastGoodWindows?: boolean;
 }
 
 /** Normalized quota snapshot for a single provider. */

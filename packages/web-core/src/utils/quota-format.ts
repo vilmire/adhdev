@@ -84,12 +84,22 @@ export function formatQuotaReset(resetsAt: number | null | undefined, now: numbe
     return `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
 }
 
-/** "23.5% used" / "23.5% used · resets in 2h 14m" for one rolling window. */
-export function formatQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined, now: number = Date.now()): string | null {
+/**
+ * "23.5% used" / "23.5% used · resets in 2h 14m" for one rolling window.
+ *
+ * `isLastGood` marks a window carried forward from a prior successful read
+ * after a TRANSIENT fetch failure (daemon-core's `carryForwardLastGoodWindows`,
+ * signalled via `metadata.lastGoodWindows` — see mesh-shared node-facts.ts).
+ * It appends "· refreshing" so a reader can tell "this number is real but not
+ * from this tick" from a freshly measured value, instead of the two looking
+ * identical — the whole point of retaining the number instead of blanking it.
+ */
+export function formatQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined, now: number = Date.now(), isLastGood: boolean = false): string | null {
     if (!window || typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) return null
     const used = `${window.usedPercent.toFixed(1)}% used`
     const resets = formatQuotaReset(window.resetsAt, now)
-    return resets ? `${used} · ${resets}` : used
+    const base = resets ? `${used} · ${resets}` : used
+    return isLastGood ? `${base} · refreshing` : base
 }
 
 /**

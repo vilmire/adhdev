@@ -63,7 +63,23 @@ export interface MeshNodeFactsProviderQuota {
      * daemon-core `QuotaMetadata.accountEmail` and the regression suite that
      * pins its absence from every server allow-list.
      */
-    metadata?: { failureKind?: string; source?: string; planType?: string | null; accountEmail?: string | null; [extra: string]: unknown }
+    metadata?: {
+        failureKind?: string
+        source?: string
+        planType?: string | null
+        accountEmail?: string | null
+        /**
+         * True when `session`/`weekly` are NOT this snapshot's own reading but a
+         * retained last-good reading carried forward by daemon-core's
+         * `carryForwardLastGoodWindows` (quota/refresh.ts) after a TRANSIENT
+         * fetch failure (expired token, network blip, rate limit). `status` on
+         * this same entry is the fresh failure, not 'ok' — the numbers are real,
+         * just not from THIS tick. A reader should label them (e.g. "· refreshing")
+         * rather than presenting them as a freshly measured value.
+         */
+        lastGoodWindows?: boolean
+        [extra: string]: unknown
+    }
     [extra: string]: unknown
 }
 

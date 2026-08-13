@@ -111,7 +111,8 @@ function toWireQuota(quota: ProviderQuota): MeshNodeFactsProviderQuota {
 
 /**
  * LAST-GOOD CARRY-FORWARD (owner report 2026-08-10: kimi shows a bald
- * "token expired" and drops its numbers).
+ * "token expired" and drops its numbers; follow-up 2026-08-13: two
+ * consecutive transient failures still dropped them).
  *
  * Every provider whose credential the CLI refreshes on its own cadence
  * (kimi's ~15-min tokens are the recurring case) periodically fails a quota
@@ -121,12 +122,18 @@ function toWireQuota(quota: ProviderQuota): MeshNodeFactsProviderQuota {
  * "28% used" to a scary error until the next successful tick.
  *
  * When the fresh read is a transient failure AND we still hold a real reading
- * (status 'ok' with at least one window), keep those windows and the prior
- * updatedAt, but surface the fresh failure's status/error/kind so the reader
- * can render "28% used · (refreshing)" rather than either a stale-looking OK
- * or a numberless error. A NON-transient failure (missing credentials, parse,
- * unauthorized) still replaces wholesale — those are real problems the old
- * numbers would mask. A fresh 'ok' always replaces.
+ * — either a fresh 'ok' snapshot, or an ALREADY-carried-forward entry from a
+ * prior transient failure (metadata.lastGoodWindows, still holding a window)
+ * — keep those windows and the ORIGINAL updatedAt, but surface the fresh
+ * failure's status/error/kind so the reader can render "28% used ·
+ * (refreshing)" rather than either a stale-looking OK or a numberless error.
+ * Chaining off an already-carried entry (not just a fresh 'ok') is what makes
+ * this survive an unbounded run of consecutive transient failures — with only
+ * `prev.status === 'ok'` accepted, the SECOND consecutive failure had no
+ * 'ok' predecessor to carry from and the numbers vanished anyway, which is
+ * the bug this widening fixes. A NON-transient failure (missing credentials,
+ * parse, unauthorized) still replaces wholesale — those are real problems the
+ * old numbers would mask. A fresh 'ok' always replaces.
  */
 export function carryForwardLastGoodWindows(
     prev: MeshNodeFactsProviderQuota | undefined,
@@ -136,9 +143,16 @@ export function carryForwardLastGoodWindows(
     const kind = typeof fresh.metadata?.failureKind === 'string' ? fresh.metadata.failureKind : '';
     const transient = TRANSIENT_QUOTA_FAILURE_KINDS.has(kind as any);
     if (!transient) return fresh;
-    const prevHasWindows = !!prev && prev.status === 'ok' && (prev.session !== null || prev.weekly !== null);
+    const prevIsFreshOk = !!prev && prev.status === 'ok';
+    const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
+    const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward)
+        && (prev!.session !== null || prev!.weekly !== null);
     if (!prevHasWindows) return fresh;
-    // Keep the last good numbers + their age; carry the fresh failure signal.
+    // Keep the last good numbers + their ORIGINAL age; carry the fresh
+    // failure signal. prev.updatedAt is already the original observation
+    // time even when prev is itself a carried-forward entry, since that
+    // entry never overwrote it either — so this never needs to look further
+    // back than one hop.
     return {
         ...fresh,
         session: prev!.session,

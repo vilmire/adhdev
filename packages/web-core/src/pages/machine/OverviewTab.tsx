@@ -59,8 +59,9 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
             </div>
             <div className="flex flex-col gap-2">
                 {entries.map(({ provider, quota }) => {
-                    const session = formatQuotaWindow(quota.session)
-                    const weekly = formatQuotaWindow(quota.weekly)
+                    const isLastGood = quota.metadata?.lastGoodWindows === true
+                    const session = formatQuotaWindow(quota.session, undefined, isLastGood)
+                    const weekly = formatQuotaWindow(quota.weekly, undefined, isLastGood)
                     const usage = formatQuotaUsage(quota)
                     return (
                         <div key={provider} className="flex flex-wrap items-center gap-2">

@@ -8,6 +8,13 @@ import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 // erased the last good reading and the dashboard flipped from "28% used" to a
 // numberless "token expired" error. The fix keeps the prior windows (marked as
 // retained) while surfacing the fresh failure signal.
+//
+// Follow-up (2026-08-13): the original fix only chained off a fresh 'ok'
+// predecessor, so a SECOND consecutive transient failure had no 'ok' entry to
+// carry from and the numbers vanished anyway. The fix widened the predecessor
+// check to also accept an already-carried-forward entry (metadata.lastGoodWindows)
+// that still holds a window, so the carry survives an unbounded run of
+// consecutive transient failures, not just one.
 
 const win = (usedPercent: number) => ({ usedPercent, windowMinutes: 300, resetsAt: null });
 
@@ -72,8 +79,47 @@ describe('carryForwardLastGoodWindows', () => {
         expect(carryForwardLastGoodWindows(undefined, fresh)).toBe(fresh);
     });
 
-    it('a prior FAILURE (no windows) is not carried — only a real reading counts', () => {
+    it('a prior FAILURE that never held windows is not carried — only a real reading counts', () => {
         const fresh = failure('expired-token');
         expect(carryForwardLastGoodWindows(failure('network'), fresh)).toBe(fresh);
+    });
+
+    it('THREE consecutive transient failures still keep the numbers (the reported bug)', () => {
+        // Tick 1: ok -> failure. Carries from the fresh 'ok'.
+        const afterTick1 = carryForwardLastGoodWindows(okReading(), failure('expired-token'));
+        expect(afterTick1.session?.usedPercent).toBe(28);
+        expect(afterTick1.metadata?.lastGoodWindows).toBe(true);
+
+        // Tick 2: carried -> failure again. Before the fix, prev.status was
+        // 'error' (not 'ok'), so this used to fall through and lose the numbers.
+        const afterTick2 = carryForwardLastGoodWindows(afterTick1, failure('network'));
+        expect(afterTick2.session?.usedPercent).toBe(28);
+        expect(afterTick2.weekly?.usedPercent).toBe(71);
+        expect(afterTick2.metadata?.lastGoodWindows).toBe(true);
+
+        // Tick 3: same again — must not regress on a longer chain either.
+        const afterTick3 = carryForwardLastGoodWindows(afterTick2, failure('rate-limited'));
+        expect(afterTick3.session?.usedPercent).toBe(28);
+        expect(afterTick3.weekly?.usedPercent).toBe(71);
+        expect(afterTick3.metadata?.lastGoodWindows).toBe(true);
+
+        // updatedAt must stay pinned to the ORIGINAL observation the whole way
+        // through, never bumped forward by a carried tick — a carried reading
+        // must not look freshly measured.
+        expect(afterTick1.updatedAt).toBe(1_700_000);
+        expect(afterTick2.updatedAt).toBe(1_700_000);
+        expect(afterTick3.updatedAt).toBe(1_700_000);
+    });
+
+    it('a carried-forward entry that lost its windows to a non-transient failure does not resurrect them', () => {
+        const afterTransient = carryForwardLastGoodWindows(okReading(), failure('expired-token'));
+        const afterNonTransient = carryForwardLastGoodWindows(afterTransient, failure('missing-credentials'));
+        expect(afterNonTransient.session).toBeNull();
+        expect(afterNonTransient.weekly).toBeNull();
+
+        // A transient failure AFTER that non-transient one has nothing to carry.
+        const afterAnotherTransient = carryForwardLastGoodWindows(afterNonTransient, failure('expired-token'));
+        expect(afterAnotherTransient.session).toBeNull();
+        expect(afterAnotherTransient.metadata?.lastGoodWindows).toBeUndefined();
     });
 });

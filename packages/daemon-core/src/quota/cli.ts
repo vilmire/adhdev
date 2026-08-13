@@ -22,14 +22,24 @@ const CLAUDE_NO_API_LINE = 'Claude has no quota API — adhdev borrows your stat
 /** What install actually does to the user's config, in one line. */
 const CLAUDE_WRAP_NOT_REPLACE_LINE = 'Install wraps (not replaces) your statusline, so nothing is lost.';
 
-function formatWindow(label: string, window: QuotaWindow | null): string {
+/**
+ * `isLastGood` mirrors web-core's `formatQuotaWindow` — true when this window
+ * is a retained last-good reading carried forward after a TRANSIENT fetch
+ * failure (daemon-core's `carryForwardLastGoodWindows`, signalled via
+ * `metadata.lastGoodWindows`), not this tick's own measurement. Appends the
+ * same "(refreshing)" cue so the CLI does not drift from the dashboards — see
+ * the account-label comment on printQuota for why this shares a convention
+ * instead of drifting per surface.
+ */
+function formatWindow(label: string, window: QuotaWindow | null, isLastGood: boolean = false): string {
     if (!window) {
         return `  ${label.padEnd(8)} ${chalk.gray('not reported')}`;
     }
     const percent = `${window.usedPercent.toFixed(1)}%`;
     const bar = renderBar(window.usedPercent);
     const reset = window.resetsAt === null ? '' : chalk.gray(`  resets ${formatRelative(window.resetsAt)}`);
-    return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}`;
+    const stale = isLastGood ? chalk.gray('  (refreshing)') : '';
+    return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}${stale}`;
 }
 
 function renderBar(usedPercent: number): string {
@@ -81,8 +91,9 @@ export function printQuota(name: string, quota: ProviderQuota): void {
     const account = formatQuotaAccount(quota as unknown as MeshNodeFactsProviderQuota);
     console.log(account ? `${chalk.bold(name)}  ${chalk.gray(account)}` : chalk.bold(name));
     if (quota.status === 'ok' || quota.session || quota.weekly) {
-        console.log(formatWindow('5 hour', quota.session));
-        console.log(formatWindow('7 day', quota.weekly));
+        const isLastGood = quota.metadata?.lastGoodWindows === true;
+        console.log(formatWindow('5 hour', quota.session, isLastGood));
+        console.log(formatWindow('7 day', quota.weekly, isLastGood));
     }
     if (quota.error) {
         const tone = quota.status === 'unavailable' ? chalk.gray : chalk.yellow;

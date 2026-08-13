@@ -236,8 +236,9 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 meaning when comparing machines side by side, and this
                                 dialog is a label/value list about one session. */}
                             {collectQuotaEntries(data.quota).map(({ provider, quota }) => {
-                                const session = formatQuotaWindow(quota.session)
-                                const weekly = formatQuotaWindow(quota.weekly)
+                                const isLastGood = quota.metadata?.lastGoodWindows === true
+                                const session = formatQuotaWindow(quota.session, undefined, isLastGood)
+                                const weekly = formatQuotaWindow(quota.weekly, undefined, isLastGood)
                                 // Usage-shaped provider (opencode): absolute
                                 // tokens/cost, no percent windows to chip.
                                 const usage = formatQuotaUsage(quota)

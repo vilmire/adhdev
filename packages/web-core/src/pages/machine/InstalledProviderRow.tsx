@@ -220,12 +220,13 @@ export default function InstalledProviderRow({
     // every other quota surface.
     const quotaChip = (() => {
         if (!quota) return null
-        const session = formatQuotaWindow(quota.session)
+        const isLastGood = quota.metadata?.lastGoodWindows === true
+        const session = formatQuotaWindow(quota.session, undefined, isLastGood)
         if (session) {
             const tone = quotaUsageTone(quota.session?.usedPercent ?? NaN)
             return { label: `5h ${session}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.sessionHint') }
         }
-        const weekly = formatQuotaWindow(quota.weekly)
+        const weekly = formatQuotaWindow(quota.weekly, undefined, isLastGood)
         if (weekly) {
             const tone = quotaUsageTone(quota.weekly?.usedPercent ?? NaN)
             return { label: `7d ${weekly}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.weeklyHint') }

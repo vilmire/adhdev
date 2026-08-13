@@ -118,6 +118,43 @@ describe('printQuota — the claude "not set up" addendum', () => {
     });
 });
 
+// LAST-GOOD CARRY-FORWARD CLI PARITY — mirrors web-core's formatQuotaWindow
+// (quota-format-last-good.test.ts): when daemon-core's
+// carryForwardLastGoodWindows retains a prior reading after a TRANSIENT
+// failure (metadata.lastGoodWindows), the CLI must not print those numbers
+// as if they were freshly measured this tick.
+describe('printQuota — last-good carry-forward marker', () => {
+    const carriedQuota: ProviderQuota = {
+        provider: 'kimi',
+        session: { usedPercent: 28, windowMinutes: 300, resetsAt: null },
+        weekly: { usedPercent: 71, windowMinutes: 10080, resetsAt: null },
+        updatedAt: 1,
+        error: 'kimi expired-token',
+        status: 'error',
+        metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true } as any,
+    };
+
+    it('appends "(refreshing)" to a carried-forward window', () => {
+        const joined = captureLogs(() => printQuota('Kimi Code', carriedQuota)).join('\n');
+        expect(joined).toMatch(/28\.0%.*\(refreshing\)/);
+        expect(joined).toMatch(/71\.0%.*\(refreshing\)/);
+    });
+
+    it('does NOT append the marker to a freshly measured window', () => {
+        const fresh: ProviderQuota = {
+            provider: 'kimi',
+            session: { usedPercent: 28, windowMinutes: 300, resetsAt: null },
+            weekly: null,
+            updatedAt: 1,
+            error: null,
+            status: 'ok',
+            metadata: { source: 'oauth' },
+        };
+        const joined = captureLogs(() => printQuota('Kimi Code', fresh)).join('\n');
+        expect(joined).not.toContain('(refreshing)');
+    });
+});
+
 describe('printClaudeStatuslineStatus — diagnostic output', () => {
     let tempDir: string;
 
