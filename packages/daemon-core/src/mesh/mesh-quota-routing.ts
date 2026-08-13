@@ -13,8 +13,9 @@
  *      NOT actionable (the coordinator is not paged; the 4s reconcile retries).
  *      rankProvidersByQuotaGate is the gate's SELECTION-LOOP form: it evaluates
  *      every usable candidate of a node and orders the survivors by weekly
- *      remaining headroom, so a gated first choice falls through to the node's
- *      next provider (dynamic provider priority by quota).
+ *      EXPIRY RISK (unused remainder evaporates at the window reset), so a
+ *      gated first choice falls through to the node's next provider (dynamic
+ *      provider priority by quota).
  *
  *   2. SPREAD (quotaSpreadBonusByProvider): a bounded 0..spreadBonusMax bonus
  *      the caller folds into task→slot fitness, proportional to remaining
@@ -251,31 +252,78 @@ export function evaluateProviderQuotaGate(
     return null;
 }
 
+/** Fallback weekly-window length when a snapshot reports a weekly window
+ *  without its windowMinutes (every in-tree fetcher fills it; this only
+ *  guards malformed/foreign bundles). */
+const DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
+
+/** Ranking metric for one candidate, or undefined when even the weekly
+ *  REMAINING is unknown (no snapshot / non-'ok' / stale / no weekly window). */
+interface WeeklyExpiryRisk {
+    remainingPercent: number;
+    /** Expiry-risk score — see rankProvidersByQuotaGate. Bounded by
+     *  remainingPercent, so it can never diverge. */
+    risk: number;
+}
+
 /**
- * Weekly-window remaining headroom (0–100) usable as a RANKING key, or
- * undefined when the weekly reading is unknown: no snapshot, a non-'ok'
- * status, a stale snapshot, or a provider that simply does not report a
- * weekly window. Same freshness discipline as the gate — an old reading must
- * not steer routing either (stale-quota misexclusion works both ways).
+ * Expiry-risk metric: how much of this provider's weekly remainder is likely
+ * to EVAPORATE unused at the window reset if it is not consumed now.
+ *
+ *   risk = remainingPercent × elapsedFraction
+ *   elapsedFraction = clamp(1 − timeLeft/windowMs, 0, 1)
+ *
+ * i.e. the remaining headroom weighted by how much of the window is already
+ * gone. A full remainder right after a reset scores ~0 (plenty of time to
+ * spend it — a big remainder alone must NOT win); the same remainder minutes
+ * before the reset scores ~its full value (every unused point is a certain
+ * loss). Deliberately NOT remaining/timeLeft ("required burn rate"): that
+ * diverges as timeLeft → 0 and would let a 1% remainder outrank a 90% one.
+ * Here risk ≤ remainingPercent by construction, so a trivial remainder can
+ * never beat a substantial one except when the substantial one's window has
+ * literally just reset (elapsedFraction < 1/90) — where deferring it is
+ * correct anyway.
+ *
+ * Clock-skew: resetsAt is stamped on the REPORTER's clock, so timeLeft is
+ * computed against the skew-safe reporter-now estimate (updatedAt + snapshot
+ * age — the same same-clock-difference trick as isSessionResetImminent).
+ *
+ * resetsAt UNKNOWN (window reported, reset stamp absent): risk 0 — no
+ * evidence of imminent loss means no invented urgency (the same
+ * observation-without-confidence-is-inert rule as the gate's fail-open).
+ * Such candidates still rank by their known remaining, above the
+ * remaining-unknown group, below every candidate with positive risk.
  */
-function weeklyRemainingForRanking(
+function weeklyExpiryRiskForRanking(
     node: any,
     providerType: string,
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
-): number | undefined {
+): WeeklyExpiryRisk | undefined {
     const entry = quotaEntryFor(node, providerType);
     if (!entry) return undefined;
     const { facts, quota } = entry;
     if (quota.status !== 'ok') return undefined;
     if (!isQuotaSnapshotFresh(facts, quota, policy, now)) return undefined;
-    return remainingPercent(quota.weekly);
+    const remaining = remainingPercent(quota.weekly);
+    if (remaining === undefined) return undefined;
+    const resetsAt = Number(quota.weekly?.resetsAt);
+    if (!Number.isFinite(resetsAt) || resetsAt <= 0) return { remainingPercent: remaining, risk: 0 };
+    const ageMs = quotaSnapshotAgeMs(facts, quota, now);
+    if (!Number.isFinite(ageMs)) return { remainingPercent: remaining, risk: 0 };
+    const reporterNowMs = Number(quota.updatedAt) + ageMs;
+    const windowMinutes = Number(quota.weekly?.windowMinutes);
+    const windowMs = (Number.isFinite(windowMinutes) && windowMinutes > 0
+        ? windowMinutes : DEFAULT_WEEKLY_WINDOW_MINUTES) * 60 * 1000;
+    const elapsedFraction = Math.min(1, Math.max(0, 1 - (resetsAt - reporterNowMs) / windowMs));
+    return { remainingPercent: remaining, risk: remaining * elapsedFraction };
 }
 
 export interface ProviderQuotaGateRanking {
-    /** Gate-clear providers, best first: weekly remaining DESC, providers
-     *  whose weekly reading is unknown LAST, and the caller's original order
-     *  preserved within each group (stable sort). */
+    /** Gate-clear providers, best first: weekly EXPIRY-RISK DESC (remaining ×
+     *  elapsed window fraction), weekly remaining DESC on a risk tie,
+     *  providers whose weekly reading is unknown LAST, and the caller's
+     *  original order preserved within each group (stable sort). */
     clear: string[];
     /** Gate-blocked providers with their blocks, in the caller's order. */
     gated: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
@@ -287,9 +335,13 @@ export interface ProviderQuotaGateRanking {
  * and split them into gate-clear vs gate-blocked, so a gated first-choice
  * provider falls through to the node's NEXT provider instead of skipping the
  * whole node. Owner-confirmed sort: gate-clear candidates are ordered by
- * WEEKLY (7d) remaining headroom, descending — the goal is to spread the
- * 7-day budget evenly across provider accounts rather than always draining
- * the static first priority.
+ * weekly EXPIRY RISK, descending (weeklyExpiryRiskForRanking) — an unused
+ * weekly remainder EVAPORATES at the window reset, so the provider to spend
+ * first is the one whose remainder is least likely to be consumable in the
+ * time left, not merely the largest. Equal reset time ⇒ the larger remainder
+ * wins (risk is proportional to remaining at equal elapsed fraction, and
+ * remaining is the explicit risk-tie breaker), so the original
+ * "spread the 7-day budget evenly" axis is preserved as a special case.
  *
  * UNKNOWN-WEEKLY PLACEMENT (deliberate): candidates whose weekly remaining
  * cannot be read sort BELOW every measured candidate, never above. Two
@@ -329,14 +381,18 @@ export function rankProvidersByQuotaGate(
         if (block) gated.push({ providerType, block });
         else clear.push(providerType);
     }
-    const weeklyByProvider = new Map(clear.map(p => [p, weeklyRemainingForRanking(node, p, policy, now)]));
+    const weeklyByProvider = new Map(clear.map(p => [p, weeklyExpiryRiskForRanking(node, p, policy, now)]));
     clear.sort((a, b) => {
         const wa = weeklyByProvider.get(a);
         const wb = weeklyByProvider.get(b);
         if (wa === undefined && wb === undefined) return 0; // both unknown: keep caller order
         if (wa === undefined) return 1;  // unknown sorts below every measured candidate
         if (wb === undefined) return -1;
-        return wb - wa; // weekly remaining DESC; ties keep caller order (stable sort)
+        if (wb.risk !== wa.risk) return wb.risk - wa.risk; // expiry risk DESC
+        // Risk tie (e.g. equal reset time): the larger weekly remainder wins —
+        // the original even-spend axis, preserved as the tie-break. A further
+        // tie keeps the caller order (stable sort).
+        return wb.remainingPercent - wa.remainingPercent;
     });
     return { clear, gated };
 }

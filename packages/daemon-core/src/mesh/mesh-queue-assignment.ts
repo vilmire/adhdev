@@ -1896,14 +1896,16 @@ async function resolveUsableProvider(
     }
 
     // QUOTA GATE, inside the loop: split the usable candidates by the gate and
-    // order the survivors by weekly (7d) remaining headroom, descending — the
-    // owner-confirmed dynamic priority (spread the 7-day budget evenly across
-    // provider accounts). Fail-open is inherited from evaluateProviderQuotaGate
-    // unchanged: missing / stale / expired-token / transient readings are never
-    // BLOCKED, they only sort into the unknown-weekly group (see
-    // rankProvidersByQuotaGate). ALL-gated is reported under its own reason so
-    // a quota WAIT (self-resolving, non-actionable) is never conflated with
-    // 'provider_priority_unusable' (a slot configuration error, actionable).
+    // order the survivors by weekly EXPIRY RISK, descending (remaining ×
+    // elapsed window fraction — an unused remainder evaporates at the window
+    // reset, so the least-consumable-in-time remainder is spent first; the
+    // owner-confirmed dynamic priority). Fail-open is inherited from
+    // evaluateProviderQuotaGate unchanged: missing / stale / expired-token /
+    // transient readings are never BLOCKED, they only sort into the
+    // unknown-weekly group (see rankProvidersByQuotaGate). ALL-gated is
+    // reported under its own reason so a quota WAIT (self-resolving,
+    // non-actionable) is never conflated with 'provider_priority_unusable'
+    // (a slot configuration error, actionable).
     const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting);
     if (!ranked.clear.length) {
         const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');

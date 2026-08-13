@@ -10,10 +10,10 @@
  *
  *   - every usable (detected) candidate is evaluated, not just the first;
  *   - a quota-gated first choice falls through to the node's NEXT provider;
- *   - gate-clear candidates are ordered by WEEKLY (7d) remaining headroom,
- *     descending (owner-confirmed: spread the 7-day budget evenly across
- *     provider accounts); unknown-weekly candidates sort last, caller order
- *     preserved within each group;
+ *   - gate-clear candidates are ordered by weekly EXPIRY RISK, descending
+ *     (remaining × elapsed window fraction — an unused remainder evaporates
+ *     at the window reset); remaining desc breaks risk ties, unknown-weekly
+ *     candidates sort last, caller order preserved within each group;
  *   - when EVERY usable provider is gated the reason is the non-actionable
  *     ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON (a self-resolving WAIT), never the
  *     actionable 'provider_priority_unusable' (a slot configuration error);
@@ -135,19 +135,41 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         expect(resolved.model).toBe('kimi-code/k3');
     });
 
-    it('orders gate-clear candidates by WEEKLY remaining headroom, descending', async () => {
+    it('orders gate-clear candidates by WEEKLY remaining when the reset time is equal', async () => {
         detectCliMocks.detected.add('claude-cli').add('kimi');
+        const sameReset = Date.now() + 5 * 24 * 60 * MIN;
         const node = nodeWith([
             // claude-cli wins the static order (difficulty match +100) but only
-            // 40% weekly remaining; kimi (general slot) has 90% and must win.
+            // 40% weekly remaining; kimi (general slot) has 90% and must win
+            // the risk tie (equal reset ⇒ risk is proportional to remaining).
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
             { provider: 'kimi', model: 'kimi-code/k3', maxParallel: 2 },
         ], {
-            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: null } }),
-            kimi: okQuota('kimi', { weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } }),
+            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: sameReset } }),
+            kimi: okQuota('kimi', { weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: sameReset } }),
         });
         const resolved = await resolve(node);
         expect(resolved.providerType).toBe('kimi');
+    });
+
+    // ★The core of the expiry-risk delta, end to end through provider
+    // selection: the static first priority loses when its larger remainder is
+    // in no danger while a smaller remainder is hours from evaporating.
+    it('spends the soon-EXPIRING remainder first, even when it is the lower static priority', async () => {
+        detectCliMocks.detected.add('claude-cli').add('kimi');
+        const node = nodeWith([
+            // kimi wins the static order (difficulty match +100): 40% weekly
+            // remaining but 5 days to spend it.
+            { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
+            // claude-cli (general slot): only 20% remaining, but it evaporates
+            // in 2 hours — the certain loss is spent first.
+            { provider: 'claude-cli', model: 'opus', maxParallel: 1 },
+        ], {
+            kimi: okQuota('kimi', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
+            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
+        });
+        const resolved = await resolve(node);
+        expect(resolved.providerType).toBe('claude-cli');
     });
 
     it('sorts a measured candidate above an unknown-weekly one even when the unknown is first priority', async () => {

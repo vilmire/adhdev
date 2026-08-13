@@ -321,7 +321,7 @@ describe('evaluateProviderQuotaGate — session reset-imminent relaxation', () =
     });
 });
 
-describe('rankProvidersByQuotaGate — selection-loop gate + weekly-remaining priority', () => {
+describe('rankProvidersByQuotaGate — selection-loop gate + weekly expiry-risk priority', () => {
     const exhausted = (over: Record<string, any> = {}) => okQuota({
         status: 'error',
         session: null,
@@ -330,26 +330,79 @@ describe('rankProvidersByQuotaGate — selection-loop gate + weekly-remaining pr
         metadata: { source: 'oauth', failureKind: 'quota-exhausted' },
         ...over,
     });
+    const DAY = 24 * 60 * MIN;
+    const weeklyWindow = (usedPercent: number, resetsAt: number | null) =>
+        ({ usedPercent, windowMinutes: 10080, resetsAt });
 
-    it('orders gate-clear candidates by WEEKLY remaining headroom, descending', () => {
+    it('orders gate-clear candidates by WEEKLY remaining when the reset time is equal', () => {
+        const sameReset = NOW + 5 * DAY;
         const node = nodeWithQuota({
             // kimi listed first by the caller but only 20% weekly remaining...
-            kimi: okQuota({ provider: 'kimi', weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: null } }),
-            // ...claude-cli has 60% weekly remaining and must win the sort.
-            'claude-cli': okQuota({ weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: null } }),
+            kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(80, sameReset) }),
+            // ...claude-cli has 60% weekly remaining and must win the risk tie.
+            'claude-cli': okQuota({ weekly: weeklyWindow(40, sameReset) }),
         });
         const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW);
         expect(ranked.gated).toEqual([]);
         expect(ranked.clear).toEqual(['claude-cli', 'kimi']);
     });
 
-    it('keeps the caller order on a weekly tie (stable sort)', () => {
+    // ★The core of the expiry-risk delta: an unused weekly remainder EVAPORATES
+    // at the reset, so a smaller remainder hours from its reset is spent before
+    // a larger one with days to spare.
+    it('prefers the smaller remainder whose reset is IMMINENT over a larger remainder with days to spare', () => {
         const node = nodeWithQuota({
-            kimi: okQuota({ provider: 'kimi' }),          // weekly 60 remaining
-            'claude-cli': okQuota(),                      // weekly 60 remaining
+            kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(60, NOW + 5 * DAY) }),   // 40% left, 5d
+            'claude-cli': okQuota({ weekly: weeklyWindow(80, NOW + 2 * 60 * MIN) }),        // 20% left, 2h
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW);
+        expect(ranked.clear).toEqual(['claude-cli', 'kimi']);
+    });
+
+    it('a large remainder right AFTER a reset scores ~0 risk — size alone must not win', () => {
+        const node = nodeWithQuota({
+            // 99% left but the window has 7 full days to go (just reset)...
+            kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(1, NOW + 7 * DAY) }),
+            // ...vs 20% left evaporating in 2h — the certain loss comes first.
+            'claude-cli': okQuota({ weekly: weeklyWindow(80, NOW + 2 * 60 * MIN) }),
+        });
+        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['claude-cli', 'kimi']);
+    });
+
+    it('DIVERGENCE GUARD: a tiny remainder at the reset edge must NOT beat a 90% remainder', () => {
+        const node = nodeWithQuota({
+            // 16% is the smallest remainder that passes the weekly gate (15%
+            // threshold) — even it caps at risk ~16 (risk ≤ remaining by
+            // construction) despite being 1 minute from its reset...
+            kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(84, NOW + MIN) }),
+            // ...while 90% with 4 of 7 days left scores ~38.6.
+            'claude-cli': okQuota({ weekly: weeklyWindow(10, NOW + 4 * DAY) }),
+        });
+        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
+            .toEqual(['claude-cli', 'kimi']);
+    });
+
+    it('keeps the caller order on a weekly tie (same remaining, same reset — stable sort)', () => {
+        const sameReset = NOW + 5 * DAY;
+        const node = nodeWithQuota({
+            kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(40, sameReset) }),
+            'claude-cli': okQuota({ weekly: weeklyWindow(40, sameReset) }),
         });
         expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
             .toEqual(['kimi', 'claude-cli']);
+    });
+
+    it('reset-time UNKNOWN (remaining known): zero invented urgency — below positive risk, above remaining-unknown', () => {
+        const node = nodeWithQuota({
+            // measured with evidenced urgency: 30% left, 1d to go (risk ~25.7)
+            codex: okQuota({ provider: 'codex', weekly: weeklyWindow(70, NOW + DAY) }),
+            // remaining known (50%) but resetsAt absent → risk 0, no invented urgency
+            'claude-cli': okQuota({ weekly: weeklyWindow(50, null) }),
+            // kimi: no quota entry at all → remaining unknown
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli', 'codex'], null, NOW);
+        expect(ranked.clear).toEqual(['codex', 'claude-cli', 'kimi']);
     });
 
     it('sorts UNKNOWN-weekly candidates below every measured one, caller order among themselves', () => {
