@@ -54,10 +54,25 @@ function sourceForTmp(): typeof CODEX_SOURCE {
     return { ...CODEX_SOURCE, path: CODEX_SOURCE.path.replace('{SESSIONS}', sessionsDir) };
 }
 
+// executeNativeHistory expands {yyyy}/{mm}/{dd} to the CURRENT date at read
+// time (native-history-executor.ts's `now = new Date()`), so the fixture
+// must land under today's date directory, not a fixed one — a hardcoded
+// date only matches on the day it was written (oss 5403ad93 hardcoded
+// 2026-08-10 and these tests went red every day after).
+function todayRolloutDir(): { yyyy: string; mm: string; dd: string } {
+    const now = new Date();
+    return {
+        yyyy: String(now.getFullYear()),
+        mm: String(now.getMonth() + 1).padStart(2, '0'),
+        dd: String(now.getDate()).padStart(2, '0'),
+    };
+}
+
 function writeRollout(sessionId: string, lines: string[]): string {
-    const dir = path.join(sessionsDir, '2026', '08', '10');
+    const { yyyy, mm, dd } = todayRolloutDir();
+    const dir = path.join(sessionsDir, yyyy, mm, dd);
     fs.mkdirSync(dir, { recursive: true });
-    const filePath = path.join(dir, `rollout-2026-08-10T21-03-52-${sessionId}.jsonl`);
+    const filePath = path.join(dir, `rollout-${yyyy}-${mm}-${dd}T21-03-52-${sessionId}.jsonl`);
     fs.writeFileSync(filePath, lines.map((l) => l).join('\n') + '\n', 'utf8');
     return filePath;
 }
