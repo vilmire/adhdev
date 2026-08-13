@@ -338,6 +338,10 @@ export type { MeshMagiActivityStatus, MeshMagiActivitySummary, MeshMagiActivityS
 export { buildMeshSchedulingRuntime } from './mesh/mesh-scheduling-runtime.js';
 export type { MeshSchedulingRuntime, MeshNodeSchedulingRuntime, MeshNodeProviderSchedulingRuntime } from './mesh/mesh-scheduling-runtime.js';
 
+// ── Mesh Quota Routing (observability: last ranking decision per node) ──
+export { getLastQuotaRanking } from './mesh/mesh-quota-routing.js';
+export type { LastQuotaRankingRecord, ProviderQuotaRiskSnapshot } from './mesh/mesh-quota-routing.js';
+
 // ── Mesh Host Ownership ──
 export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';
 

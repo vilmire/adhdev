@@ -20,7 +20,7 @@ import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates, recordLastQuotaRanking, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -781,6 +781,19 @@ export function tryAssignQueueTask(
     // `n.id` — a stamp-form nodeId vs the mesh node's config-form id must still
     // resolve, mirroring the remote idle-session path below (:1341).
     const node = mesh?.nodes.find((n: any) => meshNodeIdMatches(n, nodeId));
+
+    // OBSERVABILITY (quota-ranking gap C): this is the single funnel every claim
+    // path flows through (auto-launch, event-driven agent:ready, idle drain,
+    // reconcile re-drain). Only the auto-launch path (source:'autoLaunch') just
+    // ran the ranking loop and already wrote a real record for this nodeId —
+    // every OTHER path adopts whatever provider the already-running session
+    // already has, without ranking anything. Recording that fact here (instead
+    // of leaving it silently absent) makes the gap itself visible in
+    // getLastQuotaRanking/mesh_status, rather than looking identical to "never
+    // dispatched here yet".
+    if (routingDecision?.source !== 'autoLaunch') {
+        recordLastQuotaRanking(nodeId, { decidedAt: Date.now(), winner: providerType, adopted: true });
+    }
 
     // AUTO-FF LEASE: an auto fast-forward may be mutating this node's workspace right
     // now (git merge --ff-only can move HEAD). Dispatching a task into it mid-checkout
@@ -1907,12 +1920,28 @@ async function resolveUsableProvider(
     // non-actionable) is never conflated with 'provider_priority_unusable'
     // (a slot configuration error, actionable).
     const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting);
+    // OBSERVABILITY (quota-ranking): the risk snapshot backing `ranked.clear`'s
+    // order, plus the gated reasons, so a debug-log tail or a later mesh_status
+    // read can reconstruct WHY this order happened, not just what it was.
+    const riskSnapshot = quotaRiskSnapshotForCandidates(node, ranked.clear, quotaRouting);
     if (!ranked.clear.length) {
         const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
         LOG.info('MeshQueue', `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
+        recordLastQuotaRanking(nodeId, {
+            decidedAt: Date.now(),
+            clear: riskSnapshot,
+            gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })),
+        });
         return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}` };
     }
     const winner = candidates.find(c => c.providerType === ranked.clear[0]) ?? candidates[0];
+    LOG.debug('MeshQueue', `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map(s => `${s.providerType}:${s.risk?.toFixed(1) ?? '?'}`).join(',')}] gated=[${ranked.gated.map(g => `${g.providerType}:${g.block.reason}`).join(',')}] winner=${winner.providerType}`);
+    recordLastQuotaRanking(nodeId, {
+        decidedAt: Date.now(),
+        winner: winner.providerType,
+        clear: riskSnapshot,
+        gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })),
+    });
     return {
         providerType: winner.providerType,
         ...(winner.slot.model ? { model: winner.slot.model } : {}),

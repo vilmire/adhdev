@@ -398,6 +398,72 @@ export function rankProvidersByQuotaGate(
 }
 
 /**
+ * OBSERVABILITY (quota-ranking): per-provider expiry-risk snapshot for every
+ * candidate the ranking loop considered, clear or gated. Order-preserving
+ * (caller's candidate order, not the sorted rank) so a log line or a
+ * mesh_status reader can show "here is what each candidate looked like"
+ * without re-deriving weeklyExpiryRiskForRanking itself (kept module-private
+ * — this is the one sanctioned way to read it from outside the module).
+ * remainingPercent/risk are undefined for the same reasons rankProvidersByQuotaGate's
+ * unknown group exists: no snapshot, non-'ok', stale, or no weekly window.
+ */
+export interface ProviderQuotaRiskSnapshot {
+    providerType: string;
+    remainingPercent?: number;
+    risk?: number;
+}
+
+export function quotaRiskSnapshotForCandidates(
+    node: any,
+    orderedProviderTypes: string[],
+    policy?: RepoMeshQuotaRoutingPolicy | null,
+    now: number = Date.now(),
+): ProviderQuotaRiskSnapshot[] {
+    return orderedProviderTypes.map(providerType => {
+        const w = weeklyExpiryRiskForRanking(node, providerType, policy, now);
+        return {
+            providerType,
+            ...(w ? { remainingPercent: w.remainingPercent, risk: w.risk } : {}),
+        };
+    });
+}
+
+/**
+ * OBSERVABILITY (quota-ranking): the mesh's last quota-ranking decision per
+ * node, overwritten on every write — ONE entry per node, never accumulating,
+ * so this cannot grow unbounded across a long-lived daemon process. Exists so
+ * a caller who was not tailing logs at the moment a routing decision was made
+ * (e.g. mesh_status, queried minutes later) can still see WHY the winner won.
+ *
+ * Two shapes: a real ranking (the selection loop ran rankProvidersByQuotaGate)
+ * carries `clear`/`gated`/`winner`; an ADOPT record (an idle-session claim path
+ * that never runs the ranking loop — it adopts whatever provider the already-
+ * running session already has) carries only `adopted: true` and the provider,
+ * making the "no ranking ran here" gap itself visible instead of silently
+ * absent. See mesh-queue-assignment.ts tryAssignQueueTask for the write side.
+ */
+export interface LastQuotaRankingRecord {
+    decidedAt: number;
+    winner?: string;
+    clear?: ProviderQuotaRiskSnapshot[];
+    gated?: Array<{ providerType: string; reason: string }>;
+    /** True when this record documents an ADOPT (idle-session claim that
+     *  never ran the ranking loop) rather than a fresh ranking. */
+    adopted?: boolean;
+}
+
+const lastQuotaRankingByNode = new Map<string, LastQuotaRankingRecord>();
+
+export function recordLastQuotaRanking(nodeId: string, record: LastQuotaRankingRecord): void {
+    if (!nodeId) return;
+    lastQuotaRankingByNode.set(nodeId, record);
+}
+
+export function getLastQuotaRanking(nodeId: string): LastQuotaRankingRecord | undefined {
+    return lastQuotaRankingByNode.get(nodeId);
+}
+
+/**
  * The SPREAD input: per-provider quota-headroom bonus (0..spreadBonusMax) for
  * every provider with a fresh, usable snapshot on this node. The bonus is
  * proportional to the TIGHTEST reported window's remaining headroom (the

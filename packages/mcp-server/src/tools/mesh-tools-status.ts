@@ -18,6 +18,7 @@ import {
     summarizeMeshMagiActivity,
     buildMeshNodeProbeFreshness,
     buildMeshSchedulingRuntime,
+    getLastQuotaRanking,
     buildNodeCapabilityExposure,
     buildNodeMachineIdentity,
     collectLiveStatusProbe,
@@ -168,6 +169,20 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             entry.scheduling = compact
                 ? { load: rest.load, capReached: rest.capReached }
                 : rest;
+        }
+
+        // OBSERVABILITY (quota-ranking): the mesh's last quota-ranking decision
+        // for this node, overwritten on every claim — so a coordinator who was
+        // not tailing logs at dispatch time can still see WHY the current
+        // provider won (or that this claim ADOPTED an existing session without
+        // ranking anything — the idle-drain/event-driven claim paths never run
+        // the ranking loop; see mesh-quota-routing.ts LastQuotaRankingRecord).
+        // Present in both compact and verbose: it is one small object, already
+        // bounded to the mesh's node count, not a per-call cost like the
+        // scheduling projection above.
+        const lastQuotaRanking = getLastQuotaRanking(node.id);
+        if (lastQuotaRanking) {
+            entry.scheduling = { ...(entry.scheduling ?? {}), lastQuotaRanking };
         }
 
         // Tracks whether THIS call obtained live truth from a fresh git_status probe.
