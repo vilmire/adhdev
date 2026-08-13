@@ -207,6 +207,23 @@ function mapUsageResponse(data: unknown): ProviderQuota {
     };
 }
 
+/**
+ * Body markers that mean "the plan is exhausted", per Kimi's own error
+ * reference (403 + "You've reached your usage limit for this billing cycle").
+ * Matched against the raw error body; deliberately narrow so an unrelated 403
+ * (client allowlist, region block, ...) is never misclassified.
+ */
+const USAGE_LIMIT_BODY_PATTERN = /usage limit|quota\s*(exhausted|refresh)|billing cycle/i;
+
+/** Best-effort error-body read; never throws, never blocks classification. */
+async function readErrorBody(response: { text?(): Promise<string> }): Promise<string> {
+    try {
+        return (await response.text?.()) ?? '';
+    } catch {
+        return '';
+    }
+}
+
 function retryAfterMs(header: string | null, nowMs: number): number | undefined {
     if (!header) {
         return undefined;
@@ -260,11 +277,35 @@ export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
             return quotaFailure(
                 'kimi',
                 'error',
-                `Kimi usage request was rejected (HTTP ${response.status})`,
+                'Kimi usage request was rejected (HTTP 401)',
+                { source: 'oauth', failureKind: 'unauthorized' },
+            );
+        }
+        if (response.status === 403) {
+            // A 403 is NOT always an auth failure: Kimi answers 403 with
+            // "You've reached your usage limit for this billing cycle..."
+            // when the plan is exhausted (and with unrelated bodies — e.g. the
+            // client-allowlist access_terminated_error — when it is not). Only
+            // an explicit usage-limit marker in the body earns the
+            // 'quota-exhausted' kind; anything else stays 'unauthorized' so an
+            // auth problem is never misread as exhaustion.
+            const body = await readErrorBody(response);
+            if (USAGE_LIMIT_BODY_PATTERN.test(body)) {
+                return quotaFailure(
+                    'kimi',
+                    'error',
+                    'Kimi usage limit reached (HTTP 403) — quota refreshes at the next reset/billing cycle',
+                    { source: 'oauth', failureKind: 'quota-exhausted' },
+                );
+            }
+            return quotaFailure(
+                'kimi',
+                'error',
+                'Kimi usage request was rejected (HTTP 403)',
                 { source: 'oauth', failureKind: 'unauthorized' },
             );
         }

@@ -23,6 +23,12 @@
  * on data that no longer describes them (the stale-quota misexclusion failure
  * mode). Observation without confidence must be inert.
  *
+ * ONE hard-block exception: a FRESH 'error' snapshot whose metadata.failureKind
+ * is 'quota-exhausted' (the provider's own "usage limit reached" answer, e.g.
+ * Kimi's 403) blocks the pair — that is a measured fact about the account, not
+ * a guess, and launching would strand the task on a provider that cannot run
+ * it. Stale exhaustion readings fail open like everything else.
+ *
  * ★QUOTA TRACKING TURNED OFF is one of those missing entries, and it is a
  * DELIBERATE user choice, not a failure. A provider whose probe is disabled
  * (`machineProviders[type].quotaEnabled === false`, set from the install
@@ -67,6 +73,11 @@ import {
  *  SLOT MODEL GUARD's busy outcome. */
 export const PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON = 'provider_quota_session_low';
 export const PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON = 'provider_quota_weekly_low';
+/** Hard-block reason: the provider itself reported its plan exhausted (a fresh
+ *  'error' snapshot with metadata.failureKind 'quota-exhausted'). Same WAIT
+ *  semantics as the window gates — the quota resets on its own — so this is
+ *  deliberately NOT actionable either. */
+export const PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = 'provider_quota_exhausted';
 
 /** Read the reported quota entry for a provider off a node's facts bundle. */
 function quotaEntryFor(node: any, providerType: string): { facts: { reportedAt: number }; quota: MeshNodeFactsProviderQuota } | null {
@@ -115,7 +126,9 @@ function remainingPercent(window: { usedPercent: number } | null | undefined): n
 
 export interface ProviderQuotaGateBlock {
     reason: string;
-    window: 'session' | 'weekly';
+    /** 'unknown' when the block comes from an explicit exhaustion signal that
+     *  does not name a window (PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON). */
+    window: 'session' | 'weekly' | 'unknown';
     remainingPercent: number;
     thresholdPercent: number;
 }
@@ -153,7 +166,12 @@ function isSessionResetImminent(
  * The launch GATE: should this (node, provider) pair be skipped because the
  * provider's reported quota is nearly exhausted? Returns null (launch may
  * proceed) when the quota is unknown, unmeasurable, stale, or above every
- * threshold — the gate only ever blocks on a FRESH, 'ok' snapshot.
+ * threshold. The gate blocks in exactly two situations, both on FRESH
+ * snapshots only:
+ *   1. an 'ok' snapshot with a window below its threshold, and
+ *   2. an 'error' snapshot with failureKind 'quota-exhausted' — the provider's
+ *      own exhaustion verdict (no window breakdown, so window is 'unknown').
+ * Every other non-'ok' reading fails open.
  *
  * Thresholds are judged per window against the node's session/weekly axes —
  * the provider-agnostic vocabulary every fetcher normalizes into, so no
@@ -174,7 +192,26 @@ export function evaluateProviderQuotaGate(
     const entry = quotaEntryFor(node, providerType);
     if (!entry) return null; // never reported → unknown, not blocked
     const { facts, quota } = entry;
-    if (quota.status !== 'ok') return null; // looked-and-could-not-tell is not a routing signal
+    if (quota.status !== 'ok') {
+        // HARD BLOCK, the single exception to fail-open: a FRESH 'error'
+        // snapshot whose failureKind is 'quota-exhausted' is the provider
+        // itself saying "no quota until the reset" — measured fact, not a
+        // guess — so launching here would burn a task slot on a provider that
+        // cannot run it. Every other failure kind (unauthorized, network,
+        // parse, stale, ...) still fails OPEN: looked-and-could-not-tell is
+        // not a routing signal.
+        if (quota.status === 'error'
+            && (quota as any).metadata?.failureKind === 'quota-exhausted'
+            && isQuotaSnapshotFresh(facts, quota, policy, now)) {
+            return {
+                reason: PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
+                window: 'unknown',
+                remainingPercent: 0,
+                thresholdPercent: 0,
+            };
+        }
+        return null;
+    }
     if (!isQuotaSnapshotFresh(facts, quota, policy, now)) return null; // fail-open on stale
     const resolved = resolveQuotaRoutingPolicy(policy);
     const session = remainingPercent(quota.session);
