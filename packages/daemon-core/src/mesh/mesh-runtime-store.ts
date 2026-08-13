@@ -1705,12 +1705,25 @@ export class MeshRuntimeStore {
     // regardless of arrival order, so a late confirm can never demote a consumed delivery.
     // 'failed'/'expired'/'cancelled' are absorbing OUTCOMES, not progress ranks — they are
     // always allowed (a genuine dispatch failure must be recordable even from 'acked').
+    //
+    // QUEUED-IS-PROGRESS: 'queued' is a legitimate INTERMEDIATE rank between 'delivering'
+    // and 'delivered', NOT the floor of the FSM. A delivery row is INSERTED as 'delivering'
+    // (dispatch in flight to the transport); when the session is busy the adapter buffers
+    // the prompt and the transport confirm reports {status:'queued'} — a genuine forward
+    // step (handed to the adapter's outbound queue), but still short of 'delivered'
+    // (submitted at the PTY boundary; see DISPATCH-ACK-EVIDENCE in mesh-queue-assignment).
+    // Ranking 'queued' at 0 made that confirm write a rank REGRESSION (0 < 1), so the
+    // monotonic guard dropped it and the row stayed 'delivering' forever — never confirmed
+    // for taskHasConfirmedDelivery, feeding the redrive staleness heuristics a permanent
+    // "no confirmed delivery" signal for a prompt that was already buffered on the worker.
+    // At rank 2 the confirm records correctly and the later flush advance
+    // (queued→delivered / queued→acked via consumeSessionDelivery) still applies.
     private static readonly DELIVERY_PROGRESS_RANK: Record<string, number> = {
-        queued: 0,
         delivering: 1,
-        delivered: 2,
-        acked: 3,
-        completed: 4,
+        queued: 2,
+        delivered: 3,
+        acked: 4,
+        completed: 5,
     };
 
     updateSessionDeliveryStatus(id: string, status: string, opts?: { lastError?: string; incrementAttempt?: boolean }): void {
@@ -1730,8 +1743,8 @@ export class MeshRuntimeStore {
         }
         // Monotonic guard for forward-progress statuses: a plain status write may ADVANCE or
         // rewrite the SAME rank, but NEVER regress to a strictly-lower rank. This is what stops the
-        // late transport-confirm ('delivered', rank 2) from clobbering an already-consumed row
-        // ('acked', rank 3): the `@targetRank >= current` predicate fetches zero rows for 3→2, so
+        // late transport-confirm ('delivered', rank 3) from clobbering an already-consumed row
+        // ('acked', rank 4): the `@targetRank >= current` predicate fetches zero rows for 4→3, so
         // 'acked' survives. Absorbing failure outcomes (failed/expired/cancelled) have no rank and
         // are written unconditionally.
         const targetRank = MeshRuntimeStore.DELIVERY_PROGRESS_RANK[status];
@@ -1744,13 +1757,14 @@ export class MeshRuntimeStore {
             return;
         }
         // Absorbing failure states (failed/expired/cancelled) map to rank 99 so no progress write
-        // (max rank 4) can ever resurrect a dead delivery.
+        // (max rank 5) can ever resurrect a dead delivery. The CASE mirrors DELIVERY_PROGRESS_RANK
+        // exactly — keep the two in sync.
         this.db.prepare(`
             UPDATE mesh_session_delivery
             SET status = @status, last_error = @lastError, updated_at = @updatedAt
             WHERE id = @id AND (@targetRank >= CASE status
-                WHEN 'queued' THEN 0 WHEN 'delivering' THEN 1 WHEN 'delivered' THEN 2
-                WHEN 'acked' THEN 3 WHEN 'completed' THEN 4 ELSE 99 END)
+                WHEN 'delivering' THEN 1 WHEN 'queued' THEN 2 WHEN 'delivered' THEN 3
+                WHEN 'acked' THEN 4 WHEN 'completed' THEN 5 ELSE 99 END)
         `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now, targetRank });
     }
 

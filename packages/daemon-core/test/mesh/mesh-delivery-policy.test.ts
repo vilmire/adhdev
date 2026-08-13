@@ -210,16 +210,28 @@ describe('mesh-delivery-policy', () => {
     // ── updateSessionDeliveryStatus ──────────────────────────────────────────
 
     describe('updateSessionDeliveryStatus', () => {
-        it('transitions queued → delivering → delivered', () => {
+        it('transitions delivering → queued → delivered (QUEUED-IS-PROGRESS lifecycle)', () => {
             const meshId = `mesh-del-status-${randomUUID().slice(0, 8)}`;
-            const d = createSessionDelivery({ meshId, sessionId: 'sess-x', kind: 'task', message: 'msg', status: 'queued' });
-            updateSessionDeliveryStatus(d.id, 'delivering');
+            // Rows are INSERTED as 'delivering' (dispatch in flight); a busy session's
+            // adapter buffers the prompt and the confirm reports 'queued' — a forward
+            // step, not the FSM floor (it ranked 0 pre-fix and the write was dropped).
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-x', kind: 'task', message: 'msg', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'queued');
             let active = getActiveSessionDeliveries(meshId, 'sess-x');
-            expect(active[0].status).toBe('delivering');
+            expect(active[0].status).toBe('queued');
             updateSessionDeliveryStatus(d.id, 'delivered');
             // 'delivered' is a terminal-equivalent — not in active list
             active = getActiveSessionDeliveries(meshId, 'sess-x');
             expect(active.length).toBe(0);
+        });
+
+        it('queued → delivering is a rank regression and stays a no-op', () => {
+            const meshId = `mesh-del-status-regress-${randomUUID().slice(0, 8)}`;
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-x', kind: 'task', message: 'msg', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'queued');
+            updateSessionDeliveryStatus(d.id, 'delivering'); // regress attempt — ignored
+            const active = getActiveSessionDeliveries(meshId, 'sess-x');
+            expect(active[0].status).toBe('queued');
         });
 
         it('increments attemptCount on failure with incrementAttempt', () => {
@@ -300,6 +312,42 @@ describe('mesh-delivery-policy', () => {
             updateSessionDeliveryStatus(d.id, 'acked');
             expect(store().taskDeliveryConsumed(meshId, 't-x')).toBe(false);
             expect(store().taskHasConfirmedDelivery(meshId, 't-x')).toBe(false);
+        });
+
+        // QUEUED-IS-PROGRESS regression: the adapter-buffered confirm ({status:'queued'})
+        // used to rank BELOW the initial 'delivering' insert (0 < 1), so the monotonic
+        // guard dropped it and the row stuck at 'delivering' forever — taskHasConfirmedDelivery
+        // never saw it and the redrive staleness heuristics read a permanent
+        // "no confirmed delivery" for a prompt already buffered on the worker.
+        it('QUEUED intermediate: an adapter-buffered confirm advances delivering→queued (no longer stuck at delivering)', () => {
+            const meshId = `mesh-fsm-queued-${randomUUID().slice(0, 8)}`;
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-q', taskId: 't-q', kind: 'task', message: 'm', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'queued');
+            const row = store().getActiveSessionDeliveries(meshId).find(r => r.id === d.id);
+            expect(row?.status).toBe('queued');
+        });
+
+        it('QUEUED → flush: the later advance queued→delivered→acked applies (the buffered prompt reaches the PTY / the turn starts)', () => {
+            const meshId = `mesh-fsm-flush-${randomUUID().slice(0, 8)}`;
+            const taskId = `t-flush-${randomUUID().slice(0, 8)}`;
+            const sessionId = 'sess-flush';
+            const d = createSessionDelivery({ meshId, sessionId, taskId, kind: 'task', message: 'm', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'queued');      // adapter buffered the prompt
+            updateSessionDeliveryStatus(d.id, 'delivered');   // adapter flushed it to the PTY
+            expect(store().taskHasConfirmedDelivery(meshId, taskId)).toBe(true);
+            // The worker's generating_started consumes the delivery straight from 'delivered'.
+            expect(consumeSessionDelivery(meshId, sessionId, 'acked', taskId)).toBe(1);
+            expect(store().taskDeliveryConsumed(meshId, taskId)).toBe(true);
+        });
+
+        it('QUEUED never demotes: delivered→queued is a rank regression and stays a no-op', () => {
+            const meshId = `mesh-fsm-qguard-${randomUUID().slice(0, 8)}`;
+            const d = createSessionDelivery({ meshId, sessionId: 'sess-qg', taskId: 't-qg', kind: 'task', message: 'm', status: 'delivering' });
+            updateSessionDeliveryStatus(d.id, 'delivered');
+            updateSessionDeliveryStatus(d.id, 'queued'); // regress attempt — ignored
+            // 'delivered' rows leave the active list, so assert via the confirmed-delivery
+            // predicate: it would read false had the demotion to 'queued' applied.
+            expect(store().taskHasConfirmedDelivery(meshId, 't-qg')).toBe(true);
         });
 
         it('completion terminal marking includes a delivered row (markSessionDeliveriesTerminal → completed)', () => {
