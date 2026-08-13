@@ -11,6 +11,13 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Follows the ci.yml concurrency convention (ci-oss- prefix), with
+# ${{ github.workflow }} added so this workflow does not share a group with
+# ci.yml — sharing one would make the two cancel each other on the same push.
+concurrency:
+  group: ci-oss-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-build:
     runs-on: ${{ matrix.runner }}
