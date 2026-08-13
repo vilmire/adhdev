@@ -5,9 +5,11 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import {
+  buildSubmodulePublishRequiredNextStep,
   convergeDivergedSubmoduleGitlinks,
   rootRebaseResolvingGitlinks,
   runMeshRefinePatchEquivalenceGate,
+  runMeshRefineSubmoduleReachabilityGate,
 } from '../../src/commands/router'
 
 // --- git helpers --------------------------------------------------------
@@ -252,5 +254,219 @@ describe('rootRebaseResolvingGitlinks + patch-equivalence (end-to-end auto-conve
     // No mid-rebase state left behind.
     expect(() => git(wt, ['rev-parse', '--verify', 'REBASE_HEAD'])).toThrow()
     void baseHead; void branchHead
+  })
+})
+
+/**
+ * The REAL incident this regression suite pins down (parallel-refine twin):
+ *
+ *   oss origin/main = 83ea6c68
+ *   A worker merged the branch → 67dab44d, ff-pushed to origin/main (published)
+ *   The Refinery rewrote the branch commit 9586a8d8 onto 83ea6c68 → d8e3acb7
+ *     · patch-id(d8e3acb7) == patch-id(9586a8d8)   (byte-identical diff)
+ *     · tree(d8e3acb7)     == tree(67dab44d)       (byte-identical content)
+ *     · d8e3acb7 is NOT an ancestor of 67dab44d
+ *   → old behavior: submodule_publish_required (WRONG — publishing the twin
+ *     mints duplicate history)
+ *   → fixed behavior: converge the gitlink to the already-published 67dab44d.
+ *
+ * Submodule graph built here (analog SHAs):
+ *
+ *   subMB ──> subBase ──(merge branchsub)──> subPublished   (origin/main)
+ *     └──> subBranch
+ *
+ * where tree(merge-tree(subBase, subBranch)) == tree(subPublished).
+ */
+function setupPublishedTwinSubmodule() {
+  const tmp = makeTmp()
+  const submoduleOrigin = join(tmp, 'sub-origin')
+  const base = join(tmp, 'base')
+
+  initRepo(submoduleOrigin)
+  const subMB = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'sub v1')
+  const subBase = commitFile(submoduleOrigin, 'mod.txt', 'v1\nbase-line\n', 'sub base edit')
+  git(submoduleOrigin, ['checkout', '-q', '-b', 'branchsub', subMB])
+  const subBranch = commitFile(submoduleOrigin, 'other.txt', 'branch-line\n', 'sub branch add')
+  // The sibling worker merges the branch onto main and pushes → the published twin.
+  git(submoduleOrigin, ['checkout', '-q', 'main'])
+  git(submoduleOrigin, ['merge', '-q', '--no-ff', 'branchsub', '-m', 'merge branchsub'])
+  const subPublished = git(submoduleOrigin, ['rev-parse', 'HEAD'])
+
+  // Root base repo: pin sub at subMB (the common ancestor), then advance to subBase.
+  initRepo(base)
+  commitFile(base, 'top.txt', 'top\n', 'root init')
+  git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+  git(join(base, 'sub'), ['fetch', '-q', 'origin'])
+  git(join(base, 'sub'), ['checkout', '-q', subMB])
+  git(base, ['add', 'sub'])
+  git(base, ['commit', '-q', '-m', 'pin sub at merge-base'])
+  const rootMB = git(base, ['rev-parse', 'HEAD'])
+
+  writeFileSync(join(base, 'sibling.txt'), 'sibling\n', 'utf-8')
+  git(base, ['add', 'sibling.txt'])
+  git(join(base, 'sub'), ['checkout', '-q', subBase])
+  git(base, ['add', 'sub'])
+  git(base, ['commit', '-q', '-m', 'base: sub->subBase + sibling'])
+  const baseHead = git(base, ['rev-parse', 'HEAD'])
+
+  // Worktree branch off rootMB: sub->subBranch + own root file.
+  const wt = join(tmp, 'wt')
+  git(base, ['worktree', 'add', '-q', '--detach', wt, rootMB])
+  git(wt, ['checkout', '-q', '-b', 'feat'])
+  git(wt, ['submodule', 'update', '-q', '--init'])
+  git(join(wt, 'sub'), ['fetch', '-q', 'origin'])
+  git(join(wt, 'sub'), ['checkout', '-q', subBranch])
+  git(wt, ['add', 'sub'])
+  writeFileSync(join(wt, 'ours.txt'), 'ours\n', 'utf-8')
+  git(wt, ['add', 'ours.txt'])
+  git(wt, ['commit', '-q', '-m', 'branch: sub->subBranch + ours'])
+  const branchHead = git(wt, ['rev-parse', 'HEAD'])
+
+  return { base, wt, baseHead, branchHead, subMB, subBase, subBranch, subPublished }
+}
+
+describe('parallel-refine published-twin (Gap #1/Gap #2 regression)', () => {
+  it('converges to the already-published equivalent commit instead of rewriting a same-content twin', async () => {
+    const { base, wt, baseHead, branchHead, subBase, subBranch, subPublished } = setupPublishedTwinSubmodule()
+    const subRepo = join(wt, 'sub')
+
+    // Precondition: base and branch advanced the SAME submodule to genuinely
+    // diverged sibling commits (neither an ancestor of the other) — the exact
+    // input the stale cache misjudged.
+    expect(() => git(subRepo, ['merge-base', '--is-ancestor', subBase, subBranch])).toThrow()
+    expect(() => git(subRepo, ['merge-base', '--is-ancestor', subBranch, subBase])).toThrow()
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    expect(result.converged).toBe(true)
+    expect(result.resolutions).toHaveLength(1)
+    const [res] = result.resolutions
+    expect(res.path).toBe('sub')
+    // ★ NO rewrite: the resolution IS the already-published commit (67dab44d
+    // analog). Under the old behavior this was a freshly-minted local twin.
+    expect(res.rebasedCommit).toBe(subPublished)
+    expect(result.gitlinks[0].action).toBe('converged_to_published')
+    // The published commit descends from the base side (linear history preserved).
+    expect(git(subRepo, ['merge-base', '--is-ancestor', subBase, res.rebasedCommit])).toBe('')
+
+    // End-to-end: the gitlink-aware root rebase resolves to the published commit
+    // and the patch-equivalence gate passes on the converged branch.
+    const rebased = rootRebaseResolvingGitlinks(wt, baseHead, result.resolutions)
+    expect(rebased.ok).toBe(true)
+    const pe = await runMeshRefinePatchEquivalenceGate(base, baseHead, rebased.branchHead!)
+    expect(pe.status).toBe('passed')
+    expect(pe.equivalent).toBe(true)
+  })
+
+  it('still rewrites a genuinely diverged submodule when origin/main advanced with UNRELATED content', () => {
+    // The maximum-risk guard: the published-equivalence check must NOT be so
+    // broad that it blocks a legitimate rewrite. Here origin/main HAS moved past
+    // the base side, but with content unrelated to the branch — there is no
+    // equivalent twin, so the historical rebase path must run unchanged.
+    const { base, wt, baseHead, branchHead, subBase, subBranch } = setupDivergedSubmodule()
+    const subRepo = join(wt, 'sub')
+    const submoduleOrigin = git(subRepo, ['remote', 'get-url', 'origin'])
+    commitFile(submoduleOrigin, 'unrelated.txt', 'unrelated\n', 'unrelated published commit')
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    expect(result.converged).toBe(true)
+    expect(result.resolutions).toHaveLength(1)
+    const [res] = result.resolutions
+    expect(result.gitlinks[0].action).toBe('rebased')
+    expect(res.rebasedCommit).not.toBe(subBranch)
+    // A REAL rewrite happened: a brand-new tip that descends from the base side
+    // and still carries the branch's work.
+    expect(git(subRepo, ['merge-base', '--is-ancestor', subBase, res.rebasedCommit])).toBe('')
+    expect(git(subRepo, ['ls-tree', '-r', '--name-only', res.rebasedCommit])).toMatch(/other\.txt/)
+    expect(git(subRepo, ['ls-tree', '-r', '--name-only', res.rebasedCommit])).not.toMatch(/unrelated\.txt/)
+  })
+
+  it('reachability gate points an unreachable twin at the published equivalent instead of demanding a publish', async () => {
+    // Reproduce the incident's exact end state: the Refinery already rewrote the
+    // branch commit into a LOCAL twin (d8e3acb7 analog) whose tree is
+    // byte-identical to the published origin/main commit (67dab44d analog) but
+    // which is NOT reachable from origin/main.
+    const tmp = makeTmp()
+    const submoduleOrigin = join(tmp, 'sub-origin')
+    const base = join(tmp, 'base')
+
+    initRepo(submoduleOrigin)
+    const subMB = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'sub v1')
+    const subPublished = commitFile(submoduleOrigin, 'other.txt', 'branch-line\n', 'published merge result')
+
+    initRepo(base)
+    commitFile(base, 'top.txt', 'top\n', 'root init')
+    git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+    // Mint the local twin: same content as subPublished, different SHA, not pushed.
+    const subRepo = join(base, 'sub')
+    git(subRepo, ['checkout', '-q', '--detach', subMB])
+    writeFileSync(join(subRepo, 'other.txt'), 'branch-line\n', 'utf-8')
+    git(subRepo, ['add', 'other.txt'])
+    git(subRepo, ['commit', '-q', '-m', 'rewritten twin'])
+    const subTwin = git(subRepo, ['rev-parse', 'HEAD'])
+
+    // The incident's three invariants, asserted on the fixture itself:
+    const patchIdOf = (from: string, to: string) =>
+      execFileSync('git', ['patch-id', '--stable'], {
+        cwd: subRepo,
+        input: git(subRepo, ['diff', '--patch', '--full-index', from, to]),
+        encoding: 'utf-8',
+      }).trim().split(/\s+/)[0]
+    expect(patchIdOf(subMB, subTwin)).toBe(patchIdOf(subMB, subPublished))          // patch-id equal
+    expect(git(subRepo, ['rev-parse', `${subTwin}^{tree}`]))
+      .toBe(git(subRepo, ['rev-parse', `${subPublished}^{tree}`]))                  // tree equal
+    expect(() => git(subRepo, ['merge-base', '--is-ancestor', subTwin, subPublished])).toThrow() // not an ancestor
+
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'gitlink -> twin'])
+    const mergedTree = git(base, ['rev-parse', 'HEAD^{tree}'])
+
+    const gate = await runMeshRefineSubmoduleReachabilityGate(base, mergedTree)
+    expect(gate.status).toBe('failed')
+    expect(gate.unreachable).toHaveLength(1)
+    const [entry] = gate.unreachable
+    // ★ Old behavior: publishRequired:true + "push the commit". Fixed behavior:
+    // converge the gitlink to the already-published equivalent.
+    expect(entry.equivalentPublishedCommit).toBe(subPublished)
+    expect(entry.publishRequired).toBe(false)
+    expect(entry.error).toContain('converge the gitlink to the published commit')
+    const nextStep = buildSubmodulePublishRequiredNextStep(gate.unreachable)
+    expect(nextStep).toContain('already-published equivalent commit')
+    expect(nextStep).toContain(subPublished)
+    expect(nextStep).not.toContain('Ask the user for explicit approval')
+  })
+
+  it('reachability gate still demands a publish for a genuinely unpublished commit (no equivalent on origin)', async () => {
+    // Guard against the equivalence check passing spuriously: a commit whose
+    // content exists nowhere on origin/main keeps the historical
+    // publish-required prescription, byte-for-byte.
+    const tmp = makeTmp()
+    const submoduleOrigin = join(tmp, 'sub-origin')
+    const base = join(tmp, 'base')
+
+    initRepo(submoduleOrigin)
+    commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'sub v1')
+
+    initRepo(base)
+    commitFile(base, 'top.txt', 'top\n', 'root init')
+    git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+    const subRepo = join(base, 'sub')
+    writeFileSync(join(subRepo, 'local-only.txt'), 'not published\n', 'utf-8')
+    git(subRepo, ['add', 'local-only.txt'])
+    git(subRepo, ['commit', '-q', '-m', 'genuinely new work'])
+    const localOnly = git(subRepo, ['rev-parse', 'HEAD'])
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'gitlink -> local only'])
+    const mergedTree = git(base, ['rev-parse', 'HEAD^{tree}'])
+
+    const gate = await runMeshRefineSubmoduleReachabilityGate(base, mergedTree)
+    expect(gate.status).toBe('failed')
+    expect(gate.unreachable).toHaveLength(1)
+    const [entry] = gate.unreachable
+    expect(entry.equivalentPublishedCommit).toBeUndefined()
+    expect(entry.publishRequired).toBe(true)
+    expect(entry.error).toContain('Submodule remote main reachability check failed for origin/main')
+    const nextStep = buildSubmodulePublishRequiredNextStep(gate.unreachable)
+    expect(nextStep).toContain('Ask the user for explicit approval')
+    expect(nextStep).toContain(`sub@${localOnly}`)
   })
 })
