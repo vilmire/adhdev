@@ -2661,6 +2661,8 @@
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
             "sectionACPAgents": "ACP 代理",
+            "cpu": "CPU",
+            "mem": "MEM",
             "loading": "正在加载你的机器…",
             "emptyHeadline": "欢迎使用 ADHDev",
             "emptyBody": "将你的第一台机器连接到仪表板。运行一次设置，然后在该机器上启动 ADHDev：",

@@ -2661,6 +2661,8 @@
             "sectionIDEs": "IDEs",
             "sectionCLIs": "CLIs",
             "sectionACPAgents": "ACP Agents",
+            "cpu": "CPU",
+            "mem": "MEM",
             "loading": "Loading your machines…",
             "emptyHeadline": "Welcome to ADHDev",
             "emptyBody": "Connect your first machine to the dashboard. Run setup once, then start ADHDev on that machine:",

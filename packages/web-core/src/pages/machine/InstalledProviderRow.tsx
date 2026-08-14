@@ -411,7 +411,7 @@ export default function InstalledProviderRow({
                                             href={href}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="text-violet-400 hover:underline mr-2"
+                                            className="text-accent-primary hover:underline mr-2"
                                         >{k}</a>
                                     ))}
                                 </div>
@@ -434,7 +434,7 @@ export default function InstalledProviderRow({
                                         <div className="text-[11px] font-medium text-text-primary">
                                             {s.label || s.key}
                                             {savingKey === `${prov.type}.${s.key}` && (
-                                                <span className="ml-1.5 text-[9px] text-violet-500">{t('machine.providerRow.saving')}</span>
+                                                <span className="ml-1.5 text-[9px] text-accent-primary">{t('machine.providerRow.saving')}</span>
                                             )}
                                         </div>
                                         {s.description && (

@@ -172,7 +172,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                 <div className="flex items-center justify-between mb-1.5">
                                     <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider">{t('machine.providerFix.scriptsToFix')}</label>
                                     <div className="flex gap-1.5">
-                                        <button onClick={selectAll} className="text-[10px] text-violet-400 hover:text-violet-300">{t('machine.providerFix.all')}</button>
+                                        <button onClick={selectAll} className="text-[10px] text-accent-primary hover:text-accent-primary-light">{t('machine.providerFix.all')}</button>
                                         <span className="text-[10px] text-text-muted">|</span>
                                         <button onClick={selectNone} className="text-[10px] text-text-muted hover:text-text-secondary">{t('machine.providerFix.none')}</button>
                                     </div>
@@ -186,7 +186,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                             style={{
                                                 borderColor: selectedScripts.includes(s) ? 'color-mix(in srgb, var(--accent-primary) 40%, transparent)' : 'var(--border-subtle)',
                                                 background: selectedScripts.includes(s) ? 'color-mix(in srgb, var(--accent-primary) 8%, transparent)' : 'transparent',
-                                                color: selectedScripts.includes(s) ? '#a78bfa' : 'var(--text-secondary)',
+                                                color: selectedScripts.includes(s) ? 'var(--accent-primary)' : 'var(--text-secondary)',
                                             }}
                                         >
                                             {selectedScripts.includes(s) ? '☑ ' : '☐ '}{s}
@@ -205,7 +205,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                     onChange={e => setComment(e.target.value)}
                                     placeholder="e.g. Also search buttons inside Shadow DOM, preserve code block formatting in readChat..."
                                     rows={2}
-                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] resize-none placeholder:text-text-muted/50 focus:outline-none focus:border-violet-500/40"
+                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] resize-none placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
                                 />
                             </div>
                         </div>
@@ -224,7 +224,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                     </div>
                                 ))}
                                 {phase === 'running' && (
-                                    <div className="text-violet-400 animate-pulse mt-1">{t('machine.providerFix.running')}</div>
+                                    <div className="text-accent-primary animate-pulse mt-1">{t('machine.providerFix.running')}</div>
                                 )}
                                 <div ref={logsEndRef} />
                             </div>

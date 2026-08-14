@@ -117,7 +117,7 @@ export function LogsToolbar({
                             onClick={() => onQuickFilterChange(option.id)}
                             className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${
                                 quickFilter === option.id
-                                    ? 'bg-violet-500/15 text-violet-300 border border-violet-500/30'
+                                    ? 'bg-accent-primary/15 text-accent-primary border border-accent-primary/30'
                                     : 'text-text-secondary hover:text-text-primary'
                             }`}
                         >
@@ -166,7 +166,7 @@ export function AdvancedSourceScope({
                             key={level}
                             onClick={() => onLogLevelChange(level)}
                             className={`machine-btn text-[10px] px-2 py-0.5 ${
-                                logLevel === level ? 'bg-violet-500/15 border-violet-500/40 text-violet-400' : ''
+                                logLevel === level ? 'bg-accent-primary/15 border-accent-primary/40 text-accent-primary' : ''
                             }`}
                         >Daemon {level.toUpperCase()}+</button>
                     ))}
@@ -177,7 +177,7 @@ export function AdvancedSourceScope({
                             key={filter.value}
                             onClick={() => onTraceCategoryChange(filter.value)}
                             className={`machine-btn text-[10px] px-2 py-0.5 ${
-                                traceCategory === filter.value ? 'bg-violet-500/15 border-violet-500/40 text-violet-400' : ''
+                                traceCategory === filter.value ? 'bg-accent-primary/15 border-accent-primary/40 text-accent-primary' : ''
                             }`}
                         >
                             {filter.label}
