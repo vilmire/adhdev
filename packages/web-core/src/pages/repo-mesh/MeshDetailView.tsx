@@ -68,10 +68,9 @@ interface Props {
     coordinatorDaemonId: string
     /** First-setup host picker: set the host daemon when no authoritative pin exists yet. */
     onCoordinatorDaemonIdChange: (id: string) => void
+    /** Still read by CoordinatorPromptDefaultPreview below — NOT dead despite no
+     *  longer being passed into MeshHostDaemonSection (host-launch UI removed there). */
     coordinatorCliType: string
-    onCoordinatorCliTypeChange: (type: string) => void
-    launchingCoordinator: boolean
-    launchResult: string | null
     isHostNodeAttached: boolean
     selectedHostNode: MeshNode | undefined
     hostPinned: boolean
@@ -82,7 +81,6 @@ interface Props {
     /** Temporary command-routing override daemon while the host is offline ('' = none). */
     hostRebindDaemonId: string
     onHostRebindDaemonIdChange: (id: string) => void
-    onLaunchCoordinator: () => void
     /** True while the explicit first-setup host pin is being persisted. */
     settingMeshHost?: boolean
     /** Persist the operator's first-setup host choice (HOST-PIN-WRITER). */
@@ -179,9 +177,6 @@ export function MeshDetailView({
     coordinatorDaemonId,
     onCoordinatorDaemonIdChange,
     coordinatorCliType,
-    onCoordinatorCliTypeChange,
-    launchingCoordinator,
-    launchResult,
     isHostNodeAttached,
     selectedHostNode,
     hostPinned,
@@ -189,7 +184,6 @@ export function MeshDetailView({
     hostOnline,
     hostRebindDaemonId,
     onHostRebindDaemonIdChange,
-    onLaunchCoordinator,
     settingMeshHost,
     onSetMeshHost,
     activeDaemon,
@@ -306,10 +300,6 @@ export function MeshDetailView({
                     daemons={daemons}
                     coordinatorDaemonId={coordinatorDaemonId}
                     onCoordinatorDaemonIdChange={onCoordinatorDaemonIdChange}
-                    coordinatorCliType={coordinatorCliType}
-                    onCoordinatorCliTypeChange={onCoordinatorCliTypeChange}
-                    launchingCoordinator={launchingCoordinator}
-                    launchResult={launchResult}
                     isHostNodeAttached={isHostNodeAttached}
                     selectedHostNode={selectedHostNode}
                     hostPinned={hostPinned}
@@ -317,7 +307,6 @@ export function MeshDetailView({
                     hostOnline={hostOnline}
                     hostRebindDaemonId={hostRebindDaemonId}
                     onHostRebindDaemonIdChange={id => { onHostRebindDaemonIdChange(id); onRefreshGraph() }}
-                    onLaunchCoordinator={onLaunchCoordinator}
                     settingMeshHost={settingMeshHost}
                     onSetMeshHost={onSetMeshHost}
                 />

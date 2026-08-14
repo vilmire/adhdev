@@ -203,8 +203,7 @@ export default function RepoMesh() {
         nodeDaemonId, setNodeDaemonId,
         nodeCustomPath, setNodeCustomPath,
         nodePickerWorkspaces, nodePickerProviders, nodeOnboardingPlan, nodePlanLoading,
-        coordinatorCliType, setCoordinatorCliType,
-        launchingCoordinator, launchResult,
+        coordinatorCliType,
         savingPolicy,
         coordinatorPromptDraft, setCoordinatorPromptDraft,
         savingCoordinatorPrompt,
@@ -216,7 +215,6 @@ export default function RepoMesh() {
         handleUpdateNodeSlots,
         handleUpdateNodeCapabilities,
         handleSaveCoordinatorPrompt, handleSaveNodeSystemPrompt,
-        handleLaunchCoordinator,
         settingMeshHost, handleSetMeshHost,
     } = useMeshNodeActions({
         selectedMesh,
@@ -720,9 +718,6 @@ export default function RepoMesh() {
             coordinatorDaemonId={coordinatorDaemonId}
             onCoordinatorDaemonIdChange={setCoordinatorDaemonId}
             coordinatorCliType={coordinatorCliType}
-            onCoordinatorCliTypeChange={setCoordinatorCliType}
-            launchingCoordinator={launchingCoordinator}
-            launchResult={launchResult}
             isHostNodeAttached={isHostNodeAttached}
             selectedHostNode={hostNodeForDisplay}
             hostPinned={persistedHostInfo.pinned}
@@ -730,7 +725,6 @@ export default function RepoMesh() {
             hostOnline={hostOnline}
             hostRebindDaemonId={hostRebindDaemonId}
             onHostRebindDaemonIdChange={id => setHostRebindDaemonId(id)}
-            onLaunchCoordinator={handleLaunchCoordinator}
             settingMeshHost={settingMeshHost}
             onSetMeshHost={handleSetMeshHost}
             activeDaemon={activeDaemon}

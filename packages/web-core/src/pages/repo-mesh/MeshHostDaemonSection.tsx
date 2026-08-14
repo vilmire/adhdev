@@ -21,10 +21,6 @@ interface Props {
      * so the operator chooses instead of a wrong node flashing in the header.
      */
     onCoordinatorDaemonIdChange: (id: string) => void
-    coordinatorCliType: string
-    onCoordinatorCliTypeChange: (type: string) => void
-    launchingCoordinator: boolean
-    launchResult: string | null
     isHostNodeAttached: boolean
     selectedHostNode: MeshNode | undefined
     /** True when this mesh already has a persisted host pinned (meshHost metadata). */
@@ -36,13 +32,12 @@ interface Props {
     /** Temporary command-routing override daemon while the host is offline ('' = none). */
     hostRebindDaemonId: string
     onHostRebindDaemonIdChange: (id: string) => void
-    onLaunchCoordinator: () => void
     /** True while the first-setup host pin is being persisted. */
     settingMeshHost?: boolean
     /**
      * Persist the operator's first-setup host choice (HOST-PIN-WRITER, set_mesh_host).
      * Absent on hosts (e.g. older embedders) that have not wired the action yet — the
-     * section then falls back to launch-only, whose backfill also establishes the pin.
+     * section then falls back to a bare picker with no confirm action.
      */
     onSetMeshHost?: (hostDaemonId: string) => void
 }
@@ -67,10 +62,6 @@ export function MeshHostDaemonSection({
     daemons,
     coordinatorDaemonId,
     onCoordinatorDaemonIdChange,
-    coordinatorCliType,
-    onCoordinatorCliTypeChange,
-    launchingCoordinator,
-    launchResult,
     isHostNodeAttached,
     selectedHostNode,
     hostPinned,
@@ -78,27 +69,10 @@ export function MeshHostDaemonSection({
     hostOnline,
     hostRebindDaemonId,
     onHostRebindDaemonIdChange,
-    onLaunchCoordinator,
     settingMeshHost,
     onSetMeshHost,
 }: Props) {
     const { t } = useTranslation('common')
-    const cliProviderField = (
-        <FormField label={t('repoMesh.host.coordinatorProvider')} hint={t('repoMesh.host.coordinatorProviderHint')}>
-            <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
-                value={coordinatorCliType} onChange={e => onCoordinatorCliTypeChange(e.target.value)}>
-                <option value="">{t('repoMesh.host.useNodePriority')}</option>
-                <option value="claude-cli">Claude Code</option>
-                <option value="codex-cli">Codex</option>
-                <option value="gemini-cli">Gemini</option>
-                <option value="hermes-cli">Hermes</option>
-            </select>
-        </FormField>
-    )
-
-    const launchResultBanner = launchResult && (
-        <div className="mt-3 text-[12px] text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">{launchResult}</div>
-    )
 
     // ── Host already pinned: read-only display (never a picker) ──
     if (hostPinned) {
@@ -141,16 +115,6 @@ export function MeshHostDaemonSection({
                         )}
                     </div>
                 )}
-
-                <div className="mt-3 grid gap-3 sm:grid-cols-[180px_auto] items-end">
-                    {cliProviderField}
-                    <button className="btn btn-primary btn-sm" onClick={onLaunchCoordinator}
-                        disabled={launchingCoordinator || !coordinatorDaemonId}
-                        title={!coordinatorDaemonId ? t('repoMesh.host.noCommandTarget') : undefined}>
-                        {launchingCoordinator ? t('repoMesh.host.launching') : t('repoMesh.host.launchHost')}
-                    </button>
-                </div>
-                {launchResultBanner}
             </Section>
         )
     }
@@ -209,21 +173,12 @@ export function MeshHostDaemonSection({
                             <span className="text-[12px] text-text-muted">{t('repoMesh.host.setHostActionHint')}</span>
                         </div>
                     )}
-                    <div className="grid gap-3 sm:grid-cols-[180px_auto] items-end mt-3">
-                        {cliProviderField}
-                        <button className={`btn btn-sm ${setHostButton ? 'btn-secondary' : 'btn-primary'}`} onClick={onLaunchCoordinator}
-                            disabled={!coordinatorDaemonId || !isHostNodeAttached || launchingCoordinator}
-                            title={!coordinatorDaemonId ? t('repoMesh.host.pickHostFirst') : !isHostNodeAttached ? t('repoMesh.host.attachNodeFirst') : undefined}>
-                            {launchingCoordinator ? t('repoMesh.host.launching') : t('repoMesh.host.launchHostSetsHost')}
-                        </button>
-                    </div>
                 </>
             ) : (
                 <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
                     {t('repoMesh.host.noDaemonsToHost')}
                 </div>
             )}
-            {launchResultBanner}
         </Section>
     )
 }

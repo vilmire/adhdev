@@ -955,7 +955,9 @@
             "titleNoCount": "Nodes & Providers",
             "workspacesDetected": "{{count}} workspace(s) detected",
             "pickFromSaved": "← Pick from saved workspaces",
-            "ownerMachine": "Owner: {{owner}} · Machine: {{machine}}"
+            "ownerMachine": "Owner: {{owner}} · Machine: {{machine}}",
+            "machineTabsLabel": "Machines in this mesh",
+            "machineTabCounts": "{{nodes}} node(s) · {{slots}} slot(s)"
         },
         "host": {
             "coordinatorProvider": "Coordinator CLI provider",

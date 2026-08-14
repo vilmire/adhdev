@@ -955,7 +955,9 @@
             "titleNoCount": "노드 및 제공자",
             "workspacesDetected": "워크스페이스 {{count}}개 감지됨",
             "pickFromSaved": "← 저장된 워크스페이스에서 선택",
-            "ownerMachine": "소유자: {{owner}} · 머신: {{machine}}"
+            "ownerMachine": "소유자: {{owner}} · 머신: {{machine}}",
+            "machineTabsLabel": "이 메시의 머신",
+            "machineTabCounts": "노드 {{nodes}}개 · 슬롯 {{slots}}개"
         },
         "host": {
             "coordinatorProvider": "코디네이터 CLI 프로바이더",

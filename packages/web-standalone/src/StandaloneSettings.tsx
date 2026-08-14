@@ -272,21 +272,31 @@ export default function StandaloneSettings() {
 
             {/* ═══ Daemon Info ═══ */}
             <Section title={t('standalone.settings.daemonSection')} description={t('standalone.settings.daemonDescription')}>
-                <div className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-2.5 text-sm">
-                    <span className="text-text-muted">{t('standalone.settings.versionLabel')}</span>
-                    <span className="font-mono text-xs">v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}</span>
-                    <span className="text-text-muted">{t('standalone.settings.statusLabel')}</span>
-                    <span className={daemonEntry ? 'text-green-400' : 'text-yellow-400'}>
-                        {daemonEntry ? t('standalone.settings.statusRunning') : t('standalone.settings.statusNotConnected')}
-                    </span>
-                    <span className="text-text-muted">{t('standalone.settings.currentBindLabel')}</span>
-                    <span className="font-mono text-xs">{preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1'}</span>
-                    <span className="text-text-muted">{t('standalone.settings.defaultBindLabel')}</span>
-                    <span className="font-mono text-xs">{preferences?.standaloneBindHost || '127.0.0.1'}</span>
-                    <span className="text-text-muted">{t('standalone.settings.authLabel')}</span>
-                    <span className="text-xs">
-                        {authStatus?.hasPasswordAuth ? t('standalone.settings.authPassword') : authStatus?.hasTokenAuth ? t('standalone.settings.authToken') : t('standalone.settings.authNone')}
-                    </span>
+                <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
+                        <span className="text-sm text-text-muted">{t('standalone.settings.versionLabel')}</span>
+                        <span className="font-mono text-xs text-text-primary">v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}</span>
+                    </div>
+                    <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
+                        <span className="text-sm text-text-muted">{t('standalone.settings.statusLabel')}</span>
+                        <span className={`text-xs font-medium ${daemonEntry ? 'text-green-400' : 'text-yellow-400'}`}>
+                            {daemonEntry ? t('standalone.settings.statusRunning') : t('standalone.settings.statusNotConnected')}
+                        </span>
+                    </div>
+                    <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
+                        <span className="text-sm text-text-muted">{t('standalone.settings.currentBindLabel')}</span>
+                        <span className="font-mono text-xs text-text-primary">{preferences?.currentBindHost || authStatus?.boundHost || '127.0.0.1'}</span>
+                    </div>
+                    <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
+                        <span className="text-sm text-text-muted">{t('standalone.settings.defaultBindLabel')}</span>
+                        <span className="font-mono text-xs text-text-primary">{preferences?.standaloneBindHost || '127.0.0.1'}</span>
+                    </div>
+                    <div className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
+                        <span className="text-sm text-text-muted">{t('standalone.settings.authLabel')}</span>
+                        <span className="text-xs text-text-primary">
+                            {authStatus?.hasPasswordAuth ? t('standalone.settings.authPassword') : authStatus?.hasTokenAuth ? t('standalone.settings.authToken') : t('standalone.settings.authNone')}
+                        </span>
+                    </div>
                 </div>
             </Section>
 
@@ -396,12 +406,12 @@ export default function StandaloneSettings() {
                 {detectedIdes.length === 0 ? (
                     <p className="text-sm text-text-muted">{t('standalone.settings.noIdesDetected')}</p>
                 ) : (
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-2">
                         {detectedIdes.map((ide) => (
-                            <div key={ide.type} className="flex justify-between items-center bg-bg-glass rounded-lg px-3.5 py-2.5">
+                            <div key={ide.type} className="flex items-center justify-between px-3.5 py-3 bg-bg-glass rounded-xl border border-border-subtle">
                                 <div className="flex items-center gap-2.5">
                                     <span className={`w-2 h-2 rounded-full ${ide.running ? 'bg-green-400' : 'bg-text-muted/30'}`} />
-                                    <span className="text-sm font-medium">{ide.name}</span>
+                                    <span className="text-sm font-medium text-text-primary">{ide.name}</span>
                                 </div>
                                 <span className="text-[11px] text-text-muted font-mono">{ide.type}</span>
                             </div>
