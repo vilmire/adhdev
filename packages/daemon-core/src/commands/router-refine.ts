@@ -15,6 +15,7 @@ import { createInteractionId } from '../logging/debug-trace.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
 import { resolveCoordinatorSelfIds, daemonIdListIncludes } from '../mesh/mesh-reconcile-identity.js';
+import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
@@ -330,16 +331,43 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
         }
     }
 
+// RESUME-DISPATCH-GRACE: an un-terminated `task_dispatched` may still be genuinely
+// running elsewhere (e.g. an old/new daemon overlap during an atomic upgrade
+// handoff). Resuming it would race a live execution, so a dispatch younger than
+// this is skipped this boot pass and reconsidered next boot. 60s mirrors the
+// DEAD_TARGET_GRACE_MS precedent in mesh-skip-notify.ts.
+function resolveRefineResumeDispatchGraceMs(): number {
+    return resolveTunedReconcileMs('MESH_REFINE_RESUME_DISPATCH_GRACE_MS', 60_000, 0, 10 * 60_000);
+}
+
+// RESUME-ZOMBIE-CUTOFF: a dispatch this old has outlived any plausible single-run
+// refine and is an orphan the ledger never closed, not a job mid-flight — resuming
+// it forever (once per boot) is the zombie bug this fix stops. Closed out via a
+// synthetic task_failed entry instead. 24h mirrors this function's own "died
+// mid-job" framing for what counts as still-plausibly-interrupted.
+function resolveRefineResumeZombieCutoffMs(): number {
+    return resolveTunedReconcileMs('MESH_REFINE_RESUME_ZOMBIE_CUTOFF_MS', 24 * 60 * 60_000, 5 * 60_000, 30 * 24 * 60 * 60_000);
+}
+
     /**
      * On daemon restart, scan all mesh ledgers for refine jobs that were dispatched
-     * but never completed/failed (i.e. the daemon died mid-job).  Re-queue each one
-     * so the job runs to completion automatically without coordinator intervention.
+     * but never completed/failed (i.e. the daemon died mid-job). Re-queue each one,
+     * PRESERVING the original jobId (JOBID-RESUME-PRESERVE) so its terminal event
+     * closes out the job the coordinator is waiting on — minting a fresh jobId left
+     * the original un-terminated forever (zombie re-resume every boot) while a
+     * second execution raced the coordinator's already-converged view (ghost
+     * dispatch). A dispatch younger than resolveRefineResumeDispatchGraceMs() is
+     * skipped this pass (may be genuinely running elsewhere); older than
+     * resolveRefineResumeZombieCutoffMs() is closed out as failed, not resumed.
      */
 export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter): Promise<void> {
         try {
             const { listMeshes } = await import('../config/mesh-config.js');
             const { readLedgerEntries } = await import('../mesh/mesh-ledger.js');
             const meshIds: string[] = listMeshes().map(m => m.id).filter(Boolean) as string[];
+            const nowMs = Date.now();
+            const dispatchGraceMs = resolveRefineResumeDispatchGraceMs();
+            const zombieCutoffMs = resolveRefineResumeZombieCutoffMs();
             for (const meshId of meshIds) {
                 const entries = readLedgerEntries(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'] });
                 // Build set of nodeIds that already have a terminal entry.
@@ -359,10 +387,55 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                     if (!jobId || terminal.has(`${e.nodeId}:${jobId}`)) continue;
                     const key = buildRefineJobKey(self, meshId, e.nodeId);
                     if (self.runningRefineJobs.has(key)) continue;
+
+                    const dispatchedAtMs = new Date(e.timestamp).getTime();
+                    const ageMs = Number.isFinite(dispatchedAtMs) ? nowMs - dispatchedAtMs : undefined;
+
+                    // RESUME-DISPATCH-GRACE: too young to safely assume the original
+                    // process is dead — skip this boot pass, reconsider next boot.
+                    if (ageMs !== undefined && ageMs >= 0 && ageMs < dispatchGraceMs) {
+                        LOG.info('Mesh', `[Refinery] Deferring resume of refine job for node ${e.nodeId} (jobId=${jobId}) — `
+                            + `dispatched ${ageMs}ms ago, within the ${dispatchGraceMs}ms grace window; may still be running.`);
+                        continue;
+                    }
+
+                    // RESUME-ZOMBIE-CUTOFF: too old to plausibly still be "mid-job" —
+                    // close it out as failed instead of resuming it forever.
+                    if (ageMs !== undefined && ageMs >= zombieCutoffMs) {
+                        const node = (e.payload as any)?.refineJob;
+                        const coordinatorDaemonId = node?.targetCoordinatorDaemonId;
+                        const coordinatorSessionId = node?.targetCoordinatorSessionId;
+                        const zombieHandle = buildRefineJobHandle(self, {
+                            meshId,
+                            nodeId: e.nodeId,
+                            jobId,
+                            interactionId: typeof node?.interactionId === 'string' ? node.interactionId : undefined,
+                            status: 'failed',
+                            startedAt: typeof node?.startedAt === 'string' ? node.startedAt : e.timestamp,
+                            completedAt: new Date().toISOString(),
+                            coordinatorDaemonId,
+                            coordinatorSessionId,
+                        });
+                        LOG.warn('Mesh', `[Refinery] Closing out stale refine job for node ${e.nodeId} (jobId=${jobId}) as failed — `
+                            + `dispatched ${ageMs}ms ago, past the ${zombieCutoffMs}ms zombie cutoff with no terminal entry; not resuming.`);
+                        const zombieResult = {
+                            success: false,
+                            code: 'resume_abandoned_stale_dispatch',
+                            error: `Refine job dispatched at ${e.timestamp} never reached a terminal state and exceeded the `
+                                + `${zombieCutoffMs}ms zombie cutoff on daemon restart; closed out without resuming.`,
+                        };
+                        await appendRefineJobLedger(self, 'task_failed', zombieHandle, zombieResult);
+                        queueRefineJobEvent(self, 'refine:failed', zombieHandle, zombieResult);
+                        continue;
+                    }
+
                     const coordinatorDaemonId = (e.payload as any)?.refineJob?.targetCoordinatorDaemonId;
+                    const coordinatorSessionId = (e.payload as any)?.refineJob?.targetCoordinatorSessionId;
                     LOG.info('Mesh', `[Refinery] Auto-resuming interrupted refine job for node ${e.nodeId} (jobId=${jobId})`);
                     void startMeshRefineJob(self, meshId, e.nodeId, {
+                        jobId,
                         coordinatorDaemonId,
+                        coordinatorSessionId,
                     });
                 }
             }
@@ -2786,7 +2859,13 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
         // below too — otherwise a poller (mesh_status → activeRefineJobs) that reads the
         // placeholder in this narrow window would see a jobId that immediately vanishes
         // and gets replaced by a different one once the real handle overwrites it.
-        const jobId = `refine_${createInteractionId()}`;
+        //
+        // JOBID-RESUME-PRESERVE: resumePendingRefineJobsOnStartup passes the interrupted
+        // job's ORIGINAL jobId via args.jobId so the resumed run terminates that SAME
+        // job. Minting a fresh one here left the original un-terminated forever (zombie
+        // re-resume every boot) and ran a second, ghost job against an already-converged
+        // node.
+        const jobId = typeof args?.jobId === 'string' && args.jobId.trim() ? args.jobId.trim() : `refine_${createInteractionId()}`;
         const interactionId = createInteractionId();
         const placeholder = buildRefineJobHandle(self, { meshId, nodeId, jobId, interactionId, retryOfJobId: terminal?.jobId });
         self.runningRefineJobs.set(key, placeholder);
