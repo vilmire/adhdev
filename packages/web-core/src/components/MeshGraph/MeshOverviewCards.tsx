@@ -303,16 +303,29 @@ export default function MeshOverviewCards({
         return node?.machineLabel || nodeId
     }, [canonicalStatus.nodes])
 
+    // SHOW-TASK-DIFFICULTY: sessionId -> difficulty, from queue tasks currently
+    // claimed by that session. The session axis itself carries no difficulty.
+    const difficultyBySessionId = useMemo(() => {
+        const map = new Map<string, string>()
+        for (const task of queueTasks) {
+            if (task.assignedSessionId && task.difficulty) map.set(task.assignedSessionId, task.difficulty)
+        }
+        return map
+    }, [queueTasks])
+
     const sessionEntries = useMemo(() => {
         const entries: { node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }[] = []
         for (const node of canonicalStatus.nodes) {
             const sessions: MeshGraphSessionDetail[] = (node.activeSessionDetails && node.activeSessionDetails.length > 0)
                 ? node.activeSessionDetails as MeshGraphSessionDetail[]
                 : (node.activeSessions ?? []).map(sessionId => ({ sessionId, workspace: node.workspace, isCached: true }))
-            for (const session of sessions) entries.push({ node, session })
+            for (const session of sessions) {
+                const difficulty = difficultyBySessionId.get(session.sessionId)
+                entries.push({ node, session: difficulty ? { ...session, difficulty } : session })
+            }
         }
         return entries
-    }, [canonicalStatus.nodes])
+    }, [canonicalStatus.nodes, difficultyBySessionId])
 
     return (
         // Plain flow content — the scroll container lives one level up in
@@ -843,6 +856,7 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={label} tone={sessionStatusTone(label)} />
                 <StatusBadge meshTheme={meshTheme} label={session.providerType || 'provider unknown'} tone="muted" />
+                {session.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(session.difficulty, t)} tone={difficultyTone(session.difficulty)} />}
             </div>
             {session.statusNote && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{session.statusNote}</div>}
             <div className="grid gap-1.5 text-xs">

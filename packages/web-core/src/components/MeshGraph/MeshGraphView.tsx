@@ -278,6 +278,42 @@ function getSessionStatusBadgeClasses(session: MeshGraphNode['sessionDetails'][n
     return getBadgeClasses('health', isDark)
 }
 
+/**
+ * SHOW-TASK-DIFFICULTY: session.difficulty is joined from the queue task the
+ * session is executing (buildMeshGraph, mesh-visualization.ts) — the session
+ * axis itself carries no difficulty. Mirrors getSessionStatusBadgeClasses'
+ * severity coloring (emerald=cheap → rose=expensive); 'freeform' has no fixed
+ * shape so it isn't a severity level and stays neutral.
+ */
+function getDifficultyBadgeClasses(difficulty: string, isDark: boolean): string {
+    switch (difficulty) {
+        case 'easy':
+            return isDark
+                ? 'border-emerald-400/30 bg-emerald-500/12 text-emerald-100'
+                : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+        case 'medium':
+            return isDark
+                ? 'border-amber-400/30 bg-amber-500/12 text-amber-100'
+                : 'border-amber-300 bg-amber-50 text-amber-700'
+        case 'difficult':
+            return isDark
+                ? 'border-rose-400/30 bg-rose-500/12 text-rose-100'
+                : 'border-rose-300 bg-rose-50 text-rose-700'
+        default:
+            return getBadgeClasses('health', isDark)
+    }
+}
+
+function difficultyLabel(difficulty: string, t: (key: string) => string): string {
+    switch (difficulty) {
+        case 'easy': return t('meshGraph.difficulty.easy')
+        case 'medium': return t('meshGraph.difficulty.medium')
+        case 'difficult': return t('meshGraph.difficulty.difficult')
+        case 'freeform': return t('meshGraph.difficulty.freeform')
+        default: return difficulty
+    }
+}
+
 function parseSessionTimeMs(value: string | null | undefined): number | null {
     if (!value) return null
     const parsed = Date.parse(value)
@@ -365,8 +401,9 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         const provider = session.providerType || 'provider unknown'
         const role = getSessionRoleLabel(session)
         const startedAt = session.startedAt || session.createdAt || null
+        const difficulty = session.difficulty ? ` · ${difficultyLabel(session.difficulty, t)}` : ''
         const note = session.statusNote ? ` · ${session.statusNote}` : ''
-        return `Session: ${session.sessionId} · ${provider} · ${status} · ${role} · ${formatElapsedSince(startedAt)}${note}`
+        return `Session: ${session.sessionId} · ${provider} · ${status} · ${role}${difficulty} · ${formatElapsedSince(startedAt)}${note}`
     })
 
     if (compact) {
@@ -434,6 +471,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                     session.providerType ? `Provider: ${session.providerType}` : null,
                                     `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                     `Role: ${getSessionRoleLabel(session)}`,
+                                    session.difficulty ? `${t('mesh.overview.routingDifficulty')}: ${difficultyLabel(session.difficulty, t)}` : null,
                                 ].filter(Boolean).join('\n')}
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-1.5">
@@ -533,6 +571,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                     session.providerType ? `Provider: ${session.providerType}` : null,
                                     `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                     `Role: ${roleLabel}`,
+                                    session.difficulty ? `${t('mesh.overview.routingDifficulty')}: ${difficultyLabel(session.difficulty, t)}` : null,
                                 ].filter(Boolean).join('\n')}
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-2">
@@ -546,6 +585,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 <div className={`mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[9px] ${meshTheme.textMuted}`}>
                                     <span className="min-w-0 truncate font-mono">{shortSessionId(session.sessionId)}</span>
                                     <span>{roleLabel}</span>
+                                    {session.difficulty && (
+                                        <span className={`shrink-0 rounded-full border px-1.5 py-0 text-[8px] font-semibold uppercase tracking-[0.1em] ${getDifficultyBadgeClasses(session.difficulty, meshTheme.isDark)}`}>
+                                            {difficultyLabel(session.difficulty, t)}
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         )
@@ -656,6 +700,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             session.providerType ? `Provider: ${session.providerType}` : null,
                                             `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                             `Role: ${roleLabel}`,
+                                            session.difficulty ? `${t('mesh.overview.routingDifficulty')}: ${difficultyLabel(session.difficulty, t)}` : null,
                                             startedAt ? `Started: ${startedAt}` : t('meshGraph.panel.tooltipStartedNotReported'),
                                             session.statusNote ? `${t('meshGraph.panel.tooltipPrefixNote')} ${session.statusNote}` : null,
                                         ].filter(Boolean).join('\n')}
@@ -672,6 +717,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             <span className="truncate">{session.providerType || t('meshGraph.panel.providerUnknown')}</span>
                                             <span>{roleLabel}</span>
                                             <span>{formatElapsedSince(startedAt)}</span>
+                                            {session.difficulty && (
+                                                <span className={`shrink-0 rounded-full border px-1.5 py-0 text-[8px] font-semibold uppercase tracking-[0.1em] ${getDifficultyBadgeClasses(session.difficulty, meshTheme.isDark)}`}>
+                                                    {difficultyLabel(session.difficulty, t)}
+                                                </span>
+                                            )}
                                         </div>
                                         {session.statusNote && (
                                             <div className={`mt-1 text-[9px] leading-4 ${meshTheme.textMuted}`}>

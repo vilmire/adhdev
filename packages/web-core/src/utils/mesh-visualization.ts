@@ -26,6 +26,15 @@ export interface MeshGraphSessionDetail extends RepoMeshSessionStatus {
     statusNote?: string | null
     createdAt?: string | null
     startedAt?: string | null
+    /**
+     * SHOW-TASK-DIFFICULTY: the difficulty of the queue task this session is
+     * executing, joined in buildMeshGraph via RepoMeshQueueTask.assignedSessionId
+     * (the session axis carries no difficulty/task linkage of its own — see
+     * readNodeSessionDetails). Undefined when the session isn't running a task
+     * that was enqueued with a difficulty (or isn't tied to a queue task at all,
+     * e.g. a manually-opened chat).
+     */
+    difficulty?: string
 }
 
 type MeshGraphNodeSource = RepoMeshNodeStatus | {
@@ -296,15 +305,27 @@ function parseTimestampMs(value: string | null | undefined): number | null {
     return Number.isNaN(parsed) ? null : parsed
 }
 
-function readNodeSessionDetails(nodeStatus: RepoMeshNodeStatus): MeshGraphSessionDetail[] {
-    if (nodeStatus.activeSessionDetails && nodeStatus.activeSessionDetails.length > 0) {
-        return nodeStatus.activeSessionDetails as MeshGraphSessionDetail[]
+/** sessionId -> difficulty, from queue tasks currently claimed by that session. */
+function buildDifficultyBySessionId(status: RepoMeshStatus): Map<string, string> {
+    const map = new Map<string, string>()
+    for (const task of status.queue?.tasks ?? []) {
+        if (task.assignedSessionId && task.difficulty) map.set(task.assignedSessionId, task.difficulty)
     }
-    return (nodeStatus.activeSessions ?? []).map(sessionId => ({
-        sessionId,
-        workspace: nodeStatus.workspace,
-        isCached: true,
-    }))
+    return map
+}
+
+function readNodeSessionDetails(nodeStatus: RepoMeshNodeStatus, difficultyBySessionId: Map<string, string>): MeshGraphSessionDetail[] {
+    const details = nodeStatus.activeSessionDetails && nodeStatus.activeSessionDetails.length > 0
+        ? (nodeStatus.activeSessionDetails as MeshGraphSessionDetail[])
+        : (nodeStatus.activeSessions ?? []).map(sessionId => ({
+            sessionId,
+            workspace: nodeStatus.workspace,
+            isCached: true,
+        }))
+    return details.map(session => {
+        const difficulty = difficultyBySessionId.get(session.sessionId)
+        return difficulty ? { ...session, difficulty } : session
+    })
 }
 
 function isDirty(git?: GitRepoStatus): boolean {
@@ -712,6 +733,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const warnings: string[] = readSourceOfTruthWarnings(canonicalStatus)
     const branchToNodeIds = new Map<string, string[]>()
     const refineJobsByNode = groupRefineJobsByNode(readAsyncRefineJobs(canonicalStatus))
+    const difficultyBySessionId = buildDifficultyBySessionId(canonicalStatus)
 
     for (const nodeStatus of canonicalStatus.nodes) {
         const git = nodeStatus.git
@@ -728,7 +750,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const rawClonedFromNodeId = typeof (nodeStatus as any).clonedFromNodeId === 'string'
             ? (nodeStatus as any).clonedFromNodeId
             : null
-        const sessionDetails = readNodeSessionDetails(nodeStatus)
+        const sessionDetails = readNodeSessionDetails(nodeStatus, difficultyBySessionId)
         const dominantRefineJob = pickDominantRefineJob(refineJobsByNode.get(nodeStatus.nodeId) ?? [])
         const projectedConnection = projectNodeConnection(nodeStatus)
         const graphNode: MeshGraphNode = {
