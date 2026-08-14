@@ -305,14 +305,28 @@ jobs:
             fi
             pending_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha == "'"${GITHUB_SHA}"'" and (.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "waiting")) | .id' | head -n 1 || true)"
             if [ -z "${pending_run}" ]; then
-              echo "No successful Ghostty VT Native run found for ${GITHUB_SHA}."
-              exit 1
+              echo "No Ghostty VT Native run queued for ${GITHUB_SHA}; falling back to main."
+              break
             fi
             echo "Waiting for Ghostty VT Native run ${pending_run} to finish..."
             sleep 10
           done
+          # Fall back to the newest successful run on main. The Ghostty VT Native
+          # workflow only triggers on packages/ghostty-vt-node/** changes, so a
+          # release commit that merely bumps versions has no run of its own —
+          # while "Check ghostty release need" still reports publish=true until
+          # the ghostty package version reaches npm. Requiring a run for the exact
+          # release SHA therefore deadlocks: publishing needs the gate, and the
+          # gate needs a run that only a ghostty source change would create.
+          # The non-release paths above already resolve prebuilts this way.
           if [ -z "${run_id}" ]; then
-            echo "Timed out waiting for Ghostty VT Native run on ${GITHUB_SHA}."
+            run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?branch=main&event=push&per_page=30" --jq '.workflow_runs[] | select(.conclusion == "success") | .id' | head -n 1 || true)"
+            if [ -n "${run_id}" ]; then
+              echo "No Ghostty VT Native run for ${GITHUB_SHA}; using newest successful main run ${run_id}."
+            fi
+          fi
+          if [ -z "${run_id}" ]; then
+            echo "No successful Ghostty VT Native run found for ${GITHUB_SHA} or on main."
             exit 1
           fi
           artifact_names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false and (.name | startswith("ghostty-vt-node-"))) | .name')"
