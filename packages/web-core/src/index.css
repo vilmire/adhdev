@@ -46,6 +46,13 @@
     --color-status-error: var(--status-error);
     --color-status-offline: var(--status-offline);
 
+    --color-semantic-success: var(--semantic-success);
+    --color-semantic-danger: var(--semantic-danger);
+    --color-semantic-warning: var(--semantic-warning);
+    --color-semantic-identity: var(--semantic-identity);
+    --color-semantic-device: var(--semantic-device);
+    --color-semantic-integration: var(--semantic-integration);
+
     /* Shadows — kept static (same for both themes) */
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
@@ -156,6 +163,20 @@
         --status-error: #ef4444;
         --status-offline: #71717a;
 
+        /* ── Semantic event colors ──────────────────────
+           Meaning-keyed palette for audit/activity rows and scope chips, where
+           the color encodes *what kind of event* it was rather than a live
+           status. success/danger/warning intentionally alias --status-* so an
+           "ok"/"failed" event always matches the status dot for the same idea;
+           the remaining three are distinct hues that --status-* has no concept
+           of. Each has a light-mode counterpart below. */
+        --semantic-success: var(--status-online);
+        --semantic-danger: var(--status-error);
+        --semantic-warning: var(--status-warning);
+        --semantic-identity: #6366f1;
+        --semantic-device: #06b6d4;
+        --semantic-integration: #14b8a6;
+
         /* Shadows, radii, font, transition — inherited from @theme directly */
         --font: var(--font-sans);
         --transition: var(--transition-base);
@@ -200,6 +221,15 @@
         --status-error: #dc2626;
         --status-offline: #a1a1aa;
 
+        /* Semantic event colors — darkened for contrast on light backgrounds,
+           matching the shift --status-* makes above. */
+        --semantic-success: var(--status-online);
+        --semantic-danger: var(--status-error);
+        --semantic-warning: var(--status-warning);
+        --semantic-identity: #4f46e5;
+        --semantic-device: #0891b2;
+        --semantic-integration: #0d9488;
+
         color-scheme: light;
     }
 
@@ -239,6 +269,15 @@
             --status-busy: #ea580c;
             --status-error: #dc2626;
             --status-offline: #a1a1aa;
+
+            /* Semantic event colors — must mirror the :root[data-theme="light"]
+               block above; this branch covers system-preference light mode. */
+            --semantic-success: var(--status-online);
+            --semantic-danger: var(--status-error);
+            --semantic-warning: var(--status-warning);
+            --semantic-identity: #4f46e5;
+            --semantic-device: #0891b2;
+            --semantic-integration: #0d9488;
 
             color-scheme: light;
         }
