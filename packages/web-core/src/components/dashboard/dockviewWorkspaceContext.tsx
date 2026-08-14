@@ -23,6 +23,7 @@ import { getConversationNativeTargetSessionId } from './conversation-selectors'
 import PaneGroupEmptyState from './PaneGroupEmptyState'
 import { areConversationsLoaded } from './dashboard-mobile-chat-mode-helpers'
 import type { DashboardDockviewPanelParams, DashboardDockviewRemotePanelParams } from './dockviewWorkspaceLayout'
+import LoadingSpinner from '../ui/LoadingSpinner'
 
 export interface DashboardDockviewContextValue {
     actionLogs: { routeId: string; text: string; timestamp: number }[]
@@ -257,13 +258,13 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
             {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status" aria-hidden="true">
                 {isGenerating ? (
-                    <div className="tab-spinner" />
+                    <LoadingSpinner size={12} thickness={2} color="success" />
                 ) : isWaiting ? (
                     <span className="adhdev-dockview-tab-status-text is-waiting">▲</span>
                 ) : isReconnecting ? (
                     <span className="adhdev-dockview-tab-status-text is-reconnecting">○</span>
                 ) : isConnecting ? (
-                    <div className="tab-connecting-spinner" />
+                    <LoadingSpinner size={12} thickness={2} />
                 ) : conversation.connectionState === 'connected' ? (
                     <span className="adhdev-dockview-tab-status-text is-connected">●</span>
                 ) : (

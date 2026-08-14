@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { EmptyState } from '../ui/EmptyState'
 import { StatusBadge } from '../ui/StatusBadge'
+import LoadingSpinner from '../ui/LoadingSpinner'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
 import { isVersionMismatch, isVersionUpdateRequired } from '../../utils/version-update'
 import { buildDaemonUpgradePayload, getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
@@ -274,7 +275,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             >
                                 {upgradeState === 'upgrading' ? (
                                     <span className="flex items-center gap-1">
-                                        <span className="animate-spin">⟳</span> {t('machine.connectedMachines.upgrading')}
+                                        <LoadingSpinner size={12} thickness={2} /> {t('machine.connectedMachines.upgrading')}
                                     </span>
                                 ) : upgradeState === 'done' ? (
                                     t('machine.connectedMachines.updated')

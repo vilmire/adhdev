@@ -756,17 +756,6 @@
         border-color: rgba(234, 179, 8, 0.15);
     }
 
-    /* Tab spinner — subtler in light mode */
-    :root[data-theme="light"] .tab-spinner {
-        border-color: rgba(217, 119, 6, 0.16);
-        border-top-color: var(--accent-primary);
-    }
-
-    :root[data-theme="light"] .tab-connecting-spinner {
-        border-color: rgba(59, 130, 246, 0.16);
-        border-top-color: #2563eb;
-    }
-
     @media (prefers-color-scheme: light) {
         :root:not([data-theme="dark"]) .chat-markdown code {
             background: rgba(0, 0, 0, 0.06);
@@ -2652,10 +2641,6 @@
         line-height: 1.25;
     }
 
-    .dashboard-header-inbox-item-spinner {
-        flex-shrink: 0;
-    }
-
     .dashboard-header-inbox-item-meta {
         font-size: 11px;
         color: var(--text-muted);
@@ -3295,7 +3280,7 @@
 
     /* ── Dashboard UI Enhancements ────────────────── */
 
-    /* Agent tab states: no glow/border effects — spinner indicator is sufficient */
+    /* Agent tab states: no glow/border effects — loading indicator is sufficient */
 
     /* Typing indicator dots */
     .typing-indicator {
@@ -3357,28 +3342,6 @@
     .status-pill.generating {
         background: rgba(16, 185, 129, 0.15);
         color: #10b981;
-    }
-
-    /* Green spinner for generating state in tab */
-    .tab-spinner {
-        width: 12px;
-        height: 12px;
-        border: 2px solid rgba(16, 185, 129, 0.2);
-        border-top-color: #10b981;
-        border-radius: 50%;
-        animation: spin 0.65s linear infinite;
-        flex-shrink: 0;
-    }
-
-    /* Blue spinner for P2P connecting state in tab */
-    .tab-connecting-spinner {
-        width: 12px;
-        height: 12px;
-        border: 2px solid rgba(96, 165, 250, 0.2);
-        border-top-color: #60a5fa;
-        border-radius: 50%;
-        animation: spin 0.75s linear infinite;
-        flex-shrink: 0;
     }
 
     /* Connecting overlay — floating bounce for chat area */

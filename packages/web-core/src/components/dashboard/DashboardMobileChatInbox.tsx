@@ -13,6 +13,7 @@ import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUti
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
 import GitStatusPill from '../git/GitStatusPill'
 import ModalPortal from '../ui/ModalPortal'
+import LoadingSpinner from '../ui/LoadingSpinner'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
@@ -357,17 +358,6 @@ function DashboardMobileChatItem({
     )
 }
 
-function MobileSpinner({ size = 32 }: { size?: number }) {
-    return (
-        <div className="flex flex-col items-center gap-2.5">
-            <div
-                className="rounded-full animate-spin border-[2.5px] border-accent-primary/20 border-t-accent-primary-light"
-                style={{ width: size, height: size }}
-            />
-        </div>
-    )
-}
-
 /**
  * Compact "generating" indicator (pulsing dot + count) used to surface active
  * work on collapsed/hidden surfaces where the chat body itself isn't visible.
@@ -504,7 +494,7 @@ export default function DashboardMobileChatInbox({
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         {isDisconnected ? (
                             <MobileEmptyHero
-                                icon={<MobileSpinner />}
+                                icon={<LoadingSpinner size={32} />}
                                 title={
                                     wsStatus === 'offline'
                                         ? t('mobileInbox.networkOffline')
@@ -522,7 +512,7 @@ export default function DashboardMobileChatInbox({
                             />
                         ) : isBootstrapping ? (
                             <MobileEmptyHero
-                                icon={<MobileSpinner />}
+                                icon={<LoadingSpinner size={32} />}
                                 title={t('mobileInbox.loading')}
                                 subtitle={t('mobileInbox.loadingSubtitle')}
                             />
@@ -693,13 +683,13 @@ export default function DashboardMobileChatInbox({
                         ) : !hasAnyConversation ? (
                             isDisconnected ? (
                                 <MobileEmptyHero
-                                    icon={<MobileSpinner size={28} />}
+                                    icon={<LoadingSpinner size={28} />}
                                     title={t('mobileInbox.connecting')}
                                     subtitle={t('mobileInbox.connectingSubtitle')}
                                 />
                             ) : isConversationBootstrapping ? (
                                 <MobileEmptyHero
-                                    icon={<MobileSpinner size={28} />}
+                                    icon={<LoadingSpinner size={28} />}
                                     title={t('mobileInbox.loading')}
                                     subtitle={t('mobileInbox.loadingSubtitle')}
                                 />

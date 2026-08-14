@@ -14,6 +14,7 @@ import {
 import { IconMesh } from '../Icons'
 import GitStatusPill from '../git/GitStatusPill'
 import ModalPortal from '../ui/ModalPortal'
+import LoadingSpinner from '../ui/LoadingSpinner'
 
 const preventContextMenuButtonFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
     // Keep context-menu clicks from moving focus into the fixed menu overlay,
@@ -203,13 +204,13 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
             {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status">
                 {viewStates.isGenerating ? (
-                    <div className="tab-spinner" />
+                    <LoadingSpinner size={12} thickness={2} color="success" />
                 ) : viewStates.isWaiting ? (
                     <span className="adhdev-dockview-tab-status-text is-waiting">▲</span>
                 ) : isReconnecting ? (
                     <span className="adhdev-dockview-tab-reconnecting">○</span>
                 ) : viewStates.isConnecting ? (
-                    <div className="tab-connecting-spinner" />
+                    <LoadingSpinner size={12} thickness={2} />
                 ) : conv.connectionState === 'connected' ? (
                     <span className="adhdev-dockview-tab-status-text is-connected">●</span>
                 ) : (

@@ -18,6 +18,7 @@ import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
 import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
 import GitStatusPill from '../git/GitStatusPill';
+import LoadingSpinner from '../ui/LoadingSpinner';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -609,7 +610,7 @@ export default function DashboardHeader({
                                             >
                                                 <span className="dashboard-header-inbox-item-title">
                                                     {isConversationGenerating(conversation) && (
-                                                        <span className="tab-spinner dashboard-header-inbox-item-spinner" aria-label={t('dashboard.header.generating')} />
+                                                        <LoadingSpinner size={12} thickness={2} color="success" label={t('dashboard.header.generating')} />
                                                     )}
                                                     {getConversationTitle(conversation)}
                                                 </span>

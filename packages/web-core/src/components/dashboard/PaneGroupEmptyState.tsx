@@ -1,6 +1,7 @@
 import { IconPlus } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { useTranslation } from 'react-i18next'
+import LoadingSpinner from '../ui/LoadingSpinner'
 
 interface PaneGroupEmptyStateProps {
     conversationsCount: number
@@ -40,10 +41,7 @@ export default function PaneGroupEmptyState({
     if (isLoading) {
         return (
             <div className="empty-dashboard flex-1 flex flex-col items-center justify-center gap-3 -mt-8 text-text-muted">
-                <div
-                    className="w-7 h-7 rounded-full animate-spin border-[2.5px] border-accent-primary/20 border-t-accent-primary-light"
-                    aria-hidden="true"
-                />
+                <LoadingSpinner />
                 <p className="text-sm">{t('paneGroup.loadingSessions')}</p>
             </div>
         )

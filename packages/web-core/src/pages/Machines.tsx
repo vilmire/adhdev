@@ -16,6 +16,7 @@ import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor, IconEyeOff } from '../components/Icons'
+import LoadingSpinner from '../components/ui/LoadingSpinner'
 
 // ─── Compact Agent Row (replaces full IdeCard/CliCard) ──────────
 function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive, hidden, onClick }: {
@@ -348,14 +349,7 @@ export default function MachinesPage() {
                                         </div>
                                     ) : isConnecting && (
                                         <div className="flex items-center gap-2 mt-2.5 px-2.5 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle">
-                                            <span
-                                                className="w-3 h-3 rounded-full shrink-0"
-                                                style={{
-                                                    border: '2px solid color-mix(in srgb, var(--accent-primary) 22%, transparent)',
-                                                    borderTopColor: 'var(--accent-primary-light)',
-                                                    animation: 'spin 0.9s linear infinite',
-                                                }}
-                                            />
+                                            <LoadingSpinner size={12} thickness={2} />
                                             <span className="text-[11px] font-medium text-text-secondary">{t('machine.card.connecting')}</span>
                                         </div>
                                     )}
