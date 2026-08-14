@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import LoadingSpinner from '../ui/LoadingSpinner';
 
 /**
  * ConnectionBanner — WS connection status banner
@@ -26,6 +27,13 @@ export interface ConnectionBannerProps {
 
 const DEFAULT_RECONNECT_BANNER_DELAY_MS = 5000;
 const DEFAULT_RECONNECT_ACTION_DELAY_MS = 12000;
+/**
+ * Safety net for the manual-reconnect lock. `wsStatus` normally clears the lock
+ * (leaves 'reconnecting') well before this fires; this only guards the rare path
+ * where a connect attempt returns without emitting any status (see ws.ts stale
+ * dev-token branch) and would otherwise leave the button stuck disabled forever.
+ */
+const MANUAL_RECONNECT_LOCK_TIMEOUT_MS = 15000;
 
 function isReconnectLikeStatus(status: string): boolean {
     return status === 'disconnected' || status === 'reconnecting';
@@ -44,6 +52,7 @@ export default function ConnectionBanner({
     const [showReconnectState, setShowReconnectState] = useState(() => !reconnectLikeStatus || reconnectDelayMs <= 0);
     const [showReconnectAction, setShowReconnectAction] = useState(() => !reconnectLikeStatus || reconnectActionDelayMs <= 0);
     const reconnectBannerWasVisibleRef = useRef(false);
+    const [manualReconnectPending, setManualReconnectPending] = useState(false);
 
     useEffect(() => {
         if (!reconnectLikeStatus) {
@@ -86,6 +95,27 @@ export default function ConnectionBanner({
 
         return () => clearTimeout(timer);
     }, [reconnectActionDelayMs, reconnectLikeStatus]);
+
+    // Clicking "Reconnect now" flips wsStatus to 'reconnecting' synchronously
+    // (dashboardWS.forceReconnect / StandaloneDaemonContext), so that's the
+    // authoritative signal to release the lock — it clears on both success
+    // ('connected') and failure ('auth_failed'/'offline'/'disconnected').
+    useEffect(() => {
+        if (wsStatus !== 'reconnecting') {
+            setManualReconnectPending(false);
+        }
+    }, [wsStatus]);
+
+    useEffect(() => {
+        if (!manualReconnectPending) return;
+        const timer = setTimeout(() => setManualReconnectPending(false), MANUAL_RECONNECT_LOCK_TIMEOUT_MS);
+        return () => clearTimeout(timer);
+    }, [manualReconnectPending]);
+
+    const handleReconnectClick = () => {
+        setManualReconnectPending(true);
+        onReconnect?.();
+    };
 
     const showDisconnected = reconnectLikeStatus
         ? showReconnectState
@@ -162,11 +192,12 @@ export default function ConnectionBanner({
                         {showManualReconnectAction && (
                             <button
                                 type="button"
-                                className="basis-full sm:basis-auto mx-auto sm:mx-0 sm:ml-1 shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
-                                onClick={() => onReconnect?.()}
-                                disabled={wsStatus === 'offline'}
+                                className="basis-full sm:basis-auto mx-auto sm:mx-0 sm:ml-1 shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                                onClick={handleReconnectClick}
+                                disabled={wsStatus === 'offline' || manualReconnectPending}
                             >
-                                {t('connection.reconnectNow')}
+                                {manualReconnectPending && <LoadingSpinner size={11} thickness={2} color="muted" />}
+                                {manualReconnectPending ? t('connection.reconnecting') : t('connection.reconnectNow')}
                             </button>
                         )}
                     </div>
