@@ -955,7 +955,9 @@
             "titleNoCount": "节点与提供方",
             "workspacesDetected": "检测到 {{count}} 个工作区",
             "pickFromSaved": "← 从已保存的工作区中选择",
-            "ownerMachine": "所有者：{{owner}} · 机器：{{machine}}"
+            "ownerMachine": "所有者：{{owner}} · 机器：{{machine}}",
+            "machineTabsLabel": "此 mesh 中的机器",
+            "machineTabCounts": "{{nodes}} 个节点 · {{slots}} 个插槽"
         },
         "host": {
             "coordinatorProvider": "协调器 CLI 提供方",

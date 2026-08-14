@@ -955,7 +955,9 @@
             "titleNoCount": "Nodos y proveedores",
             "workspacesDetected": "{{count}} espacio(s) de trabajo detectado(s)",
             "pickFromSaved": "← Elige de los espacios de trabajo guardados",
-            "ownerMachine": "Propietario: {{owner}} · Máquina: {{machine}}"
+            "ownerMachine": "Propietario: {{owner}} · Máquina: {{machine}}",
+            "machineTabsLabel": "Máquinas en este mesh",
+            "machineTabCounts": "{{nodes}} nodo(s) · {{slots}} ranura(s)"
         },
         "host": {
             "coordinatorProvider": "Proveedor CLI del coordinador",

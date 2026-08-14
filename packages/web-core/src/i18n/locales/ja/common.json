@@ -955,7 +955,9 @@
             "titleNoCount": "ノードとプロバイダー",
             "workspacesDetected": "{{count}} 件のワークスペースを検出",
             "pickFromSaved": "← 保存済みワークスペースから選択",
-            "ownerMachine": "オーナー：{{owner}} · マシン：{{machine}}"
+            "ownerMachine": "オーナー：{{owner}} · マシン：{{machine}}",
+            "machineTabsLabel": "このメッシュのマシン",
+            "machineTabCounts": "ノード {{nodes}} 個 · スロット {{slots}} 個"
         },
         "host": {
             "coordinatorProvider": "コーディネーター CLI プロバイダー",
