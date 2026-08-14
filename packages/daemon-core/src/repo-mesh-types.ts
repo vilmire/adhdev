@@ -1749,6 +1749,13 @@ export interface RepoMeshQueueTask {
     meshId: string;
     message: string;
     status: RepoMeshQueueTaskStatus;
+    /**
+     * SLOT-ROUTING difficulty classification ('easy'|'medium'|'difficult'|'freeform')
+     * carried on {@link MeshWorkQueueEntry} — already on the wire, just untyped here
+     * until the show-task-difficulty UI needed it. Absent on tasks enqueued without
+     * a difficulty (pre-existing rows, or freeform-classified work).
+     */
+    difficulty?: string;
     targetNodeId?: string;
     targetSessionId?: string;
     assignedNodeId?: string;

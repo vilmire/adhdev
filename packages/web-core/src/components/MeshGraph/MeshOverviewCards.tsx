@@ -147,6 +147,32 @@ function queueTaskTone(status: RepoMeshQueueTask['status']): Tone {
     }
 }
 
+/**
+ * SHOW-TASK-DIFFICULTY: reuses the same severity vocabulary as StatusBadge's
+ * other Tone mappings (emerald=cheap/safe → rose=expensive/hard) so a task's
+ * cost/effort tier reads consistently with the rest of the overview cards.
+ * 'freeform' isn't a severity level (no fixed shape), so it stays neutral.
+ */
+function difficultyTone(difficulty: string): Tone {
+    switch (difficulty) {
+        case 'easy': return 'emerald'
+        case 'medium': return 'amber'
+        case 'difficult': return 'rose'
+        default: return 'muted'
+    }
+}
+
+/** Label for a task's difficulty badge — falls back to the raw value for forward-compat with an unrecognized future difficulty. */
+function difficultyLabel(difficulty: string, t: (key: string) => string): string {
+    switch (difficulty) {
+        case 'easy': return t('meshGraph.difficulty.easy')
+        case 'medium': return t('meshGraph.difficulty.medium')
+        case 'difficult': return t('meshGraph.difficulty.difficult')
+        case 'freeform': return t('meshGraph.difficulty.freeform')
+        default: return difficulty
+    }
+}
+
 /** Priority for the "recent queue" list: live work first, then newest history. */
 function queueTaskSortRank(status: RepoMeshQueueTask['status']): number {
     switch (status) {
@@ -787,6 +813,7 @@ function QueueDetail({ meshTheme, task }: { meshTheme: MeshGraphTheme; task: Rep
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
                 {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}
             </div>
             {task.message && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{task.message}</div>}
@@ -1002,6 +1029,7 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
                         {list.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
                                 <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{describeQueueTaskMessage(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
                             </ListRow>
