@@ -17,7 +17,13 @@
  *   latest published version on this build's track dist-tag (Phase 3: the
  *   release channel is a build-time identity; any channel arg in args is
  *   accepted and ignored), then detached-restart.
- *   Already-latest is a no-op (no restart), matching the dashboard button.
+ *   Already-latest is a no-op (no restart), matching the dashboard button, and
+ *   a target OLDER than the running daemon is refused outright
+ *   (code 'downgrade_refused') unless allowDowngrade is passed — see the
+ *   downgrade-guard note in low-family/daemon-lifecycle.ts. The guard lives in
+ *   daemon_upgrade rather than here on purpose: that is where the target
+ *   version is actually resolved, so the dashboard button and the
+ *   mandatory-update path get the same protection instead of only this one.
  *   mode: 'restart' uses daemon_restart — a pure re-spawn with no npm
  *   reinstall, so it restarts even when already latest and the downtime is
  *   just the detached re-spawn. Use it to reset wedged daemon state.

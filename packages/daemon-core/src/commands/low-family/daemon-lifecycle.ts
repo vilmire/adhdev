@@ -13,11 +13,24 @@
  * mesh restart_daemon_node / mesh_restart_daemon args) are accepted and
  * ignored so a stale payload can never retarget the daemon to another
  * environment, and a self-hoster's custom serverUrl is never clobbered.
+ *
+ * DOWNGRADE GUARD: an upgrade whose resolved target is OLDER than the running
+ * daemon is refused (code 'downgrade_refused') unless the caller passes
+ * allowDowngrade. Phase 3 makes the track a build identity, but the dist-tag
+ * still only says "newest on this tag" — it does not promise "newer than what
+ * you are running". A machine whose install surface resolves to the other
+ * track's package (a legacy npm prefix, a half-migrated preview install) gets
+ * that track's dist-tag version handed to it as `latest`, and the old
+ * equality-only no-op check (`currentInstalled === latest`) happily installed
+ * it because it merely differed. That is a rollback with no warning, and it is
+ * how a node on 1.0.49-rc.2 was put back on 1.0.48 and left unable to launch
+ * sessions. Direction is now checked explicitly, with semver precedence.
  */
 import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
 import { installClaudeStatusline } from '../../quota/statusline/install.js';
 import { execNpmCommandSync, getUpgradeLogPath, resolveCurrentGlobalInstallSurface, resolveNpmPublishedVersion, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
 import { LOG } from '../../logging/logger.js';
+import { compareSemver } from '../../version-compare.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
 import { resolveSessionHostAppName } from '../../session-host/app-name.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
@@ -34,10 +47,47 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
             // Deprecated channel hints (args.channel / args.updatePolicy.channel /
             // args.npmTag) are accepted and ignored: the upgrade target is this
             // binary's build track, full stop.
-            if (args?.channel || args?.updatePolicy?.channel || args?.npmTag) {
-                LOG.info('Upgrade', 'Ignoring deprecated channel hint — upgrade target is the build track');
+            //
+            // ACKNOWLEDGE, don't ignore silently. Accept-and-ignore was the
+            // right compatibility call (a stale payload must never retarget the
+            // daemon), but it was only ever announced to the daemon's own log —
+            // the RESPONSE said `channel: <build track>` with no hint that the
+            // caller had asked for something else. A coordinator that passed
+            // channel:'preview' and read back channel:'stable' had no way to
+            // tell "your request was overridden" from "you are on stable". So
+            // the override now travels back in the payload: same behavior,
+            // no longer invisible.
+            const requestedChannelRaw = args?.channel ?? args?.updatePolicy?.channel ?? null;
+            const requestedChannel = typeof requestedChannelRaw === 'string' && requestedChannelRaw.trim()
+                ? requestedChannelRaw.trim().toLowerCase()
+                : null;
+            const requestedNpmTag = typeof args?.npmTag === 'string' && args.npmTag.trim()
+                ? args.npmTag.trim().toLowerCase()
+                : null;
+            if (requestedChannel || requestedNpmTag) {
+                LOG.info('Upgrade', `Ignoring deprecated channel hint (channel=${requestedChannel ?? '-'}, npmTag=${requestedNpmTag ?? '-'}) — upgrade target is the build track '${TRACK}'`);
             }
             const npmTag = IDENTITY.npmTag;
+            // Only a hint that actually CONFLICTS with the build track is worth
+            // reporting. channel:'stable' on a stable build asked for what it
+            // got — flagging that as an override would be noise that trains
+            // callers to ignore the field.
+            const channelOverride = (requestedChannel && requestedChannel !== TRACK
+                && !(TRACK === 'preview' && requestedChannel === 'next')
+                && !(TRACK === 'stable' && requestedChannel === 'latest'))
+                || (requestedNpmTag && requestedNpmTag !== npmTag)
+                ? {
+                    requestedChannel,
+                    requestedNpmTag,
+                    effectiveChannel: TRACK,
+                    effectiveNpmTag: npmTag,
+                    ignored: true,
+                    reason: `The requested channel/tag was IGNORED. Since Phase 3 the release channel is a build-time identity of the installed binary, so this daemon can only upgrade on its own '${TRACK}' track (${pkgName}@${npmTag}). Switching tracks requires installing the other track's package, not an upgrade argument.`,
+                }
+                : null;
+            const withChannelNotice = <T extends Record<string, unknown>>(payload: T): T => (
+                channelOverride ? { ...payload, channelOverride } : payload
+            );
 
             // Check the build track's dist-tag and resolve it to a concrete install version.
             const latest = resolveNpmPublishedVersion(pkgName, npmTag, npmSurface);
@@ -60,10 +110,63 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 : null;
             if (currentInstalled === latest && runningVersion === latest) {
                 LOG.info('Upgrade', `Already on ${TRACK} track version v${latest}; skipping install`);
-                return { success: true, upgraded: false, alreadyLatest: true, outcome: 'already_latest', version: latest, targetVersion: latest, channel: TRACK, npmTag };
+                return withChannelNotice({ success: true, upgraded: false, alreadyLatest: true, outcome: 'already_latest', version: latest, targetVersion: latest, channel: TRACK, npmTag });
             }
             if (currentInstalled === latest && runningVersion && runningVersion !== latest) {
                 LOG.info('Upgrade', `Installed package is v${latest}, but running daemon is v${runningVersion}; scheduling restart`);
+            }
+
+            // DOWNGRADE GUARD. Compare the RUNNING daemon against the resolved
+            // target by semver precedence and refuse a backwards move.
+            //
+            // Ordering matters: this sits AFTER the already-latest no-op above
+            // (an equal-version call must keep returning alreadyLatest, not a
+            // refusal) and BEFORE the spawn, which is the point of no return —
+            // once the detached helper is up, this process exits in 3s and
+            // nothing here can intervene.
+            //
+            // Direction is measured against `runningVersion`, not
+            // `currentInstalled`: the running process is what a rollback would
+            // actually take away, and `currentInstalled` is best-effort (the
+            // `npm ls` above swallows its own failures and leaves it null).
+            //
+            // FAIL-OPEN on unknown direction. compareSemver returns null when
+            // either side is unparsable, and runningVersion can legitimately be
+            // absent (statusVersion unset in some embeddings). In every such
+            // case the upgrade PROCEEDS. A guard that blocked on uncertainty
+            // would be a far worse failure than the bug it fixes: it could
+            // freeze fleet-wide upgrades on a version-string quirk, with no
+            // remote way to unfreeze them.
+            const direction = runningVersion ? compareSemver(latest, runningVersion) : null;
+            if (direction !== null && direction < 0 && args?.allowDowngrade !== true) {
+                LOG.warn('Upgrade', `Refusing downgrade: running v${runningVersion} is NEWER than ${TRACK} track target v${latest} (${pkgName}@${npmTag}). Pass allowDowngrade to override.`);
+                return withChannelNotice({
+                    success: false,
+                    upgraded: false,
+                    restarting: false,
+                    code: 'downgrade_refused',
+                    outcome: 'downgrade_refused',
+                    // Everything the caller needs to see WHY it would go
+                    // backwards, without a second round-trip: the incident that
+                    // motivated this guard was diagnosable only because someone
+                    // noticed the version in the response was lower than the
+                    // node's actual version.
+                    version: runningVersion,
+                    currentVersion: runningVersion,
+                    installedVersion: currentInstalled,
+                    targetVersion: latest,
+                    channel: TRACK,
+                    npmTag,
+                    packageName: pkgName,
+                    reason: `Upgrade refused: it would DOWNGRADE this daemon from v${runningVersion} to v${latest}. `
+                        + `The ${TRACK} track dist-tag ${pkgName}@${npmTag} currently resolves to v${latest}, which is older than what is running. `
+                        + 'This usually means the daemon is resolving the wrong track\'s package — check that the npm install surface (global prefix) matches the running build\'s track. '
+                        + 'Pass allowDowngrade:true to force the rollback anyway.',
+                    clientHint: 'Downgrade refused — no restart happened and the daemon is untouched. Fix the install surface/track pin, or pass allowDowngrade:true to roll back deliberately.',
+                });
+            }
+            if (direction !== null && direction < 0) {
+                LOG.warn('Upgrade', `allowDowngrade set — proceeding with DOWNGRADE from v${runningVersion} to v${latest} on the ${TRACK} track`);
             }
 
             spawnDetachedDaemonUpgradeHelper({
@@ -91,7 +194,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
             // signal is `outcome: 'scheduled'` + `targetVersion`, and the only
             // place the actual result lands is upgradeLogPath (and, on failure,
             // the durable notice surfaced via get_status_metadata.upgradeFailure).
-            return {
+            return withChannelNotice({
                 success: true,
                 upgraded: true,
                 version: latest,
@@ -100,9 +203,16 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 npmTag,
                 outcome: 'scheduled',
                 targetVersion: latest,
+                // No `currentVersion` here on purpose: this response is about a
+                // SCHEDULED move, and daemon-upgrade-scheduled-intent.test.ts
+                // pins that it must not read as "already on the target". The
+                // pre-upgrade version belongs on the refusal payload, where it
+                // is the actual diagnosis. Only the deliberate-override marker
+                // is added, so an intentional rollback stays self-evident.
+                ...(direction !== null && direction < 0 ? { downgrade: true } : {}),
                 upgradeLogPath: getUpgradeLogPath(),
                 clientHint: `Upgrade to v${latest} SCHEDULED, not completed — the detached helper installs and restarts the daemon after this response, and a failure rolls back to the previous version. Check upgradeLogPath (or get_status_metadata.upgradeFailure after the restart) for the actual outcome.`,
-            };
+            });
         } catch (e: any) {
             LOG.error('Upgrade', `Failed: ${e.message}`);
             return { success: false, error: e.message };

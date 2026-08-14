@@ -155,6 +155,7 @@ export async function meshRestartDaemon(
         cancel_when_idle?: boolean;
         timeout_ms?: number;
         kill_session_host?: boolean;
+        allow_downgrade?: boolean;
     },
 ): Promise<string> {
     await refreshMeshFromDaemon(ctx);
@@ -180,6 +181,9 @@ export async function meshRestartDaemon(
             ...(args.cancel_when_idle === true ? { cancelWhenIdle: true } : {}),
             ...(typeof args.timeout_ms === 'number' ? { timeoutMs: args.timeout_ms } : {}),
             ...(args.kill_session_host === true ? { killSessionHost: true } : {}),
+            // Forwarded only when explicitly set, so the default stays "refuse
+            // a downgrade" for every caller that does not opt in.
+            ...(args.allow_downgrade === true ? { allowDowngrade: true } : {}),
         });
         return JSON.stringify(unwrapCommandPayload(result), null, 2);
     } catch (e: any) {
