@@ -324,6 +324,37 @@ describe('evaluateProviderQuotaGate — retained last-good windows', () => {
         expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
     });
 
+    it('blocks from a stale exhausted retained window while its own reset is still in the future', () => {
+        const node = nodeWithQuota({
+            kimi: retainedQuota({
+                weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: NOW + 2 * 24 * 60 * MIN },
+                updatedAt: NOW - 85 * MIN,
+            }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)?.reason)
+            .toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
+    });
+
+    it('fails OPEN on a stale exhausted retained window after its own reset has passed', () => {
+        const node = nodeWithQuota({
+            kimi: retainedQuota({
+                weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: NOW - MIN },
+                updatedAt: NOW - 85 * MIN,
+            }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
+    });
+
+    it('keeps a stale retained window with sufficient headroom gate-clear before reset', () => {
+        const node = nodeWithQuota({
+            kimi: retainedQuota({
+                weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: NOW + 2 * 24 * 60 * MIN },
+                updatedAt: NOW - 85 * MIN,
+            }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW)).toBeNull();
+    });
+
     it('keeps a fresh retained reading with sufficient headroom gate-clear', () => {
         const node = nodeWithQuota({
             kimi: retainedQuota({ weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } }),

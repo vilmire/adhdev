@@ -33,8 +33,10 @@
  * STALE snapshot yields "no gate, no bonus" — routing on an old reading would
  * exclude nodes on data that no longer describes them (the stale-quota
  * misexclusion failure mode). A non-'ok' entry may gate from retained windows
- * only when metadata.lastGoodWindows proves their provenance and their
- * ORIGINAL updatedAt is still fresh. Observation without confidence is inert.
+ * only when metadata.lastGoodWindows proves their provenance and each low
+ * window has not reset yet. A missing/unparseable reset stamp falls back to
+ * the ORIGINAL updatedAt freshness check. Observation without confidence is
+ * inert.
  *
  * ONE hard-block exception: a FRESH 'error' snapshot whose metadata.failureKind
  * is 'quota-exhausted' (the provider's own "usage limit reached" answer, e.g.
@@ -210,6 +212,35 @@ function isSessionResetImminent(
 }
 
 /**
+ * A retained last-good window remains authoritative until that SAME window
+ * resets. This is deliberately per-window: session and weekly reset on
+ * different schedules. A valid reset stamp supersedes snapshot age in both
+ * directions — future means the observed low-water mark still applies, past
+ * means the old window is gone. If the reset stamp cannot be read, preserve
+ * the existing staleAfterMs fail-open fallback.
+ *
+ * resetsAt and updatedAt are reporter-clock stamps, so compare resetsAt with
+ * the same skew-safe reporter-now estimate used by the reset-imminent logic.
+ */
+function isRetainedWindowTrustworthy(
+    window: { resetsAt?: number | null } | null | undefined,
+    facts: { reportedAt: number },
+    quota: { updatedAt: number },
+    policy: RepoMeshQuotaRoutingPolicy | null | undefined,
+    now: number,
+): boolean {
+    const resetsAt = Number(window?.resetsAt);
+    if (!Number.isFinite(resetsAt) || resetsAt <= 0) {
+        return isQuotaSnapshotFresh(facts, quota, policy, now);
+    }
+    const ageMs = quotaSnapshotAgeMs(facts, quota, now);
+    if (!Number.isFinite(ageMs)) return false;
+    const reporterNowMs = Number(quota.updatedAt) + ageMs;
+    if (!Number.isFinite(reporterNowMs)) return false;
+    return resetsAt > reporterNowMs;
+}
+
+/**
  * The launch GATE: should this (node, provider) pair be skipped because the
  * provider's reported quota is nearly exhausted? Returns null (launch may
  * proceed) when the quota is unknown, unmeasurable, stale, or above every
@@ -220,9 +251,10 @@ function isSessionResetImminent(
  *      own exhaustion verdict (no window breakdown, so window is 'unknown'),
  *   3. a non-'ok' snapshot marked lastGoodWindows whose retained window is
  *      below its threshold.
- * Every other non-'ok' reading fails open. Retained windows use the existing
- * staleAfterMs because carry-forward preserves their ORIGINAL updatedAt, so
- * freshness measures the last successful observation rather than the error.
+ * Every other non-'ok' reading fails open. Each retained window remains
+ * trustworthy until its own resetsAt; a missing/unparseable resetsAt uses the
+ * existing staleAfterMs fallback because carry-forward preserves the ORIGINAL
+ * updatedAt.
  *
  * Thresholds are judged per window against the node's session/weekly axes —
  * the provider-agnostic vocabulary every fetcher normalizes into, so no
@@ -244,6 +276,8 @@ export function evaluateProviderQuotaGate(
     const entry = quotaEntryFor(node, providerType, context);
     if (!entry) return null; // never reported → unknown, not blocked
     const { facts, quota } = entry;
+    let sessionTrustworthy = true;
+    let weeklyTrustworthy = true;
     if (quota.status !== 'ok') {
         // HARD BLOCK, the single exception to fail-open: a FRESH 'error'
         // snapshot whose failureKind is 'quota-exhausted' is the provider
@@ -263,19 +297,18 @@ export function evaluateProviderQuotaGate(
             };
         }
         // A transient probe failure may retain the last successfully observed
-        // windows. Their provenance is explicit and carry-forward preserves
-        // the ORIGINAL updatedAt, so the ordinary staleAfterMs check measures
-        // their true age. Unmarked/non-fresh failures remain fail-open.
-        if ((quota as any).metadata?.lastGoodWindows !== true
-            || !isQuotaSnapshotFresh(facts, quota, policy, now)) {
-            return null;
-        }
+        // windows. Provenance is mandatory; trust is then decided per window
+        // by that window's own reset boundary. Missing reset stamps retain the
+        // prior updatedAt freshness fallback.
+        if ((quota as any).metadata?.lastGoodWindows !== true) return null;
+        sessionTrustworthy = isRetainedWindowTrustworthy(quota.session, facts, quota, policy, now);
+        weeklyTrustworthy = isRetainedWindowTrustworthy(quota.weekly, facts, quota, policy, now);
     } else if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
         return null; // fail-open on stale
     }
     const resolved = resolveQuotaRoutingPolicy(policy);
     const session = remainingPercent(quota.session);
-    if (session !== undefined && session < resolved.sessionMinRemainingPercent
+    if (sessionTrustworthy && session !== undefined && session < resolved.sessionMinRemainingPercent
         && !isSessionResetImminent(quota.session, facts, quota, resolved.sessionResetImminentMs, now)) {
         return {
             reason: PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
@@ -285,7 +318,7 @@ export function evaluateProviderQuotaGate(
         };
     }
     const weekly = remainingPercent(quota.weekly);
-    if (weekly !== undefined && weekly < resolved.weeklyMinRemainingPercent) {
+    if (weeklyTrustworthy && weekly !== undefined && weekly < resolved.weeklyMinRemainingPercent) {
         return {
             reason: PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
             window: 'weekly',
