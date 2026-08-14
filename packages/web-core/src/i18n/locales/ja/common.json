@@ -1584,7 +1584,7 @@
         },
         "layout": {
             "navDashboard": "Dashboard",
-            "navBurrows": "マシン",
+            "navBurrows": "Machines",
             "navNotifications": "Notifications",
             "navMesh": "Mesh",
             "navMarketplace": "Marketplace",

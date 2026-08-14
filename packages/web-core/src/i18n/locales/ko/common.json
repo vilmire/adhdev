@@ -1584,7 +1584,7 @@
         },
         "layout": {
             "navDashboard": "Dashboard",
-            "navBurrows": "머신",
+            "navBurrows": "Machines",
             "navNotifications": "Notifications",
             "navMesh": "Mesh",
             "navMarketplace": "Marketplace",
