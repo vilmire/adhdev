@@ -130,10 +130,10 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                     value={customType}
                                     onChange={e => handleTypeChange(e.target.value)}
                                     placeholder={t('machine.providerClone.typeIdPlaceholder')}
-                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-violet-500/40"
+                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
                                 />
                                 <p className="text-[10px] text-text-muted mt-1">
-                                    {t('machine.providerClone.typeIdHint')} <code className="text-violet-400">~/.adhdev/providers/{customType || '...'}/</code>
+                                    {t('machine.providerClone.typeIdHint')} <code className="text-accent-primary">~/.adhdev/providers/{customType || '...'}/</code>
                                 </p>
                             </div>
 
@@ -146,7 +146,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                     value={displayName}
                                     onChange={e => setDisplayName(e.target.value)}
                                     placeholder={t('machine.providerClone.displayNamePlaceholder')}
-                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-violet-500/40"
+                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
                                 />
                             </div>
 

@@ -54,7 +54,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                             <button
                                 key={w.id}
                                 type="button"
-                                className="text-left text-xs px-3 py-2 rounded-lg border border-border-subtle bg-bg-primary hover:bg-violet-500/10 transition-colors"
+                                className="text-left text-xs px-3 py-2 rounded-lg border border-border-subtle bg-bg-primary hover:bg-accent-primary/10 transition-colors"
                                 onClick={() => {
                                     setLaunchPick(null)
                                     void runLaunchCliCore({

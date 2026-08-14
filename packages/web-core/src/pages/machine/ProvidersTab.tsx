@@ -356,7 +356,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             key={cat}
                             onClick={() => setFilter(cat)}
                             className={`machine-btn text-[10px] px-2 py-0.5 ${
-                                filter === cat ? 'bg-violet-500/15 border-violet-500/40 text-violet-400' : ''
+                                filter === cat ? 'bg-accent-primary/15 border-accent-primary/40 text-accent-primary' : ''
                             }`}
                         >{cat.toUpperCase()}</button>
                     ))}
@@ -422,7 +422,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 <Card padding="none" className="px-4.5 py-3.5">
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">{t('machine.providers.sourceConfigTitle')}</div>
+                            <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.sourceConfigTitle')}</div>
                             <div className="text-[11px] text-text-muted mt-1">{t('machine.providers.sourceConfigDesc')}</div>
                         </div>
                         <button onClick={fetchSourceConfig} className="machine-btn text-[10px]">↻ Refresh</button>
@@ -452,7 +452,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                         <button
                             onClick={() => void handleApplySourceConfig()}
                             disabled={sourceSaving}
-                            className="machine-btn text-[10px] bg-violet-500/[0.08] border-violet-500/20 text-violet-300 hover:bg-violet-500/[0.14]"
+                            className="machine-btn text-[10px] bg-accent-primary/[0.08] border-accent-primary/20 text-accent-primary hover:bg-accent-primary/[0.14]"
                         >{sourceSaving ? t('machine.providers.applying') : t('machine.providers.applyReload')}</button>
                     </div>
                     <div className="mt-3 grid gap-1 text-[10px] text-text-muted">

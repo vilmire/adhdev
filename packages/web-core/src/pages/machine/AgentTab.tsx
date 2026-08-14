@@ -897,7 +897,7 @@ export default function AgentTab({
                                                     <GitStatusPill git={entry.git} compact className="max-w-[8rem] shrink-0" />
                                                 )}
                                                 {cli?.mode && (
-                                                    <span className={cli.mode === 'chat' ? 'text-violet-400' : 'text-text-secondary'}>
+                                                    <span className={cli.mode === 'chat' ? 'text-accent-primary' : 'text-text-secondary'}>
                                                         {cli.mode === 'chat' ? t('machine.agentTab.chatView') : t('machine.agentTab.terminalView')}
                                                     </span>
                                                 )}
@@ -924,7 +924,7 @@ export default function AgentTab({
                                                         </>
                                                     )}
                                                     {cli.runtimeWriteOwner && (
-                                                        <span style={{ color: cli.runtimeWriteOwner.ownerType === 'user' ? 'var(--status-warning)' : undefined }} className={cli.runtimeWriteOwner.ownerType !== 'user' ? 'text-violet-400' : ''}>
+                                                        <span style={{ color: cli.runtimeWriteOwner.ownerType === 'user' ? 'var(--status-warning)' : undefined }} className={cli.runtimeWriteOwner.ownerType !== 'user' ? 'text-accent-primary' : ''}>
                                                             {describeMuxOwner(cli.runtimeWriteOwner)}
                                                         </span>
                                                     )}

@@ -198,6 +198,7 @@ export default function MachinesPage() {
             </div>
 
             <div className="page-content">
+                <div className="mx-auto w-full max-w-6xl">
 
                 {/* Cross-Machine Active Agents Feed */}
                 {allActiveAgents.length > 0 && (
@@ -361,8 +362,8 @@ export default function MachinesPage() {
 
                                     {/* System Stats (mini bars) — always shown for consistent row height */}
                                     <div className="flex gap-3 mt-3 mb-2.5">
-                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? cpuPct : 0} max={100} color="var(--accent-primary)" label="CPU" compact />
-                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? Math.round(memUsedFrac * 100) : 0} max={100} color="var(--accent-primary-light)" label="MEM" compact />
+                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? cpuPct : 0} max={100} color="var(--accent-primary)" label={t('machine.card.cpu')} compact />
+                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? Math.round(memUsedFrac * 100) : 0} max={100} color="var(--status-online)" label={t('machine.card.mem')} compact />
                                     </div>
 
                                     {/* Compact Agent List — IDEs */}
@@ -541,6 +542,7 @@ export default function MachinesPage() {
                             </p>
                         </div>
                     )}
+                </div>
                 </div>
             </div>
         </div>
