@@ -1052,7 +1052,9 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_magi_kind_panel_list\` | List configured task_kind → MAGI kind-panel slot bindings (machine-local, read-only) |
 | \`mesh_node_slots_list\` | List a node's capability slots (its AI-tool profile: provider/model/thinking + difficulty range + capability tags), read-only |
 | \`mesh_node_slots_set\` | PROPOSE (dry-run) or APPLY a node's capability slots — how you autonomously retune a node's tool profile; WHOLESALE replacement, present current-vs-proposed and get user approval before write=true |
-| \`mesh_node_slots_propose\` | AUTO-DETECT a node's installed CLI agents and DRAFT a slot profile from them (read-only, never writes) — use when a node has no slots yet or new CLIs were installed; reports droppedSlots (what a wholesale write would destroy), then apply via mesh_node_slots_set write=true after approval |`;
+| \`mesh_node_slots_propose\` | AUTO-DETECT a node's installed CLI agents and DRAFT a slot profile from them (read-only, never writes) — use when a node has no slots yet or new CLIs were installed; reports droppedSlots (what a wholesale write would destroy), then apply via mesh_node_slots_set write=true after approval |
+| \`mesh_coordinator_prompt_append_get\` | Read this daemon's user-level coordinator prompt APPEND text for a CLI type (per-machine file, applies to every mesh this daemon coordinates) |
+| \`mesh_coordinator_prompt_append_set\` | Write or clear this daemon's user-level coordinator prompt APPEND text for a CLI type — APPEND ONLY, always stacks after the base prompt; there is no tool to replace the base prompt itself |`;
 
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 

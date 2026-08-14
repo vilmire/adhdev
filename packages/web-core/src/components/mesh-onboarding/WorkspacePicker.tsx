@@ -7,7 +7,7 @@
  * committed value always flows through `value`/`onChange`; the only local
  * state is whether the custom-path input is showing.
  */
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export interface WorkspaceOption {
@@ -77,14 +77,32 @@ export default function WorkspacePicker({ workspaces, value, onChange, autoFocus
     )
 }
 
-/** Plan-probe status line (plan_mesh_onboarding dry-run result). */
+/** True when a successful plan targets an already-existing compatible mesh rather than creating a new one. */
+export function planTargetsExistingMesh(plan: any): boolean {
+    return !!plan?.success && plan?.plan?.kind !== undefined && plan.plan.kind !== 'create_mesh_and_onboard'
+}
+
+/**
+ * Plan-probe status line (plan_mesh_onboarding dry-run result). Reserves a fixed
+ * height (one line) at every state so a workspace pick never shifts the layout
+ * below it — the "flickering" complaint was as much this box appearing/
+ * disappearing as it was the text inside it changing.
+ */
 export function PlanStatus({ plan, loading }: { plan: any; loading: boolean }) {
     const { t } = useTranslation('common')
-    if (loading) return <p className="text-[11px] text-text-muted">{t('setupWizard.machines.planChecking')}</p>
-    if (!plan) return null
-    if (plan.success === false) {
-        return <p className="text-[11px] text-red-400">{plan.error}{plan.action ? ` ${plan.action}` : ''}</p>
+    let content: ReactNode = null
+    let className = 'text-[11px] text-text-muted'
+    if (loading) {
+        content = t('setupWizard.machines.planChecking')
+    } else if (plan?.success === false) {
+        className = 'text-[11px] text-red-400'
+        content = <>{plan.error}{plan.action ? ` ${plan.action}` : ''}</>
+    } else if (planTargetsExistingMesh(plan)) {
+        className = 'text-[11px] text-amber-400'
+        content = plan.plan?.summary || t('setupWizard.machines.planExists')
+    } else if (plan) {
+        className = 'text-[11px] text-emerald-400'
+        content = t('setupWizard.machines.planOk', { identity: plan.discovery?.repoIdentity || plan.discovery?.repoRoot || '' })
     }
-    const identity = plan.discovery?.repoIdentity || plan.discovery?.repoRoot || ''
-    return <p className="text-[11px] text-emerald-400">{t('setupWizard.machines.planOk', { identity })}</p>
+    return <p className={`${className} min-h-[1.4em]`}>{content}</p>
 }

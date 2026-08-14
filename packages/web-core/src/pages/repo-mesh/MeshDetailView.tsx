@@ -11,18 +11,18 @@ import { IconMesh } from '../../components/Icons'
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import QuotaPolicyStep from '../../components/setup-wizard/QuotaPolicyStep'
-import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
+import CoordinatorPromptDefaultPreview, { StartFromDefaultButton } from './CoordinatorPromptDefaultPreview'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
 import { collectMeshProviderInventory } from './node-providers'
+import { COORDINATOR_PROMPT_PLACEHOLDERS } from './coordinator-prompt-placeholders'
 import { MeshMissionsSection } from './MeshMissionsSection'
 import { MeshProviderAutoApproveSection } from './MeshProviderAutoApproveSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
 import { RepoMeshHermesMcpConfig } from './MeshHermesMcpConfig'
-import CoordinatorPromptsSection from '../../components/settings/CoordinatorPromptsSection'
 import { IconRefresh } from './icons'
 import {
     readMeshPolicy,
@@ -498,33 +498,41 @@ export function MeshDetailView({
             const promptsTabContent = (
             <>
             {/* ── Coordinator prompt (advanced) ──
-                 Two axes live here:
-                  • Per-mesh: stored in this mesh's coordinator config (systemPromptOverride /
-                    systemPromptAppend) via `update_mesh`. Applies only to this mesh.
-                  • User-level: per-machine files at ~/.adhdev/coordinator-prompts/<cli>.{md,append.md}
-                    on the coordinator daemon, edited via list_/write_coordinator_prompt. Applies to
-                    every mesh this daemon coordinates. Relocated here from Settings so it always has
-                    a daemon target (activeDaemonId) — on Settings it had no daemon/mesh context and
-                    showed "No connected daemons". */}
+                 Stored in this mesh's coordinator config (systemPromptOverride / systemPromptAppend)
+                 via `update_mesh`. Applies only to this mesh. The default base prompt is always
+                 rendered read-only above the Override field (coordinator_prompt_preview) so
+                 "leave empty to keep the default" is never a blank guess, and "Start from default"
+                 seeds Override with it for small edits instead of writing one from scratch. */}
             {features.coordinatorPrompt && (
                 <Section title={t('repoMesh.detail.coordinatorPromptTitle')} collapsible defaultOpen={false}
                     badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
                     description={t('repoMesh.detail.coordinatorPromptDescription')}>
 
-                    {/* Per-mesh override (this mesh's coordinator config) */}
                     <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
                         <div className="text-[13px] font-semibold mb-1">{t('repoMesh.detail.thisMesh')}</div>
                         <p className="text-[12px] text-text-muted mb-3">{t('repoMesh.detail.thisMeshHint', { name: selectedMesh.name })}</p>
-                        <FormField label={t('repoMesh.detail.overrideLabel')} hint={t('repoMesh.detail.overrideHint')}>
+
+                        <CoordinatorPromptDefaultPreview
+                            daemonId={activeDaemonId}
+                            meshId={selectedMesh.id}
+                            cliType={coordinatorCliType}
+                            sendCommand={sendCommand}
+                            defaultOpen
+                        />
+
+                        <FormField label={t('repoMesh.detail.overrideLabel')} hint={t('repoMesh.detail.overrideHint')} className="mt-3">
                             <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
                                 rows={6} value={coordinatorPromptDraft.override}
                                 onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
                                 disabled={savingCoordinatorPrompt} placeholder={t('repoMesh.detail.overridePlaceholder')} />
-                            <CoordinatorPromptDefaultPreview
+                            <StartFromDefaultButton
                                 daemonId={activeDaemonId}
                                 meshId={selectedMesh.id}
                                 cliType={coordinatorCliType}
                                 sendCommand={sendCommand}
+                                disabled={savingCoordinatorPrompt}
+                                hasContent={!!coordinatorPromptDraft.override.trim()}
+                                onApply={text => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: text })}
                             />
                         </FormField>
                         <FormField label={t('repoMesh.detail.appendLabel')} hint={t('repoMesh.detail.appendHint')}>
@@ -535,9 +543,20 @@ export function MeshDetailView({
                         </FormField>
                         <details className="mt-2 text-[12px] text-text-muted">
                             <summary className="cursor-pointer select-none">{t('repoMesh.detail.availablePlaceholders')}</summary>
-                            <p className="mt-1 font-mono break-words">
-                                {'{{meshName}}, {{repo}}, {{defaultBranch}}, {{cliType}}, {{nodes}}, {{policy}}, {{tools}}, {{workflow}}, {{rules}}, {{toolExposurePreflight}}'}
-                            </p>
+                            <p className="mt-1">{t('repoMesh.detail.placeholdersIntro')}</p>
+                            <div className="mt-2 overflow-x-auto">
+                                <table className="w-full text-left border-collapse">
+                                    <tbody>
+                                        {COORDINATOR_PROMPT_PLACEHOLDERS.map(p => (
+                                            <tr key={p.token} className="border-t border-border-subtle/60 align-top">
+                                                <td className="py-1 pr-3 font-mono whitespace-nowrap text-text-secondary">{`{{${p.token}}}`}</td>
+                                                <td className="py-1 pr-3">{p.description}</td>
+                                                <td className="py-1 font-mono text-text-muted/80">{p.example}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         </details>
                         <div className="mt-3 flex items-center gap-2">
                             <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
@@ -545,15 +564,6 @@ export function MeshDetailView({
                             </button>
                             <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title={t('repoMesh.detail.clearTitle')}>{t('repoMesh.detail.clear')}</button>
                         </div>
-                    </div>
-
-                    {/* User-level (per-machine files on the coordinator daemon) */}
-                    <div className="mt-5 border-t border-border-subtle pt-4">
-                        <div className="text-[13px] font-semibold mb-1">{t('repoMesh.detail.userLevel')}</div>
-                        <p className="text-[12px] text-text-muted mb-3">
-                            {t('repoMesh.detail.userLevelDescription')}
-                        </p>
-                        <CoordinatorPromptsSection daemonId={activeDaemonId || undefined} />
                     </div>
                 </Section>
             )}

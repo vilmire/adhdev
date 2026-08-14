@@ -49,7 +49,8 @@ import {
   meshMissionList, meshReviewInbox,
   meshMagiReview, meshMagiCollect,
   meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig,
-  meshNodeSlotsSet, meshNodeSlotsList, meshNodeSlotsPropose
+  meshNodeSlotsSet, meshNodeSlotsList, meshNodeSlotsPropose,
+  meshCoordinatorPromptAppendGet, meshCoordinatorPromptAppendSet
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
@@ -295,6 +296,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_node_slots_set': text = await meshNodeSlotsSet(meshCtx, a as any); break;
           case 'mesh_node_slots_list': text = await meshNodeSlotsList(meshCtx, a as any); break;
           case 'mesh_node_slots_propose': text = await meshNodeSlotsPropose(meshCtx, a as any); break;
+          case 'mesh_coordinator_prompt_append_get': text = await meshCoordinatorPromptAppendGet(meshCtx, a as any); break;
+          case 'mesh_coordinator_prompt_append_set': text = await meshCoordinatorPromptAppendSet(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
         return { content: [{ type: 'text', text }] };

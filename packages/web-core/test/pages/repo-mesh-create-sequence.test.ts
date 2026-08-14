@@ -147,6 +147,45 @@ describe('runMeshCreateSequence', () => {
         expect(sendCommand.mock.calls.map(c => c[1])).not.toContain('add_mesh_node')
     })
 
+    it('reuses an already-fetched plan instead of re-querying plan_mesh_onboarding', async () => {
+        // CREATE-FLOW-FLICKER: the create form already runs plan_mesh_onboarding as a
+        // live discovery preview while the operator fills the form. Re-running it here
+        // was a second, invisible round-trip with no loading indicator — the source of
+        // a "looks good" → surprise error flip when the plan turned out to target an
+        // existing mesh. Passing reusablePlan must skip that second fetch entirely.
+        const sendCommand = vi.fn(async (_daemonId: string, command: string) => {
+            if (command === 'plan_mesh_onboarding') throw new Error('should not re-fetch the plan')
+            if (command === 'create_mesh') return { success: true, mesh: { id: 'mesh_abc' } }
+            if (command === 'add_mesh_node') return { success: true, node: { id: 'node_1' } }
+            throw new Error(`unexpected command ${command}`)
+        })
+
+        const outcome = await runMeshCreateSequence({
+            ...baseOptions(sendCommand),
+            reusablePlan: PLAN_OK,
+        } as any)
+
+        expect(outcome.meshCreated).toBe(true)
+        expect(outcome.meshId).toBe('mesh_abc')
+        expect(sendCommand.mock.calls.map(c => c[1])).not.toContain('plan_mesh_onboarding')
+    })
+
+    it('rejects an existing-mesh reusablePlan the same way as a freshly fetched one', async () => {
+        const sendCommand = vi.fn(async (_daemonId: string, command: string) => {
+            if (command === 'plan_mesh_onboarding') throw new Error('should not re-fetch the plan')
+            throw new Error(`unexpected command ${command}`)
+        })
+
+        const outcome = await runMeshCreateSequence({
+            ...baseOptions(sendCommand),
+            reusablePlan: { success: true, plan: { kind: 'add_existing_workspace', summary: 'A compatible mesh already exists.' } },
+        } as any)
+
+        expect(outcome.meshCreated).toBe(false)
+        expect(outcome.error).toContain('compatible mesh already exists')
+        expect(sendCommand.mock.calls.map(c => c[1])).not.toContain('create_mesh')
+    })
+
     it('unwraps daemon replies nested under result (cloud P2P envelope)', async () => {
         const sendCommand = vi.fn(async (_daemonId: string, command: string) => {
             if (command === 'plan_mesh_onboarding') return { result: PLAN_OK }

@@ -1,5 +1,8 @@
 /**
- * Collapsible "View the default coordinator prompt" preview.
+ * Collapsible "View the default coordinator prompt" preview, plus a shared
+ * `useCoordinatorPromptDefault` hook so other surfaces (e.g. a "Start from
+ * default" button that seeds the override editor) can fetch the same
+ * rendered default without duplicating the load logic.
  *
  * The Override textarea replaces the daemon's built-in base prompt, but when it
  * is left empty the operator sees only a blank field with no idea what that
@@ -8,7 +11,7 @@
  * and shows it read-only, on demand, so "leave empty to keep the default" is no
  * longer an invisible choice.
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 interface Props {
@@ -16,11 +19,13 @@ interface Props {
     meshId: string
     cliType: string
     sendCommand: (daemonId: string, command: string, payload?: any) => Promise<any>
+    /** Start expanded (and auto-load) instead of collapsed. Defaults false. */
+    defaultOpen?: boolean
 }
 
-export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliType, sendCommand }: Props) {
+/** Shared fetch/state for the rendered default coordinator prompt (coordinator_prompt_preview). */
+export function useCoordinatorPromptDefault(daemonId: string, meshId: string, cliType: string, sendCommand: Props['sendCommand']) {
     const { t } = useTranslation()
-    const [open, setOpen] = useState(false)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [prompt, setPrompt] = useState<string | null>(null)
@@ -34,21 +39,38 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
             const raw: any = await sendCommand(daemonId, 'coordinator_prompt_preview', { meshId, cliType })
             // Cloud transport wraps once; standalone returns the daemon body directly.
             const result = (raw?.result && typeof raw.result === 'object') ? raw.result : raw
-            if (!result?.success) { setError(result?.error || t('repoMesh.promptPreview.errorRender')); return }
-            setPrompt(typeof result.prompt === 'string' ? result.prompt : '')
+            if (!result?.success) { setError(result?.error || t('repoMesh.promptPreview.errorRender')); return null }
+            const nextPrompt = typeof result.prompt === 'string' ? result.prompt : ''
+            setPrompt(nextPrompt)
             setBytes(typeof result.bytes === 'number' ? result.bytes : null)
+            return nextPrompt
         } catch (e: any) {
             setError(e?.message || String(e))
+            return null
         } finally {
             setLoading(false)
         }
     }, [daemonId, meshId, cliType, sendCommand, t])
 
+    return { loading, error, prompt, bytes, load }
+}
+
+export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliType, sendCommand, defaultOpen = false }: Props) {
+    const { t } = useTranslation()
+    const [open, setOpen] = useState(defaultOpen)
+    const { loading, error, prompt, bytes, load } = useCoordinatorPromptDefault(daemonId, meshId, cliType, sendCommand)
+    const loadedRef = useRef(false)
+
+    useEffect(() => {
+        if (open && !loadedRef.current) {
+            loadedRef.current = true
+            void load()
+        }
+    }, [open, load])
+
     const toggle = useCallback(() => {
-        const next = !open
-        setOpen(next)
-        if (next && prompt === null && !loading) void load()
-    }, [open, prompt, loading, load])
+        setOpen(next => !next)
+    }, [])
 
     return (
         <div className="mt-2">
@@ -89,5 +111,44 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
                 </div>
             )}
         </div>
+    )
+}
+
+interface StartFromDefaultButtonProps {
+    daemonId: string
+    meshId: string
+    cliType: string
+    sendCommand: Props['sendCommand']
+    disabled?: boolean
+    /** Whether Override already has content — gates the overwrite confirm. */
+    hasContent: boolean
+    onApply: (text: string) => void
+}
+
+/**
+ * "Start from default" — fetches the rendered default prompt and copies it into
+ * the Override field, so an operator can make a small edit instead of writing an
+ * override from scratch. Confirms before clobbering existing Override content.
+ */
+export function StartFromDefaultButton({ daemonId, meshId, cliType, sendCommand, disabled, hasContent, onApply }: StartFromDefaultButtonProps) {
+    const { t } = useTranslation()
+    const { loading, load } = useCoordinatorPromptDefault(daemonId, meshId, cliType, sendCommand)
+
+    const handleClick = useCallback(async () => {
+        if (hasContent && !window.confirm(t('repoMesh.detail.startFromDefaultConfirm'))) return
+        const text = await load()
+        if (typeof text === 'string') onApply(text)
+    }, [hasContent, load, onApply, t])
+
+    return (
+        <button
+            type="button"
+            className="btn btn-secondary btn-sm mt-2"
+            onClick={() => void handleClick()}
+            disabled={disabled || loading || !daemonId || !meshId}
+            title={t('repoMesh.detail.startFromDefaultTitle')}
+        >
+            {loading ? t('repoMesh.promptPreview.rendering') : t('repoMesh.detail.startFromDefault')}
+        </button>
     )
 }

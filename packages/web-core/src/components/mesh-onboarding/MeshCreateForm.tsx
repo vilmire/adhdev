@@ -23,7 +23,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import { FormField, Input } from '../ui/FormField'
 import { AlertBanner } from '../ui/AlertBanner'
-import WorkspacePicker, { PlanStatus, meshOnboardingInputCls, type WorkspaceOption } from './WorkspacePicker'
+import WorkspacePicker, { PlanStatus, planTargetsExistingMesh, meshOnboardingInputCls, type WorkspaceOption } from './WorkspacePicker'
 
 export interface MeshCreateFormProps {
     /** Presentation only — `page` renders FormField rows, `wizard` renders the compact inline panel. */
@@ -87,6 +87,11 @@ export function isMeshCreateDisabled(opts: {
     if (!opts.name.trim()) return true
     if (opts.showDaemonPicker && !opts.daemonId) return true
     if (opts.plan?.success === false) return true
+    // A plan that resolved to an already-existing compatible mesh cannot become a
+    // create — attempting it always fails server-side (runMeshCreateSequence
+    // rejects kind !== 'create_mesh_and_onboard'). Block it here instead of letting
+    // the operator click into a guaranteed, surprising error.
+    if (planTargetsExistingMesh(opts.plan)) return true
     // A workspace is how discovery happens. Without one, the only way to
     // identify the repo is a manually supplied URL or identity.
     if (!opts.workspace.trim()) {
@@ -196,13 +201,22 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
                 <WorkspacePicker workspaces={workspaces} value={workspace} onChange={onWorkspaceChange} />
             </FormField>
 
+            {/* Fixed-presence banner slot: the plan status ALWAYS renders once a workspace
+                 is set (loading → result), instead of mounting/unmounting per state change.
+                 That mount/unmount was the main source of layout jitter during create —
+                 every state change shifted the Name field and buttons below it. */}
             {(planLoading || plan) && (
-                <AlertBanner variant={plan?.success === false ? 'error' : 'info'} className="mb-4">
+                <AlertBanner
+                    variant={plan?.success === false ? 'error' : planTargetsExistingMesh(plan) ? 'warning' : 'info'}
+                    className="mb-4"
+                >
                     {planLoading
                         ? t('setupWizard.machines.planChecking')
-                        : plan?.success
-                            ? `${plan.plan?.summary || 'Git repository detected.'} No changes will be made until you click Create.`
-                            : `${plan?.code || 'onboarding_blocked'}: ${plan?.error || 'Git discovery failed'} ${plan?.action || ''}`}
+                        : plan?.success === false
+                            ? `${plan?.code || 'onboarding_blocked'}: ${plan?.error || 'Git discovery failed'} ${plan?.action || ''}`
+                            : planTargetsExistingMesh(plan)
+                                ? (plan.plan?.summary || t('setupWizard.machines.planExists'))
+                                : `${plan.plan?.summary || 'Git repository detected.'} No changes will be made until you click Create.`}
                 </AlertBanner>
             )}
 

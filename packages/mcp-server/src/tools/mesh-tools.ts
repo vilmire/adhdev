@@ -172,6 +172,11 @@ export {
 } from './mesh-tools-crud.js';
 
 export {
+    meshCoordinatorPromptAppendGet,
+    meshCoordinatorPromptAppendSet,
+} from './mesh-tools-coordinator-prompt.js';
+
+export {
     meshChangeImpactConfig,
     meshChangeImpactConfigSchema,
     meshInit,

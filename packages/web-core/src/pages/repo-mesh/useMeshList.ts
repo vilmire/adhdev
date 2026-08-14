@@ -53,6 +53,16 @@ export interface RunMeshCreateSequenceOptions {
     meshInventory: unknown
     sendCommand: RepoMeshContextValue['sendCommand']
     unwrapResult: RepoMeshContextValue['unwrapResult']
+    /**
+     * A plan_mesh_onboarding result already fetched for this exact workspace (the
+     * live discovery preview shown while the form is open). When present, the
+     * sequence reuses it instead of re-querying the daemon — the workspace/daemon
+     * haven't changed since that fetch, so a second round-trip would just repeat
+     * the same read-only probe invisibly (no loading indicator shown for it),
+     * which is what produced the disorienting "looks good" → surprise error flip
+     * when the plan turned out to target an already-existing mesh.
+     */
+    reusablePlan?: any
 }
 
 /**
@@ -84,12 +94,11 @@ export async function runMeshCreateSequence(opts: RunMeshCreateSequenceOptions):
     const { sendCommand, unwrapResult } = opts
     const base: MeshCreateOutcome = { meshCreated: false, meshId: '', error: null, warning: null, plan: null }
     try {
-        const planRaw = await sendCommand(opts.targetDaemonId, 'plan_mesh_onboarding', {
+        const plan = opts.reusablePlan ?? unwrapResult(await sendCommand(opts.targetDaemonId, 'plan_mesh_onboarding', {
             workspace: opts.workspace || undefined,
             operation: 'auto',
             meshInventory: opts.meshInventory,
-        })
-        const plan = unwrapResult(planRaw)
+        }))
         base.plan = plan
         if (plan?.success === false) {
             return { ...base, error: `${plan.code || 'onboarding_blocked'}: ${plan.error}${plan.action ? ` ${plan.action}` : ''}` }
@@ -355,6 +364,10 @@ export function useMeshList({
                 meshInventory: meshes,
                 sendCommand,
                 unwrapResult,
+                // Reuse the discovery plan already fetched for this workspace (the live
+                // preview effect below) instead of silently re-querying it here — see
+                // RunMeshCreateSequenceOptions.reusablePlan.
+                reusablePlan: (!createPlanLoading && createOnboardingPlan) ? createOnboardingPlan : undefined,
             })
             if (outcome.plan !== null) setCreateOnboardingPlan(outcome.plan)
             if (outcome.warning) setCreateWarning(outcome.warning)

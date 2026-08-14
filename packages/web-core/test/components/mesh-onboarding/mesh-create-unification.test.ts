@@ -57,6 +57,20 @@ describe('isMeshCreateDisabled', () => {
         expect(isMeshCreateDisabled({ ...base, showDaemonPicker: true, daemonId: '' })).toBe(true)
         expect(isMeshCreateDisabled({ ...base, showDaemonPicker: true, daemonId: 'd1' })).toBe(false)
     })
+
+    it('blocks when the plan targets an already-existing compatible mesh (CREATE-FLOW-FLICKER)', () => {
+        // A successful plan whose kind isn't create_mesh_and_onboard always fails
+        // server-side if submitted — block it here instead of letting the operator
+        // click into a guaranteed error.
+        expect(isMeshCreateDisabled({
+            ...base,
+            plan: { success: true, plan: { kind: 'add_existing_workspace' } },
+        })).toBe(true)
+        expect(isMeshCreateDisabled({
+            ...base,
+            plan: { success: true, plan: { kind: 'create_mesh_and_onboard' } },
+        })).toBe(false)
+    })
 })
 
 describe('create form single-implementation guards', () => {

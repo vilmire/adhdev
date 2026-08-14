@@ -1018,6 +1018,29 @@ export const MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
     },
 };
 
+export const MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL = {
+    name: 'mesh_coordinator_prompt_append_get',
+    description: 'Read the current user-level coordinator prompt APPEND text for a CLI type — the per-machine file at ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server\'s daemon. Read this before mesh_coordinator_prompt_append_set so you know what you would be replacing. APPEND ONLY: this always stacks AFTER whichever base prompt wins (daemon default, or a mesh-level / user-level override) — there is no tool to read or write the OVERRIDE (base-replacing) file via MCP; that stays a dashboard-only, human-gated action by design.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            cli_type: { type: 'string', description: 'CLI type key, e.g. "claude-cli", "codex-cli". Defaults to "default" (applies to every CLI type without its own file).' },
+        },
+    },
+};
+
+export const MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
+    name: 'mesh_coordinator_prompt_append_set',
+    description: 'Write (or clear) the user-level coordinator prompt APPEND text for a CLI type — the per-machine file at ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server\'s daemon. Applies to every mesh this daemon coordinates. Empty/omitted content deletes the file (reset to no append). WHOLESALE REPLACE: this replaces the entire append file, not an incremental add — read the current value first with mesh_coordinator_prompt_append_get if you want to preserve existing text. APPEND ONLY (safety boundary, not a missing feature): this can only ever add text after the base prompt; it can NEVER replace the daemon\'s base coordinator prompt (the OVERRIDE file), so a coordinator using this tool cannot erase its own core operating rules. There is no override parameter and none will be added.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            cli_type: { type: 'string', description: 'CLI type key, e.g. "claude-cli", "codex-cli". Defaults to "default".' },
+            content: { type: 'string', description: 'The full append text to write. Omit or pass an empty string to clear (delete the file, falling back to no append at this layer).' },
+        },
+    },
+};
+
 export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_LIST_NODES_TOOL,
@@ -1071,4 +1094,6 @@ export const ALL_MESH_TOOLS = [
     MESH_NODE_SLOTS_SET_TOOL,
     MESH_NODE_SLOTS_LIST_TOOL,
     MESH_NODE_SLOTS_PROPOSE_TOOL,
+    MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL,
+    MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL,
 ];
