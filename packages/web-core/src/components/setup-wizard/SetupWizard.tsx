@@ -20,7 +20,7 @@
  * Commit model: everything here writes immediately (create_mesh /
  * add_mesh_node). There is no staged draft and no Finish commit to lose.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry, RepoMeshFeatures } from '../../context/RepoMeshContext'
 import { runMeshCreateSequence, useMeshList } from '../../pages/repo-mesh/useMeshList'
@@ -95,6 +95,33 @@ export default function SetupWizard({
         void loadMeshes()
     }, [loadMeshes])
 
+    // `meshes` is a fresh array reference on every loadMeshes() call (useMeshList
+    // has no content-equality guard before setMeshes), even when the list content
+    // is unchanged. The create probe below needs meshInventory in its payload but
+    // must NOT re-fire just because loadMeshes() ran again in the background — that
+    // was the "Checking the workspace..." flicker: a reload elsewhere (e.g. after
+    // add_mesh_node) produced a new meshes array while the create form sat open,
+    // re-triggering the probe. meshesRef gives the effect the current value without
+    // depending on the array's identity; meshesKey (content-derived, like the
+    // existing daemonIdsKey pattern below) is what actually belongs in deps.
+    const meshesRef = useRef(meshes)
+    meshesRef.current = meshes
+    const meshesKey = useMemo(() => meshes.map(m => m.id).sort().join(','), [meshes])
+
+    // Same problem, different source: `sendCommand`/`unwrapResult` are function
+    // props, and at least one real caller (web-cloud's SetupWizardPage) passes
+    // them as inline arrow closures re-created on every one of ITS renders —
+    // see packages/web-cloud/src/pages/SetupWizard.tsx. Depending on them
+    // directly in the create-probe effect below would re-fire the probe on
+    // every such parent re-render, same flicker as the meshes issue above but
+    // from the opposite direction (a stable value structurally can't fix an
+    // unstable prop identity). Refs decouple "read the current function" from
+    // "the function's identity is a dependency."
+    const sendCommandRef = useRef(sendCommand)
+    sendCommandRef.current = sendCommand
+    const unwrapResultRef = useRef(unwrapResult)
+    unwrapResultRef.current = unwrapResult
+
     // Preselect: deep-linked mesh, or the single existing mesh. Never overrides
     // an explicit user choice (only fires while nothing is selected).
     useEffect(() => {
@@ -142,33 +169,49 @@ export default function SetupWizard({
     // mesh name from discovery). Mirrors useMeshList's create probe, but fires
     // for standalone too — the wizard always creates mesh + first node in one
     // go, so it needs the plan either way.
+    //
+    // Debounced 300ms on createWorkspace: the field is a filesystem path typed
+    // (or picked and then edited) character by character, and each keystroke
+    // would otherwise fire a fresh git-discovery round-trip on the daemon. 300ms
+    // is long enough to collapse a normal typing burst into one request but
+    // short enough that picking a path from the dropdown (which sets the whole
+    // value at once) still feels immediate.
     useEffect(() => {
         if (!createMode || !resolvedCreateDaemonId || !createWorkspace.trim()) {
             setCreatePlan(null)
+            setCreatePlanLoading(false)
             return
         }
         let cancelled = false
-        setCreatePlanLoading(true)
-        void sendCommand(resolvedCreateDaemonId, 'plan_mesh_onboarding', {
-            workspace: createWorkspace.trim(),
-            operation: 'auto',
-            meshInventory: meshes,
-        }).then(raw => {
+        const debounce = setTimeout(() => {
             if (cancelled) return
-            const result = unwrapResult(raw)
-            setCreatePlan(result)
-            if (result?.success) {
-                setCreateName(current => current || `${String(result.discovery?.repoIdentity || result.discovery?.repoRoot || '').split(/[\\/]/).filter(Boolean).pop() || 'repo'}-mesh`)
-                setCreateRepoIdentity(current => current || result.discovery?.repoIdentity || '')
-                setCreateRepoRemoteUrl(current => current || result.discovery?.origin?.urls?.[0] || result.discovery?.upstream?.urls?.[0] || '')
-            }
-        }).catch(error => {
-            if (!cancelled) setCreatePlan({ success: false, error: error?.message || 'Git discovery failed' })
-        }).finally(() => {
-            if (!cancelled) setCreatePlanLoading(false)
-        })
-        return () => { cancelled = true }
-    }, [createMode, resolvedCreateDaemonId, createWorkspace, meshes, sendCommand, unwrapResult])
+            setCreatePlanLoading(true)
+            void sendCommandRef.current(resolvedCreateDaemonId, 'plan_mesh_onboarding', {
+                workspace: createWorkspace.trim(),
+                operation: 'auto',
+                meshInventory: meshesRef.current,
+            }).then(raw => {
+                if (cancelled) return
+                const result = unwrapResultRef.current(raw)
+                setCreatePlan(result)
+                if (result?.success) {
+                    setCreateName(current => current || `${String(result.discovery?.repoIdentity || result.discovery?.repoRoot || '').split(/[\\/]/).filter(Boolean).pop() || 'repo'}-mesh`)
+                    setCreateRepoIdentity(current => current || result.discovery?.repoIdentity || '')
+                    setCreateRepoRemoteUrl(current => current || result.discovery?.origin?.urls?.[0] || result.discovery?.upstream?.urls?.[0] || '')
+                }
+            }).catch(error => {
+                if (!cancelled) setCreatePlan({ success: false, error: error?.message || 'Git discovery failed' })
+            }).finally(() => {
+                if (!cancelled) setCreatePlanLoading(false)
+            })
+        }, 300)
+        return () => { cancelled = true; clearTimeout(debounce) }
+        // meshesKey (content-derived) replaces meshes (reference); sendCommand/
+        // unwrapResult are read via refs and intentionally NOT deps — see the
+        // comments on meshesRef/meshesKey and sendCommandRef/unwrapResultRef
+        // above. Only values that should actually restart the probe remain:
+        // whether the form is open, which daemon/workspace it targets.
+    }, [createMode, resolvedCreateDaemonId, createWorkspace, meshesKey])
 
     const handleCreate = useCallback(async () => {
         const target = resolvedCreateDaemonId

@@ -23,7 +23,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import { FormField, Input } from '../ui/FormField'
 import { AlertBanner } from '../ui/AlertBanner'
-import WorkspacePicker, { PlanStatus, planTargetsExistingMesh, meshOnboardingInputCls, type WorkspaceOption } from './WorkspacePicker'
+import WorkspacePicker, { PlanStatus, planTargetsExistingMesh, meshOnboardingInputCls, useSettledLoading, type WorkspaceOption } from './WorkspacePicker'
 
 export interface MeshCreateFormProps {
     /** Presentation only — `page` renders FormField rows, `wizard` renders the compact inline panel. */
@@ -119,6 +119,11 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
         creating, planLoading, plan, name, workspace,
         showDaemonPicker, daemonId, repoRemoteUrl, repoIdentity,
     })
+    // Debounced ON-edge only (see useSettledLoading) — a probe that re-fires and
+    // resolves quickly must not flash "Checking..." over the banner. `disabled`
+    // above intentionally uses the raw `planLoading`, not this: Create must stay
+    // blocked for the full duration of an in-flight probe regardless of display.
+    const showPlanLoading = useSettledLoading(planLoading, 250)
 
     // Auto-expand so a discovered or typed value is never hidden behind the toggle.
     const manualExpanded = manualOpen || !!repoRemoteUrl.trim() || !!repoIdentity.trim()
@@ -205,12 +210,12 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
                  is set (loading → result), instead of mounting/unmounting per state change.
                  That mount/unmount was the main source of layout jitter during create —
                  every state change shifted the Name field and buttons below it. */}
-            {(planLoading || plan) && (
+            {(showPlanLoading || plan) && (
                 <AlertBanner
                     variant={plan?.success === false ? 'error' : planTargetsExistingMesh(plan) ? 'warning' : 'info'}
                     className="mb-4"
                 >
-                    {planLoading
+                    {showPlanLoading
                         ? t('setupWizard.machines.planChecking')
                         : plan?.success === false
                             ? `${plan?.code || 'onboarding_blocked'}: ${plan?.error || 'Git discovery failed'} ${plan?.action || ''}`
