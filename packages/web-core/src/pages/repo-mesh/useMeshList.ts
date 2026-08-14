@@ -149,6 +149,25 @@ function attachFailureMessage(detail: string): string {
     return `Mesh created, but attaching the workspace failed: ${detail}. Add the workspace from the mesh's node list.`
 }
 
+/**
+ * Content equality for two mesh lists, so a reload that returns the same data
+ * doesn't hand out a new array reference. `MeshEntry`/`MeshNode` are plain
+ * JSON-serializable records straight off the wire (no functions, no cycles),
+ * so a stringify compare is a safe deep-equality check here — the same
+ * shortcut `daemonArraysEqual` avoids only because daemon entries carry
+ * non-serializable fields; meshes don't.
+ *
+ * Without this, every loadMeshes() call produces a brand-new `meshes` array
+ * even when nothing changed, which cascades into anything that takes `meshes`
+ * as an effect dependency (e.g. the setup wizard's create-probe) re-running
+ * for no reason — the "Checking the workspace..." flicker.
+ */
+export function meshesEqual(a: MeshEntry[], b: MeshEntry[]): boolean {
+    if (a === b) return true
+    if (a.length !== b.length) return false
+    return JSON.stringify(a) === JSON.stringify(b)
+}
+
 interface UseMeshListOptions {
     daemons: RepoMeshDaemonEntry[]
     primaryDaemonId: string
@@ -304,7 +323,7 @@ export function useMeshList({
                     for (const m of r.value) { if (!byId.has(m.id)) byId.set(m.id, m) }
                 }
                 const next = Array.from(byId.values())
-                setMeshes(next)
+                setMeshes(prev => (meshesEqual(prev, next) ? prev : next))
                 meshListCache.set(daemonIdsKey, next)
                 setError(null)
             } else {
@@ -312,7 +331,7 @@ export function useMeshList({
                 const res: any = await sendCommand(primaryDaemonId, 'list_meshes')
                 if (res?.success) {
                     const next = (res.meshes || []).map((m: any) => normalizeMesh(m, primaryDaemonId))
-                    setMeshes(next)
+                    setMeshes(prev => (meshesEqual(prev, next) ? prev : next))
                     meshListCache.set(daemonIdsKey, next)
                     setError(null)
                 } else {

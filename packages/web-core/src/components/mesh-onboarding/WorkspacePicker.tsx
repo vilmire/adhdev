@@ -7,7 +7,7 @@
  * committed value always flows through `value`/`onChange`; the only local
  * state is whether the custom-path input is showing.
  */
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export interface WorkspaceOption {
@@ -83,16 +83,44 @@ export function planTargetsExistingMesh(plan: any): boolean {
 }
 
 /**
+ * Debounces the ON edge of a loading flag, not the OFF edge: `loading` must
+ * stay true for `delayMs` before this reports true, but the moment `loading`
+ * goes false it reports false immediately. This is what keeps the "Checking
+ * the workspace..." text from flashing on screen for a probe that resolves in
+ * a handful of milliseconds (e.g. a cache hit, or a probe effect that re-fires
+ * and immediately settles) — a real in-flight check still shows the message,
+ * it just doesn't appear for a check that was never actually visible to a human.
+ */
+export function useSettledLoading(loading: boolean, delayMs: number): boolean {
+    const [settled, setSettled] = useState(false)
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    useEffect(() => {
+        if (loading) {
+            timerRef.current = setTimeout(() => setSettled(true), delayMs)
+        } else {
+            setSettled(false)
+        }
+        return () => {
+            if (timerRef.current) clearTimeout(timerRef.current)
+        }
+    }, [loading, delayMs])
+    return loading && settled
+}
+
+/**
  * Plan-probe status line (plan_mesh_onboarding dry-run result). Reserves a fixed
  * height (one line) at every state so a workspace pick never shifts the layout
  * below it — the "flickering" complaint was as much this box appearing/
- * disappearing as it was the text inside it changing.
+ * disappearing as it was the text inside it changing. The loading text itself
+ * is further debounced (see useSettledLoading) so a probe that re-fires and
+ * resolves quickly doesn't flash "Checking..." over the previous result.
  */
 export function PlanStatus({ plan, loading }: { plan: any; loading: boolean }) {
     const { t } = useTranslation('common')
+    const showLoading = useSettledLoading(loading, 250)
     let content: ReactNode = null
     let className = 'text-[11px] text-text-muted'
-    if (loading) {
+    if (showLoading) {
         content = t('setupWizard.machines.planChecking')
     } else if (plan?.success === false) {
         className = 'text-[11px] text-red-400'
