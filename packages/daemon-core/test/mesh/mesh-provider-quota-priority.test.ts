@@ -17,8 +17,8 @@
  *   - when EVERY usable provider is gated the reason is the non-actionable
  *     ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON (a self-resolving WAIT), never the
  *     actionable 'provider_priority_unusable' (a slot configuration error);
- *   - fail-open is unchanged: missing / stale / expired-token / transient
- *     readings are never BLOCKED, only out-ranked.
+ *   - fail-open is unchanged: missing / stale / unmarked transient readings
+ *     are never BLOCKED, only out-ranked; fresh retained windows remain facts.
  */
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync } from 'fs';
@@ -98,12 +98,13 @@ function exhaustedQuota(provider: string, over: Record<string, any> = {}) {
     });
 }
 
-async function resolve(node: any) {
+async function resolve(node: any, quotaFactsContext?: { nodes?: any[] }) {
     return __resolveUsableProviderForTests(
         makeComponents(), NODE_ID, node, MESH_ID,
         undefined,
         { difficulty: 'difficult' as const, requiredTags: undefined },
         null,
+        quotaFactsContext,
     );
 }
 
@@ -117,6 +118,48 @@ afterEach(() => {
 });
 
 describe('resolveUsableProvider — quota gate inside the selection loop', () => {
+    it('routes a facts-less worktree clone from exhausted kimi to healthy codex using its source node facts', async () => {
+        detectCliMocks.detected.add('kimi').add('codex-cli');
+        const source = {
+            ...nodeWith([], {
+                kimi: okQuota('kimi', { weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: null } }),
+                'codex-cli': okQuota('codex-cli', { weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } }),
+            }),
+            id: 'base-node',
+        };
+        const clone = {
+            ...nodeWith([
+                { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
+                { provider: 'codex-cli', model: 'gpt-5.4', maxParallel: 1 },
+            ]),
+            clonedFromNodeId: source.id,
+        };
+
+        const resolved = await resolve(clone, { nodes: [source, clone] });
+        expect(resolved.providerType).toBe('codex-cli');
+        expect(resolved.model).toBe('gpt-5.4');
+    });
+
+    it('routes away from fresh exhausted last-good windows after a transient probe error', async () => {
+        detectCliMocks.detected.add('kimi').add('codex-cli');
+        const node = nodeWith([
+            { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
+            { provider: 'codex-cli', model: 'gpt-5.4', maxParallel: 1 },
+        ], {
+            kimi: okQuota('kimi', {
+                status: 'error',
+                error: 'token expired',
+                weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: null },
+                metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true },
+            }),
+            'codex-cli': okQuota('codex-cli', { weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } }),
+        });
+
+        const resolved = await resolve(node);
+        expect(resolved.providerType).toBe('codex-cli');
+        expect(resolved.model).toBe('gpt-5.4');
+    });
+
     // ★The core behaviour that was impossible before: the first-priority
     // provider is quota-exhausted, so selection must fall through to the same
     // node's SECOND provider instead of skipping the whole node.

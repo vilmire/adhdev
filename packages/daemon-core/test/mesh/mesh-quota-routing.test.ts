@@ -219,6 +219,38 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
         });
         expect(evaluateProviderQuotaGate(node, 'codex-cli', null, NOW)).toBeNull();
     });
+
+    it('uses clone-source facts when a new worktree node has no facts of its own', () => {
+        const source = {
+            ...nodeWithQuota({
+                kimi: okQuota({
+                    provider: 'kimi',
+                    weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: null },
+                }),
+                'codex-cli': okQuota({
+                    provider: 'codex-cli',
+                    weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null },
+                }),
+            }),
+            id: 'base-node',
+        };
+        const clone = { id: 'worktree-node', clonedFromNodeId: source.id };
+        const mesh = { nodes: [source, clone] };
+
+        expect(evaluateProviderQuotaGate(clone, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW, mesh)?.reason)
+            .toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
+        expect(evaluateProviderQuotaGate(clone, 'codex-cli', { weeklyMinRemainingPercent: 80 }, NOW, mesh))
+            .toBeNull();
+        const ranked = rankProvidersByQuotaGate(
+            clone,
+            ['kimi', 'codex-cli'],
+            { weeklyMinRemainingPercent: 80 },
+            NOW,
+            mesh,
+        );
+        expect(ranked.clear).toEqual(['codex-cli']);
+        expect(ranked.gated.map(entry => entry.providerType)).toEqual(['kimi']);
+    });
 });
 
 describe('evaluateProviderQuotaGate — quota-exhausted hard block', () => {
@@ -266,6 +298,47 @@ describe('evaluateProviderQuotaGate — quota-exhausted hard block', () => {
     it('an ok snapshot with full headroom still passes (exhaustion kind only rides errors)', () => {
         const node = nodeWithQuota({ kimi: okQuota() });
         expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
+    });
+});
+
+describe('evaluateProviderQuotaGate — retained last-good windows', () => {
+    const retainedQuota = (over: Record<string, any> = {}) => okQuota({
+        provider: 'kimi',
+        status: 'error',
+        error: 'token expired',
+        metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true },
+        ...over,
+    });
+
+    it('blocks from a fresh retained weekly window when the current probe errored', () => {
+        const node = nodeWithQuota({
+            kimi: retainedQuota({ weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: null } }),
+        });
+        const block = evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW);
+        expect(block?.reason).toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
+        expect(block?.remainingPercent).toBe(0);
+    });
+
+    it('fails OPEN once the retained reading is older than staleAfterMs', () => {
+        const node = nodeWithQuota({ kimi: retainedQuota({ updatedAt: NOW - 31 * MIN }) });
+        expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
+    });
+
+    it('keeps a fresh retained reading with sufficient headroom gate-clear', () => {
+        const node = nodeWithQuota({
+            kimi: retainedQuota({ weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW)).toBeNull();
+    });
+
+    it('fails OPEN when an error has windows but no lastGoodWindows provenance', () => {
+        const node = nodeWithQuota({
+            kimi: retainedQuota({
+                weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: null },
+                metadata: { source: 'oauth', failureKind: 'expired-token' },
+            }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW)).toBeNull();
     });
 });
 

@@ -1,7 +1,8 @@
 /**
  * Quota-aware routing — the launch GATE and fitness SPREAD bonus that consume
  * the per-provider quota snapshots riding each node's nodeFacts bundle
- * (mesh-shared MeshNodeFacts.quota).
+ * (mesh-shared MeshNodeFacts.quota), with same-daemon worktree clones falling
+ * back to their clone source while their own facts are not usable yet.
  *
  * Two consumers, one judgement module (mirrors mesh-node-slots.ts: a tiny
  * standalone module so importing it never drags in the assignment engine):
@@ -28,10 +29,12 @@
  *      (+100), so quota expresses a PREFERENCE among equally-fit slots and can
  *      never overturn a difficulty match.
  *
- * FAIL-OPEN contract: a missing entry, a non-'ok' status, or a STALE snapshot
- * yields "no gate, no bonus" — routing on an old reading would exclude nodes
- * on data that no longer describes them (the stale-quota misexclusion failure
- * mode). Observation without confidence must be inert.
+ * FAIL-OPEN contract: a missing entry, an unmeasurable non-'ok' status, or a
+ * STALE snapshot yields "no gate, no bonus" — routing on an old reading would
+ * exclude nodes on data that no longer describes them (the stale-quota
+ * misexclusion failure mode). A non-'ok' entry may gate from retained windows
+ * only when metadata.lastGoodWindows proves their provenance and their
+ * ORIGINAL updatedAt is still fresh. Observation without confidence is inert.
  *
  * ONE hard-block exception: a FRESH 'error' snapshot whose metadata.failureKind
  * is 'quota-exhausted' (the provider's own "usage limit reached" answer, e.g.
@@ -70,7 +73,7 @@
  * the node record, and no function in this module may trigger a quota fetch —
  * the refresh timer owns fetching (quota/refresh.ts); readers only ever read.
  */
-import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import {
     resolveQuotaRoutingPolicy,
     type RepoMeshQuotaRoutingPolicy,
@@ -100,8 +103,12 @@ export const PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = 'provider_quota_exhausted';
  *  reasons above. */
 export const ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = 'all_providers_quota_gated';
 
-/** Read the reported quota entry for a provider off a node's facts bundle. */
-function quotaEntryFor(node: any, providerType: string): { facts: { reportedAt: number }; quota: MeshNodeFactsProviderQuota } | null {
+interface QuotaFactsContext {
+    nodes?: any[];
+}
+
+/** Read one provider entry directly from a node's facts bundle. */
+function directQuotaEntryFor(node: any, providerType: string): { facts: { reportedAt: number }; quota: MeshNodeFactsProviderQuota } | null {
     const facts = node?.nodeFacts;
     if (!facts || typeof facts !== 'object') return null;
     const reportedAt = Number(facts.reportedAt);
@@ -109,6 +116,25 @@ function quotaEntryFor(node: any, providerType: string): { facts: { reportedAt: 
     const quota = facts.quota?.[providerType];
     if (!quota || typeof quota !== 'object') return null;
     return { facts: { reportedAt }, quota };
+}
+
+/**
+ * Read the reported quota entry for a provider. A worktree clone shares the
+ * source node's owning daemon and upstream accounts, so during its pre-probe
+ * facts gap (or when an early facts bundle has no quota yet) use the source
+ * node's entry. No source/entry still means unknown and therefore fail-open.
+ */
+function quotaEntryFor(
+    node: any,
+    providerType: string,
+    context?: QuotaFactsContext | null,
+): { facts: { reportedAt: number }; quota: MeshNodeFactsProviderQuota } | null {
+    const direct = directQuotaEntryFor(node, providerType);
+    if (direct) return direct;
+    const sourceNodeId = typeof node?.clonedFromNodeId === 'string' ? node.clonedFromNodeId.trim() : '';
+    if (!sourceNodeId || !Array.isArray(context?.nodes)) return null;
+    const sourceNode = context.nodes.find(candidate => candidate !== node && meshNodeIdMatches(candidate, sourceNodeId));
+    return sourceNode ? directQuotaEntryFor(sourceNode, providerType) : null;
 }
 
 /**
@@ -187,12 +213,16 @@ function isSessionResetImminent(
  * The launch GATE: should this (node, provider) pair be skipped because the
  * provider's reported quota is nearly exhausted? Returns null (launch may
  * proceed) when the quota is unknown, unmeasurable, stale, or above every
- * threshold. The gate blocks in exactly two situations, both on FRESH
+ * threshold. The gate blocks in exactly three situations, all on FRESH
  * snapshots only:
  *   1. an 'ok' snapshot with a window below its threshold, and
  *   2. an 'error' snapshot with failureKind 'quota-exhausted' — the provider's
- *      own exhaustion verdict (no window breakdown, so window is 'unknown').
- * Every other non-'ok' reading fails open.
+ *      own exhaustion verdict (no window breakdown, so window is 'unknown'),
+ *   3. a non-'ok' snapshot marked lastGoodWindows whose retained window is
+ *      below its threshold.
+ * Every other non-'ok' reading fails open. Retained windows use the existing
+ * staleAfterMs because carry-forward preserves their ORIGINAL updatedAt, so
+ * freshness measures the last successful observation rather than the error.
  *
  * Thresholds are judged per window against the node's session/weekly axes —
  * the provider-agnostic vocabulary every fetcher normalizes into, so no
@@ -209,8 +239,9 @@ export function evaluateProviderQuotaGate(
     providerType: string,
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
+    context?: QuotaFactsContext | null,
 ): ProviderQuotaGateBlock | null {
-    const entry = quotaEntryFor(node, providerType);
+    const entry = quotaEntryFor(node, providerType, context);
     if (!entry) return null; // never reported → unknown, not blocked
     const { facts, quota } = entry;
     if (quota.status !== 'ok') {
@@ -231,9 +262,17 @@ export function evaluateProviderQuotaGate(
                 thresholdPercent: 0,
             };
         }
-        return null;
+        // A transient probe failure may retain the last successfully observed
+        // windows. Their provenance is explicit and carry-forward preserves
+        // the ORIGINAL updatedAt, so the ordinary staleAfterMs check measures
+        // their true age. Unmarked/non-fresh failures remain fail-open.
+        if ((quota as any).metadata?.lastGoodWindows !== true
+            || !isQuotaSnapshotFresh(facts, quota, policy, now)) {
+            return null;
+        }
+    } else if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
+        return null; // fail-open on stale
     }
-    if (!isQuotaSnapshotFresh(facts, quota, policy, now)) return null; // fail-open on stale
     const resolved = resolveQuotaRoutingPolicy(policy);
     const session = remainingPercent(quota.session);
     if (session !== undefined && session < resolved.sessionMinRemainingPercent
@@ -315,8 +354,9 @@ function expiryRiskForRanking(
     axis: 'session' | 'weekly',
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
+    context?: QuotaFactsContext | null,
 ): ExpiryRisk | undefined {
-    const entry = quotaEntryFor(node, providerType);
+    const entry = quotaEntryFor(node, providerType, context);
     if (!entry) return undefined;
     const { facts, quota } = entry;
     if (quota.status !== 'ok') return undefined;
@@ -401,24 +441,26 @@ export interface ProviderQuotaGateRanking {
  * selection is byte-identical to what it was before.
  *
  * Being out-ranked and being BLOCKED are different things: a fail-open
- * candidate (missing / stale / expired-token / any transient reading) is
- * never blocked — it only lands in the unknown group. The fail-open contract
- * of evaluateProviderQuotaGate is inherited unchanged.
+ * candidate (missing / stale / an unmarked transient reading) is never blocked
+ * — it only lands in the unknown group. A transient error with fresh retained
+ * last-good windows may still be blocked by those measured windows. The
+ * fail-open contract of evaluateProviderQuotaGate is inherited unchanged.
  */
 export function rankProvidersByQuotaGate(
     node: any,
     orderedProviderTypes: string[],
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
+    context?: QuotaFactsContext | null,
 ): ProviderQuotaGateRanking {
     const clear: string[] = [];
     const gated: ProviderQuotaGateRanking['gated'] = [];
     for (const providerType of orderedProviderTypes) {
-        const block = evaluateProviderQuotaGate(node, providerType, policy, now);
+        const block = evaluateProviderQuotaGate(node, providerType, policy, now, context);
         if (block) gated.push({ providerType, block });
         else clear.push(providerType);
     }
-    const weeklyByProvider = new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'weekly', policy, now)]));
+    const weeklyByProvider = new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'weekly', policy, now, context)]));
     // 2′ conditional gate: the session (5h) axis ranks ONLY while every
     // weekly-measured candidate has weekly headroom to spare (strictly above
     // the threshold — a candidate AT it stays weekly-protected). With no
@@ -429,7 +471,7 @@ export function rankProvidersByQuotaGate(
     const sessionAxisActive = weeklyMeasured.length > 0
         && weeklyMeasured.every(w => w.remainingPercent > headroomPercent);
     const sessionByProvider = sessionAxisActive
-        ? new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'session', policy, now)]))
+        ? new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'session', policy, now, context)]))
         : undefined;
     clear.sort((a, b) => {
         const wa = weeklyByProvider.get(a);
@@ -470,9 +512,9 @@ export function rankProvidersByQuotaGate(
  *
  * ★THE DECIDING INPUT IS THE QUOTA SNAPSHOT, NEVER THE DEATH ITSELF.
  * This function is not told, and deliberately cannot ask, WHY the session died.
- * It re-uses evaluateProviderQuotaGate verbatim, which blocks on exactly two
- * measured quota readings (a fresh 'quota-exhausted' error, or a fresh 'ok'
- * snapshot below a window threshold) and fails OPEN on everything else. So a
+ * It re-uses evaluateProviderQuotaGate verbatim, which blocks on measured quota
+ * readings (a fresh 'quota-exhausted' error, or fresh current/retained windows
+ * below a threshold) and fails OPEN on everything else. So a
  * death with a healthy quota — the kimi trust-prompt case, where six
  * consecutive sessions exited 0 within ~20ms in a fresh worktree while quota was
  * perfectly fine — reads `keep` and relaunches exactly as before. Inferring
@@ -485,11 +527,12 @@ export function rankProvidersByQuotaGate(
  * debated — token expires → claim blocked → CLI never runs → token never
  * refreshes, because the CLI owns its own token lifecycle (quota/fetchers/
  * kimi.ts) — cannot arise here for the same structural reason it cannot arise
- * in the launch gate: 'expired-token' is a TRANSIENT failure kind and
- * evaluateProviderQuotaGate fails OPEN on it. Only 'quota-exhausted' — which no
- * relaunch can heal, and which resets on a timer regardless of whether anything
- * runs — blocks. A single-provider node whose token expired therefore still
- * relaunches and still refreshes its token.
+ * in the launch gate: an 'expired-token' entry without trustworthy windows
+ * still fails OPEN. If it carries fresh last-good windows already showing
+ * exhaustion, those measured windows may block, but only until staleAfterMs;
+ * after that it fails open, so the gate cannot create a permanent refresh
+ * deadlock. A single-provider node with only an expired token therefore still
+ * relaunches and can refresh it.
  *
  * ★BLOCKING IS NEVER A DEAD END. The recovery path re-queues the task BEFORE it
  * relaunches, and this resolver never touches the queue: a blocked relaunch
@@ -522,8 +565,9 @@ export interface RecoveryRelaunchDecision {
  * weekly-expiry-risk ranking the auto-launch selection loop uses, so recovery
  * and normal dispatch agree on which provider to spend next.
  *
- * Deliberately synchronous and side-effect free: it reads the in-memory
- * nodeFacts bundle only, never triggers a fetch, and never mutates the queue.
+ * Deliberately synchronous and side-effect free: it reads in-memory nodeFacts
+ * (including clone-source facts from the supplied context), never triggers a
+ * fetch, and never mutates the queue.
  */
 export function resolveRecoveryRelaunchProvider(
     node: any,
@@ -531,11 +575,12 @@ export function resolveRecoveryRelaunchProvider(
     nodeProviderTypes: string[] = [],
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
+    context?: QuotaFactsContext | null,
 ): RecoveryRelaunchDecision {
     if (!failedProviderType) return { action: 'block' };
     // The ONLY quota question asked: is the failed provider's own snapshot
     // blocking RIGHT NOW? Fail-open covers unknown/stale/transient/opted-out.
-    const block = evaluateProviderQuotaGate(node, failedProviderType, policy, now);
+    const block = evaluateProviderQuotaGate(node, failedProviderType, policy, now, context);
     if (!block) return { action: 'keep', providerType: failedProviderType };
 
     // The failed provider is measurably out of quota. Prefer another provider
@@ -544,7 +589,7 @@ export function resolveRecoveryRelaunchProvider(
     // provider for another.
     const alternatives = nodeProviderTypes.filter(p => p && p !== failedProviderType);
     if (alternatives.length) {
-        const ranked = rankProvidersByQuotaGate(node, alternatives, policy, now);
+        const ranked = rankProvidersByQuotaGate(node, alternatives, policy, now, context);
         if (ranked.clear.length) {
             return { action: 'fallback', providerType: ranked.clear[0], block };
         }
@@ -598,9 +643,10 @@ export function quotaRiskSnapshotForCandidates(
     orderedProviderTypes: string[],
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
+    context?: QuotaFactsContext | null,
 ): ProviderQuotaRiskSnapshot[] {
     return orderedProviderTypes.map(providerType => {
-        const w = expiryRiskForRanking(node, providerType, 'weekly', policy, now);
+        const w = expiryRiskForRanking(node, providerType, 'weekly', policy, now, context);
         return {
             providerType,
             ...(w ? { remainingPercent: w.remainingPercent, risk: w.risk } : {}),

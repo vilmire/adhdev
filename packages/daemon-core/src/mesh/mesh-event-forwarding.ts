@@ -2241,10 +2241,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         // itself. The gate reads the provider's quota SNAPSHOT and never the
                         // death itself: a session that died with healthy quota (e.g. a CLI
                         // exiting 0 on an un-trusted worktree path) is not a quota signal, fails
-                        // open, and relaunches exactly as before — as does 'expired-token' and
-                        // every other transient kind, so a single-provider node can still
-                        // relaunch the CLI that owns its own token refresh (no self-healing
-                        // deadlock). Only a measured block diverts: to another gate-clear
+                        // open, and relaunches exactly as before — as does an expired-token or
+                        // other transient reading without fresh retained low windows, so a
+                        // single-provider node can still relaunch the CLI that owns its own
+                        // token refresh. Only a measured block diverts: to another gate-clear
                         // provider on this node, else to no relaunch, leaving the task ALREADY
                         // re-queued above pending for the drain. See resolveRecoveryRelaunchProvider.
                         const relaunch = node
@@ -2253,6 +2253,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                 recoveryContext.failedProviderType,
                                 resolveNodeCapabilitySlots(node, args.meshId).map((s: any) => s.provider),
                                 mesh?.policy?.quotaRouting ?? null,
+                                Date.now(),
+                                mesh,
                             )
                             : { action: 'block' as const };
                         const relaunchProviderType = relaunch.action === 'block' ? null : relaunch.providerType;

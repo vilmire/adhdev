@@ -814,11 +814,12 @@ export function tryAssignQueueTask(
     // window resets, so the block is not actionable — the task stays pending
     // (return false without touching its status) and the drain simply moves on to
     // the next candidate / re-fires on the next tick. Reads only the in-memory
-    // nodeFacts bundle (synchronous; never triggers a quota fetch), and missing /
-    // stale / non-'ok' snapshots fail OPEN exactly as in the launch path. Log-only
+    // nodeFacts bundle or same-daemon clone source (synchronous; never triggers a
+    // quota fetch). Missing/stale/unmarked non-'ok' snapshots fail OPEN exactly as
+    // in the launch path; fresh last-good windows remain measurable. Log-only
     // like the lease defer above — no ledger entry, so a repeatedly gated claim
     // does not flood the ledger every drain tick.
-    const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null);
+    const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null, Date.now(), mesh);
     if (quotaClaimBlock) {
         if (quotaClaimBlock.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
             LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${nodeId} (${sessionId}): provider '${providerType}' reported its quota EXHAUSTED — task left pending until the quota resets`);
@@ -1816,6 +1817,7 @@ async function resolveUsableProvider(
     requiredTags?: string[],
     task?: FitnessTask,
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
+    quotaFactsContext?: { nodes?: any[] } | null,
 ): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; slot?: NodeCapabilitySlot; reason?: string }> {
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
@@ -1913,17 +1915,17 @@ async function resolveUsableProvider(
     // elapsed window fraction — an unused remainder evaporates at the window
     // reset, so the least-consumable-in-time remainder is spent first; the
     // owner-confirmed dynamic priority). Fail-open is inherited from
-    // evaluateProviderQuotaGate unchanged: missing / stale / expired-token /
-    // transient readings are never BLOCKED, they only sort into the
+    // evaluateProviderQuotaGate unchanged: missing / stale / unmarked transient
+    // readings are never BLOCKED, they only sort into the
     // unknown-weekly group (see rankProvidersByQuotaGate). ALL-gated is
     // reported under its own reason so a quota WAIT (self-resolving,
     // non-actionable) is never conflated with 'provider_priority_unusable'
     // (a slot configuration error, actionable).
-    const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting);
+    const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting, Date.now(), quotaFactsContext);
     // OBSERVABILITY (quota-ranking): the risk snapshot backing `ranked.clear`'s
     // order, plus the gated reasons, so a debug-log tail or a later mesh_status
     // read can reconstruct WHY this order happened, not just what it was.
-    const riskSnapshot = quotaRiskSnapshotForCandidates(node, ranked.clear, quotaRouting);
+    const riskSnapshot = quotaRiskSnapshotForCandidates(node, ranked.clear, quotaRouting, Date.now(), quotaFactsContext);
     if (!ranked.clear.length) {
         const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
         LOG.info('MeshQueue', `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
@@ -2391,7 +2393,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
             autoLaunchInProgress.add(launchKey);
             try {
-                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null);
+                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, mesh);
                 if (!resolved.providerType) {
                     // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
                     // loop (a gated first-choice provider falls through to the node's
