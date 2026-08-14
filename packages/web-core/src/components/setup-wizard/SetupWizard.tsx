@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry, RepoMeshFeatures } from '../../context/RepoMeshContext'
 import { runMeshCreateSequence, useMeshList } from '../../pages/repo-mesh/useMeshList'
 import { type MeshEntry, type MeshNode } from '../../pages/repo-mesh/types'
+import { isPhantomDaemonEntry } from '@adhdev/mesh-shared'
 import {
     defaultProviderPriorityFromInventory,
     normalizeAvailableCliProviders,
@@ -262,7 +263,9 @@ export default function SetupWizard({
     const attachableDaemons = useMemo(() => {
         if (!features.addNodeDaemonPicker) return []
         const attached = new Set(nodes.map(n => String((n as any).daemon_id || (n as any).daemonId || '')))
-        return daemons.filter(d => d.id && !attached.has(d.id))
+        // Same phantom rule as the mesh page's candidate list (see RepoMesh.tsx) —
+        // a raw-DO-id ghost must not be offered as an attachable machine here either.
+        return daemons.filter(d => d.id && !attached.has(d.id) && !isPhantomDaemonEntry(d))
     }, [features.addNodeDaemonPicker, nodes, daemons])
 
     const attachDaemon = useMemo(

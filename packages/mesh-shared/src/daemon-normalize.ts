@@ -34,6 +34,73 @@ import { readString } from './json'
 const DAEMON_ID_PREFIXES = ['daemon_', 'standalone_'] as const
 
 /**
+ * A daemon DO addressed by a raw 64-hex DO id (`idFromString`) rather than by a
+ * canonical name (`idFromName("daemon_mach_<hex>")`). Decide by FORMAT, not by
+ * length — the canonical name is 43+ chars, so a `length > 32` heuristic would
+ * misclassify it. Mirrors the server's session-routing `isRawDoId`.
+ */
+export function isRawDaemonDoId(id: string | null | undefined): boolean {
+    const trimmed = readString(id)
+    return !!trimmed && /^[0-9a-f]{64}$/i.test(trimmed)
+}
+
+/** The machine-evidence fields a real daemon reports about its hardware. */
+export interface DaemonMachineEvidence {
+    machineNickname?: string | null
+    nickname?: string | null
+    hostname?: string | null
+    platform?: string | null
+    machineId?: string | null
+    machine?: { hostname?: string | null; platform?: string | null } | null
+    sessions?: unknown[] | null
+}
+
+/**
+ * A phantom daemon entry — a UI surface must not offer it as a real machine.
+ *
+ * Symptom block for the raw-DO-id ghost (GHOST-MACHINE-REGISTRATIONS). When the
+ * `X-ADHDEV-Daemon` instanceId header is missing or unparseable, the /ws handler
+ * falls back to a random DO name, so every reconnect mints a FRESH raw 64-hex DO
+ * id. Those keys accumulate as hardware-less entries that render as a bare hash
+ * where a machine name belongs.
+ *
+ * BOTH conditions are required, and the second is what keeps this safe:
+ *   1. the id is a raw DO id — no `daemon_`/`standalone_` canonical prefix.
+ *   2. no machine evidence at all — no nickname, hostname, platform, registered
+ *      machineId, and no sessions.
+ *
+ * A legacy / not-yet-reauthed daemon that ACTUALLY reports itself fails (2) and
+ * therefore still renders, still attaches, and still routes — dropping on (1)
+ * alone would make real daemons disappear from the picker. This is strictly a
+ * PRESENTATION filter: routing tables (server `lastStatuses`, P2P relay) keep
+ * the entry, because the raw key still resolves via `idFromString`.
+ *
+ * The server applies the same rule to its dashboard payloads via
+ * `_unresolvedIdentity` (UserSession.isPhantomMachineEntry). That marker is
+ * server-internal and never reaches the browser, and the client daemon store
+ * never evicts an entry once injected — so a client surface reading the merged
+ * P2P/WS store must re-derive the verdict from the entry SHAPE. This function is
+ * that shared rule.
+ */
+export function isPhantomDaemonEntry(
+    entry: (DaemonMachineEvidence & { id?: string | null }) | null | undefined,
+): boolean {
+    if (!entry) return false
+    if (!isRawDaemonDoId(entry.id)) return false
+    const hasMachineEvidence = Boolean(
+        readString(entry.machineNickname)
+        || readString(entry.nickname)
+        || readString(entry.hostname)
+        || readString(entry.platform)
+        || readString(entry.machine?.hostname)
+        || readString(entry.machine?.platform)
+        || readString(entry.machineId)
+        || (Array.isArray(entry.sessions) && entry.sessions.length > 0),
+    )
+    return !hasMachineEvidence
+}
+
+/**
  * Reduce any daemon-id form to its machine core: strips a leading `daemon_` /
  * `standalone_` prefix, leaving the bare `mach_<hex>` (or returning a non-prefixed
  * id unchanged). Returns undefined for an empty/absent id.

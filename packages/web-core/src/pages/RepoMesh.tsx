@@ -7,7 +7,7 @@
  *             retry logic, coordinator targeting, and cloud-only UI sections.
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
+import { daemonIdsEquivalent, isPhantomDaemonEntry } from '@adhdev/mesh-shared'
 
 import AppPage from '../components/ui/AppPage'
 import { IconMesh } from '../components/Icons'
@@ -246,8 +246,13 @@ export default function RepoMesh() {
         () => new Set((selectedMesh?.nodes || []).map(n => String(n.daemon_id || n.daemonId || ''))),
         [selectedMesh],
     )
+    // Phantom raw-DO-id entries are dropped here, at the point the candidate list is
+    // BUILT — not at render — so the "N available" counter, the empty-state branch and
+    // the cards all agree. The client daemon store never evicts an entry once injected,
+    // so a ghost that the server has since stopped reporting still lingers in `daemons`;
+    // the shape-based rule is the only thing that can retire it browser-side.
     const attachableDaemons = useMemo(
-        () => daemons.filter(d => d.id && !attachedDaemonIds.has(d.id)),
+        () => daemons.filter(d => d.id && !attachedDaemonIds.has(d.id) && !isPhantomDaemonEntry(d)),
         [daemons, attachedDaemonIds],
     )
 

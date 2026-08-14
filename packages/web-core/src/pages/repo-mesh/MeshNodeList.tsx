@@ -263,11 +263,11 @@ export function MeshNodeList({
             {features.addNodeDaemonPicker && (
                 <div className="mb-4 rounded-xl border border-border-subtle bg-bg-secondary/60 p-4">
                     <div className="flex items-center justify-between gap-3 mb-3">
-                        <div>
+                        <div className="min-w-0">
                             <div className="text-sm font-semibold text-text-primary">{t('repoMesh.nodeList.daemonCandidates')}</div>
                             <div className="text-[12px] text-text-muted">{t('repoMesh.nodeList.daemonCandidatesHint')}</div>
                         </div>
-                        <span className="text-[11px] text-text-muted">{t('repoMesh.nodeList.available', { count: attachableDaemons.length })}</span>
+                        <span className="text-[11px] text-text-muted shrink-0">{t('repoMesh.nodeList.available', { count: attachableDaemons.length })}</span>
                     </div>
                     {daemons.length === 0 ? (
                         <div className="text-[12px] text-text-muted">{t('repoMesh.nodeList.noDaemonsAvailable')}</div>
@@ -277,7 +277,10 @@ export function MeshNodeList({
                         <div className="grid gap-2 md:grid-cols-2">
                             {attachableDaemons.map(d => (
                                 <button key={d.id} type="button"
-                                    className={`text-left rounded-lg border px-3 py-2 transition-colors ${d.id === coordinatorDaemonId ? 'border-accent-primary/50 bg-accent-primary/10' : 'border-border-subtle bg-bg-primary hover:border-border-default'}`}
+                                    // min-w-0: a grid item's default `min-width:auto` floors the track at
+                                    // the widest content, so the long monospace daemon id below pushes the
+                                    // card past the viewport (and defeats its own `truncate`) on mobile.
+                                    className={`text-left rounded-lg border px-3 py-2 transition-colors min-w-0 ${d.id === coordinatorDaemonId ? 'border-accent-primary/50 bg-accent-primary/10' : 'border-border-subtle bg-bg-primary hover:border-border-default'}`}
                                     onClick={() => {
                                         onNodeDaemonIdChange(d.id)
                                         onNodeWorkspaceChange('')
@@ -286,8 +289,10 @@ export function MeshNodeList({
                                         onShowAddNode()
                                     }}>
                                     <div className="flex items-center justify-between gap-2">
-                                        <span className="text-sm font-medium truncate">{daemonLabel(d)}</span>
-                                        {d.id === coordinatorDaemonId && <span className="text-[10px] text-accent-primary">{t('repoMesh.nodeList.selectedHost')}</span>}
+                                        {/* min-w-0 on the truncating child; shrink-0 on the badge so the
+                                            label yields first instead of the badge wrapping. */}
+                                        <span className="text-sm font-medium truncate min-w-0">{daemonLabel(d)}</span>
+                                        {d.id === coordinatorDaemonId && <span className="text-[10px] text-accent-primary shrink-0">{t('repoMesh.nodeList.selectedHost')}</span>}
                                     </div>
                                     <div className="mt-1 text-[11px] text-text-muted font-mono truncate">{d.id}</div>
                                     <div className="mt-1 text-[11px] text-text-muted">{t('repoMesh.nodeList.workspacesDetected', { count: (d.workspaces || []).length })}</div>
