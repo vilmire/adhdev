@@ -52,6 +52,7 @@ import { getRecentLaunchArgs, pushRecentLaunchArgs, removeRecentLaunchArgs } fro
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import { isLaunchableMachineProvider, type LaunchableProviderCategory } from '../../utils/provider-activation'
 import AgentWorkspaceSelector from './AgentWorkspaceSelector'
+import { PROVIDER_CATEGORY_COLOR } from './providerCategoryConfig'
 
 type AgentCategory = LaunchableProviderCategory
 
@@ -77,9 +78,9 @@ interface AgentTabProps {
 
 // ─── Category Config ────────────────────────────────
 const CATEGORY_CONFIG = {
-    ide: { label: 'IDE', plural: 'IDEs', accent: 'border-blue-500/[0.12]' },
-    cli: { label: 'CLI', plural: 'CLIs', accent: 'border-violet-500/[0.12]' },
-    acp: { label: 'ACP Agent', plural: 'ACP agents', accent: 'border-emerald-500/[0.12]' },
+    ide: { label: 'IDE', plural: 'IDEs', accent: PROVIDER_CATEGORY_COLOR.ide.accent },
+    cli: { label: 'CLI', plural: 'CLIs', accent: PROVIDER_CATEGORY_COLOR.cli.accent },
+    acp: { label: 'ACP Agent', plural: 'ACP agents', accent: PROVIDER_CATEGORY_COLOR.acp.accent },
 } as const
 
 function normalizePath(path: string | null | undefined) {

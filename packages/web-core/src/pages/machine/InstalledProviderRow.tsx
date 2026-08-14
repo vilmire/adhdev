@@ -16,6 +16,7 @@ import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 import { formatQuotaUsage, formatQuotaWindow, quotaUsageTone } from '../../utils/quota-format'
+import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
 
 /**
  * Validate a provider-manifest URL before rendering it as an anchor.
@@ -49,13 +50,6 @@ const QUOTA_CHIP_TONE: Record<string, string> = {
     warn: 'bg-yellow-500/[0.10] border-yellow-500/25 text-yellow-400',
     danger: 'bg-red-500/[0.10] border-red-500/25 text-red-400',
     info: 'bg-sky-500/[0.10] border-sky-500/25 text-sky-300',
-}
-
-const CATEGORY_BG: Record<string, string> = {
-    acp: 'bg-violet-500/10 text-violet-300 border-violet-500/20',
-    cli: 'bg-blue-500/10 text-blue-300 border-blue-500/20',
-    ide: 'bg-green-500/10 text-green-300 border-green-500/20',
-    extension: 'bg-yellow-500/10 text-yellow-300 border-yellow-500/20',
 }
 
 function formatCheck(check?: ProviderMachineCheck): string {
@@ -245,7 +239,7 @@ export default function InstalledProviderRow({
             >
                 <span className="text-base shrink-0">{prov.icon}</span>
                 <span className="text-[13px] font-semibold text-text-primary truncate">{prov.displayName}</span>
-                <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${CATEGORY_BG[prov.category] ?? 'border-border-subtle text-text-muted'}`}>
+                <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${PROVIDER_CATEGORY_COLOR[prov.category as ProviderCategory]?.badge ?? 'border-border-subtle text-text-muted'}`}>
                     {prov.category.toUpperCase()}
                 </span>
                 {(providerInfo as any)?.trust && (
