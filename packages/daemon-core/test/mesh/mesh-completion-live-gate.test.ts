@@ -44,7 +44,7 @@ function strongEvent(overrides: Record<string, unknown> = {}): Record<string, un
         dispatchNonce: 7,
         timestamp: NOW - 5_000,
         finalSummary: 'Proven final answer',
-        evidenceLevel: 'transcript',
+        evidenceLevel: 'reported',
         completionDiagnostic: {
             source: 'clean_final_assistant',
             cleanPath: true,

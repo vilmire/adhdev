@@ -135,7 +135,7 @@ export function flushMeshCompletionBeforeCleanup(host: StallRescueHost): boolean
         timestamp: Date.now(),
         taskId,
         finalSummary,
-        evidenceLevel: 'transcript',
+        evidenceLevel: 'reported',
         completionDiagnostic: { source: 'pre_cleanup_transcript_completion' },
     });
     return true;
@@ -259,7 +259,7 @@ export function tryReconcileTranscriptCompletionForStall(
         timestamp: Date.now(),
         taskId,
         finalSummary,
-        evidenceLevel: 'transcript',
+        evidenceLevel: 'reported',
         completionDiagnostic: { source: diagnosticSource },
     });
     return true;

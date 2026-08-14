@@ -70,10 +70,10 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
     expect(emitted[0].taskId).toBe('task-1')
     // The genuine re-emit carries strong evidence → the coordinator fingerprint surfaces it
     // as ::genuine (not collapsed against the ::weak first emit).
-    expect(emitted[0].evidenceLevel).toBe('transcript')
+    expect(emitted[0].evidenceLevel).toBe('reported')
     // ONE-SHOT CAP: the latch is overwritten with the now-genuine (weak=false) evidence.
     expect(instance.lastEmittedCompletion.weak).toBe(false)
-    expect(instance.lastEmittedCompletion.evidenceLevel).toBe('transcript')
+    expect(instance.lastEmittedCompletion.evidenceLevel).toBe('reported')
   })
 
   it('ONE-SHOT: after the weak→genuine re-emit, a further idle tick emits NOTHING (never a third emit)', () => {
@@ -104,7 +104,7 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
 
   it('GENUINE prior emit stays single-shot: a non-weak latch is never re-emitted (no spurious re-arm)', () => {
     const { instance, emitted } = makeInstance({
-      lastEmittedCompletion: { taskId: 'task-1', at: 5_000, evidenceLevel: 'transcript', weak: false, emittedAtEpoch: 0 },
+      lastEmittedCompletion: { taskId: 'task-1', at: 5_000, evidenceLevel: 'reported', weak: false, emittedAtEpoch: 0 },
       busyEpoch: 9, // even with epochs advanced, a genuine emit does not re-arm
     })
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(false)
@@ -149,7 +149,7 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
     // Genuine idle with a final assistant reaches the pre-cleanup flush → emission #2 (genuine).
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(true)
     expect(emitted).toHaveLength(2)
-    expect(emitted[1].evidenceLevel).toBe('transcript')
+    expect(emitted[1].evidenceLevel).toBe('reported')
     // The latch is now genuine (weak=false) — the one-shot cap is armed.
     expect(instance.lastEmittedCompletion.weak).toBe(false)
 

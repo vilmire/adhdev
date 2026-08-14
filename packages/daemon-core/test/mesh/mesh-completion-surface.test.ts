@@ -41,6 +41,27 @@ describe('buildMeshSystemMessage — completion summary auto-surface (C2)', () =
     expect(msg).toContain('evidence_level=weak')
   })
 
+  it('surfaces evidence_level=reported (not the old "transcript" name) for a confirmed-message-only completion', () => {
+    // A worker delegated implementation to a subagent and ended its own turn with no code
+    // changes: the completion event still carries a confirmed final assistant message
+    // (evidenceLevel='reported', the producer name as of the transcript/evidence-level
+    // rename), which is real but weaker than a parsed, structured worker-result
+    // (evidenceLevel='sufficient', which is NOT surfaced in the suffix at all). Renaming
+    // this back to 'transcript' reads as "verified" to a coordinator and must fail here.
+    const msg = buildMeshSystemMessage({
+      event: 'agent:generating_completed',
+      nodeLabel: "Node 'node_child_1'",
+      metadataEvent: {
+        sessionId: 'sess-reported',
+        timestamp: Date.now(),
+        finalSummary: 'Delegated to a subagent.',
+        evidenceLevel: 'reported',
+      },
+    })
+    expect(msg).toContain('evidence_level=reported')
+    expect(msg).not.toContain('evidence_level=transcript')
+  })
+
   it('does not truncate an 8000 char summary under the raised cap', () => {
     const finalSummary = 'x'.repeat(8000)
     const msg = buildMeshSystemMessage({

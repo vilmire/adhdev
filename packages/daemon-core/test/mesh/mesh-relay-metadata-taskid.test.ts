@@ -71,7 +71,7 @@ describe('buildRelayMetadataEvent taskId preservation (remote relay path)', () =
       taskId: 'task-1',
       attemptId: 'attempt-1',
       dispatchNonce: 9,
-      evidenceLevel: 'transcript',
+      evidenceLevel: 'reported',
       completionDiagnostic: {
         finalAssistantPresent: true,
         transcriptEvidence,
@@ -81,7 +81,7 @@ describe('buildRelayMetadataEvent taskId preservation (remote relay path)', () =
       taskId: 'task-1',
       attemptId: 'attempt-1',
       dispatchNonce: 9,
-      evidenceLevel: 'transcript',
+      evidenceLevel: 'reported',
       completionDiagnostic: {
         finalAssistantPresent: true,
         transcriptEvidence,

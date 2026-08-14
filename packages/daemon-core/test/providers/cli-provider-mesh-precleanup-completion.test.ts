@@ -61,13 +61,13 @@ describe('CliProviderInstance.flushMeshCompletionBeforeCleanup', () => {
     expect(emitted[0].event).toBe('agent:generating_completed')
     expect(emitted[0].taskId).toBe('task-1')
     expect(emitted[0].finalSummary).toBe('done: committed and pushed')
-    expect(emitted[0].evidenceLevel).toBe('transcript')
+    expect(emitted[0].evidenceLevel).toBe('reported')
     // Double-emit guard is now armed for this task. A transcript-evidence emit is
     // GENUINE (weak=false) → single-shot, and it carries the busyEpoch snapshot.
     expect(instance.lastEmittedCompletion).toEqual({
       taskId: 'task-1',
       at: expect.any(Number),
-      evidenceLevel: 'transcript',
+      evidenceLevel: 'reported',
       weak: false,
       emittedAtEpoch: expect.any(Number),
     })

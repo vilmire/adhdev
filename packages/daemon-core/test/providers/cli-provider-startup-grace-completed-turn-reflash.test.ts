@@ -158,7 +158,7 @@ describe('CliProviderInstance — standalone startup-grace generating reflash', 
     // The genuine completion landed via the real flush.
     const genuine = completions(h.events)
     expect(genuine.length).toBe(1)
-    expect(genuine[0].evidenceLevel).toBe('transcript') // genuine, not the weak synth
+    expect(genuine[0].evidenceLevel).toBe('reported') // genuine, not the weak synth
     expect(h.instance.generatingStartedAt).toBe(0) // consumed by the flush — the misfire precondition
     // The completed-turn guard stamped the turn as satisfied for the synth.
     expect(h.instance.fastCollapseSynthesizedTaskId).toBe('task-reflash-1')

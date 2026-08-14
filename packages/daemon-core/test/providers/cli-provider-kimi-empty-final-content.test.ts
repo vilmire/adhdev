@@ -291,7 +291,7 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
     expect(completions).toHaveLength(1)
     expect(completions[0].finalSummary).toBe(FINAL_ANSWER)
     expect(completions[0].finalSummary).not.toBe('')
-    expect(completions[0].evidenceLevel).toBe('transcript')
+    expect(completions[0].evidenceLevel).toBe('reported')
     expect(completions[0].completionDiagnostic).toMatchObject({
       cleanPath: true,
       evidenceWeak: false,

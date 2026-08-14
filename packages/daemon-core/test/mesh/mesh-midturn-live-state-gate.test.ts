@@ -204,7 +204,7 @@ function authoritativeEvent(seed: ReturnType<typeof seedAssignedAttempt>, overri
     dispatchNonce: seed.nonce,
     timestamp: observedAt,
     finalSummary: 'Strong transcript final',
-    evidenceLevel: 'transcript',
+    evidenceLevel: 'reported',
     completionDiagnostic: {
       source: 'clean_final_assistant',
       cleanPath: true,

@@ -88,7 +88,7 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     expect(emitted[0].event).toBe('agent:generating_completed')
     expect(emitted[0].taskId).toBe('task-1')
     expect(emitted[0].finalSummary).toBe('done: committed and pushed')
-    expect(emitted[0].evidenceLevel).toBe('transcript')
+    expect(emitted[0].evidenceLevel).toBe('reported')
     // Telemetry keeps the historical per-class source string.
     expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_pure_pty_transcript_completion' })
   })
@@ -238,7 +238,7 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     expect(emitted).toHaveLength(1)
     expect(emitted[0].event).toBe('agent:generating_completed')
     expect(emitted[0].finalSummary).toBe('done: implemented and committed')
-    expect(emitted[0].evidenceLevel).toBe('transcript')
+    expect(emitted[0].evidenceLevel).toBe('reported')
     expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_native_source_transcript_completion' })
   })
 

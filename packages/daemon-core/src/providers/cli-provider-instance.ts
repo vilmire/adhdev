@@ -2770,7 +2770,7 @@ export class CliProviderInstance implements ProviderInstance {
             timestamp: pending.timestamp,
             taskId: pending.taskId,
             finalSummary,
-            evidenceLevel: 'transcript',
+            evidenceLevel: 'reported',
             completionDiagnostic: {
                 source: 'clean_final_assistant',
                 cleanPath: true,
@@ -2950,7 +2950,7 @@ export class CliProviderInstance implements ProviderInstance {
      *   • prior emit was WEAK → re-arm ONE-SHOT, but only across a real generating→idle
      *     transition: require busyEpoch to have advanced past the weak emit's epoch, so a
      *     static idle screen cannot re-fire the same weak frame. The genuine re-emit passes
-     *     evidenceLevel:'transcript' (non-weak), overwriting the latch → any subsequent idle
+     *     evidenceLevel:'reported' (non-weak), overwriting the latch → any subsequent idle
      *     tick hits the now-genuine latch and is suppressed. Never a third emit.
      */
     private shouldSuppressCompletionReEmit(taskId: string | undefined): boolean {
