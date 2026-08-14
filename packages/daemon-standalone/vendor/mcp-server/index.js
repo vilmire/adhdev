@@ -623,7 +623,9 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_magi_kind_panel_list",
   "mesh_node_slots_set",
   "mesh_node_slots_list",
-  "mesh_node_slots_propose"
+  "mesh_node_slots_propose",
+  "mesh_coordinator_prompt_append_get",
+  "mesh_coordinator_prompt_append_set"
 ];
 var CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
 var STATUS_PROBE_ARG_KEY = "_statusProbe";
@@ -1811,6 +1813,27 @@ var MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
     }
   }
 };
+var MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL = {
+  name: "mesh_coordinator_prompt_append_get",
+  description: "Read the current user-level coordinator prompt APPEND text for a CLI type \u2014 the per-machine file at ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server's daemon. Read this before mesh_coordinator_prompt_append_set so you know what you would be replacing. APPEND ONLY: this always stacks AFTER whichever base prompt wins (daemon default, or a mesh-level / user-level override) \u2014 there is no tool to read or write the OVERRIDE (base-replacing) file via MCP; that stays a dashboard-only, human-gated action by design.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      cli_type: { type: "string", description: 'CLI type key, e.g. "claude-cli", "codex-cli". Defaults to "default" (applies to every CLI type without its own file).' }
+    }
+  }
+};
+var MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
+  name: "mesh_coordinator_prompt_append_set",
+  description: "Write (or clear) the user-level coordinator prompt APPEND text for a CLI type \u2014 the per-machine file at ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server's daemon. Applies to every mesh this daemon coordinates. Empty/omitted content deletes the file (reset to no append). WHOLESALE REPLACE: this replaces the entire append file, not an incremental add \u2014 read the current value first with mesh_coordinator_prompt_append_get if you want to preserve existing text. APPEND ONLY (safety boundary, not a missing feature): this can only ever add text after the base prompt; it can NEVER replace the daemon's base coordinator prompt (the OVERRIDE file), so a coordinator using this tool cannot erase its own core operating rules. There is no override parameter and none will be added.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      cli_type: { type: "string", description: 'CLI type key, e.g. "claude-cli", "codex-cli". Defaults to "default".' },
+      content: { type: "string", description: "The full append text to write. Omit or pass an empty string to clear (delete the file, falling back to no append at this layer)." }
+    }
+  }
+};
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_LIST_NODES_TOOL,
@@ -1863,7 +1886,9 @@ var ALL_MESH_TOOLS = [
   MESH_MAGI_KIND_PANEL_LIST_TOOL,
   MESH_NODE_SLOTS_SET_TOOL,
   MESH_NODE_SLOTS_LIST_TOOL,
-  MESH_NODE_SLOTS_PROPOSE_TOOL
+  MESH_NODE_SLOTS_PROPOSE_TOOL,
+  MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL,
+  MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL
 ];
 
 // src/tools/mesh-compact.ts
@@ -8443,6 +8468,41 @@ async function meshAddNode(transport, args, defaultMeshId) {
   }, null, 2);
 }
 
+// src/tools/mesh-tools-coordinator-prompt.ts
+var DEFAULT_CLI_TYPE_KEY = "default";
+async function meshCoordinatorPromptAppendGet(ctx, args = {}) {
+  const key = readString(args.cli_type) || DEFAULT_CLI_TYPE_KEY;
+  const result = unwrapCommandPayload(await ctx.transport.command("list_coordinator_prompts", {}));
+  if (!result?.success) {
+    return JSON.stringify({ success: false, error: result?.error || "list_coordinator_prompts failed" }, null, 2);
+  }
+  const entry = result.entries?.[key];
+  return JSON.stringify({
+    success: true,
+    cli_type: key,
+    append: entry?.append || "",
+    dir: result.dir
+  }, null, 2);
+}
+async function meshCoordinatorPromptAppendSet(ctx, args) {
+  const key = readString(args.cli_type) || DEFAULT_CLI_TYPE_KEY;
+  const content = typeof args.content === "string" ? args.content : "";
+  const result = unwrapCommandPayload(await ctx.transport.command("write_coordinator_prompt", {
+    key,
+    kind: "append",
+    content
+  }));
+  if (!result?.success) {
+    return JSON.stringify({ success: false, error: result?.error || "write_coordinator_prompt failed" }, null, 2);
+  }
+  return JSON.stringify({
+    success: true,
+    cli_type: key,
+    cleared: !content.trim(),
+    path: result.path
+  }, null, 2);
+}
+
 // src/tools/mesh-tools-refine.ts
 async function meshRefineConfigSchema(ctx) {
   const node = resolveRefineConfigNode(ctx);
@@ -9984,6 +10044,12 @@ async function startMcpServer(opts) {
             break;
           case "mesh_node_slots_propose":
             text = await meshNodeSlotsPropose(meshCtx, a);
+            break;
+          case "mesh_coordinator_prompt_append_get":
+            text = await meshCoordinatorPromptAppendGet(meshCtx, a);
+            break;
+          case "mesh_coordinator_prompt_append_set":
+            text = await meshCoordinatorPromptAppendSet(meshCtx, a);
             break;
           default:
             return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
