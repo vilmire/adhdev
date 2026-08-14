@@ -72,7 +72,10 @@ export default function MachineCommandCenter({
                                         onClick={() => onOpenConversation(conversation)}
                                     >
                                         <div className="flex items-center justify-between gap-3 w-full">
-                                            <span className="text-sm font-semibold text-text-primary truncate group-hover:text-accent-primary transition-colors">
+                                            {/* min-w-0: flex item's default min-width:auto floors the row at the
+                                                title's content width, letting a long title push past the
+                                                shrink-0 timestamp badge instead of truncating. */}
+                                            <span className="text-sm font-semibold text-text-primary truncate min-w-0 group-hover:text-accent-primary transition-colors">
                                                 {getConversationTitle(conversation)}
                                             </span>
                                             {activityAt > 0 && (
@@ -107,7 +110,9 @@ export default function MachineCommandCenter({
                                         onClick={() => onOpenRecent(launch)}
                                     >
                                         <div className="flex items-center justify-between gap-3 w-full">
-                                            <span className="text-sm font-semibold text-text-primary truncate group-hover:text-accent-primary transition-colors">
+                                            {/* min-w-0: same flex min-width:auto issue as the chat list above —
+                                                a long label pushes past the shrink-0 timestamp badge. */}
+                                            <span className="text-sm font-semibold text-text-primary truncate min-w-0 group-hover:text-accent-primary transition-colors">
                                                 {launch.label}
                                             </span>
                                             {updatedLabel && (

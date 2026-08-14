@@ -656,7 +656,9 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                 {snap.workingDir && (
                                     <>
                                         <span className="text-text-muted">Dir</span>
-                                        <span className="font-mono text-text-secondary truncate" title={snap.workingDir}>{snap.workingDir}</span>
+                                        {/* min-w-0: grid item's default min-width:auto floors the 1fr track at the
+                                            content width, so the long absolute path defeats its own truncate. */}
+                                        <span className="font-mono text-text-secondary truncate min-w-0" title={snap.workingDir}>{snap.workingDir}</span>
                                     </>
                                 )}
                                 {snap.spawnedAtMs ? (
@@ -668,7 +670,9 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                 {snap.providerSessionId && (
                                     <>
                                         <span className="text-text-muted">Session</span>
-                                        <span className="font-mono text-text-muted text-[10px] truncate" title={snap.providerSessionId}>{snap.providerSessionId}</span>
+                                        {/* min-w-0: same grid min-width:auto issue as Dir above — the id is a
+                                            single unbroken token, so it floors the track even harder. */}
+                                        <span className="font-mono text-text-muted text-[10px] truncate min-w-0" title={snap.providerSessionId}>{snap.providerSessionId}</span>
                                     </>
                                 )}
                             </div>
