@@ -30,6 +30,11 @@ export function readProviderPriorityFromPolicy(policy: unknown): string[] {
     const record = policy && typeof policy === 'object' && !Array.isArray(policy)
         ? policy as Record<string, unknown>
         : {};
+    // Slots are the source of truth whenever present. providerPriority remains a
+    // legacy fallback for slotless nodes, but must never override a newer slot
+    // order when the persisted compatibility field has drifted.
+    const derived = deriveProviderPriorityFromSlots(record.slots);
+    if (derived.length) return derived;
     const raw = record.providerPriority;
     if (Array.isArray(raw)) {
         const seen = new Set<string>();
@@ -43,10 +48,7 @@ export function readProviderPriorityFromPolicy(policy: unknown): string[] {
             });
         if (explicit.length) return explicit;
     }
-    // Slots order = preference (ORCHESTRATION_NODE_SLOTS.md): a node that declares
-    // capability slots but no usable providerPriority still has a fully determined
-    // preference order — derive it from the slots instead of reading as launch-blocked.
-    return deriveProviderPriorityFromSlots(record.slots);
+    return [];
 }
 
 /**
@@ -155,7 +157,12 @@ export function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId:
     // this coordinator's own `path.basename` is POSIX-only and would not split `\`.
     const workspaceName = workspace ? workingDirBasename(workspace) : undefined;
     const host = readStringValue(node.machineName, node.machine_name, node.hostname, node.host, node.daemonId, node.daemon_id, node.machineId, node.machine_id);
-    const provider = providerPriority[0] || (Array.isArray(node.providers) ? readStringValue(...node.providers) : undefined);
+    // Re-read the node policy here instead of trusting a potentially stale raw
+    // providerPriority supplied by a caller. With slots configured, their order is
+    // authoritative; the argument remains the fallback for legacy call sites.
+    const provider = readProviderPriorityFromPolicy(node.policy)[0]
+        || providerPriority[0]
+        || (Array.isArray(node.providers) ? readStringValue(...node.providers) : undefined);
     const parts = [workspaceName, host, provider].filter(Boolean);
     if (parts.length > 0) return parts.join(' · ');
     return nodeId || 'unidentified mesh node';

@@ -86,17 +86,12 @@ export async function decideOssCloneSync(
 /**
  * PROVIDER-PRIORITY-FROM-SLOTS write-path sync: slots order = preference
  * (ORCHESTRATION_NODE_SLOTS.md), and the read paths already fall back to the
- * slots-derived order when `policy.providerPriority` is unset
- * (readProviderPriorityFromPolicy). Persist that same derived order on node
- * writes so the stored policy agrees with what the read paths compute — a node
- * saved with slots but no providerPriority no longer sits in the "broken"
- * missing-priority state for legacy readers of the raw field.
+ * slots-derived order (readProviderPriorityFromPolicy). Persist that same order
+ * on every node write with slots so the compatibility field cannot drift.
  *
- * Call ONLY when the caller did not state providerPriority (neither the
- * top-level arg nor a `providerPriority` key inside the policy patch): an
- * explicit value always wins, and an explicit empty array means "delete".
- * Never invents a priority for a slotless node, and never clears an existing
- * providerPriority when there are no slots to derive from.
+ * Slots are authoritative even when a caller also states providerPriority. For
+ * slotless legacy nodes, an explicit providerPriority remains untouched. This
+ * helper never invents a priority without slots and never clears a legacy value.
  */
 function syncProviderPriorityFromSlots(policy: Record<string, unknown>, slots: unknown = policy.slots): void {
     const derived = deriveProviderPriorityFromSlots(slots);
@@ -868,9 +863,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 ...(slots.length ? { slots } : {}),
             };
             if (providerRoles.length) migrateProviderRolesToSlots(policy);
-            // Slots given without an explicit providerPriority → persist the
-            // slots-derived order too (see syncProviderPriorityFromSlots).
-            if (!providerPriority.length) syncProviderPriorityFromSlots(policy);
+            // Slots are the source of truth. If both inputs are present, persist
+            // their derived order; a slotless explicit providerPriority is kept as
+            // the legacy creation contract.
+            syncProviderPriorityFromSlots(policy);
             const role = normalizeMeshDaemonRole(args?.role);
             const daemonId = typeof args?.daemonId === 'string' && args.daemonId.trim() ? args.daemonId.trim() : undefined;
             const machineId = typeof args?.machineId === 'string' && args.machineId.trim() ? args.machineId.trim() : undefined;
@@ -950,16 +946,14 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 else delete (policy as any).providerRoles;
             }
             migrateProviderRolesToSlots(policy);
-            // providerPriority unstated (no top-level arg, no key inside the policy
-            // patch) → persist the order derived from the node's FINAL slots (the
-            // patch's slots when given, else the stored ones), so the written policy
-            // agrees with the read-path slots fallback. A slotless node is untouched.
-            if (!Array.isArray(args?.providerPriority) && !Object.prototype.hasOwnProperty.call(policy, 'providerPriority')) {
-                const finalSlots = Object.prototype.hasOwnProperty.call(policy, 'slots')
-                    ? policy.slots
-                    : (getMesh(meshId)?.nodes.find(n => n.id === nodeId)?.policy as Record<string, unknown> | undefined)?.slots;
-                syncProviderPriorityFromSlots(policy, finalSlots);
-            }
+            // Persist the order derived from the node's FINAL slots (the patch's
+            // slots when given, else the stored ones). This intentionally repairs a
+            // stale compatibility field even when the caller sent one alongside
+            // slots. Slotless nodes retain the explicit legacy input semantics.
+            const finalSlots = Object.prototype.hasOwnProperty.call(policy, 'slots')
+                ? policy.slots
+                : (getMesh(meshId)?.nodes.find(n => n.id === nodeId)?.policy as Record<string, unknown> | undefined)?.slots;
+            syncProviderPriorityFromSlots(policy, finalSlots);
             const patch: Record<string, unknown> = { policy: policy as any };
             if (typeof args?.systemPrompt === 'string') {
                 const trimmed = (args.systemPrompt as string).trim();
@@ -1010,11 +1004,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 ...(patch.policy as Record<string, unknown>),
             };
             // Same providerPriority-from-slots sync as the local-config path above,
-            // applied to the merged inline policy.
-            if (!Array.isArray(args?.providerPriority)
-                && !Object.prototype.hasOwnProperty.call(patch.policy as Record<string, unknown>, 'providerPriority')) {
-                syncProviderPriorityFromSlots(inlineNode.policy as Record<string, unknown>);
-            }
+            // applied after the inline policy merge so existing slots participate.
+            syncProviderPriorityFromSlots(inlineNode.policy as Record<string, unknown>);
             if (Object.prototype.hasOwnProperty.call(patch, 'systemPrompt')) {
                 const sp = (patch as any).systemPrompt;
                 if (typeof sp === 'string' && sp.trim()) inlineNode.systemPrompt = sp;

@@ -540,7 +540,11 @@ export interface RepoMeshNodePolicy {
      * can actually take work. Ignored entirely under 'first_eligible'.
      */
     schedulingPriority?: number;
-    /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
+    /**
+     * @deprecated Derived compatibility field. When slots are configured, their
+     * order is authoritative and writers/readers derive providerPriority from
+     * them. Kept optional for slotless legacy nodes and public CLI/MCP contracts.
+     */
     providerPriority?: string[];
     /**
      * Node capability slots (ORCHESTRATION_NODE_SLOTS.md) — the ordered "Preferred

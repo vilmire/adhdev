@@ -24,6 +24,22 @@ describe('buildMeshNodeDisplayLabel', () => {
         expect(label).toBe('adhdev-cloud · dst-win · claude-code')
     })
 
+    it('uses the slots-derived provider instead of a stale raw priority', () => {
+        const label = buildMeshNodeDisplayLabel(
+            {
+                workspace: '/Users/me/Work/adhdev',
+                hostname: 'mac-1',
+                policy: {
+                    providerPriority: ['kimi'],
+                    slots: [{ provider: 'claude-cli' }, { provider: 'codex-cli' }],
+                },
+            },
+            'node_mac',
+            ['kimi'],
+        )
+        expect(label).toBe('adhdev · mac-1 · claude-cli')
+    })
+
     it('prefers an explicit machine label over the workspace basename', () => {
         const label = buildMeshNodeDisplayLabel(
             { machineLabel: 'My Windows Box', workspace: 'D:\\gh\\adhdev-cloud' },

@@ -30,11 +30,9 @@ afterEach(resetMeshRuntimeStore)
 
 /**
  * PROVIDER-PRIORITY-FROM-SLOTS write-path sync: when a node write states slots
- * but no providerPriority, the daemon persists the slots-derived order into
- * policy.providerPriority too, so the stored policy agrees with the read-path
- * fallback (readProviderPriorityFromPolicy) and a slots-only node no longer sits
- * in the "broken" missing-priority state. An explicit providerPriority always
- * wins; a slotless update never touches a stored providerPriority.
+ * and the daemon persists the slots-derived order into policy.providerPriority,
+ * so the compatibility field cannot drift. An explicit providerPriority remains
+ * meaningful only for slotless legacy nodes.
  */
 describe('update_mesh_node / add_mesh_node providerPriority-from-slots sync', () => {
   it('update_mesh_node with slots and no providerPriority records the slots-derived order', async () => {
@@ -46,7 +44,11 @@ describe('update_mesh_node / add_mesh_node providerPriority-from-slots sync', ()
       const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
 
       const mesh = createMesh({ name: 'PP Sync', repoIdentity: 'github.com/acme/pp-sync', defaultBranch: 'main' })
-      const node = addNode(mesh.id, { workspace: '/tmp/pp-sync-workspace', repoRoot: '/tmp/pp-sync-workspace' })
+      const node = addNode(mesh.id, {
+        workspace: '/tmp/pp-sync-workspace',
+        repoRoot: '/tmp/pp-sync-workspace',
+        policy: { providerPriority: ['kimi'], slots: [{ provider: 'kimi' }] },
+      } as any)
       const nodeId = node!.id
 
       const { router } = createRouter()
@@ -69,7 +71,7 @@ describe('update_mesh_node / add_mesh_node providerPriority-from-slots sync', ()
     }
   })
 
-  it('an explicit providerPriority arg wins over the slots-derived order', async () => {
+  it('slots win over an explicit providerPriority arg when both are supplied', async () => {
     const configDir = await mkdtemp(join(tmpdir(), 'mesh-update-pp-explicit-'))
     const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
 
@@ -90,8 +92,37 @@ describe('update_mesh_node / add_mesh_node providerPriority-from-slots sync', ()
       }) as any
 
       expect(result.success).toBe(true)
-      expect(result.node?.policy?.providerPriority).toEqual(['hermes-cli'])
+      expect(result.node?.policy?.providerPriority).toEqual(['codex-cli'])
       const afterNode = getMesh(mesh.id)?.nodes?.find((n: any) => n.id === nodeId)
+      expect(afterNode?.policy?.providerPriority).toEqual(['codex-cli'])
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await cleanupTempDir(configDir)
+    }
+  })
+
+  it('respects an explicit providerPriority arg for a slotless legacy node', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-update-pp-legacy-explicit-'))
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
+
+      const mesh = createMesh({ name: 'PP Legacy Explicit', repoIdentity: 'github.com/acme/pp-legacy-explicit', defaultBranch: 'main' })
+      const node = addNode(mesh.id, { workspace: '/tmp/pp-legacy-explicit', repoRoot: '/tmp/pp-legacy-explicit' })
+
+      const { router } = createRouter()
+      const result = await router.execute('update_mesh_node', {
+        meshId: mesh.id,
+        nodeId: node!.id,
+        providerPriority: ['hermes-cli'],
+      }) as any
+
+      expect(result.success).toBe(true)
+      expect(result.node?.policy?.providerPriority).toEqual(['hermes-cli'])
+      const afterNode = getMesh(mesh.id)?.nodes?.find((n: any) => n.id === node!.id)
       expect(afterNode?.policy?.providerPriority).toEqual(['hermes-cli'])
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
@@ -134,7 +165,7 @@ describe('update_mesh_node / add_mesh_node providerPriority-from-slots sync', ()
     }
   })
 
-  it('add_mesh_node with slots and no providerPriority records the slots-derived order', async () => {
+  it('add_mesh_node derives providerPriority from slots even when a stale explicit value is supplied', async () => {
     const configDir = await mkdtemp(join(tmpdir(), 'mesh-add-pp-sync-'))
     const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
 
@@ -149,6 +180,7 @@ describe('update_mesh_node / add_mesh_node providerPriority-from-slots sync', ()
         meshId: mesh.id,
         workspace: '/tmp/pp-add-workspace',
         slots: [{ provider: 'gemini-cli' }, { provider: 'claude-cli' }],
+        providerPriority: ['kimi'],
       }) as any
 
       expect(result.success).toBe(true)

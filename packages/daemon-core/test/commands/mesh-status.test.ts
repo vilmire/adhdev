@@ -89,6 +89,35 @@ function createRouter(overrides: Record<string, unknown> = {}) {
 afterEach(resetMeshRuntimeStore)
 
 describe('mesh_status', () => {
+  it('surfaces slots-derived providerPriority instead of a stale raw value', async () => {
+    const { router } = createRouter({ statusInstanceId: 'daemon-local' })
+
+    const result = await router.execute('mesh_status', {
+      meshId: 'mesh-provider-priority-sot',
+      inlineMesh: {
+        id: 'mesh-provider-priority-sot',
+        name: 'Provider Priority SoT',
+        repoIdentity: 'github.com/acme/provider-priority-sot',
+        policy: {},
+        coordinator: { preferredNodeId: 'node-local' },
+        nodes: [{
+          id: 'node-local',
+          daemonId: 'daemon-local',
+          workspace: '/missing/provider-priority-sot',
+          providers: ['kimi', 'claude-cli', 'codex-cli'],
+          policy: {
+            providerPriority: ['kimi'],
+            slots: [{ provider: 'claude-cli' }, { provider: 'codex-cli' }],
+          },
+        }],
+      },
+    }) as any
+
+    expect(result.success).toBe(true)
+    expect(result.nodes).toHaveLength(1)
+    expect(result.nodes[0].providerPriority).toEqual(['claude-cli', 'codex-cli'])
+  })
+
   it('persists standalone manual Mesh Host pairing config without storing the raw token', async () => {
     const configDir = await mkdtemp(join(tmpdir(), 'mesh-host-pairing-config-'))
     const previousConfigDir = process.env.ADHDEV_CONFIG_DIR

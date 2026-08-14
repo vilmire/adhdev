@@ -1,23 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { readProviderPriorityFromPolicy } from '../../src/mesh/mesh-node-identity'
+import { resolveNodeCapabilitySlots } from '../../src/mesh/mesh-node-slots'
 
-// PROVIDER-PRIORITY-FROM-SLOTS read fallback: a node that declares capability
-// slots but no explicit providerPriority still has a determined preference order
-// (slot order = preference — ORCHESTRATION_NODE_SLOTS.md). Readers of the legacy
-// providerPriority field must derive it from the slots instead of reporting the
-// node as launch-blocked (missing_provider_priority).
-describe('readProviderPriorityFromPolicy slots fallback', () => {
+// PROVIDER-PRIORITY-FROM-SLOTS: slots are authoritative when present, while the
+// legacy providerPriority remains the fallback for slotless configurations.
+describe('readProviderPriorityFromPolicy slots precedence', () => {
   it('derives the priority from slots when providerPriority is absent', () => {
     expect(readProviderPriorityFromPolicy({
       slots: [{ provider: 'claude-cli' }, { provider: 'codex-cli' }, { provider: 'claude-cli' }],
     })).toEqual(['claude-cli', 'codex-cli'])
   })
 
-  it('an explicit providerPriority always wins over the slots-derived order', () => {
+  it('slots win over a stale explicit providerPriority', () => {
     expect(readProviderPriorityFromPolicy({
       providerPriority: ['codex-cli'],
       slots: [{ provider: 'claude-cli' }],
-    })).toEqual(['codex-cli'])
+    })).toEqual(['claude-cli'])
   })
 
   it('an explicit empty providerPriority array falls back to slots', () => {
@@ -35,5 +33,19 @@ describe('readProviderPriorityFromPolicy slots fallback', () => {
     expect(readProviderPriorityFromPolicy({ slots: 'nope' })).toEqual([])
     expect(readProviderPriorityFromPolicy({ providerPriority: [' claude-cli ', 'claude-cli', ''] }))
       .toEqual(['claude-cli'])
+  })
+
+  it('keeps providerPriority as the legacy fallback when slots are absent', () => {
+    expect(readProviderPriorityFromPolicy({
+      providerPriority: ['codex-cli', 'claude-cli'],
+    })).toEqual(['codex-cli', 'claude-cli'])
+  })
+
+  it('keeps a slotless legacy node routable through derived capability slots', () => {
+    const slots = resolveNodeCapabilitySlots({
+      id: 'node-legacy',
+      policy: { providerPriority: ['codex-cli', 'claude-cli'] },
+    })
+    expect(slots.map(slot => slot.provider)).toEqual(['codex-cli', 'claude-cli'])
   })
 })
