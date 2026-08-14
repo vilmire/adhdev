@@ -32,7 +32,13 @@ const skipNotify = readFileSync(join(SRC, 'mesh-skip-notify.ts'), 'utf-8')
 
 /** Body of the delivered-no-turn GENERATING branch. */
 function generatingBranch(): string {
-  const start = reconcile.indexOf("if (verdict === 'GENERATING'")
+  // Anchored on the GENERATING-HARD-DEADLINE marker, NOT on the bare `verdict ===
+  // 'GENERATING'` test: that expression now appears at three sites in this module (the
+  // early-idle transcript arm gate and the delivered-not-consumed branch precede this
+  // one), so a bare indexOf silently anchored on the FIRST of them and widened the slice
+  // to ~800 lines — the assertions below then passed against a span that included, but
+  // was not, the branch they are meant to pin.
+  const start = reconcile.indexOf('// GENERATING-HARD-DEADLINE:')
   expect(start, "delivered-no-turn GENERATING branch not found").toBeGreaterThan(-1)
   const end = reconcile.indexOf('continue;  // worker still working', start)
   expect(end, 'GENERATING branch terminator not found').toBeGreaterThan(start)

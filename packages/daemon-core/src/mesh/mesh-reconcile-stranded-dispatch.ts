@@ -339,6 +339,53 @@ function resolveAssignedTranscriptProfile(
 //       its own emit or the normal grace). A remote-not-consumed worker whose provider class is
 //       unknowable locally falls back to the reprobe: it may accrue only once (a) reads it positively
 //       idle, and the poll's post-dispatch + trailing-tool-activity guards remain the final net.
+// (CANCEL-BLIP-ORPHAN, coordinator net) Is a LOCAL 'GENERATING' verdict contradicted by the
+// session's own adapter?
+//
+// resolveSessionBusyVerdict reads getState().status — the PROVIDER FSM LABEL. The completion
+// arm that a continuity cancel deleted (see armCancelledCompletionRecheck in
+// cli-provider-instance.ts) leaves that label stuck at 'generating' with nothing left to clear
+// it, so this early-completion rescue — whose very first gate is (a) positive idle evidence —
+// refused to accrue and the row sat 'assigned' until the 15/90-min hard deadline. That is the
+// exact stall observed live: worker finished ~10min in, queue showed 'generating' for ~24min.
+//
+// The daemon-side fix removes the cause; this is the independent net for the class. It does NOT
+// weaken the gate, because it does not treat "not generating" as idle. It requires a POSITIVE
+// contradiction from an ORTHOGONAL source: hasLiveTurnPendingEvidence() is computed from the
+// ADAPTER's own turn state (isWaitingForResponse / currentTurnScope / isProcessing / a non-empty
+// partial response / a parked modal / native trailing-tool activity) — deliberately the same
+// discriminators the instance's finalization gate uses — and is entirely independent of the FSM
+// status label. A session whose label says 'generating' while the adapter reports NO pending
+// turn is, by construction, one whose label is stale.
+//
+// Safety: a genuinely mid-turn worker has pending adapter evidence, so this returns false and
+// the gate is byte-for-byte the historical one. When the probe is unavailable (remote session,
+// older instance surface, throw) we return false — an unresolvable probe is never a
+// contradiction. And clearing this gate only lets the STREAK begin: the caller still requires
+// ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS of continuity, gate (b)'s turn-start evidence, and the
+// decisive pollAssignedTaskTerminalEvidence (post-dispatch final assistant + settled-bubble +
+// trailing-tool vetoes) before anything is marked complete. This changes only WHICH rows are
+// allowed to be examined, never the evidence bar for completing one.
+/** @internal Exported for the CANCEL-BLIP-ORPHAN regression suite only — the arm gate that
+ *  consumes it is module-private, and this predicate is the decision worth pinning. Not
+ *  public surface: no consumer outside src/mesh imports it and no barrel re-exports it. */
+export function localGeneratingLabelIsContradicted(
+    components: DaemonComponents,
+    sessionId: string,
+): boolean {
+    try {
+        const probe = resolveLiveTurnPendingEvidence(components, sessionId);
+        if (!probe) return false;           // no probe → no contradiction (unchanged behaviour)
+        if (probe()) return false;          // adapter agrees a turn is live → genuinely busy
+        LOG.info('MeshReconcile', `Session ${sessionId} reports FSM status 'generating' but its adapter has no live `
+            + `turn evidence — treating the label as stale so the early transcript-evidence rescue may evaluate it `
+            + `(the completion arm was likely orphaned by a continuity cancel)`);
+        return true;
+    } catch {
+        return false;                       // failed observation ⇒ never a contradiction
+    }
+}
+
 async function evaluateEarlyIdleTranscriptArm(
     components: DaemonComponents,
     mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
@@ -379,7 +426,9 @@ async function evaluateEarlyIdleTranscriptArm(
 
     // (a) POSITIVE idle evidence.
     const verdict = resolveSessionBusyVerdict(components, sessionId);
-    if (verdict === 'GENERATING') return false; // locally observed mid-turn — never accrue
+    if (verdict === 'GENERATING' && !localGeneratingLabelIsContradicted(components, sessionId)) {
+        return false; // locally observed mid-turn — never accrue
+    }
     if (verdict === 'UNKNOWN') {
         // Remote / gone / id-form skew. First consult the LIVE mesh node snapshot (the same
         // cross-daemon status feed the approval-hold guard and mesh_status use): if it already

@@ -93,6 +93,13 @@ import type { EvidenceHost } from './completion/evidence.js';
 import * as stallRescue from './completion/stall-rescue.js';
 import type { StallRescueHost } from './completion/stall-rescue.js';
 import { runStatusTransitionTick, type StatusTransitionHost } from './completion/status-transition.js';
+import {
+    armCancelledCompletionRecheck,
+    clearCancelledCompletionRecheck,
+    type CancelRecheckHost,
+    type CancelledCompletionRecheck,
+    type CancelledCompletionReason,
+} from './completion/cancel-recheck.js';
 import type {
     CompletedDebouncePending,
     CompletedFinalizationBlock,
@@ -1535,12 +1542,23 @@ export class CliProviderInstance implements ProviderInstance {
         // can't fire resolveModal/detectStatusTransition against a dead adapter.
         if (this.autoApproveSettleTimer) { clearTimeout(this.autoApproveSettleTimer); this.autoApproveSettleTimer = null; }
         if (this.autoApproveBusyTimer) { clearTimeout(this.autoApproveBusyTimer); this.autoApproveBusyTimer = null; }
+        // (CANCEL-BLIP-ORPHAN) Same reason: a pending completion recheck must not fire a
+        // flush against a shut-down adapter.
+        this.clearCancelledCompletionRecheck();
         this.appliedEffectKeys.clear();
         closeSqliteProbeCache(this.sqliteProbeCache);
     }
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
     private completedDebouncePending: CompletedDebouncePending | null = null;
+    /**
+     * (CANCEL-BLIP-ORPHAN) Re-verification watch for an arm the continuity cancel just
+     * deleted — the cancelled arm's snapshot plus a bounded recheck budget, so a
+     * sub-second PTY blip cannot permanently orphan the completion. Full rationale:
+     * completion/cancel-recheck.ts.
+     */
+    private cancelledCompletionRecheck: CancelledCompletionRecheck | null = null;
+    private cancelledCompletionRecheckTimer: NodeJS.Timeout | null = null;
     private lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
     // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
     // on every completion probe; null when the provider surfaces none.
@@ -2069,6 +2087,22 @@ export class CliProviderInstance implements ProviderInstance {
     private scheduleCompletedDebounceFlush(delayMs: number): void {
         if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
         this.completedDebounceTimer = setTimeout(() => this.flushCompletedDebounceIfFinalized(), delayMs);
+    }
+
+    /**
+     * (CANCEL-BLIP-ORPHAN) Post-cancel completion re-verification. The judgment and its
+     * full rationale live in completion/cancel-recheck.ts; these are the host-dispatched
+     * seams, matching the status-transition / evidence / stall-rescue moves.
+     */
+    private armCancelledCompletionRecheck(
+        pending: CompletedDebouncePending,
+        reason: CancelledCompletionReason,
+    ): void {
+        armCancelledCompletionRecheck(this as unknown as CancelRecheckHost, pending, reason);
+    }
+
+    private clearCancelledCompletionRecheck(): void {
+        clearCancelledCompletionRecheck(this as unknown as CancelRecheckHost);
     }
 
     // EVTTRACE (observation-only): is this a mesh worker session whose completion
@@ -2669,6 +2703,24 @@ export class CliProviderInstance implements ProviderInstance {
             if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', { blockReason: decision.reason, ...decision.trace });
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
+            // (CANCEL-BLIP-ORPHAN) The cancel above is CORRECT and stays — a resumed turn
+            // must never emit the completion armed before it. But dropping the arm here was
+            // the whole story, and that is the defect: the ONLY path that re-arms a
+            // completion is a fresh idle→generating FSM edge, so a sub-second PTY blip
+            // right after a genuine turn end (live codex incident: busy→idle→busy in 81ms,
+            // then idle again with no further edge) deleted the arm and no completion ever
+            // fired — the worker finished ~10min later while the coordinator's queue row
+            // sat 'generating' until a 15/90-min hard deadline reclaimed it.
+            //
+            // Instead of guessing blip-vs-real-resume at cancel time (unknowable from a
+            // point sample — that is exactly what made the original inline judgment
+            // unreliable), hand the deleted arm to a bounded RE-VERIFICATION watch and
+            // decide later, when the session's state is actually observable. A real resume
+            // simply re-cancels on each recheck and the watch expires; a blip settles back
+            // to idle and the re-armed pending flushes through the unchanged gate. Every
+            // rule (continuity, finalization block, evidence) is re-applied on the retry —
+            // the watch grants no exemption, it only restores the chance to be judged.
+            this.armCancelledCompletionRecheck(pending, decision.reason);
             return;
         }
 
@@ -2742,6 +2794,9 @@ export class CliProviderInstance implements ProviderInstance {
             });
             this.completedDebouncePending = null;
             this.completedDebounceTimer = null;
+            // (CANCEL-BLIP-ORPHAN) This turn's completion is out; any watch owed for it is
+            // settled. Leaving it armed would let a stale recheck re-arm a duplicate.
+            this.clearCancelledCompletionRecheck();
             this.generatingStartedAt = 0;
             this.lastApprovalEventFingerprint = '';
             this.markCurrentTurnStartupGraceCollapseSatisfied();
@@ -2800,6 +2855,8 @@ export class CliProviderInstance implements ProviderInstance {
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;
+        // (CANCEL-BLIP-ORPHAN) Completion delivered — settle any outstanding watch.
+        this.clearCancelledCompletionRecheck();
         this.generatingStartedAt = 0;
         this.lastApprovalEventFingerprint = '';
         this.markCurrentTurnStartupGraceCollapseSatisfied();

@@ -183,6 +183,23 @@ export const MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS = 60_000;
 // hold only covers the approval-resolved valley; widening this settle window to 4000ms
 // covers that race AND the ~3s waiting_approval valley within the settle bound.
 export const NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4000;
+// (CANCEL-BLIP-ORPHAN) Re-verification cadence + budget for an arm that a continuity
+// cancel deleted. The cancel itself stays correct (a resumed turn MUST NOT emit the
+// completion armed before it); what was missing is that the deleted arm was never
+// re-examined, so a sub-second PTY blip after a genuine turn end orphaned the
+// completion forever — only a fresh idle→generating FSM edge could re-arm, and a blip
+// that flips straight back to idle produces no such edge.
+//
+// The recheck interval must comfortably exceed the blip durations observed live
+// (81ms in the codex incident) while staying short enough that a real completion is
+// not visibly delayed. The budget bounds the watch so a genuinely resumed, long-running
+// turn stops being re-examined instead of polling for the rest of its life: a REAL
+// resume keeps the session non-idle, each recheck re-cancels, and after this many
+// attempts the watch is dropped — the turn's own eventual generating→idle edge arms a
+// fresh completion normally. Both are deliberately failure-safe in the same direction:
+// the worst case of a recheck is that it observes a still-busy session and gives up.
+export const CANCELLED_COMPLETION_RECHECK_MS = 1500;
+export const CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS = 4;
 // (FALSE-IDLE-MIDTURN codex/PTY) Minimum quiet dwell required after the LAST raw PTY
 // output before a PTY-PARSED (non-native-history) provider's on-screen "final" assistant
 // bubble may be trusted as a turn-complete reply. codex parses its assistant text from the
