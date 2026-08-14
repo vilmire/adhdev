@@ -122,6 +122,17 @@ export type MeshLedgerKind =
     // at most once per (task, gate) per process — see queueHoldHardDeadlineExceeded.
     // payload: { taskId, reason: 'queue_hold_hard_deadline', gate, heldMs, ceilingMs, detail? }
     | 'queue_hold_hard_deadline'
+    // COMPLETION-SIDE-EFFECT-EVIDENCE: async, best-effort follow-up to a `code_change`
+    // task's `task_completed` entry, checking whether the completing node's workspace
+    // actually has a git diff. A local-only git status read (no P2P — see cost guard on
+    // the appending call site) run AFTER the completion already landed, so it is its OWN
+    // kind rather than mutating task_completed (the ledger is append-only) or folding into
+    // task_completed's counters (a clean-tree completion is not necessarily a failure —
+    // "nothing to change" can be the correct outcome of an investigation task). Purely
+    // informational: never flips task status, never blocks/delays completion delivery.
+    // payload: { taskId, sessionId, nodeId, workspace, gitDirty: false, changedFiles: 0,
+    //            reason: 'no_side_effects' }
+    | 'task_completion_no_side_effects'
     ;
 
 export interface MeshLedgerEntry {

@@ -20,6 +20,7 @@ import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { describeRecoveryRelaunchDecision, resolveRecoveryRelaunchProvider } from './mesh-quota-routing.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
+import { scheduleTaskCompletionSideEffectEvidence } from './mesh-completion-side-effect-evidence.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -1535,7 +1536,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
     }
 
-    function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null, opts?: { tentativeIfDirect?: boolean }): { id?: string } | null {
+    function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null, opts?: { tentativeIfDirect?: boolean }): { id?: string; taskMode?: string } | null {
         // C2: prefer an exact taskId match when the completion event carries one —
         // it's immune to coordinator↔worker clock skew that can hide the assigned row.
         const eventTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
@@ -1707,10 +1708,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             } catch { /* best-effort safety net — never fail the completion path */ }
         }
         setImmediate(() => cleanupTerminalDirectDispatches());
-        return task ? { id: task.id } : null;
+        return task ? { id: task.id, taskMode: task.taskMode } : null;
     }
 
-    let completedTaskForLedger: { id?: string } | null = null;
+    let completedTaskForLedger: { id?: string; taskMode?: string } | null = null;
     // Fix B: direct-dispatch taskId used to attribute the terminal ledger entry when no
     // work-queue row matches (resolved BEFORE markSessionTerminal flips the dispatch terminal).
     let directDispatchTaskIdForLedger: string | undefined;
@@ -2162,6 +2163,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         : {}),
                 },
             });
+            if (ledgerKind === 'task_completed') {
+                scheduleTaskCompletionSideEffectEvidence(components, {
+                    meshId: args.meshId,
+                    taskId: completedTaskForLedger?.id || directDispatchTaskIdForLedger || undefined,
+                    taskMode: completedTaskForLedger?.taskMode,
+                    sessionId: ledgerSessionId,
+                    nodeId: ledgerNodeId,
+                });
+            }
         } catch (e: any) {
             LOG.warn('MeshLedger', `Failed to record ${ledgerKind}: ${e?.message || e}`);
         }
