@@ -323,6 +323,12 @@ jobs:
           while IFS= read -r artifact_name; do
             [ -n "${artifact_name}" ] || continue
             triplet="${artifact_name#ghostty-vt-node-}"
+            # Replace, don't merge. Some triplets (currently the node137 set) are
+            # committed to the repo, so checkout leaves those files on disk and
+            # `gh run download` aborts with "file exists" rather than overwriting.
+            # The freshly built artifact is the one we want to publish, so clear
+            # the destination first.
+            rm -rf "packages/ghostty-vt-node/prebuilt/${triplet}"
             mkdir -p "packages/ghostty-vt-node/prebuilt/${triplet}"
             gh run download "${run_id}" \
               --repo "${GITHUB_REPOSITORY}" \
