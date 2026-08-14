@@ -54,7 +54,7 @@ const CLOUD_FINAL_STEP: OnboardingStep = {
 const STANDALONE_FINAL_STEP: OnboardingStep = {
   icon: '🚀',
   title: "You're all set",
-  desc: 'This dashboard is already connected to your local daemon. Start a session from the Dashboard tab, or add more providers under Burrow → Providers.',
+  desc: 'This dashboard is already connected to your local daemon. Start a session from the Dashboard tab, or add more providers under Machines → Providers.',
   visual: '✅',
 }
 

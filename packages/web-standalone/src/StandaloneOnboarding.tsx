@@ -4,7 +4,7 @@
  *
  * Trigger: shown once when the daemon has 0 installed providers AND
  * localStorage.adhdev_onboarding_done is unset. The user can also dismiss
- * to come back later via Burrow > Providers > Add provider.
+ * to come back later via Machines > Providers > Add provider.
  *
  * Default selection: the 4 officially supported CLI providers — Claude Code,
  * Codex, Antigravity, Hermes. Everything else stays unchecked.

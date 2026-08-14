@@ -518,7 +518,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                             onChange={e => actions.setNicknameInput(e.target.value)}
                                             onKeyDown={e => { if (e.key === 'Enter') actions.handleSaveNickname(); if (e.key === 'Escape') actions.setEditingNickname(false) }}
                                             placeholder={t('machine.detail.nicknamePlaceholder')}
-                                            className="px-2.5 py-1 rounded-md border border-violet-500/30 bg-bg-secondary text-text-primary text-sm font-semibold w-[140px] md:w-[200px]"
+                                            className="px-2.5 py-1 rounded-md border border-accent/30 bg-bg-secondary text-text-primary text-sm font-semibold w-[140px] md:w-[200px]"
                                         />
                                         <button onClick={actions.handleSaveNickname} className="flex items-center justify-center px-3 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 text-sm font-medium transition-colors">{t('machine.detail.save')}</button>
                                         <button onClick={() => actions.setEditingNickname(false)} className="flex items-center justify-center px-3 py-1 rounded bg-bg-glass text-text-muted hover:bg-bg-glass-hover hover:text-text-primary text-sm font-medium transition-colors">{t('machine.detail.cancel')}</button>

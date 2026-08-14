@@ -40,11 +40,11 @@ const SELFHOST_FEATURES = [
 ]
 
 const CLOUD_EXTRAS = [
-    { icon: <IconRocket size={16} />, title: 'Access from anywhere', desc: 'Reach your burrows from another laptop or phone without opening local ports.' },
+    { icon: <IconRocket size={16} />, title: 'Access from anywhere', desc: 'Reach your machines from another laptop or phone without opening local ports.' },
     { icon: <IconDashboard size={16} />, title: 'Low-latency P2P stream', desc: 'Cloud adds the WebRTC path for faster screenshots and remote control.' },
     { icon: <IconBell size={16} />, title: 'Mobile notifications', desc: 'Get approval prompts and activity updates when you are away from your desk.' },
     { icon: <IconKey size={16} />, title: 'REST API access', desc: 'Integrate with Slack, CI, or internal tools using API keys and service routes.' },
-    { icon: <IconUsers size={16} />, title: 'Team workspace', desc: 'Share burrows, activity views, and policies across a team workspace.' },
+    { icon: <IconUsers size={16} />, title: 'Team workspace', desc: 'Share machines, activity views, and policies across a team workspace.' },
     { icon: <IconShield size={16} />, title: 'Enterprise controls', desc: 'SSO, RBAC, audit logs, and managed policy features for production teams.' },
 ]
 
@@ -59,7 +59,7 @@ const COMPARISON = [
     { feature: 'Mobile push notifications', selfhost: false, cloud: true },
     { feature: 'REST API and webhooks', selfhost: false, cloud: true },
     { feature: 'Team collaboration', selfhost: false, cloud: true },
-    { feature: 'Multi-machine burrows', selfhost: false, cloud: true },
+    { feature: 'Multi-machine dashboards', selfhost: false, cloud: true },
     { feature: 'SSO, RBAC, audit logs', selfhost: false, cloud: true },
 ]
 

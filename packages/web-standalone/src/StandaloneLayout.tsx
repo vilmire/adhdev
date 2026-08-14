@@ -19,7 +19,7 @@ export default function StandaloneLayout({ children }: LayoutProps) {
 
     const navItems = useMemo<AppShellNavItem[]>(() => ([
         { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: t('standalone.nav.dashboard'), active: location.pathname.startsWith('/dashboard'), onSelect: () => navigate('/dashboard') },
-        { id: 'machine', path: '/machines', icon: <IconServer />, label: 'Burrow', active: location.pathname.startsWith('/machines'), onSelect: () => navigate('/machines') },
+        { id: 'machine', path: '/machines', icon: <IconServer />, label: 'Machines', active: location.pathname.startsWith('/machines'), onSelect: () => navigate('/machines') },
         // Setup has no nav entry: it is first-run onboarding that ends by handing off
         // to Mesh, which owns every mesh setting from then on. The /setup route stays
         // reachable for deep links and docs.

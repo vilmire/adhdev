@@ -3716,7 +3716,7 @@
     /* Accent line at top of machine card */
     .machine-accent {
         height: 2px;
-        background: linear-gradient(90deg, #a78bfa 0%, #8b5cf6 40%, #7c3aed 100%);
+        background: var(--accent-gradient, var(--accent-primary));
     }
 
     .machine-accent.offline {

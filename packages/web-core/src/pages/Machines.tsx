@@ -184,7 +184,7 @@ export default function MachinesPage() {
                     <div className="header-subtitle flex gap-3 flex-wrap">
                         {/*
                          * Same loading-vs-empty distinction as the body below:
-                         * before `initial_state` lands, "0 burrows / 0 online"
+                         * before `initial_state` lands, "0 machines / 0 online"
                          * is a claim we cannot yet make, so show the counters
                          * only once the numbers mean something.
                          */}
@@ -236,11 +236,8 @@ export default function MachinesPage() {
                     </div>
                 )}
 
-                {/* Machine Cards Grid */}
-                <div
-                    className="grid gap-4"
-                    style={{ gridTemplateColumns: machines.length === 1 ? '1fr' : 'repeat(auto-fill, minmax(min(380px, 100%), 1fr))' }}
-                >
+                {/* Machine List — flat rows, matching the Account page pattern */}
+                <div className="flex flex-col gap-3">
                     {machines.map((machine) => {
                         const isOnline = machine.daemonIde.status === 'online'
                         const hasRuntimeStats = typeof machine.system?.uptime === 'number'
@@ -270,69 +267,29 @@ export default function MachinesPage() {
                         return (
                             <div
                                 key={machine.machineId}
-                                className={`machine-card${isOnline ? '' : ' offline'}`}
+                                className={`bg-bg-glass rounded-xl border transition-colors ${
+                                    isBlocked ? 'border-red-500/25' : 'border-border-subtle hover:border-border-strong'
+                                }`}
                             >
-                                {/* Connection overlay */}
-                                {isBlocked ? (
-                                    <div className="p2p-overlay">
-                                        <div className="text-[11px] font-semibold tracking-tight text-red-400">
-                                            {t('machine.card.connectionFailed')}
-                                        </div>
-                                        <div className="text-[10px] text-text-muted">
-                                            {machine.nickname || machine.hostname}
-                                        </div>
-                                        {retryConnection && (
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); retryConnection(machine.machineId) }}
-                                                className="mt-1 px-3 py-1 rounded-md text-[10px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
-                                            >
-                                                {t('machine.card.reconnect')}
-                                            </button>
-                                        )}
-                                    </div>
-                                ) : isConnecting && (
-                                    <div className="p2p-overlay">
-                                        <div
-                                            className="w-7 h-7 rounded-full"
-                                            style={{
-                                                border: '2.5px solid color-mix(in srgb, var(--accent-primary) 22%, transparent)',
-                                                borderTopColor: 'var(--accent-primary-light)',
-                                                animation: 'spin 0.9s linear infinite',
-                                            }}
-                                        />
-                                        <div
-                                            className="text-[11px] font-semibold tracking-tight"
-                                            style={{ color: 'var(--accent-primary-light)' }}
-                                        >
-                                            {t('machine.card.connecting')}
-                                        </div>
-                                        <div className="text-[10px] text-text-muted">
-                                            {machine.nickname || machine.hostname}
-                                        </div>
-                                    </div>
-                                )}
-                                {/* Status accent line */}
-                                <div className={`machine-accent${isOnline ? '' : ' offline'}`} />
-
-                                <div className="px-5 py-4">
+                                <div className="px-4 py-3.5">
                                     {/* Header Row — clickable to machine detail */}
                                     <div
                                         onClick={() => navigate(`/machines/${machine.machineId}`)}
-                                        className="flex justify-between items-center mb-3.5 cursor-pointer"
+                                        className="flex justify-between items-center gap-3 cursor-pointer"
                                     >
-                                        <div className="flex items-center gap-2.5">
+                                        <div className="flex items-center gap-2.5 min-w-0">
                                             <div
-                                                className={`w-9 h-9 rounded-[10px] flex items-center justify-center text-lg ${
-                                                    isOnline ? 'bg-violet-500/[0.08] border border-violet-500/15' : 'bg-gray-500/[0.06] border border-gray-500/10'
+                                                className={`w-9 h-9 shrink-0 rounded-[10px] flex items-center justify-center text-lg border ${
+                                                    isOnline ? 'bg-accent/[0.08] border-accent/15' : 'bg-bg-secondary border-border-subtle'
                                                 }`}
                                             >
                                                 {PLATFORM_ICONS[machine.platform] || <IconMonitor size={20} />}
                                             </div>
-                                                <div className="overflow-hidden min-w-0">
-                                                    <div className="font-bold text-sm text-text-primary tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">
-                                                        {machine.nickname || machine.hostname}
-                                                    </div>
-                                                    <div className="text-[10px] text-text-muted flex gap-1 items-center">
+                                            <div className="overflow-hidden min-w-0">
+                                                <div className="font-semibold text-sm text-text-primary tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">
+                                                    {machine.nickname || machine.hostname}
+                                                </div>
+                                                <div className="text-[10px] text-text-muted flex gap-1 items-center">
                                                     {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
                                                         <span>{machine.system.cpus} cores · {formatBytes(machine.system.totalMem)}</span>
                                                     )}
@@ -343,7 +300,7 @@ export default function MachinesPage() {
                                                 </div>
                                             </div>
                                         </div>
-                                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                        <div className="flex items-center gap-1.5 shrink-0">
                                             {machine.p2p?.available && (
                                                 <ConnectionBadge connection={{
                                                     status: machine.p2p.state,
@@ -375,10 +332,37 @@ export default function MachinesPage() {
                                         </div>
                                     </div>
 
-                                    {/* System Stats (mini bars) — always shown for consistent card height */}
-                                    <div className="flex gap-3 mb-3.5">
-                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? cpuPct : 0} max={100} color="#8b5cf6" label="CPU" compact />
-                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? Math.round(memUsedFrac * 100) : 0} max={100} color="#3b82f6" label="MEM" compact />
+                                    {/* Connection status line (blocked / connecting) */}
+                                    {isBlocked ? (
+                                        <div className="flex items-center justify-between gap-2 mt-2.5 px-2.5 py-1.5 rounded-lg bg-red-500/[0.06] border border-red-500/15">
+                                            <span className="text-[11px] font-medium text-red-400">{t('machine.card.connectionFailed')}</span>
+                                            {retryConnection && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); retryConnection(machine.machineId) }}
+                                                    className="px-2.5 py-0.5 rounded-md text-[10px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
+                                                >
+                                                    {t('machine.card.reconnect')}
+                                                </button>
+                                            )}
+                                        </div>
+                                    ) : isConnecting && (
+                                        <div className="flex items-center gap-2 mt-2.5 px-2.5 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle">
+                                            <span
+                                                className="w-3 h-3 rounded-full shrink-0"
+                                                style={{
+                                                    border: '2px solid color-mix(in srgb, var(--accent-primary) 22%, transparent)',
+                                                    borderTopColor: 'var(--accent-primary-light)',
+                                                    animation: 'spin 0.9s linear infinite',
+                                                }}
+                                            />
+                                            <span className="text-[11px] font-medium text-text-secondary">{t('machine.card.connecting')}</span>
+                                        </div>
+                                    )}
+
+                                    {/* System Stats (mini bars) — always shown for consistent row height */}
+                                    <div className="flex gap-3 mt-3 mb-2.5">
+                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? cpuPct : 0} max={100} color="var(--accent-primary)" label="CPU" compact />
+                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? Math.round(memUsedFrac * 100) : 0} max={100} color="var(--accent-primary-light)" label="MEM" compact />
                                     </div>
 
                                     {/* Compact Agent List — IDEs */}
@@ -507,7 +491,7 @@ export default function MachinesPage() {
                                             {t('machine.card.noAgentsRunning')} ·{' '}
                                             <span
                                                 onClick={(e) => { e.stopPropagation(); navigate(`/machines/${machine.machineId}`) }}
-                                                className="text-violet-500 cursor-pointer not-italic"
+                                                className="text-accent cursor-pointer not-italic"
                                             >{t('machine.card.launchCta')}</span>
                                         </div>
                                     )}
@@ -533,7 +517,7 @@ export default function MachinesPage() {
                      * account still reaches onboarding on the first round trip.
                      */}
                     {!initialLoaded && (
-                        <div className="col-span-full flex flex-col items-center justify-center gap-3 py-24 text-text-muted">
+                        <div className="flex flex-col items-center justify-center gap-3 py-24 text-text-muted">
                             <img src="/otter-logo.png" alt="" aria-hidden="true" className="w-10 h-10 object-contain opacity-60 animate-pulse" />
                             <p className="text-sm">{t('machine.card.loading')}</p>
                         </div>
@@ -541,16 +525,15 @@ export default function MachinesPage() {
 
                     {/* Empty state — only once we know the list is genuinely empty */}
                     {initialLoaded && machines.length === 0 && (
-                        <div className="col-span-full py-16 px-10 text-center bg-bg-secondary border-2 border-dashed border-border-subtle rounded-[20px] shadow-sm relative overflow-hidden">
-                            <div className="absolute inset-0 bg-gradient-to-b from-violet-500/5 to-transparent pointer-events-none" />
-                            <img src="/otter-logo.png" alt="ADHDev" className="w-14 h-14 object-contain mb-5 mx-auto opacity-90 animate-bounce" style={{ animationDuration: '3s' }} />
-                            <h3 className="text-text-primary mb-2 text-xl font-bold tracking-tight">{t('machine.card.emptyHeadline')}</h3>
+                        <div className="bg-bg-glass rounded-xl border border-border-subtle p-10 text-center">
+                            <img src="/otter-logo.png" alt="ADHDev" className="w-12 h-12 object-contain mb-4 mx-auto opacity-90" />
+                            <h3 className="text-text-primary mb-2 text-lg font-bold tracking-tight">{t('machine.card.emptyHeadline')}</h3>
                             <p className="text-[13px] text-text-muted max-w-[420px] mx-auto leading-relaxed mb-6">
                                 {t('machine.card.emptyBody')}
                             </p>
-                            
+
                             <InstallCommand />
-                            
+
                             <p className="text-[12px] text-text-muted mt-8">
                                 <a href="https://docs.adhf.dev" target="_blank" rel="noopener noreferrer" className="text-accent font-semibold hover:underline flex items-center justify-center gap-1">
                                     {t('machine.card.emptyDocsLink')}
