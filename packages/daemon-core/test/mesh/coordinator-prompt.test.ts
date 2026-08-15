@@ -224,6 +224,49 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('/reload-mcp')
   })
 
+  it('names mesh_refine_batch where the shared-base merge problem is stated, not only in the tool table', () => {
+    // REFINE-BATCH-DISCOVERABILITY. The Rules section described the shared-base
+    // hazard (merging one worktree advances a sibling's base, especially a shared
+    // submodule pointer) but named no tool for it, so a coordinator landing three
+    // sibling worktrees read it as "go slowly, one at a time" and called
+    // mesh_refine_node 7+ times — self-inflicting base_locked and hand-rebasing each
+    // laggard. mesh_refine_batch appeared ONLY as a row in the static tool table,
+    // which does not carry an applicability condition. The fix is placement: the
+    // solution must sit against the problem statement, and in the Workflow converge
+    // step that a coordinator actually reads while landing work.
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [{ id: 'node_1', workspace: '/repo', daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+      coordinatorCliType: 'claude-cli',
+    })
+
+    // The applicability condition must be explicit — "2+ siblings", not just the
+    // tool name floating in a table.
+    expect(prompt).toContain('use `mesh_refine_batch` for two or more')
+    expect(prompt).toContain('when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch`')
+
+    // Only the capabilities the implementation actually has may be claimed:
+    // conflict-aware ordering, per-node re-resolve + auto-rebase, base_locked
+    // avoidance. (router-refine.ts: refineSyncBaseStage rebases whenever behind>0;
+    // resolve_refs re-fetches origin/<base> per node; the batch is one sequential
+    // lease holder with a single retry pass for base-movement blockers.)
+    expect(prompt).toContain('non-submodule first, submodule-touching serialized last')
+    expect(prompt).toContain('re-resolves the base and auto-rebases')
+    expect(prompt).toContain('base_locked')
+
+    // Must NOT be sold as a conflict solver — a real conflict still blocks the node.
+    // Overstating this is worse than silence, since it would send the coordinator
+    // back to manual recovery with false expectations.
+    expect(prompt).toContain('not a conflict solver')
+    expect(prompt).toContain('blocked_review')
+  })
+
   it('treats node labels as display context instead of shorthand aliases', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
