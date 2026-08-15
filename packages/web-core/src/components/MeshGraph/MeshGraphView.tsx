@@ -42,6 +42,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import {
     buildMeshGraphLayout,
+    formatMeshGraphAheadBehindLocalized,
     MESH_GRAPH_EDGE_LABEL,
     getMeshGraphNodeCardWidth,
     getNodeSummaryForLayout,
@@ -135,21 +136,20 @@ function getHealthClasses(node: MeshGraphNode, selected: boolean, isDark: boolea
     const isActive = isNodeActive(node)
     const isStale = isNodeStale(node)
 
+    // Same card family as the task-DAG view: flat shadow-sm + ring selection.
+    // The old bespoke multi-layer glows made the two graph surfaces read as
+    // different design systems.
     let base: string
     if (selected) {
-        base = 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_24px_60px_rgba(8,145,178,0.18)]'
+        base = isDark
+            ? 'border-cyan-400/60 ring-2 ring-cyan-300/60 shadow-sm'
+            : 'border-sky-400 ring-2 ring-sky-400/70 shadow-sm'
     } else if (isActive) {
-        base = isDark
-            ? 'border-emerald-400/40 shadow-[0_0_0_1px_rgba(52,211,153,0.18),0_18px_48px_rgba(3,7,18,0.22)]'
-            : 'border-emerald-400/60 shadow-[0_0_0_1px_rgba(52,211,153,0.2),0_18px_48px_rgba(148,163,184,0.20)]'
+        base = isDark ? 'border-emerald-400/40 shadow-sm' : 'border-emerald-400/60 shadow-sm'
     } else if (isStale) {
-        base = isDark
-            ? 'border-white/6 shadow-[0_12px_32px_rgba(3,7,18,0.16)] opacity-60'
-            : 'border-slate-200/70 shadow-[0_12px_32px_rgba(148,163,184,0.14)] opacity-60'
+        base = isDark ? 'border-white/6 shadow-sm opacity-60' : 'border-slate-200/70 shadow-sm opacity-60'
     } else {
-        base = isDark
-            ? 'border-white/10 shadow-[0_18px_48px_rgba(3,7,18,0.22)]'
-            : 'border-slate-300/90 shadow-[0_18px_48px_rgba(148,163,184,0.20)]'
+        base = isDark ? 'border-white/10 shadow-sm' : 'border-slate-300/90 shadow-sm'
     }
 
     const attention = getMeshGraphAttentionBadge(node)
@@ -357,17 +357,47 @@ function getSessionRoleLabel(session: MeshGraphNode['sessionDetails'][number]): 
     return role || 'worker'
 }
 
-function getSessionSummaryLabel(node: MeshGraphNode): string | null {
+function getSessionSummaryLabel(node: MeshGraphNode, t: (key: string, opts?: Record<string, unknown>) => string): string | null {
     if (node.sessionDetails.length === 0) return null
     const generatingCount = node.sessionDetails.filter(session => formatSessionStatusLabel(session) === 'generating').length
     const coordinatorCount = node.sessionDetails.filter(session => session.isSelfCoordinator).length
     const workerCount = node.sessionDetails.length - coordinatorCount
-    const parts = [`${node.sessionDetails.length} chat${node.sessionDetails.length === 1 ? '' : 's'}`]
-    if (generatingCount > 0) parts.push(`${generatingCount} generating`)
-    if (coordinatorCount > 0) parts.push(coordinatorCount === 1 ? 'coordinator attached' : `${coordinatorCount} coordinators`)
-    if (workerCount > 0) parts.push(`${workerCount} worker${workerCount === 1 ? '' : 's'}`)
-    if (generatingCount === 0 && coordinatorCount > 0) parts.push('sampled status')
+    const parts = [t('meshGraph.panel.chats', { count: node.sessionDetails.length })]
+    if (generatingCount > 0) parts.push(t('meshGraph.panel.generatingCount', { count: generatingCount }))
+    if (coordinatorCount > 0) parts.push(coordinatorCount === 1 ? t('meshGraph.panel.coordinatorAttached') : t('meshGraph.panel.coordinators', { count: coordinatorCount }))
+    if (workerCount > 0) parts.push(t('meshGraph.panel.workers', { count: workerCount }))
+    if (generatingCount === 0 && coordinatorCount > 0) parts.push(t('meshGraph.panel.sampledStatus'))
     return parts.join(' · ')
+}
+
+/**
+ * Attention badge labels come from the pure view-model as canonical English
+ * (tests pin them there); the render layer maps the finite label set onto i18n
+ * keys. Dynamic ahead/behind drift labels are re-derived via the localized
+ * formatter; anything unknown falls through untranslated.
+ */
+const ATTENTION_LABEL_KEYS: Record<string, string> = {
+    'submodule drift': 'meshGraph.attention.submoduleDrift',
+    'submodule dirty': 'meshGraph.attention.submoduleDirty',
+    'conflicts present': 'meshGraph.attention.conflictsPresent',
+    'dirty workspace': 'meshGraph.attention.dirtyWorkspace',
+    'upstream unverified': 'meshGraph.attention.upstreamUnverified',
+    'push branch': 'meshGraph.attention.pushBranch',
+    'blocked review': 'meshGraph.attention.blockedReview',
+    'refine failed': 'meshGraph.attention.refineFailed',
+    'refining…': 'meshGraph.attention.refining',
+    'needs merge': 'meshGraph.attention.needsMerge',
+    'refine worktree': 'meshGraph.attention.refineWorktree',
+    'needs follow-up': 'meshGraph.attention.needsFollowUp',
+    'offline': 'meshGraph.attention.offline',
+}
+
+function translateAttentionLabel(label: string, node: MeshGraphNode, t: (key: string, opts?: Record<string, unknown>) => string): string {
+    const key = ATTENTION_LABEL_KEYS[label]
+    if (key) return t(key)
+    const drift = formatMeshGraphAheadBehindLocalized(node, t)
+    if (drift && /^(ahead|behind) /.test(label)) return drift
+    return label
 }
 
 /** Last two path segments of a workspace — enough to identify a checkout without the noise of the full path. */
@@ -391,7 +421,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     // Card context line. Machine identity only earns a spot when the graph spans
     // machines (single-machine meshes were repeating the same machine name on
     // every card); locality only when it is the exceptional case (remote).
-    const machineContext = [node.machineLabel, node.locality === 'remote' ? 'remote' : null].filter(Boolean).join(' · ')
+    const machineContext = [node.machineLabel, node.locality === 'remote' ? t('meshGraph.panel.remote') : null].filter(Boolean).join(' · ')
     const workspaceTail = formatWorkspaceTail(node.workspace)
     const subtitle = multiMachine
         ? (machineContext || workspaceTail || node.workspace)
@@ -405,11 +435,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
         const attention = getMeshGraphAttentionBadge(node)
         return (
             <div
-                className={`rounded-full border px-4 py-2.5 backdrop-blur-sm transition-all ${meshTheme.isDark
+                className={`rounded-full border px-4 py-2.5 transition-all ${meshTheme.isDark
                     ? `border-sky-400/40 bg-sky-500/10 ${selected ? 'ring-2 ring-cyan-300/60' : ''}`
                     : `border-sky-400 bg-sky-50 ${selected ? 'ring-2 ring-sky-400/70' : ''}`}`}
                 style={{ width: getMeshGraphNodeCardWidth(node, compact) }}
-                title={[node.label, getNodeSummaryForLayout(node), attention ? attention.label : null].filter(Boolean).join('\n')}
+                title={[node.label, getNodeSummaryForLayout(node, t), attention ? translateAttentionLabel(attention.label, node, t) : null].filter(Boolean).join('\n')}
             >
                 <Handle type="target" position={direction === 'TB' ? Position.Top : Position.Left} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
                 <div className="flex min-w-0 items-center justify-center gap-2">
@@ -417,7 +447,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     <span className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{node.label}</span>
                     <span className={`shrink-0 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.panel.defaultBranch')}</span>
                     {attention && (
-                        <span className={`shrink-0 h-2 w-2 rounded-full ${attention.tone === 'danger' ? 'bg-rose-400' : attention.tone === 'warn' ? 'bg-amber-400' : 'bg-sky-400'}`} title={attention.label} aria-hidden />
+                        <span className={`shrink-0 h-2 w-2 rounded-full ${attention.tone === 'danger' ? 'bg-rose-400' : attention.tone === 'warn' ? 'bg-amber-400' : 'bg-sky-400'}`} title={translateAttentionLabel(attention.label, node, t)} aria-hidden />
                     )}
                 </div>
                 <Handle type="source" position={direction === 'TB' ? Position.Bottom : Position.Right} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
@@ -441,7 +471,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 : getBadgeClasses('submodule', meshTheme.isDark)
         return (
             <div
-                className={`rounded-xl border px-3 py-2 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+                className={`rounded-xl border px-3 py-2 transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
                 style={{ width: getMeshGraphNodeCardWidth(node, compact) }}
                 title={[
                     node.label,
@@ -483,7 +513,9 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const hasActiveSession = isNodeActive(node)
     const visibleSessions = node.sessionDetails
     const visibleCardSessions = node.sessionDetails
-    const sessionSummaryLabel = getSessionSummaryLabel(node)
+    const sessionSummaryLabel = getSessionSummaryLabel(node, t)
+    const attentionLabel = attentionBadge ? translateAttentionLabel(attentionBadge.label, node, t) : null
+    const nodeSummary = getNodeSummaryForLayout(node, t)
     const sessionTooltipLines = node.sessionDetails.map(session => {
         const status = formatSessionStatusLabel(session)
         const provider = session.providerType || 'provider unknown'
@@ -497,15 +529,15 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     if (compact) {
         return (
             <div
-                className={`rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
+                className={`rounded-xl border px-3 py-2.5 transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}`}
                 style={{ width: getMeshGraphNodeCardWidth(node, true) }}
                 title={[
                     node.label,
                     node.branch ? `${t('meshGraph.panel.tooltipPrefixBranch')} ${node.branch}` : null,
                     node.machineLabel ? `Machine: ${node.machineLabel}` : null,
                     node.workspace ? `Workspace: ${node.workspace}` : null,
-                    attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionBadge.label}` : null,
-                    getNodeSummaryForLayout(node),
+                    attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionLabel}` : null,
+                    nodeSummary,
                     ...sessionTooltipLines,
                 ].filter(Boolean).join('\n')}
             >
@@ -529,17 +561,17 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </div>
                 </div>
                 {node.health === 'unknown' && !attentionBadge && (
-                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[9px] italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
                         <span className="truncate">{t('meshGraph.obs.connecting')}</span>
                     </div>
                 )}
                 {attentionBadge && (
-                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionBadge.label}>
-                        <span className="truncate">{attentionBadge.label}</span>
+                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
+                        <span className="truncate">{attentionLabel}</span>
                     </div>
                 )}
                 {!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown' && (
-                    <div className={`mt-1 min-w-0 max-w-full truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-2 py-0.5 inline-block`} title={node.branch}>
+                    <div className={`mt-1 min-w-0 max-w-full truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-1.5 py-px inline-block`} title={node.branch}>
                         {node.branch}
                     </div>
                 )}
@@ -591,8 +623,8 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const tooltipLines = [
         node.label,
         subtitle,
-        attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionBadge.label}` : null,
-        getNodeSummaryForLayout(node),
+        attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionLabel}` : null,
+        nodeSummary,
         node.branch ? `${t('meshGraph.panel.tooltipPrefixBranch')} ${node.branch}` : null,
         node.dirty ? (isSubmoduleNode ? t('meshGraph.panel.tooltipLocalChanges') : `${node.dirtyFiles} dirty`) : null,
         node.hasConflicts ? t('meshGraph.panel.tooltipHasConflicts') : null,
@@ -605,7 +637,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
     return (
         <div
-            className={`rounded-2xl border px-4 py-3 backdrop-blur-sm transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}${hasGeneratingSession(node) ? ' mesh-node-generating' : ''}`}
+            className={`rounded-2xl border px-4 py-3 transition-all ${getHealthClasses(node, selected, meshTheme.isDark)}${hasGeneratingSession(node) ? ' mesh-node-generating' : ''}`}
             style={{ width: getMeshGraphNodeCardWidth(node) }}
             title={tooltipLines}
         >
@@ -633,18 +665,18 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             </div>
 
             {attentionBadge ? (
-                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionBadge.label}>
-                    <span className="truncate">{attentionBadge.label}</span>
+                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
+                    <span className="truncate">{attentionLabel}</span>
                 </div>
             ) : node.branch && !isSubmoduleNode ? (
-                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)}`} title={node.branch}>
+                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)}`} title={node.branch}>
                     <span className="truncate">{node.branch}</span>
                 </div>
             ) : null}
 
             {sessionSummaryLabel && (
                 <div
-                    className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${meshTheme.isDark ? 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                    className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[10px] font-medium ${meshTheme.isDark ? 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
                     title={sessionTooltipLines.join('\n')}
                 >
                     <span className="truncate">{sessionSummaryLabel}</span>
@@ -656,68 +688,68 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 one card. The summary pill above + the labeled list below remain. */}
 
             <div className="mt-3">
-                <div className="flex min-w-0 flex-wrap gap-1.5 text-[10px]">
+                <div className="flex min-w-0 flex-wrap gap-1 text-[9px]">
                     {/* Health pill only when it says something the dot cannot: online is
                         the normal state and stays dot-only, so the badge row is quiet on
                         a healthy mesh and loud exactly where something is off. */}
                     {node.health === 'unknown' ? (
-                        <span className={`rounded-full border px-2 py-0.5 italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
                             {t('meshGraph.obs.connecting')}
                         </span>
                     ) : node.health !== 'online' ? (
-                        <span className={`rounded-full border px-2 py-0.5 capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
                             {formatHealth(node.health)}
                         </span>
                     ) : null}
                     {node.locality === 'remote' && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}>
                             remote
                         </span>
                     )}
                     {(connectionTransport || connectionRtt) && (
                         <span
-                            className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('meta', meshTheme.isDark)}`}
+                            className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}
                             title={connectionTransport === 'relay' ? t('meshGraph.panel.tooltipP2PRelayed') : t('meshGraph.panel.tooltipP2PRtt')}
                         >
                             {[connectionTransport, connectionRtt].filter(Boolean).join(' · ')}
                         </span>
                     )}
                     {node.dirty && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('dirty', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('dirty', meshTheme.isDark)}`}>
                             {`${node.dirtyFiles} dirty`}
                         </span>
                     )}
                     {node.outOfSync && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
                             {t('meshGraph.panel.outOfSyncBadge')}
                         </span>
                     )}
                     {node.hasConflicts && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
                             {t('meshGraph.panel.conflictBadge')}
                         </span>
                     )}
                     {!isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
                             {t('meshGraph.panel.upstreamUnverified')}
                         </span>
                     )}
                     {node.isOrphan && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
                             {t('meshGraph.panel.needsFollowUp')}
                         </span>
                     )}
                     {/* The attention badge above already surfaces in-progress/failed refine state;
                         the card only adds the recent-completed case it does not show. */}
                     {!isSubmoduleNode && node.refineJobStatus === 'completed' && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? t('meshGraph.panel.tooltipRefinedBranch', { branch: `${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` }) : t('meshGraph.panel.tooltipRefineCompleted')}>
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? t('meshGraph.panel.tooltipRefinedBranch', { branch: `${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` }) : t('meshGraph.panel.tooltipRefineCompleted')}>
                             {t('meshGraph.panel.refined')}
                         </span>
                     )}
                 </div>
 
                 <div className={`mt-3 text-[11px] leading-5 ${meshTheme.textSecondary}`} style={summaryTextStyle}>
-                    {getNodeSummaryForLayout(node)}
+                    {nodeSummary}
                 </div>
 
                 {visibleSessions.length > 0 && (
@@ -889,7 +921,7 @@ function getEdgePath(args: EdgeProps<FlowEdge>): [string, number, number] {
 }
 
 function getEdgeLabelClasses(edge: MeshGraphEdge, isDark: boolean): string {
-    const base = 'nodrag nopan rounded-md border px-2 py-1 text-[10px] font-semibold shadow-sm backdrop-blur-sm'
+    const base = 'nodrag nopan rounded-md border px-2 py-1 text-[10px] font-semibold shadow-sm'
     switch (edge.type) {
         case 'orphanLink':
             return isDark
@@ -1130,7 +1162,11 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
         let cancelled = false
         const frame = requestAnimationFrame(() => {
             if (cancelled) return
-            const shouldFocusSubset = initialFocusNodeIds.length > 0 && initialFocusNodeIds.length < data.nodes.length
+            // Subset-focus is a big-graph affordance; on small graphs it hid nodes
+            // that would have fit anyway (the task tab always fits everything, so
+            // the graph tab cutting nodes off read as a defect, not a choice).
+            const shouldFocusSubset = data.nodes.length > 8
+                && initialFocusNodeIds.length > 0 && initialFocusNodeIds.length < data.nodes.length
             void reactFlow.fitView({
                 nodes: shouldFocusSubset ? initialFocusNodeIds.map(id => ({ id })) : undefined,
                 padding: shouldFocusSubset ? 0.24 : 0.2,
@@ -1325,7 +1361,7 @@ export default function MeshGraphView({
                 className={`pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 px-3 py-1 text-[10px] transition-opacity duration-700 ${meshTheme.graphStatChipClass} ${showPanHint ? 'opacity-100' : 'opacity-0'}`}
                 aria-hidden={!showPanHint}
             >
-                drag or scroll to pan
+                {t('meshGraph.obs.panHint')}
             </div>
             {presentEdgeTypes.length > 0 && (
                 <div className={`pointer-events-none absolute right-3 top-2 z-10 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 rounded-xl border px-2.5 py-1.5 text-[9px] ${meshTheme.isDark ? 'border-white/10 bg-slate-950/75 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
@@ -1350,8 +1386,16 @@ export default function MeshGraphView({
                     edges={layout.edges}
                     nodeTypes={nodeTypes}
                     edgeTypes={edgeTypes}
-                    minZoom={isNarrowViewport ? 0.3 : 0.18}
+                    // Same floor on every viewport: the old 0.3 mobile floor stopped
+                    // fitView from ever showing the WHOLE graph on a phone (the task
+                    // DAG had no such floor — the parity gap users noticed).
+                    minZoom={0.18}
                     maxZoom={1.35}
+                    // Baseline auto-fit (same as the task DAG): React Flow fits once
+                    // nodes initialize even if the controller's keyed fit misfires
+                    // (e.g. a dialog that mounts the pane mid-animation on mobile).
+                    fitView
+                    fitViewOptions={{ padding: 0.2, maxZoom: 0.9 }}
                     nodesDraggable={false}
                     nodesConnectable={false}
                     elementsSelectable

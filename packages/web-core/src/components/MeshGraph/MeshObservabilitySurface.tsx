@@ -437,13 +437,17 @@ export default function MeshObservabilitySurface({
     ]
     const hasSnapshotGaps = canonicalGraph.stats.incompleteSnapshotNodes > 0
     const headlineLabel = canonicalGraph.stats.followUpNodes > 0
-        ? `${canonicalGraph.stats.followUpNodes} need follow-up`
+        ? t('meshGraph.obs.headlineFollowUp', { count: canonicalGraph.stats.followUpNodes })
         : hasSnapshotGaps
-            ? 'mesh visibility incomplete'
-            : 'mesh converged'
+            ? t('meshGraph.obs.headlineIncomplete')
+            : t('meshGraph.obs.headlineConverged')
     const headlineTone = canonicalGraph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
 
-    const [directionPref, setDirectionPref] = useState<'auto' | 'LR' | 'TB'>('LR')
+    // 'auto' (not 'LR'): an explicit direction prop suppresses MeshGraphView's
+    // narrow-viewport TB fallback, so a hard 'LR' default forced phones into the
+    // wide horizontal pipeline. Auto keeps LR on desktop (heuristic) and lets
+    // mobile fall back to vertical.
+    const [directionPref, setDirectionPref] = useState<'auto' | 'LR' | 'TB'>('auto')
 
     const directionToggleButtonClass = (active: boolean) =>
         active
@@ -537,38 +541,38 @@ export default function MeshObservabilitySurface({
                     <div className={`flex min-w-0 flex-1 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible gap-2 text-xs ${meshTheme.textSecondary}`}>
                         <Badge label={headlineLabel} tone={headlineTone} className="shrink-0" />
                         {canonicalGraph.stats.blockedReviewNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.blockedReviewNodes} blocked`} title={`${canonicalGraph.stats.blockedReviewNodes} blocked review`} tone="danger" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeBlocked', { count: canonicalGraph.stats.blockedReviewNodes })} title={t('meshGraph.obs.badgeBlockedTitle', { count: canonicalGraph.stats.blockedReviewNodes })} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.notMergeableNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.notMergeableNodes} not mergeable`} tone="danger" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeNotMergeable', { count: canonicalGraph.stats.notMergeableNodes })} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.mergeReadyNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.mergeReadyNodes} need merge`} tone="warn" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeNeedMerge', { count: canonicalGraph.stats.mergeReadyNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.cleanupCandidateNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.cleanupCandidateNodes} cleanup`} title={`${canonicalGraph.stats.cleanupCandidateNodes} refine/cleanup`} tone="info" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeCleanup', { count: canonicalGraph.stats.cleanupCandidateNodes })} title={t('meshGraph.obs.badgeCleanupTitle', { count: canonicalGraph.stats.cleanupCandidateNodes })} tone="info" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.offlineNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.offlineNodes} offline`} tone="danger" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeOffline', { count: canonicalGraph.stats.offlineNodes })} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.incompleteSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete`} title={`${canonicalGraph.stats.incompleteSnapshotNodes} incomplete peer snapshot`} tone="warn" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeIncomplete', { count: canonicalGraph.stats.incompleteSnapshotNodes })} title={t('meshGraph.obs.badgeIncompleteTitle', { count: canonicalGraph.stats.incompleteSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.missingGitSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.missingGitSnapshotNodes} no-git`} title={`${canonicalGraph.stats.missingGitSnapshotNodes} no git snapshot`} tone="warn" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeNoGit', { count: canonicalGraph.stats.missingGitSnapshotNodes })} title={t('meshGraph.obs.badgeNoGitTitle', { count: canonicalGraph.stats.missingGitSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.missingSubmoduleSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} no-submod`} title={`${canonicalGraph.stats.missingSubmoduleSnapshotNodes} missing submodule visibility`} tone="warn" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeNoSubmod', { count: canonicalGraph.stats.missingSubmoduleSnapshotNodes })} title={t('meshGraph.obs.badgeNoSubmodTitle', { count: canonicalGraph.stats.missingSubmoduleSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.staleGitSnapshotNodes > 0 && (
-                            <Badge label={`${canonicalGraph.stats.staleGitSnapshotNodes} stale`} title={`${canonicalGraph.stats.staleGitSnapshotNodes} stale peer snapshot`} tone="warn" className="shrink-0" />
+                            <Badge label={t('meshGraph.obs.badgeStale', { count: canonicalGraph.stats.staleGitSnapshotNodes })} title={t('meshGraph.obs.badgeStaleTitle', { count: canonicalGraph.stats.staleGitSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {(queueSummary?.active ?? 0) > 0 && (
-                            <Badge label={`${queueSummary?.active ?? 0} active queue`} tone="info" className="shrink-0 hidden sm:inline-flex" />
+                            <Badge label={t('meshGraph.obs.badgeActiveQueue', { count: queueSummary?.active ?? 0 })} tone="info" className="shrink-0 hidden sm:inline-flex" />
                         )}
-                        <Badge label={`${canonicalGraph.stats.totalNodes} nodes`} tone="default" className="shrink-0 hidden sm:inline-flex" />
+                        <Badge label={t('meshGraph.obs.badgeNodes', { count: canonicalGraph.stats.totalNodes })} tone="default" className="shrink-0 hidden sm:inline-flex" />
                         {canonicalGraph.stats.totalActiveSessions > 0 && (
-                            <Badge label={`${canonicalGraph.stats.totalActiveSessions} attached chats`} tone="info" className="shrink-0 hidden sm:inline-flex" />
+                            <Badge label={t('meshGraph.obs.badgeAttachedChats', { count: canonicalGraph.stats.totalActiveSessions })} tone="info" className="shrink-0 hidden sm:inline-flex" />
                         )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
@@ -591,12 +595,15 @@ export default function MeshObservabilitySurface({
                                     {(() => {
                                         const failedRefine = ((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined)?.filter(j => j.status === 'failed').length ?? 0
                                         const recentFail = ledgerSummary.recentFailures
-                                        if (failedRefine > 0) return <span className={meshTheme.isDark ? 'text-rose-300' : 'text-rose-600'}>{failedRefine} refine failed</span>
-                                        if (recentFail > 0) return <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{recentFail} failures</span>
+                                        if (failedRefine > 0) return <span className={meshTheme.isDark ? 'text-rose-300' : 'text-rose-600'}>{t('meshGraph.obs.healthRefineFailed', { count: failedRefine })}</span>
+                                        if (recentFail > 0) return <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{t('meshGraph.obs.healthFailures', { count: recentFail })}</span>
                                         return t('meshGraph.obs.health')
                                     })()}
                                 </summary>
-                                <div className={`absolute right-0 z-40 mt-2 w-72 max-h-[70vh] overflow-y-auto rounded-xl border p-4 shadow-xl backdrop-blur-xl ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}`}>
+                                {/* Mobile: the header is a scroll container, so an absolutely-
+                                    positioned dropdown gets CLIPPED into invisibility — anchor to
+                                    the viewport (fixed) below sm and to the trigger on desktop. */}
+                                <div className={`fixed inset-x-4 top-28 z-50 max-h-[70dvh] overflow-y-auto rounded-xl border p-4 shadow-xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-72 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}`}>
                                     <MeshHealthPanel
                                         canonicalStatus={canonicalStatus}
                                         queueSummary={queueSummary}
@@ -614,22 +621,22 @@ export default function MeshObservabilitySurface({
                                 <summary className={`cursor-pointer list-none font-medium ${meshTheme.textSecondary} [&::-webkit-details-marker]:hidden`}>
                                     {t('meshGraph.obs.legend')}
                                 </summary>
-                                <div className={`absolute right-0 z-40 mt-2 w-72 rounded-xl border p-3 shadow-xl backdrop-blur-xl ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}`}>
+                                <div className={`fixed inset-x-4 top-28 z-50 max-h-[70dvh] overflow-y-auto rounded-xl border p-3 shadow-xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-72 sm:max-h-none sm:overflow-visible ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}`}>
                                     <div className="flex flex-col gap-3">
                                         <div className="flex flex-wrap gap-2">
-                                            <Badge label={`${canonicalGraph.stats.dirtyNodes} dirty`} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                                            <Badge label={`${canonicalGraph.stats.orphanNodes} orphan`} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
-                                            <Badge label={`${ledgerSummary.recentFailures} recent failures`} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
+                                            <Badge label={t('meshGraph.obs.legendDirty', { count: canonicalGraph.stats.dirtyNodes })} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                                            <Badge label={t('meshGraph.obs.legendOrphan', { count: canonicalGraph.stats.orphanNodes })} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
+                                            <Badge label={t('meshGraph.obs.legendRecentFailures', { count: ledgerSummary.recentFailures })} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
                                             {stateCounts.length === 0 ? (
-                                                <Badge label="no session metadata" />
+                                                <Badge label={t('meshGraph.obs.legendNoSessionMeta')} />
                                             ) : stateCounts.slice(0, 2).map(([label, count]) => (
                                                 <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
                                             ))}
                                         </div>
                                         <div className="flex flex-wrap gap-2">
-                                            <Badge label="Anchor = default branch" tone="info" />
-                                            <Badge label="Peer link = same-branch worktree" tone="default" />
-                                            <Badge label="Submodule link = child checkout" tone="warn" />
+                                            <Badge label={t('meshGraph.obs.legendAnchor')} tone="info" />
+                                            <Badge label={t('meshGraph.obs.legendPeerLink')} tone="default" />
+                                            <Badge label={t('meshGraph.obs.legendSubmoduleLink')} tone="warn" />
                                         </div>
                                         {statusWarnings.length > 0 && (
                                             <div className="flex flex-wrap gap-2">
@@ -639,7 +646,7 @@ export default function MeshObservabilitySurface({
                                             </div>
                                         )}
                                         <div className={`text-xs ${meshTheme.textMuted}`}>
-                                            Click a node or edge to pin its drill-down details in the side panel. Click it again to close.
+                                            {t('meshGraph.obs.legendClickHint')}
                                         </div>
                                     </div>
                                 </div>

@@ -317,8 +317,10 @@ describe('dashboard mesh graph dialog wiring', () => {
         const graphViewSource = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(dialogSource).toContain('meshTheme.dialogBodyClass')
-        expect(surfaceSource).toContain('Click a node or edge to pin its drill-down details in the side panel. Click it again to close.')
-        expect(graphViewSource).toContain('drag or scroll to pan')
+        // i18n wave: the hint strings moved into the locale files; the source must
+        // reference their keys (the en resource still carries the original text).
+        expect(surfaceSource).toContain("t('meshGraph.obs.legendClickHint')")
+        expect(graphViewSource).toContain("t('meshGraph.obs.panHint')")
         expect(surfaceSource).toContain('role="dialog"')
         expect(surfaceSource).toContain('onClick={closeGraphDetail}')
         expect(surfaceSource).toContain('absolute inset-x-3 bottom-3 top-20')
