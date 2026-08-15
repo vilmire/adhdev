@@ -22,6 +22,7 @@ import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhd
 const QUOTA_PROVIDER_LABELS: Record<string, string> = {
     'claude-cli': 'Claude Code',
     'codex-cli': 'Codex CLI',
+    'grok-cli': 'Grok CLI',
     kimi: 'Kimi Code',
     opencode: 'opencode',
 }

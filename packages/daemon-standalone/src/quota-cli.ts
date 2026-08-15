@@ -12,6 +12,7 @@
 import {
     fetchClaudeQuota,
     fetchCodexQuota,
+    fetchGrokQuota,
     fetchKimiQuota,
     installClaudeStatusline,
     readStatuslineStatus,
@@ -31,9 +32,10 @@ Usage: adhdev quota <provider>
 Providers:
   claude    Show Claude Code plan usage (requires \`adhdev quota claude:install\`)
   codex     Show Codex CLI plan usage (queries codex app-server live)
+  grok      Show Grok CLI plan usage (queries the xAI billing API live)
   kimi      Show Kimi Code plan usage (queries the Kimi API live)
 
-Claude Code setup (codex/kimi need no setup — they query live):
+Claude Code setup (codex/grok/kimi need no setup — they query live):
   claude:install     Set up Claude Code quota reporting by wrapping your statusline
   claude:uninstall   Remove Claude Code quota reporting and restore your original statusline
   claude:status      Show whether Claude Code quota reporting is set up
@@ -48,6 +50,9 @@ export async function runQuotaCommand(args: readonly string[]): Promise<number> 
             return 0;
         case 'codex':
             printQuota('Codex CLI', await fetchCodexQuota());
+            return 0;
+        case 'grok':
+            printQuota('Grok CLI', await fetchGrokQuota());
             return 0;
         case 'kimi':
             printQuota('Kimi Code', await fetchKimiQuota());

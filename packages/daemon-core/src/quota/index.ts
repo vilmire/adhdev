@@ -1,8 +1,9 @@
 /**
  * Provider quota fetching — public surface.
  *
- * Scope note: Kimi (OAuth GET), codex-cli (app-server JSON-RPC) and claude-cli
- * (statusline wrapper) ship fetchers. antigravity-cli is unresolved.
+ * Scope note: Kimi (OAuth GET), grok-cli (OAuth GET), codex-cli (app-server
+ * JSON-RPC) and claude-cli (statusline wrapper) ship fetchers.
+ * antigravity-cli is unresolved.
  *
  * claude-cli is the odd one out and worth understanding before touching it.
  * Claude Code exposes no outbound quota interface; the numbers exist only as
@@ -69,6 +70,7 @@ export {
     type QuotaRefreshLoopOptions,
 } from './refresh.js';
 
+export { fetchGrokQuota } from './fetchers/grok.js';
 export { fetchKimiQuota } from './fetchers/kimi.js';
 export { fetchCodexQuota } from './fetchers/codex.js';
 export { fetchClaudeQuota, STALE_AFTER_MS } from './fetchers/claude.js';

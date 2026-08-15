@@ -25,6 +25,7 @@ import type { ProviderQuota, QuotaProvider } from './types.js';
 import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
+import { fetchGrokQuota } from './fetchers/grok.js';
 import { fetchKimiQuota } from './fetchers/kimi.js';
 import { fetchOpencodeUsage } from './fetchers/opencode.js';
 import { loadQuotaCache, saveQuotaCache } from './persist.js';
@@ -46,6 +47,7 @@ export const QUOTA_ACTIVITY_WINDOW_MS = 20 * 60 * 1000;
 const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<ProviderQuota> }> = [
     { provider: 'claude-cli', fetch: () => fetchClaudeQuota() },
     { provider: 'codex-cli', fetch: () => fetchCodexQuota() },
+    { provider: 'grok-cli', fetch: () => fetchGrokQuota() },
     { provider: 'kimi', fetch: () => fetchKimiQuota() },
     { provider: 'opencode', fetch: () => fetchOpencodeUsage() },
 ];

@@ -17,7 +17,7 @@
 
 /** Providers that can report a quota. Kept narrow on purpose — adding one
  *  means an actual fetcher exists, not just a CLI we support. */
-export type QuotaProvider = 'kimi' | 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'opencode';
+export type QuotaProvider = 'kimi' | 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'opencode' | 'grok-cli';
 
 /**
  * Lifecycle of a quota snapshot.

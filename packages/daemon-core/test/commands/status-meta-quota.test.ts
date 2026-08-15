@@ -9,11 +9,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // ~900ms app-server spawn would land on every open of the panel.
 const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
+const fetchGrokQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
 
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
+vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
@@ -39,6 +41,7 @@ describe('get_machine_runtime_stats — quota', () => {
     it('never invokes a quota fetcher (cache read only)', async () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
         vi.clearAllMocks()
@@ -62,11 +65,12 @@ describe('get_machine_runtime_stats — quota', () => {
     it('carries cached quota snapshots on the machine payload', async () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
 
         const result: any = await statusMetaHandlers.get_machine_runtime_stats({ deps: {} as any }, {})
-        expect(Object.keys(result.machine.quota).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
+        expect(Object.keys(result.machine.quota).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         expect(result.machine.quota['codex-cli'].status).toBe('ok')
     })
 
@@ -81,6 +85,7 @@ describe('get_machine_runtime_stats — quota', () => {
             metadata: { failureKind: 'missing-credentials' },
         })
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
 
@@ -102,6 +107,7 @@ describe('get_session_info — quota', () => {
     it('never invokes a quota fetcher (cache read only)', async () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
         vi.clearAllMocks()
@@ -131,6 +137,7 @@ describe('get_session_info — quota', () => {
     it('carries cached quota snapshots and machineNickname on the response', async () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
 
@@ -140,7 +147,7 @@ describe('get_session_info — quota', () => {
             providerLoader: { resolve: vi.fn(() => undefined), getMeta: vi.fn(() => undefined) },
         } as any
         const result: any = await statusMetaHandlers.get_session_info({ deps: coordDeps }, { targetSessionId: 'sess-1' })
-        expect(Object.keys(result.quota).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
+        expect(Object.keys(result.quota).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         expect('machineNickname' in result).toBe(true)
     })
 })

@@ -7,11 +7,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // call count, not as a slow test.
 const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
+const fetchGrokQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
 
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
+vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
@@ -51,6 +53,7 @@ describe('buildLocalNodeFacts — quota', () => {
         // read — otherwise a builder that fetched could hide behind an empty map.
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
         vi.clearAllMocks()
@@ -79,11 +82,12 @@ describe('buildLocalNodeFacts — quota', () => {
     it('carries cached snapshots into the bundle', async () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
 
         const facts = buildLocalNodeFacts()
-        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
+        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         expect(facts.quota?.['codex-cli'].status).toBe('ok')
         expect(facts.quota?.['codex-cli'].session?.usedPercent).toBeCloseTo(38.2)
     })
@@ -102,6 +106,7 @@ describe('buildLocalNodeFacts — quota', () => {
             metadata: { failureKind: 'missing-credentials' },
         })
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
 
@@ -114,6 +119,7 @@ describe('buildLocalNodeFacts — quota', () => {
     it('records a definite failure when a fetcher breaks its never-throw contract', async () => {
         fetchClaudeQuota.mockRejectedValue(new Error('boom'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
 
@@ -128,6 +134,7 @@ describe('buildLocalNodeFacts — quota', () => {
     it('does NOT add a ttl/expiry field — age is derived from reportedAt', async () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
 
@@ -178,6 +185,7 @@ describe('startQuotaRefreshLoop', () => {
         vi.useFakeTimers()
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
         const handle = startQuotaRefreshLoop({ hasRecentCliActivity: () => true, intervalMs: 1000 })
@@ -200,6 +208,7 @@ describe('startQuotaRefreshLoop', () => {
         vi.useFakeTimers()
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         const handle = startQuotaRefreshLoop({ hasRecentCliActivity: () => true, intervalMs: 1000 })
         await vi.advanceTimersByTimeAsync(3000)
@@ -212,6 +221,7 @@ describe('startQuotaRefreshLoop', () => {
         vi.useFakeTimers()
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         const handle = startQuotaRefreshLoop({ hasRecentCliActivity: () => true, intervalMs: 1000 })
         await vi.advanceTimersByTimeAsync(1000)

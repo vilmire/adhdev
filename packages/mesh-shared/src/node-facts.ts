@@ -166,12 +166,20 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
  *   - antigravity-cli — possible via OAuth, not implemented
  *   - hermes-cli    — no model-axis quota to report
  *
+ * ★grok-cli WAS listed here as impossible and is not: that verdict came from
+ * probing `api.x.ai` / `management-api.x.ai` (the team-API billing axis, which
+ * genuinely rejects a CLI OAuth token) and from reading `grok --help`, where
+ * the `/usage` view does not appear because it is a TUI slash command. The
+ * subscription quota is served by the CLI's own chat proxy — see the endpoint
+ * provenance note in daemon-core `quota/fetchers/grok.ts`.
+ *
  * ★Adding a provider here without adding its fetcher to REFRESHERS re-creates
  * exactly the "switch that does nothing" this constant prevents.
  */
 export const QUOTA_SUPPORTED_PROVIDERS: readonly string[] = [
     'claude-cli',
     'codex-cli',
+    'grok-cli',
     'kimi',
     'opencode',
 ]
