@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshRestartDaemon, meshStatus } from '../src/tools/mesh-tools.js';
@@ -53,7 +54,7 @@ function makeIpcCtx(responder: (daemonId: string, command: string) => unknown) {
   };
 }
 
-it('mesh_status exposes the release track explicitly under daemonBuilds', async () => {
+test('mesh_status exposes the release track explicitly under daemonBuilds', async () => {
   const ctx = makeIpcCtx((_daemonId, command) => {
     if (command === 'get_mesh') return { success: true, mesh: buildMesh() };
     if (command === 'get_pending_mesh_events') return { events: [] };
@@ -75,21 +76,21 @@ it('mesh_status exposes the release track explicitly under daemonBuilds', async 
 
   const status = JSON.parse(await meshStatus(ctx as any));
 
-  expect(status.daemonBuilds['daemon_mainpc_stable'].track).toBe('stable');
+  assert.equal(status.daemonBuilds['daemon_mainpc_stable'].track, 'stable');
   // The rc suffix is deliberately present: track identity came from the daemon,
   // not from guessing based on its version string.
-  expect(status.daemonBuilds['daemon_mainpc_stable'].version).toBe('1.0.49-rc.2');
+  assert.equal(status.daemonBuilds['daemon_mainpc_stable'].version, '1.0.49-rc.2');
 });
 
-it('a legacy daemon with no track is reported as unknown, never assumed stable', () => {
+test('a legacy daemon with no track is reported as unknown, never assumed stable', () => {
   const build = extractDaemonBuildInfo({
     daemonBuild: { commit: 'def5678def5678', commitShort: 'def5678', version: '1.0.49' },
   });
 
-  expect(build?.track).toBe('unknown');
+  assert.equal(build?.track, 'unknown');
 });
 
-it('incident regression: stable mesh daemon vs preview upgrade target is loud and fail-open', async () => {
+test('incident regression: stable mesh daemon vs preview upgrade target is loud and fail-open', async () => {
   const calls: Array<{ daemonId: string; command: string }> = [];
   const ctx = makeIpcCtx((daemonId, command) => {
     calls.push({ daemonId, command });
@@ -130,23 +131,23 @@ it('incident regression: stable mesh daemon vs preview upgrade target is loud an
     mode: 'upgrade',
   }));
 
-  expect(result.success, 'track mismatch must not block the upgrade').toBe(true);
-  expect(result.outcome).toBe('scheduled');
-  expect(result.meshAttachedDaemon).toEqual({
+  assert.equal(result.success, true, 'track mismatch must not block the upgrade');
+  assert.equal(result.outcome, 'scheduled');
+  assert.deepEqual(result.meshAttachedDaemon, {
     daemonId: 'daemon_mainpc_stable',
     configuredDaemonId: 'daemon_mainpc_stable',
     track: 'stable',
   });
-  expect(result.restartTargetDaemon).toEqual({
+  assert.deepEqual(result.restartTargetDaemon, {
     daemonId: 'daemon-coordinator-preview',
     track: 'preview',
     npmTag: 'next',
   });
-  expect(result.daemonMismatch).toBe(true);
-  expect(result.trackMismatch).toBe(true);
-  expect(result.trackWarning).toMatch(/DAEMON\/TRACK MISMATCH/);
-  expect(result.trackWarning).toMatch(/stable/);
-  expect(result.trackWarning).toMatch(/preview/);
-  expect(calls.some(call => call.command === 'get_status_metadata'), 'restart must observe the mesh-attached daemon before acting').toBe(true);
-  expect(calls.some(call => call.command === 'restart_daemon_node'), 'upgrade remains fail-open and is still issued').toBe(true);
+  assert.equal(result.daemonMismatch, true);
+  assert.equal(result.trackMismatch, true);
+  assert.match(result.trackWarning, /DAEMON\/TRACK MISMATCH/);
+  assert.match(result.trackWarning, /stable/);
+  assert.match(result.trackWarning, /preview/);
+  assert.ok(calls.some(call => call.command === 'get_status_metadata'), 'restart must observe the mesh-attached daemon before acting');
+  assert.ok(calls.some(call => call.command === 'restart_daemon_node'), 'upgrade remains fail-open and is still issued');
 });
