@@ -54,6 +54,7 @@ import { isLaunchableMachineProvider, type LaunchableProviderCategory } from '..
 import AgentWorkspaceSelector from './AgentWorkspaceSelector'
 import { PROVIDER_CATEGORY_COLOR } from './providerCategoryConfig'
 import { IconSpinner } from '../../components/Icons'
+import { ProviderLogo } from '../../components/ProviderLogo'
 
 type AgentCategory = LaunchableProviderCategory
 
@@ -93,7 +94,7 @@ function normalizePath(path: string | null | undefined) {
 }
 
 export default function AgentTab({
-    category, machine, machineId, providers, managedEntries, getIcon, actions, sendDaemonCommand,
+    category, machine, machineId, providers, managedEntries, actions, sendDaemonCommand,
     initialWorkspaceId,
     initialWorkspacePath,
     onOpenGitDialog,
@@ -662,7 +663,7 @@ export default function AgentTab({
                                     style={{ opacity: (launchingIde && launchingIde !== d.type) ? 0.4 : 1 }}
                                 >
                                     <div className="relative">
-                                        <span className="text-2xl drop-shadow-sm transition-transform group-hover:scale-110 block">{getIcon(d.type)}</span>
+                                        <span className="drop-shadow-sm transition-transform group-hover:scale-110 block"><ProviderLogo type={d.type} size={26} /></span>
                                         {isRunning && <span className={`absolute -top-1 -right-1 w-2 h-2 rounded-full ${isReady ? 'bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]' : 'bg-orange-500 shadow-[0_0_6px_rgba(249,115,22,0.6)] animate-pulse'}`} />}
                                     </div>
                                     <div className="flex flex-col items-center">
@@ -697,7 +698,7 @@ export default function AgentTab({
                                     }`}
                                 >
                                     <div className="relative">
-                                        <span className="text-2xl drop-shadow-sm transition-transform group-hover:scale-110 block">{p.icon}</span>
+                                        <span className="drop-shadow-sm transition-transform group-hover:scale-110 block"><ProviderLogo type={p.type} label={p.displayName} size={26} /></span>
                                         {isRunning && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]" />}
                                     </div>
                                     <div className="flex flex-col items-center">
@@ -848,7 +849,7 @@ export default function AgentTab({
                             <div key={`pending:${type}`} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary" style={{ border: '1px solid color-mix(in srgb, var(--status-warning) 20%, transparent)' }}>
                                 <div className="flex justify-between items-center">
                                     <div className="flex items-center gap-2.5">
-                                        <span className="text-lg">{getIcon(type)}</span>
+                                        <ProviderLogo type={type} size={20} />
                                         <div>
                                             <div className="font-semibold text-[13px] text-text-primary">
                                                 {isIde ? formatIdeType(type) : (providerLabelMap.get(type) || type)}
@@ -878,7 +879,7 @@ export default function AgentTab({
                             <Card key={entry.id} padding="none" className="px-4.5 py-3.5">
                                 <div className="flex justify-between items-center mb-2">
                                     <div className="flex items-center gap-2.5">
-                                        <span className="text-lg">{getIcon(entry.type)}</span>
+                                        <ProviderLogo type={entry.type} size={20} />
                                         <div>
                                             <div className="font-semibold text-[13px] text-text-primary">
                                                 {getName(entry)}

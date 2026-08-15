@@ -7,6 +7,7 @@ import {
   removeProviderPriorityItem,
   type AvailableCliProviderOption,
 } from '../../utils/provider-priority'
+import { ProviderLogo } from '../ProviderLogo'
 
 interface ProviderPriorityEditorProps {
   value: string[]
@@ -72,7 +73,7 @@ export default function ProviderPriorityEditor({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[10px] font-semibold text-text-muted">#{index + 1}</span>
-                  {provider?.icon && <span aria-hidden="true">{provider.icon}</span>}
+                  <ProviderLogo type={type} label={provider?.label} size={14} />
                   <span className={`font-mono text-[12px] ${detected ? 'text-text-primary' : 'text-text-muted'}`}>{type}</span>
                   {detected ? (
                     <span className="rounded border border-green-500/20 bg-green-500/10 px-1.5 py-px text-[9px] font-semibold text-green-400">{t('settings.providerPriority.available')}</span>

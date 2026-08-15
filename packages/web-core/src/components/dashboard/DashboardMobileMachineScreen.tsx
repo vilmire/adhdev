@@ -27,6 +27,7 @@ import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
 import { getConversationTitle, getMachineConversationCardSubtitle } from './conversation-presenters'
 import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { useDashboardMobileMachineLauncher } from './useDashboardMobileMachineLauncher'
+import { ProviderLogo } from '../ProviderLogo'
 
 interface LaunchProviderInfo {
     type: string
@@ -458,8 +459,8 @@ export default function DashboardMobileMachineScreen({
                                                     })
                                                 }}
                                             >
-                                                <span className="text-[13px] font-bold text-text-primary">
-                                                    {provider.icon ? `${provider.icon} ` : ''}{provider.displayName}
+                                                <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-text-primary">
+                                                    <ProviderLogo type={provider.type} label={provider.displayName} size={15} />{provider.displayName}
                                                 </span>
                                                 <span className="text-[11px] leading-relaxed text-text-muted break-all">
                                                     {launcher.resolvedWorkspacePath || 'Use selected workspace'}

@@ -16,7 +16,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertBanner, Button, Dialog } from '@adhdev/web-core'
-import { IconPackage } from '@adhdev/web-core'
+import { ProviderLogo } from '@adhdev/web-core'
 
 const DEFAULTS = ['claude-cli', 'codex-cli', 'antigravity-cli', 'hermes-cli']
 
@@ -233,8 +233,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                     {group.items.map(p => {
                                         const isSelected = selected.has(p.type)
                                         const result = results?.find(r => r.type === p.type)
-                                        const icon = p.manifest?.icon ?? null
-                                        const details = p.manifest?.details ?? ''
+                                                                                const details = p.manifest?.details ?? ''
                                         return (
                                             <label
                                                 key={p.type}
@@ -251,7 +250,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                                     disabled={installing}
                                                     className="shrink-0"
                                                 />
-                                                <span className="text-base shrink-0 inline-flex items-center">{icon ?? <IconPackage size={15} />}</span>
+                                                <ProviderLogo type={p.type} label={p.displayName ?? p.type} size={18} className="shrink-0" />
                                                 <div className="min-w-0 flex-1">
                                                     <div className="text-[13px] font-medium text-text-primary truncate">{p.displayName}</div>
                                                     {details && (

@@ -125,6 +125,7 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
 
 import { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS } from '../../constants/supported'
 import { IconMonitor, IconLink } from '../Icons'
+import { ProviderLogo } from '../ProviderLogo'
 
 function getIdeLabel(type: string): { icon: string; name: string } {
     // Type format: "vscode", "cursor", or full "adhdev-daemon" (skip)
@@ -344,7 +345,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                 const cdp = ideInst.cdpConnected
                                 return (
                                     <span key={ideInst.id} className="flex items-center gap-1 bg-bg-secondary px-1.5 py-0.5 rounded">
-                                        <span>{label.icon}</span>
+                                        <ProviderLogo type={ideInst.type} label={label.name} size={13} />
                                         <span>{label.name}</span>
                                         {cdp !== undefined && (
                                             <span

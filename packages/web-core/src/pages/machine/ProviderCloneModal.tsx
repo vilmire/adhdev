@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next'
 import type { ProviderInfo } from './types'
 import ModalPortal from '../../components/ui/ModalPortal'
 import { IconCheckCircle } from '../../components/Icons'
+import { ProviderLogo } from '../../components/ProviderLogo'
 
 interface ProviderCloneModalProps {
     machineId: string
@@ -113,7 +114,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                                 background: baseType === p.type ? 'color-mix(in srgb, var(--accent-primary) 8%, transparent)' : 'transparent',
                                             }}
                                         >
-                                            <div className="text-lg">{p.icon}</div>
+                                            <div className="flex justify-center"><ProviderLogo type={p.type} label={p.displayName} size={22} /></div>
                                             <div className="text-[10px] font-medium mt-0.5" style={{ color: baseType === p.type ? '#a78bfa' : 'var(--text-secondary)' }}>
                                                 {p.displayName}
                                             </div>

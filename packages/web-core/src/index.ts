@@ -220,6 +220,9 @@ export {
     IconPackage, IconSmartphone, IconFlag, IconGitBranch, IconMaximize, IconMinimize, IconCheck
 } from './components/Icons'
 
+export { ProviderLogo } from './components/ProviderLogo'
+export type { ProviderLogoProps } from './components/ProviderLogo'
+
 // ── Hooks ──
 export { useTheme, initTheme } from './hooks/useTheme'
 export type { Theme, ThemePreference } from './hooks/useTheme'

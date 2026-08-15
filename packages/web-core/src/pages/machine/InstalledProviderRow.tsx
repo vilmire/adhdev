@@ -17,6 +17,7 @@ import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 import { formatQuotaUsage, formatQuotaWindow, quotaUsageTone } from '../../utils/quota-format'
 import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
+import { ProviderLogo } from '../../components/ProviderLogo'
 
 /**
  * Validate a provider-manifest URL before rendering it as an anchor.
@@ -237,7 +238,7 @@ export default function InstalledProviderRow({
                 onClick={() => setExpanded(v => !v)}
                 className="w-full px-4 py-2.5 flex items-center gap-3 text-left"
             >
-                <span className="text-base shrink-0">{prov.icon}</span>
+                <ProviderLogo type={prov.type} label={prov.displayName} size={20} className="shrink-0" />
                 <span className="text-[13px] font-semibold text-text-primary truncate">{prov.displayName}</span>
                 <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${PROVIDER_CATEGORY_COLOR[prov.category as ProviderCategory]?.badge ?? 'border-border-subtle text-text-muted'}`}>
                     {prov.category.toUpperCase()}

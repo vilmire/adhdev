@@ -17,10 +17,11 @@ import ConnectionBadge from '../components/ConnectionBadge'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle, IconLink } from '../components/Icons'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
+import { ProviderLogo } from '../components/ProviderLogo'
 
 // ─── Compact Agent Row (replaces full IdeCard/CliCard) ──────────
-function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive, hidden, onClick }: {
-    icon: string; name: string; status: string; statusTone?: 'active' | 'waiting' | 'idle' | 'offline'; workspace?: string
+function AgentRow({ type, name, status, statusTone = 'idle', workspace, isActive, hidden, onClick }: {
+    type: string; name: string; status: string; statusTone?: 'active' | 'waiting' | 'idle' | 'offline'; workspace?: string
     isActive: boolean; hidden?: boolean; onClick: () => void
 }) {
     const { t } = useTranslation('common')
@@ -42,7 +43,7 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
                 onClick={(e) => { e.stopPropagation(); onClick() }}
                 className="flex-1 flex items-center gap-2 cursor-pointer min-w-0"
             >
-                <span className="text-sm">{icon}</span>
+                <ProviderLogo type={type} label={name} size={16} />
                 <span className="font-semibold text-[11px] text-text-primary">{name}</span>
                 {hidden && (
                     <span
@@ -85,8 +86,7 @@ export default function MachinesPage() {
     const connectionTransports = daemonCtx.connectionTransports || {}
     const connectionRetryStatuses = daemonCtx.connectionRetryStatuses || {}
     const retryConnection = daemonCtx.retryConnection
-    const { icons: providerIcons, labels: providerLabels } = buildProviderMaps(daemons)
-    const getIcon = (type: string) => providerIcons[type] || ''
+    const { labels: providerLabels } = buildProviderMaps(daemons)
     const machines = groupByMachine(daemons, providerLabels)
     const machineIdsKey = Array.from(new Set(machines.map((machine) => machine.machineId).filter(Boolean))).join('|')
     const onlineCount = machines.filter(m => m.daemonIde.status === 'online').length
@@ -220,7 +220,7 @@ export default function MachinesPage() {
                                     }}
                                     className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-orange-500/[0.04] cursor-pointer transition-colors duration-150 hover:bg-orange-500/10"
                                 >
-                                    <span className="text-sm">{getIcon(agent.type)}</span>
+                                    <ProviderLogo type={agent.type} label={agent.name} size={16} />
                                     <span className="text-xs text-orange-400 font-semibold">{agent.name}</span>
                                     {agent.workspace && <span className="text-[9px] text-text-muted max-w-20 overflow-hidden text-ellipsis whitespace-nowrap">· {agent.workspace}</span>}
                                     <span className="text-[10px] text-text-muted">on {agent.machine}</span>
@@ -384,7 +384,7 @@ export default function MachinesPage() {
                                                     return (
                                                         <div key={ide.id}>
                                                             <AgentRow
-                                                                icon={getIcon(ide.type)}
+                                                                type={ide.type}
                                                                 name={ide.name}
                                                                 status={statusText}
                                                                 statusTone={statusTone}
@@ -401,7 +401,7 @@ export default function MachinesPage() {
                                                                             key={si}
                                                                             className="flex items-center gap-1.5 px-2 py-0.5 text-[10px] text-text-secondary"
                                                                         >
-                                                                            <span className="text-[8px]">{getIcon(stream.providerType) || ''}</span>
+                                                                            <ProviderLogo type={stream.providerType} size={12} />
                                                                             <span className="font-medium">{stream.providerName}</span>
                                                                             <span className={`ml-auto text-[9px] ${
                                                                                 isManagedStatusWorking(stream.status)
@@ -435,7 +435,7 @@ export default function MachinesPage() {
                                                     return (
                                                         <AgentRow
                                                             key={cli.id}
-                                                            icon={getIcon(cli.cliType)}
+                                                            type={cli.cliType}
                                                             name={cli.cliName}
                                                             status={active ? t('machine.card.generating') : normalizeManagedStatus(cli.status)}
                                                             statusTone={statusTone}
@@ -465,7 +465,7 @@ export default function MachinesPage() {
                                                     return (
                                                         <AgentRow
                                                             key={acp.id}
-                                                            icon={getIcon(acp.acpType)}
+                                                            type={acp.acpType}
                                                             name={acp.acpName}
                                                             status={active ? t('machine.card.generating') : normalizeManagedStatus(acp.status)}
                                                             statusTone={statusTone}

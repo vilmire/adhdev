@@ -12,7 +12,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderInfo } from './types'
 import ModalPortal from '../../components/ui/ModalPortal'
-import { IconWrench } from '../../components/Icons'
+import { ProviderLogo } from '../../components/ProviderLogo'
 
 const SCRIPTS = [
     'openPanel', 'sendMessage', 'readChat', 'newSession',
@@ -125,7 +125,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                 {/* Header */}
                 <div className="px-5 py-4 border-b border-border-subtle flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
-                        <span className="text-lg">{provider.icon || <IconWrench size={16} />}</span>
+                        <ProviderLogo type={provider.type} label={provider.displayName} size={20} />
                         <div>
                             <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerFix.titlePrefix', { name: provider.displayName })}</h2>
                             <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerFix.footerHint')}</p>
