@@ -376,6 +376,60 @@ export function isFailureRetryDue(provider: QuotaProvider, now: number = Date.no
 }
 
 /**
+ * Age past which a cached snapshot is refreshed even on an IDLE machine.
+ *
+ * Deliberately equal to the routing gate's own staleness horizon
+ * (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs, 30 min) rather than to the
+ * refresh interval: this constant exists to keep a snapshot INSIDE the window
+ * where the quota gate will still act on it, so the number it protects is the
+ * gate's, not the loop's. Duplicated as a literal rather than imported from
+ * repo-mesh-types to keep this module free of mesh imports (quota/ is consumed
+ * by daemons that never build a mesh); quota-routing-staleness-agreement.test.ts
+ * asserts the two stay equal, so a change to either is caught.
+ */
+export const QUOTA_ROUTABLE_MAX_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * True when an enabled provider's snapshot has aged past the point where
+ * ROUTING will still act on it — the idle-gate exception that keeps the quota
+ * gate armed.
+ *
+ * ★WHY THIS EXISTS (the failure it fixes, observed on the owner's mesh
+ * 2026-08-15). Three rules composed into a self-reinforcing loop that silently
+ * disabled quota routing:
+ *
+ *   1. the periodic tick is skipped while the machine is idle
+ *      (hasRecentCliActivity) — quota "cannot have moved";
+ *   2. the event-driven refresh (setupQuotaEventRefresh) re-reads ONLY the
+ *      provider that just finished a turn; and
+ *   3. the routing gate fails OPEN on any snapshot older than staleAfterMs.
+ *
+ * So the provider currently doing the work stayed fresh, while every ALTERNATIVE
+ * provider — precisely the ones the gate is supposed to divert work TO — aged
+ * out and became ungateable. With `weeklyMinRemainingPercent: 80` set to steer
+ * work off claude-cli (68% left) onto codex-cli (91% left), BOTH readings were
+ * ~3h old, so both failed open, the threshold applied to nobody, and selection
+ * fell back to slot order — which put claude-cli first. The setting the owner
+ * configured did nothing, and the busier claude-cli got, the more reliably it
+ * kept winning: the loop fed itself.
+ *
+ * Rule 1's premise ("idle ⇒ the number cannot have moved") is sound about the
+ * VALUE but not about its ROUTABILITY: an unchanged number still ages out of
+ * the gate's trust window, and routing then behaves as if it had never been
+ * measured. This predicate closes exactly that gap and nothing more — one fetch
+ * per provider per staleness horizon on an otherwise idle machine, which is
+ * strictly cheaper than the pre-idle-gate cadence and only ever fires for
+ * providers the machine is actually enabled to run.
+ */
+export function isSnapshotStaleForRouting(provider: QuotaProvider, now: number = Date.now()): boolean {
+    const entry = cache.get(provider);
+    if (!entry) return false; // no entry at all is the existing backfill case
+    const updatedAt = Number(entry.updatedAt);
+    if (!Number.isFinite(updatedAt) || updatedAt <= 0) return true;
+    return now - updatedAt >= QUOTA_ROUTABLE_MAX_AGE_MS;
+}
+
+/**
  * Reconcile the retry schedule with the entry this refresh just recorded.
  * Called once per refreshed provider from refreshQuotaCacheOnce so every
  * refresh path — boot, periodic tick, event-driven, retry itself — funnels
@@ -527,9 +581,18 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
         // A PERSISTENT failure (no retryAtMs) or an exhausted retry budget
         // still counts as a snapshot, so a failing fetcher cannot re-trigger
         // this every tick.
+        //   - a snapshot that has aged past the ROUTING staleness horizon
+        //     (isSnapshotStaleForRouting). An idle machine's number cannot have
+        //     moved, but it still ages out of the quota gate's trust window,
+        //     and the gate then fails open as if the provider had never been
+        //     measured. Since the event-driven refresh only re-reads the
+        //     provider that just ran, the ALTERNATIVE providers the gate exists
+        //     to divert work to were the ones going stale — see
+        //     isSnapshotStaleForRouting for the full failure loop.
         const needsBackfill = options.isEnabled
             ? fetchers.some(({ provider }) =>
-                options.isEnabled!(provider) && (!cache.has(provider) || isFailureRetryDue(provider)))
+                options.isEnabled!(provider)
+                && (!cache.has(provider) || isFailureRetryDue(provider) || isSnapshotStaleForRouting(provider)))
             : false;
         if (!active && !needsBackfill) return;
         running = true;

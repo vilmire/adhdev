@@ -30,11 +30,16 @@ const {
 } = await import('../../src/quota/refresh.js')
 const { saveQuotaCache } = await import('../../src/quota/persist.js')
 
+// `updatedAt` must be NOW, not a fixed epoch constant: the idle-gate staleness
+// exception (isSnapshotStaleForRouting) re-probes any snapshot older than the
+// routing horizon, and a hardcoded 1_700_000 reads as ~56 years old, which
+// would make every "an idle machine is left alone" case below fire the
+// staleness backfill instead of testing what it means to test.
 const okQuota = (provider: string) => ({
     provider,
     session: { usedPercent: 10, windowMinutes: 300, resetsAt: null },
     weekly: { usedPercent: 5, windowMinutes: 10080, resetsAt: null },
-    updatedAt: 1_700_000,
+    updatedAt: Date.now(),
     error: null,
     status: 'ok',
     metadata: {},

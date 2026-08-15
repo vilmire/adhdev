@@ -34,11 +34,14 @@ const {
 } = await import('../../src/quota/types.js')
 const { saveQuotaCache } = await import('../../src/quota/persist.js')
 
+// `updatedAt` must be NOW, not a fixed epoch constant — see the same note in
+// quota-enabled-gate.test.ts: a stale-looking snapshot would trip the
+// idle-gate staleness backfill and mask what these cases assert.
 const okQuota = (provider: string) => ({
     provider,
     session: { usedPercent: 10, windowMinutes: 300, resetsAt: null },
     weekly: { usedPercent: 5, windowMinutes: 10080, resetsAt: null },
-    updatedAt: 1_700_000,
+    updatedAt: Date.now(),
     error: null,
     status: 'ok',
     metadata: {},
