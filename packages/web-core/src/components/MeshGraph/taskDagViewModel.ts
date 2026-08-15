@@ -82,6 +82,70 @@ function edgeState(depStatus: string | undefined): TaskDagEdgeState {
     return 'waiting'
 }
 
+/** Default cap for terminal (completed/failed/cancelled) rows in the DAG. */
+export const TASK_DAG_RECENT_TERMINAL_LIMIT = 30
+
+/** How many additional terminal rows each "load more" click reveals. */
+export const TASK_DAG_LOAD_MORE_STEP = 50
+
+export interface TaskDagScopeResult {
+    tasks: RepoMeshQueueTask[]
+    /** Terminal rows excluded by the current limit. */
+    hiddenCount: number
+}
+
+/**
+ * Scope the queue history BEFORE the DAG projection. A mesh accumulates
+ * hundreds of terminal rows; feeding them all to ELK made the Tasks tab take
+ * tens of seconds to lay out and rendered an unreadable wall. The scope keeps:
+ *
+ *   - every ACTIVE task (pending/assigned) — the pipeline being watched,
+ *   - the full dependency ANCESTRY of those tasks (any status/age), so no
+ *     rendered edge dangles into a hidden node,
+ *   - plus the most recent `terminalLimit` terminal rows by updatedAt, so
+ *     "what just happened" stays visible. The caller raises the limit
+ *     incrementally ("load more") instead of ever rendering everything at once.
+ */
+export function scopeTaskDagTasks(
+    tasks: RepoMeshQueueTask[] | null | undefined,
+    terminalLimit: number = TASK_DAG_RECENT_TERMINAL_LIMIT,
+): TaskDagScopeResult {
+    const list = Array.isArray(tasks) ? tasks.filter(task => task && typeof task.id === 'string' && task.id) : []
+
+    const byId = new Map(list.map(task => [task.id, task]))
+    const included = new Set<string>()
+
+    // Active tasks + their transitive dependency ancestry.
+    const stack: string[] = []
+    for (const task of list) {
+        if (task.status === 'pending' || task.status === 'assigned') {
+            included.add(task.id)
+            stack.push(task.id)
+        }
+    }
+    while (stack.length > 0) {
+        const current = byId.get(stack.pop()!)
+        if (!current || !Array.isArray(current.dependsOn)) continue
+        for (const dep of current.dependsOn) {
+            if (typeof dep === 'string' && byId.has(dep) && !included.has(dep)) {
+                included.add(dep)
+                stack.push(dep)
+            }
+        }
+    }
+
+    // Most recent terminal rows (newest first by updatedAt, createdAt fallback).
+    const terminals = list
+        .filter(task => !included.has(task.id) && task.status !== 'pending' && task.status !== 'assigned')
+        .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))
+    for (const task of terminals.slice(0, Math.max(0, terminalLimit))) {
+        included.add(task.id)
+    }
+
+    const scoped = list.filter(task => included.has(task.id))
+    return { tasks: scoped, hiddenCount: list.length - scoped.length }
+}
+
 export function buildTaskDag(tasks: RepoMeshQueueTask[] | null | undefined): TaskDagData {
     const list = Array.isArray(tasks) ? tasks.filter(task => task && typeof task.id === 'string' && task.id) : []
     const statusById = new Map<string, string>(list.map(task => [task.id, task.status]))

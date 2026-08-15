@@ -25,7 +25,7 @@ import ELK from 'elkjs/lib/elk.bundled.js'
 import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
-import { buildTaskDag, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
+import { buildTaskDag, scopeTaskDagTasks, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
 import { IconFlag } from '../Icons'
 
 const elk = new ELK()
@@ -206,7 +206,13 @@ export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagView
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
-    const dag = useMemo(() => buildTaskDag(tasks), [tasks])
+    // Scope the history: active tasks + their dependency ancestry always render;
+    // terminal rows are capped and revealed incrementally via "load more". A
+    // long-lived mesh accumulates hundreds of terminal rows, and laying ALL of
+    // them out took tens of seconds while rendering an unreadable wall.
+    const [terminalLimit, setTerminalLimit] = useState(TASK_DAG_RECENT_TERMINAL_LIMIT)
+    const scoped = useMemo(() => scopeTaskDagTasks(tasks, terminalLimit), [tasks, terminalLimit])
+    const dag = useMemo(() => buildTaskDag(scoped.tasks), [scoped.tasks])
     // Layout identity: statuses drive edge state and badge rows (card height), so
     // re-layout when any of them change — not only when the id set changes.
     const dagFingerprint = useMemo(
@@ -308,7 +314,21 @@ export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagView
             </ReactFlow>
 
             {/* Stats overlay — the "this is a graph of your work" headline row. */}
-            <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap gap-1.5">
+            <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap items-center gap-1.5">
+                {scoped.hiddenCount > 0 && (
+                    <>
+                        {statBadge(t('meshGraph.taskDag.hiddenTasks', { count: scoped.hiddenCount }))}
+                        <button
+                            type="button"
+                            onClick={() => setTerminalLimit(limit => limit + TASK_DAG_LOAD_MORE_STEP)}
+                            className={`pointer-events-auto rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${meshTheme.isDark
+                                ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
+                                : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
+                        >
+                            {t('meshGraph.taskDag.loadMore', { count: Math.min(TASK_DAG_LOAD_MORE_STEP, scoped.hiddenCount) })}
+                        </button>
+                    </>
+                )}
                 {statBadge(t('meshGraph.taskDag.statsTasks', { count: dag.stats.total }))}
                 {dag.stats.edges > 0 && statBadge(t('meshGraph.taskDag.statsEdges', { count: dag.stats.edges }), 'info')}
                 {dag.stats.missions > 0 && statBadge(t('meshGraph.taskDag.statsMissions', { count: dag.stats.missions }), 'info')}

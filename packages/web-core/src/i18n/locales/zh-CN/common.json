@@ -759,7 +759,11 @@
                 "satisfied": "完成",
                 "waiting": "等待",
                 "failed": "失败"
-            }
+            },
+            "hiddenTasks_one": "已隐藏 {{count}} 个较早任务",
+            "hiddenTasks_other": "已隐藏 {{count}} 个较早任务",
+            "loadMore_one": "再加载 {{count}} 个",
+            "loadMore_other": "再加载 {{count}} 个"
         },
         "obs": {
             "tabOverview": "概览",

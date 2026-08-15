@@ -759,7 +759,11 @@
                 "satisfied": "done",
                 "waiting": "waiting",
                 "failed": "failed"
-            }
+            },
+            "hiddenTasks_one": "{{count}} older task hidden",
+            "hiddenTasks_other": "{{count}} older tasks hidden",
+            "loadMore_one": "Load {{count}} more",
+            "loadMore_other": "Load {{count}} more"
         },
         "obs": {
             "tabOverview": "Overview",

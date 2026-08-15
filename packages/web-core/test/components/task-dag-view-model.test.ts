@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { buildTaskDag } from '../../src/components/MeshGraph/taskDagViewModel'
+import { buildTaskDag, scopeTaskDagTasks, TASK_DAG_RECENT_TERMINAL_LIMIT } from '../../src/components/MeshGraph/taskDagViewModel'
 
 // Task-DAG projection: queue rows → dependency graph. Edge state must mirror the
 // scheduler's dependency predicate (satisfied iff the dep task is 'completed'),
@@ -82,5 +82,54 @@ describe('buildTaskDag', () => {
     it('returns an empty projection for null/empty input', () => {
         expect(buildTaskDag(null).nodes).toHaveLength(0)
         expect(buildTaskDag([]).stats.total).toBe(0)
+    })
+})
+
+describe('scopeTaskDagTasks', () => {
+    it('keeps every active task plus its full dependency ancestry, regardless of age', () => {
+        const tasks = [
+            task({ id: 'ancient-dep', status: 'completed', updatedAt: '2020-01-01T00:00:00.000Z' }),
+            task({ id: 'mid-dep', status: 'completed', dependsOn: ['ancient-dep'], updatedAt: '2020-01-02T00:00:00.000Z' }),
+            task({ id: 'active', status: 'assigned', dependsOn: ['mid-dep'] }),
+            // 40 unrelated old terminals — more than the recent cap.
+            ...Array.from({ length: 40 }, (_, i) => task({
+                id: `old-${i}`, status: 'completed',
+                updatedAt: `2021-01-${String((i % 27) + 1).padStart(2, '0')}T00:00:00.000Z`,
+            })),
+        ]
+        const scoped = scopeTaskDagTasks(tasks)
+        const ids = new Set(scoped.tasks.map(t => t.id))
+        // Ancestry survives even though those rows are older than every capped terminal.
+        expect(ids.has('active')).toBe(true)
+        expect(ids.has('mid-dep')).toBe(true)
+        expect(ids.has('ancient-dep')).toBe(true)
+        // Unrelated terminals are capped at the recent limit.
+        const oldKept = scoped.tasks.filter(t => t.id.startsWith('old-')).length
+        expect(oldKept).toBe(TASK_DAG_RECENT_TERMINAL_LIMIT)
+        expect(scoped.hiddenCount).toBe(40 - TASK_DAG_RECENT_TERMINAL_LIMIT)
+    })
+
+    it('picks the NEWEST terminals by updatedAt within the limit', () => {
+        const tasks = Array.from({ length: 5 }, (_, i) => task({
+            id: `t-${i}`, status: 'completed', updatedAt: `2026-01-0${i + 1}T00:00:00.000Z`,
+        }))
+        const scoped = scopeTaskDagTasks(tasks, 2)
+        expect(scoped.tasks.map(t => t.id).sort()).toEqual(['t-3', 't-4'])
+        expect(scoped.hiddenCount).toBe(3)
+    })
+
+    it('raising the limit ("load more") reveals more terminals until none are hidden', () => {
+        const tasks = Array.from({ length: 100 }, (_, i) => task({
+            id: `t-${i}`, status: 'completed', updatedAt: `2026-01-01T00:00:${String(i % 60).padStart(2, '0')}.000Z`,
+        }))
+        const first = scopeTaskDagTasks(tasks, TASK_DAG_RECENT_TERMINAL_LIMIT)
+        expect(first.tasks).toHaveLength(TASK_DAG_RECENT_TERMINAL_LIMIT)
+        expect(first.hiddenCount).toBe(100 - TASK_DAG_RECENT_TERMINAL_LIMIT)
+        const more = scopeTaskDagTasks(tasks, TASK_DAG_RECENT_TERMINAL_LIMIT + 50)
+        expect(more.tasks).toHaveLength(80)
+        expect(more.hiddenCount).toBe(20)
+        const all = scopeTaskDagTasks(tasks, 999)
+        expect(all.tasks).toHaveLength(100)
+        expect(all.hiddenCount).toBe(0)
     })
 })

@@ -759,7 +759,11 @@
                 "satisfied": "完了",
                 "waiting": "待機",
                 "failed": "失敗"
-            }
+            },
+            "hiddenTasks_one": "過去のタスク {{count}}件を非表示",
+            "hiddenTasks_other": "過去のタスク {{count}}件を非表示",
+            "loadMore_one": "さらに{{count}}件読み込む",
+            "loadMore_other": "さらに{{count}}件読み込む"
         },
         "obs": {
             "tabOverview": "概要",

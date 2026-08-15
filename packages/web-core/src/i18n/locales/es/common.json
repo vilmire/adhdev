@@ -759,7 +759,11 @@
                 "satisfied": "completada",
                 "waiting": "en espera",
                 "failed": "fallida"
-            }
+            },
+            "hiddenTasks_one": "{{count}} tarea anterior oculta",
+            "hiddenTasks_other": "{{count}} tareas anteriores ocultas",
+            "loadMore_one": "Cargar {{count}} más",
+            "loadMore_other": "Cargar {{count}} más"
         },
         "obs": {
             "tabOverview": "Resumen",

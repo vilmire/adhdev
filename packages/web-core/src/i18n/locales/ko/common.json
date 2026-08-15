@@ -759,7 +759,11 @@
                 "satisfied": "완료",
                 "waiting": "대기",
                 "failed": "실패"
-            }
+            },
+            "hiddenTasks_one": "이전 태스크 {{count}}개 숨김",
+            "hiddenTasks_other": "이전 태스크 {{count}}개 숨김",
+            "loadMore_one": "{{count}}개 더 불러오기",
+            "loadMore_other": "{{count}}개 더 불러오기"
         },
         "obs": {
             "tabOverview": "개요",
