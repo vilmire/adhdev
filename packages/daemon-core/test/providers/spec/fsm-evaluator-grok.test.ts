@@ -20,6 +20,12 @@ import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { resolveSections, sectionText, extractButtonsFromRule } from '../../../src/providers/spec/evaluator.js';
 import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
+import {
+    pickApprovalButton,
+    hasNegativeApprovalOption,
+    hasReliableApprovalAffirmative,
+    isNegativeApprovalLabel,
+} from '../../../src/providers/approval-utils.js';
 
 function resolveSpecPath(): string {
     const here = path.dirname(fileURLToPath(import.meta.url));
@@ -230,5 +236,64 @@ describe('grok-cli FSM — modal button extraction', () => {
         const trust = spec.states.find((s) => s.id === 'trust')!;
         expect(trust.modal_kind).toBe('confirm');
         expect((trust as { extract?: { buttons?: unknown } }).extract?.buttons).toBeUndefined();
+    });
+});
+
+// ── Auto-approve safety ─────────────────────────────────────────────────────
+// Grok lists its choices BROADEST-FIRST:
+//   1 (o) Yes, and don't ask again for anything (always-approve mode)
+//   2 (o) Yes, proceed
+//   3 (o) No, reject
+// Index 1 is a persistent grant that turns the CLI into yolo mode for the rest
+// of the session. The daemon must pick index 2. This is the same class of bug
+// as the cursor "Add … to allowlist" defect documented in approval-utils.ts:
+// a hint that substring-hits a scope-broadening option beats the correct
+// least-permissive one. Verified live: two consecutive commands each raised a
+// modal and each was auto-approved, and grok's own events.jsonl recorded
+// yolo_mode=false on both turns — which is only possible if "Yes, proceed" was
+// the button pressed.
+describe('grok-cli approval — auto-approve must pick the least-permissive Yes', () => {
+    const grokButtons = [
+        "Yes, and don't ask again for anything (always-approve mode)",
+        'Yes, proceed',
+        'No, reject (type to add feedback)',
+    ];
+
+    function manifest(): { approvalPositiveHints?: string[] } {
+        const here = path.dirname(fileURLToPath(import.meta.url));
+        const repoRoot = path.resolve(here, '../../../../../..');
+        const p = path.join(repoRoot, 'adhdev-providers/cli/grok-cli/provider.v1.json');
+        return JSON.parse(fs.readFileSync(p, 'utf8'));
+    }
+
+    it('selects "Yes, proceed", never the always-approve grant', () => {
+        const picked = pickApprovalButton(grokButtons, manifest() as never);
+        expect(picked.index).toBe(1);
+        expect(picked.label).toBe('Yes, proceed');
+    });
+
+    it('regresses to the always-approve grant without the ordered hint', () => {
+        // Proves the manifest's hint order is what protects us: with the generic
+        // default hints, "yes" prefix-matches the grant at index 0 first.
+        const withoutHints = pickApprovalButton(grokButtons, {} as never);
+        expect(withoutHints.index).toBe(0);
+        expect(pickApprovalButton(grokButtons, manifest() as never).index).not.toBe(withoutHints.index);
+    });
+
+    it('recognises a reliable consent anchor so the gate can fire at all', () => {
+        // approvableModalSignature() bails unless one of these holds.
+        expect(hasNegativeApprovalOption(grokButtons)).toBe(true);
+        expect(hasReliableApprovalAffirmative(grokButtons)).toBe(true);
+    });
+
+    it('never treats the always-approve grant as a negative/decline option', () => {
+        expect(isNegativeApprovalLabel(grokButtons[0])).toBe(false);
+        expect(isNegativeApprovalLabel(grokButtons[1])).toBe(false);
+        expect(isNegativeApprovalLabel(grokButtons[2])).toBe(true);
+    });
+
+    it('picks the affirmative on the workspace-trust rows too', () => {
+        const picked = pickApprovalButton(['Yes, proceed', 'No, quit'], manifest() as never);
+        expect(picked.label).toBe('Yes, proceed');
     });
 });
