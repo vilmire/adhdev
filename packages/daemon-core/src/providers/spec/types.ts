@@ -78,7 +78,7 @@ export interface DelegateTrigger {
 }
 
 export interface NativeHistoryConfig {
-    reader?: 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli';
+    reader?: 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli' | 'grok-cli';
     source?: NativeHistorySource;
     override_path?: string;
 }
