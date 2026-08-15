@@ -72,11 +72,25 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
     // off by default and the user opts in.
     useEffect(() => {
         let cancelled = false
-        const REGISTRY = window.location.hostname === 'localhost'
+        // The '/registry' proxy exists ONLY under the vite dev server. The
+        // daemon-served dashboard (localhost:3847) answers unknown paths with the
+        // SPA fallback — 200 text/html — so the old hostname-only check made
+        // r.json() explode there ("registry load failed" with WebKit's pattern
+        // message on Safari). The registry API sends Access-Control-Allow-Origin:*,
+        // so every non-vite origin can (and must) call it directly.
+        const REGISTRY = import.meta.env.DEV && window.location.hostname === 'localhost'
             ? '/registry'
             : 'https://api.adhf.dev/api/v1/registry'
         fetch(`${REGISTRY}/providers?sort=popular&limit=100`)
-            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+            .then(async r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`)
+                const text = await r.text()
+                try {
+                    return JSON.parse(text)
+                } catch {
+                    throw new Error(`unexpected non-JSON response (${r.headers.get('content-type') ?? 'unknown content type'})`)
+                }
+            })
             .then((data: { providers: RegistryProvider[] }) => {
                 if (cancelled) return
                 setProviders(data.providers ?? [])
