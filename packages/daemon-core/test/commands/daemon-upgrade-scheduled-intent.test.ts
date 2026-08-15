@@ -77,6 +77,7 @@ vi.mock('../../src/build-info.js', () => ({
 }))
 
 import { DaemonCommandRouter } from '../../src/commands/router'
+import { TRACK } from '../../src/track-identity'
 
 function createRouter(statusVersion: string) {
   return new DaemonCommandRouter({
@@ -173,6 +174,7 @@ describe('daemon_upgrade / daemon_restart — scheduled intent vs completed resu
 
     expect(result.success).toBe(true)
     expect(result.upgradeFailure).toEqual(notice)
+    expect(result.daemonBuild).toEqual({ sha: 'test', track: TRACK })
   })
 
   it('get_status_metadata reports upgradeFailure: null when no upgrade failed', async () => {

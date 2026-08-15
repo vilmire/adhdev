@@ -7,8 +7,10 @@ import {
     appendLedgerEntry,
     buildCoordinatorP2pRelayFailure,
     buildRemoveNodeArgs,
+    collectLiveStatusProbe,
     collectRelatedRepoStatuses,
     commandForNode,
+    daemonIdsEquivalent,
     extractCloneNodePayload,
     extractGitDiff,
     extractGitStatus,
@@ -161,6 +163,18 @@ export async function meshRestartDaemon(
     await refreshMeshFromDaemon(ctx);
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
+    // Observe the daemon mesh_status would read for this node BEFORE issuing
+    // the lifecycle command. The restart responder separately reports the
+    // daemon that actually accepted the operation; comparing the two exposes
+    // a routing/track split without blocking the operator's recovery action.
+    // A legacy/unreachable responder remains explicitly unknown.
+    const observedProbe = await collectLiveStatusProbe(ctx, node);
+    const meshAttachedTrack = observedProbe.daemonBuild?.track ?? 'unknown';
+    const configuredDaemonId = typeof node.daemonId === 'string' && node.daemonId.trim()
+        ? node.daemonId.trim()
+        : 'unknown';
+    const meshAttachedDaemonId = observedProbe.daemonId ?? 'unknown';
+
     try {
         // inlineMesh lets the owning daemon resolve this node for the
         // remote-forward guard; channel is forwarded only when explicitly set.
@@ -185,14 +199,65 @@ export async function meshRestartDaemon(
             // a downgrade" for every caller that does not opt in.
             ...(args.allow_downgrade === true ? { allowDowngrade: true } : {}),
         });
-        return JSON.stringify(unwrapCommandPayload(result), null, 2);
+        const payload = unwrapCommandPayload(result) as Record<string, any>;
+        const rawTarget = payload?.restartTargetDaemon && typeof payload.restartTargetDaemon === 'object'
+            ? payload.restartTargetDaemon as Record<string, unknown>
+            : {};
+        const targetTrack = rawTarget.track === 'stable' || rawTarget.track === 'preview'
+            ? rawTarget.track
+            : 'unknown';
+        const targetDaemonId = typeof rawTarget.daemonId === 'string' && rawTarget.daemonId.trim()
+            ? rawTarget.daemonId.trim()
+            : 'unknown';
+        const targetNpmTag = typeof rawTarget.npmTag === 'string' && rawTarget.npmTag.trim()
+            ? rawTarget.npmTag.trim()
+            : (typeof payload?.npmTag === 'string' && payload.npmTag.trim() ? payload.npmTag.trim() : 'unknown');
+        const trackMismatch = meshAttachedTrack === 'unknown' || targetTrack === 'unknown'
+            ? null
+            : meshAttachedTrack !== targetTrack;
+        const daemonMismatch = meshAttachedDaemonId === 'unknown' || targetDaemonId === 'unknown'
+            ? null
+            : !daemonIdsEquivalent(meshAttachedDaemonId, targetDaemonId);
+        const routingMismatch = trackMismatch === true || daemonMismatch === true;
+        return JSON.stringify({
+            ...payload,
+            meshAttachedDaemon: {
+                daemonId: meshAttachedDaemonId,
+                configuredDaemonId,
+                track: meshAttachedTrack,
+            },
+            restartTargetDaemon: {
+                daemonId: targetDaemonId,
+                track: targetTrack,
+                npmTag: targetNpmTag,
+            },
+            daemonMismatch,
+            trackMismatch,
+            ...(routingMismatch ? {
+                trackWarning: `DAEMON/TRACK MISMATCH: mesh status was answered by ${meshAttachedDaemonId} on the '${meshAttachedTrack}' track, but restart/upgrade was accepted by ${targetDaemonId} on the '${targetTrack}' track. The operation was not blocked; verify the intended daemon before interpreting version changes.`,
+            } : {}),
+            ...(!routingMismatch && (trackMismatch === null || daemonMismatch === null) ? {
+                trackWarning: 'Daemon/track match is unknown because the mesh-attached daemon or restart target did not report enough identity. No track was inferred from the version string.',
+            } : {}),
+        }, null, 2);
     } catch (e: any) {
         const failure = buildCoordinatorP2pRelayFailure(e, {
             command: 'restart_daemon_node',
             targetDaemonId: node.daemonId,
             nodeId: args.node_id,
         });
-        return JSON.stringify(failure, null, 2);
+        return JSON.stringify({
+            ...failure,
+            meshAttachedDaemon: {
+                daemonId: meshAttachedDaemonId,
+                configuredDaemonId,
+                track: meshAttachedTrack,
+            },
+            restartTargetDaemon: { daemonId: 'unknown', track: 'unknown', npmTag: 'unknown' },
+            daemonMismatch: null,
+            trackMismatch: null,
+            trackWarning: 'Restart/upgrade target track is unknown because the command was not accepted. No track was inferred from the version string.',
+        }, null, 2);
     }
 }
 
