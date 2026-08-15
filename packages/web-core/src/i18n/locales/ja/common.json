@@ -2958,8 +2958,8 @@
             "axes": {
                 "os": [
                     "Mac",
-                    "Windows PC",
-                    "Linux マシン"
+                    "Windows",
+                    "Linux"
                 ],
                 "place": [
                     "地下鉄",
@@ -3076,7 +3076,7 @@
             "sectionSubtitle": "設計からしてベンダーニュートラル。Mac で Claude Code、Windows の GPU マシンで Codex、レビューパスに Cursor CLI を — 同じメッシュ内、同じポリシーの下で実行します。プラットフォームを変えずにベンダーを切り替えられます。",
             "cliHighlight": "CLI エージェント",
             "cliTitle": "あらゆるターミナルエージェントを Web から操作",
-            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Hermes、Kimi、OpenCode — 適切な再開と再接続を備えた PTY アダプター経由であなたのマシンに接続し、ブラウザから操作します。プロンプトを送信し、視覚的なコンテキストを即座に提供できます（貼り付け、ドラッグ＆ドロップ、または複数画像の一括アップロード、最大 5 枚 / 各 10MB まで）。Aider、Goose など他の ACP エージェントは stdio 経由で接続します。",
+            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Grok、Hermes、Kimi、OpenCode — 適切な再開と再接続を備えた PTY アダプター経由であなたのマシンに接続し、ブラウザから操作します。プロンプトを送信し、視覚的なコンテキストを即座に提供できます（貼り付け、ドラッグ＆ドロップ、または複数画像の一括アップロード、最大 5 枚 / 各 10MB まで）。Aider、Goose など他の ACP エージェントは stdio 経由で接続します。",
             "uiHighlight": "1 つの UI",
             "uiTitle": "同じダッシュボード、あらゆるデバイス",
             "uiDesc": "adhf.dev でクラウドホスト — デスクにいても外出中でも、ノート PC やスマホからあらゆるエージェントを操作できます。",

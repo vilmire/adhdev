@@ -2958,8 +2958,8 @@
             "axes": {
                 "os": [
                     "Mac",
-                    "Windows PC",
-                    "Linux 머신"
+                    "Windows",
+                    "Linux"
                 ],
                 "place": [
                     "지하철",
@@ -3077,7 +3077,7 @@
             "sectionSubtitle": "설계부터 벤더 중립. Mac에서 Claude Code, Windows GPU 박스에서 Codex, 리뷰 패스에 Cursor CLI — 동일한 메시에서, 동일한 정책 아래. 플랫폼을 바꾸지 않고 벤더를 바꿉니다.",
             "cliHighlight": "CLI 에이전트",
             "cliTitle": "어떤 터미널 에이전트든 웹에서 구동",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, OpenCode — PTY 어댑터를 통해 머신에 연결되어 재개 및 재연결이 가능하며, 브라우저에서 구동됩니다. 즉시 프롬프트를 보내고 시각적 컨텍스트를 제공하세요(붙여넣기, 드래그 앤 드롭, 또는 한 번에 최대 5개 이미지/10MB 업로드). Aider, Goose 등 ACP 에이전트는 stdio로 연결됩니다.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Hermes, Kimi, OpenCode — PTY 어댑터를 통해 머신에 연결되어 재개 및 재연결이 가능하며, 브라우저에서 구동됩니다. 즉시 프롬프트를 보내고 시각적 컨텍스트를 제공하세요(붙여넣기, 드래그 앤 드롭, 또는 한 번에 최대 5개 이미지/10MB 업로드). Aider, Goose 등 ACP 에이전트는 stdio로 연결됩니다.",
             "uiHighlight": "하나의 UI",
             "uiTitle": "같은 대시보드, 어떤 기기에서든",
             "uiDesc": "adhf.dev에 클라우드로 호스팅 — 책상에 있든 없든 노트북이나 폰에서 모든 에이전트를 구동합니다.",

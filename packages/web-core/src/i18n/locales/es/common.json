@@ -2963,8 +2963,8 @@
             "axes": {
                 "os": [
                     "Mac",
-                    "PC con Windows",
-                    "máquina Linux"
+                    "Windows",
+                    "Linux"
                 ],
                 "place": [
                     "el metro",
@@ -3081,7 +3081,7 @@
             "sectionSubtitle": "Neutral respecto al proveedor por diseño. Ejecuta Claude Code en el Mac, Codex en la máquina GPU con Windows, Cursor CLI para las pasadas de revisión, en el mismo mesh y bajo las mismas políticas. Cambia de proveedor sin cambiar de plataforma.",
             "cliHighlight": "Agentes CLI",
             "cliTitle": "Controla cualquier agente de terminal desde la web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi y OpenCode: conectados en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez, hasta 5 imágenes / 10MB cada una). Aider, Goose y otros agentes ACP se conectan por stdio.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Hermes, Kimi y OpenCode: conectados en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez, hasta 5 imágenes / 10MB cada una). Aider, Goose y otros agentes ACP se conectan por stdio.",
             "uiHighlight": "Una sola UI",
             "uiTitle": "El mismo panel, cualquier dispositivo",
             "uiDesc": "Alojado en la nube en adhf.dev: controla cada agente desde una laptop o un teléfono, ya sea en tu escritorio o lejos de él.",

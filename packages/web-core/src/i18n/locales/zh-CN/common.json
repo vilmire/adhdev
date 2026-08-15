@@ -2958,8 +2958,8 @@
             "axes": {
                 "os": [
                     "Mac",
-                    "Windows 电脑",
-                    "Linux 机器"
+                    "Windows",
+                    "Linux"
                 ],
                 "place": [
                     "地铁",
@@ -3076,7 +3076,7 @@
             "sectionSubtitle": "设计上厂商中立。在 Mac 上运行 Claude Code，在 Windows GPU 机器上运行 Codex，用 Cursor CLI 做审阅 —— 都在同一个网格中、同一套策略之下。切换厂商无需切换平台。",
             "cliHighlight": "CLI 智能体",
             "cliTitle": "从 Web 驱动任何终端智能体",
-            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Hermes、Kimi 和 OpenCode —— 通过 PTY 适配器在你的机器上接入，具备完善的恢复与重连，由你的浏览器驱动。即时发送提示并提供视觉上下文（粘贴、拖放，或一次上传多张图片，最多 5 张 / 每张 10MB）。Aider、Goose 及其他 ACP 智能体通过 stdio 连接。",
+            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Grok、Hermes、Kimi 和 OpenCode —— 通过 PTY 适配器在你的机器上接入，具备完善的恢复与重连，由你的浏览器驱动。即时发送提示并提供视觉上下文（粘贴、拖放，或一次上传多张图片，最多 5 张 / 每张 10MB）。Aider、Goose 及其他 ACP 智能体通过 stdio 连接。",
             "uiHighlight": "一个 UI",
             "uiTitle": "同一个仪表盘，任意设备",
             "uiDesc": "在 adhf.dev 云端托管 —— 无论你在办公桌前还是外出，都可从笔记本或手机驱动每个智能体。",

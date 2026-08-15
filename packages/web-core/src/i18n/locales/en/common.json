@@ -2958,8 +2958,8 @@
             "axes": {
                 "os": [
                     "Mac",
-                    "Windows PC",
-                    "Linux machine"
+                    "Windows",
+                    "Linux"
                 ],
                 "place": [
                     "the subway",
@@ -3077,7 +3077,7 @@
             "sectionSubtitle": "Vendor-neutral by design. Run Claude Code on the Mac, Codex on the Windows GPU box, Cursor CLI for review passes — in the same mesh, under the same policies. Switch vendors without switching platforms.",
             "cliHighlight": "CLI agents",
             "cliTitle": "Drive any terminal agent from the web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each). Aider, Goose, and other ACP agents connect over stdio.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Hermes, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each). Aider, Goose, and other ACP agents connect over stdio.",
             "uiHighlight": "One UI",
             "uiTitle": "Same dashboard, any device",
             "uiDesc": "Cloud-hosted at adhf.dev — drive every agent from a laptop or phone, whether you're at your desk or away from it.",
