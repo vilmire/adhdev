@@ -185,6 +185,80 @@ describe('CODEX-LONG-OUTPUT-BUSY-SIGNAL — before/after replay of a long-output
         expect(ev.fired?.to).toBe('busy');
     });
 
+    // ── The mesh-delivered-task shape (the ACTUAL reported symptom) ──────────
+    //
+    // The owner's report was "infinite generating, result never reached the
+    // coordinator", and it surfaced when MESH delivered a task rather than in a
+    // hand-driven session. That is the opposite direction from a premature idle,
+    // and it is the direction the snapshot's leaves actually show:
+    //
+    //   not regex status_tail~/…/ = false      <-- the cue MATCHED, so busy was VETOED
+    //   stable cursor_above=4 0ms / 1500ms     <-- clock reset by the repaint
+    //   elapsed 855023ms / 30000ms = true      <-- fired only once the text scrolled away
+    //
+    // A `not` leaf reading FALSE means the spinner cue matched. Both busy→idle arms
+    // carry that same veto, so while the matching text was on screen NEITHER arm could
+    // fire — busy was pinned. The 855s is not "waiting for a signal"; it is how long the
+    // offending text stayed in the window.
+    //
+    // What matched: a delegated worker's report is full of lines like
+    // `Working (3 packages) rebuilt cleanly` — a digit directly after the paren, which
+    // the old cue accepted as an elapsed-time digit. Mesh tasks make this near-certain
+    // (workers emit structured reports); a hand-driven session rarely produces that
+    // text, which is exactly why it reproduced only under mesh.
+    //
+    // Fix: the paren must contain an actual DURATION (12s / 2m 14s / 1h 3m / 45ms) or a
+    // braille animation glyph — never a bare count. Line-anchoring alone is NOT enough
+    // here: worker reports are bulleted/indented lists, so the phrase sits at line start
+    // where a position-only guard still admits it.
+    it('MESH REGRESSION: a worker report containing "Working (N units)" must not veto idle', () => {
+        const spec = loadSpec(false);
+        const workerReport = [
+            '  Verified the following:',
+            '  - Working (3 packages) rebuilt cleanly',
+            '  - Thinking (2 steps) remained',
+            '  - Working (12 files) verified',
+            '  "root convergence: behind 0, ahead 1, clean"',
+            '› ',
+        ].join('\n');
+        // Turn is OVER: no live spinner. The FSM must be able to leave busy.
+        const ev = evaluateFsm(spec, 'busy', workerReport, undefined, undefined, {
+            now: 60_000, stateEnteredAt: 0,
+            regionLastChangedAt: new Map([[stableRegionKey({ stable_ms: 1500, cursor_above: 4 }), 0]]),
+        });
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('MESH REGRESSION: a LIVE spinner alongside that same report still holds busy', () => {
+        const spec = loadSpec(false);
+        const generating = [
+            'Working (12m 03s • esc to interrupt)',
+            '  - Working (3 packages) rebuilt cleanly',
+            '  "root convergence: behind 0, ahead 1, clean"',
+            '› ',
+        ].join('\n');
+        const ev = evaluateFsm(spec, 'busy', generating, undefined, undefined, {
+            now: 60_000, stateEnteredAt: 0,
+            regionLastChangedAt: new Map([[stableRegionKey({ stable_ms: 1500, cursor_above: 4 }), 0]]),
+        });
+        expect(ev.fired?.to).not.toBe('idle');
+    });
+
+    it('the duration guard separates real spinners from worker-report counts', () => {
+        const spec = loadSpec(false);
+        const re = new RegExp(spec.transitions.find((t: any) => t.label === 'idle→busy').when.matches);
+        // Real spinners: the paren carries an elapsed duration or a braille glyph.
+        for (const s of ['Working (8s • esc to interrupt)', '⠋ Working (2m 14s)', '• Working (12m 03s)',
+            '  Working (3s)', 'Thinking (⠙', '  Working (45ms)', 'Working (1h 3m)']) {
+            expect(re.test(s), s).toBe(true);
+        }
+        // Worker-report prose: the paren carries a COUNT, not a duration.
+        for (const s of ['  - Working (3 packages) rebuilt cleanly', '  Thinking (2 steps) remained',
+            '  Working (12 files) verified', '  - Working (3 tests) passed', '  Working (4 commits) ahead']) {
+            expect(re.test(s), s).toBe(false);
+        }
+    });
+
     it('SPINNER-BODY-SELFMATCH stays closed: prose quoting the cue does not read busy', () => {
         const spec = loadSpec(false);
         const prose = [
