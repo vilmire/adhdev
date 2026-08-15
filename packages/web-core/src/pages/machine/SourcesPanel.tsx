@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import Card from '../../components/Card'
+import { IconSpinner } from '../../components/Icons'
 
 interface Source {
     name: string
@@ -132,7 +133,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                     </div>
                 </div>
                 <div className="flex gap-1.5">
-                    <button onClick={() => void load()} disabled={loading} className="machine-btn text-[10px]">{loading ? '⏳' : '↻'} Refresh</button>
+                    <button onClick={() => void load()} disabled={loading} className="machine-btn text-[10px]">{loading ? <IconSpinner size={11} /> : '↻'} Refresh</button>
                     <button onClick={() => setAddOpen(true)} className="machine-btn text-[10px] bg-sky-500/[0.08] border-sky-500/20 text-sky-300 hover:bg-sky-500/[0.14]">+ Add source</button>
                 </div>
             </div>

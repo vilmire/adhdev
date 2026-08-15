@@ -1,5 +1,6 @@
 import React from 'react'
 import { cn } from '../../lib/utils'
+import { IconWarning, IconCheckCircle, IconInfo } from '../Icons'
 
 type AlertVariant = 'error' | 'warning' | 'success' | 'info'
 
@@ -17,11 +18,11 @@ const VARIANT_STYLES: Record<AlertVariant, string> = {
     info: 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400',
 }
 
-const VARIANT_ICONS: Record<AlertVariant, string> = {
-    error: '⚠️',
-    warning: '🧪',
-    success: '✅',
-    info: '💡',
+const VARIANT_ICONS: Record<AlertVariant, typeof IconInfo> = {
+    error: IconWarning,
+    warning: IconWarning,
+    success: IconCheckCircle,
+    info: IconInfo,
 }
 
 export function AlertBanner({ variant, children, onDismiss, className }: AlertBannerProps) {
@@ -32,7 +33,7 @@ export function AlertBanner({ variant, children, onDismiss, className }: AlertBa
             className
         )}>
             <div className="flex items-center gap-2">
-                <span>{VARIANT_ICONS[variant]}</span>
+                {(() => { const Icon = VARIANT_ICONS[variant]; return <Icon size={14} /> })()}
                 <span>{children}</span>
             </div>
             {onDismiss && (

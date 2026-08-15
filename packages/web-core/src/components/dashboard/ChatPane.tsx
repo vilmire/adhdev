@@ -20,7 +20,7 @@ import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
-import { IconPlug, IconEye, IconFolder } from '../Icons';
+import { IconChat, IconEye, IconFolder, IconPlug, IconSpinner } from '../Icons';
 import {
     getMessageTimestamp,
 } from './message-utils';
@@ -367,7 +367,7 @@ export default function ChatPane({
                     <div className="text-3xl opacity-60"><IconPlug size={28} /></div>
                     <div className="text-[13px] opacity-50">{t('chatPane.agentNotMonitored')}</div>
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                        {isFocusingAgent ? `⌛ ${t('chatPane.switchingPanel')}` : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
+                        {isFocusingAgent ? <span className="inline-flex items-center gap-1.5"><IconSpinner size={12} />{t('chatPane.switchingPanel')}</span> : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
                     <div className="text-[11px] opacity-35 max-w-[280px]">{t('chatPane.clickToSwitchMonitoring')}</div>
                 </div>
@@ -379,7 +379,7 @@ export default function ChatPane({
                     <div className="text-3xl opacity-60"><IconEye size={28} /></div>
                     <div className="text-[13px] opacity-50">{t('chatPane.agentPanelHidden')}</div>
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                        {isFocusingAgent ? `⌛ ${t('chatPane.openingPanel')}` : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
+                        {isFocusingAgent ? <span className="inline-flex items-center gap-1.5"><IconSpinner size={12} />{t('chatPane.openingPanel')}</span> : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
                     <div className="text-[11px] opacity-35 max-w-[280px]">{t('chatPane.openPanelHint')}</div>
                 </div>
@@ -390,14 +390,14 @@ export default function ChatPane({
             if (!hasMoreHistory && historyMessages.length === 0) {
                 return (
                     <div className="text-center mt-16 flex flex-col items-center gap-3">
-                        <div className="text-2xl opacity-40">💬</div>
+                        <div className="opacity-40"><IconChat size={26} /></div>
                         <div className="text-[13px] opacity-40">{t('chatPane.noMessagesYet')}</div>
                     </div>
                 );
             }
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
-                    <div className="text-2xl opacity-40 animate-pulse">💬</div>
+                    <div className="opacity-40 animate-pulse"><IconChat size={26} /></div>
                     <div className="text-[13px] opacity-40">{t('chatPane.loadingChat')}</div>
                 </div>
             );

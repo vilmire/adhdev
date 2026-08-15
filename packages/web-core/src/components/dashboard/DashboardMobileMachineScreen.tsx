@@ -278,7 +278,7 @@ export default function DashboardMobileMachineScreen({
                                         <>
                                             {launcher.workspaceRows.map(workspace => (
                                                 <option key={workspace.id} value={workspace.id}>
-                                                    {workspace.id === launcher.defaultWorkspaceId ? '⭐ ' : ''}
+                                                    {workspace.id === launcher.defaultWorkspaceId ? '★ ' : ''}
                                                     {getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
                                                 </option>
                                             ))}

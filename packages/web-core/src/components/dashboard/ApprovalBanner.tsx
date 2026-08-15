@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import type { ActiveConversation } from './types';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import { IconWarning } from '../Icons';
+import { IconSpinner } from '../Icons'
 
 interface Props {
     activeConv: ActiveConversation;
@@ -82,7 +83,7 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                                         }
                                         : undefined}
                             >
-                                {isThisPending ? '⏳ ...' : cleanBtnText(btnText)}
+                                {isThisPending ? <IconSpinner size={12} /> : cleanBtnText(btnText)}
                             </button>
                         );
                     })}

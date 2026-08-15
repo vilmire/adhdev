@@ -14,7 +14,7 @@ import remarkAlert from 'remark-github-blockquote-alert';
 import remarkBreaks from 'remark-breaks';
 import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures';
 import type { Pluggable, PluggableList } from 'unified';
-import { IconThought, IconClipboard, IconCheck } from '../Icons';
+import { IconThought, IconClipboard, IconCheck, IconSpinner } from '../Icons';
 import { stringifyTextContent } from '../../utils/text';
 import { classifyChatMessageForDisplay } from '../dashboard/chat-activity-visibility';
 import type { ChatMessage } from '../../types';
@@ -342,12 +342,11 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     }
 
     if (kind === 'terminal') {
-        const icon = message.meta?.isRunning ? '⏳' : '✅';
         const label = typeof message.meta?.label === 'string' ? message.meta.label : 'Ran command';
         return (
             <div className="self-start chat-msg-terminal" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <div className="chat-msg-header">
-                    <span>{icon}</span>
+                    <span>{message.meta?.isRunning ? <IconSpinner size={12} /> : <IconCheck size={12} />}</span>
                     <span>{label}</span>
                 </div>
                 {hasStructuredRenderer && structuredParts ? (

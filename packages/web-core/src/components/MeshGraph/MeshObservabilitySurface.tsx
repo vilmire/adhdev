@@ -584,9 +584,9 @@ export default function MeshObservabilitySurface({
                             role="group"
                             aria-label="Graph layout direction"
                         >
-                            <button type="button" onClick={() => setDirectionPref('auto')} className={directionToggleButtonClass(directionPref === 'auto')} title="Auto-detect direction">Auto</button>
-                            <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title="Left to right">LR</button>
-                            <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title="Top to bottom">TB</button>
+                            <button type="button" onClick={() => setDirectionPref('auto')} className={directionToggleButtonClass(directionPref === 'auto')} title={t('meshGraph.obs.directionAutoTitle')}>{t('meshGraph.obs.directionAuto')}</button>
+                            <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title={t('meshGraph.obs.directionLRTitle')}>LR</button>
+                            <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title={t('meshGraph.obs.directionTBTitle')}>TB</button>
                         </div>
                         {/* Health panel button */}
                         <div className="relative">

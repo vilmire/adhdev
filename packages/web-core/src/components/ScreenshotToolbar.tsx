@@ -4,6 +4,7 @@
  * Used by SessionShare and potentially Dashboard detail view.
  */
 import { useTranslation } from 'react-i18next'
+import { IconSearch, IconMaximize, IconMinimize } from './Icons'
 
 export interface ScreenshotToolbarProps {
     zoom: number;
@@ -36,9 +37,9 @@ export default function ScreenshotToolbar({
                 {zoom}%
             </span>
             <button className={btnClass} onClick={onZoomIn} title={t('screenshot.zoomIn')}>➕</button>
-            <button className={btnClass} onClick={onZoomReset} title={t('screenshot.resetZoom')}>🔍</button>
+            <button className={btnClass} onClick={onZoomReset} title={t('screenshot.resetZoom')}><IconSearch size={13} /></button>
             <button className={btnClass} onClick={onToggleFullscreen} title={t('screenshot.toggleFullscreen')}>
-                {isFullscreen ? '✖' : '⛶'}
+                {isFullscreen ? <IconMinimize size={13} /> : <IconMaximize size={13} />}
             </button>
         </div>
     );

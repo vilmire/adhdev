@@ -27,7 +27,7 @@ const LABEL: Record<ProviderTrust, string> = {
     'trusted': 'Official',
     'trusted-with-scripts': 'Official · runs JS',
     'external-safe': 'External · spec-only',
-    'external-untrusted': '⚠ External · untrusted JS',
+    'external-untrusted': 'External · untrusted JS',
 }
 
 const TONE: Record<ProviderTrust, string> = {

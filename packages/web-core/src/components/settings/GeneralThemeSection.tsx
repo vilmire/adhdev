@@ -1,9 +1,10 @@
 import { useTheme, ThemePreference } from '../../hooks/useTheme'
+import { IconMoon, IconSun, IconSystem } from '../Icons'
 
-const THEME_OPTIONS: { id: ThemePreference; label: string; icon: string }[] = [
-    { id: 'dark', label: 'Dark', icon: '🌙' },
-    { id: 'light', label: 'Light', icon: '☀️' },
-    { id: 'system', label: 'System', icon: '💻' }
+const THEME_OPTIONS: { id: ThemePreference; label: string; icon: typeof IconMoon }[] = [
+    { id: 'dark', label: 'Dark', icon: IconMoon },
+    { id: 'light', label: 'Light', icon: IconSun },
+    { id: 'system', label: 'System', icon: IconSystem }
 ]
 
 export function GeneralThemeSection() {
@@ -22,7 +23,7 @@ export function GeneralThemeSection() {
                     }`}
                     style={preference === opt.id ? { color: 'var(--accent-on-primary)' } : undefined}
                 >
-                    <span>{opt.icon}</span>
+                    <opt.icon size={14} />
                     {opt.label}
                 </button>
             ))}

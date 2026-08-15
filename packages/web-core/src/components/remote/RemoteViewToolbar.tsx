@@ -1,5 +1,6 @@
 import type { Dispatch, KeyboardEvent, SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
+import { IconMousePointer, IconHand, IconSettings } from '../Icons'
 
 interface RemoteViewToolbarProps {
     inputMode: 'touch' | 'mouse'
@@ -57,7 +58,7 @@ export default function RemoteViewToolbar({
                         inputMode === 'mouse' ? 'bg-blue-500/25 border border-blue-500/40' : 'bg-white/[0.08] border border-white/10'
                     }`}
                 >
-                    <span className="text-sm">{inputMode === 'mouse' ? '🖱️' : '👆'}</span>
+                    <span className="text-sm">{inputMode === 'mouse' ? <IconMousePointer size={14} /> : <IconHand size={14} />}</span>
                     <span className={`text-[10px] font-bold ${inputMode === 'mouse' ? 'text-blue-400' : 'text-slate-400'}`}>
                         {inputMode === 'mouse' ? t('remote.mouse') : t('remote.touch')}
                     </span>
@@ -95,7 +96,7 @@ export default function RemoteViewToolbar({
                             isMenuOpen ? 'bg-blue-500/25 border border-blue-500/40' : 'bg-white/[0.08] border border-white/10'
                         }`}
                     >
-                        <span className="text-sm">⚙️</span>
+                        <span className="text-sm"><IconSettings size={14} /></span>
                     </div>
                 </div>
 

@@ -18,6 +18,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshNodeStatus, RepoMeshSessionStatus } from '@adhdev/daemon-core'
 import { IconWarning } from '../Icons'
+import { IconSpinner } from '../Icons'
 
 export type PendingApprovalAction = 'approve' | 'reject'
 
@@ -269,14 +270,14 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                         className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 font-extrabold ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                                         style={{ color: 'var(--status-warning)', background: 'var(--surface-primary)' }}
                                     >
-                                        {active === 'approve' ? '⏳ ...' : t('meshGraph.approvals.approve')}
+                                        {active === 'approve' ? <IconSpinner size={12} /> : t('meshGraph.approvals.approve')}
                                     </button>
                                     <button
                                         onClick={() => handle(item, 'reject')}
                                         disabled={disabled}
                                         className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 font-semibold text-white bg-red-500/30 ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                                     >
-                                        {active === 'reject' ? '⏳ ...' : t('meshGraph.approvals.reject')}
+                                        {active === 'reject' ? <IconSpinner size={12} /> : t('meshGraph.approvals.reject')}
                                     </button>
                                 </div>
                             </li>

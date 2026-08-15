@@ -15,6 +15,7 @@ import { IconMesh } from '../Icons'
 import GitStatusPill from '../git/GitStatusPill'
 import ModalPortal from '../ui/ModalPortal'
 import LoadingSpinner from '../ui/LoadingSpinner'
+import { IconEyeOff } from '../Icons'
 
 const preventContextMenuButtonFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
     // Keep context-menu clicks from moving focus into the fixed menu overlay,
@@ -414,7 +415,7 @@ export default function PaneGroupTabBar({
                                 onMouseDown={preventContextMenuButtonFocus}
                                 onClick={() => { onHideTab(ctxMenu.tabKey); setCtxMenu(null) }}
                             >
-                                🚫 Hide from Dashboard
+                                <span className="inline-flex items-center gap-1.5"><IconEyeOff size={12} />Hide from Dashboard</span>
                             </button>
                         </>
                     )}

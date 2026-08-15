@@ -6,6 +6,7 @@
  * Windows: PowerShell (irm | iex) or CMD
  */
 import { useState, useEffect, useCallback } from 'react'
+import { IconCheck, IconClipboard } from './Icons'
 
 type ShellType = 'unix' | 'powershell' | 'cmd'
 type PlatformTab = 'unix' | 'windows'
@@ -47,7 +48,7 @@ export default function InstallCommand() {
                     }`}
                     onClick={() => setPlatform('unix')}
                 >
-                    🍎🐧 macOS / Linux
+                    macOS / Linux
                 </button>
                 <button
                     className={`text-[10px] px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
@@ -57,7 +58,7 @@ export default function InstallCommand() {
                     }`}
                     onClick={() => setPlatform('windows')}
                 >
-                    🪟 Windows
+                    Windows
                 </button>
             </div>
 
@@ -69,7 +70,7 @@ export default function InstallCommand() {
                             winShell === 'powershell' ? 'bg-accent-primary/10 text-accent-primary' : 'text-text-muted hover:text-text-secondary'
                         }`}
                         onClick={() => setWinShell('powershell')}
-                    >⚡ PowerShell</button>
+                    >PowerShell</button>
                     <button
                         className={`text-[9px] px-2 py-0.5 rounded font-semibold cursor-pointer transition-all ${
                             winShell === 'cmd' ? 'bg-accent-primary/10 text-accent-primary' : 'text-text-muted hover:text-text-secondary'
@@ -88,7 +89,7 @@ export default function InstallCommand() {
                 <span className="text-text-muted select-none">{INSTALL_COMMANDS[shell].prompt}</span>
                 <span className="flex-1 break-all">{INSTALL_COMMANDS[shell].cmd}</span>
                 <span className="text-[9px] font-sans text-accent-primary opacity-0 group-hover:opacity-100 transition-opacity shrink-0 select-none">
-                    {copied ? '✓' : '📋'}
+                    {copied ? <IconCheck size={12} /> : <IconClipboard size={12} />}
                 </span>
             </div>
 

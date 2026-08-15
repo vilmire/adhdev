@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { IconX } from './Icons'
 import ModalPortal from './ui/ModalPortal'
+import { IconCheckCircle, IconEye, IconGitBranch, IconGlobe, IconInfo, IconChat, IconMousePointer, IconRocket, IconSmartphone } from './Icons'
 
 interface OnboardingModalProps {
   onClose: () => void
@@ -10,52 +11,52 @@ interface OnboardingModalProps {
 }
 
 interface OnboardingStep {
-  icon: string
+  icon: typeof IconInfo
   title: string
   desc: string
-  visual?: string
+  visual?: typeof IconInfo
   code?: string
 }
 
 const SHARED_STEPS: OnboardingStep[] = [
   {
-    icon: '🦦',
+    icon: IconRocket,
     title: 'Welcome to ADHDev',
     desc: 'Drive any local CLI coding agent — Claude Code, Codex, Gemini — straight from your browser or phone. The agents keep running on your machine; you control them from the web.',
-    visual: '🎉',
+    visual: IconGlobe,
   },
   {
-    icon: '💬',
+    icon: IconChat,
     title: 'Real-time chat',
     desc: 'See what your AI agent is doing in real-time. Send messages, approve or reject actions — all from your browser or phone.',
-    visual: '📱',
+    visual: IconSmartphone,
   },
   {
-    icon: '👀',
+    icon: IconEye,
     title: 'Watch and steer, live',
     desc: "Follow each agent's session in real time and steer it as it works — switch sessions, take screenshots, and (for IDE sessions) view and control the screen over a P2P connection.",
-    visual: '🖱️',
+    visual: IconMousePointer,
   },
   {
-    icon: '🕸️',
+    icon: IconGitBranch,
     title: 'Orchestrate your agents',
     desc: 'Repo Mesh (Cloud Pro) lets one coordinator hand work to agents across many machines — parallel git worktrees, automatic branch convergence, and cross-checking the same repo from several angles.',
-    visual: '🕸️',
+    visual: IconGitBranch,
   },
 ]
 
 const CLOUD_FINAL_STEP: OnboardingStep = {
-  icon: '🚀',
+  icon: IconRocket,
   title: 'Get started',
   desc: 'Run this on any machine you want to drive, then sign in — the daemon pairs itself to your dashboard automatically.',
   code: 'curl -fsSL https://adhf.dev/install | sh',
 }
 
 const STANDALONE_FINAL_STEP: OnboardingStep = {
-  icon: '🚀',
+  icon: IconRocket,
   title: "You're all set",
   desc: 'This dashboard is already connected to your local daemon. Start a session from the Dashboard tab, or add more providers under Machines → Providers.',
-  visual: '✅',
+  visual: IconCheckCircle,
 }
 
 export default function OnboardingModal({ onClose, standalone = false }: OnboardingModalProps) {
@@ -132,7 +133,7 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
 
         {/* Visual */}
         <div style={{ textAlign: 'center', fontSize: '3rem', marginBottom: '1rem' }}>
-          {current.visual || current.icon}
+          {(() => { const Visual = current.visual || current.icon; return <Visual size={44} /> })()}
         </div>
 
         {/* Content */}
@@ -142,7 +143,7 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
             color: 'var(--text-primary)', marginBottom: '0.75rem',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
           }}>
-            <span>{current.icon}</span> {current.title}
+            <current.icon size={18} /> {current.title}
           </h2>
           <p style={{
             fontSize: '0.9rem', color: 'var(--text-secondary)',
@@ -171,7 +172,7 @@ export default function OnboardingModal({ onClose, standalone = false }: Onboard
               rel="noopener noreferrer"
               style={{ fontSize: '0.75rem', color: 'var(--accent, #a78bfa)', textDecoration: 'none' }}
             >
-              📚 Learn more in the docs →
+              Learn more in the docs →
             </a>
           )}
         </div>

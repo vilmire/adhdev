@@ -139,7 +139,7 @@ export function LogsToolbar({
                 <button
                     onClick={onToggleAutoRefresh}
                     className={`machine-btn ${autoRefresh ? 'text-green-500 border-green-500/30' : ''}`}
-                >{autoRefresh ? '⏸ Pause' : '▶ Resume'}</button>
+                >{autoRefresh ? 'Pause' : 'Resume'}</button>
                 <button onClick={onRefresh} className="machine-btn">↻ Refresh</button>
                 <button onClick={onClear} className="machine-btn">Clear</button>
             </div>

@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderInfo } from './types'
 import ModalPortal from '../../components/ui/ModalPortal'
+import { IconCheckCircle } from '../../components/Icons'
 
 interface ProviderCloneModalProps {
     machineId: string
@@ -158,7 +159,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                         </>
                     ) : (
                         <div className="text-center py-6">
-                            <div className="text-3xl mb-2">🎉</div>
+                            <div className="mb-2 flex justify-center text-emerald-400"><IconCheckCircle size={30} /></div>
                             <h3 className="text-[14px] font-semibold text-text-primary">{t('machine.providerClone.createdTitle')}</h3>
                             <p className="text-[11px] text-text-muted mt-1">
                                 {t('machine.providerClone.createdDesc', { type: customType })} <code className="text-green-400">~/.adhdev/providers/{customType}/</code>

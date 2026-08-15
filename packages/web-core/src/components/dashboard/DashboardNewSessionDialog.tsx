@@ -883,7 +883,7 @@ export default function DashboardNewSessionDialog({
                                         <option value="__home__">{t('newSession.homeDirectory')}</option>
                                         {workspaceRows.map(workspace => (
                                             <option key={workspace.id} value={workspace.id}>
-                                                {workspace.id === defaultWorkspaceId ? '⭐ ' : ''}{getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
+                                                {workspace.id === defaultWorkspaceId ? '★ ' : ''}{getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
                                             </option>
                                         ))}
                                         <option value="__custom__">{t('newSession.customFolder')}</option>

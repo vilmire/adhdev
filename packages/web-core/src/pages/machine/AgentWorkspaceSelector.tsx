@@ -43,16 +43,16 @@ export default function AgentWorkspaceSelector({
                             <option value="">(no workspace — launch in home)</option>
                             {(machine.workspaces || []).map(w => (
                                 <option key={w.id} value={w.id}>
-                                    {w.id === machine.defaultWorkspaceId ? '⭐ ' : ''}
+                                    {w.id === machine.defaultWorkspaceId ? '★ ' : ''}
                                     {getWorkspaceDisplayLabel(w.path, w.label)}
                                 </option>
                             ))}
-                            <option value="__custom__">{canBrowse ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
+                            <option value="__custom__">{canBrowse ? 'Select workspace…' : 'Custom path…'}</option>
                         </>
                     ) : (
                         <>
                             <option value="">(no workspaces saved — add in Overview tab)</option>
-                            <option value="__custom__">{canBrowse ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
+                            <option value="__custom__">{canBrowse ? 'Select workspace…' : 'Custom path…'}</option>
                         </>
                     )}
                 </select>

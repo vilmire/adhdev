@@ -215,7 +215,9 @@ export {
     IconBarChart, IconScroll, IconFolder, IconWarning, IconClock,
     IconTerminal, IconSplitView, IconPlay, IconX, IconRocket, IconBot, IconThought,
     IconWrench, IconCandle, IconApple, IconLinux, IconWindows, IconBell, IconBuilding,
-    IconCheckCircle, IconZap, IconVolume, IconDiscord, IconGlobe
+    IconCheckCircle, IconZap, IconVolume, IconDiscord, IconGlobe,
+    IconSpinner, IconLightbulb, IconLink, IconShuffle, IconMousePointer, IconHand,
+    IconPackage, IconSmartphone, IconFlag, IconGitBranch, IconMaximize, IconMinimize, IconCheck
 } from './components/Icons'
 
 // ── Hooks ──
@@ -337,3 +339,4 @@ export type {
 
 // ── CSS ──
 // Import '@adhdev/web-core/index.css' in your app entry
+

@@ -26,6 +26,7 @@ import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
+import { IconFlag } from '../Icons'
 
 const elk = new ELK()
 
@@ -132,7 +133,7 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                 {task.priority && task.priority !== 'normal' && <span className={chipClass}>{task.priority}</span>}
                 {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={chipClass}>read-only</span>}
                 {task.missionId && (
-                    <span className={chipClass} title={task.missionId}>⚑ {task.missionId.slice(0, 10)}</span>
+                    <span className={`${chipClass} inline-flex items-center gap-1`} title={task.missionId}><IconFlag size={8} />{task.missionId.slice(0, 10)}</span>
                 )}
                 {dagNode.waitingOn.length > 0 && (
                     <span
@@ -348,7 +349,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagView
                     <div className="flex flex-wrap gap-1.5 text-[10px]">
                         {statBadge(selectedNode.task.status, selectedNode.task.status === 'failed' ? 'danger' : selectedNode.task.status === 'assigned' ? 'info' : 'default')}
                         {selectedNode.task.difficulty && statBadge(selectedNode.task.difficulty)}
-                        {selectedNode.task.missionId && statBadge(`⚑ ${selectedNode.task.missionId}`, 'info')}
+                        {selectedNode.task.missionId && statBadge(selectedNode.task.missionId, 'info')}
                         {selectedNode.task.assignedNodeId && statBadge(`@ ${selectedNode.task.assignedNodeId.slice(0, 14)}`)}
                     </div>
                     {selectedNode.waitingOn.length > 0 && (

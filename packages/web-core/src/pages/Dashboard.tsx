@@ -175,7 +175,7 @@ export default function Dashboard() {
     const conversationPrefs = useConversationPrefs(
         liveSessionInboxState,
         sendDaemonCommand,
-        useCallback((message: string) => appendWarningToast(setToasts, `⚠️ ${message}`), [setToasts]),
+        useCallback((message: string) => appendWarningToast(setToasts, message), [setToasts]),
     )
     const {
         notifications,

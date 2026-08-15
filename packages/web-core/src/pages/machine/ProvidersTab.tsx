@@ -30,6 +30,7 @@ import ProviderInstallOptionsModal from './ProviderInstallOptionsModal'
 import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderRow'
 import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
+import { IconSpinner } from '../../components/Icons'
 
 interface ProvidersTabProps {
     machineId: string
@@ -373,7 +374,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                         title="Create a new provider from an existing one"
                     >{t('machine.providers.create')}</button>
                     <button onClick={fetchSettings} disabled={loading} className="machine-btn text-[10px]">
-                        {loading ? '⏳' : '↻'} {t('machine.providers.refresh')}
+                        {loading ? <IconSpinner size={11} /> : '↻'} {t('machine.providers.refresh')}
                     </button>
                     <button
                         onClick={() => setShowSourceConfig(v => !v)}
@@ -400,7 +401,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                                     disabled={installingNewType !== null}
                                     className="px-2.5 py-1 rounded-md text-[12px] font-medium bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:opacity-50"
                                 >
-                                    {installingNewType === providerType ? '⏳' : t('machine.providers.installNewType')}
+                                    {installingNewType === providerType ? <IconSpinner size={11} /> : t('machine.providers.installNewType')}
                                 </button>
                             </div>
                         ))}

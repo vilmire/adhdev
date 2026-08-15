@@ -361,7 +361,7 @@ class EventManager {
             const requestId = payload.requestId
             const orgId = payload.orgId
 
-            msg = `👁️ ${i18next.t('event.viewRequest', { requester: requesterName })}`
+            msg = `${i18next.t('event.viewRequest', { requester: requesterName })}`
             type = 'warning'
 
             // Show actionable toast with Approve/Decline
@@ -383,7 +383,7 @@ class EventManager {
             // Browser notification if not focused
             if (shouldNotify('browser') && !document.hasFocus()) {
                 notify(
-                    `👁️ ${i18next.t('event.viewRequestTitle')}`,
+                    `${i18next.t('event.viewRequestTitle')}`,
                     i18next.t('event.viewRequest', { requester: requesterName }),
                     `view-request-${requestId}`,
                 )

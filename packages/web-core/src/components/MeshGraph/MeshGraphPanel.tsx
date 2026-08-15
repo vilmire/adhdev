@@ -8,6 +8,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
 import { formatMeshConnectionSummary } from '../../utils/mesh-visualization'
 import type { MeshGraphNode } from './types'
+import { IconLightbulb } from '../Icons'
 
 interface MeshGraphPanelProps {
     node: MeshGraphNode | null
@@ -234,7 +235,7 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
 
             {node.nextStepHint && (
                 <div className={`${meshTheme.infoCalloutClass}`}>
-                    💡 {node.nextStepHint}
+                    <span className="inline-flex items-start gap-1.5"><IconLightbulb size={12} className="mt-0.5 shrink-0" /><span>{node.nextStepHint}</span></span>
                 </div>
             )}
         </div>

@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { IconWarning } from '../../components/Icons'
 
 interface ConfirmExternalUntrustedModalProps {
     /** Provider type the user is trying to activate. */
@@ -54,7 +55,7 @@ export default function ConfirmExternalUntrustedModal({
                 onClick={e => e.stopPropagation()}
             >
                 <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
-                    <span aria-hidden className="text-amber-400 text-base">⚠</span>
+                    <span aria-hidden className="text-amber-400"><IconWarning size={16} /></span>
                     <h2 className="text-sm font-semibold">{t('machine.confirmExternal.title')}</h2>
                 </div>
                 <div className="px-4 py-3 text-[12px] flex flex-col gap-3">

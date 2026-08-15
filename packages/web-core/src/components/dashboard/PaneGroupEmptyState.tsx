@@ -98,7 +98,7 @@ export default function PaneGroupEmptyState({
                                 rel="noopener noreferrer"
                                 className="text-sm font-medium text-accent hover:opacity-80 transition-colors flex items-center justify-center gap-1.5"
                             >
-                                📚 Read the documentation →
+                                Read the documentation →
                             </a>
                         </div>
                     )}

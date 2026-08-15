@@ -124,6 +124,7 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
 }
 
 import { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS } from '../../constants/supported'
+import { IconMonitor, IconLink } from '../Icons'
 
 function getIdeLabel(type: string): { icon: string; name: string } {
     // Type format: "vscode", "cursor", or full "adhdev-daemon" (skip)
@@ -141,7 +142,7 @@ function getIdeLabel(type: string): { icon: string; name: string } {
         return { icon: match.icon, name: match.name }
     }
     
-    return { icon: '📝', name: type }
+    return { icon: '', name: type }
 }
 
 // ── Machine Card ──
@@ -164,7 +165,6 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
     const platform = ide.machine?.platform || ide.system?.platform || ''
     const nickname = getMachineDisplayName(ide, { fallbackId: ide.id })
 
-    const platformIcon = platform === 'win32' ? '🪟' : platform === 'darwin' ? '🍎' : '🐧'
 
     // Collect connected sessions by transport (IDE via CDP, CLI via PTY, ACP via stdio)
     const connectedIdes = allIdes.filter(i => i.daemonId === ide.id && i.transport === 'cdp-page')
@@ -248,7 +248,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                 {/* Header row */}
                 <div className="flex justify-between items-center">
                     <div className="flex items-center gap-3">
-                        <span className="text-xl">{platformIcon}</span>
+                        <span className="text-text-muted" title={platform}><IconMonitor size={18} /></span>
                         <div>
                             <div className="font-medium text-sm">{nickname}</div>
                             <div className="text-xs text-text-muted font-mono flex items-center gap-2">
@@ -363,7 +363,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             ))}
                             {connectedAcps.map(acp => (
                                 <span key={acp.id} className="flex items-center gap-1 bg-bg-secondary px-1.5 py-0.5 rounded">
-                                    <span>🔗</span>
+                                    <span className="inline-flex"><IconLink size={12} /></span>
                                     <span>{acp.cliName || 'ACP'}</span>
                                 </span>
                             ))}

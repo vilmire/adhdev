@@ -52,6 +52,7 @@ import {
 } from './meshGraphLayout'
 import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './meshGraphMemo'
 import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../utils/mesh-visualization'
+import { IconGitBranch } from '../Icons'
 
 /** Dense graph threshold: above this node count, switch to compact card mode */
 const COMPACT_NODE_THRESHOLD = 7
@@ -443,7 +444,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             >
                 <Handle type="target" position={direction === 'TB' ? Position.Top : Position.Left} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
                 <div className="flex min-w-0 items-center justify-center gap-2">
-                    <span className={`shrink-0 text-sm ${meshTheme.isDark ? 'text-sky-200' : 'text-sky-600'}`} aria-hidden>⎇</span>
+                    <span className={`shrink-0 text-sm ${meshTheme.isDark ? 'text-sky-200' : 'text-sky-600'}`} aria-hidden><IconGitBranch size={13} /></span>
                     <span className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{node.label}</span>
                     <span className={`shrink-0 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.panel.defaultBranch')}</span>
                     {attention && (

@@ -53,6 +53,7 @@ import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-
 import { isLaunchableMachineProvider, type LaunchableProviderCategory } from '../../utils/provider-activation'
 import AgentWorkspaceSelector from './AgentWorkspaceSelector'
 import { PROVIDER_CATEGORY_COLOR } from './providerCategoryConfig'
+import { IconSpinner } from '../../components/Icons'
 
 type AgentCategory = LaunchableProviderCategory
 
@@ -1073,7 +1074,7 @@ export default function AgentTab({
                                                 className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-green-500/20 text-green-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                                 title={t('machine.agentTab.restart')}
                                             >
-                                                {pendingLaunchTypes.includes(entry.type) ? '⏳' : <IconPlay size={14} />}
+                                                {pendingLaunchTypes.includes(entry.type) ? <IconSpinner size={14} /> : <IconPlay size={14} />}
                                             </button>
                                         ) : (
                                             <button onClick={() => handleStop(entry)} className="flex items-center justify-center w-7 h-7 rounded bg-bg-glass hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer" title={t('machine.agentTab.stop')}>

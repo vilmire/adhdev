@@ -15,7 +15,7 @@ import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
 import InstallCommand from '../components/InstallCommand'
-import { IconServer, IconMonitor, IconEyeOff } from '../components/Icons'
+import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle, IconLink } from '../components/Icons'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
 
 // ─── Compact Agent Row (replaces full IdeCard/CliCard) ──────────
@@ -57,7 +57,7 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
                     <span className="text-[9px] text-text-muted overflow-hidden text-ellipsis whitespace-nowrap max-w-[100px]">{workspace}</span>
                 )}
                 <span className={`ml-auto flex items-center gap-1 text-[9px] font-medium ${isActive ? 'text-orange-400' : 'text-text-muted'}`}>
-                    {isActive && <span>⚡</span>}
+                    {isActive && <IconZap size={10} />}
                     {status}
                 </span>
                 <span
@@ -192,7 +192,7 @@ export default function MachinesPage() {
                         {initialLoaded && <span>{t('machine.card.burrowCount', { count: machines.length })}</span>}
                         {initialLoaded && <span className="text-green-500">● {t('machine.card.onlineCount', { count: onlineCount })}</span>}
                         {allActiveAgents.length > 0 && (
-                            <span className="text-orange-500">⚡ {t('machine.card.agentsActive', { count: allActiveAgents.length })}</span>
+                            <span className="text-orange-500 inline-flex items-center gap-1"><IconZap size={11} />{t('machine.card.agentsActive', { count: allActiveAgents.length })}</span>
                         )}
                     </div>
                 </div>
@@ -320,7 +320,7 @@ export default function MachinesPage() {
                                                     }`}
                                                     title={transport === 'relay' ? t('machine.card.transportRelay') : t('machine.card.transportDirect')}
                                                 >
-                                                    {transport === 'relay' ? '🔀 relay' : '🔗 direct'}
+                                                    {transport === 'relay' ? <><IconShuffle size={10} /> relay</> : <><IconLink size={10} /> direct</>}
                                                 </span>
                                             )}
                                             <div
@@ -401,13 +401,13 @@ export default function MachinesPage() {
                                                                             key={si}
                                                                             className="flex items-center gap-1.5 px-2 py-0.5 text-[10px] text-text-secondary"
                                                                         >
-                                                                            <span className="text-[8px]">{getIcon(stream.providerType) || '🧩'}</span>
+                                                                            <span className="text-[8px]">{getIcon(stream.providerType) || ''}</span>
                                                                             <span className="font-medium">{stream.providerName}</span>
                                                                             <span className={`ml-auto text-[9px] ${
                                                                                 isManagedStatusWorking(stream.status)
                                                                                     ? 'text-orange-400' : 'text-text-muted'
                                                                             }`}>
-                                                                                {isManagedStatusWorking(stream.status) ? `⚡ ${t('machine.card.generating')}` : normalizeManagedStatus(stream.status)}
+                                                                                {isManagedStatusWorking(stream.status) ? `${t('machine.card.generating')}` : normalizeManagedStatus(stream.status)}
                                                                             </span>
                                                                         </div>
                                                                     ))}

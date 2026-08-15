@@ -12,6 +12,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ProviderInfo } from './types'
 import ModalPortal from '../../components/ui/ModalPortal'
+import { IconWrench } from '../../components/Icons'
 
 const SCRIPTS = [
     'openPanel', 'sendMessage', 'readChat', 'newSession',
@@ -70,7 +71,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                 })
                 if (res?.running === false && phase === 'running') {
                     setPhase('done')
-                    setLogs(prev => [...prev, '\n✅ Auto-fix completed!'])
+                    setLogs(prev => [...prev, '\n✓ Auto-fix completed!'])
                     if (pollingRef.current) clearInterval(pollingRef.current)
                 }
             } catch { /* ignore polling errors */ }
@@ -80,7 +81,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
     const handleStart = async () => {
         if (selectedScripts.length === 0) return
         setPhase('running')
-        setLogs(['🚀 Starting auto-fix...', `Agent: ${agent}`, `Scripts: ${selectedScripts.join(', ')}`, comment ? `💬 Comment: ${comment}` : '', ''])
+        setLogs(['Starting auto-fix...', `Agent: ${agent}`, `Scripts: ${selectedScripts.join(', ')}`, comment ? `Comment: ${comment}` : '', ''])
         setError('')
 
         try {
@@ -91,7 +92,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                 ...(comment ? { comment } : {}),
             })
             if (res?.success && (res?.started || res?.running)) {
-                setLogs(prev => [...prev, '✅ Agent started. Monitoring progress...'])
+                setLogs(prev => [...prev, '✓ Agent started. Monitoring progress...'])
                 startPolling()
             } else {
                 setPhase('error')
@@ -108,7 +109,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
             await sendDaemonCommand(machineId, 'provider_auto_fix_cancel', {
                 providerType: provider.type,
             })
-            setLogs(prev => [...prev, '\n⚠️ Auto-fix cancelled.'])
+            setLogs(prev => [...prev, '\nAuto-fix cancelled.'])
             setPhase('done')
             if (pollingRef.current) clearInterval(pollingRef.current)
         } catch { /* ignore */ }
@@ -124,7 +125,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                 {/* Header */}
                 <div className="px-5 py-4 border-b border-border-subtle flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
-                        <span className="text-lg">{provider.icon || '🔧'}</span>
+                        <span className="text-lg">{provider.icon || <IconWrench size={16} />}</span>
                         <div>
                             <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerFix.titlePrefix', { name: provider.displayName })}</h2>
                             <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerFix.footerHint')}</p>
@@ -219,7 +220,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                 style={{ maxHeight: 320, minHeight: 200 }}
                             >
                                 {logs.map((line, i) => (
-                                    <div key={i} className={line.startsWith('✅') ? 'text-green-400' : ''} style={(line.startsWith('❌') || line.startsWith('⚠')) ? { color: 'var(--status-warning)' } : undefined}>
+                                    <div key={i} className={line.startsWith('✓') ? 'text-green-400' : ''} style={(line.startsWith('❌') || line.startsWith('⚠')) ? { color: 'var(--status-warning)' } : undefined}>
                                         {line}
                                     </div>
                                 ))}
