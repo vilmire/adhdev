@@ -307,8 +307,8 @@ function actionableSkipGuidance(reason: string, evidence?: TaskDeliveryEvidence)
         nextAction: 'Launch a session on that node yourself with mesh_launch_session, or ensure the remote daemon is connected over P2P.',
     };
     if (reason.startsWith('provider') || reason === 'missing_provider_priority') return {
-        summary: 'the node has no usable provider for this task (provider priority missing/unusable, or the provider loader is unavailable)',
-        nextAction: "Check the node's providerPriority policy and that the required CLI/ACP provider is installed and enabled on that machine.",
+        summary: `the current provider scan found no usable provider for this task (provider priority missing/unusable, or the provider loader is unavailable; ${reason})`,
+        nextAction: "Check the node's providerPriority policy and that the required CLI/ACP provider is installed and enabled on that machine. Quota-gated candidates use a separate, self-resolving reason and are not proof of this configuration blocker.",
     };
     if (reason === 'dirty_workspace') return {
         summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
@@ -384,11 +384,16 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // The trailing clause is reason-dependent. 'target_session_pin_expired' has ALREADY cleared
     // the pin by the time this fires (expireTaskTargetPin ran), so the task is claimable by any
     // compatible session — telling the coordinator it "stays pending until you resolve it" is
-    // false for this reason and contradicts the summary itself. Every other actionable reason is
-    // a genuine standing blocker, so the original clause stands there unchanged.
+    // false for this reason and contradicts the summary itself. Provider-availability reasons
+    // are observations from the current scan: a refresh or an already-starting session can make
+    // progress, while a genuinely absent provider still needs explicit configuration work. Every
+    // other actionable reason is a standing blocker, so the original clause remains unchanged.
+    const providerAvailabilityResult = reason!.startsWith('provider') || reason === 'missing_provider_priority';
     const closing = reason === 'target_session_pin_expired'
         ? 'The stale pin has already been cleared, so the task is now claimable by any compatible session — the action above is about the session it was originally addressed to.'
-        : 'This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.';
+        : providerAvailabilityResult
+            ? 'This result needs action if it persists: a later provider-status refresh or an already-starting usable session can clear it, but a genuinely missing, disabled, or misconfigured provider will keep the task pending until you fix that configuration.'
+            : 'This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.';
     const coordinatorMessage = `[System] A queued mesh task${nodeLabel ? ` for node ${nodeLabel}` : ''} is not being dispatched because ${summary}. ${nextAction} ${closing}`;
     try {
         queuePendingMeshCoordinatorEvent({
