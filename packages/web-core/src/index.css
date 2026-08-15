@@ -824,6 +824,25 @@
         overscroll-behavior: none;
     }
 
+    /* Form controls do NOT inherit the page font by default, and Tailwind
+       Preflight (which normally fixes this) is deliberately excluded above.
+       Without this rule Chrome renders inputs/textareas in its Arial-ish form
+       default — with a legacy Hangul fallback for Korean — while Safari uses
+       the system font, so user-typed text looked noticeably cheaper in Chrome
+       (chat input bar, rename fields, search boxes). */
+    button, input, optgroup, select, textarea {
+        font-family: inherit;
+        font-feature-settings: inherit;
+        font-variation-settings: inherit;
+        letter-spacing: inherit;
+    }
+
+    /* xterm's hidden IME proxy stays monospace so composition metrics keep
+       matching the terminal grid (the inherit rule above must not retarget it). */
+    textarea.xterm-helper-textarea {
+        font-family: monospace;
+    }
+
     a {
         color: var(--accent-primary-light);
         text-decoration: none;

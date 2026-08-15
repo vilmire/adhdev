@@ -1171,7 +1171,11 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
             void reactFlow.fitView({
                 nodes: shouldFocusSubset ? initialFocusNodeIds.map(id => ({ id })) : undefined,
                 padding: shouldFocusSubset ? 0.24 : 0.2,
-                maxZoom: shouldFocusSubset ? 0.98 : 0.9,
+                // maxZoom 1 (not 0.9): a sub-1 cap FORCES a fractional transform scale,
+                // and Chrome rasterizes then scales text layers — permanently fuzzy
+                // cards even when the graph would fit at a crisp 1.0 (Safari
+                // re-rasterizes under transform, which is why it looked fine there).
+                maxZoom: 1,
                 duration: 260,
             })
             lastViewportKeyRef.current = viewportKey
@@ -1396,7 +1400,7 @@ export default function MeshGraphView({
                     // nodes initialize even if the controller's keyed fit misfires
                     // (e.g. a dialog that mounts the pane mid-animation on mobile).
                     fitView
-                    fitViewOptions={{ padding: 0.2, maxZoom: 0.9 }}
+                    fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
                     nodesDraggable={false}
                     nodesConnectable={false}
                     elementsSelectable
