@@ -32,6 +32,7 @@ const BRAND: Record<string, BrandEntry> = {
     'cursor-cli': { monogram: 'CU', hue: '#64748B' },
     'opencode-cli': { monogram: 'OC', hue: '#CA8A04' },
     'hermes-cli': { monogram: 'HM', hue: '#14B8A6' },
+    'grok-cli': { monogram: 'GK', hue: '#475569' },
     // IDEs
     'antigravity': { monogram: 'AG', hue: '#8B5CF6' },
     'cursor': { monogram: 'CU', hue: '#64748B' },
