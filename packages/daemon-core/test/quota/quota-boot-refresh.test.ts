@@ -74,7 +74,7 @@ describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
         await vi.waitFor(() => {
             const quota = readQuotaCache()
             expect(quota).toBeDefined()
-            expect(Object.keys(quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'kimi', 'opencode'])
+            expect(Object.keys(quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         })
     })
 
