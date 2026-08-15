@@ -94,7 +94,7 @@ export function LegacyAutoApproveToggle({
                 <span className="block text-sm font-semibold text-text-primary">{t('newSession.autoApproveLegacy')}</span>
                 <span className="mt-0.5 block text-[11px] text-text-muted">{t('newSession.autoApproveLegacyDescription')}</span>
             </span>
-            <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-bg-tertiary'}`}>
+            <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-surface-secondary'}`}>
                 <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
             </span>
         </button>

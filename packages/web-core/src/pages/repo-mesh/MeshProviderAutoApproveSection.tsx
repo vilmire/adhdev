@@ -214,12 +214,12 @@ export function MeshProviderAutoApproveSection({
                 <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.machineSection.title')}</div>
                 <div className="mt-1 text-[11px] text-text-muted">{t('repoMesh.providerAutoApprove.machineSection.hint')}</div>
                 <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
-                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineAutoApproveEnabled ? 'border-status-online/25 bg-status-online/10 text-status-online' : 'border-border-subtle bg-bg-tertiary/40 text-text-muted'}`}>
+                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineAutoApproveEnabled ? 'border-status-online/25 bg-status-online/10 text-status-online' : 'border-border-subtle bg-surface-secondary/40 text-text-muted'}`}>
                         {machineAutoApproveEnabled
                             ? t('repoMesh.providerAutoApprove.machineSection.autoApproveOn')
                             : t('repoMesh.providerAutoApprove.machineSection.autoApproveOff')}
                     </span>
-                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineDangerousAllowed ? 'border-status-error/30 bg-status-error/10 text-status-error' : 'border-border-subtle bg-bg-tertiary/40 text-text-muted'}`}>
+                    <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineDangerousAllowed ? 'border-status-error/30 bg-status-error/10 text-status-error' : 'border-border-subtle bg-surface-secondary/40 text-text-muted'}`}>
                         {machineDangerousAllowed
                             ? t('repoMesh.providerAutoApprove.machineSection.dangerousOn')
                             : t('repoMesh.providerAutoApprove.machineSection.dangerousOff')}
@@ -428,7 +428,7 @@ function EffectiveResultRow({
         ? 'border-status-online/25 bg-status-online/5 text-text-secondary'
         : tone === 'warn'
             ? 'border-status-warning/30 bg-status-warning/5 text-status-warning'
-            : 'border-border-subtle bg-bg-tertiary/30 text-text-muted'
+            : 'border-border-subtle bg-surface-secondary/30 text-text-muted'
 
     return (
         <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${toneClass}`}>
@@ -467,7 +467,7 @@ function MachinePolicyToggle({
                 <span className="block text-[13px] font-semibold text-text-primary">{label}</span>
                 <span className="mt-0.5 block text-[11px] text-text-muted">{hint}</span>
             </span>
-            <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-bg-tertiary'}`}>
+            <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-surface-secondary'}`}>
                 <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
             </span>
         </button>

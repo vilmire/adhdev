@@ -71,7 +71,7 @@ export default function ProviderInstallOptionsModal({
                 onClick={onCancel}
             >
             <div
-                className="w-[min(520px,92vw)] rounded-xl border border-border-primary bg-bg-elevated p-5 shadow-2xl"
+                className="w-[min(520px,92vw)] rounded-xl border border-border-default bg-surface-primary p-5 shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
                 role="dialog"
                 aria-modal="true"

@@ -88,23 +88,24 @@
     --z-tooltip: 1500;
 }
 
-/* ── Canonical token mapping (documentation only) ───────────────────────
-   Several existing components reference Tailwind color classes whose backing
-   `--color-*` variable is NOT defined in the @theme block above, so they
-   currently resolve to nothing. This wave introduces no new tokens for them;
-   it records the canonical target a later migration wave should substitute at
-   the consuming call sites. New primitives added in this wave already use the
-   canonical classes on the right.
+/* ── Canonical token mapping — MIGRATION LANDED ─────────────────────────
+   A Tailwind color class whose backing `--color-*` variable is not defined in
+   the @theme block above resolves to NOTHING (transparent) — the live symptom
+   was ProviderInstallOptionsModal rendering with a see-through panel
+   (bg-bg-elevated / border-border-primary were unregistered). The deferred
+   substitution wave has now been applied at every consuming call site across
+   web-core / web-cloud / web-standalone:
 
-     absent (used in code)      →  canonical (defined above)
-     ───────────────────────────  ──────────────────────────────
-     --border-primary           →  --color-border-default   (class: border-border-primary   → border-border-default)
-     --border-secondary         →  --color-border-subtle    (class: border-border-secondary → border-border-subtle)
-     --bg-tertiary              →  --color-surface-secondary(class: bg-bg-tertiary           → bg-surface-secondary)
-     --surface-tertiary         →  --color-surface-secondary(class: bg-surface-tertiary      → bg-surface-secondary)
-     --surface-alt              →  --color-surface-secondary(class: bg-surface-alt           → bg-surface-secondary)
-     border-strong              →  --color-border-default   (class: border-border-strong     → border-border-default)
-   ──────────────────────────────────────────────────────────────────── */
+     border-border-primary   → border-border-default
+     border-border-secondary → border-border-subtle
+     border-border-strong    → border-border-default
+     bg-bg-tertiary          → bg-surface-secondary
+     bg-surface-tertiary     → bg-surface-secondary
+     bg-surface-alt          → bg-surface-secondary
+     bg-bg-elevated          → bg-surface-primary (the ui/Dialog panel surface)
+
+   Do NOT reintroduce classes outside the @theme registry — if a new surface
+   tier is genuinely needed, register its `--color-*` variable here first. */
 
 @layer base {
     /* ═══════════════════════════════════════════════════

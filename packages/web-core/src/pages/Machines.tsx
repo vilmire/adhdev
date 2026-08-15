@@ -270,7 +270,7 @@ export default function MachinesPage() {
                             <div
                                 key={machine.machineId}
                                 className={`bg-bg-glass rounded-xl border transition-colors ${
-                                    isBlocked ? 'border-red-500/25' : 'border-border-subtle hover:border-border-strong'
+                                    isBlocked ? 'border-red-500/25' : 'border-border-subtle hover:border-border-default'
                                 }`}
                             >
                                 <div className="px-4 py-3.5">
