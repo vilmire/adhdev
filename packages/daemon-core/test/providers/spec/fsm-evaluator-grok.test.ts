@@ -292,6 +292,26 @@ describe('grok-cli approval — auto-approve must pick the least-permissive Yes'
         expect(isNegativeApprovalLabel(grokButtons[2])).toBe(true);
     });
 
+    it('picks single-shot "Yes" on the 4-button file-edit modal', () => {
+        // Captured live: the EDIT modal differs from the shell one — it offers
+        // TWO scope-broadening grants ahead of the safe option:
+        //   1 Yes, and don't ask again for anything (always-approve mode)
+        //   2 Yes, allow all edits during this session
+        //   3 Yes                          <- single-shot, the correct pick
+        //   4 No, reject
+        // Both grants would silently widen permission beyond this one edit.
+        const editModal = [
+            "Yes, and don't ask again for anything (always-approve mode)",
+            'Yes, allow all edits during this session',
+            'Yes',
+            'No, reject (type to add feedback)',
+        ];
+        const picked = pickApprovalButton(editModal, manifest() as never);
+        expect(picked.label).toBe('Yes');
+        expect(picked.index).toBe(2);
+        expect(hasNegativeApprovalOption(editModal)).toBe(true);
+    });
+
     it('picks the affirmative on the workspace-trust rows too', () => {
         const picked = pickApprovalButton(['Yes, proceed', 'No, quit'], manifest() as never);
         expect(picked.label).toBe('Yes, proceed');
