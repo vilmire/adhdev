@@ -105,15 +105,23 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('opacity-60')
     })
 
-    it('renders all node session rows instead of slicing extra workers behind a summary', () => {
+    it('caps per-card session rows behind an overflow line that keeps every session reachable', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
+        // UI/UX refactor contract (replaces the old render-all-rows rule): a busy
+        // node no longer grows an unbounded scrollable list inside its card — rows
+        // are capped at CARD_SESSION_ROW_CAP and the overflow line carries the FULL
+        // per-session tooltip, so no session becomes unreachable.
         expect(source).toContain('const visibleSessions = node.sessionDetails')
         expect(source).toContain('const visibleCardSessions = node.sessionDetails')
-        expect(source).toContain('overflow-y-auto')
-        expect(source).not.toContain('node.sessionDetails.slice(0, 3)')
-        expect(source).not.toContain('node.sessionDetails.slice(0, compact ? 1 : 2)')
-        expect(source).not.toContain('more attached chat(s)')
+        expect(source).toContain('CARD_SESSION_ROW_CAP')
+        expect(source).toContain('visibleSessions.slice(0, CARD_SESSION_ROW_CAP)')
+        expect(source).toContain('visibleCardSessions.slice(0, CARD_SESSION_ROW_CAP)')
+        expect(source).toContain("t('meshGraph.panel.moreChats'")
+        expect(source).toContain('title={sessionTooltipLines.join')
+        // The old unbounded in-card scroll region must not come back.
+        expect(source).not.toContain('max-h-44 min-w-0 flex-col gap-1.5 overflow-y-auto')
+        expect(source).not.toContain('max-h-56 flex-col gap-1.5 overflow-y-auto')
     })
 
     it('scales viewport height for dense graphs with 10+ and 16+ nodes', () => {

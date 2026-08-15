@@ -686,10 +686,47 @@
             "tooltipP2PRtt": "P2P 왕복 지연",
             "tooltipPrefixStatus": "상태:",
             "tooltipPrefixBranch": "브랜치:",
-            "tooltipPrefixNote": "메모:"
+            "tooltipPrefixNote": "메모:",
+            "defaultBranch": "기본 브랜치",
+            "submoduleSynced": "동기화됨",
+            "moreChats_one": "+{{count}}개 채팅 더",
+            "moreChats_other": "+{{count}}개 채팅 더"
+        },
+        "legendEdge": {
+            "parentBranch": "기본 브랜치",
+            "cloneLink": "워크트리 클론",
+            "worktreeLink": "동일 브랜치",
+            "submoduleLink": "서브모듈",
+            "sessionLink": "세션",
+            "orphanLink": "후속 조치 필요"
+        },
+        "taskDag": {
+            "empty": "큐 태스크가 없습니다 — mesh 태스크를 등록하면 의존성 그래프가 표시됩니다.",
+            "waitsOn_one": "{{count}}개 대기",
+            "waitsOn_other": "{{count}}개 대기",
+            "blocked": "차단됨",
+            "missingDeps_one": "미확인 의존성 {{count}}개",
+            "missingDeps_other": "미확인 의존성 {{count}}개",
+            "selectedTask": "선택된 태스크",
+            "statsTasks_one": "태스크 {{count}}개",
+            "statsTasks_other": "태스크 {{count}}개",
+            "statsEdges_one": "의존성 {{count}}개",
+            "statsEdges_other": "의존성 {{count}}개",
+            "statsMissions_one": "미션 {{count}}개",
+            "statsMissions_other": "미션 {{count}}개",
+            "statsWaiting_one": "대기 {{count}}개",
+            "statsWaiting_other": "대기 {{count}}개",
+            "statsBlocked_one": "차단 {{count}}개",
+            "statsBlocked_other": "차단 {{count}}개",
+            "legend": {
+                "satisfied": "완료",
+                "waiting": "대기",
+                "failed": "실패"
+            }
         },
         "obs": {
             "tabOverview": "개요",
+            "tabTasks": "태스크",
             "tabStatus": "상태",
             "tabGraph": "그래프",
             "convergenceMergedToMain": "main에 병합됨",

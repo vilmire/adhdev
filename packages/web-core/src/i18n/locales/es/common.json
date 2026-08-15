@@ -686,10 +686,47 @@
             "tooltipP2PRtt": "Latencia de ida y vuelta P2P",
             "tooltipPrefixStatus": "Estado:",
             "tooltipPrefixBranch": "Rama:",
-            "tooltipPrefixNote": "Nota:"
+            "tooltipPrefixNote": "Nota:",
+            "defaultBranch": "rama principal",
+            "submoduleSynced": "sincronizado",
+            "moreChats_one": "+{{count}} chat más",
+            "moreChats_other": "+{{count}} chats más"
+        },
+        "legendEdge": {
+            "parentBranch": "rama principal",
+            "cloneLink": "clon de worktree",
+            "worktreeLink": "misma rama",
+            "submoduleLink": "submódulo",
+            "sessionLink": "sesión",
+            "orphanLink": "requiere seguimiento"
+        },
+        "taskDag": {
+            "empty": "Aún no hay tareas en cola — encola tareas del mesh para ver el grafo de dependencias.",
+            "waitsOn_one": "espera {{count}}",
+            "waitsOn_other": "espera {{count}}",
+            "blocked": "bloqueada",
+            "missingDeps_one": "{{count}} dependencia desconocida",
+            "missingDeps_other": "{{count}} dependencias desconocidas",
+            "selectedTask": "Tarea seleccionada",
+            "statsTasks_one": "{{count}} tarea",
+            "statsTasks_other": "{{count}} tareas",
+            "statsEdges_one": "{{count}} dependencia",
+            "statsEdges_other": "{{count}} dependencias",
+            "statsMissions_one": "{{count}} misión",
+            "statsMissions_other": "{{count}} misiones",
+            "statsWaiting_one": "{{count}} en espera",
+            "statsWaiting_other": "{{count}} en espera",
+            "statsBlocked_one": "{{count}} bloqueada",
+            "statsBlocked_other": "{{count}} bloqueadas",
+            "legend": {
+                "satisfied": "completada",
+                "waiting": "en espera",
+                "failed": "fallida"
+            }
         },
         "obs": {
             "tabOverview": "Resumen",
+            "tabTasks": "Tareas",
             "tabStatus": "Estado",
             "tabGraph": "Grafo",
             "convergenceMergedToMain": "Fusionado en main",

@@ -686,10 +686,47 @@
             "tooltipP2PRtt": "P2P round-trip latency",
             "tooltipPrefixStatus": "Status:",
             "tooltipPrefixBranch": "Branch:",
-            "tooltipPrefixNote": "Note:"
+            "tooltipPrefixNote": "Note:",
+            "defaultBranch": "default branch",
+            "submoduleSynced": "synced",
+            "moreChats_one": "+{{count}} more chat",
+            "moreChats_other": "+{{count}} more chats"
+        },
+        "legendEdge": {
+            "parentBranch": "default branch",
+            "cloneLink": "worktree clone",
+            "worktreeLink": "same branch",
+            "submoduleLink": "submodule",
+            "sessionLink": "session",
+            "orphanLink": "needs follow-up"
+        },
+        "taskDag": {
+            "empty": "No queue tasks yet — enqueue mesh tasks to see the dependency graph.",
+            "waitsOn_one": "waits on {{count}}",
+            "waitsOn_other": "waits on {{count}}",
+            "blocked": "blocked",
+            "missingDeps_one": "{{count}} unknown dep",
+            "missingDeps_other": "{{count}} unknown deps",
+            "selectedTask": "Selected task",
+            "statsTasks_one": "{{count}} task",
+            "statsTasks_other": "{{count}} tasks",
+            "statsEdges_one": "{{count}} dependency",
+            "statsEdges_other": "{{count}} dependencies",
+            "statsMissions_one": "{{count}} mission",
+            "statsMissions_other": "{{count}} missions",
+            "statsWaiting_one": "{{count}} waiting",
+            "statsWaiting_other": "{{count}} waiting",
+            "statsBlocked_one": "{{count}} blocked",
+            "statsBlocked_other": "{{count}} blocked",
+            "legend": {
+                "satisfied": "done",
+                "waiting": "waiting",
+                "failed": "failed"
+            }
         },
         "obs": {
             "tabOverview": "Overview",
+            "tabTasks": "Tasks",
             "tabStatus": "Status",
             "tabGraph": "Graph",
             "convergenceMergedToMain": "Merged to main",

@@ -1,4 +1,7 @@
 export { default as MeshGraphView } from './MeshGraphView'
+export { default as MeshTaskDagView } from './MeshTaskDagView'
+export { buildTaskDag } from './taskDagViewModel'
+export type { TaskDagData, TaskDagNode, TaskDagEdge, TaskDagEdgeState, TaskDagStats } from './taskDagViewModel'
 export { default as MeshGraphPanel } from './MeshGraphPanel'
 export { default as MeshObservabilitySurface, MeshSurfaceTabControls } from './MeshObservabilitySurface'
 export type { MeshSurfaceTab } from './MeshObservabilitySurface'

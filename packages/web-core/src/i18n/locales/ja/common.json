@@ -686,10 +686,47 @@
             "tooltipP2PRtt": "P2P ラウンドトリップ遅延",
             "tooltipPrefixStatus": "ステータス:",
             "tooltipPrefixBranch": "ブランチ:",
-            "tooltipPrefixNote": "メモ:"
+            "tooltipPrefixNote": "メモ:",
+            "defaultBranch": "デフォルトブランチ",
+            "submoduleSynced": "同期済み",
+            "moreChats_one": "+{{count}}件のチャット",
+            "moreChats_other": "+{{count}}件のチャット"
+        },
+        "legendEdge": {
+            "parentBranch": "デフォルトブランチ",
+            "cloneLink": "ワークツリークローン",
+            "worktreeLink": "同一ブランチ",
+            "submoduleLink": "サブモジュール",
+            "sessionLink": "セッション",
+            "orphanLink": "要フォローアップ"
+        },
+        "taskDag": {
+            "empty": "キュータスクがありません — mesh タスクを登録すると依存関係グラフが表示されます。",
+            "waitsOn_one": "{{count}}件待機",
+            "waitsOn_other": "{{count}}件待機",
+            "blocked": "ブロック中",
+            "missingDeps_one": "不明な依存 {{count}}件",
+            "missingDeps_other": "不明な依存 {{count}}件",
+            "selectedTask": "選択中のタスク",
+            "statsTasks_one": "タスク {{count}}件",
+            "statsTasks_other": "タスク {{count}}件",
+            "statsEdges_one": "依存 {{count}}件",
+            "statsEdges_other": "依存 {{count}}件",
+            "statsMissions_one": "ミッション {{count}}件",
+            "statsMissions_other": "ミッション {{count}}件",
+            "statsWaiting_one": "待機 {{count}}件",
+            "statsWaiting_other": "待機 {{count}}件",
+            "statsBlocked_one": "ブロック {{count}}件",
+            "statsBlocked_other": "ブロック {{count}}件",
+            "legend": {
+                "satisfied": "完了",
+                "waiting": "待機",
+                "failed": "失敗"
+            }
         },
         "obs": {
             "tabOverview": "概要",
+            "tabTasks": "タスク",
             "tabStatus": "ステータス",
             "tabGraph": "グラフ",
             "convergenceMergedToMain": "main にマージ済み",

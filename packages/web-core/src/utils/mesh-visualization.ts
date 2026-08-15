@@ -641,6 +641,19 @@ function evaluateBranchConvergence(node: RepoMeshNodeStatus, defaultBranch: stri
 }
 
 
+/**
+ * Last path segment of a workspace (handles both separators, trailing slashes).
+ * Used to title worktree checkouts by their directory name — the worktree dir
+ * encodes the branch/purpose, whereas the machine label repeated on every
+ * checkout card made a multi-checkout machine read as N duplicate machines.
+ */
+function workspaceBasename(workspace: string | null | undefined): string | null {
+    const raw = (workspace || '').trim().replace(/[\\/]+$/, '')
+    if (!raw) return null
+    const segments = raw.split(/[\\/]+/).filter(Boolean)
+    return segments[segments.length - 1] || null
+}
+
 function getSubmoduleHealth(submodule: MeshGraphSubmoduleStatus): RepoMeshNodeHealth {
     if (submodule.error || submodule.outOfSync) return 'degraded'
     if (submodule.dirty) return 'dirty'
@@ -753,10 +766,17 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const sessionDetails = readNodeSessionDetails(nodeStatus, difficultyBySessionId)
         const dominantRefineJob = pickDominantRefineJob(refineJobsByNode.get(nodeStatus.nodeId) ?? [])
         const projectedConnection = projectNodeConnection(nodeStatus)
+        // Checkout identity: a worktree/cloned checkout is titled by its directory
+        // name (unique per checkout); only the machine's base checkout is titled by
+        // the machine label. Titling every checkout with the machine label rendered a
+        // multi-checkout machine as N cards that all said the same machine name.
+        const isWorktreeCheckout = !!(nodeStatus.worktreeBranch) || !!rawClonedFromNodeId
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
-            label: nodeStatus.machineLabel || nodeStatus.nodeId.slice(0, 8),
+            label: isWorktreeCheckout
+                ? (workspaceBasename(nodeStatus.workspace) || nodeStatus.machineLabel || nodeStatus.nodeId.slice(0, 8))
+                : (nodeStatus.machineLabel || workspaceBasename(nodeStatus.workspace) || nodeStatus.nodeId.slice(0, 8)),
             workspace: nodeStatus.workspace,
             branch,
             upstream: git?.upstream ?? null,
@@ -864,7 +884,10 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 source: graphNode.id,
                 target: submoduleNodeId,
                 type: 'submoduleLink',
-                label: submodule.outOfSync ? 'submodule out of sync' : 'submodule',
+                // Only an EXCEPTIONAL submodule earns an edge label — a healthy
+                // "submodule" label on every edge doubled the visual noise of the
+                // per-checkout submodule cards without adding information.
+                label: submodule.outOfSync ? 'submodule out of sync' : undefined,
                 direction: 'directed',
             })
         }
@@ -954,7 +977,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                     source: defaultBranchNodeId,
                     target: node.id,
                     type: 'parentBranch',
-                    label: 'checked out',
+                    // No label: the anchor→member relationship is the edge itself; a
+                    // "checked out" chip on every default-branch member was pure noise.
                     direction: 'undirected',
                 })
                 continue
@@ -991,13 +1015,15 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         const edgeId = `clone_${node.clonedFromNodeId}--${node.id}`
         if (cloneLinkEdgeIds.has(edgeId)) continue
         cloneLinkEdgeIds.add(edgeId)
-        const branchLabel = node.worktreeBranch ?? node.branch ?? undefined
         edges.push({
             id: edgeId,
             source: node.clonedFromNodeId,
             target: node.id,
             type: 'cloneLink',
-            label: branchLabel ? `cloned · ${branchLabel}` : 'cloned',
+            // Just "cloned" — the worktree card already shows its branch pill, so
+            // repeating the (often very long) branch name mid-edge only collided
+            // with other labels and got truncated anyway.
+            label: 'cloned',
             direction: 'directed',
         })
     }

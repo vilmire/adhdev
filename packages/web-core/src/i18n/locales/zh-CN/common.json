@@ -686,10 +686,47 @@
             "tooltipP2PRtt": "P2P 往返延迟",
             "tooltipPrefixStatus": "状态：",
             "tooltipPrefixBranch": "分支：",
-            "tooltipPrefixNote": "备注："
+            "tooltipPrefixNote": "备注：",
+            "defaultBranch": "默认分支",
+            "submoduleSynced": "已同步",
+            "moreChats_one": "还有 {{count}} 个会话",
+            "moreChats_other": "还有 {{count}} 个会话"
+        },
+        "legendEdge": {
+            "parentBranch": "默认分支",
+            "cloneLink": "工作树克隆",
+            "worktreeLink": "同一分支",
+            "submoduleLink": "子模块",
+            "sessionLink": "会话",
+            "orphanLink": "需要跟进"
+        },
+        "taskDag": {
+            "empty": "队列中还没有任务 — 提交 mesh 任务后即可查看依赖图。",
+            "waitsOn_one": "等待 {{count}} 项",
+            "waitsOn_other": "等待 {{count}} 项",
+            "blocked": "已阻塞",
+            "missingDeps_one": "{{count}} 个未知依赖",
+            "missingDeps_other": "{{count}} 个未知依赖",
+            "selectedTask": "选中的任务",
+            "statsTasks_one": "{{count}} 个任务",
+            "statsTasks_other": "{{count}} 个任务",
+            "statsEdges_one": "{{count}} 条依赖",
+            "statsEdges_other": "{{count}} 条依赖",
+            "statsMissions_one": "{{count}} 个任务组",
+            "statsMissions_other": "{{count}} 个任务组",
+            "statsWaiting_one": "{{count}} 个等待中",
+            "statsWaiting_other": "{{count}} 个等待中",
+            "statsBlocked_one": "{{count}} 个已阻塞",
+            "statsBlocked_other": "{{count}} 个已阻塞",
+            "legend": {
+                "satisfied": "完成",
+                "waiting": "等待",
+                "failed": "失败"
+            }
         },
         "obs": {
             "tabOverview": "概览",
+            "tabTasks": "任务",
             "tabStatus": "状态",
             "tabGraph": "图谱",
             "convergenceMergedToMain": "已合并到 main",

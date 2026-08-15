@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import MeshGraphView from './MeshGraphView'
+import MeshTaskDagView from './MeshTaskDagView'
 import MeshOverviewCards from './MeshOverviewCards'
 import { MeshHelpPanel, MeshHelpToggle } from './MeshHelpPanel'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
@@ -59,7 +60,7 @@ type DetailSelection =
     | { kind: 'session'; nodeId: string; sessionId: string }
     | { kind: 'queue'; taskId: string }
 
-export type MeshSurfaceTab = 'overview' | 'status' | 'notes' | 'graph'
+export type MeshSurfaceTab = 'overview' | 'tasks' | 'status' | 'notes' | 'graph'
 
 interface MeshObservabilitySurfaceProps {
     status: RepoMeshStatus
@@ -110,6 +111,15 @@ export function MeshSurfaceTabControls({
         <div className="flex items-center gap-2">
             <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
                 <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => onActiveTabChange('overview')}>{t('meshGraph.obs.tabOverview')}</button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'tasks'}
+                    className={tabButtonClass(activeTab === 'tasks')}
+                    onClick={() => onActiveTabChange('tasks')}
+                >
+                    {t('meshGraph.obs.tabTasks')}
+                </button>
                 <button
                     type="button"
                     role="tab"
@@ -194,6 +204,18 @@ export default function MeshObservabilitySurface({
     useEffect(() => {
         if (activeTab === 'graph') setGraphMounted(true)
     }, [activeTab])
+    // Same lazy-mount treatment for the task-DAG tab: React Flow + ELK stay
+    // unloaded until the user first opens it.
+    const [taskDagMounted, setTaskDagMounted] = useState(false)
+    useEffect(() => {
+        if (activeTab === 'tasks') setTaskDagMounted(true)
+    }, [activeTab])
+    // Queue rows for the task DAG — the status snapshot carries raw queue entries
+    // (dependsOn included) under queue.tasks; legacy payloads used queue.items.
+    const queueTasks = useMemo<RepoMeshQueueTask[]>(() => {
+        const raw = (canonicalStatus.queue as any)?.tasks ?? (canonicalStatus.queue as any)?.items ?? null
+        return Array.isArray(raw) ? (raw as RepoMeshQueueTask[]) : []
+    }, [canonicalStatus.queue])
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
@@ -468,6 +490,23 @@ export default function MeshObservabilitySurface({
                 )}
                 {/* MAGI named-panels overview removed — the named-panel surface (magi_panel_*)
                     was deleted; only the task_kind / magi_kind_panel_* surface remains. */}
+            </div>
+
+            {/* ── Tasks tab: work-queue dependency DAG (lazily mounted) ── */}
+            <div className={`${activeTab === 'tasks' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col`}>
+                <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px]`} style={{ minHeight: 420 }}>
+                    {taskDagMounted ? (
+                        // absolute-fill so React Flow receives a CONCRETE height — a
+                        // percentage height through the flex chain resolves to 0 when
+                        // the card only has a min-height (nodes then render outside the
+                        // overflow-hidden card and the canvas looks empty).
+                        <div className="absolute inset-0">
+                            <MeshTaskDagView tasks={queueTasks} />
+                        </div>
+                    ) : (
+                        <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('meshGraph.obs.loadingGraph')}</div>
+                    )}
+                </div>
             </div>
 
             {/* ── Status / Runtime tab: scheduling + per-node runtime (own scroll region) ── */}

@@ -1756,6 +1756,25 @@ export interface RepoMeshQueueTask {
      * a difficulty (pre-existing rows, or freeform-classified work).
      */
     difficulty?: string;
+    /**
+     * M1 dependency edges carried on {@link MeshWorkQueueEntry} — like `difficulty`,
+     * already on the wire (mesh_status serializes raw queue rows) and typed here the
+     * moment a UI needed it: the task-DAG view renders these as graph edges. Absent
+     * on tasks enqueued without dependencies.
+     */
+    dependsOn?: string[];
+    /** M1/M3 mission this task belongs to (same wire-already provenance as dependsOn). */
+    missionId?: string;
+    /** G6 task-level scheduling priority ('low' | 'normal' | 'high'); absent = normal. */
+    priority?: string;
+    /** M1 dependency-failure block marker ("dependency_failed:<taskId>") under the 'block' policy. */
+    blockedReason?: string;
+    /** Task-mode contract (code_change | validation | live_debug_readonly | launch_app | convergence). */
+    taskMode?: string;
+    /** QUEUE-NODE-SERIALIZATION read-only axis (orthogonal to taskMode). */
+    readonly?: boolean;
+    /** G7 delayed-execution hold (ISO timestamp) — the task stays pending until this time. */
+    notBefore?: string;
     targetNodeId?: string;
     targetSessionId?: string;
     assignedNodeId?: string;

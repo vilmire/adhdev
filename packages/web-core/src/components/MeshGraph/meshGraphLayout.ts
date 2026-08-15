@@ -17,10 +17,16 @@ import {
 
 export const MESH_GRAPH_LAYOUT = {
     worktreeCardWidth: 256,
-    submoduleCardWidth: 228,
-    minWorktreeCardHeight: 174,
-    minSubmoduleCardHeight: 146,
-    maxEstimatedCardHeight: 304,
+    // Submodules render as MICRO cards (name + state chip), not machine-card
+    // chrome — a fraction of the old footprint so N checkouts × M submodules no
+    // longer dominate the canvas.
+    submoduleCardWidth: 180,
+    // The default-branch anchor is a compact branch pill, not a machine card.
+    anchorCardWidth: 232,
+    minWorktreeCardHeight: 150,
+    minSubmoduleCardHeight: 56,
+    minAnchorCardHeight: 44,
+    maxEstimatedCardHeight: 360,
     layerGap: 220,
     nodeGap: 82,
     edgeLabelBuffer: 180,
@@ -29,10 +35,12 @@ export const MESH_GRAPH_LAYOUT = {
 
 export const MESH_GRAPH_LAYOUT_COMPACT = {
     worktreeCardWidth: 188,
-    submoduleCardWidth: 188,
+    submoduleCardWidth: 156,
+    anchorCardWidth: 196,
     minWorktreeCardHeight: 88,
-    minSubmoduleCardHeight: 88,
-    maxEstimatedCardHeight: 178,
+    minSubmoduleCardHeight: 50,
+    minAnchorCardHeight: 40,
+    maxEstimatedCardHeight: 230,
     layerGap: 160,
     nodeGap: 52,
     edgeLabelBuffer: 120,
@@ -58,8 +66,10 @@ function elkDirection(dir: MeshGraphDirection): 'RIGHT' | 'DOWN' {
 interface MeshGraphLayoutShape {
     readonly worktreeCardWidth: number
     readonly submoduleCardWidth: number
+    readonly anchorCardWidth: number
     readonly minWorktreeCardHeight: number
     readonly minSubmoduleCardHeight: number
+    readonly minAnchorCardHeight: number
     readonly maxEstimatedCardHeight: number
     readonly layerGap: number
     readonly nodeGap: number
@@ -154,7 +164,9 @@ const elk = new ELK()
 
 export function getMeshGraphNodeCardWidth(node: MeshGraphNode, compact = false): number {
     const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
-    return node.type === 'submoduleNode' ? layout.submoduleCardWidth : layout.worktreeCardWidth
+    if (node.type === 'submoduleNode') return layout.submoduleCardWidth
+    if (node.type === 'defaultBranchNode') return layout.anchorCardWidth
+    return layout.worktreeCardWidth
 }
 
 export function getNodeSummaryForLayout(node: MeshGraphNode): string {
@@ -185,28 +197,45 @@ export function getNodeSummaryForLayout(node: MeshGraphNode): string {
     return parts.join(' · ')
 }
 
+/** Mirrors MeshGraphView's CARD_SESSION_ROW_CAP — per-session rows shown on a card. */
+export const MESH_GRAPH_CARD_SESSION_ROWS = 2
+
 export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false): number {
     const layout = compact ? MESH_GRAPH_LAYOUT_COMPACT : MESH_GRAPH_LAYOUT
+
+    // Anchor pill: single centered row (+ nothing else — attention renders as a dot).
+    if (node.type === 'defaultBranchNode') {
+        return layout.minAnchorCardHeight
+    }
+
+    // Submodule micro card: name row + state row.
+    if (node.type === 'submoduleNode') {
+        return layout.minSubmoduleCardHeight
+    }
+
     const width = getMeshGraphNodeCardWidth(node, compact)
-    const charsPerLine = compact
-        ? (node.type === 'submoduleNode' ? 20 : 22)
-        : (node.type === 'submoduleNode' ? 24 : 30)
-    const badgesPerRow = compact
-        ? (node.type === 'submoduleNode' ? 2 : 2)
-        : (node.type === 'submoduleNode' ? 2 : 3)
+    const charsPerLine = compact ? 22 : 30
+    const badgesPerRow = compact ? 2 : 3
     const badgeRows = Math.ceil(countRenderedBadges(node) / badgesPerRow)
-    const titleLines = estimateTextLines(node.label, charsPerLine, compact ? 2 : 2)
-    const subtitleLines = estimateTextLines(
-        node.type === 'submoduleNode' ? node.submodulePath : node.machineLabel || node.workspace,
-        charsPerLine,
-        compact ? 2 : 2,
-    )
+    const titleLines = estimateTextLines(node.label, charsPerLine, 2)
+    const subtitleLines = estimateTextLines(node.machineLabel || node.workspace, charsPerLine, 2)
     const summaryLines = estimateTextLines(getNodeSummaryForLayout(node), charsPerLine + (compact ? 1 : 4), compact ? 2 : 3)
     const attentionBadge = getMeshGraphAttentionBadge(node)
     const calloutText = shouldShowMeshGraphCallout(node) ? getMeshGraphCalloutText(node) : null
     const calloutLines = compact
         ? 0
         : estimateTextLines(calloutText, Math.max(24, Math.floor(width / 8)), 4)
+    // Session block is now bounded (summary pill + up to MESH_GRAPH_CARD_SESSION_ROWS
+    // rows + an overflow line), so the estimator can account for it — the old
+    // unbounded scroll list was invisible to the estimator and the first-pass
+    // layout undershot busy nodes badly.
+    const sessionCount = node.sessionDetails?.length ?? 0
+    const sessionRows = Math.min(MESH_GRAPH_CARD_SESSION_ROWS, sessionCount)
+    const sessionBlock = sessionCount > 0
+        ? (compact
+            ? 14 + sessionRows * 36 + (sessionCount > sessionRows ? 14 : 0)
+            : 24 + 22 + sessionRows * 48 + (sessionCount > sessionRows ? 16 : 0))
+        : 0
 
     const estimated = compact
         ? 40
@@ -214,19 +243,17 @@ export function estimateMeshGraphNodeHeight(node: MeshGraphNode, compact = false
             + subtitleLines * 12
             + (attentionBadge ? 22 : 0)
             + Math.max(0, badgeRows - 1) * 18
-            + Math.max(18, summaryLines * 16)
+            + sessionBlock
         : 52
             + titleLines * 18
             + subtitleLines * 14
             + (attentionBadge ? 30 : 0)
             + badgeRows * 24
             + Math.max(22, summaryLines * 18)
+            + sessionBlock
             + (calloutLines > 0 ? 22 + calloutLines * 16 : 0)
 
-    const minHeight = node.type === 'submoduleNode'
-        ? layout.minSubmoduleCardHeight
-        : layout.minWorktreeCardHeight
-    return Math.min(layout.maxEstimatedCardHeight, Math.max(minHeight, Math.ceil(estimated)))
+    return Math.min(layout.maxEstimatedCardHeight, Math.max(layout.minWorktreeCardHeight, Math.ceil(estimated)))
 }
 
 function estimateTextLines(value: string | null | undefined, charsPerLine: number, maxLines: number): number {
@@ -236,14 +263,16 @@ function estimateTextLines(value: string | null | undefined, charsPerLine: numbe
 }
 
 function countRenderedBadges(node: MeshGraphNode): number {
-    let count = 1
-    if (node.type === 'submoduleNode') count += 1
-    if (node.branch && node.type !== 'submoduleNode') count += 1
-    if (node.submoduleCommit && node.type === 'submoduleNode') count += 1
+    // Health pill renders only when it says something the status dot cannot
+    // (unknown / degraded / …) — 'online' is dot-only, keeping healthy cards quiet.
+    let count = node.health === 'online' ? 0 : 1
+    if (node.branch) count += 1
+    if (node.locality === 'remote') count += 1
+    if (node.connectionTransport || node.connectionRttMs != null) count += 1
     if (node.dirty) count += 1
     if (node.outOfSync) count += 1
     if (node.hasConflicts) count += 1
-    if (node.type !== 'submoduleNode' && node.upstream && node.upstreamStatus !== 'fresh') count += 1
+    if (node.upstream && node.upstreamStatus !== 'fresh') count += 1
     if (node.isOrphan) count += 1
     return count
 }

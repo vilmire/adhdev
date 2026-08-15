@@ -11,6 +11,13 @@ const localWebCoreSupported = fileURLToPath(new URL('../web-core/src/constants/s
 const localWebCoreRoot = fileURLToPath(new URL('../web-core', import.meta.url))
 const workspaceRoot = searchForWorkspaceRoot(process.cwd())
 
+// Dev-only: point the proxy at a non-default daemon port so a second standalone
+// stack can run beside an existing daemon that already holds 3847 (common on a
+// machine whose real daemon is live). Default unchanged.
+const standaloneDaemonPort = process.env.ADHDEV_STANDALONE_DAEMON_PORT?.trim() || '3847'
+const daemonHttpTarget = `http://localhost:${standaloneDaemonPort}`
+const daemonWsTarget = `ws://localhost:${standaloneDaemonPort}`
+
 export default defineConfig({
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -61,9 +68,9 @@ export default defineConfig({
             allow: [workspaceRoot, localWebCoreRoot],
         },
         proxy: {
-            '/api': 'http://localhost:3847',
-            '/auth': 'http://localhost:3847',
-            '/ws': { target: 'ws://localhost:3847', ws: true },
+            '/api': daemonHttpTarget,
+            '/auth': daemonHttpTarget,
+            '/ws': { target: daemonWsTarget, ws: true },
             // Marketplace registry — proxied to production API so the dev origin
             // (localhost:3000) doesn't hit production CORS. See
             // StandaloneMarketplace.tsx.

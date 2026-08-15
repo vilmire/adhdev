@@ -1111,8 +1111,10 @@ describe('buildMeshGraph', () => {
         expect(cloneEdge?.source).toBe('node_main')
         expect(cloneEdge?.target).toBe('node_feature')
         expect(cloneEdge?.direction).toBe('directed')
-        expect(cloneEdge?.label).toContain('cloned')
-        expect(cloneEdge?.label).toContain('feature/my-task')
+        // UI/UX refactor: the edge label is just "cloned" — the branch renders as
+        // the worktree card's own pill, so repeating it mid-edge only produced a
+        // long truncated chip. The branch stays on the NODE (worktreeBranch above).
+        expect(cloneEdge?.label).toBe('cloned')
     })
 
     it('does not emit cloneLink when clonedFromNodeId points to a non-existent node', () => {
