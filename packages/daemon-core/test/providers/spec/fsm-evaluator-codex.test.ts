@@ -364,23 +364,48 @@ describe('codex-cli v4 FSM — assistant text cannot self-match spinner chrome',
         expect(ev.fired?.to).toBe('idle');
     });
 
-    it('idle→busy is scoped to status_tail (not the whole-screen body)', () => {
+    // CODEX-LONG-OUTPUT-BUSY-SIGNAL (2026-08-15) reversed the scoping decision these
+    // two cases used to assert. The status_tail window is anchored on the composer,
+    // which does NOT pin the spinner: on long output the spinner scrolls above the
+    // window (and mid-turn, with the composer absent, anchor_miss:'empty' collapses
+    // the section entirely), so every spinner veto read "no spinner" DURING generation
+    // and busy→idle could only exit via its 30s elapsed fallback. The cue is now
+    // scoped WHOLE-SCREEN and SELFMATCH is prevented by the cue SHAPE instead — see
+    // fsm-codex-longoutput-busysignal.test.ts. The two behavioral cases above (prose
+    // must not read as busy) are unchanged and still pass.
+    it('idle→busy is scoped whole-screen so long output cannot hide the spinner', () => {
         const idleToBusy = spec.transitions.find(t => t.label === 'idle→busy')!;
-        expect((idleToBusy.when as any).section).toBe('status_tail');
+        expect((idleToBusy.when as any).section).toBe('screen');
+        expect((spec.sections as any).screen).toEqual({ from_top: 0 });
     });
 
-    it('the tail-anchored spinner regex rejects quoted prose but keeps the live spinner/hint', () => {
+    it('the line-anchored spinner regex rejects quoted prose but keeps the live spinner', () => {
         const re = new RegExp((spec.transitions.find(t => t.label === 'idle→busy')!.when as any).matches, 'i');
         // Prose that merely mentions the cue must NOT match.
         expect(re.test('  string here — Working (like this) or esc to interrupt —')).toBe(false);
         expect(re.test('  quoting the bare esc to interrupt hint')).toBe(false);
         expect(re.test('  explaining the Working (header) cue')).toBe(false);
-        // The genuine animated spinner header (glyph or elapsed digit) still matches.
+        // The genuine animated spinner header (glyph or elapsed digit) still matches,
+        // with or without a leading decoration glyph. The prefix is deliberately NOT
+        // braille-only: codex has shipped bullet/bar/dot spinner glyphs too, and a
+        // braille-only prefix would silently miss those (which is the same class of
+        // failure this defect is about — a cue that cannot see a live spinner).
         expect(re.test('  Working (⣿ 3s)')).toBe(true);
         expect(re.test('  Thinking (⣾ 12s)')).toBe(true);
-        // The genuine footer interrupt hint inside the live status parens matches.
         expect(re.test('  Working (⣿ 3s · esc to interrupt)')).toBe(true);
-        expect(re.test('  … • esc to interrupt)')).toBe(true);
+        expect(re.test('⠋ Working (2m 14s • esc to interrupt)')).toBe(true);
+        expect(re.test('• Working (12m 03s • esc to interrupt)')).toBe(true);
+        expect(re.test('▌ Working (5s)')).toBe(true);
+        expect(re.test('· Working (5s)')).toBe(true);
+        // ...but a quote/backtick/markdown opener is prose, never a spinner glyph.
+        expect(re.test('"Working (2s • esc to interrupt)" appears in the tail')).toBe(false);
+        expect(re.test('`Working (3s)` matches')).toBe(false);
+        expect(re.test('*Working (4s)* in markdown')).toBe(false);
+        // The BARE footer hint is no longer a cue on its own: measured, it is the
+        // alternative that assistant prose actually self-matches, and it is redundant
+        // because codex always renders it on the same line as `Working (`/`Thinking (`.
+        expect(re.test('  … • esc to interrupt)')).toBe(false);
+        expect(re.test('  status shows (12s • esc to interrupt)')).toBe(false);
     });
 
     it('a live tail spinner still drives idle→busy (fix is a guard, not an over-fix)', () => {

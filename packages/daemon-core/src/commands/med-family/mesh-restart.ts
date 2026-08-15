@@ -58,6 +58,7 @@
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { daemonLifecycleHandlers } from '../low-family/daemon-lifecycle.js';
 import { LOG } from '../../logging/logger.js';
+import { IDENTITY, TRACK } from '../../track-identity.js';
 import { resolveSessionTurnPresentation, isRestartBlockingPresentation } from '../../mesh/mesh-turn-presentation.js';
 import {
     clearDeferredRestartSchedule,
@@ -187,6 +188,26 @@ export function __clearDeferredRestartsForTests(): void {
 
 function normalizeRestartMode(value: unknown): RestartMode {
     return value === 'restart' ? 'restart' : 'upgrade';
+}
+
+/**
+ * Identify the daemon process that actually accepted the lifecycle operation.
+ * This is intentionally separate from daemon_upgrade's legacy `channel` /
+ * `npmTag` fields: mesh callers need an explicit target identity to compare
+ * with the daemon observed for the node before issuing the command.
+ */
+function withRestartTargetDaemon(
+    result: CommandRouterResult,
+    selfDaemonId: string | undefined,
+): CommandRouterResult {
+    return {
+        ...result,
+        restartTargetDaemon: {
+            daemonId: selfDaemonId || 'unknown',
+            track: TRACK,
+            npmTag: IDENTITY.npmTag,
+        },
+    } as CommandRouterResult;
 }
 
 function restartWarnings(args: { killSessionHost: boolean; forced: boolean }): string[] {
@@ -347,6 +368,9 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         }
 
         const selfDaemonId = ctx.deps.statusInstanceId;
+        const finishHere = (result: CommandRouterResult): CommandRouterResult => (
+            withRestartTargetDaemon(result, selfDaemonId)
+        );
         // daemonIdsEquivalent: a legacy-form daemonId resolving to this machine's
         // core is local — execute here instead of forwarding (and P2P self-dial).
         // Equivalent → local. _meshDirectDispatch prevents re-forwarding once the
@@ -368,10 +392,10 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         if (args?.cancelWhenIdle === true) {
             const had = pendingDeferredRestarts.has(scheduleKey);
             clearPendingDeferredRestart(scheduleKey);
-            return { success: true, restarted: false, cancelled: had, deferredRestart: null } as CommandRouterResult;
+            return finishHere({ success: true, restarted: false, cancelled: had, deferredRestart: null } as CommandRouterResult);
         }
         if (args?.whenIdleStatus === true) {
-            return { success: true, restarted: false, deferredRestart: deferredRestartInfo(scheduleKey) } as CommandRouterResult;
+            return finishHere({ success: true, restarted: false, deferredRestart: deferredRestartInfo(scheduleKey) } as CommandRouterResult);
         }
 
         // Idle-gate: refuse if any session on THIS daemon is mid-turn / awaiting
@@ -383,7 +407,7 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
                 // Bypass the gate entirely. Audit-logged: this kills in-flight
                 // turns and drops the unpersisted pendingOutboundQueue.
                 LOG.warn('MeshRestart', `force restart over ${blocking.length} blocking session(s): ${blocking.map((b) => `${b.instanceId || '?'}(${b.status})`).join(', ')} — pendingOutboundQueue will be lost`);
-                return executeRestart(ctx.deps, args, { forced: true });
+                return finishHere(await executeRestart(ctx.deps, args, { forced: true }));
             }
             // selfOnly waives ONLY the calling mesh's own coordinator sessions —
             // and never a pendingOutbound block: a queued outbound coordinator
@@ -394,12 +418,12 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
                 // Only the calling mesh's own coordinator session is blocking —
                 // the structural self-deadlock case. Waive exactly those.
                 LOG.info('MeshRestart', `selfOnly restart: waiving ${blocking.length} self-coordinator session(s) for mesh ${meshId}`);
-                return executeRestart(ctx.deps, args, { forced: false });
+                return finishHere(await executeRestart(ctx.deps, args, { forced: false }));
             }
             if (args?.whenIdle === true) {
-                return scheduleDeferredRestart(ctx.deps, args, meshId, nodeId);
+                return finishHere(scheduleDeferredRestart(ctx.deps, args, meshId, nodeId));
             }
-            return {
+            return finishHere({
                 success: false,
                 restarted: false,
                 code: 'blocking_sessions',
@@ -411,9 +435,9 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
                     whenIdle: 'schedule the restart to run automatically once the daemon goes idle (safest)',
                 },
                 deferredRestart: deferredRestartInfo(scheduleKey),
-            } as CommandRouterResult;
+            } as CommandRouterResult);
         }
 
-        return executeRestart(ctx.deps, args, { forced: false });
+        return finishHere(await executeRestart(ctx.deps, args, { forced: false }));
     },
 };

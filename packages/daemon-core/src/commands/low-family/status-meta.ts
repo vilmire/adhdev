@@ -11,6 +11,7 @@ import { loadConfig, updateConfig } from '../../config/config.js';
 import { readUpgradeFailureNotice } from '../upgrade-helper.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../../status/snapshot.js';
 import { getDaemonBuildInfo } from '../../build-info.js';
+import { TRACK } from '../../track-identity.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 // Cache-only read (no fetcher call) — see quota/refresh.ts header. Both
 // get_machine_runtime_stats and get_session_info are on-demand commands (dialog
@@ -56,7 +57,11 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         return {
             success: true,
             status: snapshot,
-            daemonBuild: getDaemonBuildInfo(),
+            // `track` is reported by the daemon that answered this command. It
+            // must travel explicitly: version strings do not identify a release
+            // track (stable can legitimately publish an rc), and an older daemon
+            // that omits this field must remain "unknown" to remote consumers.
+            daemonBuild: { ...getDaemonBuildInfo(), track: TRACK },
             upgradeFailure: readUpgradeFailureNotice(),
             providerChannelStaleness: ctx.deps.providerLoader?.getChannelStalenessSnapshot?.() ?? null,
         };

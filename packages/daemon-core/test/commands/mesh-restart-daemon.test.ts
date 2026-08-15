@@ -36,6 +36,7 @@ vi.mock('../../src/commands/low-family/daemon-lifecycle.js', () => ({
 }))
 
 import { meshRestartHandlers } from '../../src/commands/med-family/mesh-restart'
+import { IDENTITY, TRACK } from '../../src/track-identity'
 
 const MESH_ID = 'mesh-restart-test'
 const SELF_DAEMON_ID = 'daemon_mach_self'
@@ -92,6 +93,11 @@ describe('restart_daemon_node — backward compatibility', () => {
     expect(daemonUpgrade).toHaveBeenCalledTimes(1)
     expect(daemonRestart).not.toHaveBeenCalled()
     expect(result).toMatchObject({ success: true, restarted: true, mode: 'upgrade' })
+    expect(result.restartTargetDaemon).toEqual({
+      daemonId: SELF_DAEMON_ID,
+      track: TRACK,
+      npmTag: IDENTITY.npmTag,
+    })
   })
 
   it('bare call on already-latest stays a no-op (no restart)', async () => {

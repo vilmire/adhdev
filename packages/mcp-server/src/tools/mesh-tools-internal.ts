@@ -2222,7 +2222,8 @@ async function collectLiveStatusSessionsVerified(
 
 /**
  * One get_status_metadata probe → the live session list, the daemon's build
- * stamp, and any failed-upgrade notice. Used by mesh_status so a single
+ * stamp (including its explicitly reported release track), and any
+ * failed-upgrade notice. Used by mesh_status so a single
  * daemon-wide probe yields the sessions, the `daemonBuild` field
  * (commit/version of the running daemon) AND `upgradeFailure`.
  */
@@ -2231,15 +2232,18 @@ export async function collectLiveStatusProbe(
     node: LocalMeshNodeEntry,
 ): Promise<{
     sessions: any[];
-    daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string };
+    daemonId?: string;
+    daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string; track: 'stable' | 'preview' | 'unknown' };
     upgradeFailure?: MeshUpgradeFailureSummary;
 }> {
     try {
         // OFFLINE-NODE-STATUS-REFRESH: part of the mesh_status per-node assembly — mark it
         // status-origin so the relay to an offline peer uses the SHORT connect-wait budget.
         const statusResult = await commandForNode(ctx, node, 'get_status_metadata', {}, { statusProbe: true });
+        const payload = unwrapCommandPayload(statusResult);
         return {
             sessions: extractStatusMetadataSessions(statusResult),
+            ...(readString(payload?.status?.instanceId) ? { daemonId: readString(payload.status.instanceId) } : {}),
             daemonBuild: extractDaemonBuildInfo(statusResult),
             upgradeFailure: extractUpgradeFailureSummary(statusResult),
         };
@@ -2307,7 +2311,7 @@ export function extractUpgradeFailureSummary(value: any): MeshUpgradeFailureSumm
     };
 }
 
-export function extractDaemonBuildInfo(value: any): { commit: string; commitShort: string; version: string; builtAt?: string } | undefined {
+export function extractDaemonBuildInfo(value: any): { commit: string; commitShort: string; version: string; builtAt?: string; track: 'stable' | 'preview' | 'unknown' } | undefined {
     const payload = unwrapCommandPayload(value);
     const build = payload?.daemonBuild && typeof payload.daemonBuild === 'object'
         ? payload.daemonBuild
@@ -2315,11 +2319,19 @@ export function extractDaemonBuildInfo(value: any): { commit: string; commitShor
     if (!build) return undefined;
     const commit = readString(build.commit);
     if (!commit) return undefined;
+    const reportedTrack = readString(build.track);
+    // Missing/unrecognized is UNKNOWN, never stable. resolveBuildTrack()'s
+    // fail-closed stable default applies inside the reporting daemon; it is not
+    // evidence that a legacy remote daemon actually reported stable.
+    const track = reportedTrack === 'stable' || reportedTrack === 'preview'
+        ? reportedTrack
+        : 'unknown';
     return {
         commit,
         commitShort: readString(build.commitShort) || commit.slice(0, 7),
         version: readString(build.version) || 'unknown',
         ...(readString(build.builtAt) ? { builtAt: readString(build.builtAt) } : {}),
+        track,
     };
 }
 

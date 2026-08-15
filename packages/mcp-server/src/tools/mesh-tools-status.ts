@@ -474,11 +474,13 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             }
         }
     }
-    // Per-daemon build fold: the daemon build stamp is identical for every node
+    // Per-daemon build fold: the daemon build stamp (commit/version/track) is identical for every node
     // sharing a daemonId (it's a daemon-wide probe), so record it ONCE per
     // daemonId at the top level. Small field — emitted in both compact and
     // verbose modes so the coordinator can compare the live daemon's commit with
-    // a just-merged fix without paging through nodes.
+    // a just-merged fix and see its explicitly reported release track without
+    // paging through nodes. Legacy peers carry track:'unknown', never an inferred
+    // stable value.
     const daemonBuilds: Record<string, unknown> = {};
     for (const entry of results as any[]) {
         const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';

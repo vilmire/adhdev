@@ -45,7 +45,11 @@ import {
 } from '../config/registry-resolver.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
-import { createNativeHistoryDispatcher, type ReaderId } from './native-history/dispatcher.js';
+import {
+  createNativeHistoryDispatcher,
+  createNativeHistoryListDispatcher,
+  type ReaderId,
+} from './native-history/dispatcher.js';
 import { resolveProviderChannel, type ProviderChannel } from './channel/contract.js';
 import { ProviderChannelStore, type ActivationPointer } from './channel/store.js';
 import {
@@ -2011,6 +2015,13 @@ export class ProviderLoader {
             const dispatch = createNativeHistoryDispatcher(nh.reader as ReaderId);
             format = nh.reader;
             reader = (input: any) => dispatch(input);
+            // Readers whose on-disk store is enumerable expose a lister too.
+            // Without it `list_saved_sessions` returns [] no matter how many
+            // transcripts exist (same gap the declarative jsonl path fills
+            // above). Returns null for readers that have no enumerator, so the
+            // existing claude/codex/antigravity/hermes wiring is unchanged.
+            const listDispatch = createNativeHistoryListDispatcher(nh.reader as ReaderId);
+            if (listDispatch) lister = (input: any) => listDispatch(input);
           }
 
           if (reader) {

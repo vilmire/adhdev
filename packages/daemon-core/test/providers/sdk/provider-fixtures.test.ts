@@ -221,3 +221,59 @@ describe('provider fixtures — codex-cli', () => {
     },
   );
 });
+
+// ─── grok-cli fixtures ─────────────────────────────────────────────────────
+
+describe('provider fixtures — grok-cli', () => {
+  const MANIFEST_PATH = manifestPath('cli', 'grok-cli');
+
+  if (!existsSync(MANIFEST_PATH)) {
+    it.skip('manifest not found — skipping all grok-cli fixture tests', () => undefined);
+    return;
+  }
+
+  const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf-8')) as Record<string, unknown>;
+  const handlers = buildHandlersFromManifest(manifest);
+
+  // ─── generating-to-idle ─────────────────────────────────────────────────
+
+  const generatingToIdlePath = fixturePath('cli', 'grok-cli', 'generating-to-idle');
+
+  it.skipIf(!ptyExists(generatingToIdlePath))(
+    'generating-to-idle: braille spinner + [stop] → generating; footer without Esc:cancel → idle',
+    () => {
+      const result = replayFixture(generatingToIdlePath, handlers, { spawnAt: 1000 });
+      if (!result.overallPasses) {
+        throw new Error(`Fixture replay failed:\n${formatReplayReport(result)}`);
+      }
+      expect(result.overallPasses).toBe(true);
+      expect(result.perAnchor).toHaveLength(2);
+      expect(result.perAnchor[0].anchor.name).toBe('tool active');
+      expect(result.perAnchor[1].anchor.name).toBe('settled prompt');
+    },
+  );
+
+  // ─── approval-modal ─────────────────────────────────────────────────────
+
+  const approvalModalPath = fixturePath('cli', 'grok-cli', 'approval-modal');
+
+  it.skipIf(!ptyExists(approvalModalPath))(
+    'approval-modal: radio rows + N/M:select → waiting_approval (modal beats the spinner still in buffer)',
+    () => {
+      const result = replayFixture(approvalModalPath, handlers, { spawnAt: 1000 });
+      if (!result.overallPasses) {
+        throw new Error(`Fixture replay failed:\n${formatReplayReport(result)}`);
+      }
+      expect(result.overallPasses).toBe(true);
+      expect(result.perAnchor).toHaveLength(1);
+      expect(result.perAnchor[0].anchor.name).toBe('modal visible');
+      const actual = result.perAnchor[0].actual;
+      expect(actual.detectStatus).toBe('waiting_approval');
+      // Button labels are asserted against the same captured screen in
+      // fsm-evaluator-grok.test.ts (extractButtonsFromRule), where the modal
+      // section is resolved directly. The replay runner only records the
+      // handlers an anchor's `expect` asks for, so parseApproval is not
+      // checked here — same reason the claude-cli fixture skips it.
+    },
+  );
+});

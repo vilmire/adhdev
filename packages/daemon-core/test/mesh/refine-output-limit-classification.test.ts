@@ -48,6 +48,13 @@ const routerSrc = readFileSync(
   path.resolve(here, '../../src/commands/router-refine.ts'),
   'utf8',
 );
+// GHOST-FAILURE: the terminal-kind classification moved out of router-refine.ts into
+// this module (a pure move, to keep router-refine.ts under its frozen file-size
+// baseline). The mapping assertions below follow it here; the behaviour is unchanged.
+const landingSrc = readFileSync(
+  path.resolve(here, '../../src/mesh/mesh-refine-landing.ts'),
+  'utf8',
+);
 
 /**
  * The REAL production classifier — imported, not mirrored. An earlier draft of
@@ -134,8 +141,8 @@ describe('refine validation failure classification', () => {
   it('maps output_limit_exceeded to the validation_failed terminal kind', () => {
     // Without this the code fell through to the 'merge_failed' fallback and a
     // command that never finished was reported to coordinators as a merge failure.
-    expect(routerSrc).toMatch(/refineCode === 'output_limit_exceeded'/);
-    const mapping = routerSrc.match(
+    expect(landingSrc).toMatch(/refineCode === 'output_limit_exceeded'/);
+    const mapping = landingSrc.match(
       /\|\| refineCode === 'output_limit_exceeded'\s*\n\s*\? 'validation_failed'/,
     );
     expect(mapping, "output_limit_exceeded must map to 'validation_failed'").toBeTruthy();

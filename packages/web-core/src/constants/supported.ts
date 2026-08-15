@@ -106,6 +106,11 @@ export const BUILTIN_CLI_AGENTS: readonly SupportedEntry[] = [
     "icon": "⚡"
   },
   {
+    "id": "grok-cli",
+    "name": "Grok",
+    "icon": "🛰️"
+  },
+  {
     "id": "hermes-cli",
     "name": "Hermes",
     "icon": "⚕️"
@@ -282,6 +287,17 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "cursor-cli": {
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
+    "source": "docs/site/data/provider-catalog.mjs"
+  },
+  "grok-cli": {
     "status": "unverified",
     "testedOn": [],
     "testedVersions": [],
@@ -725,6 +741,7 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "claude-cli": "unverified",
   "codex-cli": "unverified",
   "cursor-cli": "unverified",
+  "grok-cli": "unverified",
   "hermes-cli": "unverified",
   "kimi": "unverified",
   "opencode": "unverified",

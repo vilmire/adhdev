@@ -40,6 +40,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { LOG } from '../../src/logging/logger.js'
 
 const NODE_ID = 'node_quota'
 const NODE_WS = '/repo/quota'
@@ -92,8 +93,8 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
   } as any
 }
 
-function setMesh(meshId: string, nodes: any[]) {
-  meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'QUOTA-CLAIM Mesh', policy: {}, nodes })
+function setMesh(meshId: string, nodes: any[], quotaRouting?: Record<string, unknown>) {
+  meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'QUOTA-CLAIM Mesh', policy: quotaRouting ? { quotaRouting } : {}, nodes })
 }
 
 // Fresh quota bundle stamped on the local clock (the claim path evaluates with Date.now()).
@@ -186,6 +187,89 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
         expect.objectContaining({ id: task.id, nodeId: NODE_ID, sessionId: 'sess-quota' }),
       ])
     } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('makes the measured claude block → codex claim fallback observable exactly once', async () => {
+    const meshId = `mesh_quota_claim_fallback_${randomUUID().slice(0, 8)}`
+    const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined as any)
+    try {
+      setMesh(meshId, [quotaNode({
+        kimi: claudeQuota({
+          provider: 'kimi',
+          status: 'error',
+          weekly: null,
+          error: 'token expired',
+          metadata: { source: 'oauth', failureKind: 'expired-token' },
+        }),
+        'claude-cli': claudeQuota({ weekly: { usedPercent: 32, windowMinutes: 10080, resetsAt: null } }),
+        'codex-cli': claudeQuota({ provider: 'codex-cli', weekly: { usedPercent: 18, windowMinutes: 10080, resetsAt: null } }),
+      }, {
+        policy: {
+          slots: [
+            { provider: 'kimi', difficulty: ['difficult'], maxParallel: 1 },
+            { provider: 'claude-cli', difficulty: ['difficult'], maxParallel: 1 },
+            { provider: 'codex-cli', difficulty: ['difficult'], maxParallel: 1 },
+          ],
+        },
+      })], { weeklyMinRemainingPercent: 80 })
+      const components = createComponents(meshId, [
+        { sessionId: 'sess-claude', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'claude-cli' },
+        { sessionId: 'sess-codex', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'codex-cli' },
+      ])
+      const task = enqueueTask(meshId, 'today\'s difficult fallback', {
+        targetNodeId: NODE_ID,
+        taskMode: 'code_change',
+        difficulty: 'difficult',
+      })
+
+      const first = await triggerMeshQueue(components, meshId)
+      const second = await triggerMeshQueue(components, meshId)
+
+      expect(first.claimed).toBe(true)
+      expect(second.claimed).toBe(false)
+      expect(getQueue(meshId).find(t => t.id === task.id)).toMatchObject({
+        status: 'assigned',
+        assignedProviderType: 'codex-cli',
+      })
+      const messages = info.mock.calls.map(([, message]) => String(message))
+      expect(messages.filter(message => message.includes('deferring queue claim') && message.includes("provider 'claude-cli'") && message.includes('68.0%'))).toHaveLength(1)
+      const fallback = messages.filter(message => message.includes('queue claim fallback succeeded'))
+      expect(fallback).toHaveLength(1)
+      expect(fallback[0]).toContain(`task ${task.id}`)
+      expect(fallback[0]).toContain("provider 'claude-cli' had 68.0% weekly quota remaining")
+      expect(fallback[0]).toContain("provider 'codex-cli' claimed")
+    } finally {
+      info.mockRestore()
+      cleanup(meshId)
+    }
+  })
+
+  it('logs an all-candidates-gated conclusion once and never labels it fallback success', async () => {
+    const meshId = `mesh_quota_claim_all_gated_${randomUUID().slice(0, 8)}`
+    const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined as any)
+    try {
+      setMesh(meshId, [quotaNode({
+        'claude-cli': claudeQuota({ weekly: { usedPercent: 32, windowMinutes: 10080, resetsAt: null } }),
+        'codex-cli': claudeQuota({ provider: 'codex-cli', weekly: { usedPercent: 19, windowMinutes: 10080, resetsAt: null } }),
+      })], { weeklyMinRemainingPercent: 82 })
+      const components = createComponents(meshId, [
+        { sessionId: 'sess-claude-gated', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'claude-cli' },
+        { sessionId: 'sess-codex-gated', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'codex-cli' },
+      ])
+      const task = enqueueTask(meshId, 'all gated', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'difficult' })
+
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+
+      expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe('pending')
+      const messages = info.mock.calls.map(([, message]) => String(message))
+      expect(messages.filter(message => message.includes('every idle provider candidate was quota-gated'))).toHaveLength(1)
+      expect(messages.some(message => message.includes('fallback succeeded'))).toBe(false)
+      expect(messages.filter(message => message.includes('deferring queue claim'))).toHaveLength(2)
+    } finally {
+      info.mockRestore()
       cleanup(meshId)
     }
   })

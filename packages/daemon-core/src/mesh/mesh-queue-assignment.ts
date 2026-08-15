@@ -20,7 +20,7 @@ import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates, recordLastQuotaRanking, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates, recordLastQuotaRanking, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -35,6 +35,7 @@ import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, targetPinAgeMs, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, nodeFitnessForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 
 // The four concerns below were split out of this module (pure move). Their public
 // symbols are re-exported here so the module's export surface — which several suites
@@ -51,6 +52,7 @@ export { __isActionableSkipReasonForTests } from './mesh-skip-notify.js';
 // imported above for internal use, so they are re-exported by name rather than via
 // `export ... from` (which would collide with the import binding).
 export { activeWriteAssignedCount, activeReadonlyAssignedCount, sessionHasActiveAssignment };
+export { AUTO_LAUNCH_LEDGER_DEDUP_MAX };
 export {
     __resolveSchedulingStrategyForTests,
     __orderEligibleNodesForTests,
@@ -775,6 +777,7 @@ export function tryAssignQueueTask(
     // task_dispatched ledger entry. Other claim paths (event/idle drain) omit it and the
     // entry records source:'queue' with just the resolved provider from the claimed row.
     routingDecision?: MeshTaskRoutingDecision,
+    quotaClaimTrace?: QuotaClaimDrainTrace,
 ): boolean {
     const mesh = getMeshWithCache(components, meshId);
     // Match with the shared 3-form normalizer (id / nodeId / node_id), not raw
@@ -820,14 +823,15 @@ export function tryAssignQueueTask(
     // like the lease defer above — no ledger entry, so a repeatedly gated claim
     // does not flood the ledger every drain tick.
     const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null, Date.now(), mesh);
+    if (quotaClaimTrace) quotaClaimTrace.evaluated += 1;
     if (quotaClaimBlock) {
-        if (quotaClaimBlock.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
-            LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${nodeId} (${sessionId}): provider '${providerType}' reported its quota EXHAUSTED — task left pending until the quota resets`);
-        } else {
-            LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${nodeId} (${sessionId}): provider '${providerType}' has ${quotaClaimBlock.remainingPercent.toFixed(1)}% ${quotaClaimBlock.window} quota remaining (< ${quotaClaimBlock.thresholdPercent}% threshold) — task left pending until the window resets`);
-        }
+        const observation = { nodeId, sessionId, providerType, block: quotaClaimBlock };
+        logQuotaClaimBlockTransition(meshId, observation);
+        quotaClaimTrace?.blocked.push(observation);
         return false;
     }
+    clearQuotaClaimBlockState(meshId, nodeId, sessionId, providerType);
+    if (quotaClaimTrace) quotaClaimTrace.clear += 1;
 
     // WORKTREE-CLAIM-GATE-BYPASS: the SINGLE claim-time gate for the worktree-bootstrap defer.
     // tryAssignQueueTask is the one funnel every claim path flows through — the event-driven
@@ -995,6 +999,13 @@ export function tryAssignQueueTask(
     });
     if (!task) {
         return false;
+    }
+
+    if (quotaClaimTrace?.blocked.length) {
+        logQuotaClaimFallbackSuccess(quotaClaimTrace.blocked, task.id, { nodeId, sessionId, providerType });
+        quotaClaimTrace.blocked = [];
+        quotaClaimTrace.evaluated = 0;
+        quotaClaimTrace.clear = 0;
     }
 
     const terminal = findTerminalLedgerEvidenceForTask({
@@ -1363,21 +1374,6 @@ function inWindowAutoLaunchSessionIdsForNode(meshId: string, nodeId: string): st
     return out;
 }
 
-// De-dup for repeated `skipped` ledger noise: the reconcile loop re-runs the queue
-// trigger every 4s, so a task that can't be claimed (e.g. a remote node with no
-// transport, or a node under cooldown) would otherwise append an identical
-// session_auto_launch{phase:'skipped'} entry on every tick — flooding the ledger.
-// We suppress a `skipped` ledger append when the immediately-prior recorded event
-// for that task was the SAME (phase, reason). Any non-skip phase (started/failed/
-// completed) or a changed reason resets the de-dup so real transitions still record.
-const lastAutoLaunchLedgerKey = new Map<string, string>();
-/** @internal Split-visibility only: mesh-skip-notify bounds its own notify de-dup map by
- *  the same cap. Not part of this module's public surface — no consumer outside
- *  src/mesh imports it, and neither re-export barrel lists it. */
-export const AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2000;
-
-
-
 function sweepExpiredCooldowns(): void {
     const now = Date.now();
     for (const [key, until] of autoLaunchCooldownUntil) {
@@ -1709,57 +1705,6 @@ function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: st
     });
 }
 
-function recordAutoLaunchEvent(meshId: string, args: {
-    phase: 'skipped' | 'started' | 'failed' | 'completed';
-    taskId: string;
-    nodeId?: string;
-    providerType?: string;
-    sessionId?: string;
-    reason?: string;
-    error?: string;
-    // LEDGER-TASK-TRACEABILITY (D): the resolved execution profile the auto-launch
-    // resolved for this worker, so session_auto_launch records what model/thinking the
-    // spawned worker actually launched with (not just the provider).
-    model?: string;
-    thinkingLevel?: string;
-}) {
-    // Suppress consecutive identical `skipped` entries for the same task (4s reconcile
-    // re-trigger noise). Non-skip phases and changed reasons always record and reset
-    // the de-dup so genuine state transitions remain visible in the ledger.
-    const dedupKey = `${meshId}:${args.taskId}`;
-    const currentSig = `${args.phase}|${args.reason || ''}`;
-    if (args.phase === 'skipped' && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
-        return;
-    }
-    lastAutoLaunchLedgerKey.set(dedupKey, currentSig);
-    if (lastAutoLaunchLedgerKey.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
-        // Bound memory: drop the oldest insertion (Map preserves insertion order).
-        const oldest = lastAutoLaunchLedgerKey.keys().next().value;
-        if (oldest !== undefined) lastAutoLaunchLedgerKey.delete(oldest);
-    }
-    try {
-        appendLedgerEntry(meshId, {
-            kind: 'session_auto_launch',
-            nodeId: args.nodeId,
-            sessionId: args.sessionId,
-            providerType: args.providerType,
-            // (B) promote taskId so this entry joins the task lifecycle timeline.
-            ...(args.taskId ? { taskId: args.taskId } : {}),
-            payload: {
-                phase: args.phase,
-                taskId: args.taskId,
-                reason: args.reason,
-                error: args.error,
-                // (D) resolved execution profile for the spawned worker.
-                ...(args.model ? { resolvedModel: args.model } : {}),
-                ...(args.thinkingLevel ? { resolvedThinkingLevel: args.thinkingLevel } : {}),
-            },
-        });
-    } catch (e: any) {
-        LOG.warn('MeshQueue', `Failed to record auto-launch ledger event: ${e?.message || e}`);
-    }
-}
-
 function markAutoLaunch(meshId: string, taskId: string, args: {
     status: 'skipped' | 'started' | 'failed' | 'completed';
     reason?: string;
@@ -1818,7 +1763,7 @@ async function resolveUsableProvider(
     task?: FitnessTask,
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
     quotaFactsContext?: { nodes?: any[] } | null,
-): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; slot?: NodeCapabilitySlot; reason?: string }> {
+): Promise<{ providerType?: string; model?: string; thinkingLevel?: string; slot?: NodeCapabilitySlot; reason?: string; quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }> }> {
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
 
@@ -1946,6 +1891,7 @@ async function resolveUsableProvider(
     });
     return {
         providerType: winner.providerType,
+        ...(ranked.gated.length ? { quotaGated: ranked.gated } : {}),
         ...(winner.slot.model ? { model: winner.slot.model } : {}),
         ...(winner.slot.thinkingLevel ? { thinkingLevel: winner.slot.thinkingLevel } : {}),
         // The slot that won selection. Returned so the caller can enforce
@@ -2552,6 +2498,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // reconcile. Set a cooldown so the 4s loop doesn't re-launch before that lands.
                     const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
                     markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined);
                     autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                     return true;
                 }
@@ -2580,6 +2527,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     return false;
                 }
                 markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
                 // Readiness barrier: a freshly-spawned local CLI session is NOT yet
                 // interactive — its PTY prints the input prompt (and the adapter flips
                 // isReady()) only ~2-6s after launch. Dispatching the task immediately
@@ -2759,8 +2707,9 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         }
     }
 
+    const quotaClaimTrace: QuotaClaimDrainTrace = { blocked: [], evaluated: 0, clear: 0 };
     const assignIdleCandidate = (candidate: IdleCandidate): void => {
-        const assigned = tryAssignQueueTask(components, meshId, candidate.nodeId, candidate.sessionId, candidate.providerType);
+        const assigned = tryAssignQueueTask(components, meshId, candidate.nodeId, candidate.sessionId, candidate.providerType, undefined, quotaClaimTrace);
         if (assigned && candidate.origin === 'remote') {
             try {
                 MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId, candidate.nodeId, candidate.sessionId);
@@ -2818,6 +2767,15 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
             nodeId: task.assignedNodeId,
             sessionId: task.assignedSessionId,
         }));
+
+    // A successful claim logs its blocked→winner transition at the atomic claim point.
+    // If no candidate cleared the quota gate and auto-launch also made no progress, emit
+    // a distinct all-gated conclusion once for this pending-task/gate-state fingerprint.
+    if (newlyAssignedTasks.length === 0 && !autoLaunchStarted) {
+        logAllQuotaClaimCandidatesBlocked(meshId, quotaClaimTrace, afterQueue.filter(task => task.status === 'pending').map(task => task.id));
+    } else {
+        clearAllQuotaClaimCandidatesBlockedState(meshId);
+    }
 
     // An auto-launch is "pending" when the coordinator has already spun a session up
     // for a still-pending task and is waiting on that session's idle→claim. This covers

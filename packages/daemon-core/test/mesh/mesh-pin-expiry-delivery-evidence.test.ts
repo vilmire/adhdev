@@ -173,4 +173,23 @@ describe('DISPATCH-ACK-EVIDENCE — pin-expiry guidance must not claim a delta w
       cleanup(meshId)
     }
   })
+
+  it('does not call a provider scan result permanently blocked while keeping missing-provider action explicit', () => {
+    const meshId = `mesh_provider_scan_wording_${randomUUID().slice(0, 8)}`
+    try {
+      const task = enqueueTask(meshId, 'PROVIDER-SCAN', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      notifyCoordinatorOfActionableSkip(meshId, task.id, 'provider_priority_unusable: claude-cli: not detected; codex-cli: detect failed', NODE_ID)
+      const events = drainPendingMeshCoordinatorEvents(meshId, COORDINATOR_DAEMON_ID) as any[]
+      const msg = String((events || []).find(e => (e?.metadataEvent?.taskId ?? e?.taskId) === task.id)?.coordinatorMessage ?? '')
+
+      expect(msg).toMatch(/current provider scan/i)
+      expect(msg).toMatch(/needs action if it persists/i)
+      expect(msg).toMatch(/missing, disabled, or misconfigured provider/i)
+      expect(msg).toMatch(/later provider-status refresh.*can clear it/i)
+      expect(msg).not.toMatch(/will NOT clear on its own/i)
+      expect(msg).toMatch(/quota-gated candidates use a separate, self-resolving reason/i)
+    } finally {
+      cleanup(meshId)
+    }
+  })
 })

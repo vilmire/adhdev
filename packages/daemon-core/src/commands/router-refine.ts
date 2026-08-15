@@ -9,6 +9,7 @@
  * message, or result shape was changed — only physical location + `this.` → `self.`.
  */
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
@@ -19,6 +20,11 @@ import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
+// GHOST-FAILURE: pure move to keep this file under its frozen file-size baseline.
+// Re-exported below so existing import sites (and tests) are unaffected.
+import { buildRefineWorktreeMissingResult, classifyRefineTerminal, refineTerminalNextStep } from '../mesh/mesh-refine-landing.js';
+export { extractRefineMergeLanding, classifyRefineTerminal } from '../mesh/mesh-refine-landing.js';
+export type { RefineMergeLanding, RefineTerminalKind } from '../mesh/mesh-refine-landing.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
 import { classifyChangedPackages } from '../git/git-status.js';
@@ -158,6 +164,10 @@ export function slimRefineEventResult(result: Record<string, unknown>): Record<s
             'branch', 'into', 'terminalKind', 'nextStep', 'finalBranchConvergenceState',
             // QW4: merge conflict paths; QW5: cleanup branch-ref / residue warnings.
             'conflictPaths', 'branchRefWarning', 'residueWarning', 'branchRefDeleted',
+            // GHOST-FAILURE: merge-landing facts. The coordinator sees ONLY this slim
+            // result; without these it cannot tell a pre-merge failure (nothing landed)
+            // from a post-merge one (the change IS on origin) without a manual git check.
+            'merged', 'mergedLocal', 'pushed', 'mergedSha', 'postMergeWarning', 'refineLanding',
         ] as const) {
             if (result[key] !== undefined) slim[key] = result[key];
         }
@@ -539,6 +549,19 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
 
             if (!node.isLocalWorktree || !node.workspace) {
                 return { kind: 'terminal', result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
+            }
+
+            // GHOST-FAILURE: the worktree directory is already GONE — almost always
+            // because a PRIOR refine merged, pushed and cleaned it up. Terminate with a
+            // named blocker instead of spawning git/bootstrap into a deleted directory,
+            // which is what produced ghost dependency_bootstrap_failed / merge_failed
+            // notifications for nodes whose work was already on origin. Rationale and the
+            // exact result shape live in buildRefineWorktreeMissingResult.
+            if (!existsSync(node.workspace)) {
+                recordMeshRefineStage(refineStages, 'resolve_refs', 'failed', Date.now(), {
+                    workspace: node.workspace, workspaceMissing: true,
+                });
+                return { kind: 'terminal', result: buildRefineWorktreeMissingResult(nodeId, node.workspace, refineStages) };
             }
 
             const sourceNode = node.clonedFromNodeId
@@ -2641,39 +2664,19 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
 
         const completedAt = new Date().toISOString();
 
-        // B1: Discriminated terminal status — do not rely solely on result.success.
-        // Map known failure codes to structured terminal kinds.
-        type RefineTerminalKind = 'completed' | 'blocked_review' | 'validation_failed' | 'submodule_reachability_failed' | 'merge_failed' | 'cleanup_failed';
+        // B1 + GHOST-FAILURE: discriminated terminal status. `converged` answers "did
+        // the change land on origin?" (decides the completed-vs-failed NOTIFICATION);
+        // `clean` answers "is there nothing left to do?" (decides blockerContext).
+        // See classifyRefineTerminal for why these must stay two separate questions.
         const refineCode = typeof result.code === 'string' ? result.code : '';
-        const refineTerminalKind: RefineTerminalKind = result.success === true
-            ? 'completed'
-            : refineCode === 'blocked_review'
-                ? 'blocked_review'
-                // QW3: the validation stage returns `code: validationSummary.failureCode`,
-                // so a dependency/spawn failure surfaces as one of these codes — NOT the
-                // literal 'validation_failed'. They must map to the validation_failed
-                // terminal kind too, otherwise they fell through to the merge_failed
-                // fallback and coordinators saw a merge failure for a missing-deps block.
-                : refineCode === 'validation_failed' || refineCode === 'validation_dependencies_missing'
-                    || refineCode === 'missing_dependencies' || refineCode === 'dependency_bootstrap_failed'
-                    || refineCode === 'spawn_resolution_failed' || refineCode === 'validation_unavailable'
-                    // An output-budget kill is a validation-stage failure like the rest;
-                    // without it here it fell through to the 'merge_failed' fallback and
-                    // coordinators saw a merge failure for a command that never finished.
-                    || refineCode === 'output_limit_exceeded'
-                    ? 'validation_failed'
-                    : refineCode === 'submodule_reachability_failed'
-                        ? 'submodule_reachability_failed'
-                        : refineCode === 'merge_failed' || refineCode === 'patch_equivalence_failed' || refineCode === 'needs_rebase' || refineCode === 'needs_rebase_with_conflicts'
-                            ? 'merge_failed'
-                            : refineCode === 'cleanup_failed'
-                                ? 'cleanup_failed'
-                                : 'merge_failed'; // fallback for unclassified failures
-        const isTerminalSuccess = refineTerminalKind === 'completed';
+        const { kind: refineTerminalKind, landing, isPostMergeWarning, converged: isTerminalConverged, clean: isTerminalClean } =
+            classifyRefineTerminal(result);
 
         // Build structured blocker context for task_failed ledger entries so coordinators
-        // can inspect the failure cause without parsing free-form error strings.
-        const blockerContext: Record<string, unknown> | undefined = isTerminalSuccess ? undefined : (() => {
+        // can inspect the failure cause without parsing free-form error strings. A
+        // post-merge warning keeps its context: the merge landed, but the trailing step
+        // still needs a human, and swallowing that would be the opposite failure mode.
+        const blockerContext: Record<string, unknown> | undefined = isTerminalClean ? undefined : (() => {
             const code = typeof result.code === 'string' ? result.code : refineTerminalKind;
             const stage = refineTerminalKind === 'validation_failed' ? 'validation'
                 : refineTerminalKind === 'submodule_reachability_failed' ? 'submodule_reachability'
@@ -2681,6 +2684,11 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
                 : refineCode === 'needs_rebase' || refineCode === 'needs_rebase_with_conflicts' ? 'patch_equivalence'
                 : refineTerminalKind === 'merge_failed' ? 'merge'
                 : refineTerminalKind === 'cleanup_failed' ? 'cleanup'
+                // GHOST-FAILURE: a post-merge warning's failing stage is whatever ran
+                // AFTER the merge (cleanup / submodule alignment); name it from the code
+                // rather than falling through to 'unknown'.
+                : refineTerminalKind === 'completed_with_warnings'
+                    ? (refineCode === 'post_merge_submodule_alignment_failed' ? 'submodule_alignment' : 'cleanup')
                 : 'unknown';
             const ctx: Record<string, unknown> = {
                 stage,
@@ -2741,25 +2749,25 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
             ...result,
             terminalKind: refineTerminalKind,
             ...(blockerContext ? { blockerContext } : {}),
-            ...(result.nextStep === undefined && !isTerminalSuccess ? {
-                nextStep: refineTerminalKind === 'blocked_review'
-                    ? 'Request user review/approval before attempting to merge again.'
-                    : refineTerminalKind === 'validation_failed'
-                        ? 'Fix failing tests or configure validation.bootstrapCommands and retry mesh_refine_node.'
-                        : refineTerminalKind === 'submodule_reachability_failed'
-                            ? 'Push unreachable submodule commits to origin/main, then retry mesh_refine_node.'
-                            : refineTerminalKind === 'merge_failed'
-                                ? 'Resolve merge conflicts or patch equivalence issues, then retry mesh_refine_node.'
-                                : refineTerminalKind === 'cleanup_failed'
-                                    ? 'Manually remove the worktree and retry or use mesh_remove_node.'
-                                    : 'Inspect refineStages for the failing stage and retry.',
+            ...(result.nextStep === undefined && !isTerminalClean
+                ? { nextStep: refineTerminalNextStep(refineTerminalKind) } : {}),
+            // GHOST-FAILURE: explicit machine-readable landing verdict, present on EVERY
+            // terminal result (plain failures read merged:false) so a coordinator never
+            // has to run `git log` to tell whether the work landed.
+            refineLanding: {
+                merged: landing.merged,
+                pushed: landing.pushed,
+                converged: isTerminalConverged,
+            },
+            ...(isPostMergeWarning ? {
+                postMergeWarning: `Merge landed and was pushed to origin/${typeof result.into === 'string' ? result.into : 'base'}, but a post-merge step failed (${refineCode || 'unknown'}). This node is CONVERGED — do not re-refine it.`,
             } : {}),
         };
 
         const terminalHandle = buildRefineJobHandle(self, {
             meshId: handle.meshId,
             nodeId: handle.targetNodeId,
-            status: isTerminalSuccess ? 'completed' : 'failed',
+            status: isTerminalConverged ? 'completed' : 'failed',
             startedAt: handle.startedAt,
             completedAt,
             jobId: handle.jobId,
@@ -2777,8 +2785,12 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
         self.terminalRefineJobs.set(key, terminal);
         self.runningRefineJobs.delete(key);
         self.invalidateAggregateMeshStatus(handle.meshId);
-        await appendRefineJobLedger(self, isTerminalSuccess ? 'task_completed' : 'task_failed', terminalHandle, normalizedResult);
-        queueRefineJobEvent(self, isTerminalSuccess ? 'refine:completed' : 'refine:failed', terminalHandle, normalizedResult);
+        // GHOST-FAILURE: ledger kind and coordinator event key off CONVERGENCE, not
+        // cleanliness — a merge that reached origin is task_completed even when a
+        // trailing local step failed. The unclean detail still rides on normalizedResult
+        // (terminalKind / blockerContext / postMergeWarning / nextStep), so nothing is lost.
+        await appendRefineJobLedger(self, isTerminalConverged ? 'task_completed' : 'task_failed', terminalHandle, normalizedResult);
+        queueRefineJobEvent(self, isTerminalConverged ? 'refine:completed' : 'refine:failed', terminalHandle, normalizedResult);
     }
 
 /**

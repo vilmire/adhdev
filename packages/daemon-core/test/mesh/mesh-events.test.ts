@@ -58,6 +58,7 @@ import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
 import { peekUnresolvedDelegateForwards } from '../../src/mesh/mesh-unresolved-forward-outbox.js'
+import { LOG } from '../../src/logging/logger.js'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating'; statusInstanceId?: string }) {
   let listener: ((event: any) => void) | undefined
@@ -2591,6 +2592,65 @@ describe('setupMeshEventForwarding', () => {
       expect(entry.autoLaunch?.status).toBe('completed')
       expect(readLedgerEntries(meshId).some(e => e.kind === 'session_auto_launch' && e.payload?.phase === 'completed')).toBe(true)
     } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('logs claude quota block → codex spawn only after the fallback launch succeeds', async () => {
+    const meshId = `mesh_auto_launch_quota_fallback_${Date.now()}`
+    const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined as any)
+    try {
+      const quota = (provider: string, weeklyUsedPercent: number) => ({
+        provider,
+        status: 'ok',
+        session: { usedPercent: 10, windowMinutes: 300, resetsAt: null },
+        weekly: { usedPercent: weeklyUsedPercent, windowMinutes: 10080, resetsAt: null },
+        updatedAt: Date.now(),
+        error: null,
+      })
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{
+          id: 'node_child_1',
+          workspace: '/repo/worktree-a',
+          health: 'online',
+          policy: {
+            slots: [
+              { provider: 'kimi', difficulty: ['difficult'], maxParallel: 1 },
+              { provider: 'claude-cli', difficulty: ['difficult'], maxParallel: 1 },
+              { provider: 'codex-cli', difficulty: ['difficult'], maxParallel: 1 },
+            ],
+          },
+          nodeFacts: {
+            schemaVersion: 1,
+            reportedAt: Date.now(),
+            quota: {
+              kimi: { ...quota('kimi', 100), status: 'error', session: null, weekly: null, error: 'token expired', metadata: { source: 'oauth', failureKind: 'expired-token' } },
+              'claude-cli': quota('claude-cli', 32),
+              'codex-cli': quota('codex-cli', 18),
+            },
+          },
+        }],
+        policy: {
+          maxParallelTasks: 2,
+          quotaRouting: { weeklyMinRemainingPercent: 80 },
+        },
+      })
+      detectCliMocks.detectCLI.mockImplementation(async (provider: string) => provider === 'kimi' ? null : { path: `/bin/${provider}` })
+      const queued = enqueueTask(meshId, 'today\'s difficult fallback', { difficulty: 'difficult' })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({ cliType: 'codex-cli' }))
+      const messages = info.mock.calls.map(([, message]) => String(message))
+      const fallback = messages.filter(message => message.includes('auto-launch fallback succeeded'))
+      expect(fallback).toHaveLength(1)
+      expect(fallback[0]).toContain(`task ${queued.id}`)
+      expect(fallback[0]).toContain("provider 'claude-cli' had 68.0% weekly quota remaining")
+      expect(fallback[0]).toContain("spawned provider 'codex-cli'")
+    } finally {
+      info.mockRestore()
       cleanupMeshFiles(meshId)
     }
   })

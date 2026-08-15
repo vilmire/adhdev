@@ -19,6 +19,12 @@ import { readSession as readClaudeCliSession } from './claude-cli-transcript.js'
 import { readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';
 import { readSession as readHermesCliSession } from './hermes-cli-transcript.js';
+import {
+    readSession as readGrokCliSession,
+    listSessions as listGrokCliSessions,
+    listSessionsAllWorkspaces as listGrokCliSessionsAllWorkspaces,
+    resolveGrokPath,
+} from './grok-cli-transcript.js';
 import { SPAWN_BIND_GRACE_MS } from './constants.js';
 import {
     antigravityOwnerToken,
@@ -26,7 +32,7 @@ import {
     isAntigravityConversationClaimedByOther,
 } from './antigravity-claim-registry.js';
 
-export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli';
+export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli' | 'grok-cli';
 
 export interface NativeHistoryInput {
     agentType?: string;
@@ -168,6 +174,10 @@ function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: strin
         case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs); return p ? { path: p } : null; }
         case 'antigravity-cli': return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
         case 'hermes-cli':   { const p = resolveHermesPath(workspace, sessionId); return p ? { path: p } : null; }
+        // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
+        // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
+        // the filename, so resolution lives in the reader module.
+        case 'grok-cli':     { const p = resolveGrokPath(workspace, sessionId); return p ? { path: p } : null; }
     }
 }
 
@@ -542,6 +552,7 @@ function readByReader(
         // THAT session directly instead of newest-wins. claude/codex resolve a
         // per-session file upstream, so they need no equivalent pin here.
         case 'hermes-cli':      return readHermesCliSession(sourcePath, requestedProviderSid || undefined);
+        case 'grok-cli':        return readGrokCliSession(sourcePath, sessionId, workspace || undefined);
     }
 }
 
@@ -617,6 +628,33 @@ function safeBirthtime(p: string): number {
 
 function safeSize(p: string): number {
     try { return fs.statSync(p).size; } catch { return 0; }
+}
+
+/**
+ * Enumerator counterpart to `createNativeHistoryDispatcher`.
+ *
+ * Returns null for readers with no enumerable store, so `provider-loader` leaves
+ * `listNativeHistory` unwired for them exactly as before — claude/codex/
+ * antigravity/hermes keep whatever listing they already had. Only readers listed
+ * here gain `list_saved_sessions`.
+ */
+export function createNativeHistoryListDispatcher(
+    reader: ReaderId,
+): ((input: NativeHistoryInput) => unknown) | null {
+    if (reader !== 'grok-cli') return null;
+    return (input: NativeHistoryInput) => {
+        const limitRaw = (input.args as Record<string, unknown> | undefined)?.limit;
+        const limit = typeof limitRaw === 'number' && limitRaw > 0 ? Math.floor(limitRaw) : 50;
+        // The `list_saved_sessions` caller (collectProviderScriptNativeHistory-
+        // SessionSummaries) passes only {agentType, format, watchPath, args} —
+        // no workspace. So enumerate EVERY workspace grok has a store for and
+        // let the caller filter, rather than returning nothing.
+        const sessions = input.workspace
+            ? listGrokCliSessions(input.workspace, limit)
+            : listGrokCliSessionsAllWorkspaces(limit);
+        // Caller reads `result.sessions`; a bare array is silently dropped.
+        return { sessions };
+    };
 }
 
 function normalizeRole(r: any): 'user' | 'assistant' | 'system' {
