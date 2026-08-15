@@ -949,7 +949,7 @@ function isLocalControlPlaneNode(ctx, node) {
 // src/tools/mesh-tool-schemas.ts
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
-  description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version}); when a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning \u2014 meaning that daemon's LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
+  description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers \u2014 it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning \u2014 meaning that daemon's LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
   inputSchema: {
     type: "object",
     properties: {
@@ -1206,7 +1206,7 @@ var MESH_FAST_FORWARD_NODE_TOOL = {
 };
 var MESH_RESTART_DAEMON_TOOL = {
   name: "mesh_restart_daemon",
-  description: `Restart a mesh node's daemon, optionally updating it first \u2014 the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon without a manual restart round-trip. No agent session is launched. mode="upgrade" (default): update to the latest published version on the release channel, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). mode="restart": pure re-spawn with no reinstall \u2014 restarts even when already latest, with much shorter downtime; use it to reset wedged daemon state (memory leaks, zombie sessions). Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. self_only=true waives ONLY this mesh's own coordinator session (the structural self-deadlock case \u2014 the coordinator is always generating while it calls). Other sessions still refuse. force=true bypasses the gate entirely: in-flight turns die and the unpersisted pendingOutboundQueue is lost. when_idle=true schedules the restart to run automatically once the daemon goes idle (the safest path \u2014 no queue loss); cancel_when_idle=true cancels it and every response reports the schedule under deferredRestart. kill_session_host=true additionally stops the session-host process, destroying ALL hosted CLI sessions (hard refresh; this is what Windows already does on every upgrade). Default off. Note: on Windows any daemon restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. Upgrade mode refuses a DOWNGRADE: if the target version resolved from the daemon's build track is OLDER than the running daemon, the call fails with code "downgrade_refused" and reports currentVersion / targetVersion / channel instead of rolling the node back. Pass allow_downgrade=true only for a deliberate rollback. The channel parameter is DEPRECATED and ignored: since Phase 3 the release channel is a build-time identity of the installed binary (stable = adhdev/@latest, preview = adhdev-preview/@next), so an upgrade always targets the daemon's own build track and can never switch channels. When you pass a channel that conflicts with the node's build track, the response now carries a channelOverride object saying so \u2014 the request is not silently honored.`,
+  description: `Restart a mesh node's daemon, optionally updating it first \u2014 the same path as the dashboard "preview update" button, exposed as a mesh command so a coordinator can roll a worker daemon without a manual restart round-trip. No agent session is launched. mode="upgrade" (default): update to the latest published version on the release channel, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). mode="restart": pure re-spawn with no reinstall \u2014 restarts even when already latest, with much shorter downtime; use it to reset wedged daemon state (memory leaks, zombie sessions). Idle-gated: a node whose daemon has an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted. self_only=true waives ONLY this mesh's own coordinator session (the structural self-deadlock case \u2014 the coordinator is always generating while it calls). Other sessions still refuse. force=true bypasses the gate entirely: in-flight turns die and the unpersisted pendingOutboundQueue is lost. when_idle=true schedules the restart to run automatically once the daemon goes idle (the safest path \u2014 no queue loss); cancel_when_idle=true cancels it and every response reports the schedule under deferredRestart. kill_session_host=true additionally stops the session-host process, destroying ALL hosted CLI sessions (hard refresh; this is what Windows already does on every upgrade). Default off. Note: on Windows any daemon restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. Upgrade mode refuses a DOWNGRADE: if the target version resolved from the daemon's build track is OLDER than the running daemon, the call fails with code "downgrade_refused" and reports currentVersion / targetVersion / channel instead of rolling the node back. Pass allow_downgrade=true only for a deliberate rollback. The channel parameter is DEPRECATED and ignored: since Phase 3 the release channel is a build-time identity of the installed binary (stable = adhdev/@latest, preview = adhdev-preview/@next), so an upgrade always targets the daemon's own build track and can never switch channels. When you pass a channel that conflicts with the node's build track, the response now carries a channelOverride object saying so \u2014 the request is not silently honored. The response compares meshAttachedDaemon (the daemon that answered status immediately before the command) with restartTargetDaemon (the daemon process that accepted the lifecycle operation). daemonMismatch/trackMismatch=true and trackWarning surface a split but do not block the operation; null means an older/unreachable daemon did not report enough identity.`,
   inputSchema: {
     type: "object",
     properties: {
@@ -3478,8 +3478,10 @@ async function collectLiveStatusSessionsVerified(ctx, node) {
 async function collectLiveStatusProbe(ctx, node) {
   try {
     const statusResult = await commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
+    const payload = unwrapCommandPayload(statusResult);
     return {
       sessions: extractStatusMetadataSessions(statusResult),
+      ...readString(payload?.status?.instanceId) ? { daemonId: readString(payload.status.instanceId) } : {},
       daemonBuild: extractDaemonBuildInfo(statusResult),
       upgradeFailure: extractUpgradeFailureSummary(statusResult)
     };
@@ -3515,11 +3517,14 @@ function extractDaemonBuildInfo(value) {
   if (!build) return void 0;
   const commit = readString(build.commit);
   if (!commit) return void 0;
+  const reportedTrack = readString(build.track);
+  const track = reportedTrack === "stable" || reportedTrack === "preview" ? reportedTrack : "unknown";
   return {
     commit,
     commitShort: readString(build.commitShort) || commit.slice(0, 7),
     version: readString(build.version) || "unknown",
-    ...readString(build.builtAt) ? { builtAt: readString(build.builtAt) } : {}
+    ...readString(build.builtAt) ? { builtAt: readString(build.builtAt) } : {},
+    track
   };
 }
 async function collectMeshViewQueueNodesWithLiveSessions(ctx) {
@@ -8146,6 +8151,10 @@ async function meshFastForwardNode(ctx, args) {
 async function meshRestartDaemon(ctx, args) {
   await refreshMeshFromDaemon(ctx);
   const node = await findNodeWithRefresh(ctx, args.node_id);
+  const observedProbe = await collectLiveStatusProbe(ctx, node);
+  const meshAttachedTrack = observedProbe.daemonBuild?.track ?? "unknown";
+  const configuredDaemonId = typeof node.daemonId === "string" && node.daemonId.trim() ? node.daemonId.trim() : "unknown";
+  const meshAttachedDaemonId = observedProbe.daemonId ?? "unknown";
   try {
     const result = await commandForNode(ctx, node, "restart_daemon_node", {
       meshId: ctx.mesh.id,
@@ -8163,14 +8172,53 @@ async function meshRestartDaemon(ctx, args) {
       // a downgrade" for every caller that does not opt in.
       ...args.allow_downgrade === true ? { allowDowngrade: true } : {}
     });
-    return JSON.stringify(unwrapCommandPayload(result), null, 2);
+    const payload = unwrapCommandPayload(result);
+    const rawTarget = payload?.restartTargetDaemon && typeof payload.restartTargetDaemon === "object" ? payload.restartTargetDaemon : {};
+    const targetTrack = rawTarget.track === "stable" || rawTarget.track === "preview" ? rawTarget.track : "unknown";
+    const targetDaemonId = typeof rawTarget.daemonId === "string" && rawTarget.daemonId.trim() ? rawTarget.daemonId.trim() : "unknown";
+    const targetNpmTag = typeof rawTarget.npmTag === "string" && rawTarget.npmTag.trim() ? rawTarget.npmTag.trim() : typeof payload?.npmTag === "string" && payload.npmTag.trim() ? payload.npmTag.trim() : "unknown";
+    const trackMismatch = meshAttachedTrack === "unknown" || targetTrack === "unknown" ? null : meshAttachedTrack !== targetTrack;
+    const daemonMismatch = meshAttachedDaemonId === "unknown" || targetDaemonId === "unknown" ? null : !(0, import_daemon_core5.daemonIdsEquivalent)(meshAttachedDaemonId, targetDaemonId);
+    const routingMismatch = trackMismatch === true || daemonMismatch === true;
+    return JSON.stringify({
+      ...payload,
+      meshAttachedDaemon: {
+        daemonId: meshAttachedDaemonId,
+        configuredDaemonId,
+        track: meshAttachedTrack
+      },
+      restartTargetDaemon: {
+        daemonId: targetDaemonId,
+        track: targetTrack,
+        npmTag: targetNpmTag
+      },
+      daemonMismatch,
+      trackMismatch,
+      ...routingMismatch ? {
+        trackWarning: `DAEMON/TRACK MISMATCH: mesh status was answered by ${meshAttachedDaemonId} on the '${meshAttachedTrack}' track, but restart/upgrade was accepted by ${targetDaemonId} on the '${targetTrack}' track. The operation was not blocked; verify the intended daemon before interpreting version changes.`
+      } : {},
+      ...!routingMismatch && (trackMismatch === null || daemonMismatch === null) ? {
+        trackWarning: "Daemon/track match is unknown because the mesh-attached daemon or restart target did not report enough identity. No track was inferred from the version string."
+      } : {}
+    }, null, 2);
   } catch (e) {
     const failure = buildCoordinatorP2pRelayFailure(e, {
       command: "restart_daemon_node",
       targetDaemonId: node.daemonId,
       nodeId: args.node_id
     });
-    return JSON.stringify(failure, null, 2);
+    return JSON.stringify({
+      ...failure,
+      meshAttachedDaemon: {
+        daemonId: meshAttachedDaemonId,
+        configuredDaemonId,
+        track: meshAttachedTrack
+      },
+      restartTargetDaemon: { daemonId: "unknown", track: "unknown", npmTag: "unknown" },
+      daemonMismatch: null,
+      trackMismatch: null,
+      trackWarning: "Restart/upgrade target track is unknown because the command was not accepted. No track was inferred from the version string."
+    }, null, 2);
   }
 }
 async function meshCheckpoint(ctx, args) {
