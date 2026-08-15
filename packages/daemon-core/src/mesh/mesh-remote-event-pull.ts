@@ -154,6 +154,27 @@ export function readChatPayloadStatus(payload: Record<string, unknown> | null): 
     return readNonEmptyString(payload?.status).toLowerCase();
 }
 
+/**
+ * PROJECTION-SELF-REFERENCE: the PROVIDER's own status verdict, independent of
+ * the Stage 6 turn-ledger projection that overwrites `status` for mesh-owned
+ * sessions (see read-chat-presentation.ts).
+ *
+ * The transcript completion poll must read THIS rather than `status`: gating the
+ * ledger's terminal write on a value derived from the ledger's own stage is a
+ * closed cycle that wedges a finished turn at `generating` permanently.
+ *
+ * FAIL-SAFE FALLBACK: when the field is absent — an older remote daemon, or any
+ * payload that predates it — we return the projected `status` instead. That is
+ * the pre-fix behaviour, so a mixed-version mesh degrades to "wedge is still
+ * possible on the old node", never to "a mid-turn worker reads idle". Falling
+ * back to 'idle' here would invent a turn-end from a missing field, which is the
+ * one direction this whole path must never fail in.
+ */
+export function readChatPayloadProviderObservedStatus(payload: Record<string, unknown> | null): string {
+    const observed = readNonEmptyString(payload?.providerObservedStatus).toLowerCase();
+    return observed || readChatPayloadStatus(payload);
+}
+
 // R4e fix (3): peek the pending-events queue for a REAL (worker-emitted) terminal completion
 // already queued for a task — used to yield the in-flight synth to the worker's own emit. Broad
 // peek (no daemon-id scoping) matched precisely by taskId, so a worker stamp in any daemon-id form

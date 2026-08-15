@@ -47,6 +47,7 @@ import {
 import {
     unwrapReadChatPayload,
     readChatPayloadStatus,
+    readChatPayloadProviderObservedStatus,
     reprobeWorkerStatus,
     realTerminalEmitPendingForTask,
     collectLiveNodesWithSessions,
@@ -828,7 +829,22 @@ export async function pollAssignedTaskTerminalEvidence(
 
     // Only a settled-idle session is a turn-end; a generating/waiting session is mid-turn and
     // must NEVER be short-circuited to completed.
-    const payloadStatus = readChatPayloadStatus(payload);
+    //
+    // PROJECTION-SELF-REFERENCE: read the PROVIDER's own verdict, not the projected
+    // `status`. For a mesh-owned session Stage 6 replaces `status` with the turn-ledger
+    // stage — and this poll is the writer that advances that stage. Gating on it made the
+    // condition self-referential: the ledger stayed `generating` because the poll declined,
+    // and the poll declined because the ledger said `generating`. Observed live for 1h+ on
+    // both codex-cli and claude-cli (328 `session_not_idle` drops on a session whose turn had
+    // visibly ended), and it is the reason finished tasks never released their queue slot.
+    //
+    // This does NOT loosen completion detection. The `!== 'idle'` test never protected against
+    // a false completion — a genuinely generating provider reports `generating` here too, so a
+    // mid-turn worker is still refused. The guards that actually prove a turn-end all remain
+    // below and unchanged: a post-dispatch final assistant message, no trailing tool activity,
+    // and the settle window. When the field is absent (older remote daemon) the reader falls
+    // back to the projected status — i.e. the pre-fix behaviour, never a fabricated idle.
+    const payloadStatus = readChatPayloadProviderObservedStatus(payload);
     if (payloadStatus !== 'idle') return declined('session_not_idle', `status=${payloadStatus ?? 'unknown'} — mid-turn, not a turn-end`);
 
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];

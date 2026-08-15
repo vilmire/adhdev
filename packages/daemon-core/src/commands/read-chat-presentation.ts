@@ -255,6 +255,27 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
         ...preservedPayloadFields,
         messages: sync.messages,
         totalMessages: sync.totalMessages,
+        // PROJECTION-SELF-REFERENCE (turn-completion deadlock): the provider's OWN
+        // status verdict, BEFORE the Stage 6 projection overrides it above.
+        //
+        // Why this must be emitted separately: when an attempt exists, `status`
+        // becomes the ledger stage. The mesh transcript completion poll
+        // (pollAssignedTaskTerminalEvidence) then required `status === 'idle'`
+        // before it would write the terminal outcome INTO that same ledger — so a
+        // finished worker's ledger stage stayed `generating` forever, and the
+        // stage it was waiting on was the one only it could advance. Live: attempt
+        // 22ac9624 frozen at stage=generating for 1h+ with 328 `session_not_idle`
+        // drops, reproduced on codex-cli AND claude-cli (not provider-specific).
+        //
+        // This field breaks the cycle by preserving the one input that is
+        // genuinely independent of the ledger. It is ADDITIVE — `status` keeps its
+        // Stage 6 semantics for every existing consumer, and nothing that relies
+        // on the projection overriding the point sample changes behaviour.
+        // Consumers must NOT use this as a general status: a point sample can read
+        // idle mid-turn, which is exactly why Stage 6 exists. It is safe only
+        // behind the poll's structural turn-end guards (post-dispatch final
+        // assistant, no trailing tool activity, settle window).
+        providerObservedStatus: legacyStatus,
         // Stage 6: the authoritative turn presentation rides the read_chat
         // payload for mesh-owned sessions (identity + stage + evidence
         // timestamps; the `status` field above already reflects it).
