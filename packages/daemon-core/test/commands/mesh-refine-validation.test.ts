@@ -1274,9 +1274,23 @@ describe('refine_mesh_node validation gate', () => {
 
       expectAccepted(accepted, 'node-cleanup-fail')
       const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
-      expect(terminal.kind).toBe('task_failed')
+      // GHOST-FAILURE: this run MERGED — only the trailing worktree cleanup failed. The
+      // ledger/notification therefore reports task_completed, because the question a
+      // coordinator asks the terminal event is "did the change land?" and the answer is
+      // yes. Reporting task_failed here is the ghost: it made coordinators file landed
+      // work as blocked_review, or re-refine an already-merged node.
+      //
+      // The failure is NOT swallowed — every blocker assertion below still holds, and
+      // terminalKind names the unclean state explicitly.
+      expect(terminal.kind).toBe('task_completed')
       const result = (terminal.payload as any).result
       expect(result).toMatchObject({ success: false, code: 'cleanup_failed', merged: true })
+      expect(result.terminalKind).toBe('completed_with_warnings')
+      expect(result.refineLanding).toMatchObject({ merged: true, converged: true })
+      // The residual manual work is still reported, and the next step must NOT tell the
+      // coordinator to re-run refine against an already-merged node.
+      expect(result.blockerContext).toMatchObject({ stage: 'cleanup', reason: 'cleanup_failed' })
+      expect(result.postMergeWarning).toContain('do not re-refine')
       expect(result.removeResult).toMatchObject({ success: false, removed: false, code: 'mesh_worktree_cleanup_missing_branch' })
       expect(result.refineStages.map((entry: any) => `${entry.stage}:${entry.status}`)).toContain('cleanup:failed')
       expect(result.finalBranchConvergenceState).toMatchObject({ status: 'merged_cleanup_failed', merged: true, removed: false })
