@@ -11,7 +11,8 @@ import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js'
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { loadConfig } from '../config/config.js';
 import { SLOT_MODEL_ABSENT_SKIP_REASON } from './slot-model-enforcement.js';
-import { isLocalAutoLaunchNode, resolveSessionBusyVerdict, AUTO_LAUNCH_LEDGER_DEDUP_MAX } from './mesh-queue-assignment.js';
+import { isLocalAutoLaunchNode, resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
+import { AUTO_LAUNCH_LEDGER_DEDUP_MAX } from './mesh-queue-observability.js';
 
 // Fix (1): actionable dispatch-skip notification.
 //

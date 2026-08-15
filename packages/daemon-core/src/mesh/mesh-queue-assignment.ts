@@ -20,7 +20,7 @@ import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates, recordLastQuotaRanking, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates, recordLastQuotaRanking, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -35,6 +35,7 @@ import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, targetPinAgeMs, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, nodeFitnessForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 
 // The four concerns below were split out of this module (pure move). Their public
 // symbols are re-exported here so the module's export surface — which several suites
@@ -51,6 +52,7 @@ export { __isActionableSkipReasonForTests } from './mesh-skip-notify.js';
 // imported above for internal use, so they are re-exported by name rather than via
 // `export ... from` (which would collide with the import binding).
 export { activeWriteAssignedCount, activeReadonlyAssignedCount, sessionHasActiveAssignment };
+export { AUTO_LAUNCH_LEDGER_DEDUP_MAX };
 export {
     __resolveSchedulingStrategyForTests,
     __orderEligibleNodesForTests,
@@ -60,87 +62,6 @@ export {
     __scoreSlotForTaskForTests,
     __slotHasCapacityForTests,
 } from './mesh-scheduling-fitness.js';
-
-interface QuotaClaimGateObservation {
-    nodeId: string;
-    sessionId: string;
-    providerType: string;
-    block: ProviderQuotaGateBlock;
-}
-
-interface QuotaClaimDrainTrace {
-    blocked: QuotaClaimGateObservation[];
-    evaluated: number;
-    clear: number;
-}
-
-// Claim reconciliation runs every few seconds. Keep the existing per-candidate gate
-// diagnostic, but emit it only when that candidate's gate verdict changes instead of
-// repeating the same line on every poll. A clear verdict deletes the fingerprint so a
-// later genuine re-entry into the gate is observable again.
-const lastQuotaClaimBlockLog = new Map<string, string>();
-const lastAllQuotaClaimBlockedLog = new Map<string, string>();
-
-function quotaClaimBlockKey(meshId: string, observation: Pick<QuotaClaimGateObservation, 'nodeId' | 'sessionId' | 'providerType'>): string {
-    return `${meshId}:${observation.nodeId}:${observation.sessionId}:${observation.providerType}`;
-}
-
-function quotaClaimBlockDescription(providerType: string, block: ProviderQuotaGateBlock): string {
-    if (block.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
-        return `provider '${providerType}' reported quota exhausted`;
-    }
-    return `provider '${providerType}' had ${block.remainingPercent.toFixed(1)}% ${block.window} quota remaining (< ${block.thresholdPercent}% threshold)`;
-}
-
-function rememberBounded(map: Map<string, string>, key: string, value: string): void {
-    map.set(key, value);
-    if (map.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
-        const oldest = map.keys().next().value;
-        if (oldest !== undefined) map.delete(oldest);
-    }
-}
-
-function logQuotaClaimBlockTransition(meshId: string, observation: QuotaClaimGateObservation): void {
-    const key = quotaClaimBlockKey(meshId, observation);
-    const fingerprint = `${observation.block.reason}:${observation.block.window}:${observation.block.remainingPercent}:${observation.block.thresholdPercent}`;
-    if (lastQuotaClaimBlockLog.get(key) === fingerprint) return;
-    rememberBounded(lastQuotaClaimBlockLog, key, fingerprint);
-    LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${observation.nodeId} (${observation.sessionId}): ${quotaClaimBlockDescription(observation.providerType, observation.block)} — trying remaining provider candidates; the task stays pending only if none can claim`);
-}
-
-function clearQuotaClaimBlockState(meshId: string, nodeId: string, sessionId: string, providerType: string): void {
-    lastQuotaClaimBlockLog.delete(quotaClaimBlockKey(meshId, { nodeId, sessionId, providerType }));
-}
-
-function logQuotaClaimFallbackSuccess(
-    blocked: QuotaClaimGateObservation[],
-    taskId: string,
-    winner: { nodeId: string; sessionId: string; providerType: string },
-): void {
-    if (!blocked.length) return;
-    const detail = blocked.map(item => quotaClaimBlockDescription(item.providerType, item.block)).join('; ');
-    LOG.info('MeshQueue', `QUOTA GATE: queue claim fallback succeeded for task ${taskId}: ${detail} → provider '${winner.providerType}' claimed on node ${winner.nodeId} (${winner.sessionId})`);
-}
-
-function logAllQuotaClaimCandidatesBlocked(meshId: string, trace: QuotaClaimDrainTrace, pendingTaskIds: string[]): void {
-    if (!trace.blocked.length || trace.clear > 0 || trace.blocked.length !== trace.evaluated) return;
-    const detail = trace.blocked.map(item => `${item.nodeId}/${quotaClaimBlockDescription(item.providerType, item.block)}`).join('; ');
-    const fingerprint = `${pendingTaskIds.slice().sort().join(',')}|${detail}`;
-    if (lastAllQuotaClaimBlockedLog.get(meshId) === fingerprint) return;
-    rememberBounded(lastAllQuotaClaimBlockedLog, meshId, fingerprint);
-    LOG.info('MeshQueue', `QUOTA GATE: every idle provider candidate was quota-gated for mesh ${meshId} (${detail}); task(s) ${pendingTaskIds.join(', ') || 'pending'} remain queued until a quota window resets`);
-}
-
-function logAutoLaunchQuotaFallbackSuccess(
-    resolved: { providerType?: string; quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }> },
-    taskId: string,
-    nodeId: string,
-    sessionId?: string,
-): void {
-    if (!resolved.providerType || !resolved.quotaGated?.length) return;
-    const detail = resolved.quotaGated.map(item => quotaClaimBlockDescription(item.providerType, item.block)).join('; ');
-    LOG.info('MeshQueue', `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} → spawned provider '${resolved.providerType}'${sessionId ? ` (${sessionId})` : ''}`);
-}
 
 /**
  * CANON: the single canonical coordinator-daemon id this daemon stamps onto every
@@ -1453,21 +1374,6 @@ function inWindowAutoLaunchSessionIdsForNode(meshId: string, nodeId: string): st
     return out;
 }
 
-// De-dup for repeated `skipped` ledger noise: the reconcile loop re-runs the queue
-// trigger every 4s, so a task that can't be claimed (e.g. a remote node with no
-// transport, or a node under cooldown) would otherwise append an identical
-// session_auto_launch{phase:'skipped'} entry on every tick — flooding the ledger.
-// We suppress a `skipped` ledger append when the immediately-prior recorded event
-// for that task was the SAME (phase, reason). Any non-skip phase (started/failed/
-// completed) or a changed reason resets the de-dup so real transitions still record.
-const lastAutoLaunchLedgerKey = new Map<string, string>();
-/** @internal Split-visibility only: mesh-skip-notify bounds its own notify de-dup map by
- *  the same cap. Not part of this module's public surface — no consumer outside
- *  src/mesh imports it, and neither re-export barrel lists it. */
-export const AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2000;
-
-
-
 function sweepExpiredCooldowns(): void {
     const now = Date.now();
     for (const [key, until] of autoLaunchCooldownUntil) {
@@ -1797,57 +1703,6 @@ function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: st
         }
         return true; // live + unassigned + provider-capable → will claim the pending task itself
     });
-}
-
-function recordAutoLaunchEvent(meshId: string, args: {
-    phase: 'skipped' | 'started' | 'failed' | 'completed';
-    taskId: string;
-    nodeId?: string;
-    providerType?: string;
-    sessionId?: string;
-    reason?: string;
-    error?: string;
-    // LEDGER-TASK-TRACEABILITY (D): the resolved execution profile the auto-launch
-    // resolved for this worker, so session_auto_launch records what model/thinking the
-    // spawned worker actually launched with (not just the provider).
-    model?: string;
-    thinkingLevel?: string;
-}) {
-    // Suppress consecutive identical `skipped` entries for the same task (4s reconcile
-    // re-trigger noise). Non-skip phases and changed reasons always record and reset
-    // the de-dup so genuine state transitions remain visible in the ledger.
-    const dedupKey = `${meshId}:${args.taskId}`;
-    const currentSig = `${args.phase}|${args.reason || ''}`;
-    if (args.phase === 'skipped' && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
-        return;
-    }
-    lastAutoLaunchLedgerKey.set(dedupKey, currentSig);
-    if (lastAutoLaunchLedgerKey.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
-        // Bound memory: drop the oldest insertion (Map preserves insertion order).
-        const oldest = lastAutoLaunchLedgerKey.keys().next().value;
-        if (oldest !== undefined) lastAutoLaunchLedgerKey.delete(oldest);
-    }
-    try {
-        appendLedgerEntry(meshId, {
-            kind: 'session_auto_launch',
-            nodeId: args.nodeId,
-            sessionId: args.sessionId,
-            providerType: args.providerType,
-            // (B) promote taskId so this entry joins the task lifecycle timeline.
-            ...(args.taskId ? { taskId: args.taskId } : {}),
-            payload: {
-                phase: args.phase,
-                taskId: args.taskId,
-                reason: args.reason,
-                error: args.error,
-                // (D) resolved execution profile for the spawned worker.
-                ...(args.model ? { resolvedModel: args.model } : {}),
-                ...(args.thinkingLevel ? { resolvedThinkingLevel: args.thinkingLevel } : {}),
-            },
-        });
-    } catch (e: any) {
-        LOG.warn('MeshQueue', `Failed to record auto-launch ledger event: ${e?.message || e}`);
-    }
 }
 
 function markAutoLaunch(meshId: string, taskId: string, args: {
@@ -2919,7 +2774,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     if (newlyAssignedTasks.length === 0 && !autoLaunchStarted) {
         logAllQuotaClaimCandidatesBlocked(meshId, quotaClaimTrace, afterQueue.filter(task => task.status === 'pending').map(task => task.id));
     } else {
-        lastAllQuotaClaimBlockedLog.delete(meshId);
+        clearAllQuotaClaimCandidatesBlockedState(meshId);
     }
 
     // An auto-launch is "pending" when the coordinator has already spun a session up
