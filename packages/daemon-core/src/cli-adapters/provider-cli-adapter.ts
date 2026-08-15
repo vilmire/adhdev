@@ -21,6 +21,7 @@ import type { InteractivePrompt, InteractivePromptResponse } from '../providers/
 import { buildKimiInteractiveTuiAnswerSteps } from '../providers/types/interactive-prompt.js';
 import { detectKimiPendingQuestion, detectKimiIdleSelectorPrompt, buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX } from '../providers/kimi-pending-question.js';
 import { applyKimiWorkspaceTrust } from '../providers/kimi-workspace-trust.js';
+import { applyGrokWorkspaceTrust } from '../providers/grok-workspace-trust.js';
 import { LOG } from '../logging/logger.js';
 import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
@@ -732,6 +733,14 @@ export class ProviderCliAdapter implements CliAdapter {
         // kimi exit(0) immediately (best-effort; see kimi-workspace-trust.ts).
         if (this.cliType === 'kimi') {
             applyKimiWorkspaceTrust(this.workingDir);
+        }
+
+        // Same for grok, which gates folders carrying repo-local config
+        // (.mcp.json / .grok/lsp.json / hooks) behind a TUI prompt the spec
+        // can detect but cannot answer (best-effort; see
+        // grok-workspace-trust.ts).
+        if (this.cliType === 'grok-cli') {
+            applyGrokWorkspaceTrust(this.workingDir);
         }
 
         const spawnPlan = resolveCliSpawnPlan({
