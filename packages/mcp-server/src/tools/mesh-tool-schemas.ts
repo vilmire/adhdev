@@ -37,6 +37,7 @@ export const MESH_LIST_NODES_TOOL = {
 export const MESH_ENQUEUE_TASK_TOOL = {
     name: 'mesh_enqueue_task',
     description: 'Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node. '
+        + 'For a dependency-wired MULTI-task graph prefer mesh_enqueue_batch: it inserts the whole set atomically and lets depends_on reference batch-local refs, so no half-registered chain can be left behind. '
         + 'Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection '
         + '(by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).',
     inputSchema: {
@@ -72,6 +73,59 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
         },
         required: ['message', 'difficulty'],
+    },
+};
+
+export const MESH_ENQUEUE_BATCH_TOOL = {
+    name: 'mesh_enqueue_batch',
+    description: 'G5: atomically enqueue a dependency-wired set of tasks — either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). '
+        + 'Use this instead of N sequential mesh_enqueue_task calls whenever you are wiring a multi-task graph: give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed — array order does not matter). '
+        + 'A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            tasks: {
+                type: 'array',
+                description: 'The tasks to enqueue atomically (max 50). Each entry accepts the same fields as mesh_enqueue_task, plus an optional batch-local `ref`.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        ref: { type: 'string', description: 'Batch-local label other entries\' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted — resolved to the generated task id at insert.' },
+                        message: { type: 'string', description: 'The task instruction for the agent.' },
+                        task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract (same semantics as mesh_enqueue_task).' },
+                        taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
+                        readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task.' },
+                        read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
+                        requiredTags: { type: 'array', items: { type: 'string' }, description: 'Optional capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli, worktree=<branch>.' },
+                        required_tags: { type: 'array', items: { type: 'string' }, description: 'Snake_case alias for requiredTags.' },
+                        target_node_id: { type: 'string', description: 'Optional HARD pin: only this node may claim the task. An unresolvable id rejects the WHOLE batch (atomic).' },
+                        targetNodeId: { type: 'string', description: 'CamelCase alias for target_node_id.' },
+                        prefer_worktree: { type: 'boolean', description: 'Route to the most recently cloned idle worktree node (no-op when none exists).' },
+                        preferWorktree: { type: 'boolean', description: 'CamelCase alias for prefer_worktree.' },
+                        depends_on: { type: 'array', items: { type: 'string' }, description: 'Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch.' },
+                        dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
+                        mission_id: { type: 'string', description: 'Per-task mission override; defaults to the top-level mission_id.' },
+                        missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
+                        priority: { type: 'string', enum: ['low', 'normal', 'high'], description: 'G6 task-level scheduling priority (same semantics as mesh_enqueue_task).' },
+                        model: { type: 'string', description: 'Optional model override for the agent that runs this task (best-effort at launch).' },
+                        thinkingLevel: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Optional reasoning-effort level (best-effort at launch).' },
+                        difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED per task — routing hint matched against node capability slots (same semantics as mesh_enqueue_task).' },
+                        not_before: { type: 'number', description: 'G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string).' },
+                        notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
+                        max_retries: { type: 'number', description: 'P3 retry cap (same semantics as mesh_enqueue_task).' },
+                        maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
+                    },
+                    required: ['message', 'difficulty'],
+                },
+            },
+            mission_id: { type: 'string', description: 'Mission every task in this batch belongs to unless an entry overrides it. For multi-task work, create the mission first (mesh_mission_upsert) and pass it here.' },
+            missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
+            block_duplicate: { type: 'boolean', description: 'G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response.' },
+            blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
+            allow_duplicate: { type: 'boolean', description: 'G4: skip duplicate detection entirely for every entry (intentional re-enqueue).' },
+            allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
+        },
+        required: ['tasks'],
     },
 };
 
@@ -1047,6 +1101,7 @@ export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_LIST_NODES_TOOL,
     MESH_ENQUEUE_TASK_TOOL,
+    MESH_ENQUEUE_BATCH_TOOL,
     MESH_VIEW_QUEUE_TOOL,
     MESH_QUEUE_CANCEL_TOOL,
     MESH_QUEUE_REQUEUE_TOOL,

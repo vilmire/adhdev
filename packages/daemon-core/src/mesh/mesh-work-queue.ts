@@ -1198,52 +1198,60 @@ function assertMeshTaskDifficulty(value: unknown, callerLabel: string): MeshTask
 }
 
 /**
+ * Options accepted by {@link enqueueTask}. Named (rather than inline) so
+ * {@link enqueueTaskGraph} can reuse the exact same per-task option surface —
+ * the batch path generates `id` itself and resolves batch refs in `dependsOn`
+ * before delegating each entry to enqueueTask, so the two can never drift.
+ */
+export interface MeshEnqueueTaskOptions {
+    targetNodeId?: string;
+    targetSessionId?: string;
+    taskMode?: MeshTaskMode | string;
+    /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
+    readonly?: boolean;
+    requiredTags?: string[];
+    /** M1: tasks that must complete before this one is claimable. */
+    dependsOn?: string[];
+    /** G6: task-level scheduling priority ('low' | 'normal' | 'high'). Absent → 'normal'. */
+    priority?: MeshTaskPriority | string;
+    /** G7: hold the task pending until this time. ISO string, absolute epoch-ms, or relative-ms offset from now. */
+    notBefore?: string | number;
+    /** P3: max automatic requeue attempts before the task auto-fails. Absent → policy default (1). */
+    maxRetries?: number;
+    /** M1/M3: mission this task belongs to. */
+    missionId?: string;
+    /** MAGI: consensus group id shared by every replica of a mesh_magi_review fan-out. */
+    consensusGroupId?: string;
+    /** MAGI-KIND-PANEL: model override forwarded to the executing session's launch (initialModel). */
+    model?: string;
+    /** BRAIN-ROUTING: standard thinking level forwarded to launch (initialThinkingLevel). */
+    thinkingLevel?: string;
+    /**
+     * BRAIN-ROUTING: task execution difficulty ('easy'|'medium'|'difficult'|
+     * 'freeform'). REQUIRED — a missing or unrecognized value throws (see
+     * assertMeshTaskDifficulty). Typed as optional only because the value arrives
+     * from untyped MCP tool args; the guard is what enforces it at runtime.
+     *
+     * The mesh's difficulty→brain preset fills in model / thinkingLevel that were
+     * not passed explicitly (an explicit model/thinkingLevel wins). Purely a
+     * convenience resolver — the stored task still carries the resolved
+     * model/thinkingLevel, so downstream launch is unchanged. The value itself is
+     * persisted on the entry for slot matching at assignment time.
+     */
+    difficulty?: string;
+    /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
+    id?: string;
+    /** (3) Originating coordinator session id (for session-anchored completion routing). */
+    sourceCoordinatorSessionId?: string;
+}
+
+/**
  * Add a new task to the mesh queue.
  */
 export function enqueueTask(
     meshId: string,
     message: string,
-    opts?: {
-        targetNodeId?: string;
-        targetSessionId?: string;
-        taskMode?: MeshTaskMode | string;
-        /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
-        readonly?: boolean;
-        requiredTags?: string[];
-        /** M1: tasks that must complete before this one is claimable. */
-        dependsOn?: string[];
-        /** G6: task-level scheduling priority ('low' | 'normal' | 'high'). Absent → 'normal'. */
-        priority?: MeshTaskPriority | string;
-        /** G7: hold the task pending until this time. ISO string, absolute epoch-ms, or relative-ms offset from now. */
-        notBefore?: string | number;
-        /** P3: max automatic requeue attempts before the task auto-fails. Absent → policy default (1). */
-        maxRetries?: number;
-        /** M1/M3: mission this task belongs to. */
-        missionId?: string;
-        /** MAGI: consensus group id shared by every replica of a mesh_magi_review fan-out. */
-        consensusGroupId?: string;
-        /** MAGI-KIND-PANEL: model override forwarded to the executing session's launch (initialModel). */
-        model?: string;
-        /** BRAIN-ROUTING: standard thinking level forwarded to launch (initialThinkingLevel). */
-        thinkingLevel?: string;
-        /**
-         * BRAIN-ROUTING: task execution difficulty ('easy'|'medium'|'difficult'|
-         * 'freeform'). REQUIRED — a missing or unrecognized value throws (see
-         * assertMeshTaskDifficulty). Typed as optional only because the value arrives
-         * from untyped MCP tool args; the guard is what enforces it at runtime.
-         *
-         * The mesh's difficulty→brain preset fills in model / thinkingLevel that were
-         * not passed explicitly (an explicit model/thinkingLevel wins). Purely a
-         * convenience resolver — the stored task still carries the resolved
-         * model/thinkingLevel, so downstream launch is unchanged. The value itself is
-         * persisted on the entry for slot matching at assignment time.
-         */
-        difficulty?: string;
-        /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
-        id?: string;
-        /** (3) Originating coordinator session id (for session-anchored completion routing). */
-        sourceCoordinatorSessionId?: string;
-    } & MeshQueueMutationOptions,
+    opts?: MeshEnqueueTaskOptions & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry {
     requireMeshHostQueueOwner(opts);
     // DELIVERY-MSG-GUARD (upstream defence): a task whose message is undefined /
@@ -1350,6 +1358,92 @@ export function enqueueTask(
     // stale close-candidate marker so a later re-completion can nudge again.
     scheduleMissionCloseCandidateCheck(meshId, [result]);
     return result;
+}
+
+// ─── G5: Atomic Task-Graph Enqueue ─────────
+
+/**
+ * G5: one task in an atomic multi-task enqueue. `ref` is a batch-local label that
+ * other entries' `dependsOn` may name (forward references included — order within
+ * the batch does not matter); it is resolved to the generated task id before insert
+ * and never persisted. A `dependsOn` value that is not a batch ref must be an
+ * EXISTING queue task id. Unknown values are rejected — unlike single enqueueTask,
+ * which tolerates dangling dep ids precisely because multi-call batch flows needed
+ * forward references; with an atomic batch the only unknown-id case left is a typo,
+ * and a typo'd dep would otherwise hang the task as unclaimable forever.
+ */
+export interface MeshTaskGraphEntrySpec extends Omit<MeshEnqueueTaskOptions, 'id'> {
+    ref?: string;
+    message: string;
+}
+
+/** G5: hard cap on tasks per atomic graph enqueue — a runaway backstop, not a tuning knob. */
+export const MESH_TASK_GRAPH_MAX_TASKS = 50;
+
+/**
+ * G5: enqueue a dependency-wired set of tasks ATOMICALLY — either every task in
+ * `specs` is inserted or none is. Closes the half-registered-chain failure mode of
+ * building a graph via N sequential enqueueTask calls, where a mid-batch error
+ * (cycle, invalid difficulty, guardrail violation) left the earlier tasks live.
+ *
+ * Atomicity rides on the store transaction: the outer withQueueLock opens ONE
+ * better-sqlite3 transaction and each inner enqueueTask call nests as a savepoint,
+ * so any per-task throw rolls back the whole batch. Per-task validation is NOT
+ * duplicated here — every entry goes through the real enqueueTask (message guard,
+ * task-mode guardrail, difficulty assert, duplicate-id check, cycle check), so the
+ * batch and single-enqueue paths can never drift. Intra-batch cycles are caught by
+ * that same per-task assertNoDependencyCycle: ids are pre-generated, so by the time
+ * the last member of a cycle inserts, every edge of the cycle is visible to its DFS.
+ */
+export function enqueueTaskGraph(
+    meshId: string,
+    specs: MeshTaskGraphEntrySpec[],
+    opts?: MeshQueueMutationOptions,
+): MeshWorkQueueEntry[] {
+    requireMeshHostQueueOwner(opts);
+    if (!Array.isArray(specs) || specs.length === 0) {
+        throw new Error('empty_task_graph: enqueueTaskGraph requires at least one task spec');
+    }
+    if (specs.length > MESH_TASK_GRAPH_MAX_TASKS) {
+        throw new Error(`task_graph_too_large: ${specs.length} tasks exceeds the ${MESH_TASK_GRAPH_MAX_TASKS}-task cap for one atomic enqueue`);
+    }
+    // Pre-generate every task id up front so refs resolve regardless of array order.
+    const ids = specs.map(() => randomUUID());
+    const idByRef = new Map<string, string>();
+    specs.forEach((spec, i) => {
+        const ref = typeof spec.ref === 'string' ? spec.ref.trim() : '';
+        if (!ref) return;
+        if (idByRef.has(ref)) {
+            throw new Error(`duplicate_task_ref: ref '${ref}' is used by more than one task in this batch`);
+        }
+        idByRef.set(ref, ids[i]);
+    });
+    const store = MeshRuntimeStore.getInstance();
+    return withQueueLock(meshId, () => {
+        const inserted: MeshWorkQueueEntry[] = [];
+        specs.forEach((spec, i) => {
+            const { ref, message, ...taskOpts } = spec;
+            const label = ref ? `'${ref}'` : `#${i}`;
+            // A batch ref shadows a same-string existing task id (refs are short
+            // human labels, ids are UUIDs/template ids — a collision is a ref).
+            const dependsOn = normalizeDependsOn(spec.dependsOn).map(dep => {
+                const mapped = idByRef.get(dep);
+                if (mapped) return mapped;
+                if (store.findQueueEntryById(meshId, dep)) return dep;
+                throw new Error(
+                    `unknown_dependency: task ${label} depends on '${dep}', which is neither a ref in this batch nor an existing task id`
+                    + (idByRef.size ? ` (batch refs: ${[...idByRef.keys()].join(', ')})` : ''),
+                );
+            });
+            inserted.push(enqueueTask(meshId, message, {
+                ...taskOpts,
+                dependsOn,
+                id: ids[i],
+                ...(opts?.ownerRole ? { ownerRole: opts.ownerRole } : {}),
+            }));
+        });
+        return inserted;
+    });
 }
 
 /**

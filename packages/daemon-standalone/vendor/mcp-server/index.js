@@ -575,6 +575,7 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_status",
   "mesh_list_nodes",
   "mesh_enqueue_task",
+  "mesh_enqueue_batch",
   "mesh_view_queue",
   "mesh_queue_cancel",
   "mesh_queue_requeue",
@@ -974,7 +975,7 @@ var MESH_LIST_NODES_TOOL = {
 };
 var MESH_ENQUEUE_TASK_TOOL = {
   name: "mesh_enqueue_task",
-  description: "Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node. Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection (by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).",
+  description: "Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node. For a dependency-wired MULTI-task graph prefer mesh_enqueue_batch: it inserts the whole set atomically and lets depends_on reference batch-local refs, so no half-registered chain can be left behind. Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection (by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).",
   inputSchema: {
     type: "object",
     properties: {
@@ -1008,6 +1009,56 @@ var MESH_ENQUEUE_TASK_TOOL = {
       allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." }
     },
     required: ["message", "difficulty"]
+  }
+};
+var MESH_ENQUEUE_BATCH_TOOL = {
+  name: "mesh_enqueue_batch",
+  description: "G5: atomically enqueue a dependency-wired set of tasks \u2014 either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). Use this instead of N sequential mesh_enqueue_task calls whenever you are wiring a multi-task graph: give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed \u2014 array order does not matter). A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      tasks: {
+        type: "array",
+        description: "The tasks to enqueue atomically (max 50). Each entry accepts the same fields as mesh_enqueue_task, plus an optional batch-local `ref`.",
+        items: {
+          type: "object",
+          properties: {
+            ref: { type: "string", description: `Batch-local label other entries' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted \u2014 resolved to the generated task id at insert.` },
+            message: { type: "string", description: "The task instruction for the agent." },
+            task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract (same semantics as mesh_enqueue_task)." },
+            taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
+            readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task." },
+            read_only: { type: "boolean", description: "Snake-case alias for readonly." },
+            requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli, worktree=<branch>." },
+            required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
+            target_node_id: { type: "string", description: "Optional HARD pin: only this node may claim the task. An unresolvable id rejects the WHOLE batch (atomic)." },
+            targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
+            prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op when none exists)." },
+            preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
+            depends_on: { type: "array", items: { type: "string" }, description: "Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch." },
+            dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
+            mission_id: { type: "string", description: "Per-task mission override; defaults to the top-level mission_id." },
+            missionId: { type: "string", description: "CamelCase alias for mission_id." },
+            priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 task-level scheduling priority (same semantics as mesh_enqueue_task)." },
+            model: { type: "string", description: "Optional model override for the agent that runs this task (best-effort at launch)." },
+            thinkingLevel: { type: "string", enum: ["low", "medium", "high"], description: "Optional reasoning-effort level (best-effort at launch)." },
+            difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED per task \u2014 routing hint matched against node capability slots (same semantics as mesh_enqueue_task)." },
+            not_before: { type: "number", description: "G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string)." },
+            notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
+            max_retries: { type: "number", description: "P3 retry cap (same semantics as mesh_enqueue_task)." },
+            maxRetries: { type: "number", description: "CamelCase alias for max_retries." }
+          },
+          required: ["message", "difficulty"]
+        }
+      },
+      mission_id: { type: "string", description: "Mission every task in this batch belongs to unless an entry overrides it. For multi-task work, create the mission first (mesh_mission_upsert) and pass it here." },
+      missionId: { type: "string", description: "CamelCase alias for mission_id." },
+      block_duplicate: { type: "boolean", description: "G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response." },
+      blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
+      allow_duplicate: { type: "boolean", description: "G4: skip duplicate detection entirely for every entry (intentional re-enqueue)." },
+      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." }
+    },
+    required: ["tasks"]
   }
 };
 var MESH_VIEW_QUEUE_TOOL = {
@@ -1839,6 +1890,7 @@ var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_LIST_NODES_TOOL,
   MESH_ENQUEUE_TASK_TOOL,
+  MESH_ENQUEUE_BATCH_TOOL,
   MESH_VIEW_QUEUE_TOOL,
   MESH_QUEUE_CANCEL_TOOL,
   MESH_QUEUE_REQUEUE_TOOL,
@@ -4534,14 +4586,14 @@ function buildUntargetedCodeChangeWorktreeAdvisory(input) {
     worktreeRoutingAdvisory: 'This untargeted `code_change` will be claimed by whichever node polls first \u2014 usually the BASE node, which gives it no branch isolation. Base nodes are for environment-specific testing (win32 PATH/registry, clean install on one OS, that machine\'s package state, OS-dependent runtime behavior). If this task only changes code, cancel it (mesh_queue_cancel), call mesh_clone_node (~10s, auto-launch starts the session), and re-enqueue with target_node_id set to the returned worktree node id \u2014 or pass prefer_worktree: true to route to the most recent worktree. If it DOES need a specific machine, pin it with required_tags (e.g. ["os=win32"]) or target_node_id and this advisory will not appear.'
   };
 }
-async function meshEnqueueTask(ctx, args) {
+function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
   const message = readString(args.message);
   if (!message) {
-    return JSON.stringify({
-      success: false,
+    return {
+      ok: false,
       code: "invalid_message",
-      error: "mesh_enqueue_task requires a non-empty string `message`."
-    });
+      error: `${callerLabel} requires a non-empty string \`message\`.`
+    };
   }
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
@@ -4556,26 +4608,132 @@ async function meshEnqueueTask(ctx, args) {
   const notBefore = (0, import_daemon_core5.resolveNotBefore)(notBeforeRaw);
   const maxRetriesRaw = typeof args.maxRetries === "number" ? args.maxRetries : typeof args.max_retries === "number" ? args.max_retries : void 0;
   const maxRetries = typeof maxRetriesRaw === "number" && Number.isFinite(maxRetriesRaw) && maxRetriesRaw >= 0 ? Math.floor(maxRetriesRaw) : void 0;
-  const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
-  const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
   const explicitTargetRaw = readString(args.targetNodeId) || readString(args.target_node_id) || readString(args.targetNode) || readString(args.target_node) || void 0;
   const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
   let targetNodeId;
   if (explicitTargetRaw) {
     const matched = ctx.mesh.nodes.find((n) => (0, import_daemon_core5.meshNodeIdMatches)(n, explicitTargetRaw));
     if (!matched) {
-      return JSON.stringify({
-        success: false,
+      return {
+        ok: false,
         code: "target_node_not_found",
         error: `target node '${explicitTargetRaw}' is not a member of this mesh \u2014 refusing to enqueue an unpinned task (it could be claimed by any node, including a different machine). Use mesh_list_nodes to get a valid node id.`,
-        targetNodeId: explicitTargetRaw,
-        availableNodeIds: ctx.mesh.nodes.map((n) => n.id).filter(Boolean)
-      });
+        extra: {
+          targetNodeId: explicitTargetRaw,
+          availableNodeIds: ctx.mesh.nodes.map((n) => n.id).filter(Boolean)
+        }
+      };
     }
     targetNodeId = readString(matched.id) || explicitTargetRaw;
   } else if (preferWorktree) {
     targetNodeId = resolvePreferredWorktreeNodeId(ctx) || void 0;
   }
+  return {
+    ok: true,
+    value: {
+      message,
+      taskMode,
+      readonly,
+      requiredTags,
+      dependsOn,
+      missionId,
+      priority,
+      model,
+      thinkingLevel,
+      difficulty,
+      notBefore,
+      maxRetries,
+      explicitTargetRaw,
+      preferWorktree,
+      targetNodeId
+    }
+  };
+}
+function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId) {
+  const dispatchPromises = [];
+  for (const node of ctx.mesh.nodes) {
+    const isLocalNode = isLocalControlPlaneNode(ctx, node);
+    if (isLocalNode || !node.daemonId) continue;
+    if (targetNodeId && node.id !== targetNodeId) continue;
+    if (!(0, import_daemon_core5.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core5.buildMeshNodeCapabilityTags)(node))) continue;
+    dispatchPromises.push(
+      ipcDispatchToRemoteAgent(ctx, node, {
+        message,
+        meshContext: {
+          meshId: ctx.mesh.id,
+          nodeId: node.id,
+          taskId: task.id,
+          ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
+        }
+      }).then((result) => {
+        if (result.success) {
+          try {
+            const providerType = result.providerType;
+            const descriptor = summarizeTaskMessage(message);
+            (0, import_daemon_core5.appendLedgerEntry)(ctx.mesh.id, {
+              kind: "task_dispatched",
+              nodeId: node.id,
+              sessionId: result.sessionId,
+              providerType,
+              payload: {
+                source: "queue",
+                via: "p2p_direct",
+                taskId: task.id,
+                message,
+                taskTitle: descriptor.taskTitle,
+                taskSummary: descriptor.taskSummary,
+                ...task.taskMode ? { taskMode: task.taskMode } : {},
+                ...providerType ? { providerType } : {},
+                targetSessionId: result.sessionId
+              }
+            });
+          } catch {
+          }
+        }
+      }).catch((err) => {
+        try {
+          (0, import_daemon_core5.appendLedgerEntry)(ctx.mesh.id, {
+            kind: "p2p_dispatch_failed",
+            nodeId: node.id,
+            payload: {
+              source: "queue",
+              via: "p2p_direct",
+              taskId: task.id,
+              error: err?.message || String(err),
+              dispatchFailedAt: (/* @__PURE__ */ new Date()).toISOString()
+            }
+          });
+        } catch {
+        }
+      })
+    );
+  }
+  return dispatchPromises;
+}
+async function meshEnqueueTask(ctx, args) {
+  const normalized = normalizeEnqueueTaskArgs(ctx, args, "mesh_enqueue_task");
+  if (!normalized.ok) {
+    return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...normalized.extra ?? {} });
+  }
+  const {
+    message,
+    taskMode,
+    readonly,
+    requiredTags,
+    dependsOn,
+    missionId,
+    priority,
+    model,
+    thinkingLevel,
+    difficulty,
+    notBefore,
+    maxRetries,
+    explicitTargetRaw,
+    preferWorktree,
+    targetNodeId
+  } = normalized.value;
+  const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
+  const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
   const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, message, targetNodeId);
   if (duplicateSuspect && blockDuplicate) {
     return JSON.stringify({
@@ -4641,65 +4799,7 @@ async function meshEnqueueTask(ctx, args) {
       );
       const eagerPushDeferred = !(0, import_daemon_core5.taskDependenciesSatisfied)(task, dependencyStatusById);
       const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-      const dispatchPromises = [];
-      const eagerPushTargets = eagerPushDeferred ? [] : ctx.mesh.nodes;
-      for (const node of eagerPushTargets) {
-        const isLocalNode = isLocalControlPlaneNode(ctx, node);
-        if (isLocalNode || !node.daemonId) continue;
-        if (targetNodeId && node.id !== targetNodeId) continue;
-        if (!(0, import_daemon_core5.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core5.buildMeshNodeCapabilityTags)(node))) continue;
-        dispatchPromises.push(
-          ipcDispatchToRemoteAgent(ctx, node, {
-            message,
-            meshContext: {
-              meshId: ctx.mesh.id,
-              nodeId: node.id,
-              taskId: task.id,
-              ...coordinatorDaemonId ? { coordinatorDaemonId } : {}
-            }
-          }).then((result) => {
-            if (result.success) {
-              try {
-                const providerType = result.providerType;
-                const descriptor = summarizeTaskMessage(message);
-                (0, import_daemon_core5.appendLedgerEntry)(ctx.mesh.id, {
-                  kind: "task_dispatched",
-                  nodeId: node.id,
-                  sessionId: result.sessionId,
-                  providerType,
-                  payload: {
-                    source: "queue",
-                    via: "p2p_direct",
-                    taskId: task.id,
-                    message,
-                    taskTitle: descriptor.taskTitle,
-                    taskSummary: descriptor.taskSummary,
-                    ...task.taskMode ? { taskMode: task.taskMode } : {},
-                    ...providerType ? { providerType } : {},
-                    targetSessionId: result.sessionId
-                  }
-                });
-              } catch {
-              }
-            }
-          }).catch((err) => {
-            try {
-              (0, import_daemon_core5.appendLedgerEntry)(ctx.mesh.id, {
-                kind: "p2p_dispatch_failed",
-                nodeId: node.id,
-                payload: {
-                  source: "queue",
-                  via: "p2p_direct",
-                  taskId: task.id,
-                  error: err?.message || String(err),
-                  dispatchFailedAt: (/* @__PURE__ */ new Date()).toISOString()
-                }
-              });
-            } catch {
-            }
-          })
-        );
-      }
+      const dispatchPromises = eagerPushDeferred ? [] : eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId);
       Promise.all(dispatchPromises).catch(() => {
       });
       return JSON.stringify({
@@ -4730,6 +4830,178 @@ async function meshEnqueueTask(ctx, args) {
     }
     return JSON.stringify({ success: false, error: message2 });
   }
+}
+var BATCH_ENQUEUE_ERROR_CODES = [
+  "live_debug_readonly_guardrail_violation",
+  "dependency_cycle_detected",
+  "unknown_dependency",
+  "duplicate_task_ref",
+  "duplicate_task_id",
+  "task_graph_too_large",
+  "empty_task_graph",
+  "missing_task_difficulty",
+  "invalid_task_difficulty"
+];
+async function meshEnqueueBatch(ctx, args) {
+  const rawTasks = Array.isArray(args.tasks) ? args.tasks : void 0;
+  if (!rawTasks || rawTasks.length === 0) {
+    return JSON.stringify({
+      success: false,
+      code: "empty_task_graph",
+      error: "mesh_enqueue_batch requires a non-empty `tasks` array."
+    });
+  }
+  if (rawTasks.length > import_daemon_core5.MESH_TASK_GRAPH_MAX_TASKS) {
+    return JSON.stringify({
+      success: false,
+      code: "task_graph_too_large",
+      error: `mesh_enqueue_batch accepts at most ${import_daemon_core5.MESH_TASK_GRAPH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the graph, or reconsider whether one batch really needs this many tasks.`
+    });
+  }
+  const batchMissionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
+  const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
+  const specs = [];
+  const normalizedEntries = [];
+  const duplicateSuspects = [];
+  for (let i = 0; i < rawTasks.length; i++) {
+    const entry = rawTasks[i] ?? {};
+    const ref = readString(entry.ref) || void 0;
+    const label = ref ? `task '${ref}'` : `task #${i}`;
+    const normalized = normalizeEnqueueTaskArgs(ctx, entry, `mesh_enqueue_batch ${label}`);
+    if (!normalized.ok) {
+      return JSON.stringify({
+        success: false,
+        code: normalized.code,
+        error: normalized.error,
+        taskIndex: i,
+        ...ref ? { ref } : {},
+        ...normalized.extra ?? {},
+        enqueued: 0,
+        atomic: true
+      });
+    }
+    const v = normalized.value;
+    if (!allowDuplicate) {
+      const suspect = findInFlightDuplicate(ctx, v.message, v.targetNodeId);
+      if (suspect) {
+        duplicateSuspects.push({
+          taskIndex: i,
+          ...ref ? { ref } : {},
+          duplicateOf: { taskId: suspect.id, status: suspect.status, assignedNodeId: suspect.assignedNodeId, targetNodeId: suspect.targetNodeId }
+        });
+      }
+    }
+    normalizedEntries.push({ ...v, ...ref ? { ref } : {} });
+    specs.push({
+      ...ref ? { ref } : {},
+      message: v.message,
+      taskMode: v.taskMode,
+      ...v.readonly ? { readonly: true } : {},
+      requiredTags: v.requiredTags,
+      dependsOn: v.dependsOn,
+      missionId: v.missionId ?? batchMissionId,
+      targetNodeId: v.targetNodeId,
+      ...v.priority ? { priority: v.priority } : {},
+      ...v.model ? { model: v.model } : {},
+      ...v.thinkingLevel ? { thinkingLevel: v.thinkingLevel } : {},
+      ...v.difficulty ? { difficulty: v.difficulty } : {},
+      ...v.notBefore ? { notBefore: v.notBefore } : {},
+      ...v.maxRetries !== void 0 ? { maxRetries: v.maxRetries } : {},
+      ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
+    });
+  }
+  if (duplicateSuspects.length > 0 && blockDuplicate) {
+    return JSON.stringify({
+      success: false,
+      code: "duplicate_suspect",
+      error: `${duplicateSuspects.length} task(s) in this batch match an in-flight task with the same message (and target node when pinned). Refusing the WHOLE batch because block_duplicate=true and the batch is atomic. Cancel the in-flight duplicates, wait for them, or re-send with allow_duplicate=true.`,
+      duplicateSuspects,
+      enqueued: 0,
+      atomic: true
+    });
+  }
+  let tasks;
+  try {
+    tasks = (0, import_daemon_core5.enqueueTaskGraph)(ctx.mesh.id, specs);
+  } catch (e) {
+    const message = e?.message || String(e);
+    const code = BATCH_ENQUEUE_ERROR_CODES.find((c) => message.includes(c));
+    return JSON.stringify({
+      success: false,
+      ...code ? { code } : {},
+      error: message,
+      enqueued: 0,
+      atomic: true
+    });
+  }
+  const distinctMissionIds = [...new Set(specs.map((s) => s.missionId).filter((m) => !!m))];
+  const missionWarning = distinctMissionIds.map((missionId) => buildMissionInactiveWarning(ctx, missionId)).find((w) => w !== null) ?? {};
+  const advisoryTasks = [];
+  normalizedEntries.forEach((entry, i) => {
+    const advisory = buildUntargetedCodeChangeWorktreeAdvisory({
+      taskMode: entry.taskMode,
+      readonly: entry.readonly,
+      requiredTags: entry.requiredTags,
+      targetNodeId: entry.targetNodeId,
+      preferWorktree: entry.preferWorktree
+    });
+    if (advisory) advisoryTasks.push(entry.ref ? `'${entry.ref}'` : `#${i}`);
+  });
+  const worktreeAdvisory = advisoryTasks.length > 0 ? {
+    ...buildUntargetedCodeChangeWorktreeAdvisory({ taskMode: "code_change", readonly: false, preferWorktree: false }),
+    worktreeRoutingAdvisoryTasks: advisoryTasks
+  } : {};
+  const queueTrigger = await triggerMeshQueueAndReport(ctx);
+  let eagerPushDeferredCount = 0;
+  if (ctx.transport instanceof IpcTransport) {
+    const dependencyStatusById = new Map(
+      (0, import_daemon_core5.getQueue)(ctx.mesh.id).map((t) => [t.id, t.status])
+    );
+    const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+    const dispatchPromises = [];
+    tasks.forEach((task, i) => {
+      if (!(0, import_daemon_core5.taskDependenciesSatisfied)(task, dependencyStatusById)) {
+        eagerPushDeferredCount++;
+        return;
+      }
+      dispatchPromises.push(...eagerPushTaskToRemoteNodes(
+        ctx,
+        task,
+        normalizedEntries[i].message,
+        normalizedEntries[i].targetNodeId,
+        normalizedEntries[i].requiredTags,
+        coordinatorDaemonId
+      ));
+    });
+    Promise.all(dispatchPromises).catch(() => {
+    });
+  }
+  return JSON.stringify({
+    success: true,
+    source: "queue",
+    atomic: true,
+    enqueued: tasks.length,
+    tasks: tasks.map((task, i) => ({
+      ...normalizedEntries[i].ref ? { ref: normalizedEntries[i].ref } : {},
+      taskId: task.id,
+      status: task.status,
+      taskMode: task.taskMode,
+      ...Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {},
+      ...task.targetNodeId ? { targetNodeId: task.targetNodeId } : {},
+      ...task.priority ? { priority: task.priority } : {},
+      ...task.notBefore ? { notBefore: task.notBefore } : {}
+    })),
+    ...duplicateSuspects.length > 0 ? {
+      duplicateSuspects,
+      duplicateSuspectHint: "In-flight task(s) with the same message+target already exist. The batch was enqueued anyway (warn-only). Cancel duplicates via mesh_queue_cancel, or pass allow_duplicate=true / block_duplicate=true to silence or refuse next time."
+    } : {},
+    ...missionWarning,
+    ...worktreeAdvisory,
+    ...eagerPushDeferredCount > 0 ? { eagerPushDeferred: eagerPushDeferredCount, eagerPushDeferredReason: "dependencies_unsatisfied" } : {},
+    queueTrigger,
+    ...buildQueueTriggerGuidance(queueTrigger)
+  });
 }
 async function meshViewQueue(ctx, args) {
   const rateResult = (0, import_daemon_core5.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
@@ -9875,6 +10147,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_enqueue_task":
             text = await meshEnqueueTask(meshCtx, a);
+            break;
+          case "mesh_enqueue_batch":
+            text = await meshEnqueueBatch(meshCtx, a);
             break;
           case "mesh_view_queue":
             text = await meshViewQueue(meshCtx, a);

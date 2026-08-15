@@ -86,6 +86,7 @@ export {
 
 export {
     meshEnqueueTask,
+    meshEnqueueBatch,
     meshQueueCancel,
     meshQueueRequeue,
     meshViewQueue,

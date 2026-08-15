@@ -38,7 +38,7 @@ import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, MESH_PLAN_ONBOARDING_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL,
   meshStatus, meshListNodes, meshSendTask, meshReadChat,
-  meshEnqueueTask, meshViewQueue, meshQueueCancel, meshQueueRequeue,
+  meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshReadDebug, meshReadTerminal, meshSendKeys,
   meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
   meshPlanOnboarding, meshCreate, meshAddNode,
@@ -233,6 +233,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_status': text = await meshStatus(meshCtx, a as any); break;
           case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
           case 'mesh_enqueue_task': text = await meshEnqueueTask(meshCtx, a as any); break;
+          case 'mesh_enqueue_batch': text = await meshEnqueueBatch(meshCtx, a as any); break;
           case 'mesh_view_queue': text = await meshViewQueue(meshCtx, a as any); break;
           case 'mesh_queue_cancel': text = await meshQueueCancel(meshCtx, a as any); break;
           case 'mesh_queue_requeue': text = await meshQueueRequeue(meshCtx, a as any); break;

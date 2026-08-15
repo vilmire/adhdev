@@ -22,6 +22,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_status',
     'mesh_list_nodes',
     'mesh_enqueue_task',
+    'mesh_enqueue_batch',
     'mesh_view_queue',
     'mesh_queue_cancel',
     'mesh_queue_requeue',
