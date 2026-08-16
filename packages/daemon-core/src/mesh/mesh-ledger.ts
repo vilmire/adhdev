@@ -369,6 +369,44 @@ const ARCHIVABLE_KINDS: ReadonlySet<MeshLedgerKind> = new Set([
 const DEFAULT_LEDGER_SLICE_LIMIT = 100;
 export const MAX_LEDGER_SLICE_LIMIT = 500;
 
+// ARCHIVE-PAIR-ATOMICITY (B): kinds whose archival must not break a
+// dispatch↔terminal pair. `task_dispatched` is deliberately NOT in
+// ARCHIVABLE_KINDS (getSessionRecoveryContext and the refine resume scanner both
+// replay it), while `task_completed`/`task_failed` ARE. Without a guard the two
+// halves age out asymmetrically: past ARCHIVE_TERMINAL_OLDER_THAN_MS the terminal
+// row leaves the live store and its dispatch stays, so a job that finished in
+// 90 seconds re-reads as permanently open. That is the 2026-08-09 → 08-16 false
+// zombie: five refine jobs that all reached terminal within four minutes fired
+// `resume_abandoned_stale_dispatch` a week later, because the 7-day archive window
+// is far wider than the 24h zombie cutoff — making the false positive structural,
+// not incidental, for any long-lived job key.
+//
+// The invariant: a terminal entry is archived only if its dispatch counterpart
+// either goes with it or never existed in the live set. Since dispatches are never
+// archivable, in practice this pins a terminal row in the live file for as long as
+// its dispatch is there — the pair survives or ages out together, never half.
+const PAIRED_TERMINAL_KINDS: ReadonlySet<MeshLedgerKind> = new Set([
+    'task_completed',
+    'task_failed',
+] as MeshLedgerKind[]);
+
+/**
+ * Pairing key for the dispatch↔terminal atomicity invariant.
+ *
+ * Refine jobs have no taskId — their identity is `payload.refineJob.jobId` scoped
+ * by nodeId, the same composite the resume scanner keys on. Ordinary queue tasks
+ * use the taskId base field. Entries with neither are unpairable (returns
+ * undefined) and keep the previous archive behavior.
+ */
+export function ledgerPairKey(entry: Pick<MeshLedgerEntry, 'kind' | 'nodeId' | 'taskId' | 'payload'>): string | undefined {
+    const refineJobId = (entry.payload as any)?.refineJob?.jobId;
+    if (typeof refineJobId === 'string' && refineJobId.trim() && entry.nodeId) {
+        return `refine:${entry.nodeId}:${refineJobId.trim()}`;
+    }
+    const taskId = ledgerEntryTaskId(entry);
+    return taskId ? `task:${taskId}` : undefined;
+}
+
 // ─── Operating-note growth control ──────────────
 // coordinator_operating_note is append-only and, unlike task_* entries, is never
 // archived by compactLedger (it is not in ARCHIVABLE_KINDS — it must survive
@@ -490,6 +528,72 @@ function getRotatedArchivePath(meshId: string, index: number): string {
     return join(getLedgerDir(), `${safe}.archive.${index}.jsonl`);
 }
 
+function getArchivedTerminalKeysPath(meshId: string): string {
+    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return join(getLedgerDir(), `${safe}.archived-terminal-keys.json`);
+}
+
+// ARCHIVE-TERMINAL-KEY-INDEX (A): bound on the sidecar. Terminal pair keys are
+// small (~60 bytes) and only ever recorded for entries that ALREADY escaped the
+// pair guard (legacy asymmetric rows), so growth is slow; the cap keeps a
+// long-lived mesh from accumulating an unbounded file. Oldest keys drop first —
+// a key old enough to fall off has a dispatch far past every resume cutoff, so
+// losing it cannot resurrect a job the scanner would act on.
+const ARCHIVED_TERMINAL_KEYS_MAX = 5000;
+
+interface ArchivedTerminalKeyIndex {
+    /** Pair keys (ledgerPairKey) of terminal entries moved out of the live store, oldest→newest. */
+    keys: string[];
+    updatedAt: string;
+}
+
+/**
+ * ARCHIVE-TERMINAL-KEY-INDEX (A): pair keys of terminal entries that were archived
+ * out of the live store. The resume scanner consults this so a dispatch whose
+ * completion was archived under the OLD asymmetric policy is still recognized as
+ * closed, rather than re-read as an eternally-open zombie.
+ *
+ * Chosen over replaying `.archive.jsonl` / rotation files: those grow to tens of
+ * MB and would be parsed in full on every boot scan (and on every reconcile tick,
+ * once the sweep is not boot-only) purely to answer a set-membership question.
+ * This index answers the same question in O(1) from a file that is orders of
+ * magnitude smaller. The trade-off is that it only covers archival that happens
+ * from this point on — rows stranded before this code shipped are not in it, which
+ * is exactly why the D node-existence guard (the removed-node case, which covered
+ * all five observed false zombies) is a separate, independent defense.
+ */
+export function readArchivedTerminalKeys(meshId: string): Set<string> {
+    const path = getArchivedTerminalKeysPath(meshId);
+    if (!existsSync(path)) return new Set();
+    try {
+        const parsed = JSON.parse(readFileSync(path, 'utf-8')) as ArchivedTerminalKeyIndex;
+        return new Set(Array.isArray(parsed?.keys) ? parsed.keys.filter(k => typeof k === 'string') : []);
+    } catch {
+        return new Set();
+    }
+}
+
+/** Record the pair keys of newly archived terminal entries. Best-effort. */
+function recordArchivedTerminalKeys(meshId: string, archived: MeshLedgerEntry[]): void {
+    const fresh: string[] = [];
+    for (const entry of archived) {
+        if (!PAIRED_TERMINAL_KINDS.has(entry.kind)) continue;
+        const key = ledgerPairKey(entry);
+        if (key) fresh.push(key);
+    }
+    if (fresh.length === 0) return;
+    try {
+        const existing = readArchivedTerminalKeys(meshId);
+        for (const key of fresh) existing.add(key);
+        let keys = [...existing];
+        if (keys.length > ARCHIVED_TERMINAL_KEYS_MAX) {
+            keys = keys.slice(keys.length - ARCHIVED_TERMINAL_KEYS_MAX);
+        }
+        const index: ArchivedTerminalKeyIndex = { keys, updatedAt: new Date().toISOString() };
+        writeFileSync(getArchivedTerminalKeysPath(meshId), JSON.stringify(index), { encoding: 'utf-8', mode: 0o600 });
+    } catch { /* best-effort: the pair guard is the primary defense */ }
+}
+
 function getArchivedCountsPath(meshId: string): string {
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
     return join(getLedgerDir(), `${safe}.archived-counts.json`);
@@ -592,10 +696,32 @@ export function compactLedger(meshId: string): { archivedCount: number; retained
     const cutoff = Date.now() - ARCHIVE_TERMINAL_OLDER_THAN_MS;
     const entries = readLedgerEntries(meshId);
 
+    // ARCHIVE-PAIR-ATOMICITY (B): collect the pair keys of every dispatch that will
+    // REMAIN in the live file. A terminal row sharing one of those keys must stay
+    // too, or the reader sees an eternally-open job (see PAIRED_TERMINAL_KINDS).
+    const retainedDispatchKeys = new Set<string>();
+    for (const entry of entries) {
+        if (entry.kind !== 'task_dispatched') continue;
+        // Dispatches are never in ARCHIVABLE_KINDS, so every one of them is retained.
+        // Computed from the live set rather than assumed, so adding task_dispatched to
+        // ARCHIVABLE_KINDS later degrades safely instead of silently voiding the guard.
+        if (ARCHIVABLE_KINDS.has(entry.kind) && new Date(entry.timestamp).getTime() < cutoff) continue;
+        const key = ledgerPairKey(entry);
+        if (key) retainedDispatchKeys.add(key);
+    }
+
     const keep: MeshLedgerEntry[] = [];
     const archive: MeshLedgerEntry[] = [];
     for (const entry of entries) {
         if (ARCHIVABLE_KINDS.has(entry.kind) && new Date(entry.timestamp).getTime() < cutoff) {
+            // ARCHIVE-PAIR-ATOMICITY (B): pin a terminal row whose dispatch stays behind.
+            if (PAIRED_TERMINAL_KINDS.has(entry.kind)) {
+                const key = ledgerPairKey(entry);
+                if (key && retainedDispatchKeys.has(key)) {
+                    keep.push(entry);
+                    continue;
+                }
+            }
             archive.push(entry);
         } else {
             keep.push(entry);
@@ -613,6 +739,10 @@ export function compactLedger(meshId: string): { archivedCount: number; retained
         const archiveLines = archive.map(e => JSON.stringify(e)).join('\n') + '\n';
         appendFileSync(archivePath, archiveLines, { encoding: 'utf-8', mode: 0o600 });
         updateArchivedCounts(meshId, archive);
+        // ARCHIVE-TERMINAL-KEY-INDEX (A): remember which job keys reached a terminal
+        // state before their rows left the live store, so a reader replaying only the
+        // live set does not mistake them for open.
+        recordArchivedTerminalKeys(meshId, archive);
     } catch (e: any) {
         process.stderr.write(`[adhdev-mesh] Ledger archive write failed for mesh ${meshId}: ${e?.message || e}\n`);
         return { archivedCount: 0, retainedCount: entries.length };
