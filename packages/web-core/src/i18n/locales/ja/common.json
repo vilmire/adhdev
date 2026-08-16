@@ -902,6 +902,39 @@
             "failedTasks": "失敗したタスク",
             "staleWork": "古い作業",
             "sessions": "セッション"
+        },
+        "tasksView": {
+            "runningTitle": "実行中",
+            "attentionTitle": "要確認",
+            "adhocTitle": "ミッションなしのタスク",
+            "readOnly": "読み取り専用",
+            "showGraph": "依存関係グラフを表示",
+            "hideGraph": "依存関係グラフを閉じる",
+            "progress": "{{done}}/{{total}} 完了",
+            "chipRunning_one": "{{count}}件実行中",
+            "chipRunning_other": "{{count}}件実行中",
+            "chipQueued_one": "{{count}}件待機",
+            "chipQueued_other": "{{count}}件待機",
+            "chipFailed_one": "{{count}}件失敗",
+            "chipFailed_other": "{{count}}件失敗",
+            "chipDone_one": "{{count}}件完了",
+            "chipDone_other": "{{count}}件完了",
+            "chipBlocked_one": "{{count}}件ブロック",
+            "chipBlocked_other": "{{count}}件ブロック",
+            "status": {
+                "running": "実行中",
+                "queued": "待機",
+                "done": "完了",
+                "failed": "失敗",
+                "cancelled": "キャンセル",
+                "blocked": "ブロック"
+            },
+            "missionStatus": {
+                "active": "進行中",
+                "paused": "一時停止",
+                "completed": "完了",
+                "abandoned": "中止"
+            }
         }
     },
     "repoMesh": {

@@ -902,6 +902,39 @@
             "failedTasks": "실패한 작업",
             "staleWork": "지연된 작업",
             "sessions": "세션"
+        },
+        "tasksView": {
+            "runningTitle": "지금 실행 중",
+            "attentionTitle": "확인 필요",
+            "adhocTitle": "미션 없는 태스크",
+            "readOnly": "읽기 전용",
+            "showGraph": "의존성 그래프 보기",
+            "hideGraph": "의존성 그래프 닫기",
+            "progress": "{{done}}/{{total}} 완료",
+            "chipRunning_one": "{{count}}개 실행 중",
+            "chipRunning_other": "{{count}}개 실행 중",
+            "chipQueued_one": "{{count}}개 대기",
+            "chipQueued_other": "{{count}}개 대기",
+            "chipFailed_one": "{{count}}개 실패",
+            "chipFailed_other": "{{count}}개 실패",
+            "chipDone_one": "{{count}}개 완료",
+            "chipDone_other": "{{count}}개 완료",
+            "chipBlocked_one": "{{count}}개 차단됨",
+            "chipBlocked_other": "{{count}}개 차단됨",
+            "status": {
+                "running": "실행 중",
+                "queued": "대기",
+                "done": "완료",
+                "failed": "실패",
+                "cancelled": "취소됨",
+                "blocked": "차단됨"
+            },
+            "missionStatus": {
+                "active": "진행 중",
+                "paused": "일시정지",
+                "completed": "완료",
+                "abandoned": "중단"
+            }
         }
     },
     "repoMesh": {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { describeQueueTaskMessage } from '../../utils/queue-task-label'
+import { queueTaskDisplayText, stripMarkdownSyntax } from '../../utils/queue-task-label'
 import { installTopModalEscapeHandler } from '../../utils/modal-escape'
 import ModalPortal from '../ui/ModalPortal'
 import type {
@@ -656,7 +656,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
             </div>
             {goalText && (
                 <div className={`max-h-64 overflow-y-auto whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>
-                    {goalText}
+                    {stripMarkdownSyntax(goalText)}
                     {showTruncatedLabel && !canFetchGoal && <span className={meshTheme.textMuted}> … (truncated)</span>}
                 </div>
             )}
@@ -829,7 +829,7 @@ function QueueDetail({ meshTheme, task }: { meshTheme: MeshGraphTheme; task: Rep
                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
                 {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}
             </div>
-            {task.message && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{task.message}</div>}
+            {task.message && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{queueTaskDisplayText(task.message)}</div>}
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelTaskId')} value={task.id} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCreated')} value={relativeTime(task.createdAt) ?? task.createdAt} />
@@ -1044,7 +1044,7 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
                                 <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
                                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
-                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{describeQueueTaskMessage(task.message) || task.id}</span>
+                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
                             </ListRow>
                         ))}

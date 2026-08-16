@@ -42,22 +42,31 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
             </div>
         )
     }
-    const writeTone = scheduling.globalWriteCapReached ? 'warn' : 'good'
+    // Global write/readonly cap numbers are legacy: current daemons deliberately
+    // emit `scheduling: { strategy }` only (mesh-status.ts — real concurrency is
+    // governed per-node/per-slot, shown on the node rows below). Render the cap
+    // badges ONLY when an older daemon actually reports the numbers; otherwise
+    // they showed as "write undefined/undefined".
+    const hasGlobalCaps = typeof scheduling.activeWriteAssigned === 'number' && typeof scheduling.maxParallelTasks === 'number'
     return (
         <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
             <div className="flex flex-wrap items-center gap-2">
                 <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.schedulingTitle')}</span>
                 <Badge label={SCHEDULING_STRATEGY_LABELS[scheduling.strategy] ?? scheduling.strategy} tone="info" />
-                <Badge
-                    label={`write ${scheduling.activeWriteAssigned}/${scheduling.maxParallelTasks}`}
-                    tone={writeTone}
-                    title="Active write (non-readonly) assigned tasks vs the global parallel cap"
-                />
-                <Badge
-                    label={`readonly ${scheduling.activeReadonlyAssigned}/${scheduling.maxReadonlyParallelTasks}`}
-                    tone={scheduling.globalReadonlyCapReached ? 'warn' : 'default'}
-                    title="Active read-only diagnosis tasks vs their (2× write) cap"
-                />
+                {hasGlobalCaps && (
+                    <Badge
+                        label={`write ${scheduling.activeWriteAssigned}/${scheduling.maxParallelTasks}`}
+                        tone={scheduling.globalWriteCapReached ? 'warn' : 'good'}
+                        title="Active write (non-readonly) assigned tasks vs the global parallel cap"
+                    />
+                )}
+                {hasGlobalCaps && typeof scheduling.activeReadonlyAssigned === 'number' && typeof scheduling.maxReadonlyParallelTasks === 'number' && (
+                    <Badge
+                        label={`readonly ${scheduling.activeReadonlyAssigned}/${scheduling.maxReadonlyParallelTasks}`}
+                        tone={scheduling.globalReadonlyCapReached ? 'warn' : 'default'}
+                        title="Active read-only diagnosis tasks vs their (2× write) cap"
+                    />
+                )}
             </div>
             <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>
                 {t('mesh.status.distributionTitle')}

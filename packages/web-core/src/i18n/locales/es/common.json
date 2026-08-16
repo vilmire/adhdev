@@ -907,6 +907,39 @@
             "failedTasks": "Tareas fallidas",
             "staleWork": "Trabajo obsoleto",
             "sessions": "Sesiones"
+        },
+        "tasksView": {
+            "runningTitle": "En ejecución",
+            "attentionTitle": "Requiere atención",
+            "adhocTitle": "Tareas sin misión",
+            "readOnly": "solo lectura",
+            "showGraph": "Mostrar grafo de dependencias",
+            "hideGraph": "Ocultar grafo de dependencias",
+            "progress": "{{done}}/{{total}} completadas",
+            "chipRunning_one": "{{count}} en ejecución",
+            "chipRunning_other": "{{count}} en ejecución",
+            "chipQueued_one": "{{count}} en cola",
+            "chipQueued_other": "{{count}} en cola",
+            "chipFailed_one": "{{count}} fallida",
+            "chipFailed_other": "{{count}} fallidas",
+            "chipDone_one": "{{count}} completada",
+            "chipDone_other": "{{count}} completadas",
+            "chipBlocked_one": "{{count}} bloqueada",
+            "chipBlocked_other": "{{count}} bloqueadas",
+            "status": {
+                "running": "en ejecución",
+                "queued": "en cola",
+                "done": "completada",
+                "failed": "fallida",
+                "cancelled": "cancelada",
+                "blocked": "bloqueada"
+            },
+            "missionStatus": {
+                "active": "activa",
+                "paused": "pausada",
+                "completed": "completada",
+                "abandoned": "abandonada"
+            }
         }
     },
     "repoMesh": {

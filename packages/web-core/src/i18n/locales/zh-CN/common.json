@@ -902,6 +902,39 @@
             "failedTasks": "失败的任务",
             "staleWork": "陈旧工作",
             "sessions": "会话"
+        },
+        "tasksView": {
+            "runningTitle": "正在运行",
+            "attentionTitle": "需要关注",
+            "adhocTitle": "无任务组的任务",
+            "readOnly": "只读",
+            "showGraph": "显示依赖图",
+            "hideGraph": "隐藏依赖图",
+            "progress": "{{done}}/{{total}} 已完成",
+            "chipRunning_one": "{{count}} 个运行中",
+            "chipRunning_other": "{{count}} 个运行中",
+            "chipQueued_one": "{{count}} 个排队中",
+            "chipQueued_other": "{{count}} 个排队中",
+            "chipFailed_one": "{{count}} 个失败",
+            "chipFailed_other": "{{count}} 个失败",
+            "chipDone_one": "{{count}} 个已完成",
+            "chipDone_other": "{{count}} 个已完成",
+            "chipBlocked_one": "{{count}} 个被阻塞",
+            "chipBlocked_other": "{{count}} 个被阻塞",
+            "status": {
+                "running": "运行中",
+                "queued": "排队中",
+                "done": "已完成",
+                "failed": "失败",
+                "cancelled": "已取消",
+                "blocked": "被阻塞"
+            },
+            "missionStatus": {
+                "active": "进行中",
+                "paused": "已暂停",
+                "completed": "已完成",
+                "abandoned": "已放弃"
+            }
         }
     },
     "repoMesh": {

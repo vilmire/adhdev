@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import MeshGraphView from './MeshGraphView'
-import MeshTaskDagView from './MeshTaskDagView'
+import MeshTasksView from './MeshTasksView'
 import MeshOverviewCards from './MeshOverviewCards'
 import { MeshHelpPanel, MeshHelpToggle } from './MeshHelpPanel'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
@@ -500,12 +500,11 @@ export default function MeshObservabilitySurface({
             <div className={`${activeTab === 'tasks' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col`}>
                 <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px]`} style={{ minHeight: 420 }}>
                     {taskDagMounted ? (
-                        // absolute-fill so React Flow receives a CONCRETE height — a
-                        // percentage height through the flex chain resolves to 0 when
-                        // the card only has a min-height (nodes then render outside the
-                        // overflow-hidden card and the canvas looks empty).
+                        // absolute-fill so the embedded per-mission React Flow gets a
+                        // CONCRETE height — a percentage height through the flex chain
+                        // resolves to 0 when the card only has a min-height.
                         <div className="absolute inset-0">
-                            <MeshTaskDagView tasks={queueTasks} />
+                            <MeshTasksView tasks={queueTasks} status={canonicalStatus} />
                         </div>
                     ) : (
                         <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('meshGraph.obs.loadingGraph')}</div>

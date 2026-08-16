@@ -902,6 +902,39 @@
             "failedTasks": "Failed tasks",
             "staleWork": "Stale work",
             "sessions": "Sessions"
+        },
+        "tasksView": {
+            "runningTitle": "Running now",
+            "attentionTitle": "Needs attention",
+            "adhocTitle": "Tasks without a mission",
+            "readOnly": "read-only",
+            "showGraph": "Show dependency graph",
+            "hideGraph": "Hide dependency graph",
+            "progress": "{{done}}/{{total}} done",
+            "chipRunning_one": "{{count}} running",
+            "chipRunning_other": "{{count}} running",
+            "chipQueued_one": "{{count}} queued",
+            "chipQueued_other": "{{count}} queued",
+            "chipFailed_one": "{{count}} failed",
+            "chipFailed_other": "{{count}} failed",
+            "chipDone_one": "{{count}} done",
+            "chipDone_other": "{{count}} done",
+            "chipBlocked_one": "{{count}} blocked",
+            "chipBlocked_other": "{{count}} blocked",
+            "status": {
+                "running": "running",
+                "queued": "queued",
+                "done": "done",
+                "failed": "failed",
+                "cancelled": "cancelled",
+                "blocked": "blocked"
+            },
+            "missionStatus": {
+                "active": "active",
+                "paused": "paused",
+                "completed": "completed",
+                "abandoned": "abandoned"
+            }
         }
     },
     "repoMesh": {

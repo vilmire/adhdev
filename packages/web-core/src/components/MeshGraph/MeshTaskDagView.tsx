@@ -26,6 +26,7 @@ import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, scopeTaskDagTasks, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
+import { queueTaskDisplayText } from '../../utils/queue-task-label'
 import { IconFlag } from '../Icons'
 
 const elk = new ELK()
@@ -36,6 +37,12 @@ const TASK_CARD_MIN_HEIGHT = 96
 interface MeshTaskDagViewProps {
     tasks: RepoMeshQueueTask[]
     emptyMessage?: string
+    /**
+     * Embedded mode (per-mission drill-down inside MeshTasksView): the caller
+     * already scoped the task set, so the history cap, stats overlay and
+     * load-more chrome are dropped — just the graph + edge legend render.
+     */
+    compact?: boolean
 }
 
 type TaskFlowNodeData = Record<string, unknown> & {
@@ -121,12 +128,14 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                 </span>
                 <span className={`shrink-0 font-mono text-[9px] ${theme.isDark ? 'text-slate-400' : 'text-slate-400'}`} title={task.id}>{task.id.slice(0, 8)}</span>
             </div>
+            {/* Markdown-syntax-stripped plain text; a cancelled card mutes rather
+                than strikes through — multi-line struck text was unreadable. */}
             <div
-                className={`mt-1.5 text-[11px] leading-[15px] ${task.status === 'cancelled' ? 'line-through opacity-70' : ''}`}
+                className={`mt-1.5 text-[11px] leading-[15px] ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
                 style={messageClampStyle}
-                title={task.message}
+                title={queueTaskDisplayText(task.message)}
             >
-                {task.message}
+                {queueTaskDisplayText(task.message)}
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
                 {task.difficulty && <span className={chipClass}>{task.difficulty}</span>}
@@ -202,7 +211,7 @@ async function layoutTaskDag(dag: TaskDagData): Promise<Map<string, { x: number;
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -210,8 +219,12 @@ export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagView
     // terminal rows are capped and revealed incrementally via "load more". A
     // long-lived mesh accumulates hundreds of terminal rows, and laying ALL of
     // them out took tens of seconds while rendering an unreadable wall.
+    // Compact (embedded) mode trusts the caller's scoping and renders everything.
     const [terminalLimit, setTerminalLimit] = useState(TASK_DAG_RECENT_TERMINAL_LIMIT)
-    const scoped = useMemo(() => scopeTaskDagTasks(tasks, terminalLimit), [tasks, terminalLimit])
+    const scoped = useMemo(
+        () => scopeTaskDagTasks(tasks, compact ? Number.POSITIVE_INFINITY : terminalLimit),
+        [tasks, terminalLimit, compact],
+    )
     const dag = useMemo(() => buildTaskDag(scoped.tasks), [scoped.tasks])
     // Layout identity: statuses drive edge state and badge rows (card height), so
     // re-layout when any of them change — not only when the id set changes.
@@ -314,7 +327,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagView
             </ReactFlow>
 
             {/* Stats overlay — the "this is a graph of your work" headline row. */}
-            <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap items-center gap-1.5">
+            {!compact && <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap items-center gap-1.5">
                 {scoped.hiddenCount > 0 && (
                     <>
                         {statBadge(t('meshGraph.taskDag.hiddenTasks', { count: scoped.hiddenCount }))}
@@ -334,7 +347,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagView
                 {dag.stats.missions > 0 && statBadge(t('meshGraph.taskDag.statsMissions', { count: dag.stats.missions }), 'info')}
                 {dag.stats.waiting > 0 && statBadge(t('meshGraph.taskDag.statsWaiting', { count: dag.stats.waiting }), 'warn')}
                 {dag.stats.blocked > 0 && statBadge(t('meshGraph.taskDag.statsBlocked', { count: dag.stats.blocked }), 'danger')}
-            </div>
+            </div>}
 
             {/* Edge-state legend */}
             <div className={`pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-[10px] ${meshTheme.isDark ? 'border-white/10 bg-slate-950/80 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
@@ -364,8 +377,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage }: MeshTaskDagView
                             ✕
                         </button>
                     </div>
-                    <div className="mb-2 font-mono text-[10px] opacity-70" title={selectedNode.task.id}>{selectedNode.task.id}</div>
-                    <div className="mb-2 whitespace-pre-wrap text-[11px] leading-4">{selectedNode.task.message}</div>
+                    <div className="mb-2 font-mono text-[10px] opacity-70" title={selectedNode.task.id}>{selectedNode.task.id.slice(0, 8)}</div>
+                    <div className="mb-2 whitespace-pre-wrap text-[11px] leading-4">{queueTaskDisplayText(selectedNode.task.message)}</div>
                     <div className="flex flex-wrap gap-1.5 text-[10px]">
                         {statBadge(selectedNode.task.status, selectedNode.task.status === 'failed' ? 'danger' : selectedNode.task.status === 'assigned' ? 'info' : 'default')}
                         {selectedNode.task.difficulty && statBadge(selectedNode.task.difficulty)}

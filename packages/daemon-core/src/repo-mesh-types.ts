@@ -1488,17 +1488,21 @@ export interface RepoMeshNodeSchedulingStatus {
 }
 
 /**
- * Mesh-level scheduling rollup exposed on RepoMeshStatus.scheduling: which tie-break
- * strategy is live and how much of the global parallel caps is consumed.
+ * Mesh-level scheduling rollup exposed on RepoMeshStatus.scheduling. Current
+ * daemons emit `{ strategy }` ONLY — the global cap numbers are deliberately
+ * dropped from the wire (mesh-status.ts): real concurrency is governed
+ * per-node/per-slot, and a global number misreads as capacity. The cap fields
+ * are optional so consumers must handle their absence; only pre-drop daemons
+ * still send them.
  */
 export interface RepoMeshSchedulingStatus {
     strategy: RepoMeshSchedulingStrategy;
-    maxParallelTasks: number;
-    maxReadonlyParallelTasks: number;
-    activeWriteAssigned: number;
-    activeReadonlyAssigned: number;
-    globalWriteCapReached: boolean;
-    globalReadonlyCapReached: boolean;
+    maxParallelTasks?: number;
+    maxReadonlyParallelTasks?: number;
+    activeWriteAssigned?: number;
+    activeReadonlyAssigned?: number;
+    globalWriteCapReached?: boolean;
+    globalReadonlyCapReached?: boolean;
 }
 
 export interface RepoMeshStatus {

@@ -318,6 +318,12 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                     {getConversationTitle(activeConv)}
                                     {activeConv.workspaceName ? ` · ${activeConv.workspaceName}` : ''}
                                     {meshStatus?.repoIdentity ? ` · ${meshStatus.repoIdentity}` : ''}
+                                    {/* Refresh/live state lives HERE (secondary line), not
+                                        beside the tab controls: variable-width chips next to
+                                        the tabs shifted the whole tab group on every refresh
+                                        cycle, so a tab click could land on the wrong tab. */}
+                                    {lastLoadedLabel ? ` · ${t('meshGraph.dialog.refreshedAt', { time: lastLoadedLabel })}` : ''}
+                                    {!refreshing && meshStatus ? ` · ${sendData && !error ? t('meshGraph.dialog.liveMetadata') : t('meshGraph.dialog.metadataUnavailable')}` : ''}
                                 </p>
                             </div>
                         </div>
@@ -332,22 +338,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             helpOpen={helpOpen}
                             onHelpOpenChange={setHelpOpen}
                         />
-                        {/* Secondary status chips — collapsed on mobile behind the
-                            disclosure toggle, always shown inline on desktop. */}
-                        {lastLoadedLabel && (
-                            <span
-                                className={`${meshTheme.dialogRefreshedChipClass} ${showHeaderMeta ? 'inline-flex' : 'hidden'} md:inline-flex`}
-                            >
-                                {t('meshGraph.dialog.refreshedAt', { time: lastLoadedLabel })}
-                            </span>
-                        )}
-                        {!refreshing && meshStatus && (
-                            <span
-                                className={`${meshTheme.dialogRefreshedChipClass} ${showHeaderMeta ? 'inline-flex' : 'hidden'} md:inline-flex`}
-                            >
-                                {sendData && !error ? t('meshGraph.dialog.liveMetadata') : t('meshGraph.dialog.metadataUnavailable')}
-                            </span>
-                        )}
                         <button
                             type="button"
                             onClick={() => {
