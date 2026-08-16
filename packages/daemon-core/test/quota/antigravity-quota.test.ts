@@ -174,7 +174,11 @@ function deps(spawnStub: SpawnStub, fetchStub: FetchStub, env: Record<string, st
         spawn: spawnStub.spawn,
         fetch: fetchStub.fetch,
         now: () => NOW,
-        env: env as NodeJS.ProcessEnv,
+        // Pin the platform to darwin unless a test overrides it: the fetcher is
+        // darwin-only by design (non-darwin short-circuits to 'unavailable'
+        // before any spawn/fetch), so without this pin every keychain/endpoint
+        // test inherited the HOST platform — green on a Mac, red on linux CI.
+        env: { ADHDEV_ANTIGRAVITY_PLATFORM: 'darwin', ...env } as NodeJS.ProcessEnv,
     };
 }
 
