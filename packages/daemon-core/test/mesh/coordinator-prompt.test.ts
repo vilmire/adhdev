@@ -174,7 +174,8 @@ describe('Repo Mesh coordinator prompt', () => {
 
     // 5. The same boundary is restated in the durable Rules section.
     expect(prompt).toContain('**Base nodes are reserved for environment-specific testing.**')
-    expect(prompt).toContain('you MUST clone a worktree with `mesh_clone_node` and assign the task there')
+    expect(prompt).toContain('clone a worktree and assign the task there')
+    expect(prompt).toContain('mesh_clone_node')
   })
 
   it('keeps the pre-existing worktree affinity guidance intact alongside the new clone boundary', () => {
@@ -355,7 +356,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('pendingCoordinatorEvents')
     expect(prompt).toContain('completion/approval/status signal')
     expect(prompt).toContain('Use at most one compact `mesh_read_chat` check')
-    expect(prompt).toContain('never duplicate a session because')
+    expect(prompt).toContain('Never launch a second session onto in-flight work')
 
     // The anti-polling/concurrency rules must not bleed into deferring NEW
     // independent work — the proactive-parallelize rule draws that contrast.
@@ -412,7 +413,7 @@ describe('Repo Mesh coordinator prompt', () => {
 
     // Must not contradict the parallelism rule: independent work runs side by
     // side, sequential stages of ONE line of work stay in one session.
-    expect(prompt).toContain('does not mean splitting one line of work across sessions')
+    expect(prompt).toContain('successive stages of one investigation stay in their session')
     expect(prompt).toContain('see Workflow 3f')
   })
 
@@ -494,17 +495,17 @@ describe('Repo Mesh coordinator prompt', () => {
     // with 1-2 tasks; scale only on success" anchored coordinators to serial
     // dispatch before the release condition was ever read.
     expect(prompt).toContain('**Match concurrency to task kind.**')
-    expect(prompt).toContain('dispatch every independent read-only task at once')
+    expect(prompt).toContain('dispatch all at once up to the read-only cap')
     // The per-node write limit stays; its justification is now branch isolation
     // rather than node count (WORKTREE-ROUTING-BOUNDARY) — "need N nodes" was read
     // as already-satisfied by any multi-node mesh, which sent general code_change
     // work to base checkouts. See the base-node boundary test above.
-    expect(prompt).toContain('limited to ONE active task per node and each needs its OWN branch workspace')
-    expect(prompt).toContain('clone a worktree per write task')
+    expect(prompt).toContain('limited to **one active task per node**')
+    expect(prompt).toContain('clone a worktree per task')
     expect(prompt).not.toContain('Start with 1–2 tasks; scale only on success')
 
     // The duplicate-session guard must survive the rewrite.
-    expect(prompt).toContain('Never launch a second session onto work already in flight for the same issue')
+    expect(prompt).toContain('Never launch a second session onto in-flight work for the same issue')
 
     // Caps are ceilings, not targets to approach cautiously from below.
     expect(prompt).toContain('ceilings, not targets')
@@ -1164,7 +1165,7 @@ describe('Repo Mesh coordinator prompt', () => {
 
     // And the difficulty axis itself survives — it is still the routing key.
     expect(prompt).toContain('Classify task difficulty honestly')
-    expect(prompt).toContain('Do NOT inflate or deflate difficulty')
+    expect(prompt).toContain('Never bend difficulty to chase a model')
   })
 
   // ─── Node routing default: the coordinator's own machine ───
