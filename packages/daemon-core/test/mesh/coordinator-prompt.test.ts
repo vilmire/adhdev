@@ -939,7 +939,7 @@ describe('Repo Mesh coordinator prompt', () => {
     // Size the append so the prompt fits once the unpinned notes are shed but
     // overflows with them included: pinned notes must survive the first stage.
     const withoutNotes = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
-    const headroom = 60 * 1024 - Buffer.byteLength(withoutNotes, 'utf8')
+    const headroom = 96 * 1024 - Buffer.byteLength(withoutNotes, 'utf8')
     const filler = 'F'.repeat(Math.max(1024, headroom - 1024))
     const operatingNotes = [
       { text: 'PINNED_LESSON_SENTINEL never rebase a pushed oss commit', pinned: true },
@@ -969,7 +969,7 @@ describe('Repo Mesh coordinator prompt', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
         ...baseMesh(),
-        coordinator: { systemPromptAppend: 'B'.repeat(80 * 1024) },
+        coordinator: { systemPromptAppend: 'B'.repeat(130 * 1024) },
       } as any,
       operatingNotes: [
         { text: 'PINNED_LESSON_SENTINEL', pinned: true },
@@ -984,7 +984,7 @@ describe('Repo Mesh coordinator prompt', () => {
     // A user (mesh-level) append that alone blows past the 60KB soft cap, plus
     // a large operating-notes payload. The append must survive verbatim; the
     // daemon-generated operating notes must be shed with a truncation notice.
-    const bigAppend = 'USER_APPEND_SENTINEL ' + 'A'.repeat(80 * 1024)
+    const bigAppend = 'USER_APPEND_SENTINEL ' + 'A'.repeat(130 * 1024)
     const operatingNotes = Array.from({ length: 30 }, (_, i) => ({
       text: `sheddable-note#${i} ` + 'y'.repeat(250),
     }))
@@ -999,7 +999,7 @@ describe('Repo Mesh coordinator prompt', () => {
 
     // User append is preserved in full — not truncated.
     expect(prompt).toContain('USER_APPEND_SENTINEL')
-    expect(prompt).toContain('A'.repeat(80 * 1024))
+    expect(prompt).toContain('A'.repeat(130 * 1024))
 
     // Daemon-generated operating notes were shed to fit the cap.
     expect(prompt).not.toContain('sheddable-note#0')

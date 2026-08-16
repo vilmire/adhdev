@@ -191,7 +191,15 @@ export interface CoordinatorPromptContext {
  * intent or invariant instructions. If shedding everything sheddable still
  * overflows, we keep the prompt as-is rather than mangling protected content.
  */
-const PROMPT_SOFT_CAP_BYTES = 60 * 1024;
+/*
+ * Cap sizing: 96KB ≈ 24K tokens. The 60KB original left almost no headroom —
+ * the assembled base (identity + 6-node roster + tool table + workflow +
+ * rules) already runs ~50KB on a real mesh, so ordinary operation overflowed
+ * and shed the operating notes. The prompt is composed once per coordinator
+ * launch and prompt-cached across turns, so the extra budget buys retained
+ * operating knowledge, not per-turn cost.
+ */
+const PROMPT_SOFT_CAP_BYTES = 96 * 1024;
 
 /**
  * Which daemon-generated optional sections to drop from the default base.
@@ -651,11 +659,12 @@ const OPERATING_NOTE_MAX_CHARS = 300;
  * ALWAYS kept even if they alone exceed the budget (pinned is author-opt-in and
  * bounded by the author); the budget only bounds the unpinned tail.
  *
- * ~6KB ≈ the 20-note cap at typical note length, so on ordinary meshes this
- * changes nothing — it only kicks in when notes run long. It sits well under the
- * whole-prompt PROMPT_SOFT_CAP_BYTES (60KB) so the two caps don't fight.
+ * ~8KB ≈ the 20-note cap at typical-to-long note length, so on ordinary meshes
+ * this changes nothing — it only kicks in when notes run long. It sits well
+ * under the whole-prompt PROMPT_SOFT_CAP_BYTES (96KB) so the two caps don't
+ * fight.
  */
-const OPERATING_NOTE_INJECTION_BYTE_BUDGET = 6 * 1024;
+const OPERATING_NOTE_INJECTION_BYTE_BUDGET = 8 * 1024;
 
 /**
  * A category is "durable" (survives the cap ahead of recency) when it has no
