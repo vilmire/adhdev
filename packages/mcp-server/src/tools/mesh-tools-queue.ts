@@ -40,6 +40,8 @@ import {
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
     normalizeQueueViewMode,
+    notifyCoordinatorOfOrphanedPins,
+    buildOrphanedPinNotice,
     prioritizeActiveQueueRows,
     readLedgerEntries,
     readString,
@@ -58,6 +60,7 @@ import {
 import type {
     MeshContext,
     MeshTaskGraphEntrySpec,
+    OrphanedPinnedTask,
     QueueViewMode,
 } from './mesh-tools-internal.js';
 
@@ -971,7 +974,59 @@ export async function meshQueueCancel(
             workerStop = { attempted: false, reason: 'assigned_session_is_coordinator_self — stop suppressed' };
         }
 
-        return JSON.stringify({ success: true, task, workerStop }, null, 2);
+        // CANCEL-ORPHANS-PINNED-TASK: the stop above is a HARD stop (CliManager.stopSession
+        // removes the instance), so every OTHER pending queue task hard-pinned to that same
+        // session is now undeliverable AND un-launchable — it can neither reach the dead
+        // session nor spawn a new one (the pin makes auto-launch skip with
+        // 'target_session_constraint'). Live repro 2026-08-16: 12 minutes with zero
+        // generating sessions before a human noticed. Detect it here — at the moment we
+        // KNOW which session we just killed — and page the coordinator with the exact
+        // requeue call. Notify-only by design; see mesh-orphaned-pin-notify.ts for why the
+        // pins are not cleared automatically and why detection cannot live in stopSession.
+        //
+        // Gated on `attempted`, NOT on `stopped`. No stop attempt → no session death → no
+        // orphans, so the guard is right. But an ATTEMPTED-yet-unconfirmed stop ("no response
+        // from remote worker daemon") must still notify: either the stop landed and the pins
+        // are dead, or the worker daemon is unreachable — in which case tasks pinned to a
+        // session on it are no more deliverable. Both readings leave the coordinator with
+        // stranded work, and the notice names the uncertainty by naming its cause. Staying
+        // silent on the unconfirmed case would re-open the exact hole this closes, since that
+        // is the case where a stop is MOST likely to have half-happened.
+        //
+        // Best-effort, exactly like the stop itself — a failure here must never fail the
+        // cancel, which already committed the 'cancelled' transition.
+        let orphanedPinnedTasks: OrphanedPinnedTask[] = [];
+        if (workerStop.attempted && assignedSessionId) {
+            try {
+                orphanedPinnedTasks = notifyCoordinatorOfOrphanedPins(ctx.mesh.id, assignedSessionId, {
+                    excludeTaskId: taskId,
+                    cause: `Cancelling task ${taskId}`,
+                    ...(assignedNodeId ? { nodeId: assignedNodeId } : {}),
+                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                });
+            } catch {
+                // The helper already logs its own failures (queue read / event persist).
+                // This outer catch only guarantees the cancel response is still returned.
+                orphanedPinnedTasks = [];
+            }
+        }
+
+        return JSON.stringify({
+            success: true,
+            task,
+            workerStop,
+            // Surface the orphans inline too: the pending event reaches the coordinator on its
+            // next drain, but the cancel's own response is read immediately — the coordinator
+            // can act without waiting for the event round-trip.
+            ...(orphanedPinnedTasks.length > 0 ? {
+                orphanedPinnedTasks,
+                orphanedPinnedTasksWarning: buildOrphanedPinNotice(
+                    orphanedPinnedTasks,
+                    assignedSessionId!,
+                    `Cancelling task ${taskId}`,
+                ),
+            } : {}),
+        }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
     }

@@ -348,7 +348,12 @@ export {
     upsertMeshMission,
     validateMeshTaskModeRequest,
     buildMeshTaskModeViolationError,
+    // CANCEL-ORPHANS-PINNED-TASK: consumed by mesh-tools-queue.ts (meshQueueCancel).
+    notifyCoordinatorOfOrphanedPins,
+    findTasksOrphanedBySessionStop,
+    buildOrphanedPinNotice,
 } from '@adhdev/daemon-core';
+export type { OrphanedPinnedTask } from '@adhdev/daemon-core';
 export type {
     LocalMeshEntry,
     LocalMeshNodeEntry,

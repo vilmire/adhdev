@@ -364,6 +364,12 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // ── Mesh Events ──
 export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents, queuePendingMeshCoordinatorEvent, requeueHeldMeshCoordinatorEvents, serializeV2EnvelopeToWire, readV2EnvelopeFromWire, reconcileDirectDispatchCompletionFromTranscript } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent, MeshHeldEventRequeueFilter, MeshHeldEventRequeueResult } from './mesh/mesh-events.js';
+// CANCEL-ORPHANS-PINNED-TASK: stopping a worker session strands pending queue tasks pinned to
+// it. Exported for the mcp-server cancel tool, which is where the coordinator KNOWS which
+// session it just killed (the queue lives in the coordinator daemon's store, so this cannot be
+// detected on the worker side). See mesh-orphaned-pin-notify.ts.
+export { findTasksOrphanedBySessionStop, notifyCoordinatorOfOrphanedPins, buildOrphanedPinNotice } from './mesh/mesh-orphaned-pin-notify.js';
+export type { OrphanedPinnedTask } from './mesh/mesh-orphaned-pin-notify.js';
 export { resolveSessionTurnPresentation, resolveTurnAttemptRow, presentationFromAttemptRow, turnStageToSurfaceStatus, isRestartBlockingPresentation, classifyShadowDivergence, getTurnPresentationMetrics } from './mesh/mesh-turn-presentation.js';
 export type { SessionTurnPresentation, TurnPresentationAuthority, TurnPresentationSurface, TurnAuthorityLookup, ResolveTurnPresentationArgs, TurnPresentationMetrics, ShadowDivergenceReason } from './mesh/mesh-turn-presentation.js';
 // COORD-EVENT-MISROUTE: coordinator-identity helper so the mcp-server drain path can build a
