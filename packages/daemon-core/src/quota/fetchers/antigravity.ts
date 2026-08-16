@@ -49,9 +49,18 @@
  *     that produced a permanent false `expired-token`. Until the backend is
  *     identified positively, there is nothing here worth trusting.
  *     ★Also note the win32 entry point is `antigravity` (bin\antigravity.cmd),
- *     NOT `agy` — see the provider-detection note in the ADHDev issue tracker;
- *     it is out of scope for quota but affects whether the provider is found
- *     at all.
+ *     NOT `agy`. That is a PROVIDER-DETECTION issue, not a quota one, and it
+ *     is deliberately not fixed here. The mechanism, for whoever picks it up:
+ *     `detectProviderVersion` (providers/version-archive.ts) resolves a CLI
+ *     with `findBinary(provider.binary || spawn.command || cli || type)` and
+ *     sets `installed` from whether that single name resolves. `findBinary`
+ *     DOES try a `.cmd` suffix on win32, so `antigravity.cmd` would be found —
+ *     but it is never asked for, because the manifest's `binary` is `agy` and
+ *     the manifest's `aliases: ["agy"]` is not consulted by detection at all.
+ *     Fixing it properly means a per-platform binary (no manifest in the repo
+ *     has one today) and a `spawn` rewrite, since `spawn.command` is `bash`.
+ *     Consequence meanwhile: on win32 the CLI can be installed and still
+ *     report `installed: false`, in which case quota is never even asked for.
  *
  *   linux — the surveyed host is a headless SSH server, and there the Secret
  *     Service is not merely absent but STRUCTURALLY unavailable:
