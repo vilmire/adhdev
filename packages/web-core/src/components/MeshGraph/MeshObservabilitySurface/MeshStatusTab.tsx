@@ -253,7 +253,7 @@ function describeNodeHealthIssue(node: RepoMeshNodeStatus, t: (key: string, opts
     return t('mesh.status.healthNoLiveReport')
 }
 
-function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStatus; mainAnchorCommit?: string }) {
+function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus; previewVersion?: string }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const healthIssue = describeNodeHealthIssue(node, t)
@@ -280,10 +280,14 @@ function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStat
         ? `build ${factsBuild.version || daemonBuildVersion || '?'}@${factsBuild.commitShort}`
         : daemonBuildVersion ? `build ${daemonBuildVersion}` : undefined
     // Global deploy-lag anchor: the running daemon's build commit vs origin/main
-    // (previewFreshness.currentMainCommit). Complements the node-LOCAL
-    // staleDaemonBuild marker (build vs this workspace HEAD) — a daemon can be
-    // current for its workspace yet behind the deployed main line.
-    const deployLag = !!(factsBuild?.commit && mainAnchorCommit && factsBuild.commit !== mainAnchorCommit)
+    // Deploy-lag is compared on the VERSION axis (daemon build version vs the
+    // last deployed preview version), NOT commits: the daemon build stamps the
+    // oss submodule commit while previewFreshness.currentMainCommit is a ROOT
+    // repo commit — comparing those cross-repo hashes flagged every node as
+    // deploy-lagged forever (observed live on 1.0.50-rc.1 right after a clean
+    // fleet restart). Versions come from the same release axis on both sides.
+    const nodeVersion = (factsBuild?.version || daemonBuildVersion || '').trim().toLowerCase()
+    const deployLag = !!(nodeVersion && previewVersion && nodeVersion !== previewVersion.trim().toLowerCase())
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -300,7 +304,7 @@ function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStat
                 {node.autoFastForwardEligible && <Badge label={t('mesh.status.badgeFastForwardReady')} tone="info" title={t('mesh.status.badgeFastForwardReadyTitle')} />}
                 {!!staleBuild && <Badge label={t('mesh.status.badgeStaleBuild')} tone="warn" title={t('mesh.status.badgeStaleBuildTitle')} />}
                 {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild || deployLag ? 'warn' : 'default'} title="Daemon build (version@commit) reported by this node — the running daemon's actual code identity" />}
-                {deployLag && <Badge label={`deploy-lag vs main@${shortCommit(mainAnchorCommit)}`} tone="warn" title={t('mesh.status.badgeDeployLagTitle')} />}
+                {deployLag && <Badge label={`deploy-lag vs ${previewVersion}`} tone="warn" title={t('mesh.status.badgeDeployLagTitle')} />}
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
             {healthIssue && (
@@ -402,7 +406,7 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
                         {t('mesh.status.noNodesReporting')}
                     </div>
                 ) : (
-                    canonicalStatus.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} mainAnchorCommit={typeof canonicalStatus.previewFreshness?.currentMainCommit === 'string' ? canonicalStatus.previewFreshness.currentMainCommit : undefined} />)
+                    canonicalStatus.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} previewVersion={typeof canonicalStatus.previewFreshness?.previewVersion === 'string' ? canonicalStatus.previewFreshness.previewVersion : undefined} />)
                 )}
             </div>
         </div>
