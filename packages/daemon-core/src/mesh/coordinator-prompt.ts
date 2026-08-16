@@ -180,12 +180,16 @@ export interface CoordinatorPromptContext {
  */
 /**
  * 6-4: total prompt soft cap. When the assembled prompt exceeds this, we shed
- * the two runtime-accumulated, daemon-generated sections — operating notes
- * first, then recent activity — because they grow unboundedly from the ledger.
- * We NEVER trim user append/override content or the fixed hardcoded sections
+ * the runtime-accumulated, daemon-generated sections in increasing order of
+ * harm — unpinned operating notes, then recent activity, and only as a last
+ * resort the PINNED operating notes (pinned is an author's explicit "always
+ * ride into the prompt" promise, so it outlives everything else sheddable —
+ * a live 60KB overflow was observed dropping every note wholesale, exactly
+ * the lessons the next coordinator needed). We NEVER trim user
+ * append/override content or the fixed hardcoded sections
  * (identity/nodes/policy/tools/workflow/onboarding/rules): those carry user
- * intent or invariant instructions. If shedding both still overflows, we keep
- * the prompt as-is rather than mangling protected content.
+ * intent or invariant instructions. If shedding everything sheddable still
+ * overflows, we keep the prompt as-is rather than mangling protected content.
  */
 const PROMPT_SOFT_CAP_BYTES = 60 * 1024;
 
@@ -196,6 +200,9 @@ const PROMPT_SOFT_CAP_BYTES = 60 * 1024;
  * own {{placeholder}}s and is not ours to trim.
  */
 interface DefaultPromptDropFlags {
+    /** Drop only the unpinned notes; pinned notes still render. */
+    dropUnpinnedNotes?: boolean;
+    /** Drop the whole operating-notes section, pinned included (last resort). */
     dropOperatingNotes?: boolean;
     dropRecentActivity?: boolean;
 }
@@ -212,17 +219,26 @@ export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): str
     if (usesOverrideBase(ctx)) return prompt;
 
     const shed: string[] = [];
+    const hasPinnedNotes = (ctx.operatingNotes ?? []).some(note => note?.pinned === true);
 
-    // 1) Shed operating notes first.
-    prompt = assembleCoordinatorPrompt(ctx, { dropOperatingNotes: true });
-    shed.push('operating notes');
+    // 1) Shed the unpinned notes first — pinned notes keep riding. (With no
+    //    pinned notes this empties the whole section, so label it honestly.)
+    prompt = assembleCoordinatorPrompt(ctx, { dropUnpinnedNotes: true });
+    shed.push(hasPinnedNotes ? 'unpinned operating notes' : 'operating notes');
     if (byteLength(prompt) <= PROMPT_SOFT_CAP_BYTES) {
         return appendTruncationNotice(prompt, shed);
     }
 
     // 2) Still over → also shed recent activity.
-    prompt = assembleCoordinatorPrompt(ctx, { dropOperatingNotes: true, dropRecentActivity: true });
+    prompt = assembleCoordinatorPrompt(ctx, { dropUnpinnedNotes: true, dropRecentActivity: true });
     shed.push('recent activity');
+    if (byteLength(prompt) <= PROMPT_SOFT_CAP_BYTES || !hasPinnedNotes) {
+        return appendTruncationNotice(prompt, shed);
+    }
+
+    // 3) Last resort → shed the pinned notes too.
+    prompt = assembleCoordinatorPrompt(ctx, { dropOperatingNotes: true, dropRecentActivity: true });
+    shed.push('pinned operating notes');
     return appendTruncationNotice(prompt, shed);
 }
 
@@ -319,10 +335,14 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
         if (recentActivity) sections.push(recentActivity);
     }
 
-    // ── Operating Notes (Gap2-A) — only present when notes exist. Shed first
-    //     under the 6-4 soft cap (drop.dropOperatingNotes). ──
+    // ── Operating Notes (Gap2-A) — only present when notes exist. Shed under
+    //     the 6-4 soft cap in two stages: unpinned first (dropUnpinnedNotes —
+    //     pinned notes keep riding), whole section last (dropOperatingNotes). ──
     if (!drop.dropOperatingNotes) {
-        const operatingNotes = buildOperatingNotesSection(ctx.operatingNotes);
+        const notes = drop.dropUnpinnedNotes
+            ? (ctx.operatingNotes ?? []).filter(note => note?.pinned === true)
+            : ctx.operatingNotes;
+        const operatingNotes = buildOperatingNotesSection(notes);
         if (operatingNotes) sections.push(operatingNotes);
     }
 
@@ -584,7 +604,10 @@ function buildRecentActivitySection(activity?: CoordinatorRecentActivity): strin
     const counts: string[] = [];
     if (pending > 0) counts.push(`**${pending}** pending`);
     if (assigned > 0) counts.push(`**${assigned}** assigned`);
-    if (stalled > 0) counts.push(`**${stalled}** stalled`);
+    // The ledger's stalled counter is an ALL-TIME total, not a live backlog —
+    // unlabeled it reads as "N tasks stuck right now" and sends the coordinator
+    // chasing ghosts (observed: "78 stalled" on a mesh with zero live stalls).
+    if (stalled > 0) counts.push(`**${stalled}** stalled (all-time ledger total, not current backlog)`);
     if (recentFailureCount > 0) counts.push(`**${recentFailureCount}** failed in the last ${windowMinutes} min`);
     if (counts.length) lines.push(`- Queue/ledger: ${counts.join(', ')}.`);
     if (activity.lastActivityAt) lines.push(`- Last ledger activity: ${activity.lastActivityAt}.`);
@@ -1148,7 +1171,7 @@ function buildRulesSection(coordinatorCliType?: string, policy?: RepoMeshPolicy)
 - **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as \`code_change\` from the start rather than a read-only investigation you hand off afterwards. The session that did the investigating already holds the findings; making a second session redo that context — especially on a different machine, where the findings have to be rewritten into a new task message — is pure loss. Carrying an investigation forward into its own fix is the SAME subject and belongs in that session (see the idle-session reuse rule). Split only when the fix genuinely belongs on another machine for reason (a) above.
 - **Base nodes are reserved for environment-specific testing.** Do NOT use a base node for a general code change. If a task does not strictly test OS- or machine-specific physical behavior (win32 PATH/registry, clean install/uninstall on one OS, that machine's package-manager state, OS-dependent runtime behavior), you MUST clone a worktree with \`mesh_clone_node\` and assign the task there; pin genuine environment tasks to the base with \`required_tags\`/\`target_node_id\` instead. Having several nodes available is NOT branch isolation — every base node is one shared checkout of the same branch — and cloning is ~10s with auto-launch starting the session, so there is no dispatch-cost reason to skip it.
 - **Worktree affinity.** A worktree is a durable per-branch workspace; keep all of a branch's code_change/fix/review work on its worktree node. Target it with \`required_tags: ["worktree=<branch>"]\` or \`target_node_id\`. Get the id/branch from the \`mesh_clone_node\` result or a live \`mesh_status\` — the Configured Nodes snapshot won't list a worktree cloned after launch. Untargeted same-branch follow-ups drift to the base node. Only \`convergence\` (merge/push) runs on the base, never pinned to the worktree.
-- **Classify task difficulty honestly.** For each task you enqueue, judge its execution difficulty and pass \`difficulty\`: \`easy\` (extraction, renames, doc tweaks, trivial fixes), \`medium\` (ordinary feature/bugfix work), \`difficult\` (architecture, tricky debugging, multi-file refactors, subtle reasoning), or \`freeform\`. This is a ROUTING HINT matched against node capability slots — the matched slot's OWN model/thinking is what launches, so difficulty does not name a model. Do NOT inflate or deflate difficulty to reach a model you want: fix the node's slots instead (\`mesh_node_slots_set\`). See the "Task difficulty" section below. You may still pass an explicit \`model\`/\`thinkingLevel\` to override for one task.
+- **Classify task difficulty honestly.** For each task you enqueue, judge its execution difficulty and pass \`difficulty\`: \`easy\` (extraction, renames, doc tweaks, trivial fixes), \`medium\` (ordinary feature/bugfix work), \`difficult\` (architecture, tricky debugging, multi-file refactors, subtle reasoning), or \`freeform\`. This is a ROUTING HINT matched against node capability slots — the matched slot's OWN model/thinking is what launches, so difficulty does not name a model. Do NOT inflate or deflate difficulty to reach a model you want: fix the node's slots instead (\`mesh_node_slots_set\`). See the "Task difficulty" section above. You may still pass an explicit \`model\`/\`thinkingLevel\` to override for one task.
 - **Retune node profiles when routing is a poor fit — but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via \`mesh_node_slots_list\`) are what task→node fitness routing matches against. If you notice a persistent mismatch — e.g. every \`difficult\` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared — you MAY propose a slot change with \`mesh_node_slots_set\` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.
 - **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to "first available provider"), or CLI agents were newly installed on it, call \`mesh_node_slots_propose({ node_id })\` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them — read-only, it never writes. Present its \`proposedSlots\` with the \`droppedSlots\` / \`destructive\` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with \`mesh_node_slots_set({ slots: proposedSlots, write: true })\` after approval. It flags \`unknownProvider\` / \`provisional\` slots whose placement is a conservative guess rather than an attested one — call those out rather than presenting them as settled.
 - **Respect explicit provider requests.** Map: Hermes → \`hermes-cli\`, Claude/Claude Code → \`claude-cli\`, Codex → \`codex-cli\`, Gemini → \`gemini-cli\`, Antigravity → \`antigravity-cli\`. Never substitute the coordinator's own runtime.

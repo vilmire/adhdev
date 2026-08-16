@@ -935,6 +935,51 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('**1** failed in the last 30 min')
   })
 
+  it('6-4: soft-cap sheds UNPINNED notes first — pinned notes keep riding', () => {
+    // Size the append so the prompt fits once the unpinned notes are shed but
+    // overflows with them included: pinned notes must survive the first stage.
+    const withoutNotes = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+    const headroom = 60 * 1024 - Buffer.byteLength(withoutNotes, 'utf8')
+    const filler = 'F'.repeat(Math.max(1024, headroom - 1024))
+    const operatingNotes = [
+      { text: 'PINNED_LESSON_SENTINEL never rebase a pushed oss commit', pinned: true },
+      ...Array.from({ length: 12 }, (_, i) => ({ text: `unpinned-note#${i} ` + 'y'.repeat(250) })),
+    ]
+
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        ...baseMesh(),
+        coordinator: { systemPromptAppend: filler },
+      } as any,
+      operatingNotes: operatingNotes as any,
+    })
+
+    // The pinned note survived the shed; the unpinned tail did not.
+    expect(prompt).toContain('PINNED_LESSON_SENTINEL')
+    expect(prompt).not.toContain('unpinned-note#0')
+    expect(prompt).toContain('omitted to fit: unpinned operating notes')
+    // 'unpinned operating notes' contains the substring 'pinned operating
+    // notes', so assert the LAST-RESORT entry specifically (comma-prefixed).
+    expect(prompt).not.toContain(', pinned operating notes')
+  })
+
+  it('6-4: only an overflow that shedding everything cannot fix drops pinned notes', () => {
+    // An append alone far past the cap: every sheddable stage fires, and the
+    // notice names each stage — including the pinned last resort.
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        ...baseMesh(),
+        coordinator: { systemPromptAppend: 'B'.repeat(80 * 1024) },
+      } as any,
+      operatingNotes: [
+        { text: 'PINNED_LESSON_SENTINEL', pinned: true },
+        { text: 'unpinned lesson' },
+      ] as any,
+    })
+    expect(prompt).not.toContain('PINNED_LESSON_SENTINEL')
+    expect(prompt).toContain('omitted to fit: unpinned operating notes, recent activity, pinned operating notes')
+  })
+
   it('6-4: soft-cap sheds daemon-generated sections but never the user append', () => {
     // A user (mesh-level) append that alone blows past the 60KB soft cap, plus
     // a large operating-notes payload. The append must survive verbatim; the
