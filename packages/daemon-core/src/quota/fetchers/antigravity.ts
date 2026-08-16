@@ -143,6 +143,30 @@
  * still present (gemini-cli issue #27363). Keying on the fraction avoids that
  * trap; a bucket with only an amount and no total cannot yield a percentage
  * and is dropped rather than shown as 0% used.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * ★THE QUOTA METHODS HAVE THEIR OWN CALL BUDGET — poll them sparingly.
+ *
+ * Observed 2026-08-16 while developing this fetcher: after a few dozen probes
+ * the endpoint began answering 429 RESOURCE_EXHAUSTED and kept doing so for
+ * ~30 minutes. It is NOT an auth problem and NOT a general outage — measured
+ * with the SAME token, at the SAME moment, against the SAME host:
+ *
+ *     loadCodeAssist            -> 200
+ *     retrieveUserQuotaSummary  -> 429 RESOURCE_EXHAUSTED
+ *     retrieveUserQuota         -> 429 RESOURCE_EXHAUSTED
+ *
+ * So the budget is per-METHOD, and both quota methods share the exhaustion.
+ * No Retry-After header is sent, so the retry delay is ours to choose.
+ *
+ * Consequences for anyone touching the refresh cadence:
+ *   - 429 is classified `rate-limited`, which is TRANSIENT, so refresh.ts
+ *     schedules a bounded exponential backoff (2m → 4m → 8m → 15m, then it
+ *     stops) and carries the last good windows forward. That is the correct
+ *     behaviour and should not be "fixed" into an aggressive retry.
+ *   - Do NOT add a short-interval poll or a retry-until-success loop for this
+ *     provider. Doing so spends the same budget the CLI's own quota view needs
+ *     and can lock the user out of their own usage display.
  */
 'use strict';
 
