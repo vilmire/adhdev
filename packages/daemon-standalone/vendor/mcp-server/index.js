@@ -5169,7 +5169,35 @@ async function meshQueueCancel(ctx, args) {
     } else if (wasAssigned && assignedSessionId === ctx.coordinatorSessionId) {
       workerStop = { attempted: false, reason: "assigned_session_is_coordinator_self \u2014 stop suppressed" };
     }
-    return JSON.stringify({ success: true, task, workerStop }, null, 2);
+    let orphanedPinnedTasks = [];
+    if (workerStop.attempted && assignedSessionId) {
+      try {
+        orphanedPinnedTasks = (0, import_daemon_core5.notifyCoordinatorOfOrphanedPins)(ctx.mesh.id, assignedSessionId, {
+          excludeTaskId: taskId,
+          cause: `Cancelling task ${taskId}`,
+          ...assignedNodeId ? { nodeId: assignedNodeId } : {},
+          ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
+        });
+      } catch {
+        orphanedPinnedTasks = [];
+      }
+    }
+    return JSON.stringify({
+      success: true,
+      task,
+      workerStop,
+      // Surface the orphans inline too: the pending event reaches the coordinator on its
+      // next drain, but the cancel's own response is read immediately — the coordinator
+      // can act without waiting for the event round-trip.
+      ...orphanedPinnedTasks.length > 0 ? {
+        orphanedPinnedTasks,
+        orphanedPinnedTasksWarning: (0, import_daemon_core5.buildOrphanedPinNotice)(
+          orphanedPinnedTasks,
+          assignedSessionId,
+          `Cancelling task ${taskId}`
+        )
+      } : {}
+    }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e.message });
   }
