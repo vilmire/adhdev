@@ -10,6 +10,7 @@
  */
 
 import {
+    fetchAntigravityQuota,
     fetchClaudeQuota,
     fetchCodexQuota,
     fetchGrokQuota,
@@ -30,12 +31,13 @@ Usage: adhdev quota <provider>
        adhdev quota claude:install | claude:uninstall | claude:status
 
 Providers:
+  antigravity  Show Antigravity CLI plan usage (queries the Cloud Code API live)
   claude    Show Claude Code plan usage (requires \`adhdev quota claude:install\`)
   codex     Show Codex CLI plan usage (queries codex app-server live)
   grok      Show Grok CLI plan usage (queries the xAI billing API live)
   kimi      Show Kimi Code plan usage (queries the Kimi API live)
 
-Claude Code setup (codex/grok/kimi need no setup — they query live):
+Claude Code setup (antigravity/codex/grok/kimi need no setup — they query live):
   claude:install     Set up Claude Code quota reporting by wrapping your statusline
   claude:uninstall   Remove Claude Code quota reporting and restore your original statusline
   claude:status      Show whether Claude Code quota reporting is set up
@@ -45,6 +47,10 @@ Claude Code setup (codex/grok/kimi need no setup — they query live):
 export async function runQuotaCommand(args: readonly string[]): Promise<number> {
     const sub = args[0];
     switch (sub) {
+        case 'antigravity':
+        case 'agy':
+            printQuota('Antigravity CLI', await fetchAntigravityQuota());
+            return 0;
         case 'claude':
             printQuota('Claude Code', await fetchClaudeQuota());
             return 0;

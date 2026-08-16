@@ -48,16 +48,16 @@ describe('quota support matrix', () => {
     it('covers the providers with a fetcher today', () => {
         // Pinned literally as well as structurally: if BOTH sides are edited in
         // the same wrong way, the comparison above still passes but this fails.
-        expect([...QUOTA_SUPPORTED_PROVIDERS].sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
+        expect([...QUOTA_SUPPORTED_PROVIDERS].sort()).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
     })
 
     it('excludes providers that cannot report quota', () => {
-        // cursor-cli is permanently impossible (no personal usage API);
-        // antigravity-cli is supportable via OAuth but has no fetcher; hermes
-        // has no model-axis quota. None may be offered a control.
-        // (grok-cli was once on this list and has since been implemented —
-        // its subscription quota comes from the CLI's own chat proxy.)
-        for (const providerType of ['cursor-cli', 'antigravity-cli', 'hermes-cli']) {
+        // cursor-cli is permanently impossible (no personal usage API); hermes
+        // has no model-axis quota. Neither may be offered a control.
+        // (grok-cli and antigravity-cli were once on this list and have since
+        // been implemented — grok's quota comes from the CLI's own chat proxy,
+        // antigravity's from the Cloud Code retrieveUserQuotaSummary API.)
+        for (const providerType of ['cursor-cli', 'hermes-cli']) {
             expect(supportsQuota(providerType), `${providerType} must not claim quota support`).toBe(false)
         }
     })

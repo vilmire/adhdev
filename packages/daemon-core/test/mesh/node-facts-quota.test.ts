@@ -10,7 +10,9 @@ const fetchCodexQuota = vi.fn()
 const fetchGrokQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
+const fetchAntigravityQuota = vi.fn()
 
+vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
@@ -87,7 +89,7 @@ describe('buildLocalNodeFacts — quota', () => {
         await refreshQuotaCacheOnce()
 
         const facts = buildLocalNodeFacts()
-        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
+        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         expect(facts.quota?.['codex-cli'].status).toBe('ok')
         expect(facts.quota?.['codex-cli'].session?.usedPercent).toBeCloseTo(38.2)
     })

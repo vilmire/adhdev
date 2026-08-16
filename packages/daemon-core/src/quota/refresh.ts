@@ -23,6 +23,7 @@ import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
 import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
+import { fetchAntigravityQuota } from './fetchers/antigravity.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchGrokQuota } from './fetchers/grok.js';
@@ -45,6 +46,7 @@ export const QUOTA_ACTIVITY_WINDOW_MS = 20 * 60 * 1000;
 
 /** The providers a node reports. One entry per shipped fetcher. */
 const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<ProviderQuota> }> = [
+    { provider: 'antigravity-cli', fetch: () => fetchAntigravityQuota() },
     { provider: 'claude-cli', fetch: () => fetchClaudeQuota() },
     { provider: 'codex-cli', fetch: () => fetchCodexQuota() },
     { provider: 'grok-cli', fetch: () => fetchGrokQuota() },

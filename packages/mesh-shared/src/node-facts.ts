@@ -177,6 +177,7 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
  * exactly the "switch that does nothing" this constant prevents.
  */
 export const QUOTA_SUPPORTED_PROVIDERS: readonly string[] = [
+    'antigravity-cli',
     'claude-cli',
     'codex-cli',
     'grok-cli',

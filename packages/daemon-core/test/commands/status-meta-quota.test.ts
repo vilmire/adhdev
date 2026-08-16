@@ -12,7 +12,9 @@ const fetchCodexQuota = vi.fn()
 const fetchGrokQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
+const fetchAntigravityQuota = vi.fn()
 
+vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
@@ -70,7 +72,7 @@ describe('get_machine_runtime_stats — quota', () => {
         await refreshQuotaCacheOnce()
 
         const result: any = await statusMetaHandlers.get_machine_runtime_stats({ deps: {} as any }, {})
-        expect(Object.keys(result.machine.quota).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
+        expect(Object.keys(result.machine.quota).sort()).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         expect(result.machine.quota['codex-cli'].status).toBe('ok')
     })
 
@@ -147,7 +149,7 @@ describe('get_session_info — quota', () => {
             providerLoader: { resolve: vi.fn(() => undefined), getMeta: vi.fn(() => undefined) },
         } as any
         const result: any = await statusMetaHandlers.get_session_info({ deps: coordDeps }, { targetSessionId: 'sess-1' })
-        expect(Object.keys(result.quota).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
+        expect(Object.keys(result.quota).sort()).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         expect('machineNickname' in result).toBe(true)
     })
 })

@@ -9,7 +9,9 @@ const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
+const fetchAntigravityQuota = vi.fn()
 
+vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
@@ -74,7 +76,7 @@ describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
         await vi.waitFor(() => {
             const quota = readQuotaCache()
             expect(quota).toBeDefined()
-            expect(Object.keys(quota ?? {}).sort()).toEqual(['claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
+            expect(Object.keys(quota ?? {}).sort()).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
         })
     })
 

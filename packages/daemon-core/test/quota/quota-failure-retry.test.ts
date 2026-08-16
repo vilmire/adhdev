@@ -11,7 +11,9 @@ const fetchCodexQuota = vi.fn()
 const fetchGrokQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
+const fetchAntigravityQuota = vi.fn()
 
+vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
@@ -262,6 +264,7 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
             'claude-cli': okQuota('claude-cli') as any,
             'codex-cli': okQuota('codex-cli') as any,
             'grok-cli': okQuota('grok-cli') as any,
+            'antigravity-cli': okQuota('antigravity-cli') as any,
             opencode: okQuota('opencode') as any,
             kimi: quotaFailure('kimi', 'unavailable', 'Not signed in to Kimi Code', {
                 failureKind: 'missing-credentials',
@@ -281,6 +284,7 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
             expect(fetchClaudeQuota).not.toHaveBeenCalled()
             expect(fetchCodexQuota).not.toHaveBeenCalled()
             expect(fetchGrokQuota).not.toHaveBeenCalled()
+            expect(fetchAntigravityQuota).not.toHaveBeenCalled()
         } finally {
             loop.stop()
         }

@@ -20,6 +20,7 @@ import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhd
 
 /** Provider ids are wire keys ('claude-cli'); show the product name. */
 const QUOTA_PROVIDER_LABELS: Record<string, string> = {
+    'antigravity-cli': 'Antigravity CLI',
     'claude-cli': 'Claude Code',
     'codex-cli': 'Codex CLI',
     'grok-cli': 'Grok CLI',

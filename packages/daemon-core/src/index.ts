@@ -755,6 +755,7 @@ export {
   fetchCodexQuota,
   fetchClaudeQuota,
   fetchGrokQuota,
+  fetchAntigravityQuota,
   installClaudeStatusline,
   uninstallClaudeStatusline,
   readStatuslineStatus,
