@@ -116,6 +116,85 @@ function unexpectedPathRecoveryHint(actualPath: string, normalizePath: (value: s
     return base + legacyHint + suffix;
 }
 
+/**
+ * Live-occupancy probe: is a running session still attached to this worktree?
+ *
+ * WORKTREE-DELETED-WHILE-RUNNING (2026-08-16): `mesh_remove_node` prechecked
+ * only metadata/path/branch/dirtiness, then — for a worktree, whose default
+ * session cleanup mode is `stop_and_delete` — killed the session and deleted
+ * the directory. Nothing anywhere in that path asked whether an agent was
+ * still WORKING in it. A worker mid-task therefore had its worktree removed
+ * out from under it, losing everything not already pushed (the branch was
+ * unpushed, so a commit would not have saved it either).
+ *
+ * The retention reaper already refuses on a live session and does so
+ * fail-closed (mesh-worktree-retention.ts). This brings the manual/dispatched
+ * removal path to the same standard, at the precheck — which runs BEFORE the
+ * destructive session cleanup, so a refusal leaves the session fully intact.
+ *
+ * Fail-closed on an unavailable session host: without an inventory we cannot
+ * prove the worktree is idle, and the cost asymmetry is stark — a wrong
+ * "occupied" only delays a cleanup, a wrong "idle" destroys live work.
+ * `force:true` is the documented operator override.
+ */
+async function findLiveSessionOnWorktree(self: DaemonCommandRouter, node: any, nodeId: string): Promise<
+    { state: 'idle' } | { state: 'occupied'; sessionId: string } | { state: 'unknown'; error: string }
+> {
+    const control = self.deps.sessionHostControl;
+    if (!control) return { state: 'unknown', error: 'session host control unavailable' };
+    let sessions: any[];
+    try {
+        sessions = await control.listSessions();
+    } catch (e: any) {
+        return { state: 'unknown', error: String(e?.message || e || 'listSessions failed') };
+    }
+    if (!Array.isArray(sessions)) return { state: 'unknown', error: 'session inventory was not a list' };
+    for (const record of sessions) {
+        // Reuse the exact node↔session matching the destructive cleanup uses, so
+        // the guard can never disagree with what cleanupMeshSessions would act on.
+        if (!sessionMatchesMeshNode(self, record, node, nodeId)) continue;
+        // Only a live runtime blocks; stopped/failed/inactive records do not.
+        if (getSessionHostSurfaceKind(record) !== 'live_runtime') continue;
+        return { state: 'occupied', sessionId: String(record?.sessionId || '') };
+    }
+    return { state: 'idle' };
+}
+
+/**
+ * Unpushed-commit probe: does the worktree branch hold commits that exist
+ * nowhere else? Complements the dirty guard, which only sees UNCOMMITTED
+ * changes — a worker who committed (as they are told to, precisely so work
+ * survives) but has not pushed yet leaves a CLEAN `git status`, so the dirty
+ * guard waves the removal through and the commits die with the directory.
+ *
+ * "Somewhere else" means any remote-tracking ref: if HEAD is contained in one,
+ * the commits are on a remote and removing the directory loses nothing. This
+ * checks reachability from remote refs rather than the branch's own configured
+ * upstream, because a worktree branch typically has NO upstream configured
+ * until its first push — and treating "no upstream" as "nothing to protect"
+ * would invert the guard exactly when it matters most.
+ *
+ * Best-effort and fail-open on probe failure: this is an ADDITIONAL guard, and
+ * the branch ref itself is preserved when unmerged, so a probe error must not
+ * block an otherwise-legitimate cleanup.
+ */
+async function hasUnpushedWorktreeCommits(workspace: string): Promise<{ unpushed: true; count: number } | { unpushed: false }> {
+    try {
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        const { stdout } = await execFileAsync(
+            'git',
+            ['rev-list', '--count', 'HEAD', '--not', '--remotes'],
+            { cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gitChildEnv() },
+        );
+        const count = Number.parseInt(String(stdout).trim(), 10);
+        return Number.isFinite(count) && count > 0 ? { unpushed: true, count } : { unpushed: false };
+    } catch {
+        return { unpushed: false };
+    }
+}
+
 export function sessionMatchesMeshNode(self: DaemonCommandRouter, record: any, node: any, nodeId: string, sessionIds?: Set<string>): boolean {
         const sessionId = typeof record?.sessionId === 'string' ? record.sessionId : '';
         if (!sessionId) return false;
@@ -267,6 +346,45 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
                 error: `Refusing to remove '${workspace}' because git reports branch '${managedEntry.branch}', expected '${args.node.worktreeBranch}'`,
                 recoveryHint: 'Inspect the worktree branch and mesh metadata before retrying cleanup.' + sessionPreservedNote,
             };
+        }
+
+        // Live-occupancy guard — refuse while an agent is still working in this
+        // worktree. Placed BEFORE the dirty guard because it is the stronger
+        // objection: a busy worktree must not be removed even when it is clean.
+        // `force:true` overrides, matching every other guard here.
+        if (args.force !== true) {
+            const occupancy = await findLiveSessionOnWorktree(self, args.node, args.nodeId);
+            if (occupancy.state === 'occupied') {
+                return {
+                    ok: false,
+                    code: 'mesh_worktree_cleanup_live_session',
+                    error: `Refusing to remove worktree '${workspace}' because session ${occupancy.sessionId} is still live in it`,
+                    recoveryHint: 'Wait for the session to finish, or stop it explicitly (mesh_cleanup_sessions) before retrying mesh_remove_node. Pass force:true only if you accept losing whatever that session has not yet pushed.' + sessionPreservedNote,
+                };
+            }
+            if (occupancy.state === 'unknown') {
+                return {
+                    ok: false,
+                    code: 'mesh_worktree_cleanup_live_session_unverified',
+                    error: `Refusing to remove worktree '${workspace}' because session liveness could not be verified: ${occupancy.error}`,
+                    recoveryHint: 'Removal is refused fail-closed when the session inventory is unavailable, so a running agent is never deleted out from under itself. Restore the session host and retry, or pass force:true if you have confirmed by other means that nothing is running in this worktree.' + sessionPreservedNote,
+                };
+            }
+        }
+
+        // Unpushed-commit guard — the dirty guard above only sees UNCOMMITTED
+        // work; committed-but-unpushed commits leave a clean status and would be
+        // destroyed silently along with the directory.
+        if (args.force !== true) {
+            const unpushed = await hasUnpushedWorktreeCommits(workspace);
+            if (unpushed.unpushed) {
+                return {
+                    ok: false,
+                    code: 'mesh_worktree_cleanup_unpushed_commits',
+                    error: `Refusing to remove worktree '${workspace}' because it has ${unpushed.count} commit(s) not present on any remote`,
+                    recoveryHint: 'Push the branch (or confirm the commits are already landed elsewhere) before retrying mesh_remove_node. Pass force:true only if you accept discarding those commits.' + sessionPreservedNote,
+                };
+            }
         }
 
         // Dirty-worktree guard — a read-only mirror of removeWorktree(requireClean)

@@ -99,6 +99,13 @@ export type WorktreeRetentionReasonCode =
     | 'mesh_worktree_cleanup_unexpected_path'
     | 'mesh_worktree_cleanup_branch_mismatch'
     | 'mesh_worktree_cleanup_dirty'
+    // Occupancy/unpushed refusals added with the live-occupancy guard. The
+    // reaper's own `live_session` check fires first and fail-closed, so these
+    // normally only surface on the manual path — they are listed here because
+    // every precheck refusal code passes through this union verbatim.
+    | 'mesh_worktree_cleanup_live_session'
+    | 'mesh_worktree_cleanup_live_session_unverified'
+    | 'mesh_worktree_cleanup_unpushed_commits'
     // execution outcomes (only on entries an execute pass attempted):
     | 'execution_precheck_refused'
     | 'execution_cleanup_failed'

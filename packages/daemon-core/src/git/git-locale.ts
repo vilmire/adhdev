@@ -1,5 +1,5 @@
 /**
- * Git child-process locale pinning.
+ * Git child-process environment: locale pinning + repo-location sanitization.
  *
  * Git translates its human-readable messages via gettext. Every place in this
  * codebase that decides control flow by matching git's stderr/stdout against an
@@ -36,6 +36,56 @@
  *     Replacing the env wholesale would break authenticated fetch/push.
  */
 
+/**
+ * Repo-location variables stripped from every git child process.
+ *
+ * These are the variables that make git act on a DIFFERENT repository than the
+ * one the caller named. When `GIT_DIR` (with or without `GIT_WORK_TREE`) is
+ * present in the inherited environment it takes precedence over BOTH `-C <dir>`
+ * and the child's `cwd` — the caller's explicit targeting is silently ignored:
+ *
+ *   GIT_DIR=<A/.git> GIT_WORK_TREE=<A> git -C B rev-parse --show-toplevel  →  A
+ *
+ * That is a correctness bug for read commands and a DATA-LOSS bug for
+ * destructive ones. Verified live in the same shape:
+ *
+ *   GIT_DIR=<A/.git> GIT_WORK_TREE=<A> git -C B worktree remove --force <A's wt>
+ *     → exit 0, A's worktree directory deleted
+ *
+ * i.e. a removal aimed at repo B can delete a worktree belonging to repo A,
+ * leaving NO stale registration behind (git de-registers it properly), which is
+ * precisely the forensic signature of a worktree that "vanished" with no
+ * `node_removed` ledger entry. `router-worktree-cleanup.ts` runs
+ * `git worktree remove --force` / `submodule deinit --all -f` / `worktree prune`
+ * through this env, so an inherited `GIT_DIR` reaches destructive commands.
+ *
+ * This is the same defect class already proven in the vendor hooks, where an
+ * inherited `GIT_DIR` defeated `execFileSync`'s `cwd` and overwrote the root
+ * hook with oss content (fixed by `CLEAN_ENV` in scripts/setup-hooks.mjs and
+ * scripts/vendor-precommit.mjs). This is the daemon-side equivalent.
+ *
+ * Scope: ONLY location/state-redirection vars are stripped. `GIT_SSH_COMMAND`,
+ * `GIT_ASKPASS`, credential-helper and proxy vars are deliberately preserved —
+ * removing those would break authenticated fetch/push. A caller that genuinely
+ * wants one of these (mesh-refine-gates.ts intentionally sets `GIT_INDEX_FILE`
+ * for a scratch index) must set it EXPLICITLY on the env it passes; that still
+ * works, because the strip runs before the caller's own overrides are applied.
+ */
+const REPO_LOCATION_VARS = [
+    // Redirects which repository/worktree git operates on — overrides -C and cwd.
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_COMMON_DIR',
+    // Redirects which index file is read/written (staging-area corruption).
+    'GIT_INDEX_FILE',
+    // Redirects object/ref lookup across repositories.
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_NAMESPACE',
+    // Set by git while running a hook; the prefix leaks into grandchild commands.
+    'GIT_PREFIX',
+] as const;
+
 /** Locale variables pinned on git child processes, in gettext precedence order. */
 const C_LOCALE_OVERRIDES = {
     // GNU gettext checks LANGUAGE first; an inherited value would win over LC_ALL.
@@ -49,11 +99,23 @@ const C_LOCALE_OVERRIDES = {
 
 /**
  * Build the environment for a git child process: the caller's environment with
- * the locale pinned to C so git's messages stay in English.
+ * every repo-location variable stripped (so `-C`/`cwd` actually decides which
+ * repository is acted on) and the locale pinned to C (so git's messages stay in
+ * English for the stderr matchers).
  *
  * Pass the result as `env` to execFile/spawn. Callers that already build their
  * own env should pass it as `base` so their vars are preserved.
+ *
+ * Ordering note: the strip is applied to `base` FIRST, and the locale pins are
+ * layered on top. A caller that deliberately wants a repo-location variable
+ * (e.g. a scratch `GIT_INDEX_FILE`) sets it on the object it builds AFTER
+ * calling this, which is the only way such a value should ever reach git —
+ * inherited ambiently, it is always a bug.
  */
 export function gitChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    return { ...base, ...C_LOCALE_OVERRIDES };
+    const env: NodeJS.ProcessEnv = { ...base, ...C_LOCALE_OVERRIDES };
+    for (const key of REPO_LOCATION_VARS) {
+        delete env[key];
+    }
+    return env;
 }

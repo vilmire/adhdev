@@ -41,6 +41,115 @@ describe('gitChildEnv', () => {
     gitChildEnv()
     expect(process.env.LC_ALL).toBe(before)
   })
+
+  // WORKTREE-DELETED-WHILE-RUNNING: GIT_DIR/GIT_WORK_TREE override BOTH -C and
+  // cwd, so an inherited value silently redirects git at another repository.
+  // Through this env that reaches `git worktree remove --force`.
+  it('strips every repo-location variable so -C/cwd decides the target repo', () => {
+    const env = gitChildEnv({
+      GIT_DIR: '/other/.git',
+      GIT_WORK_TREE: '/other',
+      GIT_COMMON_DIR: '/other/.git',
+      GIT_INDEX_FILE: '/other/.git/index',
+      GIT_OBJECT_DIRECTORY: '/other/.git/objects',
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: '/elsewhere/objects',
+      GIT_NAMESPACE: 'ns',
+      GIT_PREFIX: 'sub/',
+    })
+    expect(env.GIT_DIR).toBeUndefined()
+    expect(env.GIT_WORK_TREE).toBeUndefined()
+    expect(env.GIT_COMMON_DIR).toBeUndefined()
+    expect(env.GIT_INDEX_FILE).toBeUndefined()
+    expect(env.GIT_OBJECT_DIRECTORY).toBeUndefined()
+    expect(env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBeUndefined()
+    expect(env.GIT_NAMESPACE).toBeUndefined()
+    expect(env.GIT_PREFIX).toBeUndefined()
+  })
+
+  it('keeps auth/transport GIT_* vars — stripping those would break fetch/push', () => {
+    const env = gitChildEnv({
+      GIT_DIR: '/other/.git',
+      GIT_SSH_COMMAND: 'ssh -i /key',
+      GIT_ASKPASS: '/usr/bin/askpass',
+      GIT_TERMINAL_PROMPT: '0',
+    })
+    expect(env.GIT_DIR).toBeUndefined()
+    expect(env.GIT_SSH_COMMAND).toBe('ssh -i /key')
+    expect(env.GIT_ASKPASS).toBe('/usr/bin/askpass')
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0')
+  })
+})
+
+// ─── Regression: the data-loss shape, against real git ───────────────────────
+//
+// The defect that destroyed a live worktree, reproduced end to end. With
+// GIT_DIR/GIT_WORK_TREE inherited from repo A, a removal explicitly aimed at
+// repo B (`git -C B worktree remove --force ...`) acts on A instead — deleting
+// A's worktree and de-registering it cleanly, so no stale registration is left
+// behind to hint at what happened.
+//
+// Both halves are asserted: that raw git really does behave this way (the
+// hazard is real, not theoretical), and that a spawn using gitChildEnv() is
+// immune to it (the fix actually closes it).
+
+describe('inherited GIT_DIR redirects destructive git at the wrong repo (real git)', () => {
+  let root = ''
+  let available = false
+
+  beforeAll(async () => {
+    available = await hasSubmoduleSupport()
+    if (available) root = await mkdtemp(join(tmpdir(), 'adhdev-gitdir-'))
+  }, 60_000)
+
+  afterAll(async () => {
+    if (root) await rm(root, { recursive: true, force: true })
+  })
+
+  const initRepo = async (dir: string) => {
+    await execFileAsync('git', ['init', '-q', '-b', 'main', dir])
+    await writeFile(join(dir, 'f.txt'), 'x\n')
+    await execFileAsync('git', ['add', '-A'], { cwd: dir })
+    await execFileAsync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-qm', 'init'], { cwd: dir })
+  }
+
+  it('deletes repo A\'s worktree when the command targeted repo B — and gitChildEnv prevents it', async () => {
+    if (!available) return
+    const { existsSync } = await import('node:fs')
+
+    const repoA = join(root, 'repoA')
+    const repoB = join(root, 'repoB')
+    await initRepo(repoA)
+    await initRepo(repoB)
+
+    const wtVictim = join(root, 'wt-victim')
+    await execFileAsync('git', ['worktree', 'add', '-q', '-b', 'victim', wtVictim], { cwd: repoA })
+    expect(existsSync(wtVictim)).toBe(true)
+
+    // The hazard: contaminated env + a command aimed at repoB deletes repoA's worktree.
+    await execFileAsync('git', ['-C', repoB, 'worktree', 'remove', '--force', wtVictim], {
+      env: { ...process.env, GIT_DIR: join(repoA, '.git'), GIT_WORK_TREE: repoA },
+    })
+    expect(existsSync(wtVictim)).toBe(false)
+
+    // ...and it leaves NO stale registration — the forensic signature of the
+    // incident (directory gone, `worktree list` clean, `prune` a no-op).
+    const { stdout: pruneOut } = await execFileAsync('git', ['worktree', 'prune', '--dry-run', '-v'], { cwd: repoA })
+    expect(pruneOut.trim()).toBe('')
+
+    // The fix: the same contaminated parent env, sanitized by gitChildEnv, now
+    // honors -C — so the removal is scoped to repoB and repoA's worktree lives.
+    const wtSurvivor = join(root, 'wt-survivor')
+    await execFileAsync('git', ['worktree', 'add', '-q', '-b', 'survivor', wtSurvivor], { cwd: repoA })
+    expect(existsSync(wtSurvivor)).toBe(true)
+
+    await execFileAsync('git', ['-C', repoB, 'worktree', 'remove', '--force', wtSurvivor], {
+      env: gitChildEnv({ ...process.env, GIT_DIR: join(repoA, '.git'), GIT_WORK_TREE: repoA }),
+    }).catch(() => {
+      // repoB legitimately does not own this path, so git refuses — which is
+      // exactly the point: the command can no longer reach into repoA.
+    })
+    expect(existsSync(wtSurvivor)).toBe(true)
+  }, 120_000)
 })
 
 // ─── Wiring: every git spawn in git-worktree carries the pinned env ──────────
