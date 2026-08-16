@@ -25,6 +25,13 @@ interface MeshTasksViewProps {
     tasks: RepoMeshQueueTask[]
     status: RepoMeshStatus
     emptyMessage?: string
+    /** Enables the requeue/cancel row actions when the command channel exists. */
+    daemonId?: string | null
+    sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
+    /** Called after a queue mutation succeeds so the host can refresh the status. */
+    onQueueMutated?: () => void
+    /** Jump to a node's detail (graph tab) — used by running tasks' "view node". */
+    onFocusNode?: (nodeId: string) => void
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -106,14 +113,27 @@ function MissionProgressBar({ theme, group }: { theme: MeshGraphTheme; group: Mi
     )
 }
 
-function TaskRow({ task, theme, nodeLabels, expanded, onToggle }: {
+/** Queue mutation channel handed down from the surface (absent → read-only rows). */
+export interface TaskRowActions {
+    /** 'cancel' | 'requeue' against a task id; resolves after the daemon confirms. */
+    run: (action: 'cancel' | 'requeue', taskId: string) => Promise<void>
+    busyTaskId: string | null
+    error: string | null
+}
+
+function TaskRow({ task, theme, nodeLabels, expanded, onToggle, actions, onFocusNode }: {
     task: RepoMeshQueueTask
     theme: MeshGraphTheme
     nodeLabels: Map<string, string>
     expanded: boolean
     onToggle: () => void
+    actions?: TaskRowActions | null
+    onFocusNode?: (nodeId: string) => void
 }) {
     const { t } = useTranslation('common')
+    // Destructive-ish actions arm on first click and execute on the second, so a
+    // stray click on a running task's cancel cannot interrupt a worker.
+    const [armedAction, setArmedAction] = useState<'cancel' | 'requeue' | null>(null)
     const text = queueTaskDisplayText(task.message)
     const blocked = typeof task.blockedReason === 'string' && task.blockedReason.length > 0
     const nodeLabel = task.assignedNodeId ? nodeLabels.get(task.assignedNodeId) ?? task.assignedNodeId.slice(0, 12) : null
@@ -155,27 +175,99 @@ function TaskRow({ task, theme, nodeLabels, expanded, onToggle }: {
                             {task.blockedReason}
                         </div>
                     )}
+                    {(actions || (onFocusNode && task.assignedNodeId)) && (
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            {actions && (task.status === 'failed' || task.status === 'cancelled') && (
+                                <ActionButton
+                                    theme={theme}
+                                    tone="info"
+                                    busy={actions.busyTaskId === task.id}
+                                    armed={armedAction === 'requeue'}
+                                    label={t('meshGraph.tasksView.actionRequeue')}
+                                    confirmLabel={t('meshGraph.tasksView.actionConfirm')}
+                                    onClick={() => {
+                                        if (armedAction !== 'requeue') { setArmedAction('requeue'); return }
+                                        setArmedAction(null)
+                                        void actions.run('requeue', task.id)
+                                    }}
+                                />
+                            )}
+                            {actions && (task.status === 'pending' || task.status === 'assigned') && (
+                                <ActionButton
+                                    theme={theme}
+                                    tone="danger"
+                                    busy={actions.busyTaskId === task.id}
+                                    armed={armedAction === 'cancel'}
+                                    label={t('meshGraph.tasksView.actionCancel')}
+                                    confirmLabel={t('meshGraph.tasksView.actionConfirm')}
+                                    onClick={() => {
+                                        if (armedAction !== 'cancel') { setArmedAction('cancel'); return }
+                                        setArmedAction(null)
+                                        void actions.run('cancel', task.id)
+                                    }}
+                                />
+                            )}
+                            {onFocusNode && task.assignedNodeId && (
+                                <ActionButton
+                                    theme={theme}
+                                    tone="default"
+                                    label={t('meshGraph.tasksView.actionViewNode')}
+                                    onClick={() => onFocusNode(task.assignedNodeId!)}
+                                />
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
         </div>
     )
 }
 
-function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTask }: {
+function ActionButton({ theme, tone, label, confirmLabel, armed, busy, onClick }: {
+    theme: MeshGraphTheme
+    tone: 'info' | 'danger' | 'default'
+    label: string
+    confirmLabel?: string
+    armed?: boolean
+    busy?: boolean
+    onClick: () => void
+}) {
+    const toneClass = tone === 'danger'
+        ? (theme.isDark ? 'border-rose-400/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20' : 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100')
+        : tone === 'info'
+            ? (theme.isDark ? 'border-sky-400/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20' : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100')
+            : (theme.isDark ? 'border-white/10 bg-white/[0.05] text-slate-300 hover:bg-white/[0.1]' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100')
+    return (
+        <button
+            type="button"
+            disabled={busy}
+            onClick={onClick}
+            className={`rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${toneClass} ${armed ? 'ring-1 ring-current' : ''}`}
+        >
+            {armed && confirmLabel ? confirmLabel : label}
+        </button>
+    )
+}
+
+function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTask, actions, onFocusNode }: {
     group: MissionTaskGroup
     theme: MeshGraphTheme
     nodeLabels: Map<string, string>
     expandedTaskId: string | null
     onToggleTask: (id: string) => void
+    actions?: TaskRowActions | null
+    onFocusNode?: (nodeId: string) => void
 }) {
     const { t } = useTranslation('common')
     const hasLiveWork = group.counts.assigned > 0 || group.counts.pending > 0 || group.counts.failed > 0
     const [openOverride, setOpenOverride] = useState<boolean | null>(null)
     const [showGraph, setShowGraph] = useState(false)
+    const [showGoal, setShowGoal] = useState(false)
     const open = openOverride ?? hasLiveWork
     const title = group.title
         || (group.missionId ? group.missionId.slice(0, 24) : t('meshGraph.tasksView.adhocTitle'))
     const missionTone = group.missionStatus ? MISSION_STATUS_TONE[group.missionStatus] : null
+    const goalText = group.goal ? queueTaskDisplayText(group.goal) : ''
     return (
         <section className={`rounded-2xl border ${theme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-white/90'}`}>
             <button
@@ -204,17 +296,35 @@ function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTa
             </button>
             {open && (
                 <div className="flex flex-col gap-0.5 px-1.5 pb-2">
-                    {group.hasDependencies && (
-                        <div className="px-1 pb-1">
-                            <button
-                                type="button"
-                                onClick={() => setShowGraph(prev => !prev)}
-                                className={`rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors ${theme.isDark
-                                    ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
-                                    : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
-                            >
-                                {showGraph ? t('meshGraph.tasksView.hideGraph') : t('meshGraph.tasksView.showGraph')}
-                            </button>
+                    {(group.hasDependencies || goalText) && (
+                        <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1">
+                            {goalText && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowGoal(prev => !prev)}
+                                    className={`rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors ${theme.isDark
+                                        ? 'border-white/10 bg-white/[0.05] text-slate-300 hover:bg-white/[0.1]'
+                                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'}`}
+                                >
+                                    {showGoal ? t('meshGraph.tasksView.hideGoal') : t('meshGraph.tasksView.showGoal')}
+                                </button>
+                            )}
+                            {group.hasDependencies && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowGraph(prev => !prev)}
+                                    className={`rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors ${theme.isDark
+                                        ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
+                                        : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
+                                >
+                                    {showGraph ? t('meshGraph.tasksView.hideGraph') : t('meshGraph.tasksView.showGraph')}
+                                </button>
+                            )}
+                        </div>
+                    )}
+                    {showGoal && goalText && (
+                        <div className={`mx-1 mb-1 whitespace-pre-wrap rounded-xl border px-3 py-2 text-[11px] leading-4.5 ${theme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                            {goalText}
                         </div>
                     )}
                     {showGraph && group.hasDependencies ? (
@@ -230,6 +340,8 @@ function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTa
                                 nodeLabels={nodeLabels}
                                 expanded={expandedTaskId === task.id}
                                 onToggle={() => onToggleTask(task.id)}
+                                actions={actions}
+                                onFocusNode={onFocusNode}
                             />
                         ))
                     )}
@@ -239,15 +351,46 @@ function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTa
     )
 }
 
-export default function MeshTasksView({ tasks, status, emptyMessage }: MeshTasksViewProps) {
+export default function MeshTasksView({ tasks, status, emptyMessage, daemonId, sendDaemonCommand, onQueueMutated, onFocusNode }: MeshTasksViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const [terminalLimit, setTerminalLimit] = useState(TASK_DAG_RECENT_TERMINAL_LIMIT)
     const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
+    const [busyTaskId, setBusyTaskId] = useState<string | null>(null)
+    const [actionError, setActionError] = useState<string | null>(null)
     const view = useMemo(() => buildMeshTasksView(tasks, status, terminalLimit), [tasks, status, terminalLimit])
     const nodeLabels = useMemo(() => buildNodeLabels(status), [status])
     const toggleTask = (id: string) => setExpandedTaskId(current => (current === id ? null : id))
+
+    const canMutate = !!(sendDaemonCommand && daemonId && status.meshId)
+    const actions = useMemo<TaskRowActions | null>(() => {
+        if (!canMutate) return null
+        return {
+            busyTaskId,
+            error: actionError,
+            run: async (action, taskId) => {
+                if (!sendDaemonCommand || !daemonId) return
+                setBusyTaskId(taskId)
+                setActionError(null)
+                try {
+                    const command = action === 'cancel' ? 'cancel_mesh_queue_task' : 'requeue_mesh_queue_task'
+                    const raw = await sendDaemonCommand(daemonId, command, { meshId: status.meshId, taskId })
+                    // Cloud wraps daemon responses in { success, result }; standalone returns directly.
+                    const res = raw?.result ?? raw
+                    if (res && res.success === false) {
+                        setActionError(typeof res.error === 'string' ? res.error : t('meshGraph.tasksView.actionFailed'))
+                        return
+                    }
+                    onQueueMutated?.()
+                } catch (e) {
+                    setActionError(e instanceof Error ? e.message : t('meshGraph.tasksView.actionFailed'))
+                } finally {
+                    setBusyTaskId(null)
+                }
+            },
+        }
+    }, [canMutate, busyTaskId, actionError, sendDaemonCommand, daemonId, status.meshId, onQueueMutated, t])
 
     if (view.counts.total === 0) {
         return (
@@ -300,6 +443,8 @@ export default function MeshTasksView({ tasks, status, emptyMessage }: MeshTasks
                                 nodeLabels={nodeLabels}
                                 expanded={expandedTaskId === task.id}
                                 onToggle={() => toggleTask(task.id)}
+                                actions={actions}
+                                onFocusNode={onFocusNode}
                             />
                         ))}
                     </div>
@@ -321,10 +466,19 @@ export default function MeshTasksView({ tasks, status, emptyMessage }: MeshTasks
                                 nodeLabels={nodeLabels}
                                 expanded={expandedTaskId === task.id}
                                 onToggle={() => toggleTask(task.id)}
+                                actions={actions}
+                                onFocusNode={onFocusNode}
                             />
                         ))}
                     </div>
                 </section>
+            )}
+
+            {/* Action failure banner (cancel/requeue) */}
+            {actionError && (
+                <div className={`rounded-xl border px-3 py-2 text-[11px] ${meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                    {actionError}
+                </div>
             )}
 
             {/* Mission groups */}
@@ -336,6 +490,8 @@ export default function MeshTasksView({ tasks, status, emptyMessage }: MeshTasks
                     nodeLabels={nodeLabels}
                     expandedTaskId={expandedTaskId}
                     onToggleTask={toggleTask}
+                    actions={actions}
+                    onFocusNode={onFocusNode}
                 />
             ))}
         </div>

@@ -878,7 +878,10 @@
             "loadFailed": "運用ノートの読み込みに失敗しました。",
             "saveFailed": "運用ノートの保存に失敗しました。",
             "deleteFailed": "運用ノートの削除に失敗しました。",
-            "editFailed": "運用ノートの更新に失敗しました。"
+            "editFailed": "運用ノートの更新に失敗しました。",
+            "showMore": "もっと見る",
+            "showLess": "折りたたむ",
+            "pinned": "固定"
         },
         "dialog": {
             "kicker": "メッシュの可観測性",
@@ -934,7 +937,14 @@
                 "paused": "一時停止",
                 "completed": "完了",
                 "abandoned": "中止"
-            }
+            },
+            "actionRequeue": "再キュー",
+            "actionCancel": "タスクをキャンセル",
+            "actionConfirm": "もう一度クリックで実行",
+            "actionViewNode": "ノードを表示",
+            "actionFailed": "キュー操作に失敗しました",
+            "showGoal": "ミッション目標を表示",
+            "hideGoal": "ミッション目標を閉じる"
         }
     },
     "repoMesh": {
@@ -2545,7 +2555,25 @@
             "machinesQuota": "マシン — プラン使用量",
             "machineNotReporting": "このマシンはまだランタイム情報を報告していません — オフラインまたは接続不可のため、プラン使用量は不明です。",
             "quotaClaudeSetupHint": "Claude Code には使用量 API がないため、ADHDev は statusLine から読み取ります。`adhdev quota claude:install` は既存の statusline をラップして動作を維持し、claude:uninstall で復元できます。",
-            "quotaAccountHint": "この使用量が属するログイン中のアカウント（プロバイダー CLI の報告値）"
+            "quotaAccountHint": "この使用量が属するログイン中のアカウント（プロバイダー CLI の報告値）",
+            "healthNotGitRepo": "ワークスペースが git リポジトリではありません",
+            "healthProbePending": "このピアの最初の git プローブを待機中",
+            "healthPeerConnection": "ピア接続状態 {{state}} — ライブ報告なし",
+            "healthNoLiveReport": "このノードのライブ報告がまだありません",
+            "badgeWorktree": "worktree",
+            "badgeWorktreeTitle": "ローカル worktree ノード",
+            "badgeWorktreeBranchTitle": "worktree ブランチ {{branch}}",
+            "badgeBootstrapTitle": "worktree ブートストラップ進行中",
+            "badgeConnectionTitle": "メッシュピア接続状態",
+            "badgeSessions_one": "セッション {{count}} 件",
+            "badgeSessions_other": "セッション {{count}} 件",
+            "badgeFastForwardReady": "fast-forward 可能",
+            "badgeFastForwardReadyTitle": "クリーンで upstream に遅れ — fast-forward 安全",
+            "badgeStaleBuild": "古いビルド",
+            "badgeStaleBuildTitle": "ライブデーモンがワークスペース HEAD より古いビルド",
+            "badgeDeployLagTitle": "実行中デーモンのビルドが origin/main と異なる — デプロイ+再起動待ち",
+            "machinesNotReporting_one": "未報告マシン {{count}} 台: {{machines}}",
+            "machinesNotReporting_other": "未報告マシン {{count}} 台: {{machines}}"
         },
         "overview": {
             "missionCard": "ミッション",
@@ -2623,7 +2651,9 @@
             "routingRequiredTags": "必須タグ",
             "routingTagsUnsatisfied": "未充足",
             "routingSkipped": "スキップした候補",
-            "routingSkippedMore": "他 {{count}} 件"
+            "routingSkippedMore": "他 {{count}} 件",
+            "pausedMissions": "一時停止中のミッション",
+            "ledgerAllTime": "全期間の累計"
         }
     },
     "machine": {

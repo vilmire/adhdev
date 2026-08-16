@@ -883,7 +883,10 @@
             "loadFailed": "No se pudieron cargar las notas operativas.",
             "saveFailed": "No se pudo guardar la nota operativa.",
             "deleteFailed": "No se pudo eliminar la nota operativa.",
-            "editFailed": "No se pudo actualizar la nota operativa."
+            "editFailed": "No se pudo actualizar la nota operativa.",
+            "showMore": "Ver más",
+            "showLess": "Ver menos",
+            "pinned": "fijada"
         },
         "dialog": {
             "kicker": "Observabilidad de la malla",
@@ -939,7 +942,14 @@
                 "paused": "pausada",
                 "completed": "completada",
                 "abandoned": "abandonada"
-            }
+            },
+            "actionRequeue": "Reencolar",
+            "actionCancel": "Cancelar tarea",
+            "actionConfirm": "Haz clic de nuevo para confirmar",
+            "actionViewNode": "Ver nodo",
+            "actionFailed": "La acción de cola falló",
+            "showGoal": "Ver objetivo de la misión",
+            "hideGoal": "Ocultar objetivo de la misión"
         }
     },
     "repoMesh": {
@@ -2550,7 +2560,25 @@
             "machinesQuota": "Máquinas — cuota del plan",
             "machineNotReporting": "Esta máquina aún no ha reportado datos de runtime: está desconectada o inaccesible, así que se desconoce su cuota del plan.",
             "quotaClaudeSetupHint": "Claude Code no tiene API de cuota: ADHDev la lee de tu statusLine. `adhdev quota claude:install` envuelve la que ya tienes (sigue funcionando) y claude:uninstall la restaura.",
-            "quotaAccountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor"
+            "quotaAccountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor",
+            "healthNotGitRepo": "El workspace no es un repositorio git",
+            "healthProbePending": "Esperando el primer sondeo git de este par",
+            "healthPeerConnection": "Conexión del par: {{state}} — sin informe en vivo",
+            "healthNoLiveReport": "Este nodo aún no envía informes en vivo",
+            "badgeWorktree": "worktree",
+            "badgeWorktreeTitle": "Nodo worktree local",
+            "badgeWorktreeBranchTitle": "Rama worktree {{branch}}",
+            "badgeBootstrapTitle": "Bootstrap del worktree en curso",
+            "badgeConnectionTitle": "Estado de conexión del par",
+            "badgeSessions_one": "{{count}} sesión",
+            "badgeSessions_other": "{{count}} sesiones",
+            "badgeFastForwardReady": "fast-forward listo",
+            "badgeFastForwardReadyTitle": "Limpio y por detrás del upstream — fast-forward seguro",
+            "badgeStaleBuild": "build obsoleto",
+            "badgeStaleBuildTitle": "El daemon en vivo se compiló antes del HEAD del workspace",
+            "badgeDeployLagTitle": "El build del daemon difiere de origin/main — pendiente de deploy + reinicio",
+            "machinesNotReporting_one": "{{count}} máquina sin reportar: {{machines}}",
+            "machinesNotReporting_other": "{{count}} máquinas sin reportar: {{machines}}"
         },
         "overview": {
             "missionCard": "Misiones",
@@ -2628,7 +2656,9 @@
             "routingRequiredTags": "Etiquetas requeridas",
             "routingTagsUnsatisfied": "no satisfechas",
             "routingSkipped": "Candidatos omitidos",
-            "routingSkippedMore": "+{{count}} más"
+            "routingSkippedMore": "+{{count}} más",
+            "pausedMissions": "Misiones en pausa",
+            "ledgerAllTime": "totales históricos"
         }
     },
     "machine": {

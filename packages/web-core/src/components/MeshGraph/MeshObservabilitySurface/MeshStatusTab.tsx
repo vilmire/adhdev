@@ -212,18 +212,51 @@ function MeshMachinesQuotaSection({ status }: { status: RepoMeshStatus }) {
     // Empty only when the mesh has no nodes at all — a machine with nodes always
     // gets a card now, reporting or not. Nothing to head when there is nothing.
     if (machines.length === 0) return null
+    // Machines that have never reported runtime facts fold into ONE summary line:
+    // several offline machines each rendered a full card saying only "has not
+    // reported", burying the machines with actual quota numbers.
+    const reported = machines.filter(machine => machine.hasReported)
+    const unreported = machines.filter(machine => !machine.hasReported)
     return (
         <div className="flex flex-col gap-2">
             <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
                 {t('mesh.status.machinesQuota')}
             </span>
-            {machines.map(machine => <MeshMachineQuotaCard key={machine.machineKey} machine={machine} />)}
+            {reported.map(machine => <MeshMachineQuotaCard key={machine.machineKey} machine={machine} />)}
+            {unreported.length > 0 && (
+                <div className={`rounded-xl border px-3 py-2 text-[11px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+                    {t('mesh.status.machinesNotReporting', {
+                        count: unreported.length,
+                        machines: unreported.map(machine => machine.label).join(', '),
+                    })}
+                </div>
+            )}
         </div>
     )
 }
 
+/**
+ * Best-effort explanation for a degraded/unknown node health, derived from the
+ * fields the wire already carries — the daemon does not send an explicit
+ * healthReason, and "DEGRADED" alone forces the operator to guess.
+ */
+function describeNodeHealthIssue(node: RepoMeshNodeStatus, t: (key: string, opts?: Record<string, unknown>) => string): string | null {
+    if (node.health !== 'degraded' && node.health !== 'unknown') return null
+    if (typeof node.error === 'string' && node.error) return node.error
+    const git = node.git as { isGitRepo?: boolean } | undefined
+    if (git && git.isGitRepo === false) return t('mesh.status.healthNotGitRepo')
+    if ((node as { gitProbePending?: boolean }).gitProbePending) return t('mesh.status.healthProbePending')
+    const connectionState = node.connection?.state
+    if (connectionState && connectionState !== 'connected' && connectionState !== 'self') {
+        return t('mesh.status.healthPeerConnection', { state: connectionState })
+    }
+    return t('mesh.status.healthNoLiveReport')
+}
+
 function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStatus; mainAnchorCommit?: string }) {
+    const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
+    const healthIssue = describeNodeHealthIssue(node, t)
     const sessionCount = (node.activeSessionDetails?.length ?? node.activeSessions?.length ?? 0)
     const head = shortCommit(node.git?.headCommit)
     const isWorktree = node.isLocalWorktree === true
@@ -256,20 +289,25 @@ function MeshNodeRuntimeRow({ node, mainAnchorCommit }: { node: RepoMeshNodeStat
             <div className="flex flex-wrap items-center gap-2">
                 <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{node.machineLabel || node.nodeId}</span>
                 <Badge label={node.health} tone={healthTone(node.health)} />
-                {isWorktree && <Badge label="worktree" tone="info" title={node.worktreeBranch ? `Worktree branch ${node.worktreeBranch}` : 'Local worktree node'} />}
+                {isWorktree && <Badge label={t('mesh.status.badgeWorktree')} tone="info" title={node.worktreeBranch ? t('mesh.status.badgeWorktreeBranchTitle', { branch: node.worktreeBranch }) : t('mesh.status.badgeWorktreeTitle')} />}
                 {bootstrap?.status && bootstrap.status !== 'ready' && (
-                    <Badge label={`bootstrap ${bootstrap.status}`} tone="warn" title="Worktree bootstrap is still in progress" />
+                    <Badge label={`bootstrap ${bootstrap.status}`} tone="warn" title={t('mesh.status.badgeBootstrapTitle')} />
                 )}
                 {node.connection?.state && node.connection.state !== 'self' && (
-                    <Badge label={node.connection.state} tone={node.connection.state === 'connected' ? 'good' : 'warn'} title="Mesh peer connection state" />
+                    <Badge label={node.connection.state} tone={node.connection.state === 'connected' ? 'good' : 'warn'} title={t('mesh.status.badgeConnectionTitle')} />
                 )}
-                {sessionCount > 0 && <Badge label={`${sessionCount} session${sessionCount === 1 ? '' : 's'}`} tone="default" />}
-                {node.autoFastForwardEligible && <Badge label="fast-forward ready" tone="info" title="Clean, behind upstream — safe for fast-forward" />}
-                {!!staleBuild && <Badge label="stale build" tone="warn" title="Live daemon was built behind workspace HEAD — merged fixes may not be live" />}
+                {sessionCount > 0 && <Badge label={t('mesh.status.badgeSessions', { count: sessionCount })} tone="default" />}
+                {node.autoFastForwardEligible && <Badge label={t('mesh.status.badgeFastForwardReady')} tone="info" title={t('mesh.status.badgeFastForwardReadyTitle')} />}
+                {!!staleBuild && <Badge label={t('mesh.status.badgeStaleBuild')} tone="warn" title={t('mesh.status.badgeStaleBuildTitle')} />}
                 {buildChipLabel && <Badge label={buildChipLabel} tone={staleBuild || deployLag ? 'warn' : 'default'} title="Daemon build (version@commit) reported by this node — the running daemon's actual code identity" />}
-                {deployLag && <Badge label={`deploy-lag vs main@${shortCommit(mainAnchorCommit)}`} tone="warn" title="Running daemon build commit differs from origin/main — deploy + restart pending for this node" />}
+                {deployLag && <Badge label={`deploy-lag vs main@${shortCommit(mainAnchorCommit)}`} tone="warn" title={t('mesh.status.badgeDeployLagTitle')} />}
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
+            {healthIssue && (
+                <div className={`mt-1.5 truncate text-[11px] ${meshTheme.isDark ? 'text-amber-200/85' : 'text-amber-700'}`} title={healthIssue}>
+                    {healthIssue}
+                </div>
+            )}
             {providerVersionEntries.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {providerVersionEntries.map(([provider, version]) => (

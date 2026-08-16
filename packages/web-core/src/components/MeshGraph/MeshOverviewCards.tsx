@@ -25,6 +25,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
+import { sessionElapsedLabel, sessionRoleLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
 /**
  * MeshOverviewCards — the text/card "Overview" surface for a mesh. This is the
@@ -66,6 +67,9 @@ type AsyncRefineJob = {
     into?: string
     completedAt?: string
     startedAt?: string
+    /** Last refine lifecycle event/ledger kind — the failure code on failed jobs. */
+    lastEvent?: string
+    lastLedgerKind?: string
 }
 
 const EMPTY_LEDGER_SUMMARY: RepoMeshLedgerSummaryStatus = {
@@ -447,9 +451,11 @@ function EmptyHint({ meshTheme, children }: { meshTheme: MeshGraphTheme; childre
  * button so the click target opens the shared detail modal — consistent across
  * Mission / Ledger / Queue / Session cards.
  */
-function ListRow({ meshTheme, onClick, children }: {
+function ListRow({ meshTheme, onClick, dimmed, children }: {
     meshTheme: MeshGraphTheme
     onClick?: () => void
+    /** Visually mute the whole row (e.g. a mission with no tasks attached). */
+    dimmed?: boolean
     children: React.ReactNode
 }) {
     const dk = meshTheme.isDark
@@ -459,7 +465,7 @@ function ListRow({ meshTheme, onClick, children }: {
             type="button"
             onClick={onClick}
             disabled={!onClick}
-            className={`flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-1.5 py-1 text-left text-xs transition ${hover} ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
+            className={`flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-1.5 py-1 text-left text-xs transition ${hover} ${onClick ? 'cursor-pointer' : 'cursor-default'} ${dimmed ? 'opacity-55' : ''}`}
         >
             {children}
         </button>
@@ -884,11 +890,14 @@ function MissionRow({ meshTheme, mission, onSelect }: {
 }) {
     const t = mission.tasks
     const lastActivity = relativeTime(t.lastActivityAt)
+    // A mission with zero attached tasks carries no progress signal — mute the
+    // whole row so the ones with real work stand out.
+    const muted = t.total === 0
     return (
-        <ListRow meshTheme={meshTheme} onClick={onSelect}>
+        <ListRow meshTheme={meshTheme} onClick={onSelect} dimmed={muted}>
             <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
-            <span className={`min-w-0 flex-1 truncate font-medium ${meshTheme.textPrimary}`}>{mission.title}</span>
-            <span className={`shrink-0 tabular-nums text-[11px] ${meshTheme.textMuted}`}>✓{t.completed}/{t.total}</span>
+            <span className={`min-w-0 flex-1 truncate font-medium ${muted ? meshTheme.textSecondary : meshTheme.textPrimary}`}>{mission.title}</span>
+            {t.total > 0 && <span className={`shrink-0 tabular-nums text-[11px] ${meshTheme.textMuted}`}>✓{t.completed}/{t.total}</span>}
             {lastActivity && <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{lastActivity}</span>}
         </ListRow>
     )
@@ -903,15 +912,24 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
 }) {
     const { t } = useTranslation('common')
     const [showHistory, setShowHistory] = useState(false)
+    const [showPaused, setShowPaused] = useState(false)
     const dk = meshTheme.isDark
-    const live = useRecentList(liveMissions)
+    // Active missions are the working set; paused ones fold behind a disclosure
+    // (mirroring the completed/abandoned history) so a long paused backlog does
+    // not bury the live work. When NOTHING is active, paused missions show
+    // inline — an all-paused mesh would otherwise render as deceptively empty.
+    const activeMissions = useMemo(() => liveMissions.filter(m => m.status === 'active'), [liveMissions])
+    const pausedMissions = useMemo(() => liveMissions.filter(m => m.status !== 'active'), [liveMissions])
+    const inlineMissions = activeMissions.length > 0 ? activeMissions : pausedMissions
+    const foldedPaused = activeMissions.length > 0 ? pausedMissions : []
+    const live = useRecentList(inlineMissions)
     return (
         <Card
             meshTheme={meshTheme}
             title={t('mesh.overview.missionCard')}
             count={liveMissions.length || undefined}
         >
-            {liveMissions.length > 0 ? (
+            {inlineMissions.length > 0 ? (
                 <div className="flex flex-col gap-0.5">
                     {live.visible.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
                     <MoreToggle meshTheme={meshTheme} expanded={live.expanded} hiddenCount={live.hiddenCount} onToggle={live.toggle} />
@@ -922,6 +940,25 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
                         ? t('mesh.overview.noActiveMissions')
                         : t('mesh.overview.missionDataUnavailable')}
                 </EmptyHint>
+            )}
+
+            {foldedPaused.length > 0 && (
+                <div className={`mt-3 border-t pt-2 ${dk ? 'border-white/8' : 'border-slate-200'}`}>
+                    <button
+                        type="button"
+                        onClick={() => setShowPaused(v => !v)}
+                        className={`flex w-full items-center gap-1.5 text-[11px] font-medium ${meshTheme.textSecondary}`}
+                    >
+                        <span className={`inline-block transition-transform ${showPaused ? 'rotate-90' : ''}`}>▸</span>
+                        <span>{t('mesh.overview.pausedMissions')}</span>
+                        <span className={`tabular-nums ${meshTheme.textMuted}`}>{foldedPaused.length}</span>
+                    </button>
+                    {showPaused && (
+                        <div className="mt-2 flex flex-col gap-0.5">
+                            {foldedPaused.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
+                        </div>
+                    )}
+                </div>
             )}
 
             {historyMissions.length > 0 && (
@@ -961,7 +998,13 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
     const recent = useMemo(() => [...entries].reverse(), [entries])
     const list = useRecentList(recent)
     return (
-        <Card meshTheme={meshTheme} title={t('mesh.overview.ledgerCard')}>
+        <Card
+            meshTheme={meshTheme}
+            title={t('mesh.overview.ledgerCard')}
+            // The tiles are ALL-TIME ledger totals, not current state — without
+            // this caption "78 stalled" reads as 78 tasks stuck right now.
+            action={<span className={`text-[10px] ${meshTheme.textMuted}`}>{t('mesh.overview.ledgerAllTime')}</span>}
+        >
             <div className="grid grid-cols-3 gap-1.5">
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statDispatched')} value={ledgerSummary.taskDispatched} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCompleted')} value={ledgerSummary.taskCompleted} tone="emerald" />
@@ -1114,10 +1157,20 @@ function SessionsCard({ meshTheme, entries, onSelect }: {
                 <div className="flex flex-col gap-0.5">
                     {list.visible.map(({ node, session }) => {
                         const label = sessionStatusLabel(session)
+                        // Where + who, not a raw session id: the machine (with worktree
+                        // branch when applicable), the session's mesh role, provider and
+                        // age. The raw id stays available in the row tooltip / detail.
+                        const machine = node.machineLabel || node.nodeId.slice(0, 12)
+                        const branch = node.isLocalWorktree && node.worktreeBranch ? ` · ${node.worktreeBranch}` : ''
+                        const elapsed = sessionElapsedLabel(session)
                         return (
                             <ListRow key={session.sessionId} meshTheme={meshTheme} onClick={() => onSelect(node, session)}>
-                                <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`}>{shortSessionId(session.sessionId)}</span>
+                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={session.sessionId}>
+                                    {machine}{branch}
+                                </span>
+                                <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{sessionRoleLabel(session)}</span>
                                 <span className={`shrink-0 ${meshTheme.textMuted}`}>{session.providerType || '?'}</span>
+                                {!elapsed.includes('not reported') && <span className={`shrink-0 text-[10px] tabular-nums ${meshTheme.textMuted}`}>{elapsed}</span>}
                                 <StatusBadge meshTheme={meshTheme} label={label} tone={sessionStatusTone(label)} />
                             </ListRow>
                         )
@@ -1144,18 +1197,31 @@ function RefineJobsCard({ meshTheme, jobs }: { meshTheme: MeshGraphTheme; jobs: 
                 <EmptyHint meshTheme={meshTheme}>{t('mesh.overview.noRefineJobs')}</EmptyHint>
             ) : (
                 <div className="flex flex-col gap-1">
-                    {jobs.slice(0, 8).map(job => (
-                        <div key={job.jobId} className="flex items-center gap-2 text-xs">
-                            <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`}>
-                                {job.branch ?? job.jobId.slice(0, 14)}{job.into ? ` → ${job.into}` : ''}
-                            </span>
-                            <span className={`shrink-0 text-[10px] font-semibold ${
-                                job.status === 'failed' ? (dk ? 'text-rose-300' : 'text-rose-600')
-                                : job.status === 'running' || job.status === 'accepted' ? (dk ? 'text-sky-300' : 'text-sky-600')
-                                : (dk ? 'text-emerald-300' : 'text-emerald-600')
-                            }`}>{job.status}</span>
-                        </div>
-                    ))}
+                    {jobs.slice(0, 8).map(job => {
+                        // Failed jobs surface WHY inline — the last lifecycle event carries
+                        // the failure code (e.g. patch_equivalence_failed) that otherwise
+                        // required digging through mesh_task_history.
+                        const failureReason = job.status === 'failed' ? (job.lastEvent || job.lastLedgerKind || '') : ''
+                        return (
+                            <div key={job.jobId} className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2 text-xs">
+                                    <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`}>
+                                        {job.branch ?? job.jobId.slice(0, 14)}{job.into ? ` → ${job.into}` : ''}
+                                    </span>
+                                    <span className={`shrink-0 text-[10px] font-semibold ${
+                                        job.status === 'failed' ? (dk ? 'text-rose-300' : 'text-rose-600')
+                                        : job.status === 'running' || job.status === 'accepted' ? (dk ? 'text-sky-300' : 'text-sky-600')
+                                        : (dk ? 'text-emerald-300' : 'text-emerald-600')
+                                    }`}>{job.status}</span>
+                                </div>
+                                {failureReason && (
+                                    <div className={`truncate pl-1 text-[10px] ${dk ? 'text-rose-200/80' : 'text-rose-600/90'}`} title={failureReason}>
+                                        {failureReason}
+                                    </div>
+                                )}
+                            </div>
+                        )
+                    })}
                 </div>
             )}
         </Card>

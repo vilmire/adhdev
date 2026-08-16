@@ -81,6 +81,9 @@ interface MeshObservabilitySurfaceProps {
     /** When true, the surface does not render its own tab/help control row — the
      *  parent is rendering the controls (via MeshSurfaceTabControls) elsewhere. */
     hideControls?: boolean
+    /** Host-owned status reload — called after queue mutations (task cancel/requeue)
+     *  so the surface reflects the change without waiting for a manual Refresh. */
+    onRequestRefresh?: () => void
 }
 
 /**
@@ -164,6 +167,7 @@ export default function MeshObservabilitySurface({
     helpOpen: controlledHelpOpen,
     onHelpOpenChange,
     hideControls = false,
+    onRequestRefresh,
 }: MeshObservabilitySurfaceProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -504,7 +508,21 @@ export default function MeshObservabilitySurface({
                         // CONCRETE height — a percentage height through the flex chain
                         // resolves to 0 when the card only has a min-height.
                         <div className="absolute inset-0">
-                            <MeshTasksView tasks={queueTasks} status={canonicalStatus} />
+                            <MeshTasksView
+                                tasks={queueTasks}
+                                status={canonicalStatus}
+                                daemonId={daemonId}
+                                sendDaemonCommand={sendDaemonCommand}
+                                onQueueMutated={onRequestRefresh}
+                                onFocusNode={nodeId => {
+                                    // Jump to the node's detail on the graph tab — the graph
+                                    // node id IS the mesh nodeId (mesh-visualization).
+                                    setActiveTab('graph')
+                                    setSelectedNodeId(nodeId)
+                                    setSelectedEdgeId(null)
+                                    setDetailSelection({ kind: 'node', nodeId })
+                                }}
+                            />
                         </div>
                     ) : (
                         <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('meshGraph.obs.loadingGraph')}</div>

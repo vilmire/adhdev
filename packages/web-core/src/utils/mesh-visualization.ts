@@ -1003,7 +1003,19 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                     label: 'detached',
                     direction: 'undirected',
                 })
+                continue
             }
+            // Branch-less member (typically a remote machine with no live git
+            // truth yet): still a MEMBER of this mesh, so anchor it to the
+            // default-branch node instead of letting it float unconnected at
+            // the layout edge — floating cards read as unrelated to the graph.
+            edges.push({
+                id: `${defaultBranchNodeId}--${node.id}`,
+                source: defaultBranchNodeId,
+                target: node.id,
+                type: 'parentBranch',
+                direction: 'undirected',
+            })
         }
     }
 

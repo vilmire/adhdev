@@ -878,7 +878,10 @@
             "loadFailed": "Failed to load operating notes.",
             "saveFailed": "Failed to save the operating note.",
             "deleteFailed": "Failed to delete the operating note.",
-            "editFailed": "Failed to update the operating note."
+            "editFailed": "Failed to update the operating note.",
+            "showMore": "Show more",
+            "showLess": "Show less",
+            "pinned": "pinned"
         },
         "dialog": {
             "kicker": "Mesh observability",
@@ -934,7 +937,14 @@
                 "paused": "paused",
                 "completed": "completed",
                 "abandoned": "abandoned"
-            }
+            },
+            "actionRequeue": "Requeue",
+            "actionCancel": "Cancel task",
+            "actionConfirm": "Click again to confirm",
+            "actionViewNode": "View node",
+            "actionFailed": "Queue action failed",
+            "showGoal": "Show mission goal",
+            "hideGoal": "Hide mission goal"
         }
     },
     "repoMesh": {
@@ -2545,7 +2555,25 @@
             "machinesQuota": "Machines — plan quota",
             "machineNotReporting": "This machine has not reported runtime facts yet — it is offline or unreachable, so its plan quota is unknown.",
             "quotaClaudeSetupHint": "Claude Code has no quota API — ADHDev reads it from your statusLine. `adhdev quota claude:install` wraps your existing one (it keeps working) and claude:uninstall restores it.",
-            "quotaAccountHint": "The signed-in account this quota belongs to, as reported by the provider CLI"
+            "quotaAccountHint": "The signed-in account this quota belongs to, as reported by the provider CLI",
+            "healthNotGitRepo": "Workspace is not a git repository",
+            "healthProbePending": "Waiting for the first git probe from this peer",
+            "healthPeerConnection": "Peer connection is {{state}} — no live report",
+            "healthNoLiveReport": "No live runtime report from this node yet",
+            "badgeWorktree": "worktree",
+            "badgeWorktreeTitle": "Local worktree node",
+            "badgeWorktreeBranchTitle": "Worktree branch {{branch}}",
+            "badgeBootstrapTitle": "Worktree bootstrap is still in progress",
+            "badgeConnectionTitle": "Mesh peer connection state",
+            "badgeSessions_one": "{{count}} session",
+            "badgeSessions_other": "{{count}} sessions",
+            "badgeFastForwardReady": "fast-forward ready",
+            "badgeFastForwardReadyTitle": "Clean, behind upstream — safe for fast-forward",
+            "badgeStaleBuild": "stale build",
+            "badgeStaleBuildTitle": "Live daemon was built behind workspace HEAD — merged fixes may not be live",
+            "badgeDeployLagTitle": "Running daemon build commit differs from origin/main — deploy + restart pending for this node",
+            "machinesNotReporting_one": "{{count}} machine not reporting yet: {{machines}}",
+            "machinesNotReporting_other": "{{count}} machines not reporting yet: {{machines}}"
         },
         "overview": {
             "missionCard": "Missions",
@@ -2623,7 +2651,9 @@
             "routingRequiredTags": "Required tags",
             "routingTagsUnsatisfied": "unsatisfied",
             "routingSkipped": "Skipped candidates",
-            "routingSkippedMore": "+{{count}} more"
+            "routingSkippedMore": "+{{count}} more",
+            "pausedMissions": "Paused missions",
+            "ledgerAllTime": "all-time totals"
         }
     },
     "machine": {

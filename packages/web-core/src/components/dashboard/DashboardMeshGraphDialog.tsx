@@ -245,6 +245,22 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [onClose])
 
+    // Periodic refresh while the dialog stays open: the mesh keeps moving
+    // (tasks complete, sessions launch) but the dialog only loaded on open +
+    // manual Refresh, so watching an in-flight mission meant hammering the
+    // button. Every tick runs the LIGHT path (isAutoRetry=true → 'interactive'
+    // probe profile, held-state truth, no blocking peer-git fan-out) and skips
+    // entirely while the tab is hidden or a load is already in flight.
+    useEffect(() => {
+        const AUTO_REFRESH_MS = 45_000
+        const timer = window.setInterval(() => {
+            if (document.hidden) return
+            if (loadInFlightRef.current) return
+            void loadGraph(true, true)
+        }, AUTO_REFRESH_MS)
+        return () => window.clearInterval(timer)
+    }, [loadGraph])
+
     const detailLabel = meshStatus?.meshName || meshId || 'Repo Mesh'
     const extraLiveSessions = useMemo(
         () => activeConversationLiveSession ? [activeConversationLiveSession] : [],
@@ -370,6 +386,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             helpOpen={helpOpen}
                             onHelpOpenChange={setHelpOpen}
                             hideControls
+                            onRequestRefresh={() => { void loadGraph(true) }}
                         />
                     ) : (
                         <div className={meshTheme.dialogEmptyClass}>

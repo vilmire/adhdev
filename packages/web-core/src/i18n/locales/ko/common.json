@@ -878,7 +878,10 @@
             "loadFailed": "운영 노트를 불러오지 못했습니다.",
             "saveFailed": "운영 노트를 저장하지 못했습니다.",
             "deleteFailed": "운영 노트를 삭제하지 못했습니다.",
-            "editFailed": "운영 노트를 수정하지 못했습니다."
+            "editFailed": "운영 노트를 수정하지 못했습니다.",
+            "showMore": "더 보기",
+            "showLess": "접기",
+            "pinned": "고정됨"
         },
         "dialog": {
             "kicker": "Mesh 관측",
@@ -934,7 +937,14 @@
                 "paused": "일시정지",
                 "completed": "완료",
                 "abandoned": "중단"
-            }
+            },
+            "actionRequeue": "재큐",
+            "actionCancel": "태스크 취소",
+            "actionConfirm": "한 번 더 클릭하면 실행",
+            "actionViewNode": "노드 보기",
+            "actionFailed": "큐 작업이 실패했습니다",
+            "showGoal": "미션 목표 보기",
+            "hideGoal": "미션 목표 접기"
         }
     },
     "repoMesh": {
@@ -2545,7 +2555,25 @@
             "machinesQuota": "머신 — 플랜 사용량",
             "machineNotReporting": "이 머신은 아직 런타임 정보를 보고하지 않았습니다 — 오프라인이거나 연결되지 않아 플랜 사용량을 알 수 없습니다.",
             "quotaClaudeSetupHint": "Claude Code 에는 사용량 API 가 없어 ADHDev 가 statusLine 에서 읽습니다. `adhdev quota claude:install` 이 기존 statusline 을 감싸 그대로 유지하며, claude:uninstall 로 복원합니다.",
-            "quotaAccountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값"
+            "quotaAccountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값",
+            "healthNotGitRepo": "워크스페이스가 git 저장소가 아닙니다",
+            "healthProbePending": "이 피어의 첫 git 프로브를 기다리는 중",
+            "healthPeerConnection": "피어 연결 상태 {{state}} — 라이브 보고 없음",
+            "healthNoLiveReport": "이 노드의 라이브 런타임 보고가 아직 없습니다",
+            "badgeWorktree": "워크트리",
+            "badgeWorktreeTitle": "로컬 워크트리 노드",
+            "badgeWorktreeBranchTitle": "워크트리 브랜치 {{branch}}",
+            "badgeBootstrapTitle": "워크트리 부트스트랩 진행 중",
+            "badgeConnectionTitle": "메시 피어 연결 상태",
+            "badgeSessions_one": "세션 {{count}}개",
+            "badgeSessions_other": "세션 {{count}}개",
+            "badgeFastForwardReady": "fast-forward 가능",
+            "badgeFastForwardReadyTitle": "클린 + upstream 뒤처짐 — fast-forward 안전",
+            "badgeStaleBuild": "낡은 빌드",
+            "badgeStaleBuildTitle": "라이브 데몬이 워크스페이스 HEAD 이전 빌드 — 머지된 수정이 반영 안 됐을 수 있음",
+            "badgeDeployLagTitle": "실행 중 데몬 빌드가 origin/main과 다름 — 이 노드는 배포+재시작 대기",
+            "machinesNotReporting_one": "미보고 머신 {{count}}대: {{machines}}",
+            "machinesNotReporting_other": "미보고 머신 {{count}}대: {{machines}}"
         },
         "overview": {
             "missionCard": "미션",
@@ -2623,7 +2651,9 @@
             "routingRequiredTags": "필수 태그",
             "routingTagsUnsatisfied": "미충족",
             "routingSkipped": "건너뛴 후보",
-            "routingSkippedMore": "외 {{count}}개"
+            "routingSkippedMore": "외 {{count}}개",
+            "pausedMissions": "일시정지된 미션",
+            "ledgerAllTime": "전체 기간 누계"
         }
     },
     "machine": {

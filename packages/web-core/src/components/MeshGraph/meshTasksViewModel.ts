@@ -29,6 +29,8 @@ export interface MissionTaskGroup {
     title: string | null
     /** Mission lifecycle status when known (active/paused/completed/abandoned). */
     missionStatus: string | null
+    /** Mission goal text (full or slim preview, whichever the payload carries). */
+    goal: string | null
     /** Scoped tasks, display-ordered: running → queued → failed → done → cancelled. */
     tasks: RepoMeshQueueTask[]
     counts: MissionTaskCounts
@@ -86,13 +88,19 @@ function countTasks(tasks: RepoMeshQueueTask[]): MissionTaskCounts {
 }
 
 /** Missions list from the status payload (slim or full summaries), by id. */
-function missionInfoById(status: Pick<RepoMeshStatus, 'missions'> | null | undefined): Map<string, { title: string; status: string }> {
-    const out = new Map<string, { title: string; status: string }>()
+function missionInfoById(status: Pick<RepoMeshStatus, 'missions'> | null | undefined): Map<string, { title: string; status: string; goal: string }> {
+    const out = new Map<string, { title: string; status: string; goal: string }>()
     for (const mission of status?.missions ?? []) {
         if (!mission || typeof mission.id !== 'string' || !mission.id) continue
+        // Compact payloads carry goalPreview instead of goal (slim summaries).
+        const anyMission = mission as { goal?: unknown; goalPreview?: unknown }
+        const goal = typeof anyMission.goal === 'string' && anyMission.goal
+            ? anyMission.goal
+            : typeof anyMission.goalPreview === 'string' ? anyMission.goalPreview : ''
         out.set(mission.id, {
             title: typeof mission.title === 'string' ? mission.title : '',
             status: typeof mission.status === 'string' ? mission.status : '',
+            goal,
         })
     }
     return out
@@ -139,6 +147,7 @@ export function buildMeshTasksView(
             missionId,
             title: info?.title || null,
             missionStatus: info?.status || null,
+            goal: info?.goal || null,
             tasks: ordered,
             counts: countTasks(groupTasks),
             hasDependencies,

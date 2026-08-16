@@ -52,6 +52,7 @@ import {
 } from './meshGraphLayout'
 import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './meshGraphMemo'
 import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../utils/mesh-visualization'
+import { sessionElapsedLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { IconGitBranch } from '../Icons'
 
 /** Dense graph threshold: above this node count, switch to compact card mode */
@@ -545,9 +546,10 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 <Handle type="target" position={direction === 'TB' ? Position.Top : Position.Left} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
                 <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0 flex-1">
-                        <div className={`truncate text-xs font-semibold leading-4 ${meshTheme.textPrimary}`}>{node.label}</div>
+                        {/* Truncated labels get the full name as a hover tooltip. */}
+                        <div className={`truncate text-xs font-semibold leading-4 ${meshTheme.textPrimary}`} title={node.label}>{node.label}</div>
                         {!isDefaultBranchNode && (
-                            <div className={`truncate text-[10px] leading-3.5 ${meshTheme.textMuted}`}>{subtitle}</div>
+                            <div className={`truncate text-[10px] leading-3.5 ${meshTheme.textMuted}`} title={subtitle}>{subtitle}</div>
                         )}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -603,9 +605,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                         {formatSessionStatusLabel(session)}
                                     </span>
                                 </div>
+                                {/* Role + age — the raw session id says nothing at a glance
+                                    and stays available in the tooltip above. */}
                                 <div className={`mt-0.5 flex min-w-0 items-center gap-1.5 text-[8px] ${meshTheme.textMuted}`}>
-                                    <span className="min-w-0 truncate font-mono">{shortSessionId(session.sessionId)}</span>
                                     <span className="shrink-0">{getSessionRoleLabel(session)}</span>
+                                    <span className="min-w-0 truncate tabular-nums">{sessionElapsedLabel(session).includes('not reported') ? '' : sessionElapsedLabel(session)}</span>
                                 </div>
                             </div>
                         ))}

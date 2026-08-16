@@ -2,6 +2,7 @@ import { useCallback, useContext, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MeshGraphThemeContext } from './meshSurfaceTheme'
 import { Badge } from './meshSurfacePrimitives'
+import { stripMarkdownSyntax } from '../../../utils/queue-task-label'
 
 // ─── Notes tab ───────────────────────────────────────────────────────────────
 // Manual CRUD for coordinator operating notes (runtime-accumulated lessons:
@@ -21,7 +22,12 @@ interface OperatingNote {
     category?: string
     createdAt?: string
     sourceCoordinator?: string
+    /** Pinned notes always ride into the coordinator prompt — surfaced as a badge. */
+    pinned?: boolean
 }
+
+/** Above this display length a note renders collapsed to a preview first. */
+const NOTE_PREVIEW_CHAR_LIMIT = 240
 
 // Distinct badge tone per category so the three lesson kinds read apart at a glance.
 const CATEGORY_TONE: Record<NoteCategory, 'warn' | 'danger' | 'good'> = {
@@ -61,9 +67,14 @@ export function MeshNotesTab({
     const [error, setError] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
 
-    // Add form
+    // Add form — collapsed behind a button by default: the tab's primary use is
+    // READING accumulated lessons; composing a new one is the rare action.
+    const [addOpen, setAddOpen] = useState(false)
     const [draftText, setDraftText] = useState('')
     const [draftCategory, setDraftCategory] = useState<NoteCategory | ''>('')
+
+    // Per-note expand state (long notes render a preview first).
+    const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(new Set())
 
     // Inline edit
     const [editingId, setEditingId] = useState<string | null>(null)
@@ -119,6 +130,7 @@ export function MeshNotesTab({
             }
             setDraftText('')
             setDraftCategory('')
+            setAddOpen(false)
             await loadNotes()
         } catch (e) {
             setError(e instanceof Error ? e.message : t('meshGraph.notes.saveFailed'))
@@ -210,38 +222,59 @@ export function MeshNotesTab({
 
     return (
         <div className="flex flex-col gap-3">
-            {/* Add form */}
-            <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
-                <div className={`mb-2 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('meshGraph.notes.addTitle')}</div>
-                <textarea
-                    value={draftText}
-                    onChange={e => setDraftText(e.target.value)}
-                    rows={2}
-                    placeholder={t('meshGraph.notes.textPlaceholder')}
-                    className={textInputClass}
-                />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <select
-                        value={draftCategory}
-                        onChange={e => setDraftCategory(e.target.value as NoteCategory | '')}
-                        className={categorySelectClass}
-                        aria-label={t('meshGraph.notes.categoryLabel')}
-                    >
-                        <option value="">{t('meshGraph.notes.categoryUncategorized')}</option>
-                        {NOTE_CATEGORIES.map(c => (
-                            <option key={c} value={c}>{categoryLabel(t, c)}</option>
-                        ))}
-                    </select>
+            {/* Add form — a single button until the operator actually wants to write. */}
+            {!addOpen ? (
+                <div>
                     <button
                         type="button"
-                        onClick={() => { void handleAdd() }}
-                        disabled={busy || !draftText.trim()}
-                        className={actionClass('success')}
+                        onClick={() => setAddOpen(true)}
+                        className={actionClass('info')}
                     >
-                        {t('meshGraph.notes.add')}
+                        + {t('meshGraph.notes.addTitle')}
                     </button>
                 </div>
-            </div>
+            ) : (
+                <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
+                    <div className={`mb-2 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('meshGraph.notes.addTitle')}</div>
+                    <textarea
+                        value={draftText}
+                        onChange={e => setDraftText(e.target.value)}
+                        rows={2}
+                        placeholder={t('meshGraph.notes.textPlaceholder')}
+                        className={textInputClass}
+                        autoFocus
+                    />
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <select
+                            value={draftCategory}
+                            onChange={e => setDraftCategory(e.target.value as NoteCategory | '')}
+                            className={categorySelectClass}
+                            aria-label={t('meshGraph.notes.categoryLabel')}
+                        >
+                            <option value="">{t('meshGraph.notes.categoryUncategorized')}</option>
+                            {NOTE_CATEGORIES.map(c => (
+                                <option key={c} value={c}>{categoryLabel(t, c)}</option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => { void handleAdd() }}
+                            disabled={busy || !draftText.trim()}
+                            className={actionClass('success')}
+                        >
+                            {t('meshGraph.notes.add')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setAddOpen(false)}
+                            disabled={busy}
+                            className={actionClass('default')}
+                        >
+                            {t('meshGraph.notes.cancel')}
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {error && (
                 <div className={meshTheme.isDark ? 'rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100' : 'rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-700'}>
@@ -313,12 +346,41 @@ export function MeshNotesTab({
                                     </div>
                                 ) : (
                                     <>
-                                        <div className={`whitespace-pre-wrap break-words text-sm ${meshTheme.textPrimary}`}>{note.text}</div>
+                                        {/* Display-only markdown strip — the ledger keeps the raw
+                                            text (that is what the coordinator prompt injects and
+                                            what Edit loads); this surface just renders it as plain
+                                            prose. Long notes collapse to a preview first. */}
+                                        {(() => {
+                                            const display = stripMarkdownSyntax(note.text)
+                                            const expanded = expandedNoteIds.has(note.id)
+                                            const needsCollapse = display.length > NOTE_PREVIEW_CHAR_LIMIT
+                                            const shown = !needsCollapse || expanded ? display : `${display.slice(0, NOTE_PREVIEW_CHAR_LIMIT).trimEnd()}…`
+                                            return (
+                                                <>
+                                                    <div className={`whitespace-pre-wrap break-words text-sm ${meshTheme.textPrimary}`}>{shown}</div>
+                                                    {needsCollapse && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setExpandedNoteIds(prev => {
+                                                                const next = new Set(prev)
+                                                                if (next.has(note.id)) next.delete(note.id)
+                                                                else next.add(note.id)
+                                                                return next
+                                                            })}
+                                                            className={`mt-1 text-[11px] font-medium ${meshTheme.isDark ? 'text-sky-300 hover:text-sky-200' : 'text-sky-600 hover:text-sky-700'}`}
+                                                        >
+                                                            {expanded ? t('meshGraph.notes.showLess') : t('meshGraph.notes.showMore')}
+                                                        </button>
+                                                    )}
+                                                </>
+                                            )
+                                        })()}
                                         <div className="mt-1.5 flex flex-wrap items-center gap-2">
                                             <Badge
                                                 label={categoryLabel(t, note.category)}
                                                 tone={NOTE_CATEGORIES.includes(note.category as NoteCategory) ? CATEGORY_TONE[note.category as NoteCategory] : 'default'}
                                             />
+                                            {note.pinned && <Badge label={t('meshGraph.notes.pinned')} tone="info" />}
                                             {formatCreatedAt(note.createdAt) && (
                                                 <span className={`text-[11px] ${meshTheme.textMuted}`}>{formatCreatedAt(note.createdAt)}</span>
                                             )}

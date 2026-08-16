@@ -878,7 +878,10 @@
             "loadFailed": "加载运营笔记失败。",
             "saveFailed": "保存运营笔记失败。",
             "deleteFailed": "删除运营笔记失败。",
-            "editFailed": "更新运营笔记失败。"
+            "editFailed": "更新运营笔记失败。",
+            "showMore": "展开",
+            "showLess": "收起",
+            "pinned": "置顶"
         },
         "dialog": {
             "kicker": "网格可观测性",
@@ -934,7 +937,14 @@
                 "paused": "已暂停",
                 "completed": "已完成",
                 "abandoned": "已放弃"
-            }
+            },
+            "actionRequeue": "重新排队",
+            "actionCancel": "取消任务",
+            "actionConfirm": "再次点击确认",
+            "actionViewNode": "查看节点",
+            "actionFailed": "队列操作失败",
+            "showGoal": "查看任务组目标",
+            "hideGoal": "收起任务组目标"
         }
     },
     "repoMesh": {
@@ -2545,7 +2555,25 @@
             "machinesQuota": "机器 — 套餐用量",
             "machineNotReporting": "该机器尚未上报运行时信息 — 处于离线或无法连接状态，因此套餐用量未知。",
             "quotaClaudeSetupHint": "Claude Code 没有用量 API，ADHDev 从 statusLine 读取。`adhdev quota claude:install` 会包装你现有的 statusline（继续正常工作），claude:uninstall 可还原。",
-            "quotaAccountHint": "该用量所属的登录账号（由提供程序 CLI 上报）"
+            "quotaAccountHint": "该用量所属的登录账号（由提供程序 CLI 上报）",
+            "healthNotGitRepo": "工作区不是 git 仓库",
+            "healthProbePending": "等待该节点的首次 git 探测",
+            "healthPeerConnection": "节点连接状态 {{state}} — 无实时报告",
+            "healthNoLiveReport": "该节点尚无实时运行报告",
+            "badgeWorktree": "worktree",
+            "badgeWorktreeTitle": "本地 worktree 节点",
+            "badgeWorktreeBranchTitle": "worktree 分支 {{branch}}",
+            "badgeBootstrapTitle": "worktree 引导进行中",
+            "badgeConnectionTitle": "网格节点连接状态",
+            "badgeSessions_one": "{{count}} 个会话",
+            "badgeSessions_other": "{{count}} 个会话",
+            "badgeFastForwardReady": "可 fast-forward",
+            "badgeFastForwardReadyTitle": "干净且落后于上游 — fast-forward 安全",
+            "badgeStaleBuild": "旧构建",
+            "badgeStaleBuildTitle": "运行中的守护进程构建早于工作区 HEAD",
+            "badgeDeployLagTitle": "守护进程构建与 origin/main 不同 — 等待部署+重启",
+            "machinesNotReporting_one": "{{count}} 台机器未报告: {{machines}}",
+            "machinesNotReporting_other": "{{count}} 台机器未报告: {{machines}}"
         },
         "overview": {
             "missionCard": "任务",
@@ -2623,7 +2651,9 @@
             "routingRequiredTags": "必需标签",
             "routingTagsUnsatisfied": "未满足",
             "routingSkipped": "跳过的候选",
-            "routingSkippedMore": "另有 {{count}} 个"
+            "routingSkippedMore": "另有 {{count}} 个",
+            "pausedMissions": "已暂停的任务组",
+            "ledgerAllTime": "历史累计"
         }
     },
     "machine": {

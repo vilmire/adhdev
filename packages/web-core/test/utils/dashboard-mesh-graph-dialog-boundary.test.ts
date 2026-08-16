@@ -59,7 +59,16 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).not.toContain('MESH_GRAPH_CONNECTED_BACKGROUND_REFRESH_MS')
     expect(dialogSource).not.toContain('MESH_GRAPH_RECONNECTING_BACKGROUND_REFRESH_MS')
     expect(dialogSource).not.toContain('loadGraph(true, { background: true })')
-    expect(dialogSource).not.toContain('setInterval(')
+    // Periodic refresh while the dialog is open IS allowed — but ONLY on the
+    // light path: the interval must fire loadGraph(true, true) (auto-retry →
+    // 'interactive' probe profile, held-state truth, no blocking peer-git
+    // fan-out) and must skip hidden tabs and in-flight loads. What stays
+    // banned is the old BLOCKING background-refresh class (the constants
+    // above): a settled-profile refresh on a timer stormed daemons with 25s
+    // per-peer fan-outs.
+    expect(dialogSource).toContain('AUTO_REFRESH_MS')
+    expect(dialogSource).toContain('if (document.hidden) return')
+    expect(dialogSource).toContain('if (loadInFlightRef.current) return')
     // The header metadata chip copy is now i18n-wired; assert the translation keys are used.
     expect(dialogSource).toContain("t('meshGraph.dialog.liveMetadata')")
     expect(dialogSource).toContain("t('meshGraph.dialog.metadataUnavailable')")
