@@ -1390,12 +1390,6 @@
         "resumeReview": "Revisa o cambia el espacio de trabajo de destino antes de reanudar el historial guardado."
     },
     "standalone": {
-        "nav": {
-            "dashboard": "Panel",
-            "settings": "Configuración",
-            "docs": "Documentación",
-            "about": "Acerca de"
-        },
         "layout": {
             "expandSidebar": "Expandir barra lateral",
             "collapseSidebar": "Contraer barra lateral",
@@ -1751,17 +1745,6 @@
             }
         },
         "layout": {
-            "navDashboard": "Dashboard",
-            "navBurrows": "Machines",
-            "navNotifications": "Notifications",
-            "navMesh": "Mesh",
-            "navMarketplace": "Marketplace",
-            "navApi": "API",
-            "navWebhooks": "Webhooks",
-            "navAccount": "Account",
-            "navSettings": "Settings",
-            "navDocs": "Docs",
-            "navAbout": "About",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3489,5 +3472,19 @@
             }
         },
         "continueToMesh": "Continuar a Mesh"
+    },
+    "nav": {
+        "dashboard": "Panel",
+        "machines": "Máquinas",
+        "notifications": "Notificaciones",
+        "mesh": "Mesh",
+        "marketplace": "Marketplace",
+        "api": "API",
+        "webhooks": "Webhooks",
+        "account": "Cuenta",
+        "settings": "Ajustes",
+        "docs": "Documentación",
+        "about": "Acerca de",
+        "chats": "Chats"
     }
 }

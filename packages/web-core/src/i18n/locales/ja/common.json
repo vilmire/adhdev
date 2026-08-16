@@ -1385,12 +1385,6 @@
         "resumeReview": "保存済み履歴を再開する前に対象ワークスペースを確認または変更してください。"
     },
     "standalone": {
-        "nav": {
-            "dashboard": "ダッシュボード",
-            "settings": "設定",
-            "docs": "ドキュメント",
-            "about": "概要"
-        },
         "layout": {
             "expandSidebar": "サイドバーを展開",
             "collapseSidebar": "サイドバーを折りたたむ",
@@ -1746,17 +1740,6 @@
             }
         },
         "layout": {
-            "navDashboard": "Dashboard",
-            "navBurrows": "Machines",
-            "navNotifications": "Notifications",
-            "navMesh": "Mesh",
-            "navMarketplace": "Marketplace",
-            "navApi": "API",
-            "navWebhooks": "Webhooks",
-            "navAccount": "Account",
-            "navSettings": "Settings",
-            "navDocs": "Docs",
-            "navAbout": "About",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3484,5 +3467,19 @@
             }
         },
         "continueToMesh": "メッシュへ進む"
+    },
+    "nav": {
+        "dashboard": "ダッシュボード",
+        "machines": "マシン",
+        "notifications": "通知",
+        "mesh": "メッシュ",
+        "marketplace": "マーケットプレイス",
+        "api": "API",
+        "webhooks": "Webhook",
+        "account": "アカウント",
+        "settings": "設定",
+        "docs": "ドキュメント",
+        "about": "情報",
+        "chats": "チャット"
     }
 }

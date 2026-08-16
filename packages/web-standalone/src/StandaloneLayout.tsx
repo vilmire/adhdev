@@ -18,30 +18,30 @@ export default function StandaloneLayout({ children }: LayoutProps) {
     const { t } = useTranslation('common')
 
     const navItems = useMemo<AppShellNavItem[]>(() => ([
-        { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: t('standalone.nav.dashboard'), active: location.pathname.startsWith('/dashboard'), onSelect: () => navigate('/dashboard') },
-        { id: 'machine', path: '/machines', icon: <IconServer />, label: 'Machines', active: location.pathname.startsWith('/machines'), onSelect: () => navigate('/machines') },
+        { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: t('nav.dashboard'), active: location.pathname.startsWith('/dashboard'), onSelect: () => navigate('/dashboard') },
+        { id: 'machine', path: '/machines', icon: <IconServer />, label: t('nav.machines'), active: location.pathname.startsWith('/machines'), onSelect: () => navigate('/machines') },
         // Setup has no nav entry: it is first-run onboarding that ends by handing off
         // to Mesh, which owns every mesh setting from then on. The /setup route stays
         // reachable for deep links and docs.
-        { id: 'mesh', path: '/mesh', icon: <IconMesh />, label: 'Mesh', active: location.pathname.startsWith('/mesh') || location.pathname.startsWith('/setup'), onSelect: () => navigate('/mesh') },
-        { id: 'settings', path: '/settings', icon: <IconSettings />, label: t('standalone.nav.settings'), active: location.pathname.startsWith('/settings'), onSelect: () => navigate('/settings') },
+        { id: 'mesh', path: '/mesh', icon: <IconMesh />, label: t('nav.mesh'), active: location.pathname.startsWith('/mesh') || location.pathname.startsWith('/setup'), onSelect: () => navigate('/mesh') },
+        { id: 'settings', path: '/settings', icon: <IconSettings />, label: t('nav.settings'), active: location.pathname.startsWith('/settings'), onSelect: () => navigate('/settings') },
     ]), [location.pathname, navigate, t])
 
     const footerItems = useMemo<AppShellNavItem[]>(() => ([
         {
             id: 'docs',
-            label: <><span>{t('standalone.nav.docs')}</span><span className="ml-auto text-[9px] text-text-muted">↗</span></>,
+            label: <><span>{t('nav.docs')}</span><span className="ml-auto text-[9px] text-text-muted">↗</span></>,
             icon: <IconBook />,
             onSelect: () => window.open('https://docs.adhf.dev', '_blank'),
-            title: t('standalone.nav.docs'),
+            title: t('nav.docs'),
         },
         {
             id: 'about',
-            label: t('standalone.nav.about'),
+            label: t('nav.about'),
             icon: <IconInfo />,
             active: location.pathname === '/about',
             onSelect: () => navigate('/about'),
-            title: t('standalone.nav.about'),
+            title: t('nav.about'),
         },
     ]), [location.pathname, navigate, t])
 

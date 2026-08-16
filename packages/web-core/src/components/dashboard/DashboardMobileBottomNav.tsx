@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { IconChat, IconMonitor } from '../Icons'
 
 export type DashboardMobileSection = 'machines' | 'chats'
@@ -11,13 +12,16 @@ export default function DashboardMobileBottomNav({
     section,
     onSectionChange,
 }: DashboardMobileBottomNavProps) {
+    const { t } = useTranslation('common')
+    // Shared nav.* namespace — the same labels the sidebar uses, so the
+    // standalone and cloud shells can't drift apart again.
     const items: Array<{
         key: DashboardMobileSection
         label: string
         icon: typeof IconChat
     }> = [
-        { key: 'machines', label: 'Machines', icon: IconMonitor },
-        { key: 'chats', label: 'Chats', icon: IconChat },
+        { key: 'machines', label: t('nav.machines'), icon: IconMonitor },
+        { key: 'chats', label: t('nav.chats'), icon: IconChat },
     ]
 
     return (

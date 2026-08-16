@@ -1385,12 +1385,6 @@
         "resumeReview": "저장된 기록을 재개하기 전에 대상 워크스페이스를 확인하거나 변경하세요."
     },
     "standalone": {
-        "nav": {
-            "dashboard": "대시보드",
-            "settings": "설정",
-            "docs": "문서",
-            "about": "정보"
-        },
         "layout": {
             "expandSidebar": "사이드바 펼치기",
             "collapseSidebar": "사이드바 접기",
@@ -1746,17 +1740,6 @@
             }
         },
         "layout": {
-            "navDashboard": "Dashboard",
-            "navBurrows": "Machines",
-            "navNotifications": "Notifications",
-            "navMesh": "Mesh",
-            "navMarketplace": "Marketplace",
-            "navApi": "API",
-            "navWebhooks": "Webhooks",
-            "navAccount": "Account",
-            "navSettings": "Settings",
-            "navDocs": "Docs",
-            "navAbout": "About",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3481,5 +3464,19 @@
             }
         },
         "continueToMesh": "메시로 이동"
+    },
+    "nav": {
+        "dashboard": "대시보드",
+        "machines": "머신",
+        "notifications": "알림",
+        "mesh": "메시",
+        "marketplace": "마켓플레이스",
+        "api": "API",
+        "webhooks": "웹훅",
+        "account": "계정",
+        "settings": "설정",
+        "docs": "문서",
+        "about": "정보",
+        "chats": "채팅"
     }
 }

@@ -1385,12 +1385,6 @@
         "resumeReview": "Review or change the target workspace before resuming saved history."
     },
     "standalone": {
-        "nav": {
-            "dashboard": "Dashboard",
-            "settings": "Settings",
-            "docs": "Docs",
-            "about": "About"
-        },
         "layout": {
             "expandSidebar": "Expand sidebar",
             "collapseSidebar": "Collapse sidebar",
@@ -1746,17 +1740,6 @@
             }
         },
         "layout": {
-            "navDashboard": "Dashboard",
-            "navBurrows": "Machines",
-            "navNotifications": "Notifications",
-            "navMesh": "Mesh",
-            "navMarketplace": "Marketplace",
-            "navApi": "API",
-            "navWebhooks": "Webhooks",
-            "navAccount": "Account",
-            "navSettings": "Settings",
-            "navDocs": "Docs",
-            "navAbout": "About",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3481,5 +3464,19 @@
             }
         },
         "continueToMesh": "Continue to Mesh"
+    },
+    "nav": {
+        "dashboard": "Dashboard",
+        "machines": "Machines",
+        "notifications": "Notifications",
+        "mesh": "Mesh",
+        "marketplace": "Marketplace",
+        "api": "API",
+        "webhooks": "Webhooks",
+        "account": "Account",
+        "settings": "Settings",
+        "docs": "Docs",
+        "about": "About",
+        "chats": "Chats"
     }
 }

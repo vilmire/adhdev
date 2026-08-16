@@ -1385,12 +1385,6 @@
         "resumeReview": "恢复已保存的历史记录前，请检查或更改目标工作区。"
     },
     "standalone": {
-        "nav": {
-            "dashboard": "仪表板",
-            "settings": "设置",
-            "docs": "文档",
-            "about": "关于"
-        },
         "layout": {
             "expandSidebar": "展开侧边栏",
             "collapseSidebar": "折叠侧边栏",
@@ -1746,17 +1740,6 @@
             }
         },
         "layout": {
-            "navDashboard": "Dashboard",
-            "navBurrows": "Machines",
-            "navNotifications": "Notifications",
-            "navMesh": "Mesh",
-            "navMarketplace": "Marketplace",
-            "navApi": "API",
-            "navWebhooks": "Webhooks",
-            "navAccount": "Account",
-            "navSettings": "Settings",
-            "navDocs": "Docs",
-            "navAbout": "About",
             "adminSection": "Admin",
             "adminOverview": "Overview",
             "adminUsers": "Users",
@@ -3484,5 +3467,19 @@
             }
         },
         "continueToMesh": "前往 Mesh"
+    },
+    "nav": {
+        "dashboard": "仪表板",
+        "machines": "机器",
+        "notifications": "通知",
+        "mesh": "网格",
+        "marketplace": "市场",
+        "api": "API",
+        "webhooks": "Webhook",
+        "account": "账户",
+        "settings": "设置",
+        "docs": "文档",
+        "about": "关于",
+        "chats": "聊天"
     }
 }
