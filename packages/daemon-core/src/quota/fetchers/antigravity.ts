@@ -2,64 +2,117 @@
  * Antigravity CLI (`agy`, Google) quota fetcher.
  *
  * Auth philosophy (see CLAUDE.md): ADHDev does NOT manage provider API keys.
- * We read the OAuth access token the `agy` CLI already wrote to disk and use it
- * for a single authenticated POST. We never refresh, rotate or rewrite
- * `~/.gemini/antigravity-cli/antigravity-oauth-token` — Google's refresh flow
- * can rotate the refresh token, so writing it back from here risks logging out
- * a live `agy` session. When the token has expired we report "cannot query" and
- * let the CLI refresh it on next run (`failureKind: 'expired-token'`, which is
- * TRANSIENT, so the retry scheduler re-reads the file minutes later).
+ * We read the OAuth access token the `agy` CLI already stored and use it for a
+ * single authenticated POST. We NEVER write, refresh, rotate or delete that
+ * credential — Google's refresh flow rotates the refresh token, so writing it
+ * back from here would log out a live `agy` session. When the token has
+ * expired we report "cannot query" and let the CLI refresh it on next run.
  *
- * ★Endpoint provenance — antigravity-cli was previously judged "quota not
- * supportable", so the evidence is recorded here rather than left to be
- * re-derived. The earlier verdict came from reading `agy --help`, which lists
- * no quota subcommand (usage is a TUI view, `UsageModel.renderQuotaGroup` in
- * the binary) — the same `--help`-only mistake that produced the wrong verdict
- * for grok-cli.
+ * ─────────────────────────────────────────────────────────────────────────
+ * ★CREDENTIAL SOURCE — the macOS Keychain, NOT a file.
  *
- * Chain of evidence:
- *   1. The CLI's own logs (`~/.gemini/antigravity-cli/log/cli-*.log`) show a
- *      `quota_manager.go doRefreshQuota` loop and record every backend call it
- *      makes against ONE host: `https://daily-cloudcode-pa.googleapis.com`.
- *   2. The `agy` binary carries the upstream route as a literal —
- *      `/v1internal:retrieveUserQuotaSummary` — next to the generated protobuf
- *      handler `google3/google/internal/cloud/code/v1internal/
- *      v1internal_prediction_service_go_proto._PredictionService_
- *      RetrieveUserQuotaSummary_Handler`.
- *   3. Verified live against the real host: an unauthenticated
- *      `POST /v1internal:retrieveUserQuotaSummary` answers HTTP 401
- *      UNAUTHENTICATED, and the error body names the resolved method
- *      `google.internal.cloud.code.v1internal.PredictionService.
- *      RetrieveUserQuotaSummary`. A deliberately misspelled sibling route
- *      (`…SummaryXYZ`) answers HTTP 404 instead — so the 401 proves this exact
- *      method exists and is JSON-transcoded, not that the host 401s everything.
+ * An earlier version of this fetcher read
+ * `~/.gemini/antigravity-cli/antigravity-oauth-token` and was PERMANENTLY
+ * BROKEN in the field: it reported `expired-token` on every tick while the
+ * CLI itself was happily authenticated. That file is a DEAD FALLBACK. Across
+ * every `agy` session log on the development machine the CLI authenticated
+ * 15/15 times via the keyring (`ChainedAuth: authenticated via keyring
+ * (effective: keyring)`), the file-based path was taken 0 times, and the
+ * file's mtime stayed frozen weeks in the past while the keychain item was
+ * rewritten on every login. `agy` only falls back to the file when a keyring
+ * timeout was recorded or the caller explicitly asks for it.
  *
- * ★NOT verified with a live 200: the only account on this machine has an
- * access token that expired 2026-07-28, and minting a fresh one means spending
- * the refresh token — precisely the write this fetcher refuses to do. So the
- * response MAPPING below is derived from the generated protobuf field
- * descriptors in the binary rather than from an observed body. Those give the
- * JSON names exactly (proto3 JSON uses the `json=` name):
- *   RetrieveUserQuotaSummaryResponse { groups[], buckets[] }
- *   QuotaSummaryGroup  { displayName, description, buckets[] }
- *   QuotaSummaryBucket { bucketId, displayName, description, window,
- *                        resetTime, disabled,
- *                        remainingFraction | remainingAmount }  // oneof
- * Every field is read defensively and any shape we cannot understand degrades
- * to a `parse` failure rather than a fabricated number — see mapQuotaSummary.
+ * The item is a go-keyring generic password:
+ *     service = "gemini", account = "antigravity"
+ * read via `/usr/bin/security find-generic-password` (go-keyring's own macOS
+ * backend shells out to the same binary). Reading it from another process
+ * needs no user interaction — verified: exit 0, no Keychain prompt.
  *
- * Window mapping: Antigravity reports named BUCKETS (per model family / credit
- * pool), not the fixed session+weekly axes other providers use, and the bucket
- * carries its own `window` and `resetTime`. So buckets are reported as
- * `buckets[]`, and `session`/`weekly` are filled only when a bucket's own
- * window duration actually matches that axis — never guessed from bucket order.
- * `remainingFraction` is REMAINING, so usedPercent = (1 - fraction) * 100.
+ * ★The stored blob is NOT plain JSON. go-keyring base64-encodes any value it
+ * cannot store as a clean UTF-8 string and prefixes it with the literal
+ * `go-keyring-base64:`. Decoding that prefix is required; a naive JSON.parse
+ * of the raw blob fails. The decoded payload has the same shape the file used
+ * to have: `{ token: { access_token, token_type, refresh_token, expiry },
+ * auth_method }`, where `expiry` is RFC3339 with an offset (Go time.Time).
+ *
+ * ★PLATFORM SCOPE — darwin only, deliberately.
+ * `agy` on Linux/Windows uses different keyring backends (Secret Service /
+ * Credential Manager). Those were never observed on a real machine here, so
+ * rather than guess at a backend and ship code that fails in some silent or
+ * wrong way, this fetcher reports an explicit `unsupported` on non-darwin.
+ * A wrong number is far worse than an honest "not supported".
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * ★ENDPOINT PROVENANCE — established by RUNTIME OBSERVATION, not symbols.
+ *
+ * antigravity-cli was twice judged "quota not supportable"; both verdicts came
+ * from reading `agy --help`, which lists no quota subcommand because usage is
+ * a TUI view. Recording the real chain of evidence so it is not re-derived:
+ *
+ *   1. `~/.gemini/antigravity-cli/log/cli-*.log` shows a `quota_manager.go
+ *      doRefreshQuota` loop, but NO URL line for the quota call — because
+ *      `http_helpers.go` only logs SOME outbound calls in v1.1.13 (proven:
+ *      `listExperiments` ran 4x and logged 0x in that build, 4/4 in v1.1.11).
+ *      Absence of a URL log is therefore NOT absence of a call.
+ *   2. Driving `agy` through a local CONNECT proxy that REFUSED the
+ *      cloudcode host made the CLI name its own operation:
+ *          `Cache(retrieveUserQuotaSummary): Singleflight refresh failed…`
+ *          `quota_manager.go:57] Failed to retrieve user quota summary…`
+ *      That is runtime proof that doRefreshQuota → retrieveUserQuotaSummary,
+ *      and that it first needs a `loadCodeAssist` response.
+ *   3. Verified live with a real 200 (see the response shape below).
+ *
+ * The backend is SHARED with Gemini Code Assist — `LoadCodeAssist`,
+ * `FetchAvailableModels` and `QuotaSummaryBucket` all live in the same
+ * `google.internal.cloud.code.v1internal` proto package, and gemini-cli
+ * (open source) points at the same `cloudcode-pa` host + `v1internal` scheme.
+ * So this is a Code Assist API, not an Antigravity-private one.
+ *
+ * ★Host: production `cloudcode-pa.googleapis.com`. The `daily-` prefixed host
+ * is Google's STAGING deployment; the dev machine happened to run a build
+ * pinned to it (a known Antigravity bug), and defaulting to staging here would
+ * have inherited that mistake. Both hosts serve the method; the CLI itself
+ * falls back between them.
+ *
+ * ★Request body MUST be `{}`. Verified live: adding `project` or `metadata`
+ * makes the server answer 429/400. The `project` and `forceRefresh` fields
+ * exist on the request proto but are not required, and sending them hurts.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * ★RESPONSE SHAPE — from a real 200, not inferred:
+ *
+ *   { groups: [ { displayName: "Gemini Models",
+ *                 description: "Models within this group: …",
+ *                 buckets: [ { bucketId: "gemini-weekly",
+ *                              displayName: "Weekly Limit Remaining",
+ *                              window: "weekly",
+ *                              resetTime: "2026-08-17T16:28:23Z",
+ *                              description: "…",
+ *                              remainingFraction: 0.9967779 }, … ] }, … ],
+ *     description: "Within each group, models share a weekly limit …" }
+ *
+ * ★`window` is a STRING LABEL ("weekly", "5h") — NOT a proto3 Duration
+ * ("604800s"). An earlier version parsed it as a Duration, which returned null
+ * for every real bucket and left BOTH fixed axes unmapped. Parsing handles the
+ * label form first and still tolerates a Duration, because the field is typed
+ * as one in the generated descriptors even though the server sends a label.
+ *
+ * ★`remainingFraction` is what is LEFT, so usedPercent = (1 - fraction) * 100.
+ * Live sample: 0.9967779 → 0.32% used. Getting this backwards would report an
+ * exhausted plan as untouched, so it is pinned by a test.
+ *
+ * ★Two shapes from ONE endpoint: the response proto carries both `groups` and
+ * a top-level `buckets`, and the legacy sibling `retrieveUserQuota` returns the
+ * flat form (`{buckets:[{tokenType,modelId,remainingFraction,resetTime}]}` —
+ * also verified live). Both are parsed; flat buckets are named from
+ * `modelId`/`tokenType` so they never collapse into an anonymous row.
+ *
+ * ★`remainingAmount` may be ABSENT at full quota while `remainingFraction` is
+ * still present (gemini-cli issue #27363). Keying on the fraction avoids that
+ * trap; a bucket with only an amount and no total cannot yield a percentage
+ * and is dropped rather than shown as 0% used.
  */
 'use strict';
-
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 
 import {
     SESSION_WINDOW_MINUTES,
@@ -70,24 +123,22 @@ import {
     type QuotaBucket,
     type QuotaWindow,
 } from '../types.js';
-import type { QuotaFetchDeps } from './deps.js';
+import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 
-const DEFAULT_BASE_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal';
+/** Production Cloud Code host. `daily-` is Google's staging deployment. */
+const DEFAULT_BASE_URL = 'https://cloudcode-pa.googleapis.com/v1internal';
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Refuse to spend a token that expires mid-flight. */
 const EXPIRY_SKEW_MS = 5_000;
+/** Keychain lookup must never hang a refresh tick. */
+const KEYCHAIN_TIMEOUT_MS = 5_000;
 
-function antigravityHome(env: NodeJS.ProcessEnv): string {
-    const override = env.ANTIGRAVITY_CLI_HOME?.trim();
-    return override ? override : path.join(os.homedir(), '.gemini', 'antigravity-cli');
-}
+/** go-keyring's marker for a base64-encoded secret. */
+const GO_KEYRING_BASE64_PREFIX = 'go-keyring-base64:';
 
-/** `ANTIGRAVITY_OAUTH_TOKEN_PATH` points at the file; `ANTIGRAVITY_CLI_HOME` at its dir. */
-function tokenPath(env: NodeJS.ProcessEnv): string {
-    const direct = env.ANTIGRAVITY_OAUTH_TOKEN_PATH?.trim();
-    return direct ? direct : path.join(antigravityHome(env), 'antigravity-oauth-token');
-}
+const KEYCHAIN_SERVICE = 'gemini';
+const KEYCHAIN_ACCOUNT = 'antigravity';
 
 function baseUrl(env: NodeJS.ProcessEnv): string {
     const override = env.ANTIGRAVITY_CLOUDCODE_BASE_URL?.trim();
@@ -96,44 +147,122 @@ function baseUrl(env: NodeJS.ProcessEnv): string {
 
 interface AntigravityCredentials {
     accessToken: string;
-    /** Unix ms, or null when the file records no parseable expiry. */
+    /** Unix ms, or null when the payload records no parseable expiry. */
     expiresAtMs: number | null;
+    /** `consumer` for a personal plan; business accounts use another API. */
+    authMethod: string | null;
 }
 
 type CredentialsResult =
     | { kind: 'ok'; credentials: AntigravityCredentials }
     | { kind: 'missing' }
+    | { kind: 'unsupported-platform' }
     | { kind: 'invalid'; reason: string };
 
 /**
- * `antigravity-oauth-token` is a single JSON object:
- *   { token: { access_token, token_type: "Bearer", refresh_token,
- *              expiry: "2026-07-28T21:30:05.171451+09:00" },
- *     id_token, auth_method: "consumer" }
- * `expiry` is RFC3339 with an offset (Go's `time.Time` marshalling), NOT the
- * unix-seconds form kimi uses — parsing it as a number would silently treat
- * every token as having no expiry.
+ * Read the raw keychain blob via `/usr/bin/security` — the same binary
+ * go-keyring's macOS backend shells out to, so this reads exactly what `agy`
+ * wrote. READ ONLY: `find-generic-password` cannot modify the item.
+ *
+ * Resolves to null when the item does not exist (`security` exits 44), which
+ * is the ordinary "not signed in" state and not an error worth reporting as
+ * broken. Rejects only on a timeout, so a wedged keychain prompt cannot hang a
+ * refresh tick forever.
+ *
+ * Goes through `deps.spawn` rather than importing child_process directly so
+ * tests can drive every branch without touching a real keychain — the same
+ * injection the codex fetcher uses.
  */
-function parseCredentials(raw: string): CredentialsResult {
+function readKeychainBlob(deps: Required<QuotaFetchDeps>): Promise<string | null> {
+    return new Promise((resolve, reject) => {
+        let child: QuotaChildProcess;
+        try {
+            child = deps.spawn(
+                '/usr/bin/security',
+                ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'],
+                { env: deps.env },
+            );
+        } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+            return;
+        }
+
+        let settled = false;
+        let stdout = '';
+        const finish = (fn: () => void): void => {
+            if (settled) return;
+            settled = true;
+            deps.clearTimeout(timer);
+            fn();
+        };
+
+        const timer = deps.setTimeout(() => {
+            finish(() => {
+                try {
+                    child.kill('SIGKILL');
+                } catch {
+                    // Already gone; nothing to clean up.
+                }
+                reject(new Error('Keychain lookup timed out'));
+            });
+        }, KEYCHAIN_TIMEOUT_MS);
+        if (typeof (timer as { unref?: () => void }).unref === 'function') {
+            (timer as { unref: () => void }).unref();
+        }
+
+        child.stdout.on('data', (chunk) => {
+            stdout += chunk.toString();
+        });
+        // stderr is deliberately drained but not surfaced: `security` writes
+        // "could not be found in the keychain" there for the not-signed-in
+        // case, which is already conveyed by the exit code.
+        child.stderr.on('data', () => {});
+        child.on('error', (err) => finish(() => reject(err)));
+        child.on('exit', (code) => {
+            finish(() => resolve(code === 0 ? stdout.trim() : null));
+        });
+    });
+}
+
+/**
+ * Decode a go-keyring secret. The `go-keyring-base64:` prefix is present
+ * whenever the stored value was not clean UTF-8 — which is the case for this
+ * item — so decoding it is mandatory, not optional.
+ */
+function decodeKeyringSecret(raw: string): string {
+    if (!raw.startsWith(GO_KEYRING_BASE64_PREFIX)) {
+        return raw;
+    }
+    return Buffer.from(raw.slice(GO_KEYRING_BASE64_PREFIX.length), 'base64').toString('utf-8');
+}
+
+/**
+ * Parse the credential payload:
+ *   { token: { access_token, token_type, refresh_token, expiry }, auth_method }
+ * `expiry` is RFC3339 WITH an offset (Go time.Time), e.g.
+ * "2026-08-16T18:58:07.255019+09:00" — NOT unix seconds. Parsing it as a
+ * number would silently treat every token as never-expiring.
+ */
+function parseCredentials(decoded: string): CredentialsResult {
     let parsed: unknown;
     try {
-        parsed = JSON.parse(raw);
+        parsed = JSON.parse(decoded);
     } catch {
-        return { kind: 'invalid', reason: 'Antigravity token file is not valid JSON' };
+        return { kind: 'invalid', reason: 'Antigravity credential is not valid JSON' };
     }
     if (typeof parsed !== 'object' || parsed === null) {
-        return { kind: 'invalid', reason: 'Antigravity token file is not an object' };
+        return { kind: 'invalid', reason: 'Antigravity credential is not an object' };
     }
     const root = parsed as Record<string, unknown>;
-    // Tolerate a flattened file as well as the nested `token` object the CLI
-    // writes today — the shape is the CLI's private detail, not a contract.
+    // Tolerate a flattened payload as well as the nested `token` object seen
+    // today — the layout is the CLI's private detail, not a contract.
     const token = typeof root.token === 'object' && root.token !== null
         ? (root.token as Record<string, unknown>)
         : root;
 
     const accessToken = token.access_token;
     if (typeof accessToken !== 'string' || accessToken.length === 0) {
-        return { kind: 'invalid', reason: 'Antigravity token file has no access token' };
+        return { kind: 'invalid', reason: 'Antigravity credential has no access token' };
     }
 
     const expiryRaw = token.expiry ?? token.expires_at;
@@ -147,22 +276,32 @@ function parseCredentials(raw: string): CredentialsResult {
         expiresAtMs = expiryRaw < 1e11 ? expiryRaw * 1000 : expiryRaw;
     }
 
-    return { kind: 'ok', credentials: { accessToken, expiresAtMs } };
+    const authMethod = typeof root.auth_method === 'string' && root.auth_method.trim() !== ''
+        ? root.auth_method.trim()
+        : null;
+
+    return { kind: 'ok', credentials: { accessToken, expiresAtMs, authMethod } };
 }
 
-function readCredentials(deps: Required<QuotaFetchDeps>): CredentialsResult {
-    const file = tokenPath(deps.env);
-    let raw: string;
-    try {
-        raw = fs.readFileSync(file, 'utf-8');
-    } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-            return { kind: 'missing' };
-        }
-        const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'invalid', reason: `Unable to read Antigravity token file: ${message}` };
+async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<CredentialsResult> {
+    // `ADHDEV_ANTIGRAVITY_PLATFORM` is a test seam so the non-darwin branch is
+    // exercisable from a macOS test run; it is never set in production.
+    const platform = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
+    if (platform !== 'darwin') {
+        return { kind: 'unsupported-platform' };
     }
-    return parseCredentials(raw);
+
+    let raw: string | null;
+    try {
+        raw = await readKeychainBlob(deps);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { kind: 'invalid', reason: `Unable to read the Antigravity credential: ${message}` };
+    }
+    if (raw === null || raw === '') {
+        return { kind: 'missing' };
+    }
+    return parseCredentials(decodeKeyringSecret(raw));
 }
 
 function isExpired(credentials: AntigravityCredentials, nowMs: number): boolean {
@@ -204,28 +343,64 @@ function toResetMs(value: unknown): number | null {
 }
 
 /**
- * `window` is a proto3 Duration, which JSON-encodes as a seconds string with an
- * `s` suffix ("604800s"). Returns minutes, or null when absent/unparseable —
- * a bucket with no window is still reported, just without an axis mapping.
+ * Window length in minutes.
+ *
+ * ★The live server sends a LABEL — "weekly", "5h" — even though the generated
+ * descriptors type this field as a Duration. Label parsing therefore comes
+ * first; the Duration form ("604800s") is still accepted so a server-side
+ * change to the documented type does not break this. Returns null when the
+ * value is absent or unrecognized, in which case the bucket is still reported
+ * but maps to no fixed axis.
  */
 function windowMinutes(value: unknown): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) {
         return value / 60;
     }
-    if (typeof value !== 'string' || value.trim() === '') {
+    if (typeof value !== 'string') {
         return null;
     }
-    const seconds = Number(value.trim().replace(/s$/, ''));
-    return Number.isFinite(seconds) ? seconds / 60 : null;
+    const raw = value.trim().toLowerCase();
+    if (raw === '') {
+        return null;
+    }
+    if (raw === 'weekly' || raw === 'week') {
+        return WEEKLY_WINDOW_MINUTES;
+    }
+    if (raw === 'daily' || raw === 'day') {
+        return 24 * 60;
+    }
+    if (raw === 'monthly' || raw === 'month') {
+        return 30 * 24 * 60;
+    }
+    // "5h" / "90m" / "30s" style labels.
+    const shorthand = /^(\d+(?:\.\d+)?)\s*([hms])$/.exec(raw);
+    if (shorthand) {
+        const amount = Number(shorthand[1]);
+        if (!Number.isFinite(amount)) {
+            return null;
+        }
+        if (shorthand[2] === 'h') return amount * 60;
+        if (shorthand[2] === 'm') return amount;
+        return amount / 60;
+    }
+    // proto3 Duration JSON: seconds with an `s` suffix.
+    const duration = /^(\d+(?:\.\d+)?)s$/.exec(raw);
+    if (duration) {
+        const seconds = Number(duration[1]);
+        return Number.isFinite(seconds) ? seconds / 60 : null;
+    }
+    return null;
 }
 
 /**
- * A bucket's consumed percentage. `remainingFraction` (0..1) and
- * `remainingAmount` are a protobuf `oneof`, so at most one is present, and BOTH
- * express what is LEFT — hence the inversion. `remainingAmount` alone cannot
- * produce a percentage (no total is reported), so it yields null rather than a
- * made-up denominator; such a bucket is dropped instead of shown as 0% used,
- * which would claim full headroom.
+ * A bucket's consumed percentage.
+ *
+ * `remainingFraction` (0..1) and `remainingAmount` are a protobuf `oneof`
+ * named `remaining`; proto3 JSON serializes oneof members FLAT, so the wire
+ * key is `remainingFraction`, never a nested `remaining` object. Both express
+ * what is LEFT, hence the inversion. `remainingAmount` alone cannot produce a
+ * percentage (no total is reported), so it yields null and the bucket is
+ * dropped rather than shown as 0% used, which would claim full headroom.
  */
 function bucketUsedPercent(bucket: Record<string, unknown>): number | null {
     const fraction = toNumber(bucket.remainingFraction);
@@ -235,10 +410,31 @@ function bucketUsedPercent(bucket: Record<string, unknown>): number | null {
     return null;
 }
 
+/** Human label for a bucket, preferring the server's own display name. */
+function bucketName(bucket: Record<string, unknown>): string {
+    const candidates = [
+        bucket.displayName,
+        // Present on some variants of the summary proto; used before falling
+        // back to the opaque id so a mapping-key bucket is not anonymous.
+        bucket.displayNameMappingKey,
+        bucket.bucketId,
+        // Flat (`retrieveUserQuota`) shape identifies buckets per model.
+        bucket.modelId,
+        bucket.tokenType,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim() !== '') {
+            return candidate.trim();
+        }
+    }
+    return 'quota';
+}
+
 /**
- * Flatten `groups[].buckets[]` + top-level `buckets[]` into named buckets.
- * The group's display name prefixes the bucket's so a reader can tell two
- * same-named buckets from different pools apart ("Pro · Claude Sonnet").
+ * Flatten `groups[].buckets[]` plus any top-level `buckets[]` into named
+ * buckets. The group's display name prefixes the bucket's so two same-named
+ * buckets from different pools stay distinguishable ("Gemini Models · Weekly
+ * Limit Remaining"), which is exactly how the live response is shaped.
  */
 function collectBuckets(data: Record<string, unknown>): QuotaBucket[] {
     const out: QuotaBucket[] = [];
@@ -247,15 +443,12 @@ function collectBuckets(data: Record<string, unknown>): QuotaBucket[] {
         const bucket = asRecord(raw);
         if (!bucket) return;
         // A disabled bucket is not part of this account's plan; reporting it
-        // as 0%-used would invent headroom that does not exist.
+        // as 0%-used would invent headroom that does not exist. (Not seen in
+        // live responses, but the field exists on the proto.)
         if (bucket.disabled === true) return;
         const usedPercent = bucketUsedPercent(bucket);
         if (usedPercent === null) return;
-        const own = typeof bucket.displayName === 'string' && bucket.displayName.trim() !== ''
-            ? bucket.displayName.trim()
-            : typeof bucket.bucketId === 'string' && bucket.bucketId.trim() !== ''
-                ? bucket.bucketId.trim()
-                : 'quota';
+        const own = bucketName(bucket);
         out.push({
             name: groupLabel ? `${groupLabel} · ${own}` : own,
             usedPercent,
@@ -278,23 +471,27 @@ function collectBuckets(data: Record<string, unknown>): QuotaBucket[] {
 }
 
 /**
- * Map a bucket onto a fixed axis ONLY when its own reported window matches
- * that axis. Antigravity's buckets are per-pool, not per-window, so picking
- * "the first bucket" as the session window would be a guess that renders a
- * confident wrong number; a mismatch simply leaves the axis null and the
- * buckets carry the real information.
+ * Map buckets onto a fixed axis by their own reported window.
+ *
+ * Antigravity reports one bucket PER GROUP per window (Gemini vs Claude/GPT
+ * both have a weekly and a 5h bucket), so several buckets can match one axis.
+ * The WORST (highest used) is chosen: the axis is a single headline number and
+ * under-reporting consumption is the dangerous direction — a caller deciding
+ * whether to route work here must not be told 0% when one pool is exhausted.
+ * A mismatch leaves the axis null and the buckets carry the detail.
  */
 function axisWindow(buckets: QuotaBucket[], targetMinutes: number): QuotaWindow | null {
-    // Allow 10% slack: providers report 7d as 604800s but a month as 30d/31d.
+    // Allow 10% slack so a 7d/30d window reported slightly off still matches.
     const tolerance = targetMinutes * 0.1;
-    const match = buckets.find(
+    const matches = buckets.filter(
         (b) => b.windowMinutes > 0 && Math.abs(b.windowMinutes - targetMinutes) <= tolerance,
     );
-    if (!match) return null;
+    if (matches.length === 0) return null;
+    const worst = matches.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a));
     return {
-        usedPercent: match.usedPercent,
-        windowMinutes: match.windowMinutes,
-        resetsAt: match.resetsAt,
+        usedPercent: worst.usedPercent,
+        windowMinutes: worst.windowMinutes,
+        resetsAt: worst.resetsAt,
     };
 }
 
@@ -310,8 +507,8 @@ function mapQuotaSummary(data: unknown): ProviderQuota {
     const buckets = collectBuckets(root);
     if (buckets.length === 0) {
         // Distinct from a transport failure: the call worked, the account just
-        // has no readable quota bucket (metered/enterprise accounts report
-        // none). 'no-data' is the kind for "channel fine, no current reading".
+        // has no readable quota bucket. 'no-data' is the kind for "channel
+        // fine, no current reading".
         return quotaFailure(
             'antigravity-cli',
             'unavailable',
@@ -352,28 +549,53 @@ function retryAfterMs(header: string | null, nowMs: number): number | undefined 
 export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
     const deps = resolveDeps(overrides);
 
-    const credentialsResult = readCredentials(deps);
+    const credentialsResult = await readCredentials(deps);
+    if (credentialsResult.kind === 'unsupported-platform') {
+        // Explicit, not silent: `agy` stores its credential in a different
+        // keyring backend on Linux/Windows and neither was ever observed on a
+        // real machine, so there is nothing honest to report here.
+        return quotaFailure(
+            'antigravity-cli',
+            'unavailable',
+            'Antigravity quota is only supported on macOS (the CLI stores its credential in a platform keyring that has not been verified elsewhere)',
+            { source: 'keychain', failureKind: 'unsupported' },
+        );
+    }
     if (credentialsResult.kind === 'missing') {
         return quotaFailure('antigravity-cli', 'unavailable', 'Not signed in to Antigravity', {
-            source: 'oauth',
+            source: 'keychain',
             failureKind: 'missing-credentials',
         });
     }
     if (credentialsResult.kind === 'invalid') {
         return quotaFailure('antigravity-cli', 'error', credentialsResult.reason, {
-            source: 'oauth',
+            source: 'keychain',
             failureKind: 'parse',
         });
     }
 
     const credentials = credentialsResult.credentials;
+
+    // Business/enterprise accounts are served by a DIFFERENT API
+    // (`businessaicode.googleapis.com` / FetchQuotaStatus). No such account was
+    // available to verify against, so rather than aim the consumer endpoint at
+    // one and mis-report, say plainly that it is not supported.
+    if (credentials.authMethod !== null && credentials.authMethod !== 'consumer') {
+        return quotaFailure(
+            'antigravity-cli',
+            'unavailable',
+            `Antigravity quota is only supported for personal (consumer) accounts; this machine is signed in as "${credentials.authMethod}"`,
+            { source: 'keychain', failureKind: 'unsupported' },
+        );
+    }
+
     if (isExpired(credentials, deps.now())) {
         // Deliberately do not refresh: the CLI owns the token lifecycle.
         return quotaFailure(
             'antigravity-cli',
             'error',
             'Antigravity access token expired — the agy CLI refreshes it on next use; quota will report again after that.',
-            { source: 'oauth', failureKind: 'expired-token' },
+            { source: 'keychain', failureKind: 'expired-token' },
         );
     }
 
@@ -385,9 +607,8 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
                 'Content-Type': 'application/json',
                 Accept: 'application/json',
             },
-            // `forceRefresh` deliberately omitted (defaults false): the CLI's
-            // own quota_manager throttles forced reloads, and a daemon polling
-            // on a 15-minute cadence has no reason to bypass the server cache.
+            // ★MUST stay `{}` — verified live that sending `project` or
+            // `metadata` makes the server answer 429/400.
             body: '{}',
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });

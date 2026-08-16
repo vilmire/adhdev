@@ -1,36 +1,89 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { fetchAntigravityQuota } from '../../src/quota/fetchers/antigravity';
-import type { QuotaFetch, QuotaFetchResponse } from '../../src/quota/fetchers/deps';
+import type {
+    QuotaChildProcess,
+    QuotaFetch,
+    QuotaFetchResponse,
+    QuotaSpawn,
+} from '../../src/quota/fetchers/deps';
 import { SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from '../../src/quota/types';
 
-const NOW = Date.UTC(2026, 7, 16, 8, 0, 0);
+const NOW = Date.UTC(2026, 7, 16, 9, 0, 0);
 const FRESH_EXPIRY = new Date(NOW + 60 * 60 * 1000).toISOString();
 const STALE_EXPIRY = new Date(NOW - 60 * 60 * 1000).toISOString();
 
-const tempDirs: string[] = [];
+const GO_KEYRING_PREFIX = 'go-keyring-base64:';
 
 /**
- * Write an `antigravity-oauth-token` shaped like the real one: the access token
- * lives under a nested `token` object and `expiry` is RFC3339 (Go time.Time),
- * NOT unix seconds.
+ * ★VERBATIM live response captured from
+ * POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
+ * with body `{}` and the CLI's own keychain bearer token (2026-08-16).
+ * Trimmed only of prose; field names/types/values are exactly as returned.
+ *
+ * Note `window` is a LABEL ("weekly" / "5h"), NOT a proto3 Duration — the
+ * single most important fact this fixture pins.
  */
-function makeHome(token: unknown | null): string {
-    const home = mkdtempSync(join(tmpdir(), 'adhdev-antigravity-quota-'));
-    tempDirs.push(home);
-    if (token !== null) {
-        writeFileSync(
-            join(home, 'antigravity-oauth-token'),
-            typeof token === 'string' ? token : JSON.stringify(token),
-        );
-    }
-    return home;
-}
+const LIVE_RESPONSE = {
+    groups: [
+        {
+            buckets: [
+                {
+                    bucketId: 'gemini-weekly',
+                    displayName: 'Weekly Limit Remaining',
+                    window: 'weekly',
+                    resetTime: '2026-08-17T16:28:23Z',
+                    description: 'You have used some of your weekly limit…',
+                    remainingFraction: 0.9967779,
+                },
+                {
+                    bucketId: 'gemini-5h',
+                    displayName: 'Five Hour Limit Remaining',
+                    window: '5h',
+                    resetTime: '2026-08-16T14:34:54Z',
+                    remainingFraction: 1,
+                },
+            ],
+            displayName: 'Gemini Models',
+            description: 'Models within this group: Gemini Flash, Gemini Pro',
+        },
+        {
+            buckets: [
+                {
+                    bucketId: '3p-weekly',
+                    displayName: 'Weekly Limit Remaining',
+                    window: 'weekly',
+                    resetTime: '2026-08-16T13:50:47Z',
+                    remainingFraction: 0.9764644,
+                },
+                {
+                    bucketId: '3p-5h',
+                    displayName: 'Five Hour Limit Remaining',
+                    window: '5h',
+                    resetTime: '2026-08-16T13:58:17Z',
+                    remainingFraction: 0.98662907,
+                },
+            ],
+            displayName: 'Claude and GPT models',
+            description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+        },
+    ],
+};
 
-function tokenFile(overrides: Record<string, unknown> = {}) {
+/** Live shape of the legacy sibling `retrieveUserQuota` (also captured). */
+const LIVE_FLAT_RESPONSE = {
+    buckets: [
+        { tokenType: 'WTUS', modelId: 'chat_20706', remainingFraction: 1 },
+        {
+            resetTime: '2026-08-16T13:58:17Z',
+            tokenType: 'WTUS',
+            modelId: 'claude-sonnet-4-6',
+            remainingFraction: 0.98662907,
+        },
+    ],
+};
+
+function credentialPayload(overrides: Record<string, unknown> = {}, authMethod = 'consumer') {
     return {
         token: {
             access_token: 'antigravity-access-token',
@@ -39,9 +92,49 @@ function tokenFile(overrides: Record<string, unknown> = {}) {
             expiry: FRESH_EXPIRY,
             ...overrides,
         },
-        id_token: 'id-token-value',
-        auth_method: 'consumer',
+        auth_method: authMethod,
     };
+}
+
+/** Encode like go-keyring does for a non-clean-UTF8 secret. */
+function keyringBlob(payload: unknown): string {
+    const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    return GO_KEYRING_PREFIX + Buffer.from(json, 'utf-8').toString('base64');
+}
+
+interface SpawnStub {
+    spawn: QuotaSpawn;
+    calls: Array<{ command: string; args: string[] }>;
+}
+
+/**
+ * Fake `/usr/bin/security`. `stdout === null` simulates the item being absent
+ * (non-zero exit), which is how "not signed in" reaches the fetcher.
+ */
+function stubSpawn(stdout: string | null, options: { neverExits?: boolean } = {}): SpawnStub {
+    const calls: SpawnStub['calls'] = [];
+    const spawn: QuotaSpawn = (command, args) => {
+        calls.push({ command, args });
+        const listeners: Record<string, Array<(arg: never) => void>> = {};
+        const child: QuotaChildProcess = {
+            stdin: { write: () => {}, end: () => {} },
+            stdout: {
+                on: (_event, listener) => {
+                    if (stdout !== null) queueMicrotask(() => listener(stdout));
+                },
+            },
+            stderr: { on: () => {} },
+            on: (event: string, listener: (arg: never) => void) => {
+                (listeners[event] ??= []).push(listener);
+                if (event === 'exit' && !options.neverExits) {
+                    queueMicrotask(() => queueMicrotask(() => listener((stdout === null ? 44 : 0) as never)));
+                }
+            },
+            kill: () => {},
+        };
+        return child;
+    };
+    return { spawn, calls };
 }
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): QuotaFetchResponse {
@@ -54,15 +147,15 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
     };
 }
 
-interface StubbedFetch {
+interface FetchStub {
     fetch: QuotaFetch;
     calls: string[];
     inits: Array<{ method?: string; headers?: Record<string, string>; body?: string }>;
 }
 
-function stubFetch(response: QuotaFetchResponse | Error): StubbedFetch {
+function stubFetch(response: QuotaFetchResponse | Error): FetchStub {
     const calls: string[] = [];
-    const inits: StubbedFetch['inits'] = [];
+    const inits: FetchStub['inits'] = [];
     const fetchImpl: QuotaFetch = async (url, init) => {
         calls.push(url);
         inits.push({
@@ -76,222 +169,321 @@ function stubFetch(response: QuotaFetchResponse | Error): StubbedFetch {
     return { fetch: fetchImpl, calls, inits };
 }
 
-function deps(home: string, stub: StubbedFetch) {
+function deps(spawnStub: SpawnStub, fetchStub: FetchStub, env: Record<string, string> = {}) {
     return {
-        fetch: stub.fetch,
+        spawn: spawnStub.spawn,
+        fetch: fetchStub.fetch,
         now: () => NOW,
-        env: { ANTIGRAVITY_CLI_HOME: home } as NodeJS.ProcessEnv,
+        env: env as NodeJS.ProcessEnv,
     };
 }
 
-/** The response shape the generated protobuf descriptors define. */
-function quotaSummary(buckets: unknown[], groupName = 'Antigravity Pro') {
-    return { groups: [{ displayName: groupName, description: 'plan', buckets }] };
-}
-
 afterEach(() => {
-    while (tempDirs.length > 0) {
-        rmSync(tempDirs.pop()!, { recursive: true, force: true });
-    }
+    // Nothing global is mutated: the keychain is never written, and every
+    // side effect goes through injected deps.
 });
 
 describe('fetchAntigravityQuota', () => {
-    it('POSTs to retrieveUserQuotaSummary with the CLI bearer token', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse(quotaSummary([
-            { bucketId: 'sonnet', displayName: 'Claude Sonnet', remainingFraction: 0.75, window: '604800s' },
-        ])));
+    it('reads the credential from the macOS keychain, never from a file', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        await fetchAntigravityQuota(deps(home, stub));
+        await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(stub.calls).toEqual([
-            'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+        expect(spawn.calls).toHaveLength(1);
+        expect(spawn.calls[0].command).toBe('/usr/bin/security');
+        expect(spawn.calls[0].args).toEqual([
+            'find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w',
         ]);
-        expect(stub.inits[0].method).toBe('POST');
-        expect(stub.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
-        expect(stub.inits[0].body).toBe('{}');
+    });
+
+    it('decodes the go-keyring-base64 blob', async () => {
+        // The raw keychain value is NOT plain JSON — a naive JSON.parse fails.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.status).toBe('ok');
+        expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
+    });
+
+    it('also accepts an unprefixed plain-JSON secret', async () => {
+        const spawn = stubSpawn(JSON.stringify(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.status).toBe('ok');
+    });
+
+    it('POSTs to the PRODUCTION host with an empty body', async () => {
+        // Body must stay `{}`: sending `project`/`metadata` makes the server
+        // answer 429/400 (verified live).
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(fetch.calls).toEqual([
+            'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+        ]);
+        expect(fetch.inits[0].method).toBe('POST');
+        expect(fetch.inits[0].body).toBe('{}');
+    });
+
+    it('maps the live response: window LABELS onto fixed axes', async () => {
+        // ★`window` is "weekly"/"5h", NOT a Duration like "604800s". Parsing it
+        // as a Duration returns null for every real bucket and leaves BOTH axes
+        // unmapped — the bug this pins.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.status).toBe('ok');
+        expect(quota.weekly?.windowMinutes).toBe(WEEKLY_WINDOW_MINUTES);
+        expect(quota.session?.windowMinutes).toBe(SESSION_WINDOW_MINUTES);
     });
 
     it('reports remainingFraction as CONSUMED percentage', async () => {
-        // The field is what is LEFT: 0.75 remaining => 25% used. Getting this
-        // inverted is the single most damaging bug possible here — it would
-        // report an exhausted plan as nearly untouched.
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse(quotaSummary([
-            { bucketId: 'sonnet', displayName: 'Claude Sonnet', remainingFraction: 0.75, window: '604800s' },
-        ])));
+        // The field is what is LEFT: 0.9967779 remaining => ~0.32% used.
+        // Inverting this would report an exhausted plan as untouched.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(quota.status).toBe('ok');
-        expect(quota.buckets?.[0].usedPercent).toBe(25);
-        expect(quota.metadata?.source).toBe('oauth');
+        const geminiWeekly = quota.buckets?.find((b) => b.name.startsWith('Gemini Models'));
+        expect(geminiWeekly?.usedPercent).toBeCloseTo(0.322, 2);
     });
 
-    it('maps a bucket onto the weekly axis only when its own window matches', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse(quotaSummary([
-            { bucketId: 'weekly', displayName: 'Weekly', remainingFraction: 0.4, window: '604800s', resetTime: '2026-08-20T00:00:00Z' },
-            { bucketId: 'session', displayName: 'Session', remainingFraction: 0.9, window: '18000s' },
-        ])));
+    it('picks the WORST matching bucket for an axis', async () => {
+        // Two groups each report a weekly bucket (0.32% and 2.35% used). The
+        // axis is one headline number, and under-reporting consumption is the
+        // dangerous direction, so the higher usage wins.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.weekly?.usedPercent).toBeCloseTo(2.354, 2);
+        expect(quota.session?.usedPercent).toBeCloseTo(1.337, 2);
+    });
+
+    it('prefixes bucket names with their group', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.buckets?.map((b) => b.name)).toEqual([
+            'Gemini Models · Weekly Limit Remaining',
+            'Gemini Models · Five Hour Limit Remaining',
+            'Claude and GPT models · Weekly Limit Remaining',
+            'Claude and GPT models · Five Hour Limit Remaining',
+        ]);
+    });
+
+    it('parses the FLAT legacy shape, naming buckets by modelId', async () => {
+        // The same endpoint can return model-bucket-shaped data, and the
+        // legacy sibling always does. Without modelId handling these collapse
+        // into anonymous rows.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_FLAT_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.status).toBe('ok');
+        expect(quota.buckets?.map((b) => b.name)).toEqual(['chat_20706', 'claude-sonnet-4-6']);
+    });
+
+    it('still tolerates a proto3 Duration window', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({
+            groups: [{ displayName: 'G', buckets: [
+                { bucketId: 'w', displayName: 'W', window: '604800s', remainingFraction: 0.5 },
+            ] }],
+        }));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.weekly?.windowMinutes).toBe(WEEKLY_WINDOW_MINUTES);
-        expect(quota.weekly?.usedPercent).toBeCloseTo(60);
-        expect(quota.weekly?.resetsAt).toBe(Date.parse('2026-08-20T00:00:00Z'));
-        expect(quota.session?.windowMinutes).toBe(SESSION_WINDOW_MINUTES);
-        expect(quota.session?.usedPercent).toBeCloseTo(10);
+        expect(quota.weekly?.usedPercent).toBe(50);
     });
 
-    it('leaves fixed axes null when no bucket window matches them', async () => {
-        // Antigravity buckets are per-pool, not per-window. Falling back to
-        // "first bucket = session" would render a confident wrong number.
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse(quotaSummary([
-            { bucketId: 'monthly', displayName: 'Monthly credits', remainingFraction: 0.5, window: '2592000s' },
-        ])));
+    it('falls back to displayNameMappingKey then bucketId for a nameless bucket', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({
+            buckets: [
+                { bucketId: 'id-only', remainingFraction: 0.5 },
+                { displayNameMappingKey: 'mapped', bucketId: 'ignored', remainingFraction: 0.5 },
+            ],
+        }));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(quota.status).toBe('ok');
-        expect(quota.session).toBeNull();
-        expect(quota.weekly).toBeNull();
-        expect(quota.buckets).toHaveLength(1);
+        expect(quota.buckets?.map((b) => b.name)).toEqual(['id-only', 'mapped']);
     });
 
-    it('prefixes bucket names with their group so same-named pools stay distinct', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse(quotaSummary([
-            { bucketId: 'sonnet', displayName: 'Sonnet', remainingFraction: 0.5, window: '604800s' },
-        ], 'Pro')));
+    it('drops a bucket with no remainingFraction rather than showing 0% used', async () => {
+        // remainingAmount alone carries no total, so no percentage exists.
+        // Reporting 0% would claim full headroom.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({
+            buckets: [
+                { bucketId: 'amount-only', remainingAmount: '500' },
+                { bucketId: 'good', remainingFraction: 0.25, window: 'weekly' },
+            ],
+        }));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(quota.buckets?.[0].name).toBe('Pro · Sonnet');
+        expect(quota.buckets?.map((b) => b.name)).toEqual(['good']);
     });
 
-    it('skips disabled buckets rather than reporting them as unused', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse(quotaSummary([
-            { bucketId: 'off', displayName: 'Not on this plan', disabled: true, remainingFraction: 1 },
-            { bucketId: 'on', displayName: 'Active', remainingFraction: 0.2, window: '604800s' },
-        ])));
+    it('skips disabled buckets', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({
+            buckets: [
+                { bucketId: 'off', disabled: true, remainingFraction: 1 },
+                { bucketId: 'on', remainingFraction: 0.8, window: 'weekly' },
+            ],
+        }));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(quota.buckets).toHaveLength(1);
-        expect(quota.buckets?.[0].name).toBe('Antigravity Pro · Active');
+        expect(quota.buckets?.map((b) => b.name)).toEqual(['on']);
     });
 
-    it('reports no-data (not an error) when the account has no quota buckets', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse({ groups: [] }));
+    it('reports no-data when the account has no quota buckets', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({ groups: [] }));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.status).toBe('unavailable');
         expect(quota.metadata?.failureKind).toBe('no-data');
     });
 
-    it('reports missing-credentials when the CLI has never signed in', async () => {
-        const home = makeHome(null);
-        const stub = stubFetch(jsonResponse({}));
+    it('reports missing-credentials when the keychain item is absent', async () => {
+        const spawn = stubSpawn(null); // security exits non-zero
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.status).toBe('unavailable');
         expect(quota.metadata?.failureKind).toBe('missing-credentials');
-        expect(stub.calls).toEqual([]); // never spends a request without a token
+        expect(fetch.calls).toEqual([]);
     });
 
-    it('reports expired-token WITHOUT sending a request, and never rewrites the file', async () => {
-        // The CLI owns the token lifecycle; refreshing from here would rotate
-        // the refresh token and could log out a live `agy` session.
-        const home = makeHome(tokenFile({ expiry: STALE_EXPIRY }));
-        const stub = stubFetch(jsonResponse({}));
+    it('reports unsupported on non-darwin WITHOUT touching the keychain', async () => {
+        for (const platform of ['linux', 'win32']) {
+            const spawn = stubSpawn(keyringBlob(credentialPayload()));
+            const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+            const quota = await fetchAntigravityQuota(
+                deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_PLATFORM: platform }),
+            );
+
+            expect(quota.status, platform).toBe('unavailable');
+            expect(quota.metadata?.failureKind, platform).toBe('unsupported');
+            expect(spawn.calls, platform).toEqual([]);
+            expect(fetch.calls, platform).toEqual([]);
+        }
+    });
+
+    it('reports unsupported for a non-consumer (business) account', async () => {
+        // Business accounts are served by businessaicode.googleapis.com /
+        // FetchQuotaStatus, which was never verifiable here.
+        const spawn = stubSpawn(keyringBlob(credentialPayload({}, 'business')));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('unsupported');
+        expect(fetch.calls).toEqual([]);
+    });
+
+    it('reports expired-token without sending a request', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.status).toBe('error');
         expect(quota.metadata?.failureKind).toBe('expired-token');
-        expect(stub.calls).toEqual([]);
+        expect(fetch.calls).toEqual([]);
     });
 
     it('parses the RFC3339 offset expiry the CLI actually writes', async () => {
-        // Real files carry "+09:00"-style offsets, not unix seconds. Parsing
-        // this as a number would treat every token as never-expiring.
-        const home = makeHome(tokenFile({ expiry: '2026-07-28T21:30:05.171451+09:00' }));
-        const stub = stubFetch(jsonResponse({}));
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: '2026-07-28T21:30:05.171451+09:00' })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.metadata?.failureKind).toBe('expired-token');
     });
 
     it('classifies 401 as unauthorized', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse({ error: {} }, 401));
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({}, 401));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(quota.status).toBe('error');
         expect(quota.metadata?.failureKind).toBe('unauthorized');
     });
 
     it('classifies 429 and honours Retry-After', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse({}, 429, { 'retry-after': '120' }));
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({}, 429, { 'retry-after': '120' }));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.metadata?.failureKind).toBe('rate-limited');
         expect(quota.metadata?.retryAtMs).toBe(NOW + 120_000);
     });
 
     it('classifies 5xx as a server failure', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse({}, 503));
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({}, 503));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.metadata?.failureKind).toBe('server');
     });
 
     it('never throws on a transport error', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(new Error('socket hang up'));
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(new Error('socket hang up'));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.status).toBe('error');
         expect(quota.metadata?.failureKind).toBe('network');
     });
 
-    it('reports a parse failure on a malformed token file', async () => {
-        const home = makeHome('{not json');
-        const stub = stubFetch(jsonResponse({}));
+    it('reports a parse failure on a malformed credential', async () => {
+        const spawn = stubSpawn(keyringBlob('{not json'));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        const quota = await fetchAntigravityQuota(deps(home, stub));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.status).toBe('error');
         expect(quota.metadata?.failureKind).toBe('parse');
     });
 
     it('honours the base-URL override', async () => {
-        const home = makeHome(tokenFile());
-        const stub = stubFetch(jsonResponse(quotaSummary([
-            { bucketId: 'b', displayName: 'B', remainingFraction: 0.5, window: '604800s' },
-        ])));
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
-        await fetchAntigravityQuota({
-            ...deps(home, stub),
-            env: {
-                ANTIGRAVITY_CLI_HOME: home,
-                ANTIGRAVITY_CLOUDCODE_BASE_URL: 'https://staging.example.com/v1internal',
-            } as NodeJS.ProcessEnv,
-        });
+        await fetchAntigravityQuota(deps(spawn, fetch, {
+            ANTIGRAVITY_CLOUDCODE_BASE_URL: 'https://daily-cloudcode-pa.googleapis.com/v1internal',
+        }));
 
-        expect(stub.calls[0]).toBe('https://staging.example.com/v1internal:retrieveUserQuotaSummary');
+        expect(fetch.calls[0]).toBe(
+            'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+        );
     });
 });

@@ -155,15 +155,12 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
  * existed as a hand-copied literal in web-core's ProvidersTab; that copy is now
  * derived from this one.
  *
- * Deliberately NOT the same set as the `QuotaProvider` union in daemon-core's
- * quota/types.ts. That union includes `antigravity-cli`, which is *supportable*
- * (it authenticates via OAuth) but has no fetcher implemented — so it is a
- * valid key to carry a snapshot under, and not a provider whose quota anything
- * can collect. Support here means "a fetcher exists", nothing weaker.
+ * Deliberately NOT necessarily the same set as the `QuotaProvider` union in
+ * daemon-core's quota/types.ts: that union is the set of valid keys a snapshot
+ * can be carried under, while membership HERE means "a fetcher exists".
  *
  * Known non-members and why, so this is not re-litigated per surface:
  *   - cursor-cli    — permanently impossible; no personal usage API exists
- *   - antigravity-cli — possible via OAuth, not implemented
  *   - hermes-cli    — no model-axis quota to report
  *
  * ★grok-cli WAS listed here as impossible and is not: that verdict came from
@@ -172,6 +169,15 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
  * the `/usage` view does not appear because it is a TUI slash command. The
  * subscription quota is served by the CLI's own chat proxy — see the endpoint
  * provenance note in daemon-core `quota/fetchers/grok.ts`.
+ *
+ * ★antigravity-cli was likewise twice judged impossible, from reading
+ * `agy --help` where the usage view does not appear because it is a TUI view.
+ * Its quota comes from the SHARED Gemini Code Assist backend
+ * (`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`), and its
+ * credential lives in the OS keyring, not the stale on-disk token file — see
+ * the provenance note in daemon-core `quota/fetchers/antigravity.ts`. It is
+ * macOS-only by design; other platforms report `unsupported` rather than guess
+ * at a keyring backend nobody has verified.
  *
  * ★Adding a provider here without adding its fetcher to REFRESHERS re-creates
  * exactly the "switch that does nothing" this constant prevents.

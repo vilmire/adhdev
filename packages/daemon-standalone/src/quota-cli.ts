@@ -31,7 +31,7 @@ Usage: adhdev quota <provider>
        adhdev quota claude:install | claude:uninstall | claude:status
 
 Providers:
-  antigravity  Show Antigravity CLI plan usage (queries the Cloud Code API live)
+  antigravity  Show Antigravity CLI plan usage (queries the Cloud Code API live; macOS only)
   claude    Show Claude Code plan usage (requires \`adhdev quota claude:install\`)
   codex     Show Codex CLI plan usage (queries codex app-server live)
   grok      Show Grok CLI plan usage (queries the xAI billing API live)
