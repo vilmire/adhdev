@@ -503,6 +503,46 @@ describe('execution', () => {
         const recovered = await runWorktreeNodeRetentionTick(deps, opts('tick-3', NOW + GRACE + HOUR_MS));
         expect(entryFor(recovered, 'node-wt-1').execution?.success).toBe(true);
     });
+    // WORKTREE-DELETED-WHILE-RUNNING: the 'node_removed' append sits AFTER the
+    // membership-removal step and is skipped when that step fails — but the
+    // directory was already deleted by then. The 2026-08-16 incident was found in
+    // exactly that state: node still in the mesh, workspace gone, and no ledger
+    // entry to attribute it to. A directory deletion must leave a trace even when
+    // everything after it fails.
+    it('records worktree_directory_removed even when membership removal then FAILS (no untraceable deletion)', async () => {
+        const calls = makeCalls();
+        const deps = makeDeps({}, calls);
+        const mesh = makeMesh([worktreeNode()]);
+        await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }, calls));
+
+        const ledgerFile = join(getLedgerDir(), `${MESH_ID}.jsonl`);
+        const ledgerLenBefore = fs.existsSync(ledgerFile)
+            ? fs.readFileSync(ledgerFile, 'utf8').split('\n').filter(Boolean).length
+            : 0;
+
+        const t = await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, {
+            tickId: 'tick-2', nowMs: NOW + GRACE, execute: true,
+            removeNodeFromMesh: () => false, // membership removal reports nothing removed
+        }, calls));
+
+        // The removal did fail, and the directory WAS deleted before it.
+        expect(entryFor(t, 'node-wt-1').execution?.code).toBe('execution_membership_not_removed');
+        expect(calls.cleanup).toHaveLength(1);
+
+        // The shared ledger file accumulates across this suite, so compare
+        // against the pre-tick baseline rather than the whole file.
+        const ledgerPath = join(getLedgerDir(), `${MESH_ID}.jsonl`);
+        const entries = fs.readFileSync(ledgerPath, 'utf8')
+            .split('\n').filter(Boolean).map(line => JSON.parse(line));
+        const fresh = entries.slice(ledgerLenBefore);
+        const deletion = fresh.filter(e => e.kind === 'worktree_directory_removed' && e.nodeId === 'node-wt-1');
+        expect(deletion).toHaveLength(1);
+        expect(deletion[0].payload.workspace).toBe('/wt/one');
+        expect(deletion[0].payload.source).toBe('worktree_node_retention');
+        // The orphaned shape: a deletion with NO paired node_removed.
+        expect(fresh.some(e => e.kind === 'node_removed' && e.nodeId === 'node-wt-1')).toBe(false);
+    });
+
     it('residue (directory bytes left behind) is non-gating and surfaced', async () => {
         const calls = makeCalls();
         const deps = makeDeps({

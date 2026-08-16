@@ -1317,6 +1317,48 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 }
             }
 
+            // WORKTREE-DELETED-WHILE-RUNNING: record the DIRECTORY deletion on its
+            // own, independently of membership removal.
+            //
+            // The `node_removed` append below is gated on `removed` — i.e. on the
+            // node leaving meshes.json / the inline cache. But the worktree
+            // directory is deleted EARLIER, by cleanupLocalWorktreeNode. If that
+            // succeeds and the membership removal then fails or no-ops, a directory
+            // is destroyed and the ledger records nothing at all: the node still
+            // appears in the mesh, its workspace is gone, and there is no entry
+            // explaining why. That is exactly the state the 2026-08-16 incident was
+            // found in, and the absence of any trace is what made it unattributable.
+            //
+            // Emitted only when a directory was actually deleted (not for the
+            // already-missing / skipped path), and separate from `node_removed` so
+            // the normal both-happened case still reads as one removal plus one
+            // deletion record rather than losing either.
+            if (worktreeCleanup && worktreeCleanup.success === true && worktreeCleanup.skipped !== true) {
+                try {
+                    const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
+                    appendLedgerEntry(meshId, {
+                        kind: 'worktree_directory_removed',
+                        nodeId,
+                        payload: {
+                            workspace: typeof worktreeCleanup.removedPath === 'string'
+                                ? worktreeCleanup.removedPath
+                                : typeof node?.workspace === 'string' ? node.workspace : undefined,
+                            worktreeBranch: typeof node?.worktreeBranch === 'string' ? node.worktreeBranch : undefined,
+                            // The key field for attribution: whether membership
+                            // removal also happened. `false` marks the orphaned
+                            // shape — directory gone, node still in the mesh.
+                            membershipRemoved: removed === true,
+                            forced: worktreeCleanup.forced === true ? true : undefined,
+                            fallback: typeof worktreeCleanup.fallback === 'string' ? worktreeCleanup.fallback : undefined,
+                            reason: typeof worktreeCleanup.reason === 'string' ? worktreeCleanup.reason : undefined,
+                            residue: worktreeCleanup.residue === true ? true : undefined,
+                            requestedForce: args?.force === true ? true : undefined,
+                            ...(remoteForwardedResult ? { removedByRemoteDaemon: true } : {}),
+                        },
+                    });
+                } catch { /* ledger append is best-effort */ }
+            }
+
             // Record in task ledger
             if (removed) {
                 try {

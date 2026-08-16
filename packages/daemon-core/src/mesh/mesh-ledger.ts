@@ -58,6 +58,16 @@ export type MeshLedgerKind =
     | 'node_cloned'
     | 'node_joined'
     | 'node_removed'
+    // WORKTREE-DELETED-WHILE-RUNNING: a managed worktree DIRECTORY was deleted.
+    // Distinct from 'node_removed', which records the node leaving mesh
+    // membership and is appended only when that succeeds. The directory is
+    // deleted first, so a membership removal that then fails or no-ops used to
+    // destroy a worktree while leaving no ledger trace at all — the node still
+    // listed, its workspace gone, and nothing to attribute it to. `membershipRemoved`
+    // marks that orphaned shape.
+    // payload: { workspace?, worktreeBranch?, membershipRemoved, forced?, fallback?,
+    //            reason?, residue?, requestedForce?, removedByRemoteDaemon? }
+    | 'worktree_directory_removed'
     | 'coordinator_started'
     | 'recovery_attempted'
     | 'ledger_replicated'

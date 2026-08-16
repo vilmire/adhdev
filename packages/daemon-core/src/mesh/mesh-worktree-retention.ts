@@ -682,6 +682,35 @@ async function executeNodeRemoval(
             return;
         }
 
+        // WORKTREE-DELETED-WHILE-RUNNING: record the DIRECTORY deletion here, the
+        // moment it happens, rather than relying on the 'node_removed' append
+        // further down. Every path between here and there can `return` early —
+        // a membership removal that throws or reports nothing removed — and each
+        // of those leaves a deleted worktree with no ledger trace whatsoever.
+        // The ledger is append-only, so this entry cannot be revised afterwards:
+        // it records only what is known NOW (a directory was deleted), and the
+        // 'node_removed' entry that follows on the success path is what pairs
+        // with it. A `worktree_directory_removed` with no matching
+        // `node_removed` for the same nodeId IS the orphaned shape.
+        if (cleanup.skipped !== true) {
+            try {
+                appendLedgerEntry(meshId, {
+                    kind: 'worktree_directory_removed',
+                    nodeId,
+                    payload: {
+                        source: 'worktree_node_retention',
+                        workspace: typeof cleanup.removedPath === 'string'
+                            ? cleanup.removedPath
+                            : typeof node?.workspace === 'string' ? node.workspace : undefined,
+                        worktreeBranch: typeof node?.worktreeBranch === 'string' ? node.worktreeBranch : undefined,
+                        forced: false,
+                        residue: cleanup.residue === true ? true : undefined,
+                        convergenceStatus: entry.convergence?.status,
+                    },
+                });
+            } catch { /* ledger append is best-effort */ }
+        }
+
         const removeNodeFromMesh = opts.removeNodeFromMesh ?? ((mid: string, nid: string) =>
             // Splice from the file-backed registry (meshes.json) — the same
             // mutation mesh_remove_node performs.
