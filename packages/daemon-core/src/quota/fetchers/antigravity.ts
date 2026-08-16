@@ -35,12 +35,35 @@
  * to have: `{ token: { access_token, token_type, refresh_token, expiry },
  * auth_method }`, where `expiry` is RFC3339 with an offset (Go time.Time).
  *
- * ★PLATFORM SCOPE — darwin only, deliberately.
- * `agy` on Linux/Windows uses different keyring backends (Secret Service /
- * Credential Manager). Those were never observed on a real machine here, so
- * rather than guess at a backend and ship code that fails in some silent or
- * wrong way, this fetcher reports an explicit `unsupported` on non-darwin.
- * A wrong number is far worse than an honest "not supported".
+ * ★PLATFORM SCOPE — darwin only, deliberately. Both other platforms WERE
+ * surveyed on real machines (2026-08-16); neither yielded a credential source
+ * solid enough to build on, for DIFFERENT reasons:
+ *
+ *   win32 — Antigravity 1.107.0 is installed, but its credential backend is
+ *     UNRESOLVED. `cmdkey /list` shows no antigravity entry, and that is not
+ *     evidence of absence: cmdkey enumerates the legacy Credential Manager
+ *     store and cannot see WinRT PasswordVault, which is where the token
+ *     plausibly lives. A `%USERPROFILE%\.gemini\oauth_creds.json` also exists,
+ *     but wiring THAT in would repeat the exact mistake this file documents
+ *     above — on macOS a same-shaped on-disk token file was a DEAD FALLBACK
+ *     that produced a permanent false `expired-token`. Until the backend is
+ *     identified positively, there is nothing here worth trusting.
+ *     ★Also note the win32 entry point is `antigravity` (bin\antigravity.cmd),
+ *     NOT `agy` — see the provider-detection note in the ADHDev issue tracker;
+ *     it is out of scope for quota but affects whether the provider is found
+ *     at all.
+ *
+ *   linux — the surveyed host is a headless SSH server, and there the Secret
+ *     Service is not merely absent but STRUCTURALLY unavailable:
+ *     `org.freedesktop.secrets` is not registered on the session bus, there is
+ *     no keyring-unlock history, and the first unlock would require the
+ *     `gcr-prompter` GUI dialog, which cannot be satisfied over SSH. So even a
+ *     correct libsecret implementation would not work on this class of machine
+ *     — which is precisely the class ADHDev daemons run on.
+ *
+ * Rather than guess at a backend and ship code that fails silently or, worse,
+ * reports a wrong number, this fetcher returns an explicit `unsupported` on
+ * non-darwin. A wrong number is far worse than an honest "not supported".
  *
  * ─────────────────────────────────────────────────────────────────────────
  * ★ENDPOINT PROVENANCE — established by RUNTIME OBSERVATION, not symbols.
@@ -156,8 +179,27 @@ interface AntigravityCredentials {
 type CredentialsResult =
     | { kind: 'ok'; credentials: AntigravityCredentials }
     | { kind: 'missing' }
-    | { kind: 'unsupported-platform' }
+    | { kind: 'unsupported-platform'; platform: string }
     | { kind: 'invalid'; reason: string };
+
+/**
+ * Why this platform is not supported, in the user's words.
+ *
+ * Deliberately platform-specific: on win32 the backend is merely UNIDENTIFIED
+ * (a positive finding could enable support later), whereas on a headless linux
+ * host the Secret Service is structurally unavailable, so no implementation
+ * would help. Collapsing both into "unsupported" would hide that difference
+ * from whoever picks this up next.
+ */
+function unsupportedPlatformReason(platform: string): string {
+    if (platform === 'win32') {
+        return 'Antigravity quota is not supported on Windows yet: the CLI is installed, but its credential store has not been positively identified (cmdkey cannot see the WinRT PasswordVault, so it cannot rule it out). Quota is currently macOS-only.';
+    }
+    if (platform === 'linux') {
+        return 'Antigravity quota is not supported on Linux: the CLI credential lives in the freedesktop Secret Service, which is unavailable on a headless host (no session-bus service, and the first unlock needs a GUI prompt). Quota is currently macOS-only.';
+    }
+    return `Antigravity quota is only supported on macOS (this machine reports platform "${platform}").`;
+}
 
 /**
  * Read the raw keychain blob via `/usr/bin/security` — the same binary
@@ -288,7 +330,7 @@ async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<Credenti
     // exercisable from a macOS test run; it is never set in production.
     const platform = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
     if (platform !== 'darwin') {
-        return { kind: 'unsupported-platform' };
+        return { kind: 'unsupported-platform', platform };
     }
 
     let raw: string | null;
@@ -551,13 +593,14 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
 
     const credentialsResult = await readCredentials(deps);
     if (credentialsResult.kind === 'unsupported-platform') {
-        // Explicit, not silent: `agy` stores its credential in a different
-        // keyring backend on Linux/Windows and neither was ever observed on a
-        // real machine, so there is nothing honest to report here.
+        // Explicit, not silent — and specific about WHY per platform, because
+        // "unverified" and "structurally impossible" call for different
+        // follow-ups. See the PLATFORM SCOPE note in the header for the
+        // survey these messages summarize.
         return quotaFailure(
             'antigravity-cli',
             'unavailable',
-            'Antigravity quota is only supported on macOS (the CLI stores its credential in a platform keyring that has not been verified elsewhere)',
+            unsupportedPlatformReason(credentialsResult.platform),
             { source: 'keychain', failureKind: 'unsupported' },
         );
     }

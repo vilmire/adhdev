@@ -393,6 +393,31 @@ describe('fetchAntigravityQuota', () => {
         }
     });
 
+    it('explains WHY per platform, since the two reasons differ', async () => {
+        // win32: backend merely UNIDENTIFIED (a positive finding could enable
+        // support later). linux: Secret Service structurally unavailable on a
+        // headless host, so no implementation would help. Collapsing both into
+        // one message would hide that from whoever picks this up.
+        const win = await fetchAntigravityQuota(
+            deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'win32' }),
+        );
+        expect(win.error).toMatch(/Windows/);
+        expect(win.error).toMatch(/PasswordVault/);
+
+        const linux = await fetchAntigravityQuota(
+            deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'linux' }),
+        );
+        expect(linux.error).toMatch(/Linux/);
+        expect(linux.error).toMatch(/headless/);
+
+        // An unknown platform still gets an honest, non-misleading answer.
+        const other = await fetchAntigravityQuota(
+            deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'freebsd' }),
+        );
+        expect(other.error).toMatch(/only supported on macOS/);
+        expect(other.error).toMatch(/freebsd/);
+    });
+
     it('reports unsupported for a non-consumer (business) account', async () => {
         // Business accounts are served by businessaicode.googleapis.com /
         // FetchQuotaStatus, which was never verifiable here.
