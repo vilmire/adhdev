@@ -190,6 +190,65 @@ describe('mesh idle-active-mission reminder', () => {
         expect(coord.calls).toHaveLength(1);
     });
 
+    // ── IDLE-REFINE-TAIL-BLINDSPOT ────────────────────────────────────────────────
+    //
+    // The async-refine gate used to derive its in-flight jobs from the SAME
+    // `readLedgerEntries(meshId, { tail: 200 })` window the active-work summary reads.
+    // `tail` slices the last N entries of EVERY kind, so ledger churn from unrelated
+    // events evicts a still-running refine job's `task_dispatched` row from the window —
+    // and a refine pass runs typecheck/test/build for minutes, ample time for that churn.
+    //
+    // With the dispatch row gone, buildMeshAsyncRefineJobs reports zero active jobs, the
+    // mesh reads "no work in flight", and the reminder tells the coordinator to close a
+    // mission whose merge is still running. Observed twice on 2026-08-16, both times with
+    // a Refinery job in `accepted`.
+    //
+    // The fix reads the refine slice with an explicit `kind` filter and NO tail. This test
+    // pins that: the dispatch is buried under far more than 200 unrelated entries and the
+    // reminder must STILL stay silent.
+    it('★stays silent when an in-flight refine dispatch is buried beyond the 200-entry tail window', () => {
+        upsertMeshMission(meshId, { title: 'Refining under churn', goal: 'x' });
+        appendRefineDispatch('job-buried');
+
+        // Bury it under unrelated ledger traffic — more than the 200-entry tail window, of
+        // a kind the refine derivation ignores, exactly like a busy mesh produces.
+        for (let i = 0; i < 260; i++) {
+            appendLedgerEntry(meshId, {
+                kind: 'session_launched',
+                nodeId: 'node-b',
+                payload: { source: 'unrelated_traffic', seq: i },
+            } as any);
+        }
+
+        const coord = makeCoordinator();
+        // The refine job is STILL in flight (no terminal row was ever appended), so the
+        // reminder must not fire. Before the fix the tail window held only the 260 filler
+        // rows, the gate saw no refine job, and this fired.
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
+        expect(coord.calls).toHaveLength(0);
+    });
+
+    // The inverse must still hold: burying entries must not permanently mute the reminder.
+    // Once the refine job genuinely terminates, the reminder fires again — so the fix
+    // suppresses only real in-flight work, it does not blanket-silence a busy mesh.
+    it('fires once a buried refine dispatch reaches a terminal row', () => {
+        upsertMeshMission(meshId, { title: 'Refining under churn', goal: 'x' });
+        appendRefineDispatch('job-buried-then-done');
+        for (let i = 0; i < 260; i++) {
+            appendLedgerEntry(meshId, {
+                kind: 'session_launched',
+                nodeId: 'node-b',
+                payload: { source: 'unrelated_traffic', seq: i },
+            } as any);
+        }
+        const coord = makeCoordinator();
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
+
+        appendRefineTerminal('job-buried-then-done');
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
+        expect(coord.calls).toHaveLength(1);
+    });
+
     it('debounces a second reminder for the same mission set inside the window', () => {
         upsertMeshMission(meshId, { title: 'Lingering', goal: 'x' });
         const coord = makeCoordinator();

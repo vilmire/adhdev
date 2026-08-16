@@ -370,6 +370,37 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     }
     let task: MeshWorkQueueEntry | undefined;
     try { task = getQueue(meshId).find(t => t.id === taskId); } catch { /* best-effort */ }
+
+    // STALE-SCAN-BLOCKER: re-read the task's CURRENT status before paging, and drop the
+    // notification when the task is no longer pending.
+    //
+    // The auto-launch scan snapshots the pending set ONCE
+    // (maybeAutoLaunchOneQueueSession: `queue.filter(status === 'pending')`) and then
+    // awaits per candidate node — `resolveUsableProvider` awaits `detectCLI` for EVERY
+    // slot in the node's provider priority, each a real process probe. Across a
+    // multi-slot, multi-node scan that is seconds of wall-clock. Within that window the
+    // task can be claimed by an idle session (pending → assigned → generating),
+    // completed, or cancelled — but the loop still holds the pre-await snapshot row and
+    // pages the coordinator about a blocker for work that is already under way or gone.
+    //
+    // Observed 2026-08-16, 4x, every one a false positive: 3 were late scans of
+    // already-cancelled/completed tasks (queue pending count was 0 at delivery), and 1
+    // arrived 122s after its task had already reached `generating` via a successful
+    // autoLaunch. The message asserts an actionable blocker, so each one cost the
+    // coordinator a diversion into diagnosing a block that did not exist.
+    //
+    // `getQueue` reads through to MeshRuntimeStore (not the caller's snapshot), so this
+    // check sees the post-await truth. Deliberately fail-OPEN: an unreadable queue or a
+    // row we cannot find leaves `task` undefined and we still notify, because silently
+    // swallowing a real blocker is the worse failure — the point of this fix is accuracy,
+    // not suppression.
+    if (task && task.status !== 'pending') {
+        LOG.info('MeshQueue', `Suppressed stale dispatch-blocked page for task ${taskId} (mesh ${meshId}): `
+            + `reason '${reason}' was computed against a pre-await snapshot, but the task is now '${task.status}'.`);
+        // Re-arm the de-dup ledger so a GENUINE later blocker for this task still pages.
+        lastActionableSkipNotified.delete(dedupKey);
+        return;
+    }
     // The queue is owned by this coordinator daemon, so scope the event to this daemon's id;
     // the originating coordinator SESSION (if known) further narrows delivery on this daemon.
     const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
@@ -390,11 +421,23 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // progress, while a genuinely absent provider still needs explicit configuration work. Every
     // other actionable reason is a standing blocker, so the original clause remains unchanged.
     const providerAvailabilityResult = reason!.startsWith('provider') || reason === 'missing_provider_priority';
+    // REACHABILITY-RESULT: a remote-auto-launch skip is a CONNECTIVITY observation, not a
+    // standing configuration blocker. resolveAutoLaunchTarget emits it when the node
+    // carries no resolvable daemonId, or when this daemon currently has no
+    // dispatchMeshCommand transport (mesh-queue-assignment.ts) — both of which a P2P
+    // reconnect / node re-registration clears with no operator action at all. Asserting
+    // "it will NOT clear on its own" for it was simply false, and it is one of the two
+    // reasons behind the four false blocker pages of 2026-08-16. It still deserves a page
+    // (a genuinely offline node does need a human), so the reason stays actionable — only
+    // the certainty of the wording is corrected to match what the code actually knows.
+    const reachabilityResult = reason!.startsWith('remote_auto_launch');
     const closing = reason === 'target_session_pin_expired'
         ? 'The stale pin has already been cleared, so the task is now claimable by any compatible session — the action above is about the session it was originally addressed to.'
         : providerAvailabilityResult
             ? 'This result needs action if it persists: a later provider-status refresh or an already-starting usable session can clear it, but a genuinely missing, disabled, or misconfigured provider will keep the task pending until you fix that configuration.'
-            : 'This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.';
+            : reachabilityResult
+                ? 'This result needs action if it persists: the node reconnecting (or re-registering its daemon id) clears it on its own, but a node that stays unreachable will keep the task pending until you bring it back or re-target the task.'
+                : 'This is an actionable blocker — it will NOT clear on its own; the task stays pending until you resolve it.';
     const coordinatorMessage = `[System] A queued mesh task${nodeLabel ? ` for node ${nodeLabel}` : ''} is not being dispatched because ${summary}. ${nextAction} ${closing}`;
     try {
         queuePendingMeshCoordinatorEvent({

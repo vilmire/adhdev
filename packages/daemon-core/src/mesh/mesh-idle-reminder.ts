@@ -24,7 +24,10 @@
  *    queue/direct work already makes totalActiveCount > 0, so the idle check is
  *    conservative — it suppresses the reminder whenever any work is outstanding, which is
  *    the safe direction. Async refine jobs (`mesh_refine_node`) are a separate class that
- *    buildMeshActiveWork does not count, so they are checked explicitly from the ledger.
+ *    buildMeshActiveWork does not count, so they are checked explicitly from the ledger —
+ *    over a KIND-FILTERED, untailed read, never the `tail: N` window (see
+ *    IDLE-REFINE-TAIL-BLINDSPOT below: a tail slices all kinds, so ledger churn can evict
+ *    a still-running job's dispatch row and the mesh falsely reads as idle).
  *  - NEVER transitions a mission's status. It only surfaces a hint; the coordinator
  *    decides via mesh_mission_upsert.
  *  - Debounced per mission-set. Re-fires only when the debounce window has elapsed OR
@@ -132,6 +135,27 @@ export function maybeInjectIdleActiveMissionReminder(
         }).summary;
         if (summary.totalActiveCount !== 0 || summary.generatingCount !== 0) return false;
 
+        // IDLE-REFINE-TAIL-BLINDSPOT: the refine gate below must NOT reuse the
+        // `tail: 200` window read above. `tail` slices the last N entries of EVERY kind,
+        // so a refine job's `task_dispatched` row is evicted from that window by 200
+        // unrelated ledger writes (session launches, task dispatches, checkpoints,
+        // node_removed, …) while the job is still running — and a refine pass runs
+        // typecheck/test/build for MINUTES, which is ample time for that churn on a busy
+        // mesh (47 distinct appendLedgerEntry sites feed this one window).
+        //
+        // Losing the dispatch row makes buildMeshAsyncRefineJobs report zero in-flight
+        // jobs, the mesh reads "no work in flight", and the reminder tells the
+        // coordinator to close a mission whose merge is still running — observed twice
+        // on 2026-08-16, both times while a Refinery job was `accepted`.
+        //
+        // Read the refine slice with an explicit `kind` filter and NO tail, exactly as
+        // the resume scanner does (router-refine-resume.ts). Filtering by kind first
+        // bounds the result to the three job-lifecycle kinds rather than all traffic, so
+        // an in-flight dispatch cannot be crowded out by unrelated events.
+        const refineLedgerEntries = readLedgerEntries(meshId, {
+            kind: ['task_dispatched', 'task_completed', 'task_failed'],
+        });
+
         // Async refine jobs are NOT modeled as queue/direct dispatches, so buildMeshActiveWork
         // never counts them — an accepted/running `mesh_refine_node` job (each pass runs
         // typecheck/test/build for minutes) would otherwise read as "no work in flight" and the
@@ -140,7 +164,7 @@ export function maybeInjectIdleActiveMissionReminder(
         // (buildMeshAsyncRefineJobs maps `task_dispatched` refine entries with no terminal to
         // accepted/running) and suppress the reminder while any is non-terminal.
         const activeRefineJobs = summarizeMeshAsyncRefineJobs(
-            buildMeshAsyncRefineJobs({ meshId, ledgerEntries }),
+            buildMeshAsyncRefineJobs({ meshId, ledgerEntries: refineLedgerEntries }),
         ).activeJobs;
         if (activeRefineJobs.length > 0) return false;
 
