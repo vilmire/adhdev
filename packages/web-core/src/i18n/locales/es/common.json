@@ -1517,7 +1517,73 @@
             "cloudOptional": "Cloud es opcional, no obligatorio",
             "cloudOptionalDescription": "Puedes permanecer totalmente local en standalone y pasar a Cloud más tarde sin cambiar tu forma de usar el panel.",
             "compareCloud": "Comparar Cloud ↗",
-            "discord": "Discord ↗"
+            "discord": "Discord ↗",
+            "features": {
+                "localFirst": {
+                    "title": "Runtime local-first",
+                    "desc": "Todo permanece en tu máquina; el navegador solo se conecta por localhost."
+                },
+                "chatRelay": {
+                    "title": "Relevo de chat de agentes",
+                    "desc": "Lee y responde conversaciones de IA en tiempo real en los IDE conectados."
+                },
+                "screenshots": {
+                    "title": "Capturas en vivo",
+                    "desc": "Ve tu IDE directamente en el navegador mediante el stream local de capturas."
+                },
+                "remoteControl": {
+                    "title": "Control remoto",
+                    "desc": "Haz clic, escribe y dirige tus sesiones de IDE sin cambiar de ventana."
+                },
+                "multiIde": {
+                    "title": "Soporte multi-IDE",
+                    "desc": "Supervisa VS Code, Cursor, Windsurf y agentes de extensión en un solo lugar."
+                },
+                "cliAcp": {
+                    "title": "Cobertura CLI y ACP",
+                    "desc": "Sigue agentes CLI independientes y flujos ACP junto a las sesiones de IDE."
+                }
+            },
+            "extras": {
+                "anywhere": {
+                    "title": "Acceso desde cualquier lugar",
+                    "desc": "Llega a tus máquinas desde otro portátil o el móvil sin abrir puertos locales."
+                },
+                "p2pStream": {
+                    "title": "Stream P2P de baja latencia",
+                    "desc": "Cloud añade la ruta WebRTC para capturas y control remoto más rápidos."
+                },
+                "mobileNotifications": {
+                    "title": "Notificaciones móviles",
+                    "desc": "Recibe aprobaciones y actualizaciones de actividad cuando no estés en tu mesa."
+                },
+                "restApi": {
+                    "title": "Acceso REST API",
+                    "desc": "Integra Slack, CI o herramientas internas con claves API y rutas de servicio."
+                },
+                "teamWorkspace": {
+                    "title": "Espacio de equipo",
+                    "desc": "Comparte máquinas, vistas de actividad y políticas en un espacio de equipo."
+                },
+                "enterpriseControls": {
+                    "title": "Controles enterprise",
+                    "desc": "SSO, RBAC, logs de auditoría y políticas gestionadas para equipos de producción."
+                }
+            },
+            "comparison": {
+                "chatRelay": "Relevo de chat de agentes",
+                "screenshots": "Capturas de IDE en vivo",
+                "remoteControl": "Control remoto del IDE",
+                "multiIde": "Supervisión multi-IDE",
+                "extensionCli": "Agentes de extensión y CLI",
+                "anyNetwork": "Acceso desde cualquier red",
+                "webrtc": "Streaming P2P WebRTC",
+                "mobilePush": "Notificaciones push móviles",
+                "restApi": "REST API y webhooks",
+                "teamCollaboration": "Colaboración en equipo",
+                "multiMachineDashboards": "Paneles multi-máquina",
+                "ssoRbacAuditLogs": "SSO, RBAC, logs de auditoría"
+            }
         },
         "fonts": {
             "fontOverridesNotice": "Anulaciones de fuente solo para standalone. No afectan al panel en la nube. Las burbujas de chat, el texto de markdown, los bloques de código, las filas de herramientas y la salida del terminal usan todas las preferencias de abajo.",

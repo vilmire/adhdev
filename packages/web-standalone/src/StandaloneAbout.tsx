@@ -30,37 +30,39 @@ import {
 
 declare const __APP_VERSION__: string
 
+// Card copy lives in i18n (standalone.about.features.*) — these arrays carry
+// only the icon + key so every locale renders translated cards.
 const SELFHOST_FEATURES = [
-    { icon: <IconServer size={16} />, title: 'Local-first runtime', desc: 'Everything stays on your machine and the browser only connects over localhost.' },
-    { icon: <IconChat size={16} />, title: 'Agent chat relay', desc: 'Read and respond to AI conversations in real time across connected IDEs.' },
-    { icon: <IconEye size={16} />, title: 'Live screenshots', desc: 'View your IDE directly in the browser through the local screenshot stream.' },
-    { icon: <IconMonitor size={16} />, title: 'Remote control', desc: 'Click, type, and steer your IDE sessions without switching windows.' },
-    { icon: <IconPlug size={16} />, title: 'Multi-IDE support', desc: 'Monitor VS Code, Cursor, Windsurf, and extension-based agents in one place.' },
-    { icon: <IconBook size={16} />, title: 'CLI and ACP coverage', desc: 'Track standalone CLI agents and ACP-backed workflows alongside IDE sessions.' },
+    { icon: <IconServer size={16} />, key: 'localFirst' },
+    { icon: <IconChat size={16} />, key: 'chatRelay' },
+    { icon: <IconEye size={16} />, key: 'screenshots' },
+    { icon: <IconMonitor size={16} />, key: 'remoteControl' },
+    { icon: <IconPlug size={16} />, key: 'multiIde' },
+    { icon: <IconBook size={16} />, key: 'cliAcp' },
 ]
 
 const CLOUD_EXTRAS = [
-    { icon: <IconRocket size={16} />, title: 'Access from anywhere', desc: 'Reach your machines from another laptop or phone without opening local ports.' },
-    { icon: <IconDashboard size={16} />, title: 'Low-latency P2P stream', desc: 'Cloud adds the WebRTC path for faster screenshots and remote control.' },
-    { icon: <IconBell size={16} />, title: 'Mobile notifications', desc: 'Get approval prompts and activity updates when you are away from your desk.' },
-    { icon: <IconKey size={16} />, title: 'REST API access', desc: 'Integrate with Slack, CI, or internal tools using API keys and service routes.' },
-    { icon: <IconUsers size={16} />, title: 'Team workspace', desc: 'Share machines, activity views, and policies across a team workspace.' },
-    { icon: <IconShield size={16} />, title: 'Enterprise controls', desc: 'SSO, RBAC, audit logs, and managed policy features for production teams.' },
+    { icon: <IconRocket size={16} />, key: 'anywhere' },
+    { icon: <IconDashboard size={16} />, key: 'p2pStream' },
+    { icon: <IconBell size={16} />, key: 'mobileNotifications' },
+    { icon: <IconKey size={16} />, key: 'restApi' },
+    { icon: <IconUsers size={16} />, key: 'teamWorkspace' },
+    { icon: <IconShield size={16} />, key: 'enterpriseControls' },
 ]
 
 const COMPARISON = [
-    { feature: 'Agent chat relay', selfhost: true, cloud: true },
-    { feature: 'Live IDE screenshots', selfhost: true, cloud: true },
-    { feature: 'Remote IDE control', selfhost: true, cloud: true },
-    { feature: 'Multi-IDE monitoring', selfhost: true, cloud: true },
-    { feature: 'Extension and CLI agents', selfhost: true, cloud: true },
-    { feature: 'Access from any network', selfhost: false, cloud: true },
-    { feature: 'WebRTC P2P streaming', selfhost: false, cloud: true },
-    { feature: 'Mobile push notifications', selfhost: false, cloud: true },
-    { feature: 'REST API and webhooks', selfhost: false, cloud: true },
-    { feature: 'Team collaboration', selfhost: false, cloud: true },
-    { feature: 'Multi-machine dashboards', selfhost: false, cloud: true },
-    { feature: 'SSO, RBAC, audit logs', selfhost: false, cloud: true },
+    { key: 'chatRelay', selfhost: true, cloud: true },
+    { key: 'screenshots', selfhost: true, cloud: true },
+    { key: 'remoteControl', selfhost: true, cloud: true },
+    { key: 'multiIde', selfhost: true, cloud: true },
+    { key: 'extensionCli', selfhost: true, cloud: true },
+    { key: 'anyNetwork', selfhost: false, cloud: true },
+    { key: 'webrtc', selfhost: false, cloud: true },
+    { key: 'mobilePush', selfhost: false, cloud: true },
+    { key: 'restApi', selfhost: false, cloud: true },
+    { key: 'teamCollaboration', selfhost: false, cloud: true },
+    { key: 'multiMachineDashboards', selfhost: false, cloud: true },
+    { key: 'ssoRbacAuditLogs', selfhost: false, cloud: true },
 ]
 
 export default function StandaloneAbout() {
@@ -97,14 +99,14 @@ export default function StandaloneAbout() {
             <Section title={t('standalone.about.includedSection')} description={t('standalone.about.includedDescription')}>
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {SELFHOST_FEATURES.map(feature => (
-                        <div key={feature.title} className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-4 transition-colors hover:border-border-default">
+                        <div key={feature.key} className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-4 transition-colors hover:border-border-default">
                             <div className="flex items-center gap-2 text-sm font-semibold text-text-primary mb-2">
                                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-bg-secondary text-text-secondary border border-border-subtle">
                                     {feature.icon}
                                 </span>
-                                {feature.title}
+                                {t('standalone.about.features.' + feature.key + '.title')}
                             </div>
-                            <p className="text-[13px] leading-relaxed text-text-muted">{feature.desc}</p>
+                            <p className="text-[13px] leading-relaxed text-text-muted">{t('standalone.about.features.' + feature.key + '.desc')}</p>
                         </div>
                     ))}
                 </div>
@@ -134,14 +136,14 @@ export default function StandaloneAbout() {
             <Section title={t('standalone.about.cloudExtrasSection')} description={t('standalone.about.cloudExtrasDescription')}>
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {CLOUD_EXTRAS.map(feature => (
-                        <div key={feature.title} className="rounded-xl border border-accent-primary/20 bg-accent-primary/5 px-4 py-4">
+                        <div key={feature.key} className="rounded-xl border border-accent-primary/20 bg-accent-primary/5 px-4 py-4">
                             <div className="flex items-center gap-2 text-sm font-semibold text-text-primary mb-2">
                                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
                                     {feature.icon}
                                 </span>
-                                {feature.title}
+                                {t('standalone.about.extras.' + feature.key + '.title')}
                             </div>
-                            <p className="text-[13px] leading-relaxed text-text-muted">{feature.desc}</p>
+                            <p className="text-[13px] leading-relaxed text-text-muted">{t('standalone.about.extras.' + feature.key + '.desc')}</p>
                         </div>
                     ))}
                 </div>
@@ -159,8 +161,8 @@ export default function StandaloneAbout() {
                         </thead>
                         <tbody>
                             {COMPARISON.map((row, index) => (
-                                <tr key={row.feature} className={index % 2 === 0 ? 'bg-bg-glass' : 'bg-transparent'}>
-                                    <td className="px-4 py-2.5 text-text-secondary">{row.feature}</td>
+                                <tr key={row.key} className={index % 2 === 0 ? 'bg-bg-glass' : 'bg-transparent'}>
+                                    <td className="px-4 py-2.5 text-text-secondary">{t('standalone.about.comparison.' + row.key)}</td>
                                     <td className="px-4 py-2.5 text-center">{row.selfhost ? <span className="text-emerald-500">✓</span> : <span className="text-text-muted opacity-40">—</span>}</td>
                                     <td className="px-4 py-2.5 text-center"><span className="text-emerald-500">✓</span></td>
                                 </tr>

@@ -1512,7 +1512,73 @@
             "cloudOptional": "Cloud is optional, not required",
             "cloudOptionalDescription": "You can stay fully local in standalone, and move to cloud later without changing how you use the dashboard.",
             "compareCloud": "Compare Cloud ↗",
-            "discord": "Discord ↗"
+            "discord": "Discord ↗",
+            "features": {
+                "localFirst": {
+                    "title": "Local-first runtime",
+                    "desc": "Everything stays on your machine and the browser only connects over localhost."
+                },
+                "chatRelay": {
+                    "title": "Agent chat relay",
+                    "desc": "Read and respond to AI conversations in real time across connected IDEs."
+                },
+                "screenshots": {
+                    "title": "Live screenshots",
+                    "desc": "View your IDE directly in the browser through the local screenshot stream."
+                },
+                "remoteControl": {
+                    "title": "Remote control",
+                    "desc": "Click, type, and steer your IDE sessions without switching windows."
+                },
+                "multiIde": {
+                    "title": "Multi-IDE support",
+                    "desc": "Monitor VS Code, Cursor, Windsurf, and extension-based agents in one place."
+                },
+                "cliAcp": {
+                    "title": "CLI and ACP coverage",
+                    "desc": "Track standalone CLI agents and ACP-backed workflows alongside IDE sessions."
+                }
+            },
+            "extras": {
+                "anywhere": {
+                    "title": "Access from anywhere",
+                    "desc": "Reach your machines from another laptop or phone without opening local ports."
+                },
+                "p2pStream": {
+                    "title": "Low-latency P2P stream",
+                    "desc": "Cloud adds the WebRTC path for faster screenshots and remote control."
+                },
+                "mobileNotifications": {
+                    "title": "Mobile notifications",
+                    "desc": "Get approval prompts and activity updates when you are away from your desk."
+                },
+                "restApi": {
+                    "title": "REST API access",
+                    "desc": "Integrate with Slack, CI, or internal tools using API keys and service routes."
+                },
+                "teamWorkspace": {
+                    "title": "Team workspace",
+                    "desc": "Share machines, activity views, and policies across a team workspace."
+                },
+                "enterpriseControls": {
+                    "title": "Enterprise controls",
+                    "desc": "SSO, RBAC, audit logs, and managed policy features for production teams."
+                }
+            },
+            "comparison": {
+                "chatRelay": "Agent chat relay",
+                "screenshots": "Live IDE screenshots",
+                "remoteControl": "Remote IDE control",
+                "multiIde": "Multi-IDE monitoring",
+                "extensionCli": "Extension and CLI agents",
+                "anyNetwork": "Access from any network",
+                "webrtc": "WebRTC P2P streaming",
+                "mobilePush": "Mobile push notifications",
+                "restApi": "REST API and webhooks",
+                "teamCollaboration": "Team collaboration",
+                "multiMachineDashboards": "Multi-machine dashboards",
+                "ssoRbacAuditLogs": "SSO, RBAC, audit logs"
+            }
         },
         "fonts": {
             "fontOverridesNotice": "Standalone-only font overrides. These do not affect the cloud dashboard. Chat bubbles, markdown prose, code blocks, tool rows, and terminal output all use the preferences below.",
@@ -1763,7 +1829,7 @@
             "title": "Settings",
             "subtitle": "Appearance & preferences",
             "quickLinksTitle": "Quick links",
-            "quickLinksDesc": "Open the pages that are easiest to need from mobile inbox.",
+            "quickLinksDesc": "Quick access to the pages you need most often from the mobile inbox.",
             "linkNotificationsTitle": "Notifications",
             "linkNotificationsSubtitle": "Push, browser alerts, and delivery settings",
             "linkAccountTitle": "Account",

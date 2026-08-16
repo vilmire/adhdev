@@ -1512,7 +1512,73 @@
             "cloudOptional": "Cloud는 선택 사항입니다",
             "cloudOptionalDescription": "Standalone에서 완전히 로컬로 유지하다가 나중에 대시보드 사용 방식을 바꾸지 않고 Cloud로 이전할 수 있습니다.",
             "compareCloud": "Cloud 비교 ↗",
-            "discord": "Discord ↗"
+            "discord": "Discord ↗",
+            "features": {
+                "localFirst": {
+                    "title": "로컬 우선 런타임",
+                    "desc": "모든 것이 내 머신에 남고, 브라우저는 localhost로만 연결됩니다."
+                },
+                "chatRelay": {
+                    "title": "에이전트 채팅 릴레이",
+                    "desc": "연결된 IDE들의 AI 대화를 실시간으로 읽고 응답합니다."
+                },
+                "screenshots": {
+                    "title": "라이브 스크린샷",
+                    "desc": "로컬 스크린샷 스트림으로 IDE 화면을 브라우저에서 바로 봅니다."
+                },
+                "remoteControl": {
+                    "title": "원격 제어",
+                    "desc": "창 전환 없이 IDE 세션을 클릭·입력·조종합니다."
+                },
+                "multiIde": {
+                    "title": "멀티 IDE 지원",
+                    "desc": "VS Code, Cursor, Windsurf 및 확장 기반 에이전트를 한곳에서 모니터링합니다."
+                },
+                "cliAcp": {
+                    "title": "CLI·ACP 커버리지",
+                    "desc": "독립 CLI 에이전트와 ACP 워크플로를 IDE 세션과 함께 추적합니다."
+                }
+            },
+            "extras": {
+                "anywhere": {
+                    "title": "어디서나 접근",
+                    "desc": "로컬 포트를 열지 않고 다른 노트북이나 폰에서 머신에 접근합니다."
+                },
+                "p2pStream": {
+                    "title": "저지연 P2P 스트림",
+                    "desc": "Cloud는 WebRTC 경로를 더해 스크린샷·원격 제어를 더 빠르게 합니다."
+                },
+                "mobileNotifications": {
+                    "title": "모바일 알림",
+                    "desc": "자리를 비워도 승인 요청과 활동 업데이트를 받습니다."
+                },
+                "restApi": {
+                    "title": "REST API 접근",
+                    "desc": "API 키와 서비스 라우트로 Slack, CI, 내부 도구와 연동합니다."
+                },
+                "teamWorkspace": {
+                    "title": "팀 워크스페이스",
+                    "desc": "머신·활동 뷰·정책을 팀 워크스페이스에서 공유합니다."
+                },
+                "enterpriseControls": {
+                    "title": "엔터프라이즈 컨트롤",
+                    "desc": "SSO, RBAC, 감사 로그 등 프로덕션 팀용 관리 기능."
+                }
+            },
+            "comparison": {
+                "chatRelay": "에이전트 채팅 릴레이",
+                "screenshots": "라이브 IDE 스크린샷",
+                "remoteControl": "원격 IDE 제어",
+                "multiIde": "멀티 IDE 모니터링",
+                "extensionCli": "확장·CLI 에이전트",
+                "anyNetwork": "어떤 네트워크에서든 접근",
+                "webrtc": "WebRTC P2P 스트리밍",
+                "mobilePush": "모바일 푸시 알림",
+                "restApi": "REST API·웹훅",
+                "teamCollaboration": "팀 협업",
+                "multiMachineDashboards": "멀티 머신 대시보드",
+                "ssoRbacAuditLogs": "SSO·RBAC·감사 로그"
+            }
         },
         "fonts": {
             "fontOverridesNotice": "스탠드얼론 전용 폰트 재정의. Cloud 대시보드에는 영향을 주지 않습니다. 채팅 버블, 마크다운 산문, 코드 블록, 툴 행, 터미널 출력은 모두 아래 환경설정을 따릅니다.",

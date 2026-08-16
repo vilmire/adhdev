@@ -1512,7 +1512,73 @@
             "cloudOptional": "Cloud は任意であり、必須ではありません",
             "cloudOptionalDescription": "Standalone で完全にローカルのまま利用でき、ダッシュボードの使い方を変えることなく後から Cloud へ移行できます。",
             "compareCloud": "Cloud を比較 ↗",
-            "discord": "Discord ↗"
+            "discord": "Discord ↗",
+            "features": {
+                "localFirst": {
+                    "title": "ローカルファースト実行",
+                    "desc": "すべてが自分のマシンに留まり、ブラウザは localhost にのみ接続します。"
+                },
+                "chatRelay": {
+                    "title": "エージェントチャット中継",
+                    "desc": "接続された IDE の AI 会話をリアルタイムで読み書きします。"
+                },
+                "screenshots": {
+                    "title": "ライブスクリーンショット",
+                    "desc": "ローカルのスクリーンショットストリームで IDE をブラウザに表示します。"
+                },
+                "remoteControl": {
+                    "title": "リモート操作",
+                    "desc": "ウィンドウを切り替えずに IDE セッションをクリック・入力・操作します。"
+                },
+                "multiIde": {
+                    "title": "マルチ IDE 対応",
+                    "desc": "VS Code、Cursor、Windsurf、拡張ベースのエージェントを一箇所で監視します。"
+                },
+                "cliAcp": {
+                    "title": "CLI・ACP カバレッジ",
+                    "desc": "スタンドアロン CLI エージェントと ACP ワークフローを IDE と並行して追跡します。"
+                }
+            },
+            "extras": {
+                "anywhere": {
+                    "title": "どこからでもアクセス",
+                    "desc": "ローカルポートを開かずに別の PC やスマホからマシンに接続します。"
+                },
+                "p2pStream": {
+                    "title": "低遅延 P2P ストリーム",
+                    "desc": "Cloud は WebRTC 経路を追加し、スクリーンショットと操作を高速化します。"
+                },
+                "mobileNotifications": {
+                    "title": "モバイル通知",
+                    "desc": "席を離れていても承認要求とアクティビティ更新を受け取れます。"
+                },
+                "restApi": {
+                    "title": "REST API アクセス",
+                    "desc": "API キーとサービスルートで Slack・CI・社内ツールと連携します。"
+                },
+                "teamWorkspace": {
+                    "title": "チームワークスペース",
+                    "desc": "マシン・アクティビティ・ポリシーをチームで共有します。"
+                },
+                "enterpriseControls": {
+                    "title": "エンタープライズ管理",
+                    "desc": "SSO、RBAC、監査ログなど本番チーム向けの管理機能。"
+                }
+            },
+            "comparison": {
+                "chatRelay": "エージェントチャット中継",
+                "screenshots": "ライブ IDE スクリーンショット",
+                "remoteControl": "リモート IDE 操作",
+                "multiIde": "マルチ IDE 監視",
+                "extensionCli": "拡張・CLI エージェント",
+                "anyNetwork": "任意のネットワークから接続",
+                "webrtc": "WebRTC P2P ストリーミング",
+                "mobilePush": "モバイルプッシュ通知",
+                "restApi": "REST API・Webhook",
+                "teamCollaboration": "チームコラボレーション",
+                "multiMachineDashboards": "マルチマシンダッシュボード",
+                "ssoRbacAuditLogs": "SSO・RBAC・監査ログ"
+            }
         },
         "fonts": {
             "fontOverridesNotice": "Standalone 専用のフォント上書き設定です。クラウドダッシュボードには影響しません。チャットバブル、Markdown 本文、コードブロック、ツール行、ターミナル出力はすべて以下の設定を使用します。",

@@ -1512,7 +1512,73 @@
             "cloudOptional": "Cloud 是可选的，并非必需",
             "cloudOptionalDescription": "你可以在 Standalone 中保持完全本地运行，并在以后迁移到 Cloud，而无需改变使用仪表盘的方式。",
             "compareCloud": "对比 Cloud ↗",
-            "discord": "Discord ↗"
+            "discord": "Discord ↗",
+            "features": {
+                "localFirst": {
+                    "title": "本地优先运行时",
+                    "desc": "一切都保留在你的机器上，浏览器仅通过 localhost 连接。"
+                },
+                "chatRelay": {
+                    "title": "代理聊天中继",
+                    "desc": "实时读取并回复已连接 IDE 中的 AI 对话。"
+                },
+                "screenshots": {
+                    "title": "实时截图",
+                    "desc": "通过本地截图流在浏览器中直接查看 IDE。"
+                },
+                "remoteControl": {
+                    "title": "远程控制",
+                    "desc": "无需切换窗口即可点击、输入并操控 IDE 会话。"
+                },
+                "multiIde": {
+                    "title": "多 IDE 支持",
+                    "desc": "在一处监控 VS Code、Cursor、Windsurf 及扩展型代理。"
+                },
+                "cliAcp": {
+                    "title": "CLI 与 ACP 覆盖",
+                    "desc": "与 IDE 会话一起跟踪独立 CLI 代理和 ACP 工作流。"
+                }
+            },
+            "extras": {
+                "anywhere": {
+                    "title": "随处访问",
+                    "desc": "无需开放本地端口，即可从其他电脑或手机访问你的机器。"
+                },
+                "p2pStream": {
+                    "title": "低延迟 P2P 流",
+                    "desc": "Cloud 增加 WebRTC 通道，让截图与远程控制更快。"
+                },
+                "mobileNotifications": {
+                    "title": "移动通知",
+                    "desc": "离开工位也能收到审批请求和活动更新。"
+                },
+                "restApi": {
+                    "title": "REST API 访问",
+                    "desc": "通过 API 密钥与服务路由集成 Slack、CI 或内部工具。"
+                },
+                "teamWorkspace": {
+                    "title": "团队工作区",
+                    "desc": "在团队工作区共享机器、活动视图与策略。"
+                },
+                "enterpriseControls": {
+                    "title": "企业级控制",
+                    "desc": "SSO、RBAC、审计日志等面向生产团队的管理功能。"
+                }
+            },
+            "comparison": {
+                "chatRelay": "代理聊天中继",
+                "screenshots": "实时 IDE 截图",
+                "remoteControl": "远程 IDE 控制",
+                "multiIde": "多 IDE 监控",
+                "extensionCli": "扩展与 CLI 代理",
+                "anyNetwork": "任意网络访问",
+                "webrtc": "WebRTC P2P 流",
+                "mobilePush": "移动推送通知",
+                "restApi": "REST API 与 Webhook",
+                "teamCollaboration": "团队协作",
+                "multiMachineDashboards": "多机器仪表板",
+                "ssoRbacAuditLogs": "SSO、RBAC、审计日志"
+            }
         },
         "fonts": {
             "fontOverridesNotice": "仅 Standalone 的字体覆盖设置。这些设置不会影响云端仪表盘。聊天气泡、Markdown 正文、代码块、工具行和终端输出都使用以下偏好设置。",
