@@ -371,7 +371,11 @@ describe('B. fs fallback reachability for non-submodule removal failures', () =>
                 } as any,
                 detectedIdes: { value: [] },
                 sessionRegistry: {} as any,
-                sessionHostControl: {} as any,
+                // An EMPTY session inventory, not an empty stub: the precheck's
+                // live-occupancy guard fails closed when it cannot enumerate
+                // sessions, and would otherwise mask the dirty refusal this test
+                // is about. Idle-and-dirty is the case under test.
+                sessionHostControl: { listSessions: vi.fn(async () => []) } as any,
             });
             const bestEffortSpy = vi.spyOn(router as any, 'bestEffortRemoveWorktreeDir');
 

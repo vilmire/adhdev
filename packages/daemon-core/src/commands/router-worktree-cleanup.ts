@@ -174,6 +174,14 @@ async function findLiveSessionOnWorktree(self: DaemonCommandRouter, node: any, n
  * until its first push — and treating "no upstream" as "nothing to protect"
  * would invert the guard exactly when it matters most.
  *
+ * Scope: only applies when the repo HAS a remote. In a repo with no remote
+ * configured at all there is nowhere to push to, so every commit would read as
+ * "unpushed" and the guard would block every legitimate cleanup — including in
+ * purely local repos, which are a normal way to use a mesh. "Nothing to push
+ * to" is not the same as "work at risk", and a guard that can never be
+ * satisfied is a guard operators learn to `force` past, which would erode the
+ * live-occupancy guard alongside it.
+ *
  * Best-effort and fail-open on probe failure: this is an ADDITIONAL guard, and
  * the branch ref itself is preserved when unmerged, so a probe error must not
  * block an otherwise-legitimate cleanup.
@@ -183,12 +191,15 @@ async function hasUnpushedWorktreeCommits(workspace: string): Promise<{ unpushed
         const { execFile } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
-        const { stdout } = await execFileAsync(
-            'git',
-            ['rev-list', '--count', 'HEAD', '--not', '--remotes'],
-            { cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gitChildEnv() },
-        );
-        const count = Number.parseInt(String(stdout).trim(), 10);
+        const git = async (gitArgs: string[]) => {
+            const { stdout } = await execFileAsync('git', gitArgs, {
+                cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env: gitChildEnv(),
+            });
+            return String(stdout).trim();
+        };
+        // No remote configured → nothing to be "unpushed" relative to.
+        if (!(await git(['remote']))) return { unpushed: false };
+        const count = Number.parseInt(await git(['rev-list', '--count', 'HEAD', '--not', '--remotes']), 10);
         return Number.isFinite(count) && count > 0 ? { unpushed: true, count } : { unpushed: false };
     } catch {
         return { unpushed: false };
@@ -372,21 +383,6 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
             }
         }
 
-        // Unpushed-commit guard — the dirty guard above only sees UNCOMMITTED
-        // work; committed-but-unpushed commits leave a clean status and would be
-        // destroyed silently along with the directory.
-        if (args.force !== true) {
-            const unpushed = await hasUnpushedWorktreeCommits(workspace);
-            if (unpushed.unpushed) {
-                return {
-                    ok: false,
-                    code: 'mesh_worktree_cleanup_unpushed_commits',
-                    error: `Refusing to remove worktree '${workspace}' because it has ${unpushed.count} commit(s) not present on any remote`,
-                    recoveryHint: 'Push the branch (or confirm the commits are already landed elsewhere) before retrying mesh_remove_node. Pass force:true only if you accept discarding those commits.' + sessionPreservedNote,
-                };
-            }
-        }
-
         // Dirty-worktree guard — a read-only mirror of removeWorktree(requireClean)
         // (`git status --porcelain` run inside the worktree). `force:true` skips it,
         // preserving the requireClean:!force semantics.
@@ -411,6 +407,28 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
                 // the authoritative removeWorktree(requireClean) guard rather than
                 // refusing here (which would block an otherwise-clean removal).
                 return { ok: true };
+            }
+        }
+
+        // Unpushed-commit guard — the dirty guard above sees only UNCOMMITTED
+        // work; committed-but-unpushed commits leave a CLEAN status and would be
+        // destroyed silently along with the directory.
+        //
+        // Ordered AFTER the dirty guard deliberately: an uncommitted-changes
+        // refusal is the more specific and more actionable of the two (commit,
+        // stash, or discard), and it is the long-established code that callers
+        // and tests already branch on. A dirty worktree is almost always also
+        // unpushed, so running this first would have silently relabelled the
+        // common dirty refusal as an unpushed one.
+        if (args.force !== true) {
+            const unpushed = await hasUnpushedWorktreeCommits(workspace);
+            if (unpushed.unpushed) {
+                return {
+                    ok: false,
+                    code: 'mesh_worktree_cleanup_unpushed_commits',
+                    error: `Refusing to remove worktree '${workspace}' because it has ${unpushed.count} commit(s) not present on any remote`,
+                    recoveryHint: 'Push the branch (or confirm the commits are already landed elsewhere) before retrying mesh_remove_node. Pass force:true only if you accept discarding those commits.' + sessionPreservedNote,
+                };
             }
         }
 

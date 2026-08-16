@@ -716,12 +716,18 @@ describe('mesh session cleanup', () => {
         inlineMesh,
       })
 
+      // The live-occupancy guard (WORKTREE-DELETED-WHILE-RUNNING) now refuses
+      // FIRST — a busy worktree must not be removed even when its content is
+      // safe, and the running session here is precisely what that guard exists
+      // to protect. The property this test is really about is unchanged and
+      // asserted below: the refusal happens BEFORE any session cleanup, so the
+      // delegated session is left fully intact.
       expect(result).toMatchObject({
         success: false,
         removed: false,
-        code: 'mesh_worktree_cleanup_dirty',
+        code: 'mesh_worktree_cleanup_live_session',
       })
-      expect(String((result as any).error)).toContain('Refusing to remove dirty worktree')
+      expect(String((result as any).error)).toContain('is still live in it')
       // The session was deliberately preserved: no stop/delete, and no sessionCleanup
       // key in the refusal response.
       expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
@@ -730,6 +736,45 @@ describe('mesh session cleanup', () => {
       expect(String((result as any).recoveryHint)).toContain('session was left running')
       expect(existsSync(created.worktreePath)).toBe(true)
       expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('blocks removal of a DIRTY but IDLE worktree with the dirty code (no live session to mask it)', async () => {
+    // Companion to the test above: with the worktree idle, the occupancy guard
+    // passes and the dirty refusal is the one that fires, so the long-standing
+    // dirty guard keeps direct coverage.
+    const { dir, repoRoot, worktreeBaseDir } = await createTempGitRepo('adhdev-mesh-dirty-idle-')
+    try {
+      const branch = 'feat/dirty-idle-worktree'
+      const meshName = 'dirty-idle-mesh'
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir })
+      await writeFile(join(created.worktreePath, 'dirty.txt'), 'uncommitted\n')
+      const inlineMesh = {
+        id: 'mesh-dirty-idle',
+        name: meshName,
+        policy: { worktreeBaseDir },
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter({ listSessions: vi.fn(async () => []) })
+
+      const result = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: false,
+        removed: false,
+        code: 'mesh_worktree_cleanup_dirty',
+      })
+      expect(String((result as any).error)).toContain('Refusing to remove dirty worktree')
+      expect(existsSync(created.worktreePath)).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -753,6 +798,13 @@ describe('mesh session cleanup', () => {
       }
       // A running session bound to the worktree → default worktree cleanup mode
       // (stop_and_delete) must stop AND delete it once the precheck passes.
+      //
+      // `force: true` is now required to reach that path with a LIVE session:
+      // since WORKTREE-DELETED-WHILE-RUNNING the precheck refuses an occupied
+      // worktree by default, because deleting one out from under a working
+      // agent is what destroyed a worker's unpushed work. Forcing is the
+      // documented operator override and is what this test needs in order to
+      // keep covering the stop_and_delete + directory-removal behavior itself.
       const { router, sessionHostControl } = createRouter({
         listSessions: vi.fn(async () => [
           { sessionId: 'live-1', workspace: created.worktreePath, lifecycle: 'running' },
@@ -763,12 +815,47 @@ describe('mesh session cleanup', () => {
         meshId: inlineMesh.id,
         nodeId: 'node-worktree',
         inlineMesh,
+        force: true,
       })
 
       expect(result).toMatchObject({ success: true, removed: true, worktreeCleanup: { success: true } })
       // Default worktree cleanup mode is stop_and_delete: a live workspace-bound
       // session is force-deleted (it does not route through stopSession).
       expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('live-1', { force: true })
+      expect(existsSync(created.worktreePath)).toBe(false)
+      expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('removes a clean IDLE worktree with no force at all (the guards do not break normal cleanup)', async () => {
+    // The counterweight to the occupancy guard: the ordinary case — nothing
+    // running, nothing dirty — must still succeed without any override, or the
+    // guards would have turned a safety fix into a workflow blocker.
+    const { dir, repoRoot, worktreeBaseDir } = await createTempGitRepo('adhdev-mesh-idle-worktree-')
+    try {
+      const branch = 'feat/idle-worktree'
+      const meshName = 'idle-worktree-mesh'
+      const created = await createWorktree({ repoRoot, branch, meshName, worktreeBaseDir })
+      const inlineMesh = {
+        id: 'mesh-idle-worktree',
+        name: meshName,
+        policy: { worktreeBaseDir },
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter({ listSessions: vi.fn(async () => []) })
+
+      const result: any = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, removed: true, worktreeCleanup: { success: true } })
       expect(existsSync(created.worktreePath)).toBe(false)
       expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(false)
     } finally {
