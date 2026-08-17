@@ -34,7 +34,9 @@ import {
     DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
     DEFAULT_CDP_SCAN_INTERVAL_MS,
 } from '../runtime-defaults.js';
-import { loadConfig } from '../config/config.js';
+import { loadConfig, getConfigDir } from '../config/config.js';
+import { configDirChannelMismatch } from '../config/config-dir.js';
+import { isPreviewReleaseChannel, PROVIDER_CHANNEL_ENV_VAR } from '../providers/channel/contract.js';
 import { readUpgradeFailureNotice } from '../commands/upgrade-helper.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
@@ -262,6 +264,28 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // /api/v1/providers/updates).
     providerLoader.loadAll();
     providerLoader.registerToDetector();
+
+    // 2.0.1 Config-dir/provider-channel axis warning. These two axes normally
+    // move together (both derive from the build-track stamp), but
+    // ADHDEV_CONFIG_DIR only overrides the config-dir PATH — it feeds no
+    // signal into resolveProviderChannel — so a config dir that LOOKS like
+    // one track can silently resolve providers on the other track's channel
+    // (e.g. a preview session-host child re-run under `tsx`, which has no
+    // `__ADHDEV_BUILD_CHANNEL__` bundler define). Informational only: never
+    // changes channel/provider resolution, and stays silent whenever the
+    // divergence is explained by an explicit signal (config.providerChannel,
+    // ADHDEV_PROVIDER_CHANNEL env, or a preview updateChannel) rather than by
+    // this axis decoupling.
+    const hasExplicitChannelSignal = Boolean(
+        (appConfig.providerChannel && appConfig.providerChannel.trim())
+        || (process.env[PROVIDER_CHANNEL_ENV_VAR] ?? '').trim()
+        || isPreviewReleaseChannel(appConfig.updateChannel),
+    );
+    const resolvedConfigDir = getConfigDir();
+    const channelMismatch = configDirChannelMismatch(resolvedConfigDir, providerLoader.channel, hasExplicitChannelSignal);
+    if (channelMismatch) {
+        LOG.warn('Init', `Config dir looks like the ${channelMismatch.impliedTrack} track (${resolvedConfigDir}) but the resolved provider channel is '${channelMismatch.channel}'. This usually means the build-track stamp (__ADHDEV_BUILD_CHANNEL__) was absent for this process — e.g. running via tsx/ts-node instead of a built bundle — so provider-channel resolution fell through to its 'stable' default instead of following ADHDEV_CONFIG_DIR. Impact: providers installed under the OTHER channel's store will not be visible (can present as 0 providers loaded). Fix: set ADHDEV_PROVIDER_CHANNEL=${channelMismatch.impliedTrack} (or config.providerChannel) explicitly for this process, or run the built bundle instead of source.`);
+    }
 
     // 2.1 Verified-channel first sync. When the resolved provider channel has
     // an EMPTY store, run one bounded verified sync so channel

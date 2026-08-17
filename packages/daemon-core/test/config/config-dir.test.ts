@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, rmSync } from 'fs';
 import { join, win32, posix } from 'path';
 import { tmpdir } from 'os';
 import { getConfigDir } from '../../src/config/config.js';
-import { resolveConfigDir, resolveConfigLogsDir, isCrossTrackConfigDirOverride } from '../../src/config/config-dir.js';
+import {
+  resolveConfigDir,
+  resolveConfigLogsDir,
+  isCrossTrackConfigDirOverride,
+  configDirChannelMismatch,
+} from '../../src/config/config-dir.js';
 
 const ORIGINAL_ENV = {
   ADHDEV_CONFIG_DIR: process.env.ADHDEV_CONFIG_DIR,
@@ -178,5 +183,54 @@ describe('isCrossTrackConfigDirOverride (cross-track uninstall-guard predicate)'
   it('normalizes a trailing slash and mixed forward-slash override against a native win32 join', () => {
     const withTrailingSlashAndForwardSlashes = 'C:/Users/vilmi/.adhdev-preview/';
     expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: withTrailingSlashAndForwardSlashes }, homeWin, 'win32')).toBe(true);
+  });
+});
+
+// ─── configDirChannelMismatch ───────────────────────────────────────────────
+//
+// Pure (resolvedConfigDir, resolvedChannel, hasExplicitChannelSignal) inputs
+// — same fully-injected style as isCrossTrackConfigDirOverride above — so no
+// process.env mutation or temp dirs are needed here either.
+describe('configDirChannelMismatch (config-dir/provider-channel axis warning)', () => {
+  const previewDir = posix.join('/home/vilmi', '.adhdev-preview');
+  const stableDir = posix.join('/home/vilmi', '.adhdev');
+  const customDir = posix.join('/home/vilmi', 'my-custom-config');
+
+  it('is silent when the config dir implies stable and the channel is stable', () => {
+    expect(configDirChannelMismatch(stableDir, 'stable', false)).toBeNull();
+  });
+
+  it('is silent when the config dir implies preview and the channel is preview', () => {
+    expect(configDirChannelMismatch(previewDir, 'preview', false)).toBeNull();
+  });
+
+  it('flags a preview-named config dir resolving to the stable channel (the tsx/no-build-stamp case)', () => {
+    expect(configDirChannelMismatch(previewDir, 'stable', false)).toEqual({
+      impliedTrack: 'preview',
+      channel: 'stable',
+    });
+  });
+
+  it('flags a stable-named config dir resolving to the preview channel (reverse direction)', () => {
+    expect(configDirChannelMismatch(stableDir, 'preview', false)).toEqual({
+      impliedTrack: 'stable',
+      channel: 'preview',
+    });
+  });
+
+  it('is silent when an explicit channel signal explains the divergence, even for a mismatched name', () => {
+    expect(configDirChannelMismatch(previewDir, 'stable', true)).toBeNull();
+    expect(configDirChannelMismatch(stableDir, 'preview', true)).toBeNull();
+  });
+
+  it('is silent for a config dir whose basename implies neither track (custom/self-host path)', () => {
+    expect(configDirChannelMismatch(customDir, 'stable', false)).toBeNull();
+    expect(configDirChannelMismatch(customDir, 'preview', false)).toBeNull();
+  });
+
+  it('is silent for a /tmp test-isolation dir regardless of channel (matches isCrossTrackConfigDirOverride\'s treatment of isolation dirs)', () => {
+    const isolation = posix.join('/tmp', 'adhdev-test-abc123');
+    expect(configDirChannelMismatch(isolation, 'stable', false)).toBeNull();
+    expect(configDirChannelMismatch(isolation, 'preview', false)).toBeNull();
   });
 });

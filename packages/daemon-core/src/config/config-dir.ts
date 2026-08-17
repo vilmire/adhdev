@@ -27,7 +27,7 @@
  */
 
 import { homedir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { getTrackIdentity, resolveBuildTrack, type BuildTrack } from '../track-identity.js';
 
 /** Legacy stable home dir name — also the empty-ipc-key compat instance. */
@@ -123,4 +123,46 @@ export function isCrossTrackConfigDirOverride(
         return platform === 'win32' ? unified.toLowerCase() : unified;
     };
     return normalize(override) === normalize(sibling);
+}
+
+/**
+ * Detects the config-dir/provider-channel axis decoupling: the config dir's
+ * NAME implies one track (stable `.adhdev` vs preview `.adhdev-preview`,
+ * whether that name came from ADHDEV_CONFIG_DIR or the track default) while
+ * the resolved provider channel (providers/channel/contract.ts
+ * `resolveProviderChannel`) landed on the other. This is possible because
+ * ADHDEV_CONFIG_DIR only overrides the config-dir PATH — it never feeds the
+ * provider-channel resolution — so the two axes normally move together (both
+ * derive from the same build-track stamp) but can drift apart, e.g. a
+ * preview session-host passes ADHDEV_CONFIG_DIR=~/.adhdev-preview to a child
+ * that then runs `tsx` (no `__ADHDEV_BUILD_CHANNEL__` bundler define), so
+ * resolveProviderChannel falls through its precedence chain to 'stable'.
+ *
+ * Only informational — this NEVER fires when the divergence is explained by
+ * an explicit signal (config.providerChannel, ADHDEV_PROVIDER_CHANNEL env,
+ * or a preview config.updateChannel): those are deliberate overrides, not
+ * axis decoupling, and `hasExplicitChannelSignal` lets the caller say so.
+ * Callers must pass the SAME explicit-signal inputs they gave
+ * `resolveProviderChannel` for this exemption to line up correctly.
+ *
+ * A config dir whose basename is neither track's canonical name (a custom
+ * self-host path, a /tmp test-isolation dir, `.adhdev-standalone`) never
+ * implies either track and always returns false — there is nothing to
+ * compare the channel against.
+ */
+export function configDirChannelMismatch(
+    resolvedConfigDir: string,
+    resolvedChannel: 'stable' | 'preview',
+    hasExplicitChannelSignal: boolean,
+): { impliedTrack: BuildTrack; channel: 'stable' | 'preview' } | null {
+    if (hasExplicitChannelSignal) return null;
+
+    const name = basename(resolvedConfigDir);
+    const impliedTrack: BuildTrack | null =
+        name === getTrackIdentity('stable').configDirName ? 'stable'
+            : name === getTrackIdentity('preview').configDirName ? 'preview'
+                : null;
+    if (!impliedTrack) return null;
+
+    return impliedTrack === resolvedChannel ? null : { impliedTrack, channel: resolvedChannel };
 }
