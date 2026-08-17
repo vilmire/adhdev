@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { upsertMeshMission, getMeshMission } from '@adhdev/daemon-core';
+import { upsertMeshMission, getMeshMission, getMeshMissions } from '@adhdev/daemon-core';
 import { meshMissionUpsert } from '../src/tools/mesh-tools.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
 
@@ -133,6 +133,67 @@ test('single-mission path still works and now requires a title explicitly', asyn
         const noTitle = JSON.parse(noTitleRaw);
         assert.equal(noTitle.success, false);
         assert.equal(noTitle.code, 'mission_title_required');
+    } finally {
+        cleanup(meshId);
+    }
+});
+
+test('MISSION-UPSERT-SILENT-CREATE: an unresolvable mission_id is rejected, not silently created', async () => {
+    const meshId = 'mesh-single-upsert-unresolvable-id';
+    cleanup(meshId);
+    try {
+        // Simulates a coordinator that copied a truncated/abbreviated id from a display
+        // view (e.g. mesh_mission_list showing an 8-char prefix) and passed it back as
+        // mission_id, expecting an update.
+        const raw = await meshMissionUpsert(buildCtx(meshId), {
+            mission_id: 'b643b177',
+            title: 'Ship feature X',
+        } as any);
+        const res = JSON.parse(raw);
+
+        assert.equal(res.success, false);
+        assert.equal(res.code, 'mission_not_found');
+        assert.match(res.error, /mission_not_found/);
+
+        // No orphan mission was created under the bogus id, and nothing else exists either.
+        assert.equal(getMeshMission(meshId, 'b643b177'), null);
+    } finally {
+        cleanup(meshId);
+    }
+});
+
+test('MISSION-UPSERT-SILENT-CREATE: omitting mission_id still creates normally (existing behavior preserved)', async () => {
+    const meshId = 'mesh-single-upsert-omitted-id';
+    cleanup(meshId);
+    try {
+        const raw = await meshMissionUpsert(buildCtx(meshId), { title: 'Fresh mission' } as any);
+        const res = JSON.parse(raw);
+        assert.equal(res.success, true);
+        assert.equal(res.mission.title, 'Fresh mission');
+        assert.equal(res.mission.status, 'active');
+        assert.equal(getMeshMission(meshId, res.mission.id)?.title, 'Fresh mission');
+    } finally {
+        cleanup(meshId);
+    }
+});
+
+test('MISSION-UPSERT-SILENT-CREATE: a real full id still updates correctly (regression guard)', async () => {
+    const meshId = 'mesh-single-upsert-real-id-update';
+    cleanup(meshId);
+    try {
+        const created = upsertMeshMission(meshId, { title: 'Real mission', goal: 'original goal' });
+        const raw = await meshMissionUpsert(buildCtx(meshId), {
+            mission_id: created.id,
+            title: 'Real mission',
+            status: 'completed',
+        } as any);
+        const res = JSON.parse(raw);
+        assert.equal(res.success, true);
+        assert.equal(res.mission.id, created.id);
+        assert.equal(res.mission.status, 'completed');
+        // goal preserved when not provided on update
+        assert.equal(res.mission.goal, 'original goal');
+        assert.equal(getMeshMissions(meshId).length, 1); // no duplicate created
     } finally {
         cleanup(meshId);
     }

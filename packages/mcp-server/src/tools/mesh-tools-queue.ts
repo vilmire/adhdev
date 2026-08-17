@@ -27,6 +27,7 @@ import {
     describeTaskDependencyState,
     enqueueTask,
     enqueueTaskGraph,
+    getMeshMission,
     MESH_TASK_GRAPH_MAX_TASKS,
     normalizeMeshTaskPriority,
     resolveNotBefore,
@@ -221,6 +222,19 @@ function normalizeEnqueueTaskArgs(
     const requiredTags = normalizeMeshCapabilityTags(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
     const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : undefined;
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
+    // MISSION-UPSERT-SILENT-CREATE: mission_id is a soft-looking reference but an
+    // unresolvable one silently orphans the task from any mission with no error and no
+    // warning (buildMissionInactiveWarning only warns for a KNOWN-but-inactive mission —
+    // see its own doc comment). Reject loudly here, mirroring target_node_not_found below,
+    // rather than letting the task enqueue unattributed under a typo'd/truncated id.
+    if (missionId && !getMeshMission(ctx.mesh.id, missionId)) {
+        return {
+            ok: false,
+            code: 'mission_not_found',
+            error: `mission '${missionId}' does not exist on this mesh — refusing to enqueue a task with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
+            extra: { missionId },
+        };
+    }
     // G6: task-level priority ('low' | 'normal' | 'high'). Invalid input → undefined (defaults to normal).
     const priority = normalizeMeshTaskPriority(readString(args.priority)) || undefined;
     // Optional model override — best-effort, applied at launch by providers that
@@ -575,6 +589,19 @@ export async function meshEnqueueBatch(
     }
     // Top-level mission applies to every entry that doesn't carry its own.
     const batchMissionId = readString(args.missionId) || readString(args.mission_id) || undefined;
+    // MISSION-UPSERT-SILENT-CREATE: batchMissionId is a fallback applied to entries
+    // OUTSIDE normalizeEnqueueTaskArgs (see `missionId: v.missionId ?? batchMissionId`
+    // below), so its own per-entry existence check inside the normalizer never sees this
+    // value. Validate it here up front — same reject-loudly convention, applied once for
+    // the whole batch rather than once per entry.
+    if (batchMissionId && !getMeshMission(ctx.mesh.id, batchMissionId)) {
+        return JSON.stringify({
+            success: false,
+            code: 'mission_not_found',
+            error: `mission '${batchMissionId}' does not exist on this mesh — refusing to enqueue a batch with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
+            missionId: batchMissionId,
+        });
+    }
     // G4 flags are batch-level: block refuses the WHOLE batch (it is atomic — refusing
     // one entry and inserting the rest would be exactly the partial-graph state this
     // tool exists to prevent); allow silences detection for every entry.

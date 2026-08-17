@@ -208,14 +208,25 @@ export async function meshForgetNote(
             ...(text ? { text } : {}),
             ...(typeof args.reason === 'string' && args.reason.trim() ? { reason: args.reason.trim() } : {}),
         });
+        // MISSION-UPSERT-SILENT-CREATE: a note_id is a specific, singular target — unlike
+        // text (which can legitimately match zero notes, e.g. retracting-by-content when
+        // nothing currently matches that wording). A caller that supplied note_id and got
+        // matched:0 almost always passed a truncated/wrong id (the tombstone is still
+        // recorded either way — see tombstoneOperatingNote's doc comment — but the caller
+        // needs to know their id did NOT hit a live note). success:false here means "the id
+        // you gave didn't match anything", distinct from the try/catch failure path below.
+        const idTargetMissed = Boolean(noteId) && matched === 0;
         return JSON.stringify({
-            success: true,
+            success: !idTargetMissed,
             meshId: mesh.id,
             tombstoneId: tombstone.id,
             forgot: { noteId: noteId ?? null, text: text || null, matched },
+            ...(idTargetMissed ? { code: 'note_not_found' } : {}),
             note: matched > 0
                 ? `Retracted ${matched} operating note(s). Future coordinators on this mesh will no longer see them at launch. History is preserved (append-only tombstone).`
-                : 'No live operating note matched — recorded a tombstone anyway so any matching note appended later is also suppressed.',
+                : idTargetMissed
+                    ? `No live operating note matched note_id '${noteId}' — likely a truncated/wrong id (this tool requires an exact match). A tombstone was still recorded so any matching note appended later is also suppressed, but nothing was actually retracted. Use mesh_task_history or mesh_record_note's returned noteId to get the full id.`
+                    : 'No live operating note matched — recorded a tombstone anyway so any matching note appended later is also suppressed.',
         }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
@@ -403,6 +414,7 @@ export async function meshMissionUpsert(
         const message = e?.message || String(e);
         const code = message.includes('mission_title_required') ? 'mission_title_required'
             : message.includes('invalid_mission_status') ? 'invalid_mission_status'
+            : message.includes('mission_not_found') ? 'mission_not_found'
             : undefined;
         return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
     }

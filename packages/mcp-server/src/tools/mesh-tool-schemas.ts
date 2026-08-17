@@ -58,7 +58,7 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             preferWorktree: { type: 'boolean', description: 'CamelCase alias for prefer_worktree.' },
             depends_on: { type: 'array', items: { type: 'string' }, description: 'Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue.' },
             dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
-            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id).' },
+            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). An unresolvable id is REJECTED at enqueue (mission_not_found), never silently attached — use mesh_mission_list to get a valid full id.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
             priority: { type: 'string', enum: ['low', 'normal', 'high'], description: 'G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) — distinct from a node\'s schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue.' },
             model: { type: 'string', description: 'Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default.' },
@@ -104,7 +104,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         preferWorktree: { type: 'boolean', description: 'CamelCase alias for prefer_worktree.' },
                         depends_on: { type: 'array', items: { type: 'string' }, description: 'Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch.' },
                         dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
-                        mission_id: { type: 'string', description: 'Per-task mission override; defaults to the top-level mission_id.' },
+                        mission_id: { type: 'string', description: 'Per-task mission override (full/exact id); defaults to the top-level mission_id. An unresolvable id rejects the WHOLE batch (atomic).' },
                         missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
                         priority: { type: 'string', enum: ['low', 'normal', 'high'], description: 'G6 task-level scheduling priority (same semantics as mesh_enqueue_task).' },
                         model: { type: 'string', description: 'Optional model override for the agent that runs this task (best-effort at launch).' },
@@ -118,7 +118,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                     required: ['message', 'difficulty'],
                 },
             },
-            mission_id: { type: 'string', description: 'Mission every task in this batch belongs to unless an entry overrides it. For multi-task work, create the mission first (mesh_mission_upsert) and pass it here.' },
+            mission_id: { type: 'string', description: 'Mission every task in this batch belongs to unless an entry overrides it (full/exact id). For multi-task work, create the mission first (mesh_mission_upsert) and pass it here. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
             block_duplicate: { type: 'boolean', description: 'G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response.' },
             blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
@@ -195,7 +195,7 @@ export const MESH_SEND_TASK_TOOL = {
             taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
             readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode.' },
             read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
-            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch.' },
+            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
             difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE — it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry.' },
         },
@@ -401,7 +401,7 @@ export const MESH_MISSION_UPSERT_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
-            mission_id: { type: 'string', description: 'Mission id to update. Omit to create a new mission. Ignored when mission_ids is provided.' },
+            mission_id: { type: 'string', description: 'Full mission id (exact match) to update. Omit to create a new mission — do not guess/truncate an id to force a create. An id that does not resolve to an existing mission is REJECTED (mission_not_found), never silently created under that id — use mesh_mission_list to get a valid full id. Ignored when mission_ids is provided.' },
             mission_ids: {
                 type: 'array',
                 items: { type: 'string' },
@@ -723,7 +723,7 @@ export const MESH_FORGET_NOTE_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
-            note_id: { type: 'string', description: 'The ledger note id to retract (exact). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries.' },
+            note_id: { type: 'string', description: 'The ledger note id to retract (full/exact — no prefix matching). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries. An id that does not match a live note returns success:false, code:note_not_found (the tombstone is still recorded, but nothing was actually retracted) — do not guess/truncate an id.' },
             text: { type: 'string', description: 'Retract every operating note whose trimmed text exactly matches this string. Use when you do not have the note id.' },
             reason: { type: 'string', description: 'Optional short reason for the retraction, recorded on the tombstone for audit.' },
         },

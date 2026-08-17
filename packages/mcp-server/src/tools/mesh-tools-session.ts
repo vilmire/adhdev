@@ -30,6 +30,7 @@ import {
     findNodeWithRefresh,
     findOptionalNodeWithRefresh,
     getActiveDirectDispatches,
+    getMeshMission,
     getQueue,
     getSessionMetadata,
     getWorktreeBootstrapLaunchBlock,
@@ -223,6 +224,19 @@ export async function meshSendTask(
     // task aggregates — see recordDirectDispatchTask. Absent → unattributed
     // direct dispatch as before (backward compatible).
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
+    // MISSION-UPSERT-SILENT-CREATE: an unresolvable mission_id previously dispatched fine
+    // and only produced silence — buildMissionInactiveWarning (used further below) warns
+    // solely for a KNOWN-but-inactive mission and returns undefined for an unknown id (see
+    // its own doc comment), so the task landed unattributed with zero feedback. Reject at
+    // the tool boundary, same convention as invalid_message/missing_difficulty above.
+    if (missionId && !getMeshMission(ctx.mesh.id, missionId)) {
+        return JSON.stringify({
+            success: false,
+            code: 'mission_not_found',
+            error: `mission '${missionId}' does not exist on this mesh — refusing to dispatch a task with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
+            missionId,
+        });
+    }
     // DIFFICULTY-REQUIRED: like `message` above, the schema's `required` is nominal —
     // the dispatcher forwards raw args without runtime validation. Reject at the tool
     // boundary so the caller gets a teaching error naming the field and its allowed

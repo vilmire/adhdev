@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueBatch } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
-import { enqueueTask, getQueue, updateTaskStatus } from '@adhdev/daemon-core';
+import { enqueueTask, getQueue, updateTaskStatus, upsertMeshMission } from '@adhdev/daemon-core';
 
 // G5 — mesh_enqueue_batch: atomic multi-task graph submission.
 //   The tool must (a) insert ALL tasks or NONE (a mid-batch cycle / unknown ref /
@@ -139,11 +139,15 @@ test('pre-insert validation: a bad target node in ANY entry refuses the whole ba
 test('top-level mission_id applies to every entry; a per-entry override wins', async () => {
   const meshId = nextMeshId();
   const ctx = makeCtx(meshId, recordingLocalTransport());
+  // MISSION-UPSERT-SILENT-CREATE: mission_id must resolve to a real mission (an
+  // unresolvable id now rejects the whole batch) — both ids used below must exist.
+  const batchMission = upsertMeshMission(meshId, { title: 'Batch mission' });
+  const overrideMission = upsertMeshMission(meshId, { title: 'Override mission' });
   const res = JSON.parse(await meshEnqueueBatch(ctx, {
-    mission_id: 'mission_batch',
+    mission_id: batchMission.id,
     tasks: [
       { ref: 'a', message: 'inherits batch mission', difficulty: 'easy' },
-      { ref: 'b', message: 'overrides mission', mission_id: 'mission_override', difficulty: 'easy' },
+      { ref: 'b', message: 'overrides mission', mission_id: overrideMission.id, difficulty: 'easy' },
     ],
   } as any));
 
@@ -151,8 +155,38 @@ test('top-level mission_id applies to every entry; a per-entry override wins', a
   const rows = getQueue(meshId);
   const a = rows.find(t => t.message === 'inherits batch mission');
   const b = rows.find(t => t.message === 'overrides mission');
-  assert.equal(a?.missionId, 'mission_batch');
-  assert.equal(b?.missionId, 'mission_override');
+  assert.equal(a?.missionId, batchMission.id);
+  assert.equal(b?.missionId, overrideMission.id);
+});
+
+test('MISSION-UPSERT-SILENT-CREATE: an unresolvable top-level mission_id rejects the whole batch atomically', async () => {
+  const meshId = nextMeshId();
+  const ctx = makeCtx(meshId, recordingLocalTransport());
+  const res = JSON.parse(await meshEnqueueBatch(ctx, {
+    mission_id: 'not-a-real-mission-id',
+    tasks: [
+      { ref: 'a', message: 'should not enqueue', difficulty: 'easy' },
+    ],
+  } as any));
+
+  assert.equal(res.success, false);
+  assert.equal(res.code, 'mission_not_found');
+  assert.equal(getQueue(meshId).length, 0, 'atomic — no task inserted for the unresolvable batch mission_id');
+});
+
+test('MISSION-UPSERT-SILENT-CREATE: an unresolvable per-entry mission_id rejects the whole batch atomically', async () => {
+  const meshId = nextMeshId();
+  const ctx = makeCtx(meshId, recordingLocalTransport());
+  const res = JSON.parse(await meshEnqueueBatch(ctx, {
+    tasks: [
+      { ref: 'a', message: 'valid entry', difficulty: 'easy' },
+      { ref: 'b', message: 'bad mission ref', mission_id: 'not-a-real-mission-id', difficulty: 'easy' },
+    ],
+  } as any));
+
+  assert.equal(res.success, false);
+  assert.equal(res.code, 'mission_not_found');
+  assert.equal(getQueue(meshId).length, 0, 'atomic — the valid entry must not be inserted either');
 });
 
 test('IpcTransport: only ROOTS are eager-pushed; dependents are deferred (gate symmetry)', async () => {

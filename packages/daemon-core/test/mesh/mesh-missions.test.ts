@@ -55,6 +55,23 @@ describe('M3 — mission persistence', () => {
         expect(getMeshMissions(meshId, ['active'])).toHaveLength(0);
     });
 
+    it('rejects an unresolvable id instead of silently creating a new mission under it (MISSION-UPSERT-SILENT-CREATE)', () => {
+        // A truncated/typo'd id (e.g. an 8-char prefix copied from a display view) must
+        // never be accepted as a create target — it looks like an update request.
+        expect(() => upsertMeshMission(meshId, { id: 'not-a-real-mission-id', title: 'Should not be created' }))
+            .toThrow(/mission_not_found/);
+        // No orphan mission was created under the bogus id.
+        expect(getMeshMission(meshId, 'not-a-real-mission-id')).toBeNull();
+        expect(getMeshMissions(meshId)).toHaveLength(0);
+    });
+
+    it('omitting id still creates a new mission normally (existing behavior preserved)', () => {
+        const created = upsertMeshMission(meshId, { title: 'No id supplied' });
+        expect(created.status).toBe('active');
+        expect(created.id).toBeTruthy();
+        expect(getMeshMission(meshId, created.id)?.title).toBe('No id supplied');
+    });
+
     it('rejects empty titles and invalid statuses', () => {
         expect(() => upsertMeshMission(meshId, { title: '  ' })).toThrow(/mission_title_required/);
         expect(() => upsertMeshMission(meshId, { title: 'ok', status: 'bogus' })).toThrow(/invalid_mission_status/);

@@ -142,3 +142,23 @@ test('no mission_id: no warning', async () => {
   assert.equal(res.missionInactive, undefined);
   assert.equal(res.missionInactiveHint, undefined);
 });
+
+// MISSION-UPSERT-SILENT-CREATE: an unresolvable mission_id previously enqueued the task
+// fine and orphaned it silently (buildMissionInactiveWarning only warns for a KNOWN mission
+// in a non-active status, and returns undefined for an unknown id — no feedback at all).
+// This must now be rejected before anything is queued.
+
+test('unresolvable mission_id: rejected, task never enqueued (no silent orphan)', async () => {
+  const meshId = nextMeshId();
+  const ctx = makeCtx(meshId);
+
+  const res = JSON.parse(await meshEnqueueTask(ctx, {
+    message: 'should not enqueue',
+    mission_id: 'not-a-real-mission-id',
+    difficulty: 'medium',
+  } as any));
+
+  assert.equal(res.success, false);
+  assert.equal(res.code, 'mission_not_found');
+  assert.equal(getQueue(meshId).length, 0, 'no task was inserted for the unresolvable mission_id');
+});

@@ -155,9 +155,25 @@ export function upsertMeshMission(meshId: string, input: {
     if (input.status !== undefined && !MESH_MISSION_STATUSES.includes(input.status as MeshMissionStatus)) {
         throw new Error(`invalid_mission_status: '${input.status}' (valid: ${MESH_MISSION_STATUSES.join(', ')})`);
     }
-    const id = typeof input.id === 'string' && input.id.trim() ? input.id.trim() : randomUUID();
+    const requestedId = typeof input.id === 'string' && input.id.trim() ? input.id.trim() : undefined;
     const store = MeshRuntimeStore.getInstance();
-    const existing = store.getMission(meshId, id);
+    // MISSION-UPSERT-SILENT-CREATE: an id was explicitly supplied — the caller means
+    // "update this mission" — but it doesn't resolve to any existing record (e.g. a
+    // truncated/abbreviated id copied from a display view, or a typo). Silently falling
+    // through to randomUUID()/INSERT would create an orphan mission under the wrong id
+    // AND leave the caller's intended target unmodified, with no error either way. An
+    // omitted id is the only legitimate "create new" signal.
+    if (requestedId) {
+        const target = store.getMission(meshId, requestedId);
+        if (!target) {
+            throw new Error(
+                `mission_not_found: no mission with id '${requestedId}' on this mesh. `
+                + `Omit mission_id to create a new mission, or use mesh_mission_list to get a valid full id.`,
+            );
+        }
+    }
+    const id = requestedId ?? randomUUID();
+    const existing = requestedId ? store.getMission(meshId, id) : null;
     const prevStatus = existing ? normalizeMissionStatus(existing.status) : null;
     const prevGoal = existing?.goal ?? '';
     const record = {
