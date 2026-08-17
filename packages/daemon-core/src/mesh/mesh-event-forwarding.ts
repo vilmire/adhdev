@@ -2952,6 +2952,8 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                                         coordinatorMeshId,
                                         flushSource,
                                         getMesh(coordinatorMeshId)?.policy,
+                                        undefined,
+                                        components.instanceManager,
                                     );
                                 }
                             } catch (e: any) {

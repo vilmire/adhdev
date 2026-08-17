@@ -738,6 +738,8 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         meshId,
                         targetCoordinators[0].instance,
                         getMesh(meshId)?.policy,
+                        undefined,
+                        components.instanceManager,
                     );
                     continue;
                 }

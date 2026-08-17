@@ -21,7 +21,9 @@ import {
     shouldFireIdleReminder,
     buildIdleReminderMessage,
     missionSetHash,
+    localNonCoordinatorSessionBusy,
     IDLE_REMINDER_DEBOUNCE_MS,
+    LOCAL_SESSION_STALE_MS,
 } from '../../src/mesh/mesh-idle-reminder.js';
 import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask } from '../../src/mesh/mesh-work-queue.js';
@@ -45,6 +47,24 @@ function mission(id: string, title: string): MeshMissionRecord {
         id, meshId: 'x', title, goal: '', status: 'active',
         createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
     } as MeshMissionRecord;
+}
+
+// Minimal local-session state stub — only the fields localNonCoordinatorSessionBusy /
+// the instanceManager.collectAllStates() read path actually consult.
+function localState(overrides: Record<string, any> = {}) {
+    return {
+        instanceId: 'local-1',
+        status: 'idle',
+        settings: {},
+        lastUpdated: 1_000,
+        category: 'cli',
+        ...overrides,
+    } as any;
+}
+
+// instanceManager stub exposing only collectAllStates(), the sole method the reminder calls.
+function makeInstanceManager(states: any[]) {
+    return { collectAllStates: () => states } as any;
 }
 
 describe('mesh idle-active-mission reminder', () => {
@@ -293,5 +313,133 @@ describe('mesh idle-active-mission reminder', () => {
         );
         expect(fired).toBe(false);
         expect(coord.calls).toHaveLength(0);
+    });
+
+    // ── localNonCoordinatorSessionBusy (pure) ───────────────────────────────────────
+    describe('localNonCoordinatorSessionBusy (pure)', () => {
+        it('is false with no local sessions', () => {
+            expect(localNonCoordinatorSessionBusy([], 'mesh-x', 1_000)).toBe(false);
+            expect(localNonCoordinatorSessionBusy(undefined, 'mesh-x', 1_000)).toBe(false);
+        });
+
+        it('is true when a non-coordinator local session is generating', () => {
+            const states = [localState({ instanceId: 'direct-1', status: 'generating', lastUpdated: 1_000 })];
+            expect(localNonCoordinatorSessionBusy(states, 'mesh-x', 1_000)).toBe(true);
+        });
+
+        it('is true when a non-coordinator local session is parked on an approval/choice modal', () => {
+            const waitingApproval = [localState({ status: 'waiting_approval', lastUpdated: 1_000 })];
+            expect(localNonCoordinatorSessionBusy(waitingApproval, 'mesh-x', 1_000)).toBe(true);
+            const waitingChoice = [localState({ status: 'waiting_choice', lastUpdated: 1_000 })];
+            expect(localNonCoordinatorSessionBusy(waitingChoice, 'mesh-x', 1_000)).toBe(true);
+        });
+
+        it('excludes a session that is the mesh\'s own coordinator, even if generating', () => {
+            const states = [localState({
+                instanceId: 'coord-1',
+                status: 'generating',
+                settings: { meshCoordinatorFor: 'mesh-x' },
+                lastUpdated: 1_000,
+            })];
+            expect(localNonCoordinatorSessionBusy(states, 'mesh-x', 1_000)).toBe(false);
+        });
+
+        it('does not exclude a coordinator session for a DIFFERENT mesh', () => {
+            const states = [localState({
+                instanceId: 'coord-other-mesh',
+                status: 'generating',
+                settings: { meshCoordinatorFor: 'mesh-other' },
+                lastUpdated: 1_000,
+            })];
+            expect(localNonCoordinatorSessionBusy(states, 'mesh-x', 1_000)).toBe(true);
+        });
+
+        it('ignores a stale entry (past LOCAL_SESSION_STALE_MS) rather than treating it as busy', () => {
+            const now = 1_000_000;
+            const states = [localState({ status: 'generating', lastUpdated: now - LOCAL_SESSION_STALE_MS - 1 })];
+            expect(localNonCoordinatorSessionBusy(states, 'mesh-x', now)).toBe(false);
+        });
+
+        it('still treats a fresh entry within the staleness window as busy', () => {
+            const now = 1_000_000;
+            const states = [localState({ status: 'generating', lastUpdated: now - LOCAL_SESSION_STALE_MS + 1 })];
+            expect(localNonCoordinatorSessionBusy(states, 'mesh-x', now)).toBe(true);
+        });
+    });
+
+    // ── DIRECT-SESSION-IDLE-BLINDSPOT ────────────────────────────────────────────────
+    //
+    // A directly-launched (not via mesh_enqueue_task/mesh_send_task) session has no
+    // mesh_queue or mesh_direct_dispatches row, so buildMeshActiveWork's totalActiveCount
+    // stays 0 while it is generating. Repro: the mesh has an active mission, no queue/
+    // direct work, no refine job — the pre-fix gates all read "idle" — yet a local
+    // instanceManager session is genuinely generating. Before the fix (no instanceManager
+    // param / no local-session check) this fires; after the fix it must stay silent.
+    it('★DIRECT-SESSION-IDLE-BLINDSPOT: stays silent when a directly-launched local session is generating', () => {
+        upsertMeshMission(meshId, { title: 'Direct session in flight', goal: 'x' });
+        const coord = makeCoordinator();
+        const instanceManager = makeInstanceManager([
+            localState({ instanceId: 'direct-session-1', status: 'generating', lastUpdated: 1_000 }),
+        ]);
+
+        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, instanceManager);
+        expect(fired).toBe(false);
+        expect(coord.calls).toHaveLength(0);
+    });
+
+    it('fires once the direct session returns to idle and nothing else is in flight', () => {
+        upsertMeshMission(meshId, { title: 'Direct session finishing', goal: 'x' });
+        const coord = makeCoordinator();
+        const busyManager = makeInstanceManager([
+            localState({ instanceId: 'direct-session-2', status: 'generating', lastUpdated: 1_000 }),
+        ]);
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, busyManager)).toBe(false);
+
+        const idleManager = makeInstanceManager([
+            localState({ instanceId: 'direct-session-2', status: 'idle', lastUpdated: 2_000 }),
+        ]);
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000, idleManager)).toBe(true);
+        expect(coord.calls).toHaveLength(1);
+    });
+
+    // ── self-coordinator exclusion regression guard ──────────────────────────────────
+    //
+    // Without exclusion, reading local session state would see the CALLING coordinator's
+    // own instance (which the reconcile/forwarding call sites only reach at an idle edge)
+    // as "busy" and permanently suppress the reminder. This pins that the coordinator's
+    // own session for THIS mesh — even if its snapshot momentarily reads 'generating' —
+    // must never by itself block the reminder.
+    it('★self-coordinator exclusion: fires when only the coordinator\'s OWN session is generating', () => {
+        upsertMeshMission(meshId, { title: 'Coordinator self session', goal: 'x' });
+        const coord = makeCoordinator();
+        const instanceManager = makeInstanceManager([
+            localState({
+                instanceId: 'this-coordinator-session',
+                status: 'generating',
+                settings: { meshCoordinatorFor: meshId },
+                lastUpdated: 1_000,
+            }),
+        ]);
+
+        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, instanceManager);
+        expect(fired).toBe(true);
+        expect(coord.calls).toHaveLength(1);
+    });
+
+    it('is unaffected when no instanceManager is passed (backward-compatible call sites)', () => {
+        upsertMeshMission(meshId, { title: 'No instanceManager arg', goal: 'x' });
+        const coord = makeCoordinator();
+        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        expect(fired).toBe(true);
+        expect(coord.calls).toHaveLength(1);
+    });
+
+    it('is best-effort: a throwing instanceManager does not block the reminder', () => {
+        upsertMeshMission(meshId, { title: 'Broken instanceManager', goal: 'x' });
+        const coord = makeCoordinator();
+        const throwingManager = { collectAllStates: () => { throw new Error('boom'); } } as any;
+        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, throwingManager);
+        expect(fired).toBe(true);
+        expect(coord.calls).toHaveLength(1);
     });
 });

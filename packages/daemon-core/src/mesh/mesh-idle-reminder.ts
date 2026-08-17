@@ -19,15 +19,38 @@
  * Design invariants:
  *  - Only fires when the mesh has ≥1 `active` mission AND is fully idle. Fully idle =
  *    buildMeshActiveWork over queue + direct dispatches reports totalActiveCount === 0
- *    && generatingCount === 0 AND no async refine job is accepted/running. We intentionally
- *    do NOT probe remote node sessions here (expensive per-tick RPC): any non-terminal
- *    queue/direct work already makes totalActiveCount > 0, so the idle check is
- *    conservative — it suppresses the reminder whenever any work is outstanding, which is
- *    the safe direction. Async refine jobs (`mesh_refine_node`) are a separate class that
- *    buildMeshActiveWork does not count, so they are checked explicitly from the ledger —
- *    over a KIND-FILTERED, untailed read, never the `tail: N` window (see
+ *    && generatingCount === 0, no LOCAL non-coordinator session is busy (see
+ *    DIRECT-SESSION-IDLE-BLINDSPOT below), AND no async refine job is accepted/running.
+ *    We intentionally do NOT add new remote-node RPC here (expensive per-tick probe): any
+ *    non-terminal queue/direct work already makes totalActiveCount > 0, so the idle check
+ *    stays conservative — it suppresses the reminder whenever any work is outstanding,
+ *    which is the safe direction. Async refine jobs (`mesh_refine_node`) are a separate
+ *    class that buildMeshActiveWork does not count, so they are checked explicitly from
+ *    the ledger — over a KIND-FILTERED, untailed read, never the `tail: N` window (see
  *    IDLE-REFINE-TAIL-BLINDSPOT below: a tail slices all kinds, so ledger churn can evict
  *    a still-running job's dispatch row and the mesh falsely reads as idle).
+ *
+ *    DIRECT-SESSION-IDLE-BLINDSPOT: a session the owner starts directly (not via
+ *    mesh_enqueue_task/mesh_send_task) never gets a `mesh_queue` or
+ *    `mesh_direct_dispatches` row, so buildMeshActiveWork cannot see it — the mesh reads
+ *    "no work in flight" while a direct session is still generating. Rather than adding a
+ *    new remote RPC, this reuses `instanceManager.collectAllStates()` — the SAME
+ *    synchronous, zero-RPC, in-process call the status-report path already makes every
+ *    tick (status/reporter.ts, commands/low-family/status-meta.ts) — to see every
+ *    LOCALLY-launched session on this daemon. It is local-only by construction (the
+ *    instance manager only holds providers this process itself spawned), so it adds no
+ *    network cost and no new staleness class beyond what already exists for local status
+ *    reporting. Each ProviderState carries `lastUpdated`; an entry older than
+ *    LOCAL_SESSION_STALE_MS is treated as unknown (not generating) rather than trusted
+ *    indefinitely — see localNonCoordinatorSessionBusy() for the reasoning on why "stale
+ *    → ignore" (not "stale → assume busy") is the safe default here.
+ *  - MUST exclude the mesh's own coordinator session(s). `collectAllStates()` returns
+ *    every local session including coordinators, and this function is only ever called at
+ *    a coordinator idle edge — so without exclusion, the calling coordinator's own
+ *    just-turned-idle CLI instance (or a sibling coordinator for the same mesh) would
+ *    itself be read as "busy" moments earlier and permanently suppress the reminder.
+ *    Exclusion mirrors findLiveCoordinators() (mesh-reconcile-coordinator-drain.ts): a
+ *    session is a coordinator for THIS mesh when `settings.meshCoordinatorFor === meshId`.
  *  - NEVER transitions a mission's status. It only surfaces a hint; the coordinator
  *    decides via mesh_mission_upsert.
  *  - Debounced per mission-set. Re-fires only when the debounce window has elapsed OR
@@ -45,9 +68,49 @@ import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 import { buildMeshActiveWork } from './mesh-active-work.js';
 import { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs } from './mesh-refine-status.js';
+import type { ProviderState } from '../providers/provider-instance.js';
 
 /** Coordinator instance the reminder is injected into (the idle CLI session). */
 type CoordinatorInstance = ReturnType<DaemonComponents['instanceManager']['getInstance']>;
+
+/**
+ * A local session's status is trusted for at most this long past its `lastUpdated`
+ * stamp. `collectAllStates()` is a synchronous in-process read, so staleness here means
+ * the provider adapter itself hasn't refreshed its internal state recently (a hung/dead
+ * adapter), NOT network lag — there is no RPC in this path. We deliberately do NOT treat
+ * a stale entry as "still busy": an adapter that stopped updating minutes ago is far more
+ * likely wedged/exited than genuinely mid-turn, and the failure mode of wrongly staying
+ * "busy" is a PERMANENT reminder outage (the debounce marker only advances on an actual
+ * fire), which is strictly worse than the occasional early reminder a truly-stuck-but-
+ * still-generating session would cause. So a stale entry is excluded from the busy check
+ * (treated as "unknown", not "generating") rather than assumed active.
+ */
+export const LOCAL_SESSION_STALE_MS = 120_000; // 2 minutes — well past the 30s idle heartbeat
+
+/**
+ * True when at least one LOCALLY-launched session (this daemon process), other than a
+ * coordinator session for `meshId`, is in a busy status (generating or parked on a modal
+ * awaiting a human). Pure/exported so it is independently testable without booting a real
+ * ProviderInstanceManager.
+ */
+export function localNonCoordinatorSessionBusy(
+    states: ProviderState[] | undefined,
+    meshId: string,
+    now: number,
+): boolean {
+    if (!Array.isArray(states)) return false;
+    const busyStatuses = new Set(['generating', 'waiting_approval', 'waiting_choice']);
+    for (const state of states) {
+        if (!state) continue;
+        const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
+        const coordinatorFor = typeof settings.meshCoordinatorFor === 'string' ? settings.meshCoordinatorFor : undefined;
+        if (coordinatorFor === meshId) continue; // exclude this mesh's own coordinator session(s)
+        const lastUpdated = typeof state.lastUpdated === 'number' ? state.lastUpdated : undefined;
+        if (lastUpdated !== undefined && now - lastUpdated > LOCAL_SESSION_STALE_MS) continue; // stale → unknown, not busy
+        if (busyStatuses.has(state.status)) return true;
+    }
+    return false;
+}
 
 /**
  * Debounce window: while the mesh stays idle with the SAME active-mission set, re-fire
@@ -111,6 +174,7 @@ export function maybeInjectIdleActiveMissionReminder(
     coordinator: CoordinatorInstance,
     policy: RepoMeshPolicy | undefined,
     now: number = Date.now(),
+    instanceManager?: DaemonComponents['instanceManager'],
 ): boolean {
     try {
         if (!coordinator) return false;
@@ -134,6 +198,18 @@ export function maybeInjectIdleActiveMissionReminder(
             now,
         }).summary;
         if (summary.totalActiveCount !== 0 || summary.generatingCount !== 0) return false;
+
+        // DIRECT-SESSION-IDLE-BLINDSPOT gate — a directly-launched (non-queue) local
+        // session that is generating/modal-parked has no queue/direct-dispatch row, so the
+        // gate above cannot see it. instanceManager is optional (best-effort: older/other
+        // call sites may not pass it) and this reuses the already-computed, zero-RPC local
+        // state read — see the module doc comment for why this is safe and local-only.
+        if (instanceManager) {
+            try {
+                const localStates = instanceManager.collectAllStates();
+                if (localNonCoordinatorSessionBusy(localStates, meshId, now)) return false;
+            } catch { /* best-effort — never let a local-state read failure block the reminder */ }
+        }
 
         // IDLE-REFINE-TAIL-BLINDSPOT: the refine gate below must NOT reuse the
         // `tail: 200` window read above. `tail` slices the last N entries of EVERY kind,
