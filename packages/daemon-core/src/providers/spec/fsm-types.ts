@@ -195,12 +195,29 @@ export interface FsmTransition {
  * appears — the robust alternative to detecting and auto-clicking the modal.
  * CLIs without such a gate omit this field and the engine does nothing.
  */
-export interface PreLaunchTrust {
+export interface PreLaunchTrustSettingsArray {
     /** Path to the CLI's JSON settings file. A leading `~` expands to $HOME. */
     settings_path: string;
     /** Key of the string-array of trusted folder paths within that file. */
     key: string;
 }
+
+/**
+ * Named per-workspace-file trust scheme, for CLIs whose trust store is not an
+ * array in one settings file. kimi persists trust as ONE FILE PER WORKSPACE
+ * (`~/.kimi-code/workspace-trust/wd_<slug>_<sha256[:12]>` with a JSON payload)
+ * and exits 0 silently when the prompt goes unanswered — so a spec migration
+ * without this would kill every fresh-worktree mesh launch. The scheme's exact
+ * key/payload format lives in providers/kimi-workspace-trust.ts (verified
+ * against the real kimi-code source); the spec only SELECTS the scheme by
+ * name — the same philosophy as native_history source kinds. New per-file
+ * formats become new scheme names, never inline templates.
+ */
+export interface PreLaunchTrustScheme {
+    scheme: 'kimi_workspace_file';
+}
+
+export type PreLaunchTrust = PreLaunchTrustSettingsArray | PreLaunchTrustScheme;
 
 /**
  * Declarative boot-prompt dismissal — see CliSpecV4.startup_dismiss. Shape

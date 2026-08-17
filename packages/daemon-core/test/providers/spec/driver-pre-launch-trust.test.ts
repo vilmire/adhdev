@@ -109,4 +109,48 @@ describe('FsmDriver -- pre_launch_trust', () => {
         expect(spec.pre_launch_trust.key).toBe('trustedWorkspaces');
         expect(spec.pre_launch_trust.settings_path).toContain('antigravity-cli/settings.json');
     });
+
+    // Named per-workspace-file scheme (PreLaunchTrustScheme) — the kimi trust
+    // store is one file per workspace, not an array in a settings file. A spec
+    // that declares { scheme: "kimi_workspace_file" } must pre-write kimi's
+    // wd_<slug>_<sha256[:12]> trust file before spawn, so a fresh worktree
+    // never dies on the unanswered TUI prompt (silent exit 0).
+    it('scheme "kimi_workspace_file" pre-writes the per-workspace trust file on start()', () => {
+        const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-kimi-home-'));
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-kimi-ws-'));
+        const prevEnv = process.env.KIMI_CODE_HOME;
+        process.env.KIMI_CODE_HOME = kimiHome;
+        const factory = new StubFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file' } })),
+            workingDir: workspace,
+            hotReload: false,
+            transportFactory: factory,
+        });
+        try {
+            driver.start();
+            const trustDir = path.join(kimiHome, 'workspace-trust');
+            const files = fs.existsSync(trustDir) ? fs.readdirSync(trustDir) : [];
+            expect(files).toHaveLength(1);
+            expect(files[0]).toMatch(/^wd_[a-z0-9._-]+_[0-9a-f]{12}$/);
+            const payload = JSON.parse(fs.readFileSync(path.join(trustDir, files[0]), 'utf8'));
+            expect(payload.root).toBe(fs.realpathSync(workspace));
+            expect(typeof payload.trustedAt).toBe('number');
+        } finally {
+            driver.shutdown();
+            if (prevEnv === undefined) delete process.env.KIMI_CODE_HOME;
+            else process.env.KIMI_CODE_HOME = prevEnv;
+            fs.rmSync(kimiHome, { recursive: true, force: true });
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it('validator accepts the scheme form and rejects unknown/mixed declarations', async () => {
+        const { validateFsmSpec } = await import('../../../src/providers/spec/fsm-loader.js');
+        expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file' } }))).toEqual([]);
+        expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'unknown_scheme' } })))
+            .toContain('pre_launch_trust.scheme must be "kimi_workspace_file"');
+        expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file', key: 'x' } })))
+            .toContain('pre_launch_trust with scheme excludes settings_path/key');
+    });
 });

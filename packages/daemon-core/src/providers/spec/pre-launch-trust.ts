@@ -27,6 +27,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { PreLaunchTrust } from './fsm-types.js';
+import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import { LOG } from '../../logging/logger.js';
 
 /** Expand a leading `~` to the user's home directory. */
@@ -65,6 +66,14 @@ function realWorkspacePath(workingDir: string): string {
  * an error occurred — purely so callers/tests can assert the effect.
  */
 export function applyPreLaunchTrust(trust: PreLaunchTrust, workingDir: string): string | null {
+    if ('scheme' in trust) {
+        // Named per-workspace-file scheme (fsm-types.PreLaunchTrustScheme):
+        // the trust store is one file per workspace, not an array in a
+        // settings file. Same best-effort contract as below — a failure never
+        // blocks launch, the FSM's trust-modal detection remains the fallback.
+        if (trust.scheme === 'kimi_workspace_file') return applyKimiWorkspaceTrust(workingDir);
+        return null; // unknown scheme: validator rejects at load; fail open at runtime
+    }
     const settingsPath = expandHome(trust.settings_path);
     const key = trust.key;
     const real = realWorkspacePath(workingDir);

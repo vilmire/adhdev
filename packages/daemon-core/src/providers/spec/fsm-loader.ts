@@ -37,9 +37,12 @@ export function validateFsmSpec(raw: unknown): string[] {
     if (!spec.send_message?.submit_key) errs.push('send_message.submit_key is required');
 
     if (spec.pre_launch_trust !== undefined) {
-        const t = spec.pre_launch_trust as { settings_path?: unknown; key?: unknown };
+        const t = spec.pre_launch_trust as { settings_path?: unknown; key?: unknown; scheme?: unknown };
         if (!t || typeof t !== 'object' || Array.isArray(t)) {
             errs.push('pre_launch_trust must be an object');
+        } else if (t.scheme !== undefined) {
+            if (t.scheme !== 'kimi_workspace_file') errs.push('pre_launch_trust.scheme must be "kimi_workspace_file"');
+            if (t.settings_path !== undefined || t.key !== undefined) errs.push('pre_launch_trust with scheme excludes settings_path/key');
         } else {
             if (typeof t.settings_path !== 'string' || !t.settings_path) errs.push('pre_launch_trust.settings_path is required');
             if (typeof t.key !== 'string' || !t.key) errs.push('pre_launch_trust.key is required');
