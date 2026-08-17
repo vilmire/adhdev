@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
@@ -114,6 +114,13 @@ const settle = async () => { for (let i = 0; i < 6; i += 1) await Promise.resolv
  * Drive the real dispatch loop: claim → dispatch → (async) failure → requeue → repeat,
  * exactly as the 4s reconcile tick does, until the row goes terminal or we hit `maxTicks`.
  * Returns the number of dispatch attempts actually made.
+ *
+ * DISPATCH-BOOT-RACE: a dispatch-failure requeue now sets an escalating `notBefore`
+ * backoff (see DISPATCH_RETRY_BACKOFF_BASE_MS in mesh-work-queue.ts) instead of leaving
+ * the row immediately re-claimable, so a synchronous loop would otherwise see every
+ * subsequent claim refused by the G7 notBefore gate. Advance fake timers well past the
+ * ceiling (DISPATCH_RETRY_BACKOFF_MAX_MS) between ticks so the loop still exercises
+ * "many ticks over time", matching what the real 4s-or-slower reconcile cadence sees.
  */
 async function runDispatchLoop(components: any, meshId: string, taskId: string, maxTicks: number): Promise<number> {
   let ticks = 0
@@ -124,12 +131,14 @@ async function runDispatchLoop(components: any, meshId: string, taskId: string, 
     ticks += 1
     tryAssignQueueTask(components, meshId, NODE_ID, 'sess-dead', 'claude-cli')
     await settle()
+    vi.advanceTimersByTime(31_000)
   }
   return ticks
 }
 
 describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-dispatch forever', () => {
-  afterEach(() => { vi.clearAllMocks() })
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers(); vi.clearAllMocks() })
 
   it('terminates a task whose node is absent instead of re-dispatching without limit', async () => {
     const meshId = `mesh_dead_bound_${randomUUID().slice(0, 8)}`
@@ -150,8 +159,11 @@ describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-d
 
       const after = getQueue(meshId).find(t => t.id === task.id)!
       // THE ASSERTION: the loop CONVERGED — the row is terminal and the attempts were few.
+      // DISPATCH-BOOT-RACE: a dead-node dispatch failure now spends the (separate, more
+      // generous) dispatch-failure budget — MAX_DISPATCH_FAILURES=5 — not requeueCount, so
+      // it converges in 6 attempts (5 retries + the terminal one) instead of 2.
       expect(after.status).toBe('failed')
-      expect(after.cancelReason).toMatch(/max_retries_exceeded/)
+      expect(after.cancelReason).toMatch(/dispatch_never_started/)
       expect(attempts).toBeLessThan(10)
       // And the dispatch transport was not hammered.
       expect(components.dispatchMeshCommand.mock.calls.length).toBeLessThan(10)

@@ -656,15 +656,22 @@ function deliverTaskToSession(
         if (!retryable) {
             failTaskAsUndeliverable(ctx, `dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);
         } else {
+            // DISPATCH-BOOT-RACE: route through the dispatch-failure axis, NOT
+            // requeueCount/maxTaskRetries — the worker never started this task, so it
+            // must not spend the same budget a worker-side execution failure spends.
+            // See dispatchFailureCount / MAX_DISPATCH_FAILURES doc (mesh-work-queue.ts).
+            // This also carries the escalating backoff (notBefore) that keeps a
+            // re-dispatch from racing the exact boot window that just failed.
             const requeued = requeueTask(ctx.meshId, ctx.task.id, {
                 reason: 'dispatch_failed',
                 clearTargetSession: false,
+                dispatchFailure: true,
             });
             // requeueTask no-ops (null) only when the row is already gone/terminal — nothing
             // left to schedule. When it auto-failed on the cap, say so plainly in the log so
             // the terminal state is not mistaken for a silent drop.
             if (requeued?.status === 'failed') {
-                LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) failed after repeated undeliverable dispatches to node ${ctx.nodeId}: ${requeued.cancelReason || 'max_retries_exceeded'}. Dependents were unblocked.`);
+                LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) failed after repeated dispatch failures to node ${ctx.nodeId} — the worker never started it: ${requeued.cancelReason || 'dispatch_never_started'}. Dependents were unblocked.`);
             }
         }
         try {

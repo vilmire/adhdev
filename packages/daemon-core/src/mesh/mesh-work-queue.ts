@@ -275,6 +275,21 @@ export interface MeshWorkQueueEntry {
      * cycling reclaim→re-dispatch→strand forever.
      */
     strandedReclaimCount?: number;
+    /**
+     * DISPATCH-BOOT-RACE: number of times a dispatch to this task's session FAILED
+     * BEFORE the worker ever started the task (transport reject / adapter-not-found —
+     * e.g. a session still booting when the coordinator dispatched to it). Separate
+     * from requeueCount: requeueCount is a shared budget spent by every requeue reason
+     * (worker crash, dead-target reclaim, operator retry, dispatch failure alike), so a
+     * mesh policy tuned tight for genuine worker failures (maxTaskRetries:1) exhausted
+     * itself on a single boot-race dispatch failure that resolves on its own within
+     * seconds — the worker never even saw the task. Bounded by MAX_DISPATCH_FAILURES
+     * (its own, more generous cap: these failures are cheap and fast) independently of
+     * requeueCount, and paced by a backoff `notBefore` (see scheduleDispatchRetryBackoff)
+     * instead of an immediate re-claim, so a re-dispatch lands after the session has had
+     * time to finish booting rather than racing it again on the very next tick.
+     */
+    dispatchFailureCount?: number;
     /** Last automatic queue session spin-up attempt, for mesh_view_queue/debug visibility. */
     autoLaunch?: {
         status: 'skipped' | 'started' | 'failed' | 'completed';
@@ -1307,6 +1322,28 @@ export function takeCancelledTaskAssignment(meshId: string, taskId: string): Can
 }
 
 /**
+ * DISPATCH-BOOT-RACE: max consecutive dispatch failures (transport reject / adapter not
+ * found — the worker never started the task) before a task is auto-failed on the
+ * dispatch-failure axis. Independent of (and more generous than) maxTaskRetries: a
+ * dispatch failure is cheap and fast to retry — commonly a session still booting, which
+ * self-resolves within seconds — unlike a worker crash mid-task, so it earns its own,
+ * larger budget rather than sharing/exhausting the worker-failure retry cap.
+ */
+const MAX_DISPATCH_FAILURES = 5;
+
+/**
+ * DISPATCH-BOOT-RACE: base backoff before the first dispatch-failure retry, doubled per
+ * consecutive failure (1st retry: 3s, 2nd: 6s, 3rd: 12s, …) up to
+ * DISPATCH_RETRY_BACKOFF_MAX_MS. Chosen to comfortably clear a booting CLI session's
+ * typical interactive-readiness window (waitForLocalSessionReady's own budget is up to
+ * 15s) without making a genuinely transient failure wait an unreasonably long time.
+ */
+const DISPATCH_RETRY_BACKOFF_BASE_MS = 3_000;
+
+/** DISPATCH-BOOT-RACE: ceiling on the escalating dispatch-failure backoff. */
+const DISPATCH_RETRY_BACKOFF_MAX_MS = 30_000;
+
+/**
  * Return a queue task to pending for retry. By default, dead session targeting
  * and assigned ownership are cleared so stale assignments do not strand again.
  */
@@ -1331,6 +1368,27 @@ export function requeueTask(
         force?: boolean;
         /** Per-task retry cap override. Falls back to mesh policy maxTaskRetries (default 1). */
         maxRetries?: number;
+        /**
+         * DISPATCH-BOOT-RACE: hold the requeued row pending until this time (same G7
+         * gate enforced by claimNextQueueTask and the auto-launch scan) instead of
+         * making it immediately re-claimable. Used to back off a dispatch-failure
+         * retry so it does not race the same boot window that failed the first
+         * attempt. ISO string, absolute epoch-ms, or relative-ms offset from now.
+         * Ignored when `dispatchFailure` is true — that path computes its own backoff.
+         */
+        notBefore?: string | number;
+        /**
+         * DISPATCH-BOOT-RACE: this requeue is for a dispatch that never reached the
+         * worker (transport reject / adapter not found before the task started
+         * running) — as opposed to every other requeue reason, which all spend the
+         * SAME requeueCount/maxRetries budget a worker-side failure spends. Routes
+         * through dispatchFailureCount/MAX_DISPATCH_FAILURES instead: its own,
+         * more generous cap (these failures are cheap/fast — commonly a session
+         * still booting) and an escalating backoff delay computed here, so a tight
+         * mesh policy (maxTaskRetries:1, meant to bound genuine worker failures)
+         * cannot be exhausted by a single dispatch failure the worker never saw.
+         */
+        dispatchFailure?: boolean;
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
@@ -1355,6 +1413,48 @@ export function requeueTask(
         // Proceeding to requeue (or force-override): the prior dispatch is being abandoned,
         // so end the single-flight window for this task id.
         endTaskDispatchInFlight(meshId, taskId);
+
+        // DISPATCH-BOOT-RACE: a dispatch failure spends its OWN budget
+        // (dispatchFailureCount/MAX_DISPATCH_FAILURES), never requeueCount — see the
+        // `dispatchFailure` option doc. The worker never started the task, so this is
+        // not a "retry" in the requeueCount sense (an execution attempt that ran and
+        // failed); it is the coordinator re-offering a task delivery that never landed.
+        if (opts?.dispatchFailure && !opts?.force) {
+            const dispatchFailures = (entry.dispatchFailureCount || 0) + 1;
+            if (dispatchFailures > MAX_DISPATCH_FAILURES) {
+                entry.status = 'failed';
+                entry.cancelReason = `dispatch_never_started: ${dispatchFailures - 1} consecutive dispatch failure(s) before the worker started the task, limit is ${MAX_DISPATCH_FAILURES}`;
+                entry.dispatchFailureCount = dispatchFailures;
+                entry.updatedAt = new Date().toISOString();
+                MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+                const cascaded = propagateDependencyFailure(meshId, taskId);
+                return { entry, cascaded, missionAffected: true };
+            }
+            entry.status = 'pending';
+            delete entry.blockedReason;
+            delete entry.assignedNodeId;
+            delete entry.assignedSessionId;
+            delete entry.cancelledAt;
+            delete entry.cancelReason;
+            if (opts?.clearTargetNode) delete entry.targetNodeId;
+            if (typeof opts?.targetNodeId === 'string') entry.targetNodeId = opts.targetNodeId;
+            if (opts?.clearTargetSession !== false) delete entry.targetSessionId;
+            if (typeof opts?.targetSessionId === 'string') entry.targetSessionId = opts.targetSessionId;
+            entry.requeuedAt = new Date().toISOString();
+            entry.dispatchFailureCount = dispatchFailures;
+            if (opts?.reason) entry.requeueReason = opts.reason;
+            // Escalating backoff (dispatch attempt 1→2: DISPATCH_RETRY_BACKOFF_BASE_MS,
+            // 2→3: ×2, …), so a re-dispatch lands after the session has had more time to
+            // finish booting rather than racing the same window that just failed —
+            // exactly the gap an immediate re-claim (the pre-fix behavior) could not
+            // cover: local CLI readiness alone (waitForLocalSessionReady) budgets up to
+            // 15s, so a fixed short delay would still frequently lose the race.
+            const backoffMs = DISPATCH_RETRY_BACKOFF_BASE_MS * Math.pow(2, dispatchFailures - 1);
+            entry.notBefore = resolveNotBefore(Math.min(backoffMs, DISPATCH_RETRY_BACKOFF_MAX_MS));
+            MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+            return { entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: true };
+        }
+
         const currentCount = entry.requeueCount || 0;
         const maxRetries = opts?.maxRetries ?? entry.maxRetries ?? 1;
         if (!opts?.force && currentCount >= maxRetries) {
@@ -1382,6 +1482,13 @@ export function requeueTask(
         entry.requeuedAt = new Date().toISOString();
         entry.requeueCount = currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
+        // DISPATCH-BOOT-RACE: a caller-supplied backoff holds the row pending until the
+        // session has had time to finish booting, instead of an immediate re-claim that
+        // races the exact window that failed the first attempt. Absent → immediately
+        // claimable (prior behavior; every existing caller is unaffected).
+        const notBefore = resolveNotBefore(opts?.notBefore);
+        if (notBefore) entry.notBefore = notBefore;
+        else delete entry.notBefore;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         // Non-terminal (back to pending) → mission left the all-terminal state; the
         // close-candidate check resets any stale idempotency marker so a later
