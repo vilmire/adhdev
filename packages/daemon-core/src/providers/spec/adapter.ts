@@ -93,7 +93,7 @@ export class TerminalAdapter {
     private cols: number;
     private readonly screenDebounceMs: number;
     private readonly tickIntervalMs: number;
-    private readonly factory: PtyTransportFactory;
+    private factory: PtyTransportFactory | null = null;
     private screen: TerminalScreen;
     private pty: PtyRuntimeTransport | null = null;
     private screenTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,25 +111,25 @@ export class TerminalAdapter {
         this.rows = opts.rows ?? DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
-        // Import NodePtyTransportFactory lazily to avoid loading node-pty in
-        // environments that don't need it (tests, fixture runners) — only when
-        // no transport factory was injected. Doing it unconditionally pulled in
-        // the node-pty module (and broke source-level test runs) even when a
-        // fake factory was supplied.
-        if (opts.transportFactory) {
-            this.factory = opts.transportFactory;
-        } else {
-            const { NodePtyTransportFactory } = require('../../cli-adapters/pty-transport.js');
-            this.factory = new NodePtyTransportFactory();
-        }
+        // NodePtyTransportFactory resolution is deferred to start(): with the
+        // legacy adapter gone, instance-level tests construct the REAL
+        // SpecCliAdapter (and thus this TerminalAdapter) without ever
+        // spawning — a constructor-time require of node-pty made every such
+        // test pay for (and possibly fail on) the native module.
+        if (opts.transportFactory) this.factory = opts.transportFactory;
         this.screen = new TerminalScreen(this.rows, this.cols);
     }
 
     start(): void {
+        if (!this.factory) {
+            const { NodePtyTransportFactory } = require('../../cli-adapters/pty-transport.js');
+            this.factory = new NodePtyTransportFactory();
+        }
         const env = this.opts.envIsComplete
             ? ((this.opts.env ?? {}) as Record<string, string>)
             : ({ ...process.env, ...(this.opts.env ?? {}) } as Record<string, string>);
-        this.pty = this.factory.spawn(this.opts.binary, this.opts.args ?? [], {
+        const factory = this.factory!;
+        this.pty = factory.spawn(this.opts.binary, this.opts.args ?? [], {
             cwd: this.opts.cwd ?? process.cwd(),
             env,
             cols: this.cols,

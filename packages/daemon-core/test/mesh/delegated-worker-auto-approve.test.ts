@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { minimalSpecPath } from '../helpers/minimal-spec.js';
 
 import {
   DEFAULT_MESH_POLICY,
@@ -255,7 +256,7 @@ describe('delegated worker launch envelope → shouldAutoApprove() precedence', 
     };
 
     const instance = new CliProviderInstance(
-      {
+      { _resolvedSpecPath: minimalSpecPath(),
         type: 'claude-cli',
         name: 'Claude Code',
         category: 'cli',
@@ -285,7 +286,7 @@ describe('delegated worker launch envelope → shouldAutoApprove() precedence', 
     };
 
     const instance = new CliProviderInstance(
-      {
+      { _resolvedSpecPath: minimalSpecPath(),
         type: 'claude-cli',
         name: 'Claude Code',
         category: 'cli',

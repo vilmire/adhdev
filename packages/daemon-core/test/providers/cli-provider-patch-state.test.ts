@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { minimalSpecPath } from '../helpers/minimal-spec.js';
 
 describe('CliProviderInstance provider patch state', () => {
   it('accepts explicit controlValues from parsed status without requiring provider control schemas', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'codex-cli',
       name: 'Codex CLI',
       category: 'cli',
@@ -32,7 +33,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('derives legacy model and mode fields into the same control and summary shape as IDE/extension providers', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude CLI',
       category: 'cli',
@@ -62,7 +63,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('surfaces parser crashes as an error state instead of dropping to silent adapter fallback', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude CLI',
       category: 'cli',
@@ -89,7 +90,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('does not surface parsed idle chat status while the adapter still reports generating', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -118,7 +119,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('does not let stale parsed generating override an idle adapter on dashboard/session surfaces', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -151,7 +152,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('keeps parsed generating visible when the adapter still has a pending response signal', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -180,7 +181,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('keeps all runtime overlay messages instead of slicing the live chat tail to 50', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude CLI',
       category: 'cli',
@@ -205,7 +206,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('does not place timed auto-approval overlays after an untimed parsed transcript', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude CLI',
       category: 'cli',
@@ -239,7 +240,7 @@ describe('CliProviderInstance provider patch state', () => {
   })
 
   it('keeps all pending events until flush instead of silently slicing to 50', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude CLI',
       category: 'cli',
@@ -267,7 +268,7 @@ describe('CliProviderInstance provider patch state', () => {
 
   it('emits CLI lifecycle events through the instance callback immediately without waiting for state collection', () => {
     const emitted = vi.fn()
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',

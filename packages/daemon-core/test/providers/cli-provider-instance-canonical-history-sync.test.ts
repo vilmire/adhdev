@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { minimalSpecPath } from '../helpers/minimal-spec.js';
 
 let mockHomeDir = ''
 
@@ -65,7 +66,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     const historySessionId = '20260422_002711_293d9a'
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -124,7 +125,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     const historySessionId = '12345678-1234-4234-9234-1234567890ab'
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude Code',
       category: 'cli',
@@ -186,7 +187,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'codex-cli',
       name: 'Codex CLI',
       category: 'cli',
@@ -251,7 +252,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       { role: 'user', kind: 'standard', content: 'native codex throttled user', receivedAt: 1_800_000_001_000 },
     ]
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'codex-cli',
       name: 'Codex CLI',
       category: 'cli',
@@ -317,7 +318,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'codex-cli',
       name: 'Codex CLI',
       category: 'cli',
@@ -367,7 +368,7 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     }))
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',

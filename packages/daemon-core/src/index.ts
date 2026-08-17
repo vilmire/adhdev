@@ -664,7 +664,6 @@ export type { ProviderVersionInfo, VersionHistory } from './providers/version-ar
 export { DevServer, DEV_SERVER_PORT } from './daemon/dev-server.js';
 
 // ── CLI Adapters ──
-export { ProviderCliAdapter } from './cli-adapters/provider-cli-adapter.js';
 export type { CliAdapter } from './cli-adapter-types.js';
 export { NodePtyTransportFactory } from './cli-adapters/pty-transport.js';
 export type { PtyRuntimeTransport, PtyTransportFactory, PtySpawnOptions } from './cli-adapters/pty-transport.js';

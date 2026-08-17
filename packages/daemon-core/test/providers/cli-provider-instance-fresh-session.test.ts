@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CliProviderInstance, getForcedNewSessionScriptName, waitForCliAdapterReady } from '../../src/providers/cli-provider-instance.js'
+import { minimalSpecPath } from '../helpers/minimal-spec.js';
 
 function providerNativeHistoryScripts(readMessages: () => Array<Record<string, unknown>> | null) {
   return {
@@ -123,7 +124,7 @@ describe('waitForCliAdapterReady', () => {
 
 describe('CliProviderInstance provider session recovery', () => {
   it('preserves runtime mesh metadata when provider settings are refreshed', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude Code',
       category: 'cli',
@@ -162,7 +163,7 @@ describe('CliProviderInstance provider session recovery', () => {
   })
 
   it('uses provider autoApprove defaults when runtime settings omit the field', () => {
-    const disabledByDefault = new CliProviderInstance({
+    const disabledByDefault = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -178,7 +179,7 @@ describe('CliProviderInstance provider session recovery', () => {
     } as any, '/tmp/project') as any
     disabledByDefault.settings = {}
 
-    const enabledByDefault = new CliProviderInstance({
+    const enabledByDefault = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'test-cli',
       name: 'Test CLI',
       category: 'cli',
@@ -204,7 +205,7 @@ describe('CliProviderInstance provider session recovery', () => {
   })
 
   it('allows lightweight approval parsing for session modal subscriptions', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude Code',
       category: 'cli',
@@ -237,7 +238,7 @@ describe('CliProviderInstance provider session recovery', () => {
   it('auto-approves a changed Claude approval modal even inside the prior approval busy window', () => {
     vi.useFakeTimers()
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'claude-cli',
         name: 'Claude Code',
         category: 'cli',
@@ -280,7 +281,7 @@ describe('CliProviderInstance provider session recovery', () => {
   it('does not auto-approve a still-streaming approval prompt until its modal settles', () => {
     vi.useFakeTimers()
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'claude-cli',
         name: 'Claude Code',
         category: 'cli',
@@ -321,7 +322,7 @@ describe('CliProviderInstance provider session recovery', () => {
   })
 
   it('does not adopt a probed hermes saved-history session id during a fresh launch', async () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -345,7 +346,7 @@ describe('CliProviderInstance provider session recovery', () => {
   })
 
   it('does not expose idle parser replay from a previous workspace conversation during a fresh launch', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -385,7 +386,7 @@ describe('CliProviderInstance provider session recovery', () => {
   })
 
   it('keeps explicit resume history visible for resumed launches', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -424,7 +425,7 @@ describe('CliProviderInstance provider session recovery', () => {
 
 describe('CliProviderInstance lightweight hot chat state', () => {
   it('does not run the rich script parser when projecting hot chat metadata', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -456,7 +457,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
   })
 
   it('does not run the rich script parser while handling status transitions', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -483,7 +484,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
   it('auto-approves modals discovered only by parsed getStatus snapshots', () => {
     vi.useFakeTimers()
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'hermes-cli',
         name: 'Hermes Agent',
         category: 'cli',
@@ -537,7 +538,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
   it('drops a pending completion when generation resumes before the debounce callback observes it', () => {
     vi.useFakeTimers()
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'hermes-cli',
         name: 'Hermes Agent',
         category: 'cli',
@@ -575,7 +576,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'hermes-cli',
         name: 'Hermes Agent',
         category: 'cli',
@@ -635,7 +636,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'codex-cli',
         name: 'Codex CLI',
         category: 'cli',
@@ -674,7 +675,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-07T00:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'claude-cli',
         name: 'Claude Code',
         category: 'cli',
@@ -724,7 +725,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       let nativeMessages: Array<Record<string, unknown>> = [
         { role: 'user', kind: 'standard', content: 'AskUserQuestion prompt', receivedAt: 1_800_000_001_000 },
       ]
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'claude-cli',
         name: 'Claude Code',
         category: 'cli',
@@ -793,7 +794,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       let nativeMessages: Array<Record<string, unknown>> = [
         { role: 'user', kind: 'standard', content: 'Update README', receivedAt: Date.now() },
       ]
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'antigravity-cli',
         name: 'Antigravity',
         category: 'cli',
@@ -863,7 +864,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-07T00:10:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'codex-cli',
         name: 'Codex CLI',
         category: 'cli',
@@ -935,7 +936,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'hermes-cli',
         name: 'Hermes Agent',
         category: 'cli',
@@ -989,7 +990,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'hermes-cli',
         name: 'Hermes Agent',
         category: 'cli',
@@ -1035,7 +1036,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'codex-cli',
         name: 'Codex CLI',
         category: 'cli',
@@ -1083,7 +1084,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-06T01:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'codex-cli',
         name: 'Codex CLI',
         category: 'cli',
@@ -1174,7 +1175,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-06T01:05:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'codex-cli',
         name: 'Codex CLI',
         category: 'cli',
@@ -1230,7 +1231,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
 
 describe('CliProviderInstance incremental history persistence', () => {
   it('persists only the new transcript suffix when repeated getState snapshots replay the full transcript with fresh fallback timestamps', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -1319,7 +1320,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
     // fire agent:generating_completed.
     vi.useFakeTimers()
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'antigravity-cli',
         name: 'Antigravity CLI',
         category: 'cli',
@@ -1358,7 +1359,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
   it('does not emit generating_completed for codex-cli starting→generating→idle startup blip', () => {
     vi.useFakeTimers()
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'codex-cli',
         name: 'Codex CLI',
         category: 'cli',
@@ -1393,7 +1394,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
   it('does not emit generating_completed for hermes-cli starting→generating→idle startup blip', () => {
     vi.useFakeTimers()
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'hermes-cli',
         name: 'Hermes Agent',
         category: 'cli',
@@ -1425,7 +1426,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
   })
 
   it('still emits agent:ready when starting→idle fires directly (no generating blip)', () => {
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',
@@ -1455,7 +1456,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-10T00:00:00Z'))
     try {
-      const instance = new CliProviderInstance({
+      const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'hermes-cli',
         name: 'Hermes Agent',
         category: 'cli',
@@ -1501,7 +1502,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
 
 describe('CliProviderInstance — stale parsed busy status suppression (Bug 2: false completion from non-empty responseBuffer)', () => {
   function makeInstance() {
-    return new CliProviderInstance({
+    return new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude Code',
       category: 'cli',

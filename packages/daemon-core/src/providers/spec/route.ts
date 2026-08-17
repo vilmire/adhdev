@@ -1,20 +1,21 @@
 /**
- * Routing — given a CLI provider definition, decide whether to drive
- * it via the legacy ProviderCliAdapter (scripts/v1/*.js parsers +
- * cli-state-engine) or via SpecCliAdapter (single spec.json +
- * SpecDriver). The gate is the presence of spec.json in the resolved
- * provider directory.
+ * Routing — resolve a CLI provider definition to its SpecCliAdapter
+ * (single spec.json + SpecDriver).
  *
- * This is the only place in the daemon that knows which path a given
- * provider takes. Providers can be migrated one at a time by adding
- * a spec.json next to their scripts/v1/, then deleting scripts/v1/.
+ * The legacy ProviderCliAdapter path (scripts/v1/*.js parsers +
+ * cli-state-engine) was DELETED 2026-08-17 after the last three builtin
+ * CLIs (kimi / cursor-cli / opencode) were migrated to specs and
+ * live-verified on the standalone daemon. A CLI provider without a
+ * resolvable spec now fails the launch with a descriptive error instead
+ * of silently running a weaker engine — this also ends out-of-tree
+ * support for the v1 tui-manifest CLI layout (an out-of-tree CLI provider
+ * must ship a spec.json).
  */
 'use strict';
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ProviderCliAdapter } from '../../cli-adapters/provider-cli-adapter.js';
-import type { CliProviderModule } from '../../cli-adapters/provider-cli-adapter.js';
+import type { CliProviderModule } from '../../cli-adapters/provider-cli-shared.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import type { CliAdapter } from '../../cli-adapter-types.js';
 import { SpecCliAdapter } from './cli-adapter.js';
@@ -44,13 +45,14 @@ export function createCliAdapter(
         const legacy = path.join(dir, 'spec.json');
         if (fs.existsSync(legacy)) specPath = legacy;
     }
-    if (specPath) {
-        try {
-            LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (${path.relative(dir || '', specPath) || specPath})`);
-            return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId);
-        } catch (err) {
-            LOG.warn('spec-route', `[${provider.type}] spec invalid, falling back to ProviderCliAdapter: ${(err as Error).message}`);
-        }
+    if (!specPath) {
+        throw new Error(
+            `CLI provider '${provider.type}' has no resolvable spec (checked compatibility[].spec, `
+            + `specs/default.json, spec.json under ${dir || 'the resolved provider dir'}). `
+            + `The legacy scripts/tui-manifest CLI engine was removed; update the provider bundle `
+            + `('adhdev providers sync' / dashboard provider refresh) or add a spec.json to the provider.`,
+        );
     }
-    return new ProviderCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory, sessionId) as unknown as CliAdapter;
+    LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (${path.relative(dir || '', specPath) || specPath})`);
+    return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId);
 }

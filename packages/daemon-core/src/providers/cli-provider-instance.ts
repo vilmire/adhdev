@@ -1,7 +1,7 @@
 /**
  * CliProviderInstance — Runtime instance for CLI Provider
  *
- * Lifecycle layer on top of ProviderCliAdapter.
+ * Lifecycle layer on top of the CLI adapter (SpecCliAdapter via spec/route).
  * collectCliData() + status transition logic from daemon-status.ts moved here.
  */
 
@@ -13,9 +13,16 @@ import { normalizeInputEnvelope, type ProviderModule, flattenContent, type Input
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, resolveInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
-import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
+import { SpecCliAdapter } from './spec/cli-adapter.js';
+
+/** The one concrete CLI adapter (legacy ProviderCliAdapter deleted 2026-08-17)
+ *  plus optional legacy probe/turn-scope hooks that call sites feature-test. */
+type CliInstanceAdapter = SpecCliAdapter
+    & { setInApprovalResumeGraceProbe?: (probe: () => boolean) => void }
+    & { setNativeFinalAssistantProbe?: (probe: () => boolean) => void }
+    & { currentTurnTaskId?: string; currentTurnStartedAt?: number };
 import { shortHash } from '../system/hash.js';
-import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
+import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { resolveTranscriptAuthorityProfile } from './transcript-evidence.js';
 import {
@@ -324,7 +331,7 @@ export class CliProviderInstance implements ProviderInstance {
     // re-armed stalls a few minutes apart collapse into a single notification.
     private static readonly MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = 600_000;
 
-    private adapter: ProviderCliAdapter;
+    private adapter: CliInstanceAdapter;
     private context: InstanceContext | null = null;
     private events: ProviderEvent[] = [];
     private lastStatus: string = 'starting';
@@ -568,7 +575,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
         // FSMLOG-SESSION-ATTRIBUTION (D3): hand the resolved session id (assigned just above) to
         // the adapter so a spec-driven FSM tags its log lines with the owning session.
-        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId) as ProviderCliAdapter;
+        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId) as CliInstanceAdapter;
         if (this.providerSessionId) {
             this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
         }
@@ -3376,7 +3383,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
  // ─── Adapter access (backward compat) ──────────────────
 
-    getAdapter(): ProviderCliAdapter {
+    getAdapter(): CliInstanceAdapter {
         return this.adapter;
     }
 

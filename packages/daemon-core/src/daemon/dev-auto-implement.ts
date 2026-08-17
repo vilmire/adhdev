@@ -521,9 +521,9 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     
     try {
       if (agentProvider?.category === 'cli') {
-        const { normalizeCliProviderForRuntime } = await import('../cli-adapters/provider-cli-adapter.js');
-        const normalized = normalizeCliProviderForRuntime(agentProvider);
-        approvalPatterns = normalized.patterns.approval;
+        // Legacy tui-manifest approval patterns died with ProviderCliAdapter
+        // (2026-08-17); the spec FSM owns approval detection now. Keep only
+        // the key fallback this dev tool types when it must answer manually.
         approvalKeys = agentProvider.approvalKeys || { 0: 'y\r', 1: 'a\r' };
       }
     } catch (err: any) {

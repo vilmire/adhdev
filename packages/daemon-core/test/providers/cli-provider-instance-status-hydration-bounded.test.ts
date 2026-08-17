@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { minimalSpecPath } from '../helpers/minimal-spec.js';
 
 let mockHomeDir = ''
 
@@ -52,7 +53,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'codex-cli',
       name: 'Codex CLI',
       category: 'cli',
@@ -99,7 +100,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const historySessionId = '12345678-1234-4234-9234-1234567890ab'
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude Code',
       category: 'cli',
@@ -138,7 +139,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
 
     const sessionCount = 5
     const instances = Array.from({ length: sessionCount }, (_, i) => {
-      const inst = new CliProviderInstance({
+      const inst = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
         type: 'codex-cli',
         name: 'Codex CLI',
         category: 'cli',
@@ -182,7 +183,7 @@ describe('CliProviderInstance status-snapshot hydration is bounded (cold N-sessi
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const historySessionId = '20260422_002711_293d9a'
-    const instance = new CliProviderInstance({
+    const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'hermes-cli',
       name: 'Hermes Agent',
       category: 'cli',

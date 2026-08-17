@@ -19,6 +19,13 @@ function writeProvider(root: string, category: string, type: string, data: Recor
   const dir = join(root, category, type);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'provider.json'), JSON.stringify(data), 'utf-8');
+  if (category === 'cli') {
+    writeFileSync(join(dir, 'spec.json'), JSON.stringify({
+      $schema: 'adhdev:cli/spec@4', id: type, name: type, binary: String((data as any).binary || type),
+      send_message: { submit_key: '\r' }, sections: {},
+      states: [{ id: 'idle', label: 'Idle', initial: true, status: 'idle' }], transitions: [],
+    }), 'utf-8');
+  }
 }
 
 class TestProviderLoader extends ProviderLoader {

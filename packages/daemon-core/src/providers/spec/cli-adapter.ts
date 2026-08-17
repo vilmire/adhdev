@@ -197,14 +197,14 @@ export class SpecCliAdapter implements CliAdapter {
         this.spawnedAtMs = Date.now();
     }
 
-    async sendMessage(text: string): Promise<{ status: 'queued' | 'delivered' } | void> {
+    async sendMessage(text: string, _opts?: { force?: boolean }): Promise<{ status: 'queued' | 'delivered' } | void> {
         // Content-free at info — the prompt body is user data.
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length})`);
         LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);
         this.driver.dispatch({ kind: 'send_message', text });
     }
 
-    getStatus(): CliAdapterStatus {
+    getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
         if (this.exited) return { status: 'stopped', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         if (!this.spawned) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
@@ -271,7 +271,7 @@ export class SpecCliAdapter implements CliAdapter {
         // provider-loader). SpecCliAdapter no longer polls or caches.
     }
 
-    getScriptParsedStatus(): unknown {
+    getScriptParsedStatus(): { status?: string; messages: unknown[]; title?: string } & Record<string, unknown> {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
         const status = this.getStatus();
@@ -570,8 +570,8 @@ export class SpecCliAdapter implements CliAdapter {
             && (Date.now() - this.lastApprovalResolvedAt) < SpecCliAdapter.APPROVAL_RESOLVED_COOLDOWN_MS);
     }
     clearHistory(): void { /* no transcript buffer yet */ }
-    updateRuntimeSettings(): void { /* no runtime settings in spec model yet */ }
-    setServerConn(): void { /* server conn unused by SpecDriver */ }
+    updateRuntimeSettings(_settings?: Record<string, unknown>): void { /* no runtime settings in spec model yet */ }
+    setServerConn(_conn?: unknown): void { /* server conn unused by SpecDriver */ }
     /**
      * Map an invokeScript(name, args) call onto a control_bar entry.
      *
@@ -886,7 +886,7 @@ export class SpecCliAdapter implements CliAdapter {
             committedMessages: messages,
         };
     }
-    getRuntimeMetadata(): unknown {
+    getRuntimeMetadata(): import('../../cli-adapters/pty-transport.js').PtyRuntimeMetadata & Record<string, unknown> {
         return {
             runtimeId: this.spec.id,
             runtimeKey: this.spec.id,
@@ -909,7 +909,7 @@ export class SpecCliAdapter implements CliAdapter {
         // stamp unbound on the record — the root of SESSION-ACCUMULATION-LEAK.
         try { this.driver.updateMeta(meta); } catch { /* transport may not support meta */ }
     }
-    refreshProviderDefinition(): void { /* hot reload handled by SpecDriver fs.watch */ }
+    refreshProviderDefinition(_provider?: unknown): void { /* hot reload handled by SpecDriver fs.watch */ }
 
     /**
      * TX-FSM Stage 0 (shadow): forward the daemon's normalized signal

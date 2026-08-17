@@ -11,8 +11,8 @@ import * as crypto from 'crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
-import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
-import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
+import { createCliAdapter } from '../providers/spec/route.js';
+import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
@@ -818,8 +818,8 @@ export class DaemonCliManager {
                 providerSessionId,
                 attachExisting,
             );
-            const adapter = new ProviderCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs, extraEnv || {}, transportFactory);
-            if (providerSessionId) adapter.updateRuntimeMeta({ providerSessionId });
+            const adapter = createCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs || [], extraEnv || {}, transportFactory);
+            if (providerSessionId) adapter.updateRuntimeMeta?.({ providerSessionId });
             return adapter;
         }
 

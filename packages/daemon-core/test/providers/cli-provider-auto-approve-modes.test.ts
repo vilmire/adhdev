@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { applyAutoApproveModeLaunchArgs } from '../../src/commands/cli-manager.js'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 import type { ProviderModule } from '../../src/providers/contracts.js'
+import { withMinimalSpec } from '../helpers/minimal-spec.js';
 
 const mockProvider: ProviderModule = {
   type: 'mock-modes-cli',
@@ -25,7 +26,7 @@ const mockProvider: ProviderModule = {
 }
 
 function instanceWith(settings: Record<string, unknown>, provider: ProviderModule = mockProvider): any {
-  const instance = new CliProviderInstance(provider, '/tmp/mock-modes') as any
+  const instance = new CliProviderInstance(withMinimalSpec(provider as any) as any, '/tmp/mock-modes') as any
   instance.settings = settings
   return instance
 }
