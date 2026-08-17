@@ -28,7 +28,7 @@ import {
 import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import { __clearMeshLedgerForTests, appendLedgerEntry } from '../../src/mesh/mesh-ledger.js';
+import { __clearMeshLedgerForTests, appendLedgerEntry, readLedgerEntriesByKind } from '../../src/mesh/mesh-ledger.js';
 import type { MeshMissionRecord } from '../../src/mesh/mesh-missions.js';
 
 // Minimal coordinator stub: the reminder only ever calls onEvent('send_message', …).
@@ -284,6 +284,43 @@ describe('mesh idle-active-mission reminder', () => {
         appendRefineTerminal('job-buried-then-done');
         expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
         expect(coord.calls).toHaveLength(1);
+    });
+
+    // ── LEDGER-KIND-TAIL-BLINDSPOT (fully-idle gate, :232-ish) ─────────────────────
+    //
+    // The fully-idle gate reads ledger entries via buildMeshActiveWork — the SAME
+    // consumer mesh-completion-synthesis.ts / mesh-worktree-retention.ts feed — and used
+    // to read `readLedgerEntries(meshId, { tail: 200 })` directly, the naive shape the
+    // refine gate below was fixed away from. buildMeshActiveWork only ever reads
+    // task_dispatched/task_completed/task_failed/task_stalled/task_approval_needed/
+    // task_question_pending, so a kind-filtered read (readLedgerEntriesByKind, the fix)
+    // can never miss evidence a bare tail would have to be lucky to still contain. This
+    // test pins that directly against the function the gate delegates to: a task's
+    // task_completed row, buried under 260 unrelated entries, must still be found by a
+    // kind-filtered read of exactly buildMeshActiveWork's kind set.
+    it('★buildMeshActiveWork kind set survives crowding beyond the 200-entry tail window', () => {
+        const task = enqueueTask(meshId, 'do the thing', { difficulty: 'medium' });
+        appendLedgerEntry(meshId, {
+            kind: 'task_completed',
+            nodeId: 'node-a',
+            payload: { taskId: task.id, success: true },
+        } as any);
+
+        for (let i = 0; i < 260; i++) {
+            appendLedgerEntry(meshId, {
+                kind: 'session_launched',
+                nodeId: 'node-b',
+                payload: { source: 'unrelated_traffic', seq: i },
+            } as any);
+        }
+
+        const entries = readLedgerEntriesByKind(meshId, [
+            'task_dispatched', 'task_completed', 'task_failed', 'task_stalled',
+            'task_approval_needed', 'task_question_pending',
+        ]);
+        // The terminal row for `task.id` must still be present even though 260 unrelated
+        // entries were appended after it — a bare tail:200 window would have evicted it.
+        expect(entries.some(e => e.kind === 'task_completed' && e.payload?.taskId === task.id)).toBe(true);
     });
 
     it('debounces a second reminder for the same mission set inside the window', () => {

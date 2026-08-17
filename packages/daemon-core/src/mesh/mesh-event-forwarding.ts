@@ -2,7 +2,7 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
+import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries, readLedgerEntriesByKind } from './mesh-ledger.js';
 import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, updateTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue, REDRIVE_RECLAIM_REASONS, REDRIVE_SUPERSEDE_WINDOW_MS } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -276,11 +276,17 @@ function isIntentionalCleanupStopMetadata(event: Record<string, unknown>): boole
 function hasRecentIntentionalCleanupStop(meshId: string, sessionId?: string, nodeId?: string): boolean {
     if (!sessionId && !nodeId) return false;
     const cutoff = Date.now() - INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS;
-    const entries = readLedgerEntries(meshId, { tail: 200 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered (the 3 kinds isIntentionalCleanupStopEntry
+    // accepts) + since=cutoff, no bare tail — `since` now does the 30-minute windowing
+    // directly instead of relying on walking a fixed-size tail until timestamps age out,
+    // so a genuine intentional-cleanup-stop can no longer be evicted by unrelated mesh
+    // traffic filling a bare tail:200 window before the walk reaches the cutoff.
+    const entries = readLedgerEntries(meshId, {
+        kind: ['session_stopped', 'task_failed', 'task_stalled'],
+        since: new Date(cutoff).toISOString(),
+    });
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
-        const timestamp = new Date(entry.timestamp).getTime();
-        if (!Number.isNaN(timestamp) && timestamp < cutoff) break;
         if (!isIntentionalCleanupStopEntry(entry)) continue;
         // Session ids are single-form; sessionIdsEquivalent is the one canonical
         // exact-match predicate (see its doc for why no form expansion is needed).
@@ -561,10 +567,13 @@ function findInWindowUnclaimedAutoLaunchTask(meshId: string, sessionId: string, 
 // normally has no such entry — task_dispatched is written when the claim transitions the row to
 // 'assigned' — so this is a defensive alternate signal, not the expected path.
 function hasMatchingTaskDispatchedLedgerEntry(meshId: string, taskId: string, sessionId: string): boolean {
-    const entries = readLedgerEntries(meshId, { tail: 200 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no bare tail. This feeds the
+    // CAUSAL-COMPLETION-GATE below — a false negative here suppresses a genuine task
+    // completion as a "boot artifact." A bare tail:200 window can be crowded out by
+    // unrelated mesh traffic before the real task_dispatched row is found.
+    const entries = readLedgerEntriesByKind(meshId, ['task_dispatched']);
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
-        if (entry.kind !== 'task_dispatched') continue;
         if (!sessionIdsEquivalent(entry.sessionId, sessionId)) continue;
         if (readNonEmptyString(entry.payload?.taskId) === taskId) return true;
     }

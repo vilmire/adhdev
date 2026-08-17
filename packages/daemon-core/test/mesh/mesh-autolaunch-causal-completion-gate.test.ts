@@ -257,6 +257,55 @@ describe('CAUSAL-COMPLETION-GATE — LOCAL forwarding (setupMeshEventForwarding)
     }
   })
 
+  // ★LEDGER-KIND-TAIL-BLINDSPOT: hasMatchingTaskDispatchedLedgerEntry used to read a bare
+  // `readLedgerEntries(meshId, { tail: 200 })` then filter by kind in the loop — a bare tail
+  // window can be crowded out by unrelated mesh traffic before reaching the real
+  // task_dispatched row, and a false negative here suppresses a GENUINE completion as a "boot
+  // artifact" (the CAUSAL-COMPLETION-GATE below this check). The fix reads with an explicit
+  // kind filter and no tail, so the alternate causal signal must still be found even when
+  // buried under 200+ unrelated entries.
+  it('★accepts the completion via the task_dispatched alternate signal even when buried beyond the 200-entry tail window', () => {
+    const meshId = `mesh_causal_local_dispatched_buried_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const task = seedInWindowAutoLaunchTask(meshId, SESSION_ID)
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        sessionId: SESSION_ID,
+        nodeId: NODE_ID,
+        providerType: 'codex-cli',
+        payload: { taskId: task.id, message: 'do worktree work', source: 'direct' },
+      })
+      for (let i = 0; i < 260; i++) {
+        appendLedgerEntry(meshId, {
+          kind: 'session_launched',
+          nodeId: 'node-other',
+          payload: { source: 'unrelated_traffic', seq: i },
+        })
+      }
+      const { components, emit, setMeshFor } = makeLocalComponents()
+      setMeshFor(meshId)
+      setupMeshEventForwarding(components)
+
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: SESSION_ID,
+        targetSessionId: SESSION_ID,
+        providerType: 'codex-cli',
+        finalSummary: 'done',
+        taskId: task.id,
+        timestamp: Date.now(),
+      })
+
+      // Gate passed via the alternate (task_dispatched) signal even though it was buried —
+      // same observable proof as the un-buried variant above.
+      const idleSessions = MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId)
+      expect(idleSessions.some(s => s.sessionId === SESSION_ID)).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('does NOT suppress a completion for a task already claimed (assigned) — narrow scope regression guard', () => {
     const meshId = `mesh_causal_local_assigned_${Date.now()}`
     try {

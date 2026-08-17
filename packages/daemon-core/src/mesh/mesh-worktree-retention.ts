@@ -53,7 +53,7 @@ import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
 import { removeNode as removeNodeFromMeshConfig } from '../config/mesh-config.js';
-import { appendLedgerEntry, getLedgerDir, readLedgerEntries, type MeshLedgerEntry } from './mesh-ledger.js';
+import { appendLedgerEntry, getLedgerDir, readLedgerEntriesByKind, type MeshLedgerEntry } from './mesh-ledger.js';
 import { getQueue, getActiveDirectDispatches, type DirectDispatchRecord, type MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { buildMeshAsyncRefineJobs } from './mesh-refine-status.js';
 import { hasBlockedReviewRefineResult } from './mesh-review-inbox.js';
@@ -579,8 +579,15 @@ async function buildPlan(
     const directDispatches = opts.directDispatches ?? (() => {
         try { return getActiveDirectDispatches(meshId); } catch { return []; }
     })();
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no tail — this feeds
+    // buildMeshAsyncRefineJobs / hasBlockedReviewRefineResult below, both of which
+    // are existence checks ("is a refine job for this node still in flight / did it
+    // end blocked_review") that gate a DESTRUCTIVE worktree removal. A bare tail:500
+    // window can be crowded out by unrelated mesh traffic while a refine job (which
+    // runs typecheck/test/build for minutes) is still running, letting the sweep
+    // wrongly conclude the node is free to remove out from under a live reviewer.
     const ledgerEntries = opts.ledgerEntries ?? (() => {
-        try { return readLedgerEntries(meshId, { tail: 500 }); } catch { return []; }
+        try { return readLedgerEntriesByKind(meshId, ['task_dispatched', 'task_completed', 'task_failed']); } catch { return []; }
     })();
 
     const ctxData = {

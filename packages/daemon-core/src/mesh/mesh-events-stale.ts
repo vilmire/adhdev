@@ -1,4 +1,4 @@
-import { appendLedgerEntry, buildTaskCompletionEvidence, readLedgerEntries } from './mesh-ledger.js';
+import { appendLedgerEntry, buildTaskCompletionEvidence, readLedgerEntriesByKind } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
@@ -8,6 +8,8 @@ import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResult
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { LOG } from '../logging/logger.js';
 import { meshNodeIdMatches, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
+
+const TERMINAL_LEDGER_KINDS: MeshLedgerKind[] = ['task_completed', 'task_failed', 'task_stalled'];
 
 // EARLYNOTIFY-GATEBYPASS (d): every completed-emit producer that bypasses the CLI-provider
 // completion gate (transcript-reconcile synth here, no-progress reconcile below, the fast-collapse
@@ -142,13 +144,12 @@ export function findRecentTerminalLedgerEvidence(args: {
     const notBefore = typeof args.notBeforeMs === 'number' && Number.isFinite(args.notBeforeMs)
         ? args.notBeforeMs
         : null;
-    // Tail-limit: 200 entries gives a wide enough window to catch terminal events for active
-    // sessions while avoiding a full O(n) scan. If a terminal is older than 200 entries,
-    // the MeshRuntimeStore fingerprint dedup will still block duplicate processing downstream.
-    const entries = readLedgerEntries(args.meshId, { tail: 200 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no bare tail — a bare tail:200 window can be
+    // crowded out by unrelated mesh traffic before reaching the terminal entry this function
+    // is looking for.
+    const entries = readLedgerEntriesByKind(args.meshId, TERMINAL_LEDGER_KINDS);
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
-        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
         if (notBefore !== null) {
             // Reject terminals older than the caller's cutoff. An unparseable timestamp is
             // treated as too old — a bounded caller asked for recency it cannot verify.
@@ -175,8 +176,12 @@ export function findRecentTerminalLedgerEvidence(args: {
 // entry (identified by terminalId) in ledger order. Positional (append) order is used rather
 // than timestamp comparison because both entries may share the same millisecond.
 export function hasDispatchAfterTerminal(meshId: string, sessionId: string, terminalId: string): boolean {
-    // 200-entry window matches findRecentTerminalLedgerEvidence for consistency.
-    const entries = readLedgerEntries(meshId, { tail: 200 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered (task_dispatched + the terminal kinds needed
+    // to locate the terminalId anchor), no bare tail — order (readLedgerEntries preserves
+    // append order within the filtered set) still lets us walk past the anchor correctly. A
+    // bare tail:200 window can be crowded out by unrelated mesh traffic before reaching either
+    // the anchor or the dispatch this function is looking for.
+    const entries = readLedgerEntriesByKind(meshId, ['task_dispatched', ...TERMINAL_LEDGER_KINDS]);
     let pastTerminal = false;
     for (const entry of entries) {
         if (!pastTerminal) {
@@ -192,7 +197,11 @@ export function hasUnterminalDirectDispatchLedgerEntry(meshId: string, sessionId
     // Some dispatch paths can persist task_dispatched before the direct-dispatch DB row is
     // available. Recover routing from ledger order so coordinator self-targets still emit
     // task_completed and pendingCoordinatorEvents.
-    const entries = readLedgerEntries(meshId, { tail: 200 });
+    //
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered (task_dispatched + terminal kinds — the walk
+    // needs both to know which comes first for this session), no bare tail. A bare tail:200
+    // window can be crowded out by unrelated mesh traffic before reaching either.
+    const entries = readLedgerEntriesByKind(meshId, ['task_dispatched', ...TERMINAL_LEDGER_KINDS]);
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (!sessionIdsEquivalent(entry.sessionId, sessionId)) continue;
@@ -215,16 +224,26 @@ export function findTerminalLedgerEvidenceForTask(args: {
 }): { id: string; kind: Extract<MeshLedgerKind, 'task_completed' | 'task_failed' | 'task_stalled'>; payload: Record<string, unknown>; timestamp: string } | null {
     const taskId = readNonEmptyString(args.taskId);
     if (!taskId) return null;
-    const entries = readLedgerEntries(args.meshId, { tail: args.tail ?? 500 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no bare tail — a bare tail window can be
+    // crowded out by unrelated mesh traffic before reaching this task's terminal entry.
+    // `args.tail`, when supplied, is now applied AFTER the kind filter (most-recent-N-of-kind)
+    // rather than as a raw tail over all kinds.
+    const entries = readLedgerEntriesByKind(args.meshId, TERMINAL_LEDGER_KINDS, args.tail);
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
-        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') continue;
         const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
         if (terminalTaskId !== taskId) continue;
         if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload)) continue;
         if (args.sessionId && entry.sessionId && !sessionIdsEquivalent(entry.sessionId, args.sessionId)) continue;
         if (!args.sessionId && args.nodeId && entry.nodeId && !meshNodeIdMatches(entry as unknown as MeshNodeIdentified, args.nodeId)) continue;
-        return { id: entry.id, kind: entry.kind, payload: entry.payload || {}, timestamp: entry.timestamp };
+        // readLedgerEntriesByKind(..., TERMINAL_LEDGER_KINDS) guarantees entry.kind is one of
+        // the three terminal kinds; TS can't narrow through the helper, hence the cast.
+        return {
+            id: entry.id,
+            kind: entry.kind as Extract<MeshLedgerKind, 'task_completed' | 'task_failed' | 'task_stalled'>,
+            payload: entry.payload || {},
+            timestamp: entry.timestamp,
+        };
     }
     return null;
 }
@@ -234,10 +253,11 @@ function findDirectDispatchLedgerEntry(args: {
     taskId: string;
     sessionId?: string;
 }): { id: string; timestamp: string; nodeId?: string; sessionId?: string; providerType?: string; payload: Record<string, unknown> } | null {
-    const entries = readLedgerEntries(args.meshId, { tail: 500 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no bare tail — a bare tail:500 window can be
+    // crowded out by unrelated mesh traffic before reaching this task's dispatch entry.
+    const entries = readLedgerEntriesByKind(args.meshId, ['task_dispatched']);
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
-        if (entry.kind !== 'task_dispatched') continue;
         const payloadTaskId = readNonEmptyString(entry.payload?.taskId);
         if (payloadTaskId !== args.taskId) continue;
         if (args.sessionId && entry.sessionId && !sessionIdsEquivalent(entry.sessionId, args.sessionId)) continue;
@@ -260,7 +280,11 @@ function hasTerminalLedgerAfterDispatch(args: {
     dispatchEntryId?: string;
     dispatchTimestamp?: string;
 }): boolean {
-    const entries = readLedgerEntries(args.meshId, { tail: 500 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered (task_dispatched, to locate the dispatchEntryId
+    // anchor when supplied, + terminal kinds), no bare tail — a bare tail:500 window can be
+    // crowded out by unrelated mesh traffic before reaching either the anchor or the terminal
+    // entry this function is looking for.
+    const entries = readLedgerEntriesByKind(args.meshId, ['task_dispatched', ...TERMINAL_LEDGER_KINDS]);
     let afterDispatch = !args.dispatchEntryId && !args.dispatchTimestamp;
     const dispatchTime = args.dispatchTimestamp ? new Date(args.dispatchTimestamp).getTime() : Number.NaN;
     for (const entry of entries) {

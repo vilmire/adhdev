@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
-import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
+import { getLedgerDir, readLedgerEntries, readLedgerEntriesByKind, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { resolveTurnAttemptRow } from './mesh-turn-presentation.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
@@ -714,10 +714,14 @@ function refineTerminalEventFromLedger(meshId: string, pending: readonly Pending
             .filter(value => !value.endsWith(':')),
     );
     const backfilled: PendingMeshCoordinatorEvent[] = [];
-    const entries = readLedgerEntries(meshId, { tail: 200 });
+    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no bare tail — this backfills a
+    // MISSING terminal event for an accepted refine job. A bare tail:200 window can
+    // be crowded out by unrelated mesh traffic while the refine job (minutes-long)
+    // runs, causing the terminal row this function is looking for to fall out of the
+    // window and leaving the coordinator never notified that its merge finished.
+    const entries = readLedgerEntriesByKind(meshId, ['task_completed', 'task_failed']);
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
-        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
         const payload = readRecord(entry.payload);
         if (payload?.source !== 'refine_mesh_node_async_job') continue;
         const refineJob = readRecord(payload.refineJob);

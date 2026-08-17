@@ -1429,6 +1429,42 @@ export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): Mes
 }
 
 /**
+ * LEDGER-KIND-TAIL-BLINDSPOT: a bare `tail: N` reads the last N entries of EVERY
+ * kind, then a caller-side `.filter(e => e.kind === x)` can come up empty even
+ * though a matching entry exists further back — a busy mesh produces enough
+ * unrelated traffic (task_dispatched/session_auto_launch/task_claimed/... — dozens
+ * of kinds feed the same ledger) to evict a still-relevant row from any fixed-size
+ * window within minutes. Observed twice in production (2026-08-16, M-WORKTREE-DELETED
+ * class): an in-flight Refinery job's task_dispatched row fell out of a tail:200
+ * window while the job was still running, and the caller concluded no work was in
+ * flight.
+ *
+ * Use this helper for "does an entry of kind X exist" / "find the entry of kind X"
+ * reads — anything that is an existence or lookup check rather than a bounded
+ * recency feed. It filters by kind FIRST (inside readLedgerEntries, before any
+ * tail slicing), so an old-but-still-relevant row can never be crowded out by
+ * unrelated kinds. Do NOT use this for "show recent activity" style reads (e.g.
+ * dashboard feeds) — those want the last N entries regardless of kind, which is
+ * what a bare `tail` is for.
+ *
+ * No default cap: kinds worth existence-checking (task_dispatched, task_completed,
+ * task_failed, ...) are exactly the kinds mesh-ledger's compactLedger() either never
+ * archives (task_dispatched) or pins via ARCHIVE-PAIR-ATOMICITY while their pair is
+ * still live, so the live, kind-filtered set stays bounded by real job lifecycle
+ * rather than needing an artificial ceiling — this mirrors the existing
+ * router-refine-resume.ts / readOperatingNotes precedent, neither of which caps.
+ * Pass `cap` only when a caller genuinely wants "the most recent N of this kind"
+ * (applied AFTER the kind filter, unlike a bare `tail`) rather than the full set.
+ */
+export function readLedgerEntriesByKind(meshId: string, kinds: MeshLedgerKind[], cap?: number): MeshLedgerEntry[] {
+    const entries = readLedgerEntries(meshId, { kind: kinds });
+    if (cap && cap > 0 && entries.length > cap) {
+        return entries.slice(-cap);
+    }
+    return entries;
+}
+
+/**
  * Build a ledger summary from pre-loaded entries. Used by both getLedgerSummary
  * and readLedgerSlice so they share a single getCachedRawEntries() call.
  */

@@ -1558,6 +1558,72 @@ describe('mesh_status', () => {
     }
   })
 
+  // ★LEDGER-KIND-TAIL-BLINDSPOT: asyncRefineLedgerEntries used to be a bare
+  // `readLedgerEntries(meshId, { tail: 100 })` — a bare tail window can be crowded out by
+  // unrelated mesh traffic while an in-flight refine job's task_dispatched row is still
+  // running (a refine pass runs typecheck/test/build for minutes). The fix reads with an
+  // explicit kind filter and no tail, so the accepted refine job must still surface in
+  // asyncRefineJobs even when buried under 200+ unrelated entries.
+  it('★surfaces an accepted refine job even when its dispatch row is buried beyond the 100-entry tail window', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-status-refine-crowding-'))
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-refine-crowding-')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
+      const mesh = createMesh({
+        name: 'Refine Crowding Mesh',
+        repoIdentity: 'github.com/acme/refine-crowding',
+        defaultBranch: 'master',
+      })
+      addNode(mesh.id, { workspace: repoRoot, repoRoot })
+      const { router } = createRouter()
+
+      appendLedgerEntry(mesh.id, {
+        kind: 'task_dispatched',
+        nodeId: 'node-buried',
+        payload: {
+          source: 'refine_mesh_node_async_job',
+          refineJob: {
+            jobId: 'refine_buried_under_noise',
+            interactionId: 'ix-buried',
+            status: 'accepted',
+            meshId: mesh.id,
+            nodeId: 'node-buried',
+            workspace: repoRoot,
+            startedAt: '2026-05-29T00:00:00.000Z',
+          },
+          async: true,
+        },
+      })
+
+      // Bury the dispatch under far more than 100 unrelated ledger entries.
+      for (let i = 0; i < 150; i++) {
+        appendLedgerEntry(mesh.id, {
+          kind: 'session_launched',
+          nodeId: 'node-other',
+          payload: { source: 'unrelated_traffic', seq: i },
+        })
+      }
+
+      const result = await router.execute('mesh_status', { meshId: mesh.id, refresh: true }) as any
+      expect(result.success).toBe(true)
+      expect(result.asyncRefineJobs).toEqual([
+        expect.objectContaining({
+          jobId: 'refine_buried_under_noise',
+          status: 'accepted',
+          targetNodeId: 'node-buried',
+        }),
+      ])
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await cleanupTempDir(configDir)
+      await cleanupTempDir(dir)
+    }
+  })
+
   it('separates live session-host records for removed mesh nodes from normal node active sessions', async () => {
     const configDir = await mkdtemp(join(tmpdir(), 'mesh-status-removed-sessions-'))
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-removed-sessions-')

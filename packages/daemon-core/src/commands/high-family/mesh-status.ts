@@ -179,9 +179,13 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     const schedulingRuntime = buildMeshSchedulingRuntime(mesh, queue);
                     const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
 
-                    const { readLedgerEntries, getLedgerSummary } = await import('../../mesh/mesh-ledger.js');
+                    const { readLedgerEntries, readLedgerEntriesByKind, getLedgerSummary } = await import('../../mesh/mesh-ledger.js');
                     const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
-                    const asyncRefineLedgerEntries = readLedgerEntries(meshId, { tail: 100 });
+                    // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no bare tail — feeds
+                    // buildMeshAsyncRefineJobs below, an existence/status check for in-flight
+                    // Refinery jobs. A bare tail window can be crowded out by unrelated mesh
+                    // traffic while a refine job (minutes-long) is still running.
+                    const asyncRefineLedgerEntries = readLedgerEntriesByKind(meshId, ['task_dispatched', 'task_completed', 'task_failed']);
                     const ledgerSummary = getLedgerSummary(meshId);
                     const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions
                         ? await ctx.deps.sessionHostControl.listSessions().catch(() => [])

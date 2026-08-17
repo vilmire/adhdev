@@ -81,7 +81,7 @@ import type { RepoMeshPolicy } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMeshMissions, type MeshMissionRecord } from './mesh-missions.js';
 import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
-import { readLedgerEntries } from './mesh-ledger.js';
+import { readLedgerEntries, readLedgerEntriesByKind } from './mesh-ledger.js';
 import { buildMeshActiveWork } from './mesh-active-work.js';
 import { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs } from './mesh-refine-status.js';
 import type { ProviderState } from '../providers/provider-instance.js';
@@ -229,7 +229,21 @@ export function maybeInjectIdleActiveMissionReminder(
         // We pass no `nodes`: totalActiveCount already counts pending/assigned queue tasks
         // and un-acknowledged direct dispatches from the store alone, so the check stays
         // cheap (no per-node status RPC) and conservative.
-        const ledgerEntries = readLedgerEntries(meshId, { tail: 200 });
+        //
+        // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered to exactly the kinds buildMeshActiveWork
+        // reads (task_dispatched/task_completed/task_failed/task_stalled/task_approval_needed/
+        // task_question_pending), no bare tail — same class as the refine gate below (:271):
+        // a bare tail:200 window can be crowded out by unrelated mesh traffic while a
+        // dispatch/terminal row for a still-active task falls out of the window, making this
+        // gate wrongly conclude the mesh is fully idle.
+        const ledgerEntries = readLedgerEntriesByKind(meshId, [
+            'task_dispatched',
+            'task_completed',
+            'task_failed',
+            'task_stalled',
+            'task_approval_needed',
+            'task_question_pending',
+        ]);
         const summary = buildMeshActiveWork({
             meshId,
             queue: getQueue(meshId),

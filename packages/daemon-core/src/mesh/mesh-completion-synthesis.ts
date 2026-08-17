@@ -23,7 +23,7 @@ import { traceMeshEventDrop, traceMeshEventStage } from './mesh-event-trace.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
 import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
-import { readLedgerEntries } from './mesh-ledger.js';
+import { readLedgerEntriesByKind } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
@@ -517,7 +517,19 @@ export async function autoPruneStaleDirectDispatches(
     const result = pruneStaleDirectDispatches({
         meshId: mesh.id,
         queue: getQueue(mesh.id),
-        ledgerEntries: readLedgerEntries(mesh.id, { tail: 500 }),
+        // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered to exactly the kinds buildMeshActiveWork
+        // (invoked internally by pruneStaleDirectDispatches) reads, no bare tail — a bare
+        // tail:500 window can be crowded out by unrelated mesh traffic while a still-active
+        // dispatch's ledger evidence falls out of the window, risking a live dispatch being
+        // misclassified as an orphan and pruned.
+        ledgerEntries: readLedgerEntriesByKind(mesh.id, [
+            'task_dispatched',
+            'task_completed',
+            'task_failed',
+            'task_stalled',
+            'task_approval_needed',
+            'task_question_pending',
+        ]),
         directDispatches,
         nodes: liveNodes,
         execute: true,
