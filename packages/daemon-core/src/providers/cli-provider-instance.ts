@@ -1587,6 +1587,16 @@ export class CliProviderInstance implements ProviderInstance {
      */
     private lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null = null;
 
+    /**
+     * (SUMMARY-SCRAPE-FALLBACK, part B) Provenance of the finalSummary the completion
+     * machinery resolved most recently — written by completionFinalSummary /
+     * cleanCompletionFinalSummary (see completion/evidence.ts). The emit paths read it
+     * immediately after resolving the summary and stamp it onto completionDiagnostic, so a
+     * summary that came from the PTY screen scrape of a native-source provider (and may
+     * therefore be clipped mid-sentence) is visibly marked instead of silently trusted.
+     */
+    private lastFinalSummaryProvenance: evidence.FinalSummaryProvenance | null = null;
+
     // KIMI-MESH-COMPLETION-EMIT (axis 2, double-emit guard): the (taskId, wall-clock)
     // of the most recent agent:generating_completed this instance emitted, stamped by
     // emitGeneratingCompleted. The pre-cleanup completion flush
@@ -2483,6 +2493,7 @@ export class CliProviderInstance implements ProviderInstance {
             holdClassHardCapMs: ANTIGRAVITY_HOLD_HARD_CAP_MS,
             ptyParsedFinalAssistantQuietDwellMs: PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
             terminalBlockHardCapMs: TERMINAL_BLOCK_HARD_CAP_MS,
+            nativeSummaryWriteWaitMaxMs: evidence.NATIVE_SUMMARY_WRITE_WAIT_MAX_MS,
         };
     }
 
@@ -2615,6 +2626,32 @@ export class CliProviderInstance implements ProviderInstance {
             ownsExternalHistory: () => (this.adapter as any)?.chatMessagesOwnedExternally === true,
             authorityTiming: () => resolveTranscriptAuthorityProfile(this.provider).timing,
             allowMissingAssistantTimeout: () => !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator),
+            // (SUMMARY-SCRAPE-FALLBACK, part A) Is this turn's COMPLETE text on disk yet?
+            //
+            // This is a REAL extra native read, not a reuse of the evidence probe's: on the
+            // path this signal exists for, completionFinalAssistantEvidence returned via its
+            // `parsed` short-circuit and never touched the transcript at all. It is bounded by
+            // the guards on the call site — the engine consults it only on an otherwise-clean
+            // verdict for an ownsExternal provider with `parsed` evidence, at most once per
+            // flush attempt (memoized), and at most for nativeSummaryWriteWaitMaxMs of retries.
+            //
+            // Fails closed to undefined ("cannot tell" ⇒ never holds) on any throw and for a
+            // provider that owns no external history.
+            nativeSummaryOnDisk: () => once('nativeSummaryOnDisk', () => {
+                try {
+                    if ((this.adapter as any)?.chatMessagesOwnedExternally !== true) return undefined;
+                    const messages = this.readExternalCompletionMessages();
+                    // A NULL read means the transcript is not RESOLVABLE (no session pinned,
+                    // typed fail-closed attribution) — not "written imminently". Waiting for a
+                    // transcript that is not coming would convert the established
+                    // signal-absence fail-open (kimi-parsed-race case 4: unresolved native +
+                    // parsed answer must EMIT) into a hold. So: undefined, never a hold. Only a
+                    // transcript we CAN read, which simply has no in-turn bubble yet, is the
+                    // write-lag race this hold exists for.
+                    if (!messages) return undefined;
+                    return !!evidence.extractFinalSummaryForTurn(messages, pending.turnStartedAt);
+                } catch { return undefined; }
+            }),
         };
     }
 
@@ -2778,18 +2815,26 @@ export class CliProviderInstance implements ProviderInstance {
                 waitedMs,
                 busyEpoch: this.busyEpoch,
             });
+            // finalSummary provenance chain unchanged (see snapshotExternalNativeCompletionSummary /
+            // completionFinalSummary / cachedInTurnCompletionSummaryContent docs above).
+            // (SUMMARY-SCRAPE-FALLBACK, part B) Resolved into a local FIRST so the provenance
+            // completionFinalSummary just recorded can be stamped onto the diagnostic below —
+            // reading it before the chain runs would stamp the previous turn's source.
+            const weakFinalSummary = (this.nativeTurnTerminalSummary(pending.turnStartedAt)
+                || this.snapshotExternalNativeCompletionSummary(pending)
+                || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
+                || this.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
+                || (blockReason.startsWith('parsed_status:') ? '' : undefined));
+            Object.assign(
+                completionDiagnostic as Record<string, unknown>,
+                this.finalSummaryProvenanceDiagnostic(weakFinalSummary),
+            );
             this.emitGeneratingCompleted({
                 chatTitle: pending.chatTitle,
                 duration: pending.duration,
                 timestamp: pending.timestamp,
                 taskId: pending.taskId,
-                // finalSummary provenance chain unchanged (see snapshotExternalNativeCompletionSummary /
-                // completionFinalSummary / cachedInTurnCompletionSummaryContent docs above).
-                finalSummary: (this.nativeTurnTerminalSummary(pending.turnStartedAt)
-                    || this.snapshotExternalNativeCompletionSummary(pending)
-                    || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
-                    || this.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
-                    || (blockReason.startsWith('parsed_status:') ? '' : undefined)),
+                finalSummary: weakFinalSummary,
                 completionDiagnostic,
             });
             this.completedDebouncePending = null;
@@ -2833,6 +2878,7 @@ export class CliProviderInstance implements ProviderInstance {
                 finalAssistantPresent: true,
                 finalAssistantEvidenceSource: pending.resolvedFinalEvidenceSource ?? 'parsed',
                 finalAssistantContentLength: finalContentLength,
+                ...this.finalSummaryProvenanceDiagnostic(finalSummary),
                 transcriptEvidence: {
                     version: 1,
                     kind: 'final_assistant',
@@ -2889,6 +2935,35 @@ export class CliProviderInstance implements ProviderInstance {
     /** See completion/evidence.ts — EMPTY-FINAL-CONTENT TOCTOU snapshot preference. */
     private cleanCompletionFinalSummary(pending: CompletedDebouncePending): string | undefined {
         return evidence.cleanCompletionFinalSummary(this as unknown as EvidenceHost, pending);
+    }
+
+    /**
+     * (SUMMARY-SCRAPE-FALLBACK, part B) The completionDiagnostic fields describing where the
+     * emitted finalSummary came from, and whether it may be clipped.
+     *
+     * `emittedSummary` is the value ACTUALLY being emitted, and it is verified against the
+     * recorded provenance rather than trusted: the weak path's provenance chain can be won by
+     * an earlier source (nativeTurnTerminalSummary / snapshotExternalNativeCompletionSummary)
+     * that short-circuits before completionFinalSummary ever runs, in which case
+     * lastFinalSummaryProvenance still describes a PREVIOUS resolution. Stamping that would
+     * mislabel a perfectly good native summary as a possibly-truncated scrape — the exact kind
+     * of false flag that teaches the coordinator to ignore the flag. So the length must match;
+     * when it does not, the provenance is simply not stamped (absent = "not asserted", the
+     * pre-fix shape) rather than guessed at.
+     *
+     * `finalSummaryMayBeTruncated` is emitted ONLY when true. A `false` on every genuine
+     * completion would add a field to every event to say nothing, and downstream readers
+     * already treat absent as "no truncation asserted".
+     */
+    private finalSummaryProvenanceDiagnostic(emittedSummary: string | undefined): Record<string, unknown> {
+        const provenance = this.lastFinalSummaryProvenance;
+        if (!provenance) return {};
+        const emitted = typeof emittedSummary === 'string' ? emittedSummary : '';
+        if (emitted.length !== provenance.contentLength) return {};
+        return {
+            finalSummarySource: provenance.source,
+            ...(provenance.mayBeTruncated ? { finalSummaryMayBeTruncated: true } : {}),
+        };
     }
 
     /**

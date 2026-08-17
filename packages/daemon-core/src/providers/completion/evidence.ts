@@ -44,6 +44,61 @@ import type { SignalSnapshot } from '../spec/signal-envelope.js';
 import type { ChatMessage } from '../../types.js';
 
 /**
+ * (SUMMARY-SCRAPE-FALLBACK) Where a resolved finalSummary came from, and whether that
+ * source can silently clip the text.
+ *
+ * `mayBeTruncated` is the field the emit paths and the coordinator care about. It is set
+ * ONLY for `parsed_screen_fallback`: a provider whose canonical history is the append-only
+ * native transcript, whose turn-scoped transcript read came back empty (not yet flushed to
+ * disk), and which therefore fell through to the PTY viewport scrape. The terminal wraps and
+ * scrolls, so that scrape is an arbitrary-length prefix of the real turn — the observed
+ * "summary cut off mid-sentence". Every other source is complete by construction:
+ * the native transcript holds whole bubbles, and a genuinely PTY-parsed provider
+ * (`parsed_screen`) has no better source to be truncated relative to.
+ */
+export type FinalSummaryProvenance = {
+    source:
+        /** Turn-scoped read of the provider's own append-only native transcript. */
+        | 'native_transcript'
+        /** PTY screen scrape for a provider whose ONLY history is the screen. */
+        | 'parsed_screen'
+        /** PTY screen scrape taken because a native-source transcript was not yet written. */
+        | 'parsed_screen_fallback'
+        /** No source yielded any text. */
+        | 'none';
+    mayBeTruncated: boolean;
+    /** Length of the resolved summary, for the diagnostic/trace (0 when none). */
+    contentLength: number;
+};
+
+/**
+ * (SUMMARY-SCRAPE-FALLBACK, part A) Bounded wait for a native-source provider's transcript
+ * write before a completion is allowed to settle for the PTY screen scrape as its summary.
+ *
+ * Consumed by evaluateFinalizationBlock (completion-engine.ts), NOT by
+ * completionFinalSummary. The summary is resolved AFTER the emit decision is already made,
+ * so returning nothing from the resolver would emit a summary-LESS completion rather than
+ * delay it — strictly worse than a truncated one. The only place a wait can actually buy the
+ * transcript time is the gate, which already owns a retry loop.
+ *
+ * WHY A WAIT AND NOT A DOWNSTREAM UPGRADE: the sibling turn-boundary race (NOTIF Defect-B,
+ * documented in completionFinalSummary below) can emit '' and rely on the mesh reconcile loop
+ * to replace it, because '' is unmistakably incomplete. A partial PREFIX is not — it reads as
+ * a finished sentence, no reconciler can tell it apart from a genuinely short answer, and
+ * nothing downstream ever revisits it. So it has to be caught before the value is accepted.
+ *
+ * WHY BOUNDED, AND WHY THIS BOUND: the wait delays the completion notification, so it must
+ * never be the reason a turn looks stuck. claude-cli's transcript is the `immediate`
+ * write-lag class — the append trails the PTY idle by a flush, not by seconds — so a wait
+ * of a couple of finalization retries (COMPLETED_FINALIZATION_RETRY_MS is 1s) covers the real
+ * lag with margin. Past it the completion proceeds ANYWAY and takes the scrape, flagged as
+ * possibly-truncated (part B): a late-but-flagged notification beats a withheld one. The
+ * gate's own 30s finalization cap and 600s terminal hard cap remain the outer bounds; this
+ * hold is strictly inside them and never extends either.
+ */
+export const NATIVE_SUMMARY_WRITE_WAIT_MAX_MS = 2_500;
+
+/**
  * The narrow surface of CliProviderInstance the evidence/summary machinery
  * reads/writes. Mutable probe/cache state stays instance-owned (tests seed and
  * inspect it directly), and moved siblings are dispatched back THROUGH the
@@ -66,6 +121,23 @@ export interface EvidenceHost {
     /** (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. */
     lastNativeTurnTerminalMarkers?: NativeTurnTerminalMarker[] | null;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
+    /**
+     * (SUMMARY-SCRAPE-FALLBACK) Provenance of the LAST finalSummary this module resolved.
+     *
+     * completionFinalSummary returns a bare string, so the one fact its caller cannot
+     * otherwise recover is WHICH source produced it — and that fact is exactly what makes
+     * the value trustworthy or not. A native-source provider that fell through to the PTY
+     * screen scrape yields a summary the terminal may have wrapped/scrolled/clipped
+     * (an arbitrary partial prefix), while the same provider's on-disk transcript read
+     * yields the complete turn. Recording the source here lets the emit paths stamp it onto
+     * completionDiagnostic so the coordinator can see "this summary may be truncated"
+     * instead of silently trusting a half sentence.
+     *
+     * Written on every completionFinalSummary call (including the ones that return
+     * undefined, so a stale provenance can never outlive its summary). Optional so
+     * existing test doubles that construct a bare host keep working unchanged.
+     */
+    lastFinalSummaryProvenance?: FinalSummaryProvenance | null;
     // Instance-owned helpers the moved methods call.
     hasAdapterPendingResponse(): boolean;
     isModalParked(): boolean;
@@ -87,6 +159,20 @@ export interface EvidenceHost {
     completionHasFinalAssistantMessage(messages: unknown, turnStartedAt?: number): boolean;
     readExternalCompletionMessages(opts?: { allowManifestNativeSource?: boolean }): unknown[] | null;
     completionFinalSummary(parsedMessages: unknown, turnStartedAt?: number): string | undefined;
+}
+
+/**
+ * (SUMMARY-SCRAPE-FALLBACK, part A) Turn-scoped final-summary extraction over an arbitrary
+ * message array, exposed so the signal reader can ask "is this turn's complete text on disk"
+ * using the EXACT same scoping rule completionFinalSummary applies. Sharing the predicate is
+ * the point: a reader that answered "on disk" by a looser rule than the consumer would release
+ * the hold on a bubble the summary then refuses, and the truncated scrape would ship anyway.
+ */
+export function extractFinalSummaryForTurn(messages: unknown, turnStartedAt?: number): string {
+    return extractFinalSummaryFromMessagesAfter(
+        (Array.isArray(messages) ? messages : []) as any,
+        turnStartedAt,
+    );
 }
 
 /** Pure message-content check — no host state. Semantics are a verbatim move. */
@@ -505,10 +591,35 @@ export function completionFinalSummary(host: EvidenceHost, parsedMessages: unkno
             // Record the turn boundary as its source timestamp so the weak-completion
             // fallback (cachedInTurnCompletionSummaryContent) accepts it.
             host.lastCompletionSummary = { content: externalSummary, receivedAt: Date.now(), sourceTimestampMs: typeof turnStartedAt === 'number' ? turnStartedAt : undefined };
+            host.lastFinalSummaryProvenance = {
+                source: 'native_transcript',
+                mayBeTruncated: false,
+                contentLength: externalSummary.length,
+            };
             return externalSummary;
         }
-        return parsedSummary || undefined;
+        // (SUMMARY-SCRAPE-FALLBACK) The native transcript yielded nothing for this turn while
+        // the PTY screen already shows an assistant reply. That is the write-lag race: the
+        // reply exists, it just has not been flushed to disk yet, and the scrape of it is an
+        // arbitrary prefix (the terminal wrapped/scrolled it). Part A: hold the fallback for a
+        // bounded window so the ordinary flush retry can pick up the complete transcript text.
+        // Part B: past the bound, take the scrape but stamp it as possibly-truncated.
+        if (parsedSummary) {
+            host.lastFinalSummaryProvenance = {
+                source: 'parsed_screen_fallback',
+                mayBeTruncated: true,
+                contentLength: parsedSummary.length,
+            };
+            return parsedSummary;
+        }
+        host.lastFinalSummaryProvenance = { source: 'none', mayBeTruncated: false, contentLength: 0 };
+        return undefined;
     }
+    // A genuinely PTY-parsed provider: the screen IS the canonical history, so there is no
+    // better source this value could be a truncated prefix OF. Not flagged.
+    host.lastFinalSummaryProvenance = parsedSummary
+        ? { source: 'parsed_screen', mayBeTruncated: false, contentLength: parsedSummary.length }
+        : { source: 'none', mayBeTruncated: false, contentLength: 0 };
     return parsedSummary || undefined;
 }
 
@@ -530,9 +641,42 @@ export function completionFinalSummary(host: EvidenceHost, parsedMessages: unkno
 export function cleanCompletionFinalSummary(host: EvidenceHost, pending: CompletedDebouncePending): string | undefined {
     if (Array.isArray(pending.resolvedFinalMessages)) {
         const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages as any, pending.turnStartedAt);
-        if (fromSnapshot) return fromSnapshot;
+        if (fromSnapshot) {
+            // (SUMMARY-SCRAPE-FALLBACK) The snapshot is only as good as the evidence source it
+            // was captured from, and for a native-source provider that source can be the PTY
+            // screen: completionFinalAssistantEvidence takes a `parsed` short-circuit / fail-open
+            // for such a provider whenever its transcript is unresolved, and the resulting CLEAN
+            // verdict extracts the summary from THAT snapshot — so the truncated screen text
+            // reaches the emit without ever passing through completionFinalSummary's fallback
+            // branch. This is the claude-cli case (chatMessagesOwnedExternally, busy-lease gate
+            // off, so the parsed short-circuit fires). Flag it on the same axis.
+            host.lastFinalSummaryProvenance = resolveSnapshotSummaryProvenance(host, pending, fromSnapshot);
+            return fromSnapshot;
+        }
     }
     return host.completionFinalSummary(host.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt);
+}
+
+/**
+ * (SUMMARY-SCRAPE-FALLBACK) Provenance for a summary taken from the completion's stashed
+ * evidence snapshot. `parsed` evidence for a provider whose canonical history is the native
+ * transcript means the screen won a race the transcript should have won — the clip risk. Every
+ * other combination is complete by construction: `external-native`/`native-signal` evidence IS
+ * the transcript, and `parsed` evidence for a screen-only provider has no better source.
+ */
+function resolveSnapshotSummaryProvenance(
+    host: EvidenceHost,
+    pending: CompletedDebouncePending,
+    summary: string,
+): FinalSummaryProvenance {
+    const nativeSourceProvider = (host.adapter as any)?.chatMessagesOwnedExternally === true
+        || isNativeSourceCanonicalHistory(host.provider?.nativeHistory);
+    if (pending.resolvedFinalEvidenceSource === 'parsed') {
+        return nativeSourceProvider
+            ? { source: 'parsed_screen_fallback', mayBeTruncated: true, contentLength: summary.length }
+            : { source: 'parsed_screen', mayBeTruncated: false, contentLength: summary.length };
+    }
+    return { source: 'native_transcript', mayBeTruncated: false, contentLength: summary.length };
 }
 
 /**

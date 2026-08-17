@@ -118,6 +118,19 @@ export interface CompletionSignalReader {
     authorityTiming(): AuthorityTiming;
     /** meshNodeFor || meshActiveTaskId || launchedByCoordinator */
     allowMissingAssistantTimeout(): boolean;
+    /**
+     * (SUMMARY-SCRAPE-FALLBACK, part A) For a provider whose canonical history is its own
+     * append-only native transcript: does that transcript already hold an in-turn final
+     * assistant bubble — i.e. is the COMPLETE turn text on disk?
+     *
+     * Distinct from finalAssistantEvidence(), which answers "may this turn be declared over"
+     * and deliberately fails OPEN to the PTY screen scrape when the transcript is unresolved.
+     * This one answers "is the authoritative TEXT available yet", which is the question the
+     * summary needs, and it fails CLOSED: undefined means "cannot tell" and never arms the
+     * hold. Optional so readers that predate it (and every existing test double) behave
+     * exactly as before — absent ⇒ no hold, which is the pre-fix behaviour.
+     */
+    nativeSummaryOnDisk?(): boolean | undefined;
 }
 
 /** Tunables. Defaults mirror the historical constants; injected so tests can compress time. */
@@ -137,6 +150,14 @@ export interface CompletionPolicy {
      * cap so it is a backstop for the genuinely stuck case, never the ordinary release path.
      */
     terminalBlockHardCapMs: number;
+    /**
+     * (SUMMARY-SCRAPE-FALLBACK, part A) NATIVE_SUMMARY_WRITE_WAIT_MAX_MS (2_500). Bound on the
+     * summary-write hold below. See the constant's doc in evidence.ts for why a wait (and not
+     * a downstream upgrade) is the only available fix, and why this bound. Optional so a
+     * caller/test constructing a policy literal without it keeps compiling — absent or 0
+     * disables the hold entirely, which is the pre-fix behaviour.
+     */
+    nativeSummaryWriteWaitMaxMs?: number;
 }
 
 export interface FinalizationBlock {
@@ -411,6 +432,43 @@ export function evaluateFinalizationBlock(
         if (typeof ageMs === 'number' && ageMs < policy.ptyParsedFinalAssistantQuietDwellMs) {
             return { block: { reason: 'native_source_final_assistant_quiet_dwell', terminal: false }, evidencePatch };
         }
+    }
+
+    // (SUMMARY-SCRAPE-FALLBACK, part A) The turn is provably over, but the only evidence we
+    // have is the PTY SCREEN of a provider whose canonical history is its own append-only
+    // transcript — and that transcript does not hold this turn's final bubble yet. Emitting
+    // now is what produces a finalSummary cut off mid-sentence: the terminal wrapped/scrolled
+    // the reply, so the scrape is an arbitrary-length prefix, and the CLEAN verdict extracts
+    // the summary from exactly that snapshot (cleanCompletionFinalSummary). Unlike the
+    // turn-boundary race, which can emit '' and be upgraded later, a prefix is
+    // indistinguishable from a genuinely short answer, so nothing downstream ever repairs it.
+    //
+    // Hold NON-terminally and briefly so the ordinary retry re-reads a transcript that, for
+    // the write-lag class, lands within a flush or two. The hold is bounded by
+    // nativeSummaryWriteWaitMaxMs; past it the completion emits with the scrape ANYWAY, and
+    // part B stamps completionDiagnostic.finalSummaryMayBeTruncated so the coordinator is not
+    // misled. Requires nativeSummaryOnDisk() to say FALSE explicitly — undefined ("cannot
+    // tell", and every reader that predates this signal) never holds.
+    //
+    // Deliberately last, so it can only ever delay an already-clean verdict: it adds no new
+    // way to block, and any other block reason above wins and is unaffected.
+    //
+    // NOT marked holdForTranscript, even though it is literally waiting for a transcript: that
+    // flag is consumed by the hold-class (antigravity) rule that extends a hold past the 30s
+    // cap up to the 300s hard cap while the PTY is active. This hold carries its OWN much
+    // smaller bound and must never inherit that one — a hold-class provider reaching here would
+    // otherwise be able to stretch a 2.5s summary wait into minutes.
+    const summaryWaitMaxMs = policy.nativeSummaryWriteWaitMaxMs ?? 0;
+    if (summaryWaitMaxMs > 0
+        && ownsExternal
+        && evidence.present
+        && evidence.source === 'parsed'
+        && reader.nativeSummaryOnDisk?.() === false
+        && reader.now() - arm.firstObservedAt < summaryWaitMaxMs) {
+        return {
+            block: { reason: 'native_summary_write_pending', terminal: false },
+            evidencePatch,
+        };
     }
 
     return { block: null, evidencePatch };

@@ -261,6 +261,13 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
         ? String(completionDiagnostic.finalAssistantPresent)
         : '';
     const evidenceLevel = readNonEmptyString(event.evidenceLevel);
+    // (SUMMARY-SCRAPE-FALLBACK, part B) The worker resolved this turn's finalSummary from the
+    // PTY screen scrape of a provider whose canonical history is its own transcript, because
+    // that transcript had not been written yet. The terminal wraps and scrolls, so the summary
+    // may be an arbitrary partial prefix that READS like a finished sentence. Surface it: a
+    // coordinator that sees the flag can call mesh_read_chat for the full text instead of
+    // acting on half of it. Only ever present when the worker asserted it.
+    const summaryMayBeTruncated = completionDiagnostic?.finalSummaryMayBeTruncated === true;
     const parts = [
         readNonEmptyString(event.targetSessionId) ? `session_id=${readNonEmptyString(event.targetSessionId)}` : '',
         readNonEmptyString(event.providerType) ? `provider=${readNonEmptyString(event.providerType)}` : '',
@@ -268,6 +275,7 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
         diagnosticReason ? `completion_diagnostic=${diagnosticReason}` : '',
         finalAssistantPresent ? `final_assistant=${finalAssistantPresent}` : '',
         evidenceLevel && evidenceLevel !== 'sufficient' ? `evidence_level=${evidenceLevel}` : '',
+        summaryMayBeTruncated ? 'final_summary=may_be_truncated' : '',
     ].filter(Boolean);
     return parts.length > 0 ? ` (${parts.join('; ')})` : '';
 }
