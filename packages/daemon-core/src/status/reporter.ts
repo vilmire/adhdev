@@ -91,6 +91,24 @@ export interface StatusReporterDeps {
     getScreenshotUsage?: () => { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
 }
 
+/**
+ * How many consecutive byte-identical periodic reports may be suppressed before
+ * one is sent anyway.
+ *
+ * The periodic path used to pass `forceServer: true`, which bypassed the dedup
+ * hash below unconditionally — a fully idle machine still re-sent the same
+ * routing payload every 30s forever. That is pure waste on the single busiest
+ * axis we have (UserSessionDO request count), so periodic now respects the hash.
+ *
+ * The keepalive stops that from becoming *silence*. At the 30s server interval
+ * this floors an idle daemon at one report per ~5 minutes, which is three orders
+ * of magnitude inside the server's 24h stale threshold for restoring a stored
+ * entry (`UserSession.ts` migrate()) and well inside its 1h in-memory eviction
+ * sweep, so a quiet-but-alive daemon can never be aged out. State transitions do
+ * not wait for it: they change the hash and therefore send immediately.
+ */
+export const SERVER_DEDUP_KEEPALIVE_REPORTS = 10;
+
 export class DaemonStatusReporter {
     private deps: StatusReporterDeps;
     private log: (msg: string) => void;
@@ -102,6 +120,11 @@ export class DaemonStatusReporter {
     private p2pDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private lastServerStatusHash = '';
     private lastStatusSummary = '';
+    /**
+     * Consecutive periodic reports suppressed by the server-side dedup hash.
+     * Reset on every actual send; see SERVER_DEDUP_KEEPALIVE_REPORTS.
+     */
+    private serverDedupSkipCount = 0;
 
     private statusTimer: NodeJS.Timeout | null = null;
     private p2pTimer: NodeJS.Timeout | null = null;
@@ -120,7 +143,9 @@ export class DaemonStatusReporter {
 
         const scheduleServerReport = () => {
             this.statusTimer = setTimeout(() => {
-                this.sendUnifiedStatusReport({ forceServer: true, reason: 'periodic' }).catch(e => LOG.warn('Status', `Periodic report failed: ${e?.message}`));
+                // No forceServer: an unchanged idle payload is deduped by the hash
+                // below, bounded by SERVER_DEDUP_KEEPALIVE_REPORTS.
+                this.sendUnifiedStatusReport({ reason: 'periodic' }).catch(e => LOG.warn('Status', `Periodic report failed: ${e?.message}`));
                 scheduleServerReport();
             }, DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS);
         };
@@ -359,9 +384,17 @@ export class DaemonStatusReporter {
         }));
         if (!serverConnected || !serverConn) return;
         if (!opts?.forceServer && wsHash === this.lastServerStatusHash) {
-            LOG.debug('Server', `skip duplicate status_report${opts?.reason ? ` (${opts.reason})` : ''}`);
-            return;
+            // Unchanged payload. Suppress it, but never indefinitely — after
+            // SERVER_DEDUP_KEEPALIVE_REPORTS consecutive skips send one anyway so the
+            // server's view of this daemon cannot go stale while it is still alive.
+            if (this.serverDedupSkipCount + 1 < SERVER_DEDUP_KEEPALIVE_REPORTS) {
+                this.serverDedupSkipCount++;
+                LOG.debug('Server', `skip duplicate status_report${opts?.reason ? ` (${opts.reason})` : ''} [${this.serverDedupSkipCount}/${SERVER_DEDUP_KEEPALIVE_REPORTS}]`);
+                return;
+            }
+            LOG.debug('Server', `keepalive status_report after ${this.serverDedupSkipCount} skipped duplicates`);
         }
+        this.serverDedupSkipCount = 0;
         this.lastServerStatusHash = wsHash;
         const wsPayloadBytes = JSON.stringify(wsPayload).length;
         serverConn.sendMessage('status_report', wsPayload);
