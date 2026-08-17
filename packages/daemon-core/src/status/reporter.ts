@@ -72,7 +72,12 @@ export function buildCloudStatusReportPayload(
 // ─── Daemon dependency interface ──────────────────────
 
 export interface StatusReporterDeps {
-    serverConn: { isConnected(): boolean; sendMessage(type: string, data: any): void; getUserPlan(): string } | null;
+    // sendMessage reports delivery by return value: the cloud ServerConnection
+    // returns false when the socket is not in a sendable state (mid-reconnect) or
+    // when serialization throws — it never throws. The status dedup below must
+    // honor that, or a dropped frame is recorded as delivered. Typed as
+    // `void | boolean` so implementations that return nothing still satisfy it.
+    serverConn: { isConnected(): boolean; sendMessage(type: string, data: any): void | boolean; getUserPlan(): string } | null;
     cdpManagers: Map<string, DaemonCdpManager>;
     p2p: {
         isConnected: boolean;
@@ -394,10 +399,21 @@ export class DaemonStatusReporter {
             }
             LOG.debug('Server', `keepalive status_report after ${this.serverDedupSkipCount} skipped duplicates`);
         }
+        const wsPayloadBytes = JSON.stringify(wsPayload).length;
+        // Record the dedup state only once the frame is actually handed to a live
+        // socket. sendMessage returns false when the WS is mid-reconnect or the
+        // send throws; storing the hash first would mark a dropped frame as
+        // delivered, and every later report with the same payload would then be
+        // deduped away — leaving the server on a stale status until the payload
+        // changes again or keepalive expires. Before periodic reports respected
+        // the dedup hash this was masked by an unconditional resend every 30s.
+        const delivered = serverConn.sendMessage('status_report', wsPayload);
+        if (delivered === false) {
+            LOG.debug('Server', `status_report not delivered — keeping previous dedup hash for retry${opts?.reason ? ` (${opts.reason})` : ''}`);
+            return;
+        }
         this.serverDedupSkipCount = 0;
         this.lastServerStatusHash = wsHash;
-        const wsPayloadBytes = JSON.stringify(wsPayload).length;
-        serverConn.sendMessage('status_report', wsPayload);
         LOG.debug('Server', `sent status_report (${wsPayloadBytes} bytes)${opts?.reason ? ` [${opts.reason}]` : ''}`);
     }
 
