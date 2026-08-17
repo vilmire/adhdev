@@ -38,9 +38,11 @@ interface ProvidersTabProps {
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     /** Machine plan quota (MachineInfo.quota) — rendered per provider row. */
     quota?: Record<string, MeshNodeFactsProviderQuota>
+    /** Incremented after an external channel sync so pins/settings re-read. */
+    refreshNonce?: number
 }
 
-export default function ProvidersTab({ machineId, providers, sendDaemonCommand, quota }: ProvidersTabProps) {
+export default function ProvidersTab({ machineId, providers, sendDaemonCommand, quota, refreshNonce = 0 }: ProvidersTabProps) {
     const { t } = useTranslation('common')
     const [settings, setSettings] = useState<ProviderSettingsEntry[]>([])
     // Quota account label — machine-level config, so it has its own read/write
@@ -225,6 +227,12 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
         fetchQuotaEnabled()
         fetchPins()
     }, [])
+
+    useEffect(() => {
+        if (!refreshNonce) return
+        void fetchPins()
+        void fetchSettings()
+    }, [refreshNonce, fetchPins, fetchSettings])
 
     const handleSetSetting = async (providerType: string, key: string, value: unknown) => {
         setSavingKey(`${providerType}.${key}`)

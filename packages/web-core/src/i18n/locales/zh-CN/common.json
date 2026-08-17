@@ -2978,7 +2978,11 @@
             "coresCount_one": "{{count}} 核",
             "coresCount_other": "{{count}} 核",
             "p2pState": "P2P {{state}}",
-            "p2pConnected": "已连接"
+            "p2pConnected": "已连接",
+            "providerStaleBadgeHint": "同步此机器的提供方通道（等同于 adhdev provider sync-channel）",
+            "providerSyncSuccess": "提供方通道已同步 — 已更新 {{count}} 项",
+            "providerSyncAlreadyCurrent": "提供方通道已是最新",
+            "providerSyncFailed": "提供方通道同步失败：{{error}}"
         },
         "commandCenter": {
             "currentChats": "当前聊天",

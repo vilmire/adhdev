@@ -24,7 +24,7 @@ import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../utils/dashboard-route-paths'
 import { IconBarChart, IconMonitor, IconSettings, IconClipboard, IconServer } from '../components/Icons'
-import type { ReactNode } from 'react'
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
 
@@ -57,6 +57,12 @@ import {
 } from '../utils/dashboard-launch-copy'
 import { DEFAULT_MACHINE_RUNTIME_REFRESH_MS } from '../utils/daemon-timing'
 import { buildDaemonUpgradePayload } from '../utils/daemon-update-policy'
+import {
+    PROVIDER_CHANNEL_SYNC_COMMAND,
+    extraTypesForProviderChannelSync,
+    interpretProviderChannelSyncResult,
+    unwrapDaemonCommandBody,
+} from '../utils/provider-channel-sync'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -90,6 +96,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     // snapshot; this surfaces it WITHOUT the user opening the tab. null until
     // the daemon's first probe ran — no badge, never a wrong one.
     const [providerStaleness, setProviderStaleness] = useState<{ staleTypes: string[]; newTypes: string[] } | null>(null)
+    const [providerSyncBusy, setProviderSyncBusy] = useState(false)
+    const [providerSyncNonce, setProviderSyncNonce] = useState(0)
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
     void useCallback((daemonId: string, workspace: string) => {
         setGitDialogTarget({ daemonId, workspace })
@@ -119,25 +127,69 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         void loadDaemonMetadata(machineId, { minFreshMs: 30_000 }).catch(() => {})
     }, [loadDaemonMetadata, machineEntry, machineId])
 
+    const applyProviderStalenessSnapshot = useCallback((raw: unknown) => {
+        const body = unwrapDaemonCommandBody<{
+            providerChannelStaleness?: { staleTypes?: string[]; newTypes?: string[]; error?: string }
+        }>(raw)
+        const snap = body?.providerChannelStaleness
+        if (snap && !snap.error) {
+            setProviderStaleness({
+                staleTypes: Array.isArray(snap.staleTypes) ? snap.staleTypes : [],
+                newTypes: Array.isArray(snap.newTypes) ? snap.newTypes : [],
+            })
+        }
+    }, [])
+
     useEffect(() => {
         if (!machineId || !machineEntry) return
         let cancelled = false
         void (async () => {
             try {
                 const res = await sendDaemonCommand(machineId, 'get_status_metadata')
-                const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as
-                    { providerChannelStaleness?: { staleTypes?: string[]; newTypes?: string[]; error?: string } } | undefined
-                const snap = body?.providerChannelStaleness
-                if (!cancelled && snap && !snap.error) {
-                    setProviderStaleness({
-                        staleTypes: Array.isArray(snap.staleTypes) ? snap.staleTypes : [],
-                        newTypes: Array.isArray(snap.newTypes) ? snap.newTypes : [],
-                    })
-                }
+                if (!cancelled) applyProviderStalenessSnapshot(res)
             } catch { /* badge is best-effort — absence of data shows no badge */ }
         })()
         return () => { cancelled = true }
-    }, [machineId, machineEntry?.id, sendDaemonCommand])
+    }, [applyProviderStalenessSnapshot, machineId, machineEntry?.id, sendDaemonCommand])
+
+    const handleProviderStaleBadgeClick = useCallback(async (event: ReactMouseEvent) => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!machineId || providerSyncBusy) return
+        setActiveTab('providers')
+        setProviderSyncBusy(true)
+        try {
+            const extra = extraTypesForProviderChannelSync(providerStaleness)
+            const res = await sendDaemonCommand(
+                machineId,
+                PROVIDER_CHANNEL_SYNC_COMMAND,
+                extra.length > 0 ? { types: extra } : {},
+            )
+            const outcome = interpretProviderChannelSyncResult(res)
+            if (outcome.ok) {
+                eventManager.showToast(
+                    outcome.activatedCount > 0
+                        ? t('machine.detail.providerSyncSuccess', { count: outcome.activatedCount })
+                        : t('machine.detail.providerSyncAlreadyCurrent'),
+                    'success',
+                )
+            } else {
+                eventManager.showToast(
+                    t('machine.detail.providerSyncFailed', { error: outcome.error }),
+                    'warning',
+                )
+            }
+            setProviderSyncNonce((n) => n + 1)
+            try {
+                applyProviderStalenessSnapshot(await sendDaemonCommand(machineId, 'get_status_metadata'))
+            } catch { /* badge refresh is best-effort after the toast */ }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            eventManager.showToast(t('machine.detail.providerSyncFailed', { error: message }), 'warning')
+        } finally {
+            setProviderSyncBusy(false)
+        }
+    }, [applyProviderStalenessSnapshot, machineId, providerStaleness, providerSyncBusy, sendDaemonCommand, t])
 
     useEffect(() => {
         // Providers included (owner catch 2026-08-10): the per-row quota chips
@@ -569,13 +621,27 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                             }`}
                         >
                             {tab.label}
-                            {tab.count !== undefined && (
+                            {tab.count !== undefined && tab.id === 'providers' && providerStaleness ? (
+                                <span
+                                    role="button"
+                                    title={t('machine.detail.providerStaleBadgeHint')}
+                                    aria-label={t('machine.detail.providerStaleBadgeHint')}
+                                    onClick={handleProviderStaleBadgeClick}
+                                    className={`px-1.5 py-0.5 rounded-full text-[10px] ml-1 cursor-pointer ${
+                                        providerSyncBusy
+                                            ? 'bg-amber-500/20 text-amber-300'
+                                            : 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/30'
+                                    }`}
+                                >
+                                    {providerSyncBusy ? '…' : tab.count}
+                                </span>
+                            ) : tab.count !== undefined ? (
                                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] ml-1 ${
                                     activeTab === tab.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-glass-hover text-text-muted'
                                 }`}>
                                     {tab.count}
                                 </span>
-                            )}
+                            ) : null}
                         </button>
                     ))}
                 </div>
@@ -625,6 +691,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 providers={providers}
                                 sendDaemonCommand={sendDaemonCommand}
                                 quota={machine.quota}
+                                refreshNonce={providerSyncNonce}
                             />
                         )}
 

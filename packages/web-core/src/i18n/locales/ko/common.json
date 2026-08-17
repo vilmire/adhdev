@@ -2978,7 +2978,11 @@
             "coresCount_one": "{{count}}코어",
             "coresCount_other": "{{count}}코어",
             "p2pState": "P2P {{state}}",
-            "p2pConnected": "연결됨"
+            "p2pConnected": "연결됨",
+            "providerStaleBadgeHint": "이 머신의 프로바이더 채널을 동기화합니다 (adhdev provider sync-channel과 동일)",
+            "providerSyncSuccess": "프로바이더 채널 동기화 완료 — {{count}}개 갱신",
+            "providerSyncAlreadyCurrent": "프로바이더 채널이 이미 최신입니다",
+            "providerSyncFailed": "프로바이더 채널 동기화 실패: {{error}}"
         },
         "commandCenter": {
             "currentChats": "현재 채팅",

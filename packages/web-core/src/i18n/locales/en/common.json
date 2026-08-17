@@ -2978,7 +2978,11 @@
             "coresCount_one": "{{count}} core",
             "coresCount_other": "{{count}} cores",
             "p2pState": "P2P {{state}}",
-            "p2pConnected": "connected"
+            "p2pConnected": "connected",
+            "providerStaleBadgeHint": "Sync this machine's provider channel (same as adhdev provider sync-channel)",
+            "providerSyncSuccess": "Provider channel synced — {{count}} updated",
+            "providerSyncAlreadyCurrent": "Provider channel is already current",
+            "providerSyncFailed": "Provider channel sync failed: {{error}}"
         },
         "commandCenter": {
             "currentChats": "Current Chats",

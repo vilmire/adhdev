@@ -2978,7 +2978,11 @@
             "coresCount_one": "{{count}} コア",
             "coresCount_other": "{{count}} コア",
             "p2pState": "P2P {{state}}",
-            "p2pConnected": "接続済み"
+            "p2pConnected": "接続済み",
+            "providerStaleBadgeHint": "このマシンのプロバイダーチャネルを同期します（adhdev provider sync-channel と同じ）",
+            "providerSyncSuccess": "プロバイダーチャネルを同期しました — {{count}} 件更新",
+            "providerSyncAlreadyCurrent": "プロバイダーチャネルは既に最新です",
+            "providerSyncFailed": "プロバイダーチャネルの同期に失敗しました: {{error}}"
         },
         "commandCenter": {
             "currentChats": "現在のチャット",

@@ -20,6 +20,26 @@ import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import type { CliAdapter } from '../../cli-adapter-types.js';
 import { SpecCliAdapter } from './cli-adapter.js';
 import { LOG } from '../../logging/logger.js';
+import { IDENTITY } from '../../track-identity.js';
+
+/**
+ * Recovery copy when a CLI provider has no resolvable spec.
+ *
+ * The command string is the real CLI (`provider sync-channel`, no extra
+ * args) — NOT the non-existent `providers sync`. Dashboard recovery is the
+ * stale-count badge on the machine Providers tab, which sends the existing
+ * `activate_provider_updates` daemon command (same `syncVerifiedChannel()`).
+ */
+export function formatNoResolvableSpecError(providerType: string, dir?: string): string {
+    const cli = `${IDENTITY.binaryName} provider sync-channel`;
+    return (
+        `CLI provider '${providerType}' has no resolvable spec (checked compatibility[].spec, `
+        + `specs/default.json, spec.json under ${dir || 'the resolved provider dir'}). `
+        + `The legacy scripts/tui-manifest CLI engine was removed; update the provider bundle `
+        + `with \`${cli}\` (no extra arguments), or click the stale provider badge on the `
+        + `machine Providers tab in the dashboard, or add a spec.json to the provider.`
+    );
+}
 
 export function createCliAdapter(
     provider: CliProviderModule,
@@ -46,12 +66,7 @@ export function createCliAdapter(
         if (fs.existsSync(legacy)) specPath = legacy;
     }
     if (!specPath) {
-        throw new Error(
-            `CLI provider '${provider.type}' has no resolvable spec (checked compatibility[].spec, `
-            + `specs/default.json, spec.json under ${dir || 'the resolved provider dir'}). `
-            + `The legacy scripts/tui-manifest CLI engine was removed; update the provider bundle `
-            + `('adhdev providers sync' / dashboard provider refresh) or add a spec.json to the provider.`,
-        );
+        throw new Error(formatNoResolvableSpecError(provider.type, dir));
     }
     LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (${path.relative(dir || '', specPath) || specPath})`);
     return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId);

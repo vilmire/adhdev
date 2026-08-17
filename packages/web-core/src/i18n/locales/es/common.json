@@ -2983,7 +2983,11 @@
             "coresCount_one": "{{count}} núcleo",
             "coresCount_other": "{{count}} núcleos",
             "p2pState": "P2P {{state}}",
-            "p2pConnected": "conectado"
+            "p2pConnected": "conectado",
+            "providerStaleBadgeHint": "Sincronizar el canal de proveedores de esta máquina (igual que adhdev provider sync-channel)",
+            "providerSyncSuccess": "Canal de proveedores sincronizado — {{count}} actualizados",
+            "providerSyncAlreadyCurrent": "El canal de proveedores ya está al día",
+            "providerSyncFailed": "Error al sincronizar el canal de proveedores: {{error}}"
         },
         "commandCenter": {
             "currentChats": "Chats actuales",
