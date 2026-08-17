@@ -23,7 +23,6 @@ import {
     IconRocket,
     IconServer,
     IconShield,
-    IconUsers,
     Section,
     IconDiscord,
 } from '@adhdev/web-core'
@@ -46,7 +45,6 @@ const CLOUD_EXTRAS = [
     { icon: <IconDashboard size={16} />, key: 'p2pStream' },
     { icon: <IconBell size={16} />, key: 'mobileNotifications' },
     { icon: <IconKey size={16} />, key: 'restApi' },
-    { icon: <IconUsers size={16} />, key: 'teamWorkspace' },
     { icon: <IconShield size={16} />, key: 'enterpriseControls' },
 ]
 
@@ -60,7 +58,6 @@ const COMPARISON = [
     { key: 'webrtc', selfhost: false, cloud: true },
     { key: 'mobilePush', selfhost: false, cloud: true },
     { key: 'restApi', selfhost: false, cloud: true },
-    { key: 'teamCollaboration', selfhost: false, cloud: true },
     { key: 'multiMachineDashboards', selfhost: false, cloud: true },
     { key: 'ssoRbacAuditLogs', selfhost: false, cloud: true },
 ]
