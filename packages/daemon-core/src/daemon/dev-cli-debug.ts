@@ -874,14 +874,20 @@ export function handleCliSSE(ctx: DevServerContext, cliSSEClients: http.ServerRe
   });
 }
 
-/** GET /api/cli/debug/:type — full internal debug state of a CLI adapter */
+/** GET /api/cli/debug/:type[?instanceId=…] — full internal debug state of a
+ *  CLI adapter. `instanceId` selects among CONCURRENT sessions of the same
+ *  type (multi-session spec verification); omitted → first match, as before. */
 export async function handleCliDebug(ctx: DevServerContext, type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!ctx.instanceManager) {
     ctx.json(res, 503, { error: 'InstanceManager not available' });
     return;
   }
 
-  const target = findCliTarget(ctx, type);
+  let instanceId: string | undefined;
+  try {
+    instanceId = new URL(_req.url || '', 'http://localhost').searchParams.get('instanceId') || undefined;
+  } catch { /* keep first-match behavior */ }
+  const target = findCliTarget(ctx, type, instanceId);
   if (!target) {
     const allStates = ctx.instanceManager.collectAllStates();
     ctx.json(res, 404, { error: `No running instance for: ${type}`, available: allStates.filter(s => s.category === 'cli' || s.category === 'acp').map(s => s.type) });

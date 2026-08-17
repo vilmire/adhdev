@@ -1070,7 +1070,7 @@ function projectUsageRecord(
  * still works; on mismatch we return undefined and the read fails closed rather
  * than aliasing another workspace's transcript.
  */
-function workspaceFromInputIfSlugMatches(sourcePath: string, input: NativeHistoryInput): string | undefined {
+export function workspaceFromInputIfSlugMatches(sourcePath: string, input: NativeHistoryInput): string | undefined {
     const wsRaw = typeof input.workspace === 'string' ? input.workspace.trim() : '';
     if (!wsRaw) return undefined;
     let wsReal = wsRaw;
@@ -1078,8 +1078,20 @@ function workspaceFromInputIfSlugMatches(sourcePath: string, input: NativeHistor
     const slugs = new Set<string>();
     for (const w of [wsReal, wsRaw]) {
         if (!w) continue;
-        slugs.add(claudeProjectDirName(w));            // "-Users-…" (leading dash)
-        slugs.add(claudeProjectDirName(w.replace(/^\/+/, ''))); // cursor form, no leading dash
+        for (const base of [
+            claudeProjectDirName(w),                       // "-Users-…" (leading dash)
+            claudeProjectDirName(w.replace(/^\/+/, '')),   // cursor form, no leading dash
+        ]) {
+            slugs.add(base);
+            // cursor-agent additionally COLLAPSES consecutive dashes in its
+            // slug (live-measured v2026.08.11: workspace ".../adhdev--claude-…"
+            // is stored as ".../adhdev-claude-…"). A workspace path that
+            // already contains '-' or any adjacent non-alphanumerics therefore
+            // never matched the uncollapsed form, and the read failed closed —
+            // silently degrading the chat to the PTY parse for exactly those
+            // workspaces (worktrees, tmp dirs). Match the collapsed form too.
+            slugs.add(base.replace(/-{2,}/g, '-'));
+        }
     }
     const segments = sourcePath.split(path.sep);
     for (const seg of segments) {

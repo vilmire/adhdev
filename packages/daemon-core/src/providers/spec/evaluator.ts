@@ -319,11 +319,62 @@ function compileLinePattern(ref: { pattern: string; flags?: string }): RegExp {
     return new RegExp(ref.pattern, flags);
 }
 
+/**
+ * Map a button-row KEY TOKEN (the hint inside a parenthetical like "(y)" /
+ * "(tab)" / "(shift+tab)" / "(esc or n)") to the byte sequence to type.
+ * Returns null for an unmappable token — the caller drops the button (fail
+ * closed: never type an unknown key). "esc or n" style alternatives prefer
+ * the plain-letter arm ("n"): a bare letter cannot double as a global
+ * cancel/interrupt the way ESC can.
+ */
+export function mapButtonKeyToken(tokenRaw: string): string | null {
+    const token = tokenRaw.trim().toLowerCase();
+    if (!token) return null;
+    const alternatives = token.split(/\s+or\s+/);
+    const letter = alternatives.find(t => /^[a-z0-9]$/.test(t));
+    const chosen = letter ?? alternatives[0];
+    if (/^[a-z0-9]$/.test(chosen)) return chosen;
+    switch (chosen) {
+        case 'tab': return '\t';
+        case 'shift+tab': return '\u001b[Z';
+        case 'esc': case 'escape': return '\u001b';
+        case 'enter': case 'return': return '\r';
+        case 'space': return ' ';
+        default: return null;
+    }
+}
+
 export function extractButtonsFromRule(
     rule: ExtractButtons,
     hay: string,
 ): { index: number; label: string; key: string; current: boolean }[] {
-    const keyTemplate = rule.key_for_index;
+    const keyTemplate = rule.key_for_index ?? '{index}';
+    // Ordinal mode (label_group/key_group — see ExtractButtons docs): the
+    // modal renders NO display numbers, so index = 1-based match order and
+    // each button's key comes from its own captured token. Rows keep screen
+    // order; the numbered-block reduction below is skipped (it exists to
+    // filter stray body "1./2." lists, which cannot match a parenthetical
+    // key-token pattern in the first place).
+    if (rule.label_group !== undefined || rule.key_group !== undefined) {
+        const labelGroup = rule.label_group ?? 1;
+        const re = compilePattern(rule);
+        const ordinal: { index: number; label: string; key: string; current: boolean }[] = [];
+        let om: RegExpExecArray | null;
+        while ((om = re.exec(hay)) !== null) {
+            const label = String(om[labelGroup] ?? '').trim();
+            if (!label) continue;
+            let key: string;
+            if (rule.key_group !== undefined) {
+                const mapped = mapButtonKeyToken(String(om[rule.key_group] ?? ''));
+                if (mapped === null) continue;
+                key = mapped;
+            } else {
+                key = keyTemplate.replace(/\{index\}/g, String(ordinal.length + 1));
+            }
+            ordinal.push({ index: ordinal.length + 1, label, key, current: hasCursorMarker(om[0]) });
+        }
+        return ordinal;
+    }
     const continuationLines = rule.continuation_lines ?? false;
     const buttons: { index: number; label: string; key: string; current: boolean }[] = [];
 
@@ -408,8 +459,9 @@ export function lastContiguousNumberedBlock<T extends { index: number }>(entries
     return entries.slice(start);
 }
 
-/** True when a button line carries a TUI cursor marker (`❯`, `›`, `>`) before
- *  its number — i.e. the cursor currently sits on that row. */
+/** True when a button line carries a TUI cursor marker (`❯`, `›`, `>`, `→`)
+ *  before its number/label — i.e. the cursor currently sits on that row.
+ *  (`→` is cursor-agent's focused-row marker, live-measured 2026-08-17.) */
 function hasCursorMarker(text: string): boolean {
-    return /^\s*[❯›>]/.test(text);
+    return /^\s*[❯›>→]/.test(text);
 }

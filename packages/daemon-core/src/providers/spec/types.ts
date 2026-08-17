@@ -406,9 +406,27 @@ export interface ExtractButtons {
     section?: string;
     pattern: string;
     flags?: string;
-    key_for_index: string;
+    /** Required unless `key_group` supplies each button's key directly. */
+    key_for_index?: string;
     min_count?: number;
     continuation_lines?: boolean;
+    /**
+     * UNNUMBERED modal rows (cursor-agent's "→ Run (once) (y)" style): the
+     * default extraction requires capture group 1 to be a NUMERIC display
+     * index, which such modals do not render. Setting `label_group` switches
+     * to ordinal indexing: the button's index is its 1-based match order and
+     * its label comes from this capture group.
+     */
+    label_group?: number;
+    /**
+     * Capture group holding each button's own KEY TOKEN (e.g. the "y" /
+     * "tab" / "shift+tab" / "esc or n" inside the row's parenthetical hint).
+     * The token is mapped to the byte sequence to type — see
+     * `mapButtonKeyToken` in evaluator.ts. When set, `key_for_index` is
+     * ignored for these buttons; a row whose token cannot be mapped is
+     * dropped (fail closed — never type an unknown key).
+     */
+    key_group?: number;
     /**
      * How a button is committed when its modal is resolved (auto-approve or an
      * explicit dashboard click).
