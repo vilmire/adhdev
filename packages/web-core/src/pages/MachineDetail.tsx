@@ -166,17 +166,17 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 extra.length > 0 ? { types: extra } : {},
             )
             const outcome = interpretProviderChannelSyncResult(res)
-            if (outcome.ok) {
+            if ('error' in outcome) {
+                eventManager.showToast(
+                    t('machine.detail.providerSyncFailed', { error: outcome.error }),
+                    'warning',
+                )
+            } else {
                 eventManager.showToast(
                     outcome.activatedCount > 0
                         ? t('machine.detail.providerSyncSuccess', { count: outcome.activatedCount })
                         : t('machine.detail.providerSyncAlreadyCurrent'),
                     'success',
-                )
-            } else {
-                eventManager.showToast(
-                    t('machine.detail.providerSyncFailed', { error: outcome.error }),
-                    'warning',
                 )
             }
             setProviderSyncNonce((n) => n + 1)
