@@ -1397,6 +1397,10 @@ export class SpecCliAdapter implements CliAdapter {
             spec_id: this.spec.id,
             current_state: latestState ?? null,
             current_modal: latestModal ?? null,
+            // Interactive-prompt hold (waiting_choice path) — surfaced so the
+            // spec-verification workflow can observe wire/TUI prompt capture
+            // per session (it was previously invisible in this bundle).
+            activeInteractivePrompt: this.activeInteractivePrompt ?? null,
             exited: this.exited,
             idleHoldPending: this.driver.hasIdleHoldPending?.() ?? false,
             lastBusyAt: this.driver.getLastBusyAt?.() ?? 0,
