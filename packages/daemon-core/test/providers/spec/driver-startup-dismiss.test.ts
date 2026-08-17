@@ -141,6 +141,18 @@ describe('FsmDriver -- startup_dismiss', () => {
     });
 });
 
+describe('opencode repo spec', () => {
+    it('adhdev-providers/cli/opencode/specs/1.0.json passes the v4 validator and declares startup_dismiss', () => {
+        const repoRoot = path.resolve(__dirname, '../../../../../..');
+        const specPath = path.join(repoRoot, 'adhdev-providers/cli/opencode/specs/1.0.json');
+        if (!fs.existsSync(specPath)) return; // OSS-standalone checkout has no adhdev-providers
+        const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+        expect(validateFsmSpec(spec)).toEqual([]);
+        expect(spec.startup_dismiss?.key).toBe('\u001b');
+        expect(spec.requiresFinalAssistantBeforeIdle).toBe(true);
+    });
+});
+
 describe('validateFsmSpec -- startup_dismiss', () => {
     it('accepts a well-formed declaration', () => {
         expect(validateFsmSpec(baseSpec({ startup_dismiss: DISMISS }))).toEqual([]);
