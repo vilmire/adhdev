@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { tmpdir } from 'os'
+import { execFileSync } from 'node:child_process'
 
 // Isolate all file I/O (ledger JSONL, MeshRuntimeStore, pending events) to a per-run
 // temp directory so test runs never pollute the production ~/.adhdev/mesh-ledger.
@@ -117,6 +118,22 @@ function cleanupMeshFiles(meshId: string) {
   fastForwardMocks.fastForwardMeshNode.mockReset()
   if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
   if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
+}
+
+// FALSE-COMPLETION-GIT-EVIDENCE: a real (non-mocked) git repo so the synchronous
+// git-clean gate in markSessionTerminal (checkCodeChangeWorkspaceCleanSync) has an
+// actual workspace to shell out against — this gate is untestable with the fake
+// '/repo/worktree-a' paths the rest of this file uses everywhere else.
+function tempGitRepo(name: string): string {
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), `adhdev-mesh-events-git-${name}-`)))
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' })
+  git(['init'])
+  git(['config', 'user.email', 'test@example.com'])
+  git(['config', 'user.name', 'ADHDev Test'])
+  fs.writeFileSync(path.join(repo, 'README.md'), 'hello\n')
+  git(['add', '.'])
+  git(['commit', '-m', 'initial'])
+  return repo
 }
 
 function createQueueAutoLaunchComponents(args?: {
@@ -1766,6 +1783,120 @@ describe('setupMeshEventForwarding', () => {
       expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
+    }
+  })
+
+  // FALSE-COMPLETION-GIT-EVIDENCE: a code_change task whose worker self-reports a genuine
+  // completion (real finalSummary, no weak-evidence diagnostic) is trusted purely off that
+  // self-report — even when the workspace has ZERO commits/diff since the task started. The
+  // async mesh-completion-side-effect-evidence follow-up records this in the ledger, but only
+  // AFTER this state transition and its coordinator notification already committed, so nothing
+  // ever re-reads it. markSessionTerminal's synchronous git-clean gate is meant to catch this
+  // in the SAME transition. Reverting that gate (see the paired dirty-tree control test below
+  // for what "no gate" looks like) must turn this test red.
+  it('FALSE-COMPLETION-GIT-EVIDENCE: flags reviewRecommended when a code_change task completes genuinely but the workspace is git-clean', () => {
+    const meshId = `mesh_false_completion_clean_${Date.now()}`
+    const repo = tempGitRepo('clean')
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued code change task', {
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-clean',
+        finalSummary: 'Investigated and concluded no change was needed.',
+        // explicit_metadata worker-result → NOT 'default' source, so the pre-existing
+        // NOTIF-Defect-2b text-shape heuristic (source==='default' → reviewRecommended:true)
+        // stays uninvolved and this test isolates the git-clean gate specifically.
+        workerResult: { status: 'success', changedFiles: [] },
+        timestamp: Date.now(),
+      })
+
+      // The completion is still GENUINE — the task terminates completed, not left tentative —
+      // this is a review flag, not a rejection.
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry?.payload.taskId).toBe(queued.id)
+      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
+      expect((completedEntry?.payload as any).completionDiagnostic).toMatchObject({
+        noSideEffectsAtCompletion: true,
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  it('FALSE-COMPLETION-GIT-EVIDENCE control: does NOT flag reviewRecommended when the code_change workspace has an uncommitted diff', () => {
+    const meshId = `mesh_false_completion_dirty_${Date.now()}`
+    const repo = tempGitRepo('dirty')
+    try {
+      // A genuine, still-uncommitted change — the ordinary "has evidence" case that must NOT
+      // be flagged. Proves the gate discriminates on git state rather than blanket-flagging
+      // every code_change completion.
+      fs.writeFileSync(path.join(repo, 'file.txt'), 'changed\n')
+
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued code change task', {
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-dirty',
+        finalSummary: 'Implemented the change.',
+        // Same explicit_metadata isolation as the clean-tree case above.
+        workerResult: { status: 'success', changedFiles: ['file.txt'] },
+        timestamp: Date.now(),
+      })
+
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry?.payload.taskId).toBe(queued.id)
+      expect((completedEntry?.payload as any).reviewRecommended).not.toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
     }
   })
 

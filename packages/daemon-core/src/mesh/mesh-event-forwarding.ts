@@ -20,7 +20,7 @@ import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { describeRecoveryRelaunchDecision, resolveRecoveryRelaunchProvider } from './mesh-quota-routing.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { scheduleTaskCompletionSideEffectEvidence } from './mesh-completion-side-effect-evidence.js';
+import { scheduleTaskCompletionSideEffectEvidence, resolveLocalCodeChangeWorkspace, checkCodeChangeWorkspaceCleanSync } from './mesh-completion-side-effect-evidence.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -124,6 +124,13 @@ const REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
 // ---------------------------------------------------------------------------
 const meshByWorkspaceCache = new Map<string, { mesh: any; cachedAt: number }>();
 const MESH_WORKSPACE_CACHE_TTL_MS = 5_000;
+
+// FALSE-COMPLETION-GIT-EVIDENCE: worst-case wall-clock the synchronous
+// git-clean gate (checkCodeChangeWorkspaceCleanSync) may add to a code_change
+// completion's terminal-state decision before failing open. Short by design —
+// this runs on the hot synchronous event-forwarding path (see the file header
+// note in mesh-completion-side-effect-evidence.ts on why this can't be async).
+const FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS = 3_000;
 
 // MID-TURN-LIVE-STATE-GATE defense-in-depth. The hold deliberately contains no
 // task message, final summary, transcript, or modal content: only the dispatch
@@ -1644,6 +1651,42 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         if (weakCompleted && task) {
             LOG.info('MeshQueue', `Weak completion (${readNonEmptyString(args.metadataEvent.evidenceLevel) || 'missing_final_assistant'}) kept queue task ${task.id} tentative (session ${sessionId}); reconcile owns the genuine terminal`);
         }
+        // FALSE-COMPLETION-GIT-EVIDENCE: a GENUINE (non-weak) `completed` outcome for a
+        // `code_change` queue task is otherwise trusted purely off the worker's self-reported
+        // transcript shape — a worker that delegates to a subagent and returns can self-report
+        // completion with zero commits. mesh-completion-side-effect-evidence.ts already checks
+        // this, but ASYNCHRONOUSLY after this state transition commits, so nothing ever reads
+        // the result back into the decision. This is the synchronous counterpart: a bounded,
+        // fail-open, LOCAL-ONLY git-clean probe run BEFORE the notification is built, so a
+        // clean-tree completion can carry a review flag in the SAME state transition. On any
+        // failure/timeout/remote-node it silently no-ops — identical to today's behavior.
+        // Deliberately reuses the existing reviewRecommended/evidenceLevel plumbing
+        // (isWeakCompletionEvidence, buildMeshSystemMessage's verify note, the ledger's
+        // evidenceLevel field) rather than a new status value — see file header.
+        if (outcome === 'completed' && !weakCompleted && task?.taskMode === 'code_change') {
+            try {
+                const gateNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+                const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, gateNodeId);
+                if (workspace) {
+                    const gitCheck = checkCodeChangeWorkspaceCleanSync(workspace, FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS);
+                    if (gitCheck.checked && gitCheck.clean) {
+                        args.metadataEvent.reviewRecommended = true;
+                        args.metadataEvent.evidenceLevel = readNonEmptyString(args.metadataEvent.evidenceLevel) || 'reported';
+                        args.metadataEvent.completionDiagnostic = {
+                            ...(args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
+                                ? args.metadataEvent.completionDiagnostic as Record<string, unknown>
+                                : {}),
+                            noSideEffectsAtCompletion: true,
+                        };
+                        LOG.info('MeshLedger', `code_change task ${task.id} (session ${sessionId}) completed with a CLEAN workspace — flagged reviewRecommended (no side effects at completion)`);
+                    }
+                }
+            } catch (e: any) {
+                // Fail-open: never let this probe surface as a task failure or block/delay the
+                // completion path it is only meant to annotate.
+                LOG.warn('MeshLedger', `False-completion git evidence check skipped for task ${task.id} (session ${sessionId}): ${e?.message || e}`);
+            }
+        }
         // Fix A (early-terminal prevention): a false-idle completion (no confirmed final
         // assistant) for a DIRECT dispatch — i.e. no work-queue row matched — must not flip the
         // dispatch row terminal. Leaving it active lets the reconcile loop (PHASE 4) re-read the
@@ -2161,6 +2204,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                             ? { evidenceLevel: 'insufficient', reviewRecommended: true }
                             : { evidenceLevel: 'sufficient' }
                         : {}),
+                    // FALSE-COMPLETION-GIT-EVIDENCE: markSessionTerminal's synchronous git-clean
+                    // gate stamps this onto metadataEvent BEFORE this ledger append runs — OR it
+                    // into reviewRecommended (never downgrade the NOTIF Defect-2b verdict above)
+                    // so a text-sufficient-but-workspace-clean completion still lands in the
+                    // ledger with a review flag, matching what buildMeshSystemMessage already
+                    // surfaced to the coordinator off the same metadataEvent mutation.
+                    ...(args.metadataEvent.reviewRecommended === true ? { reviewRecommended: true } : {}),
                 },
             });
             if (ledgerKind === 'task_completed') {
