@@ -29,6 +29,7 @@ export type {
   VersionUpdateReason,
   CloudStatusReportPayload,
   RoutingSessionEntry,
+  P2PStatusSummary,
   DaemonStatusEventPayload,
   DashboardStatusEventPayload,
   SessionTransport,

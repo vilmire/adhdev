@@ -890,6 +890,54 @@ export interface RoutingSessionEntry {
     muted?: boolean;
 }
 
+/**
+ * P2P connection-transport telemetry (daemon → server).
+ *
+ * ── Why this exists ───────────────────────────────────────────────────────
+ * When ICE selects a `host`/`srflx`/`prflx` candidate pair the peers talk
+ * DIRECTLY and the bandwidth cost is zero. When it falls back to a `relay`
+ * pair every byte traverses the TURN server and is BILLED. That direct/relay
+ * ratio is the single largest variable in bandwidth cost, and it was
+ * previously only ever written to a local `console.log` — never aggregated.
+ *
+ * ── Why it rides the existing status_report ───────────────────────────────
+ * The account is at ~89% of its Durable Object request quota, so this
+ * deliberately adds NO new endpoint and NO new periodic transmission. These
+ * are a handful of extra integers on the `p2p` object of a report that is
+ * already being sent, so the request-count delta is exactly zero.
+ *
+ * ── Content boundary ──────────────────────────────────────────────────────
+ * Every field here is a counter or an enum-derived tally. There is no peer
+ * identifier, no address, no free text. `relay`/`direct` are per-transport
+ * peer counts, not a per-peer list, which also keeps the payload flat as the
+ * peer count grows.
+ */
+export interface P2PStatusSummary {
+    available: boolean;
+    state: string;
+    peers: number;
+    screenshotActive?: boolean;
+    /** Currently-connected peers on a direct (host/srflx/prflx) candidate pair. */
+    direct?: number;
+    /** Currently-connected peers on a TURN `relay` candidate pair — the billed path. */
+    relay?: number;
+    /**
+     * Connected peers whose candidate pair could not be read (getStats/
+     * getSelectedCandidatePair unavailable). Tracked separately so an
+     * unobservable peer is never silently miscounted as direct — which would
+     * understate relay cost.
+     */
+    unknownTransport?: number;
+    /**
+     * Cumulative count of connections established over a DIRECT pair since this
+     * daemon process started. Monotonic; resets on daemon restart. Needed
+     * because instantaneous counts alone cannot express a success *rate*.
+     */
+    directTotal?: number;
+    /** Cumulative connections established over a TURN relay pair since process start. */
+    relayTotal?: number;
+}
+
 /** Minimal daemon->cloud status payload used for routing, fallback, and server APIs. */
 export interface CloudStatusReportPayload {
     sessions: RoutingSessionEntry[];
@@ -914,7 +962,7 @@ export interface StatusReportPayload {
     /** Detected IDEs on this machine (metadata snapshot only) */
     detectedIdes?: DetectedIdeInfo[];
     /** P2P state */
-    p2p?: { available: boolean; state: string; peers: number; screenshotActive?: boolean };
+    p2p?: P2PStatusSummary;
     /** Canonical daemon runtime sessions */
     sessions: SessionEntry[];
     /** Saved workspaces */

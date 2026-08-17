@@ -155,12 +155,95 @@ describe('buildCloudStatusReportPayload — server WS content boundary', () => {
         expect(session.workspace).toBeNull();
     });
 
-    it('passes through p2p state and timestamp untouched', () => {
+    it('forwards p2p state and timestamp', () => {
         const p2p = { available: true, state: 'connected', peers: 2, screenshotActive: false } as const;
         const payload = buildCloudStatusReportPayload([], p2p, 4242);
 
         expect(payload.p2p).toEqual(p2p);
         expect(payload.timestamp).toBe(4242);
+    });
+
+    it('projects p2p through an allow-list, dropping unknown fields', () => {
+        const payload = buildCloudStatusReportPayload([], {
+            available: true,
+            state: 'connected',
+            peers: 1,
+            screenshotActive: false,
+            // A future/tampered daemon field that is NOT on the allow-list.
+            peerAddresses: ['203.0.113.7:51820'],
+            lastPeerNote: 'freeform text that must never reach the server',
+        } as any, 1);
+
+        expect(payload.p2p).not.toHaveProperty('peerAddresses');
+        expect(payload.p2p).not.toHaveProperty('lastPeerNote');
+    });
+});
+
+describe('buildCloudStatusReportPayload — p2p transport telemetry', () => {
+    const base = { available: true, state: 'connected', peers: 3, screenshotActive: false };
+
+    it('forwards direct/relay transport counters', () => {
+        const payload = buildCloudStatusReportPayload([], {
+            ...base,
+            direct: 2,
+            relay: 1,
+            unknownTransport: 0,
+            directTotal: 7,
+            relayTotal: 4,
+        } as any, 1);
+
+        expect(payload.p2p).toMatchObject({
+            direct: 2,
+            relay: 1,
+            unknownTransport: 0,
+            directTotal: 7,
+            relayTotal: 4,
+        });
+    });
+
+    it('preserves a genuine zero rather than dropping it', () => {
+        // "0 relay connections" is a real measurement and must be distinguishable
+        // from "this daemon does not report transport at all".
+        const payload = buildCloudStatusReportPayload([], { ...base, relay: 0, relayTotal: 0 } as any, 1);
+
+        expect(payload.p2p?.relay).toBe(0);
+        expect(payload.p2p?.relayTotal).toBe(0);
+    });
+
+    it('omits counters entirely when the daemon does not report them', () => {
+        const payload = buildCloudStatusReportPayload([], base, 1);
+
+        expect(payload.p2p).not.toHaveProperty('direct');
+        expect(payload.p2p).not.toHaveProperty('relay');
+        expect(payload.p2p).not.toHaveProperty('directTotal');
+        expect(payload.p2p).not.toHaveProperty('relayTotal');
+    });
+
+    it('rejects malformed or negative counters instead of forwarding them', () => {
+        const payload = buildCloudStatusReportPayload([], {
+            ...base,
+            direct: -1,
+            relay: Number.NaN,
+            directTotal: 'lots',
+            relayTotal: null,
+        } as any, 1);
+
+        expect(payload.p2p).not.toHaveProperty('direct');
+        expect(payload.p2p).not.toHaveProperty('relay');
+        expect(payload.p2p).not.toHaveProperty('directTotal');
+        expect(payload.p2p).not.toHaveProperty('relayTotal');
+    });
+
+    it('carries no peer identifiers — counters only', () => {
+        const payload = buildCloudStatusReportPayload([], {
+            ...base, direct: 1, relay: 1, directTotal: 1, relayTotal: 1,
+        } as any, 1);
+
+        for (const value of Object.values(payload.p2p ?? {})) {
+            expect(['number', 'boolean', 'string']).toContain(typeof value);
+        }
+        // `state` is the only string, and it is a fixed enum-ish connection state.
+        expect(typeof payload.p2p?.state).toBe('string');
     });
 
     it('tolerates a non-array or malformed session list', () => {

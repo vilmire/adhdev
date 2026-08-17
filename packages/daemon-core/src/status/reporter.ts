@@ -13,7 +13,7 @@ import {
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
-import type { CloudStatusReportPayload, DaemonStatusEventPayload, RoutingSessionEntry, StatusReportPayload } from '../shared-types.js';
+import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import type {
     ProviderState,
@@ -38,6 +38,43 @@ import type {
  * strings) stays on the P2P payload, which is assembled and sent separately and
  * is untouched by this projection.
  */
+/**
+ * Project the P2P summary down to the non-content fields the server may see.
+ *
+ * Like the session projection above this is an explicit allow-list, not a
+ * pass-through: the daemon's in-memory p2p view may grow peer-identifying
+ * detail over time, and only these counters/enums are cleared for the server.
+ *
+ * Numeric fields are omitted (rather than sent as 0) when the daemon has no
+ * value for them, so an older payload shape stays distinguishable from a real
+ * zero — a genuine "0 relay connections" is a meaningful measurement.
+ */
+function buildCloudP2PSummary(p2p: StatusReportPayload['p2p'] | undefined): P2PStatusSummary | undefined {
+    if (!p2p) return undefined;
+    const counter = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+    const summary: P2PStatusSummary = {
+        available: p2p.available,
+        state: p2p.state,
+        peers: p2p.peers,
+    };
+    if (p2p.screenshotActive !== undefined) summary.screenshotActive = p2p.screenshotActive;
+
+    const direct = counter(p2p.direct);
+    const relay = counter(p2p.relay);
+    const unknownTransport = counter(p2p.unknownTransport);
+    const directTotal = counter(p2p.directTotal);
+    const relayTotal = counter(p2p.relayTotal);
+    if (direct !== undefined) summary.direct = direct;
+    if (relay !== undefined) summary.relay = relay;
+    if (unknownTransport !== undefined) summary.unknownTransport = unknownTransport;
+    if (directTotal !== undefined) summary.directTotal = directTotal;
+    if (relayTotal !== undefined) summary.relayTotal = relayTotal;
+
+    return summary;
+}
+
 export function buildCloudStatusReportPayload(
     sessions: unknown,
     p2p: StatusReportPayload['p2p'] | undefined,
@@ -64,7 +101,7 @@ export function buildCloudStatusReportPayload(
                 muted: session.muted,
             };
         }),
-        p2p,
+        p2p: buildCloudP2PSummary(p2p),
         timestamp,
     };
 }
@@ -85,6 +122,18 @@ export interface StatusReporterDeps {
         connectionState: string;
         connectedPeerCount: number;
         screenshotActive: boolean;
+        /**
+         * Direct/relay transport telemetry. Optional so a P2P implementation that
+         * cannot observe candidate pairs (or a test double) still satisfies the
+         * interface — the counters are simply omitted from the report.
+         */
+        transportStats?: {
+            direct: number;
+            relay: number;
+            unknownTransport: number;
+            directTotal: number;
+            relayTotal: number;
+        };
         sendStatus(data: any): void;
         sendStatusEvent(event: DaemonStatusEventPayload): void;
     } | null;
@@ -358,6 +407,10 @@ export class DaemonStatusReporter {
                     state: p2p?.connectionState || 'unavailable',
                     peers: p2p?.connectedPeerCount || 0,
                     screenshotActive: p2p?.screenshotActive || false,
+                    // Direct vs TURN-relay tallies. Spread so that a P2P impl without
+                    // candidate-pair observability contributes no keys at all rather
+                    // than a misleading run of zeros.
+                    ...(p2p?.transportStats ?? {}),
                 },
                 profile: 'live',
             }),
