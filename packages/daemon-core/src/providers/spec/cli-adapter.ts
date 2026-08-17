@@ -47,6 +47,12 @@ import {
     type InteractivePrompt,
     type InteractivePromptResponse,
 } from '../types/interactive-prompt.js';
+import { buildKimiInteractiveTuiAnswerSteps } from '../types/interactive-prompt.js';
+import {
+    detectKimiPendingQuestion, detectKimiIdleSelectorPrompt,
+    buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX,
+} from '../kimi-pending-question.js';
+import type { InteractivePrompts } from './fsm-types.js';
 
 
 function stripAnsi(text: string): string {
@@ -82,7 +88,11 @@ export class SpecCliAdapter implements CliAdapter {
         name: string;
         control_bar?: Control[];
         native_history?: NativeHistoryConfig;
+        interactive_prompts?: InteractivePrompts;
     };
+    /** Owning session id (session registry / read-path targetSessionId) —
+     *  the sidecar-claim owner token for wire-based prompt detection. */
+    private owningSessionId?: string;
     private lastEvent: DashboardEvent | null = null;
     private latestState: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
@@ -153,7 +163,9 @@ export class SpecCliAdapter implements CliAdapter {
             name: raw.name,
             control_bar: raw.control_bar,
             native_history: raw.native_history,
+            interactive_prompts: raw.interactive_prompts,
         };
+        this.owningSessionId = sessionId;
         this.cliType = this.spec.id;
         this.cliName = this.spec.name;
         this.workingDir = workingDir;
@@ -196,6 +208,11 @@ export class SpecCliAdapter implements CliAdapter {
         const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
         if (this.exited) return { status: 'stopped', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         if (!this.spawned) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
+
+        // kimi_wire prompt hold: refresh on the ROUTINE status poll (not only
+        // on chat reads) so a question asked while nobody reads the chat still
+        // surfaces promptly — same cadence rationale as the legacy adapter.
+        this.refreshWirePendingQuestion();
 
         // Refresh native history lazily — the watch_path is cheap to stat,
         // but parsing a full session.jsonl every call would be wasteful.
@@ -516,7 +533,24 @@ export class SpecCliAdapter implements CliAdapter {
     async setInteractivePromptResponse(response: InteractivePromptResponse): Promise<void> {
         const prompt = this.activeInteractivePrompt;
         if (!prompt || prompt.promptId !== response.promptId) throw new Error('Interactive prompt response does not match active prompt');
-        if (this.cliType !== 'claude-cli') return;
+        const scheme = this.interactivePromptScheme();
+        if (scheme === 'kimi_wire') {
+            // Measured kimi keystroke protocols: digit/Tab/Enter for the
+            // AskUserQuestion picker, arrow keys (cursor re-read live) for the
+            // built-in selector — the spec-path port of the legacy adapter's
+            // kimi branch, same 180ms inter-key repaint gap.
+            const steps = prompt.promptId.startsWith(KIMI_TUI_SELECTOR_PROMPT_PREFIX)
+                ? buildKimiSelectorAnswerSteps(prompt, response, this.driver.snapshot())
+                : buildKimiInteractiveTuiAnswerSteps(prompt, response);
+            for (const step of steps) {
+                this.driver.dispatch({ kind: 'pty_write', data: step });
+                await new Promise(resolve => setTimeout(resolve, 180));
+            }
+            this.activeInteractivePrompt = null;
+            this.statusCallback?.();
+            return;
+        }
+        if (scheme !== 'claude_tui') return;
         if (this.interactivePromptTransport === 'tui') {
             const steps = buildClaudeInteractiveTuiAnswerSteps(prompt, response);
             for (const step of steps) {
@@ -925,8 +959,57 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
+    /**
+     * Resolve the interactive-prompt protocol for this session — the spec's
+     * declared `interactive_prompts.scheme`, with a legacy default: a
+     * 'claude-cli' spec that predates the field keeps the claude_tui protocol
+     * it always had (retire this fallback once the published claude spec
+     * declares the field). Every other spec without the field captures no
+     * interactive prompts, exactly as before.
+     */
+    private interactivePromptScheme(): InteractivePrompts['scheme'] | null {
+        const declared = this.spec.interactive_prompts?.scheme;
+        if (declared === 'claude_tui' || declared === 'kimi_wire') return declared;
+        return this.cliType === 'claude-cli' ? 'claude_tui' : null;
+    }
+
+    /**
+     * kimi_wire scheme: refresh the held AskUserQuestion / built-in selector
+     * prompt on the routine status poll — the spec-path port of the legacy
+     * adapter's refreshKimiPendingQuestion (same wire.jsonl authority, same
+     * every-poll cadence, same fail-open semantics).
+     */
+    private refreshWirePendingQuestion(): void {
+        if (this.interactivePromptScheme() !== 'kimi_wire') return;
+        try {
+            let prompt: InteractivePrompt | null = null;
+            if (this.spec.native_history?.source) {
+                prompt = detectKimiPendingQuestion(this.spec.native_history, {
+                    agentType: this.cliType,
+                    providerSessionId: this.providerSessionId || undefined,
+                    sessionStartedAtMs: this.spawnedAtMs,
+                    envOverrides: this.spawnedEnv,
+                    workspace: this.workingDir,
+                    // Sidecar-claim owner token — without it resolution fails
+                    // closed on ambiguity (see the legacy call site's note).
+                    instanceId: this.owningSessionId || undefined,
+                });
+            }
+            if (!prompt && this.latestState?.status !== 'generating') {
+                // Built-in idle/cache-expired selector: TUI-only, never on the
+                // wire; only appears at idle (a quoted snapshot in scrolling
+                // output must never parse as the picker).
+                prompt = detectKimiIdleSelectorPrompt(this.driver.snapshot());
+            }
+            if ((prompt?.promptId ?? null) !== (this.activeInteractivePrompt?.promptId ?? null)) {
+                this.activeInteractivePrompt = prompt;
+                this.statusCallback?.();
+            }
+        } catch { /* fail open — keep the currently-held prompt */ }
+    }
+
     private detectInteractivePromptFromPtyChunk(chunk: string): void {
-        if (this.cliType !== 'claude-cli' || !chunk) return;
+        if (this.interactivePromptScheme() !== 'claude_tui' || !chunk) return;
         this.jsonLineTail += chunk;
         if (this.jsonLineTail.length > 64 * 1024) this.jsonLineTail = this.jsonLineTail.slice(-64 * 1024);
         const lines = this.jsonLineTail.split(/\r?\n/);
@@ -1031,7 +1114,7 @@ export class SpecCliAdapter implements CliAdapter {
      * for INTERACTIVE_PROMPT_LOST_GRACE_MS the prompt is genuinely resolved.
      */
     private maybeClearResolvedClaudeTuiPrompt(): void {
-        if (this.cliType !== 'claude-cli' || !this.activeInteractivePrompt) return;
+        if (this.interactivePromptScheme() !== 'claude_tui' || !this.activeInteractivePrompt) return;
         // stream-json prompts are tracked by their tool-call lifecycle, not by
         // screen footer, but claude renders the same TUI picker for both
         // transports while awaiting an answer — so screen presence is a valid
@@ -1060,7 +1143,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     private maybeCaptureClaudeTuiPrompt(): void {
-        if (this.cliType !== 'claude-cli'
+        if (this.interactivePromptScheme() !== 'claude_tui'
             || this.activeInteractivePrompt
             || this.claudeTuiPromptCaptureInFlight) return;
         const screenText = this.driver.snapshot();
@@ -1112,7 +1195,7 @@ export class SpecCliAdapter implements CliAdapter {
      * eventually re-read and repaired.
      */
     private maybeUpgradeClaudeTuiMultiSelect(): void {
-        if (this.cliType !== 'claude-cli'
+        if (this.interactivePromptScheme() !== 'claude_tui'
             || this.interactivePromptTransport !== 'tui'
             || !this.activeInteractivePrompt) return;
         const questions = this.activeInteractivePrompt.questions;

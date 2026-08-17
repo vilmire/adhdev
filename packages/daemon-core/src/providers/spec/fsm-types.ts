@@ -220,6 +220,29 @@ export interface PreLaunchTrustScheme {
 export type PreLaunchTrust = PreLaunchTrustSettingsArray | PreLaunchTrustScheme;
 
 /**
+ * Named interactive-prompt protocol (AskUserQuestion pickers / built-in
+ * selectors — the waiting_choice path). These protocols are inherently
+ * CLI-specific (transport, detection source, keystroke grammar), so — like
+ * pre_launch_trust schemes and native_history source kinds — the engine
+ * implements them by NAME and a spec merely selects one:
+ *
+ *   - 'claude_tui': claude's stream-json AskUserQuestion tool-call lines plus
+ *     the TUI picker capture ("Enter to select" pages, Tab navigation).
+ *   - 'kimi_wire': kimi's wire.jsonl tool-call authority
+ *     (providers/kimi-pending-question.ts) plus the screen-detected built-in
+ *     idle/cache-expired selector; answered with the measured digit/Tab/Enter
+ *     (picker) or arrow-key (selector) protocol.
+ *
+ * Omitted → no interactive-prompt capture (approval modals are unaffected —
+ * they are FSM states, not prompts). Legacy default: a spec with id
+ * 'claude-cli' that omits this field still gets 'claude_tui' until the
+ * published claude spec declares it explicitly.
+ */
+export interface InteractivePrompts {
+    scheme: 'claude_tui' | 'kimi_wire';
+}
+
+/**
  * Declarative boot-prompt dismissal — see CliSpecV4.startup_dismiss. Shape
  * mirrors the legacy manifest's `tui.startupDismiss` (spec@4 spelling is
  * snake_case); both are normalized by cli-adapters/startup-dismiss.ts.
@@ -298,6 +321,9 @@ export interface CliSpecV4 {
      * the update. Omitted by CLIs without such a prompt.
      */
     startup_dismiss?: StartupDismiss;
+    /** Named interactive-prompt protocol (waiting_choice path) — see
+     *  InteractivePrompts. Omitted → no prompt capture. */
+    interactive_prompts?: InteractivePrompts;
     send_message: {
         submit_key: string;
         delay_ms_before_submit?: number;

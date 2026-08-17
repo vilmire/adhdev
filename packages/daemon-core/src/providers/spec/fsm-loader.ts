@@ -49,6 +49,15 @@ export function validateFsmSpec(raw: unknown): string[] {
         }
     }
 
+    if (spec.interactive_prompts !== undefined) {
+        const ip = spec.interactive_prompts as { scheme?: unknown };
+        if (!ip || typeof ip !== 'object' || Array.isArray(ip)) {
+            errs.push('interactive_prompts must be an object');
+        } else if (ip.scheme !== 'claude_tui' && ip.scheme !== 'kimi_wire') {
+            errs.push('interactive_prompts.scheme must be "claude_tui" or "kimi_wire"');
+        }
+    }
+
     if (spec.startup_dismiss !== undefined) {
         const d = spec.startup_dismiss as { patterns?: unknown; key?: unknown };
         if (!d || typeof d !== 'object' || Array.isArray(d)) {
