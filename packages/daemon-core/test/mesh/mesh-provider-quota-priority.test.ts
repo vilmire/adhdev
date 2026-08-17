@@ -59,6 +59,7 @@ import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from '../../src/mesh/mesh-quota
 import { buildAutoLaunchRoutingDecision } from '../../src/mesh/mesh-routing-decision.js';
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js';
+import { getLogLevel, LOG } from '../../src/logging/logger.js';
 
 const NODE_ID = 'node_quota_priority';
 const MESH_ID = 'mesh_quota_priority';
@@ -105,13 +106,19 @@ function exhaustedQuota(provider: string, over: Record<string, any> = {}) {
     });
 }
 
-async function resolve(node: any, quotaFactsContext?: { nodes?: any[] }, difficulty: 'easy' | 'medium' | 'difficult' | 'freeform' = 'difficult') {
+async function resolve(
+    node: any,
+    quotaFactsContext?: { nodes?: any[] },
+    difficulty: 'easy' | 'medium' | 'difficult' | 'freeform' = 'difficult',
+    taskId?: string,
+) {
     return __resolveUsableProviderForTests(
         makeComponents(), NODE_ID, node, MESH_ID,
         undefined,
         { difficulty, requiredTags: undefined },
         null,
         quotaFactsContext,
+        taskId,
     );
 }
 
@@ -296,6 +303,142 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
             expect.objectContaining({ providerType: 'kimi', model: 'kimi-code/k3', fitnessScore: expect.any(Number), quotaRisk: expect.any(Number), reason: 'lower_quota_rank' }),
         ]);
         expect(Buffer.byteLength(JSON.stringify(routing), 'utf8')).toBeLessThan(2_000);
+    });
+
+    it('reconstructs the opus-to-sonnet capacity demotion and available codex alternative from the ledger alone', async () => {
+        detectCliMocks.detected.add('claude-cli').add('codex-cli');
+        const node = nodeWith([
+            { provider: 'claude-cli', model: 'sonnet', difficulty: ['medium'], maxParallel: 4 },
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
+            { provider: 'codex-cli', model: 'gpt-5.6-sol', difficulty: ['difficult'], maxParallel: 1 },
+        ], {
+            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
+            'codex-cli': okQuota('codex-cli', { weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
+        });
+        const resolved = await resolve(node, undefined, 'difficult', 'today-difficult-task');
+        expect(resolved.providerType).toBe('claude-cli');
+        expect(resolved.model).toBe('opus');
+
+        // Force the approved-downgrade seam after provider selection: opus filled
+        // between selection and finalization, while codex remained available.
+        const now = new Date().toISOString();
+        __replaceMeshQueueForTests(MESH_ID, [{
+            id: 'fills-opus', meshId: MESH_ID, message: 'busy', status: 'assigned',
+            assignedNodeId: NODE_ID, assignedProviderType: 'claude-cli', assignedModel: 'opus',
+            assignedSessionId: 'busy-opus-session', createdAt: now, updatedAt: now,
+        }] as any);
+        const decision = buildAutoLaunchRoutingDecision({
+            node,
+            meshId: MESH_ID,
+            task: { difficulty: 'difficult' },
+            resolved: resolved as any,
+            skippedCandidates: [],
+            requiredTagsResult: { required: [], satisfied: true, missing: [] },
+            effectiveModel: 'sonnet',
+            executedSlot: node.policy.slots[0],
+            demotionReason: 'winning_slot_capacity_exhausted',
+            otherProviderAvailableAtDemotion: true,
+        });
+        __recordTaskDispatchedLedgerForTests({
+            meshId: MESH_ID, nodeId: NODE_ID, sessionId: 'demoted-session', providerType: 'claude-cli',
+            task: { id: 'today-difficult-task', meshId: MESH_ID, message: 'hard task', status: 'assigned', difficulty: 'difficult' } as any,
+            transport: 'local', routingDecision: decision,
+        }, 'demotion-delivery');
+
+        // Only read the durable entry below: these assertions are the four incident
+        // questions the owner requires the ledger to answer without daemon logs.
+        const entry = readLedgerEntries(MESH_ID, { kind: ['task_dispatched'] })
+            .find(candidate => candidate.taskId === 'today-difficult-task');
+        const routing = (entry?.payload as any)?.routingDecision;
+        expect(routing.selectionTrajectory.candidates).toEqual(expect.arrayContaining([
+            expect.objectContaining({ providerType: 'claude-cli', model: 'opus', difficultyEligible: true }),
+            expect.objectContaining({ providerType: 'codex-cli', model: 'gpt-5.6-sol', capacityAvailable: true, difficultyEligible: true }),
+        ]));
+        expect(routing.selectionTrajectory.providerWinner).toEqual(expect.objectContaining({
+            providerType: 'claude-cli', model: 'opus', fitnessScore: expect.any(Number), quotaRisk: expect.any(Number),
+        }));
+        expect(routing.selectionTrajectory.quotaOrder).toEqual([
+            expect.objectContaining({ providerType: 'claude-cli', quotaRisk: expect.any(Number) }),
+            expect.objectContaining({ providerType: 'codex-cli', quotaRisk: expect.any(Number) }),
+        ]);
+        expect(routing.selectionTrajectory.quotaOrder[0].quotaRisk)
+            .toBeGreaterThan(routing.selectionTrajectory.quotaOrder[1].quotaRisk);
+        expect(routing.quotaRiskSnapshot[0]).toEqual(expect.objectContaining({ providerType: 'claude-cli', risk: expect.any(Number) }));
+        expect(routing.selectedSlot).toEqual({ providerType: 'claude-cli', model: 'sonnet' });
+        expect(routing.selectionTrajectory.slotFinalization).toEqual({
+            winningSlot: { providerType: 'claude-cli', model: 'opus' },
+            executedSlot: { providerType: 'claude-cli', model: 'sonnet' },
+            demoted: true,
+            demotionReason: 'winning_slot_capacity_exhausted',
+            otherProviderAvailableAtDemotion: true,
+        });
+        expect(Buffer.byteLength(JSON.stringify(routing), 'utf8')).toBeLessThan(2_000);
+    });
+
+    it('writes task-greppable score components at the default info level', async () => {
+        detectCliMocks.detected.add('claude-cli').add('codex-cli');
+        const node = nodeWith([
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], capability: ['code'] },
+            { provider: 'codex-cli', model: 'gpt-5.6-sol', difficulty: ['difficult'], capability: ['code'] },
+        ]);
+        const info = vi.spyOn(LOG, 'info').mockImplementation(() => {});
+
+        await resolve(node, undefined, 'difficult', 'grep-routing-task-42');
+
+        expect(getLogLevel()).toBe('info');
+        const line = info.mock.calls
+            .map(call => String(call[1]))
+            .find(message => message.includes('taskId=grep-routing-task-42'));
+        expect(line).toContain('ROUTING DECISION');
+        expect(line).toContain('"base":1');
+        expect(line).toContain('"difficulty":100');
+        expect(line).toContain('"tags":0');
+        expect(line).toContain('"quotaBonus":0');
+        expect(line).toContain('"total":101');
+        expect(info.mock.calls.find(call => String(call[1]).includes('taskId=grep-routing-task-42'))?.[0]).toBe('MeshQueue');
+        info.mockRestore();
+    });
+
+    it('keeps five-entry trajectory arrays while compacting loser tails below 2KB', () => {
+        const slots = Array.from({ length: 5 }, (_, index) => ({
+            provider: `provider-${index}`,
+            model: `model-${index}`,
+            difficulty: ['difficult'],
+        }));
+        const decision = buildAutoLaunchRoutingDecision({
+            node: { policy: { slots } },
+            meshId: MESH_ID,
+            task: { difficulty: 'difficult' },
+            resolved: {
+                providerType: 'provider-0',
+                model: 'model-0',
+                slot: slots[0],
+                quotaRiskSnapshot: slots.map((slot, index) => ({
+                    providerType: slot.provider, remainingPercent: 50 - index, risk: 10 + index,
+                })),
+                intraNodeLosers: slots.slice(1).map((slot, index) => ({
+                    providerType: slot.provider, model: slot.model, fitnessScore: 101,
+                    quotaRisk: 9 - index, reason: 'lower_quota_rank',
+                })),
+                selectionTrajectory: {
+                    candidates: slots.map(slot => ({
+                        providerType: slot.provider, model: slot.model, fitnessScore: 101,
+                        capacityAvailable: true, difficultyEligible: true,
+                    })),
+                    quotaOrder: slots.map((slot, index) => ({ providerType: slot.provider, quotaRisk: 10 + index })),
+                    providerWinner: { providerType: 'provider-0', model: 'model-0', fitnessScore: 101, quotaRisk: 10 },
+                },
+            } as any,
+            skippedCandidates: slots.map((_, index) => ({ nodeId: `node-${index}`, reason: 'max_concurrent_sessions_reached' })),
+            requiredTagsResult: { required: [], satisfied: true, missing: [] },
+            effectiveModel: 'model-0',
+        });
+
+        expect(decision.selectionTrajectory?.candidates).toHaveLength(5);
+        expect(decision.selectionTrajectory?.quotaOrder).toHaveLength(5);
+        expect(decision.intraNodeLosersOmitted).toBeGreaterThan(0);
+        expect(decision.skippedCandidatesOmitted).toBeGreaterThan(0);
+        expect(Buffer.byteLength(JSON.stringify(decision), 'utf8')).toBeLessThan(2_000);
     });
 
     it('routes a facts-less worktree clone from exhausted kimi to healthy codex using its source node facts', async () => {

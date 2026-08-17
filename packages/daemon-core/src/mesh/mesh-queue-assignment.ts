@@ -35,7 +35,7 @@ import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertProm
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, targetPinAgeMs, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
-import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, scoreSlotForTaskBreakdown, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { allowedClassifiedDifficultiesForSession, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel, taskMeetsSessionDifficultyFloor } from './mesh-difficulty-floor.js';
@@ -416,11 +416,13 @@ function recordTaskDispatchedLedger(ctx: DeliverTaskContext, deliveryId: string)
         ...(typeof routing?.fitnessScore === 'number' ? { fitnessScore: routing.fitnessScore } : {}),
         ...(routing?.selectedSlot ? { selectedSlot: routing.selectedSlot } : {}),
         ...(routing?.skippedCandidates?.length ? { skippedCandidates: routing.skippedCandidates } : {}),
+        ...(routing?.skippedCandidatesOmitted ? { skippedCandidatesOmitted: routing.skippedCandidatesOmitted } : {}),
         ...(routing?.requiredTagsResult ? { requiredTagsResult: routing.requiredTagsResult } : {}),
         ...(routing?.quotaRiskSnapshot?.length ? { quotaRiskSnapshot: routing.quotaRiskSnapshot } : {}),
         ...(routing?.quotaRisksOmitted ? { quotaRisksOmitted: routing.quotaRisksOmitted } : {}),
         ...(routing?.intraNodeLosers?.length ? { intraNodeLosers: routing.intraNodeLosers } : {}),
         ...(routing?.intraNodeLosersOmitted ? { intraNodeLosersOmitted: routing.intraNodeLosersOmitted } : {}),
+        ...(routing?.selectionTrajectory ? { selectionTrajectory: routing.selectionTrajectory } : {}),
         ...(routing?.reason ? { reason: routing.reason } : {}),
     };
     appendLedgerEntry(ctx.meshId, {
@@ -1777,6 +1779,7 @@ async function resolveUsableProvider(
     task?: FitnessTask,
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
     quotaFactsContext?: { nodes?: any[] } | null,
+    taskId?: string,
 ): Promise<ResolvedProviderSelection & { quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }> }> {
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
@@ -1902,9 +1905,36 @@ async function resolveUsableProvider(
     // (a slot configuration error, actionable).
     const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting, Date.now(), quotaFactsContext);
     // OBSERVABILITY (quota-ranking): the risk snapshot backing `ranked.clear`'s
-    // order, plus the gated reasons, so a debug-log tail or a later mesh_status
+    // order, plus the gated reasons, so a default-level log tail or a later mesh_status
     // read can reconstruct WHY this order happened, not just what it was.
     const riskSnapshot = quotaRiskSnapshotForCandidates(node, ranked.clear, quotaRouting, Date.now(), quotaFactsContext);
+    const allRiskSnapshots = quotaRiskSnapshotForCandidates(node, candidates.map(candidate => candidate.providerType), quotaRouting, Date.now(), quotaFactsContext);
+    const allRiskByProvider = new Map(allRiskSnapshots.map(snapshot => [snapshot.providerType, snapshot]));
+    const scoreDetails = task ? usableSlots.map(candidate => ({
+        providerType: candidate.providerType,
+        ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
+        capacityAvailable: slotHasCapacity(meshId ?? '', nodeId, node, candidate.slot),
+        difficultyEligible: !difficultyFloorRequired || slotDifficultyTierForTask(candidate.slot, task.difficulty) !== undefined,
+        ...scoreSlotForTaskBreakdown(candidate.slot, task, quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
+    })) : [];
+    const quotaOrderDetails = [
+        ...ranked.clear.map(providerType => ({
+            providerType,
+            ...(allRiskByProvider.get(providerType)?.risk !== undefined ? { quotaRisk: allRiskByProvider.get(providerType)!.risk } : {}),
+        })),
+        ...ranked.gated.map(entry => ({
+            providerType: entry.providerType,
+            ...(allRiskByProvider.get(entry.providerType)?.risk !== undefined ? { quotaRisk: allRiskByProvider.get(entry.providerType)!.risk } : {}),
+            gated: true,
+        })),
+    ];
+    // Default-level, one-line decision evidence. taskId is deliberately a stable
+    // grep token: post-incident diagnosis must not depend on debug logging being on.
+    // The durable ledger keeps only final scores; this line carries the full
+    // base/difficulty/tags/quotaBonus decomposition for every detected slot.
+    if (taskId) {
+        LOG.info('MeshQueue', `ROUTING DECISION taskId=${taskId} nodeId=${nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrderDetails)} winner=${ranked.clear[0] ?? 'none'}`);
+    }
     if (!ranked.clear.length) {
         const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
         LOG.info('MeshQueue', `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
@@ -1923,7 +1953,7 @@ async function resolveUsableProvider(
         clear: riskSnapshot,
         gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })),
     });
-    const riskByProvider = new Map(riskSnapshot.map(snapshot => [snapshot.providerType, snapshot]));
+    const riskByProvider = allRiskByProvider;
     const allLosers = usableSlots.filter(candidate => candidate.slot !== winner.slot).map(candidate => {
         const gated = ranked.gated.find(entry => entry.providerType === candidate.providerType);
         const risk = riskByProvider.get(candidate.providerType)?.risk;
@@ -1944,6 +1974,18 @@ async function resolveUsableProvider(
         };
     });
     const DIAGNOSTIC_CANDIDATES_MAX = 5;
+    // The trajectory is more valuable than an exhaustive loser tail. Keep the
+    // old loser field, but spend at most two entries on it so the complete four-
+    // stage trajectory remains below the routingDecision 2KB budget.
+    const INTRA_NODE_LOSERS_MAX = 2;
+    const trajectoryCandidates = scoreDetails.map(detail => ({
+        providerType: detail.providerType,
+        ...(detail.model ? { model: detail.model } : {}),
+        fitnessScore: detail.total,
+        capacityAvailable: detail.capacityAvailable,
+        difficultyEligible: detail.difficultyEligible,
+    }));
+    const winnerRisk = allRiskByProvider.get(winner.providerType)?.risk;
     return {
         providerType: winner.providerType,
         ...(ranked.gated.length ? { quotaGated: ranked.gated } : {}),
@@ -1956,8 +1998,22 @@ async function resolveUsableProvider(
         slot: winner.slot,
         ...(riskSnapshot.length ? { quotaRiskSnapshot: riskSnapshot.slice(0, DIAGNOSTIC_CANDIDATES_MAX) } : {}),
         ...(riskSnapshot.length > DIAGNOSTIC_CANDIDATES_MAX ? { quotaRisksOmitted: riskSnapshot.length - DIAGNOSTIC_CANDIDATES_MAX } : {}),
-        ...(allLosers.length ? { intraNodeLosers: allLosers.slice(0, DIAGNOSTIC_CANDIDATES_MAX) } : {}),
-        ...(allLosers.length > DIAGNOSTIC_CANDIDATES_MAX ? { intraNodeLosersOmitted: allLosers.length - DIAGNOSTIC_CANDIDATES_MAX } : {}),
+        ...(allLosers.length ? { intraNodeLosers: allLosers.slice(0, INTRA_NODE_LOSERS_MAX) } : {}),
+        ...(allLosers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: allLosers.length - INTRA_NODE_LOSERS_MAX } : {}),
+        ...(task ? {
+            selectionTrajectory: {
+                candidates: trajectoryCandidates.slice(0, DIAGNOSTIC_CANDIDATES_MAX),
+                ...(trajectoryCandidates.length > DIAGNOSTIC_CANDIDATES_MAX ? { candidatesOmitted: trajectoryCandidates.length - DIAGNOSTIC_CANDIDATES_MAX } : {}),
+                quotaOrder: quotaOrderDetails.slice(0, DIAGNOSTIC_CANDIDATES_MAX),
+                ...(quotaOrderDetails.length > DIAGNOSTIC_CANDIDATES_MAX ? { quotaOrderOmitted: quotaOrderDetails.length - DIAGNOSTIC_CANDIDATES_MAX } : {}),
+                providerWinner: {
+                    providerType: winner.providerType,
+                    ...(winner.slot.model ? { model: winner.slot.model } : {}),
+                    fitnessScore: scoreSlotForTask(winner.slot, task, quotaBonusByProvider?.[winner.slot.provider] ?? 0),
+                    ...(winnerRisk !== undefined ? { quotaRisk: winnerRisk } : {}),
+                },
+            },
+        } : {}),
     };
 }
 
@@ -2306,7 +2362,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
         // so a large fleet can't bloat the entry. markSkip mirrors markAutoLaunch's skip
         // side effect AND appends to this list in one call.
         const skippedCandidates: Array<{ nodeId: string; reason: string }> = [];
-        const SKIPPED_CANDIDATES_MAX = 12;
+        const SKIPPED_CANDIDATES_MAX = 5;
         const markSkip = (nodeIdForSkip: string, reason: string, extra?: { providerType?: string }) => {
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason, nodeId: nodeIdForSkip, ...(extra || {}) });
             if (nodeIdForSkip && skippedCandidates.length < SKIPPED_CANDIDATES_MAX) {
@@ -2398,7 +2454,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
             autoLaunchInProgress.add(launchKey);
             try {
-                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, mesh);
+                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, mesh, task.id);
                 if (!resolved.providerType) {
                     // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
                     // loop (a gated first-choice provider falls through to the node's
@@ -2454,6 +2510,15 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     continue;
                 }
                 const rawEffectiveModel = slotDecision.model;
+                const winningModel = resolved.slot?.model?.trim() || undefined;
+                const finalizedModel = slotDecision.slot.model?.trim() || undefined;
+                const slotWasDemoted = resolved.slot?.provider !== slotDecision.slot.provider
+                    || winningModel !== finalizedModel;
+                const demotionReason = slotWasDemoted
+                    ? (slotHasCapacity(meshId, nodeId, node, resolved.slot!, mesh?.nodes, isReadonly)
+                        ? 'slot_reselected_during_launch'
+                        : 'winning_slot_capacity_exhausted')
+                    : undefined;
 
                 // CODEX-400 GUARD: the difficulty→brain presets (and MAGI slots) carry
                 // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that
@@ -2627,6 +2692,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     },
                     effectiveModel,
                     effectiveThinkingLevel,
+                    executedSlot: slotDecision.slot,
+                    demotionReason,
                 });
                 tryAssignQueueTask(components, meshId, nodeId, sessionId, resolved.providerType, routingDecision);
                 return true;

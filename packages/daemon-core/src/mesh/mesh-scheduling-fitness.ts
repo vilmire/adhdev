@@ -242,14 +242,20 @@ function slotsMeetingTaskDifficultyFloor(node: any, slots: NodeCapabilitySlot[],
     return slots.filter(slot => slotDifficultyTierForTask(slot, task.difficulty) !== undefined);
 }
 
+export interface SlotFitnessScoreBreakdown {
+    base: number;
+    difficulty: number;
+    tags: number;
+    quotaBonus: number;
+    total: number;
+}
+
 /**
- * Score how well one slot fits a task. Higher = better. A slot whose difficulty
- * range contains the task's difficulty scores highest; a general-purpose slot
- * (no declared difficulty) is a valid fallback; a slot whose capability tags cover
- * the task's requiredTags gets a capability bonus. This pure scorer deliberately
- * retains a +1 mismatch score for diagnostics and legacy/unclassified callers; the
- * production candidate builders enforce operator-authored `slot.difficulty` as a
- * hard minimum before scores or quota ranking are allowed to choose a slot.
+ * Break down how well one slot fits a task. The numbers rank candidates only;
+ * they never grant admission. For classified tasks on nodes with explicit slots,
+ * production candidate builders first enforce operator-authored `slot.difficulty`
+ * as a HARD FLOOR and exclude lower/ungraded slots before quota ranking. The +1
+ * mismatch result remains solely for diagnostics and legacy/unclassified callers.
  *
  * `quotaBonus` is the QUOTA SPREAD axis (mesh-quota-routing.ts): a bounded
  * 0..spreadBonusMax headroom preference for the slot's provider, computed by
@@ -260,24 +266,37 @@ function slotsMeetingTaskDifficultyFloor(node: any, slots: NodeCapabilitySlot[],
  * never overturn a difficulty match. Callers pass 0 (or omit it) when no fresh
  * quota reading exists, which reproduces the pre-feature scores exactly.
  */
-export function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask, quotaBonus = 0): number {
-    let score = 1; // base: any slot can run the task (fallback floor)
+export function scoreSlotForTaskBreakdown(slot: NodeCapabilitySlot, task: FitnessTask, quotaBonus = 0): SlotFitnessScoreBreakdown {
+    const base = 1;
+    let difficulty = 0;
     const diff = isMeshTaskDifficulty(task.difficulty) ? task.difficulty as MeshTaskDifficulty : undefined;
     if (diff) {
         if (slot.difficulty?.length) {
-            score += slot.difficulty.includes(diff) ? 100 : 0; // exact difficulty match dominates
+            difficulty = slot.difficulty.includes(diff) ? 100 : 0; // exact difficulty match dominates
         } else {
-            score += 20; // general-purpose slot: decent fallback for any difficulty
+            difficulty = 20; // general-purpose slot: diagnostic/legacy fallback only
         }
     }
+    let tags = 0;
     const req = task.requiredTags?.filter(t => !!t) ?? [];
     if (req.length) {
         const cap = new Set(slot.capability ?? []);
         const covered = req.every(t => cap.has(t));
-        score += covered ? 30 : 0; // capability coverage bonus (hard filter is applied elsewhere)
+        tags = covered ? 30 : 0; // capability coverage bonus (hard filter is applied elsewhere)
     }
-    score += quotaBonus; // quota-headroom preference (0 when unknown/stale — see mesh-quota-routing.ts)
-    return score;
+    return {
+        base,
+        difficulty,
+        tags,
+        quotaBonus,
+        total: base + difficulty + tags + quotaBonus,
+    };
+}
+
+/** Final slot fitness score. See scoreSlotForTaskBreakdown for its components
+ * and the hard-floor admission contract. */
+export function scoreSlotForTask(slot: NodeCapabilitySlot, task: FitnessTask, quotaBonus = 0): number {
+    return scoreSlotForTaskBreakdown(slot, task, quotaBonus).total;
 }
 
 /**
