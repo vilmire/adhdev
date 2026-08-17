@@ -9,6 +9,22 @@ import { quotaSpreadBonusByProvider } from './mesh-quota-routing.js';
 import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { decideSlotForModel, isModelAllowedBySlot } from './slot-model-enforcement.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
+import { getMesh } from '../config/mesh-config.js';
+import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
+
+/**
+ * The mesh's node list, for daemon-axis sibling resolution. Best-effort: a config
+ * read failure yields undefined, and the caller then counts the single node — the
+ * pre-axis-move behavior, which can only refuse more, never fewer, claims.
+ */
+function nodesForMesh(meshId: string): readonly unknown[] | undefined {
+    try {
+        const nodes = getMesh(meshId)?.nodes;
+        return Array.isArray(nodes) ? nodes : undefined;
+    } catch {
+        return undefined;
+    }
+}
 
 
 export function activeAssignedCount(meshId: string): number {
@@ -398,12 +414,38 @@ export function orderEligibleNodes(
 }
 
 
-/** Active assignments on a (node, provider) — pre-launch guard for the per-(node,
- *  provider) maxParallel cap. The authoritative enforcement is in the claim
- *  transaction; this only avoids spawning a session that would fail the claim. */
-export function activeProviderAssignedCount(meshId: string, nodeId: string, providerType: string): number {
+/**
+ * Does an assigned row belong to the DAEMON MACHINE we are counting for?
+ *
+ * `daemonNodeIds` is the resolved sibling set (every node on the same physical
+ * daemon). Each candidate is compared with daemonIdsEquivalent, the same
+ * form-agnostic comparator used before the axis moved — so a row stamped
+ * `daemon_mach_X` still matches a sibling listed as `mach_X`.
+ *
+ * An empty/absent sibling set degrades to the single node, i.e. exactly the prior
+ * per-node behavior. A degraded read therefore never widens a cap.
+ */
+function rowChargedToDaemon(
+    assignedNodeId: unknown,
+    nodeId: string,
+    daemonNodeIds?: readonly string[],
+): boolean {
+    const scope = Array.isArray(daemonNodeIds) && daemonNodeIds.length > 0 ? daemonNodeIds : [nodeId];
+    return scope.some(candidate => daemonIdsEquivalent(assignedNodeId as string, candidate));
+}
+
+/** Active assignments on a (daemon, provider) — pre-launch guard for the
+ *  per-(daemon, provider) maxParallel cap. The authoritative enforcement is in the
+ *  claim transaction; this only avoids spawning a session that would fail the claim. */
+export function activeProviderAssignedCount(
+    meshId: string,
+    nodeId: string,
+    providerType: string,
+    daemonNodeIds?: readonly string[],
+): number {
     return getQueue(meshId, { status: ['assigned'] as any })
-        .filter(task => daemonIdsEquivalent(task.assignedNodeId, nodeId) && task.assignedProviderType === providerType).length;
+        .filter(task => rowChargedToDaemon(task.assignedNodeId, nodeId, daemonNodeIds)
+            && task.assignedProviderType === providerType).length;
 }
 
 /**
@@ -423,9 +465,10 @@ function activeSlotAssignedCount(
     nodeId: string,
     providerType: string,
     slot: NodeCapabilitySlot,
+    daemonNodeIds?: readonly string[],
 ): number {
     return getQueue(meshId, { status: ['assigned'] as any }).filter(task => {
-        if (!daemonIdsEquivalent(task.assignedNodeId, nodeId)) return false;
+        if (!rowChargedToDaemon(task.assignedNodeId, nodeId, daemonNodeIds)) return false;
         if (task.assignedProviderType !== providerType) return false;
         const assignedModel = (task as any).assignedModel;
         if (typeof assignedModel !== 'string' || !assignedModel.trim()) return true; // legacy row
@@ -451,17 +494,30 @@ export function slotCapacityRemaining(
     nodeId: string,
     node: any,
     slot: NodeCapabilitySlot,
+    meshNodes?: readonly unknown[],
+    forReadonlyTask = false,
 ): { available: boolean; slotCap?: number; providerCap?: number } {
     const providerType = typeof slot.provider === 'string' ? slot.provider.trim() : '';
     if (!providerType) return { available: false };
     const slots = resolveNodeCapabilitySlots(node, meshId);
+    // Counted over the DAEMON MACHINE, not the node — sibling worktrees of the same
+    // repo share one physical CLI/auth/rate-limit budget. Resolved from the mesh node
+    // list when the caller has it; without it this degrades to the single node, which
+    // is the pre-existing behavior and never looser.
+    const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId, meshNodes ?? nodesForMesh(meshId));
 
+    // Read-only work may not take the LAST free slot, so a write task is always
+    // reachable within one completion. Mirrors the claim transaction exactly, so the
+    // pre-launch heuristic and the authoritative gate cannot disagree and spawn a
+    // session that is then refused.
     const slotCap = resolveSlotMaxParallel(slots, providerType, slot.model, isModelAllowedBySlot);
-    if (slotCap !== undefined && activeSlotAssignedCount(meshId, nodeId, providerType, slot) >= slotCap) {
+    const effSlotCap = effectiveSlotCap(slotCap, forReadonlyTask);
+    if (effSlotCap !== undefined && activeSlotAssignedCount(meshId, nodeId, providerType, slot, daemonNodeIds) >= effSlotCap) {
         return { available: false, slotCap };
     }
     const providerCap = resolveProviderMaxParallel(slots, providerType);
-    if (providerCap !== undefined && activeProviderAssignedCount(meshId, nodeId, providerType) >= providerCap) {
+    const effProviderCap = effectiveSlotCap(providerCap, forReadonlyTask);
+    if (effProviderCap !== undefined && activeProviderAssignedCount(meshId, nodeId, providerType, daemonNodeIds) >= effProviderCap) {
         return { available: false, slotCap, providerCap };
     }
     return { available: true, slotCap, providerCap };
@@ -484,8 +540,15 @@ export function slotCapacityRemaining(
  * here is safe in the right direction — if this says "available" and the claim then
  * refuses, the task simply stays queued and retries.
  */
-export function slotHasCapacity(meshId: string, nodeId: string, node: any, slot: NodeCapabilitySlot): boolean {
-    return slotCapacityRemaining(meshId, nodeId, node, slot).available;
+export function slotHasCapacity(
+    meshId: string,
+    nodeId: string,
+    node: any,
+    slot: NodeCapabilitySlot,
+    meshNodes?: readonly unknown[],
+    forReadonlyTask = false,
+): boolean {
+    return slotCapacityRemaining(meshId, nodeId, node, slot, meshNodes, forReadonlyTask).available;
 }
 
 export function sessionHasActiveAssignment(meshId: string, sessionId: string): boolean {

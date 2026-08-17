@@ -20,6 +20,7 @@ import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
+import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates, recordLastQuotaRanking, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -989,11 +990,20 @@ export function tryAssignQueueTask(
     // resolvable here — classify once and persist it on the row so coordinator-side
     // gates (early-arm / redrive) can classify this worker without local access.
     const assignedTranscriptProfile = resolveClaimingSessionTranscriptProfile(components, sessionId);
+    // ★ DAEMON-AXIS CAP SCOPE. The provider/slot maxParallel caps above are counted
+    // over the physical DAEMON MACHINE, not this node alone: `maxParallel` bounds a
+    // machine resource (CPU, memory, upstream rate limit, one on-disk CLI auth),
+    // while a node is a branch-isolation unit. Counting per node meant cloning a
+    // worktree multiplied the budget — three worktrees of one repo on one laptop
+    // each carried their own `opus: 1` and ran three opus processes against a cap of
+    // one. Remote machines declare their own daemonId and so keep separate budgets.
+    const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes);
     const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags, {
         providerType,
         ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
         ...(assignedModel ? { assignedModel } : {}),
         ...(slotMaxParallel !== undefined ? { slotMaxParallel } : {}),
+        daemonNodeIds,
         nodeIsWorktree,
         ...(assignedTranscriptProfile ? { assignedTranscriptProfile } : {}),
     });
@@ -2381,7 +2391,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     requestedModel,
                     slots: resolveNodeCapabilitySlots(node, meshId).map(slot => ({
                         slot,
-                        available: slotHasCapacity(meshId, nodeId, node, slot),
+                        available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
                     })),
                 });
                 if (slotDecision.outcome === 'wait') {
@@ -2414,13 +2424,23 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${resolved.providerType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
                 }
 
-                // Don't spawn a session for a (node, provider) already at its declared
+                // Don't spawn a session for a (daemon, provider) already at its declared
                 // maxParallel cap — it would launch only to fail the claim. The claim
                 // transaction enforces the cap regardless; this just avoids a doomed launch.
-                const providerCap = resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), resolved.providerType);
+                // Counted over the daemon machine (sibling worktrees included), matching
+                // the claim-side scope so the two layers cannot disagree.
+                const providerCap = effectiveSlotCap(
+                    resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), resolved.providerType),
+                    isReadonly,
+                );
                 if (
                     providerCap !== undefined
-                    && activeProviderAssignedCount(meshId, nodeId, resolved.providerType) >= providerCap
+                    && activeProviderAssignedCount(
+                        meshId,
+                        nodeId,
+                        resolved.providerType,
+                        resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes),
+                    ) >= providerCap
                 ) {
                     markSkip(nodeId, 'max_provider_parallel_reached', { providerType: resolved.providerType });
                     continue;

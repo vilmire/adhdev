@@ -1042,6 +1042,11 @@ export function claimNextTask(
         assignedModel?: string;
         /** Enforced cap of the SLOT (provider, model) this claim belongs to. */
         slotMaxParallel?: number;
+        /** Every nodeId sharing this node's DAEMON MACHINE — the scope the provider
+         *  and slot maxParallel caps are counted over, so sibling worktrees on one
+         *  machine share a budget instead of multiplying it. Omit to count the single
+         *  node (prior behavior; never widens a cap). */
+        daemonNodeIds?: readonly string[];
         nodeIsWorktree?: boolean;
         assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
     },

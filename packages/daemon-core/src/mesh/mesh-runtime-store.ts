@@ -7,6 +7,7 @@ import { getLedgerDir } from './mesh-ledger.js';
 import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
+import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -1041,17 +1042,25 @@ export class MeshRuntimeStore {
     }
 
     /**
-     * Count active (status='assigned') tasks on a (node, provider) combination,
+     * Count active (status='assigned') tasks on a (daemon, provider) combination,
      * matched by the assignedProviderType stamped on the payload at claim time.
-     * Drives the per-(node, provider) maxParallel cap (summed across a provider's
-     * slots[].maxParallel). The active-assignment set for a single node is tiny, so
+     * Drives the per-(daemon, provider) maxParallel cap (summed across a provider's
+     * slots[].maxParallel). The active-assignment set for a single daemon is tiny, so
      * parsing payloads here is cheap and avoids a schema migration. Pre-cap legacy
-     * rows (no provider stamp) and other providers on the same node do not consume
+     * rows (no provider stamp) and other providers on the same daemon do not consume
      * this provider's budget, so the cap is fully backward compatible.
      */
     /**
      * Active assignments charged to ONE SLOT — the (provider, model) pair whose
-     * `maxParallel` is being enforced — on this node.
+     * `maxParallel` is being enforced — on this node's DAEMON MACHINE.
+     *
+     * ★ The counting axis is the daemon, not the node. `maxParallel` bounds a
+     * machine resource (CPU, memory, the upstream rate limit, the single on-disk
+     * CLI auth), and a node is a branch-isolation unit — so counting per node let
+     * N worktrees of one repo on one laptop each carry their own `opus: 1` and run
+     * N opus processes against a cap that says one. The caller resolves the sibling
+     * node set (mesh-daemon-slot-axis); remote machines declare their own daemonId
+     * and therefore keep independent budgets.
      *
      * A row with NO `assignedModel` (claimed by an older daemon, or via an idle/event
      * drain that cannot know the launched model) counts against EVERY slot of its
@@ -1069,11 +1078,9 @@ export class MeshRuntimeStore {
         nodeId: string,
         providerType: string,
         assignedModel: string,
+        daemonNodeIds?: readonly string[],
     ): number {
-        const rows = this.db.prepare(`
-            SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
-        `).all(meshId, nodeId) as Array<{ payload: string }>;
+        const rows = this.assignedRowsForDaemon(meshId, nodeId, daemonNodeIds);
         let count = 0;
         for (const row of rows) {
             try {
@@ -1091,11 +1098,41 @@ export class MeshRuntimeStore {
         return count;
     }
 
-    private activeProviderAssignmentCount(meshId: string, nodeId: string, providerType: string): number {
-        const rows = this.db.prepare(`
+    /**
+     * Assigned rows charged to the DAEMON MACHINE that owns `nodeId`.
+     *
+     * `daemonNodeIds` is the caller-resolved sibling set (every node on the same
+     * physical daemon — see mesh-daemon-slot-axis). Each id is expanded through
+     * expandDaemonIdForms so a row stamped in one interchangeable id form still
+     * matches; matching is done with an `IN (...)` bind, not a raw `= ?`.
+     *
+     * Omitting `daemonNodeIds` falls back to the single node — exactly the prior
+     * behavior — so a caller that cannot resolve the mesh never widens a cap.
+     */
+    private assignedRowsForDaemon(
+        meshId: string,
+        nodeId: string,
+        daemonNodeIds?: readonly string[],
+    ): Array<{ payload: string }> {
+        const scope = Array.isArray(daemonNodeIds) && daemonNodeIds.length > 0
+            ? daemonNodeIds
+            : [nodeId];
+        const forms = expandDaemonIdForms(scope as ReadonlyArray<string>);
+        if (forms.length === 0) return [];
+        const placeholders = forms.map(() => '?').join(',');
+        return this.db.prepare(`
             SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
-        `).all(meshId, nodeId) as Array<{ payload: string }>;
+            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
+        `).all(meshId, ...forms) as Array<{ payload: string }>;
+    }
+
+    private activeProviderAssignmentCount(
+        meshId: string,
+        nodeId: string,
+        providerType: string,
+        daemonNodeIds?: readonly string[],
+    ): number {
+        const rows = this.assignedRowsForDaemon(meshId, nodeId, daemonNodeIds);
         let count = 0;
         for (const row of rows) {
             try {
@@ -1117,6 +1154,10 @@ export class MeshRuntimeStore {
             providerMaxParallel?: number;
             assignedModel?: string;
             slotMaxParallel?: number;
+            /** Every nodeId sharing this node's daemon machine — the scope the
+             *  provider/slot maxParallel caps are counted over. Omit to count the
+             *  single node (prior behavior; never widens a cap). */
+            daemonNodeIds?: readonly string[];
             nodeIsWorktree?: boolean;
             assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
         },
@@ -1131,44 +1172,64 @@ export class MeshRuntimeStore {
             if (this.hasActiveSessionAssignment(meshId, sessionId)) return null;
             const nodeBusy = this.hasActiveNodeAssignment(meshId, nodeId);
 
-            // Per-(node, provider) maxParallel cap (summed slots[].maxParallel).
-            // Orthogonal to taskMode: this bounds the (node, provider) resource pool
-            // regardless of read-only vs write. When the cap is already met, this
-            // session cannot claim any candidate here — return null. This composes
-            // with the global/taskMode caps enforced in the coordinator (stricter
-            // wins); omitting providerMaxParallel preserves prior behavior exactly.
+            // Per-(daemon, provider) maxParallel cap (summed slots[].maxParallel).
+            // Bounds the (daemon, provider) resource pool — one CLI, one auth file,
+            // one upstream rate limit per machine — so sibling worktrees share it.
+            // This composes with the global/taskMode caps enforced in the coordinator
+            // (stricter wins); omitting providerMaxParallel preserves prior behavior.
+            //
+            // ★ Evaluated PER CANDIDATE (not once up front) because the effective cap
+            // depends on whether the candidate is read-only: read-only work may not
+            // take the last free slot, so a write task always has one within a single
+            // completion (see effectiveSlotCap / the starvation note in
+            // mesh-daemon-slot-axis). A write candidate still sees the full cap, so
+            // this is never looser than before for writes.
             const providerType = typeof opts?.providerType === 'string' ? opts.providerType.trim() : '';
             const providerMaxParallel = opts?.providerMaxParallel;
-            if (
-                providerType
+            const providerCapDeclared = providerType
                 && typeof providerMaxParallel === 'number'
                 && Number.isFinite(providerMaxParallel)
-                && providerMaxParallel >= 0
-                && this.activeProviderAssignmentCount(meshId, nodeId, providerType) >= providerMaxParallel
-            ) {
-                return null;
-            }
+                && providerMaxParallel >= 0;
+            const liveProviderCount = providerCapDeclared
+                ? this.activeProviderAssignmentCount(meshId, nodeId, providerType, opts?.daemonNodeIds)
+                : 0;
 
             // Per-SLOT maxParallel cap. A slot — the (provider, model) pair — is an
             // independent unit: `maxParallel: 1` on claude-cli/opus means ONE opus task
-            // on this node at a time, even while a sibling claude-cli/sonnet slot is
+            // on this DAEMON at a time, even while a sibling claude-cli/sonnet slot is
             // idle. The provider cap above bounds the shared pool (one CLI, one auth,
             // one upstream rate limit); this bounds the individual slot. Stricter wins,
             // so both are checked, and a claim missing either bound is refused.
             //
             // Enforced inside the same transaction as the provider cap so concurrent
-            // claims cannot both read "1 free" and both commit.
+            // claims cannot both read "1 free" and both commit. Like the provider cap,
+            // the read-only reservation makes the effective bound candidate-dependent.
             const assignedModel = typeof opts?.assignedModel === 'string' ? opts.assignedModel.trim() : '';
             const slotMaxParallel = opts?.slotMaxParallel;
-            if (
-                providerType
+            const slotCapDeclared = providerType
                 && typeof slotMaxParallel === 'number'
                 && Number.isFinite(slotMaxParallel)
-                && slotMaxParallel >= 0
-                && this.activeSlotAssignmentCount(meshId, nodeId, providerType, assignedModel) >= slotMaxParallel
-            ) {
-                return null;
-            }
+                && slotMaxParallel >= 0;
+            const liveSlotCount = slotCapDeclared
+                ? this.activeSlotAssignmentCount(meshId, nodeId, providerType, assignedModel, opts?.daemonNodeIds)
+                : 0;
+
+            /**
+             * Both maxParallel axes for one candidate, with the read-only reservation
+             * applied. Refuses when either axis is met — stricter wins, unchanged.
+             */
+            const parallelCapsAllow = (candidate: MeshWorkQueueEntry): boolean => {
+                const readonlyCandidate = isTaskReadonly(candidate);
+                if (providerCapDeclared) {
+                    const cap = effectiveSlotCap(providerMaxParallel as number, readonlyCandidate);
+                    if (cap !== undefined && liveProviderCount >= cap) return false;
+                }
+                if (slotCapDeclared) {
+                    const cap = effectiveSlotCap(slotMaxParallel as number, readonlyCandidate);
+                    if (cap !== undefined && liveSlotCount >= cap) return false;
+                }
+                return true;
+            };
 
             // The node-pinned SELECT must match a row whose target_node_id was stamped
             // in ANY equivalent daemon-id form (config-form `daemon_mach_X` vs the
@@ -1287,6 +1348,7 @@ export class MeshRuntimeStore {
                 && notBeforeReady(candidate)
                 && convergenceAllows(candidate)
                 && targetMatches(candidate)
+                && parallelCapsAllow(candidate)
                 && nodeConflictAllows(candidate));
             if (!entry) return null;
 

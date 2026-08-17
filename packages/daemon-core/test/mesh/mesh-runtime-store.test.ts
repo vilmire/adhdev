@@ -732,25 +732,53 @@ describe('mesh-runtime-store', () => {
             db.insertQueueEntry({ id, meshId, message: 'diagnose', status: 'pending', taskMode: 'live_debug_readonly', createdAt: iso, updatedAt: iso });
         };
 
+        const insertWrite = (db: any, meshId: string, id: string, ageMs: number) => {
+            const iso = new Date(Date.now() - ageMs).toISOString();
+            db.insertQueueEntry({ id, meshId, message: 'edit', status: 'pending', taskMode: 'code_change', createdAt: iso, updatedAt: iso });
+        };
+
         it('blocks claiming once the (node, provider) active count reaches maxParallel', () => {
             const meshId = `mesh-prov-cap-${randomUUID().slice(0, 8)}`;
             const db = MeshRuntimeStore.getInstance();
+            // WRITE tasks, so this measures the cap boundary itself rather than the
+            // read-only reservation (asserted separately below). Write claims always
+            // see the full declared cap.
+            insertWrite(db, meshId, 'w-1', 3000);
+            insertWrite(db, meshId, 'w-2', 2000);
+            insertWrite(db, meshId, 'w-3', 1000);
+
+            const opts = { providerType: 'claude-cli', providerMaxParallel: 2 };
+            // Distinct nodes on ONE daemon: the cap is a machine budget, so all three
+            // claims contend for the same 2 slots. (A write task also requires an idle
+            // node, hence one node each.)
+            const daemonNodeIds = ['node1', 'node2', 'node3'];
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { ...opts, daemonNodeIds });
+            const c2 = db.claimNextQueueTask(meshId, 'node2', 'sess2', [], { ...opts, daemonNodeIds });
+            // Third claim on the same (daemon, provider) is over the cap → blocked.
+            const c3 = db.claimNextQueueTask(meshId, 'node3', 'sess3', [], { ...opts, daemonNodeIds });
+
+            expect(c1?.id).toBe('w-1');
+            expect(c1?.assignedProviderType).toBe('claude-cli');
+            expect(c2?.id).toBe('w-2');
+            expect(c3).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('reserves the last slot for write work — read-only stops one short of the cap', () => {
+            const meshId = `mesh-prov-cap-ro-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
             insertReadonly(db, meshId, 'ro-1', 3000);
             insertReadonly(db, meshId, 'ro-2', 2000);
-            insertReadonly(db, meshId, 'ro-3', 1000);
 
             const opts = { providerType: 'claude-cli', providerMaxParallel: 2 };
             const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], opts);
+            // Read-only may not take the LAST free slot of a cap-2 budget, so that a
+            // write task is always reachable within one completion (starvation guard).
             const c2 = db.claimNextQueueTask(meshId, 'node1', 'sess2', [], opts);
-            // Third claim on the same (node, provider) is over the cap → blocked,
-            // even though a pending read-only task exists and the node is not "busy"
-            // under the read-only concurrent rule.
-            const c3 = db.claimNextQueueTask(meshId, 'node1', 'sess3', [], opts);
 
             expect(c1?.id).toBe('ro-1');
-            expect(c1?.assignedProviderType).toBe('claude-cli');
-            expect(c2?.id).toBe('ro-2');
-            expect(c3).toBeNull();
+            expect(c2).toBeNull();
 
             __clearMeshQueueForTests(meshId);
         });
