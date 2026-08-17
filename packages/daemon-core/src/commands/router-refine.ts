@@ -20,6 +20,10 @@ import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
+// DURABLE-DUPLICATE-DISPATCH / WORKTREE-VANISHED-MIDFLIGHT: pure move to keep this
+// file under its frozen file-size baseline. Re-exported below for existing importers.
+import { findOpenLedgerRefineDispatch, refineWorktreeVanishedOutcome } from '../mesh/mesh-refine-inflight.js';
+export { findOpenLedgerRefineDispatch, refineWorktreeVanishedOutcome } from '../mesh/mesh-refine-inflight.js';
 // GHOST-FAILURE: pure move to keep this file under its frozen file-size baseline.
 // Re-exported below so existing import sites (and tests) are unaffected.
 import { buildRefineWorktreeMissingResult, classifyRefineTerminal, refineTerminalNextStep } from '../mesh/mesh-refine-landing.js';
@@ -400,8 +404,23 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             const syncBase = await refineSyncBaseStage(self, ctx);
             if (syncBase.kind === 'terminal') return syncBase.result;
 
+            // WORKTREE-VANISHED-MIDFLIGHT: re-check between stages, not only at
+            // resolve_refs. The resolve_refs check is a point-in-time snapshot, and the
+            // stages below run for MINUTES (typecheck/test/build). A sibling job that
+            // merges and cleans up in that window pulls the directory out from under this
+            // one, and whichever stage happens to be running then reports the tear-down as
+            // its own failure — which is exactly why the observed duplicate dispatches
+            // failed with *different* codes (validation_failed / dependency_bootstrap_failed)
+            // purely as a function of timing. Naming the real cause here keeps a spurious
+            // failure from reading like a genuine one.
+            const afterSyncBase = refineWorktreeVanishedOutcome(ctx, 'validation');
+            if (afterSyncBase) return afterSyncBase.result;
+
             const validation = await refineValidationStage(self, ctx);
             if (validation.kind === 'terminal') return validation.result;
+
+            const afterValidation = refineWorktreeVanishedOutcome(ctx, 'patch_equivalence');
+            if (afterValidation) return afterValidation.result;
 
             const patchEquivalence = await refinePatchEquivalenceStage(self, ctx);
             if (patchEquivalence.kind === 'terminal') return patchEquivalence.result;
@@ -411,6 +430,13 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
 
             const effectiveDiff = await refineEffectiveDiffStage(self, ctx);
             if (effectiveDiff.kind === 'terminal') return effectiveDiff.result;
+
+            // WORKTREE-VANISHED-MIDFLIGHT: last check before the only stage that MUTATES
+            // the base. Merging from a worktree that has already been torn down (because a
+            // sibling job merged this very branch and cleaned up) is the one case where a
+            // spurious failure could do more than mislead.
+            const beforeMerge = refineWorktreeVanishedOutcome(ctx, 'merge');
+            if (beforeMerge) return beforeMerge.result;
 
             const merge = await refineMergeAndFinalizeStage(self, ctx);
             return (merge as { kind: 'terminal'; result: CommandRouterResult }).result;
@@ -2787,6 +2813,42 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
         if (!node.isLocalWorktree || !node.workspace) {
             self.runningRefineJobs.delete(key);
             return { success: false, error: `Refinery requires a local worktree node` };
+        }
+
+        // DURABLE-DUPLICATE-DISPATCH: the `runningRefineJobs` check above is in-MEMORY,
+        // so it only answers "is this PROCESS already refining this node?". A refine
+        // job's identity is mesh-wide, and a second dispatch reaches a different process
+        // routinely — a node view that resolves without a usable `daemonId` makes
+        // `isRemote` falsy in the refine_mesh_node handler and the coordinator executes
+        // LOCALLY instead of forwarding to the owning daemon, so call #1 can run on the
+        // worker while call #2 runs on the coordinator, each with its own empty map. That
+        // is how ONE coordinator call became TWO `task_dispatched` rows for the same node
+        // (3/3 on 2026-08-17), the second landing 2–5 minutes after the first and always
+        // failing spuriously against the worktree the first had just torn down.
+        //
+        // Consult the LEDGER — the durable record both processes write to — for an open
+        // dispatch on this node before adding a second one. Bounded by freshness so a
+        // crashed dispatch cannot wedge the node forever (the boot resume scan owns
+        // closing those out); this only refuses the duplicate.
+        const duplicateDispatch = findOpenLedgerRefineDispatch(meshId, nodeId, jobId);
+        if (duplicateDispatch) {
+            self.runningRefineJobs.delete(key);
+            LOG.warn('Mesh', `[Refinery] Refusing duplicate refine dispatch for node ${nodeId}`
+                + ` — job ${duplicateDispatch.jobId} was dispatched ${duplicateDispatch.ageMs}ms ago and has no terminal entry.`);
+            return {
+                success: true,
+                async: true,
+                duplicate: true,
+                status: 'accepted',
+                code: 'duplicate_refine_dispatch',
+                meshId,
+                jobId: duplicateDispatch.jobId,
+                targetNodeId: nodeId,
+                startedAt: duplicateDispatch.timestamp,
+                note: `A refine job for node '${nodeId}' is already in flight (jobId=${duplicateDispatch.jobId}, dispatched ${duplicateDispatch.timestamp}). `
+                    + `This call was NOT dispatched again — a second job would race the first and fail against the worktree the first removes on success. `
+                    + `Wait for that job's terminal event instead of re-invoking.`,
+            };
         }
 
         // Capture the caller's coordinator daemon ID so completed/failed events are
