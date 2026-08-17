@@ -62,3 +62,6 @@ debug_*
 ide_dom.json
 .aider*
 .adhdev-dev-pids.json
+
+# Local agent tool state (machine-specific, must not be tracked)
+.antigravitycli/
