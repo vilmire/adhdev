@@ -2,6 +2,7 @@ import { appendLedgerEntry, buildTaskCompletionEvidence, readLedgerEntries } fro
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
+import type { LiveTurnEvidenceSource } from './mesh-completion-live-gate.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata, isWeakCompletionEvidence, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
@@ -114,7 +115,7 @@ export function resolveLiveTurnPendingEvidence(
 ): (() => boolean) | undefined {
     try {
         const instance = components?.instanceManager?.getInstance?.(sessionId) as
-            { hasLiveTurnPendingEvidence?: () => boolean } | undefined;
+            LiveTurnEvidenceSource | undefined;
         if (typeof instance?.hasLiveTurnPendingEvidence !== 'function') return undefined;
         const probe = instance.hasLiveTurnPendingEvidence.bind(instance);
         return () => probe();

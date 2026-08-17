@@ -12,6 +12,18 @@ export type LiveTurnPendingEvidence = {
 };
 
 /**
+ * The provider-instance surface the mesh layer duck-types for live evidence.
+ * Single declaration — mesh-event-forwarding and mesh-events-stale import this
+ * instead of re-declaring the shape inline, so a provider-side signature change
+ * has exactly one mesh-side declaration to update (previously three drifting
+ * copies, each silently fail-open).
+ */
+export type LiveTurnEvidenceSource = {
+    getLiveTurnPendingEvidence?: () => LiveTurnPendingEvidence;
+    hasLiveTurnPendingEvidence?: () => boolean;
+};
+
+/**
  * Single definition of "read the live-turn pending evidence off a provider
  * instance" — shared by the two enforcement points of the completion contract:
  *
@@ -28,10 +40,7 @@ export type LiveTurnPendingEvidence = {
  * Fail-open by design: a probe error must never wedge a completion.
  */
 export function readLiveTurnPendingEvidence(instance: unknown): LiveTurnPendingEvidence {
-    const candidate = instance as {
-        getLiveTurnPendingEvidence?: () => LiveTurnPendingEvidence;
-        hasLiveTurnPendingEvidence?: () => boolean;
-    } | null | undefined;
+    const candidate = instance as LiveTurnEvidenceSource | null | undefined;
     try {
         if (typeof candidate?.getLiveTurnPendingEvidence === 'function') {
             const evidence = candidate.getLiveTurnPendingEvidence();

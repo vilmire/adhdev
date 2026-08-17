@@ -48,6 +48,13 @@ export interface StallRescueHost {
     fastCollapseSynthesizedTaskId: string | null;
     isMeshWorkerSession(): boolean;
     hasAdapterPendingResponse(): boolean;
+    /**
+     * (MID-TURN-LIVE-STATE parity) Live pending evidence off the instance —
+     * the same accessor the delivery-time mesh gate re-checks
+     * (providers/completion/evidence.ts getLiveTurnPendingEvidence). Optional:
+     * a host predating the accessor simply skips the parity veto.
+     */
+    getLiveTurnPendingEvidence?(): { pending: boolean; kind?: 'adapter' | 'modal' | 'transcript_tool'; observedAt?: number };
     completingTurnTaskId(): string | undefined;
     shouldSuppressCompletionReEmit(taskId: string | undefined): boolean;
     injectedTaskHasStartedGenerating(): boolean;
@@ -275,6 +282,22 @@ export function tryReconcileTranscriptCompletionForStall(
     // provider recorded this turn's end, which is strictly better evidence than our own
     // adapter's failure to notice. The idle path keeps the original veto unchanged.
     if (!wedgedGeneratingProven && host.hasAdapterPendingResponse()) return false;
+    // MID-TURN-LIVE-STATE parity (M1-deletion prerequisite — see
+    // docs/design/2026-08-17-mesh-hold-absorption.md): this gate historically
+    // checked only the adapter axis, which is why the delivery-time mesh gate
+    // re-checks live evidence on every rescue-originated emit. Enforce the two
+    // missing axes at the source: a parked modal is a real pending user
+    // decision (even when the FSM already reads 'idle' — flap/lag — or the
+    // wedged-generating admission holds), and trailing transcript tool
+    // activity means the turn is still progressing. The 'adapter' kind is
+    // deliberately NOT vetoed here: the idle path already gated on
+    // hasAdapterPendingResponse() above, and for the wedged-generating
+    // admission the stuck adapter flag IS the wedge (see previous comment).
+    // The watchdog re-polls, so a veto only defers the rescue, never loses it.
+    const live = host.getLiveTurnPendingEvidence?.();
+    if (live?.pending && (live.kind === 'modal' || live.kind === 'transcript_tool')) {
+        return false;
+    }
 
     const taskId = host.completingTurnTaskId();
     // DOUBLE-EMIT guard (COMPLETION-WEAK-REARM fix1): suppress a re-emit only when this
@@ -427,6 +450,13 @@ export function maybeSynthesizeStartupGraceCollapse(
     // Once-per-turn: the idle-stayed caller re-polls steadily while the session
     // sits idle; without this guard it would re-emit the pair every poll.
     if (host.fastCollapseSynthesizedTaskId === startedTurnTaskId) return false;
+    // MID-TURN-LIVE-STATE parity: never synthesize a completion while a modal
+    // is parked (a real pending decision — e.g. a boot-time trust prompt the
+    // FSM has not surfaced as waiting_*) or the native transcript still shows
+    // trailing tool activity. Left UNMARKED so a later idle poll retries once
+    // the pending state clears — same retry semantics as the suppressions below.
+    const liveSynth = host.getLiveTurnPendingEvidence?.();
+    if (liveSynth?.pending && (liveSynth.kind === 'modal' || liveSynth.kind === 'transcript_tool')) return false;
 
     let fcFinalSummary: string | undefined;
     let fcEvidenceSource: CompletionFinalAssistantEvidence['source'] = 'unavailable';

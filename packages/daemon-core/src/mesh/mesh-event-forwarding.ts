@@ -68,7 +68,7 @@ import {
     evaluateAuthoritativeTranscriptCompletion,
     holdCompletionForLiveStateRetry,
     readLiveTurnPendingEvidence,
-    type LiveTurnPendingEvidence,
+    type LiveTurnEvidenceSource,
 } from './mesh-completion-live-gate.js';
 
 // ---------------------------------------------------------------------------
@@ -689,10 +689,7 @@ function evaluateMeshEventSuppression(
         // Remote/unknown sessions are outside this synchronous gate, as before; absence of a local
         // instance never fabricates pending evidence and never arms a hold.
         const liveInstance = components.instanceManager?.getInstance?.(eventSessionId) as
-            {
-                getLiveTurnPendingEvidence?: () => LiveTurnPendingEvidence;
-                hasLiveTurnPendingEvidence?: () => boolean;
-            } | undefined;
+            LiveTurnEvidenceSource | undefined;
         if (typeof liveInstance?.getLiveTurnPendingEvidence === 'function'
             || typeof liveInstance?.hasLiveTurnPendingEvidence === 'function') {
             const live = readLiveTurnPendingEvidence(liveInstance);
