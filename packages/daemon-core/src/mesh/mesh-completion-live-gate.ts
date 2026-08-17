@@ -1,5 +1,5 @@
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
-import type { MeshTurnAttemptRow } from './mesh-runtime-store.js';
+import { MeshRuntimeStore, type MeshTurnAttemptRow } from './mesh-runtime-store.js';
 import { isTerminalTurnStage } from './mesh-turn-ledger.js';
 import { isWeakCompletionEvidence, readNonEmptyString } from './mesh-events-utils.js';
 
@@ -233,4 +233,178 @@ export function completionEligibleForLiveStateRetry(args: {
         || nowMs - eventTimestamp > AUTHORITATIVE_COMPLETION_MAX_AGE_MS) return false;
     if (Number.isFinite(acceptedAt) && eventTimestamp < acceptedAt - 2_000) return false;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// MID-TURN-LIVE-STATE-GATE bounded retry hold (moved here from
+// mesh-event-forwarding.ts 2026-08-17 — this module already owns every
+// predicate the hold re-evaluates; the forwarder passes its delivery function
+// in as `inject` so the hold machinery stays free of forwarding internals).
+//
+// The hold deliberately contains no task message, final summary, transcript,
+// or modal content: only the dispatch identity needed to re-evaluate the
+// live-state disagreement. The provider's transcript remains the content
+// authority.
+// ---------------------------------------------------------------------------
+const MID_TURN_COMPLETION_HOLD_RETRY_MS = 250;
+const MID_TURN_COMPLETION_HOLD_TTL_MS = 5_000;
+
+/** Minimal structural slice of DaemonComponents the hold needs to re-read live state. */
+export type LiveStateHoldComponents = {
+    instanceManager?: { getInstance?: (sessionId: string) => unknown };
+};
+
+/** Payload shape the drain hands back to the forwarder's inject function. */
+export type HeldCompletionInjectArgs = {
+    meshId: string;
+    sourceInstanceId?: string;
+    nodeId?: string;
+    nodeLabel: string;
+    event: 'agent:generating_completed';
+    metadataEvent: Record<string, unknown>;
+};
+
+type HeldLiveStateCompletion = {
+    components: LiveStateHoldComponents;
+    inject: (components: LiveStateHoldComponents, args: HeldCompletionInjectArgs) => unknown;
+    meshId: string;
+    sourceInstanceId?: string;
+    nodeId?: string;
+    nodeLabel: string;
+    sessionId: string;
+    taskId: string;
+    attemptId: string;
+    dispatchNonce: number;
+    providerType?: string;
+    eventTimestamp: number;
+    expiresAt: number;
+    nextCheckAt: number;
+};
+
+const heldLiveStateCompletions = new Map<string, HeldLiveStateCompletion>();
+let heldLiveStateCompletionTimer: NodeJS.Timeout | null = null;
+
+function heldCompletionKey(meshId: string, taskId: string, attemptId: string, sessionId: string, nonce: number): string {
+    return `${meshId}\u001f${taskId}\u001f${attemptId}\u001f${sessionId}\u001f${nonce}`;
+}
+
+function scheduleHeldLiveStateCompletionDrain(): void {
+    if (heldLiveStateCompletionTimer || heldLiveStateCompletions.size === 0) return;
+    heldLiveStateCompletionTimer = setTimeout(() => {
+        heldLiveStateCompletionTimer = null;
+        drainHeldLiveStateCompletions();
+    }, MID_TURN_COMPLETION_HOLD_RETRY_MS);
+    heldLiveStateCompletionTimer.unref?.();
+}
+
+function drainHeldLiveStateCompletions(nowMs: number = Date.now()): void {
+    for (const [key, held] of heldLiveStateCompletions) {
+        if (nowMs < held.nextCheckAt) continue;
+        if (nowMs >= held.expiresAt) {
+            heldLiveStateCompletions.delete(key);
+            continue;
+        }
+        const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(held.meshId, held.taskId);
+        const identityStillCurrent = !!attempt
+            && !attempt.terminalOutcome
+            && attempt.attemptId === held.attemptId
+            && sessionIdsEquivalent(attempt.sessionId, held.sessionId)
+            && attempt.dispatchNonce === held.dispatchNonce;
+        if (!identityStillCurrent) {
+            heldLiveStateCompletions.delete(key);
+            continue;
+        }
+        const liveInstance = held.components.instanceManager?.getInstance?.(held.sessionId);
+        if (!liveInstance) {
+            heldLiveStateCompletions.delete(key);
+            continue;
+        }
+        const live = readLiveTurnPendingEvidence(liveInstance);
+        if (live.pending) {
+            held.nextCheckAt = nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS;
+            continue;
+        }
+        // Delete BEFORE delivery. A duplicate provider event or re-entrant retry
+        // sees no armed hold, and the turn reducer/outbox remain the final exactly-
+        // once authority.
+        heldLiveStateCompletions.delete(key);
+        held.inject(held.components, {
+            meshId: held.meshId,
+            sourceInstanceId: held.sourceInstanceId,
+            nodeId: held.nodeId,
+            nodeLabel: held.nodeLabel,
+            event: 'agent:generating_completed',
+            metadataEvent: {
+                event: 'agent:generating_completed',
+                instanceId: held.sessionId,
+                targetSessionId: held.sessionId,
+                taskId: held.taskId,
+                attemptId: held.attemptId,
+                dispatchNonce: held.dispatchNonce,
+                timestamp: held.eventTimestamp,
+                ...(held.providerType ? { providerType: held.providerType } : {}),
+                completionDiagnostic: {
+                    source: 'mid_turn_live_state_retry',
+                    contentFreeRetry: true,
+                },
+            },
+        });
+    }
+    scheduleHeldLiveStateCompletionDrain();
+}
+
+export function holdCompletionForLiveStateRetry<C extends LiveStateHoldComponents>(
+    components: C,
+    args: {
+        meshId: string;
+        sourceInstanceId?: string;
+        nodeId?: string;
+        nodeLabel: string;
+        metadataEvent: Record<string, unknown>;
+    },
+    eventSessionId: string,
+    nowMs: number,
+    inject: (components: C, args: HeldCompletionInjectArgs) => unknown,
+): boolean {
+    const taskId = readNonEmptyString(args.metadataEvent.taskId);
+    const attemptId = readNonEmptyString(args.metadataEvent.attemptId);
+    const dispatchNonce = typeof args.metadataEvent.dispatchNonce === 'number'
+        ? args.metadataEvent.dispatchNonce : NaN;
+    const eventTimestamp = typeof args.metadataEvent.timestamp === 'number'
+        ? args.metadataEvent.timestamp : NaN;
+    if (!taskId || !attemptId || !Number.isFinite(dispatchNonce) || !Number.isFinite(eventTimestamp)) return false;
+    const key = heldCompletionKey(args.meshId, taskId, attemptId, eventSessionId, dispatchNonce);
+    if (!heldLiveStateCompletions.has(key)) {
+        heldLiveStateCompletions.set(key, {
+            components,
+            // Sound in practice: the drain always calls `inject` back with the
+            // exact `components` object stored alongside it, so widening the
+            // parameter type here can never surface a narrower object.
+            inject: inject as HeldLiveStateCompletion['inject'],
+            meshId: args.meshId,
+            sourceInstanceId: args.sourceInstanceId,
+            nodeId: args.nodeId,
+            nodeLabel: args.nodeLabel,
+            sessionId: eventSessionId,
+            taskId,
+            attemptId,
+            dispatchNonce,
+            providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+            eventTimestamp,
+            expiresAt: nowMs + MID_TURN_COMPLETION_HOLD_TTL_MS,
+            nextCheckAt: nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS,
+        });
+    }
+    scheduleHeldLiveStateCompletionDrain();
+    return true;
+}
+
+export function __drainHeldLiveStateCompletionsForTests(nowMs: number = Date.now()): void {
+    drainHeldLiveStateCompletions(nowMs);
+}
+
+export function __resetHeldLiveStateCompletionsForTests(): void {
+    if (heldLiveStateCompletionTimer) clearTimeout(heldLiveStateCompletionTimer);
+    heldLiveStateCompletionTimer = null;
+    heldLiveStateCompletions.clear();
 }

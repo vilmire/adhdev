@@ -49,7 +49,7 @@ import { setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
 import {
   __drainHeldLiveStateCompletionsForTests,
   __resetHeldLiveStateCompletionsForTests,
-} from '../../src/mesh/mesh-event-forwarding.js'
+} from '../../src/mesh/mesh-completion-live-gate.js'
 import {
   __clearMeshQueueForTests,
   __resetMeshRuntimeStoreForTests,

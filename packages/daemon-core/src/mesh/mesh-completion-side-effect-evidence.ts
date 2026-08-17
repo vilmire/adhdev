@@ -137,6 +137,14 @@ export interface SyncGitEvidenceResult {
  * as "no evidence either way", never as a positive or negative verdict. `timeoutMs`
  * bounds the worst case this can add to the synchronous completion path; keep it short.
  */
+// Worst-case wall-clock the synchronous git-evidence gate below may add to a
+// code_change completion's terminal-state decision before failing open. Short
+// by design — the caller (mesh-event-forwarding's markSessionTerminal) runs on
+// the hot synchronous event-forwarding path; see the file header on why the
+// check cannot be async. Owned here so the budget lives next to the code that
+// spends it.
+export const FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS = 3_000;
+
 export function checkGitEvidenceSync(workspace: string, sinceIso: string | undefined, timeoutMs: number): SyncGitEvidenceResult {
     const deadline = Date.now() + timeoutMs;
     const remaining = () => Math.max(1, deadline - Date.now());
