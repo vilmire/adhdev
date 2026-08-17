@@ -700,14 +700,33 @@ export interface QuotaEventRefreshOptions {
 }
 
 /**
+ * Events that warrant an immediate re-read of the provider's quota: a turn
+ * just completed (`agent:generating_completed`), or the session ended some
+ * other way (`agent:stopped` — manual stop, PTY/ACP process exit, or a
+ * provider-reported error, all of which route through this single status per
+ * the CLI/ACP FSMs in status-transition.ts / acp-provider-instance.ts).
+ *
+ * `agent:stopped` was added 2026-08-17 after an incident where a session's
+ * ONLY terminal event was `agent:stopped` (ready → generating_started ×2 →
+ * stopped, `generating_completed` never fired) — the event-driven path never
+ * armed, so quota fell back to the 15-minute cadence and a routing decision a
+ * few minutes later used a 3-day-stale cached value. A session ending
+ * abnormally is exactly when a re-read matters most: it is the last chance to
+ * capture what the just-finished (or just-aborted) turn spent before the next
+ * cadenced tick, and precisely the case the old completion-only filter
+ * skipped.
+ */
+const QUOTA_REFRESH_EVENTS = new Set(['agent:generating_completed', 'agent:stopped']);
+
+/**
  * Event-driven quota refresh: re-read ONE provider's quota right after one of
- * its agents finishes a turn (`agent:generating_completed`) — the moment the
- * numbers are guaranteed to have just moved. The periodic loop alone leaves
- * the post-turn reading up to 15 minutes stale; the boot refresh obviously
- * cannot help mid-session either.
+ * its agents finishes or ends a turn (see QUOTA_REFRESH_EVENTS) — the moment
+ * the numbers are guaranteed to have just moved. The periodic loop alone
+ * leaves the post-turn reading up to 15 minutes stale; the boot refresh
+ * obviously cannot help mid-session either.
  *
  * This is deliberately a COMPLEMENT to the transient-failure retry above, not
- * a fix for the token race: the completion event can fire in the same turn
+ * a fix for the token race: the triggering event can fire in the same turn
  * whose token expired, i.e. BEFORE the CLI renewed it, so an event-triggered
  * refetch may still record `expired-token`. The retry scheduler is what
  * recovers from that; this path is what keeps successful readings fresh.
@@ -718,8 +737,10 @@ export interface QuotaEventRefreshOptions {
  *  - a provider with no fetcher (or a non-quota provider type) is ignored;
  *  - the machine enable gate is consulted per event, so a disabled provider
  *    is never probed;
- *  - per-provider debounce bounds a turn-heavy session to one fetch per
- *    QUOTA_EVENT_REFRESH_DEBOUNCE_MS.
+ *  - per-provider debounce bounds a turn-heavy or stop-heavy session to one
+ *    fetch per QUOTA_EVENT_REFRESH_DEBOUNCE_MS — this is what keeps repeated
+ *    manual stops or a crash-looping provider from hammering the fetcher, the
+ *    same bound that already applied to a burst of completions.
  *
  * Disk persistence is NOT reimplemented here: every refresh funnels through
  * refreshQuotaCacheOnce, which already persists via ./persist.ts.
@@ -745,7 +766,7 @@ export function setupQuotaEventRefresh(
     let stopped = false;
     components.instanceManager.onEvent((event) => {
         if (stopped) return;
-        if (event.event !== 'agent:generating_completed') return;
+        if (typeof event.event !== 'string' || !QUOTA_REFRESH_EVENTS.has(event.event)) return;
         const refresher = typeof event.providerType === 'string'
             ? REFRESHERS.find(({ provider }) => provider === event.providerType)
             : undefined;
@@ -757,7 +778,7 @@ export function setupQuotaEventRefresh(
         void refreshQuotaCacheOnce([refresher], isEnabled)
             .catch((e: any) => LOG.warn('Quota', `Event-driven quota refresh failed: ${e?.message || e}`));
     });
-    LOG.info('Quota', `Event-driven quota refresh armed (agent:generating_completed, ${debounceMs}ms debounce)`);
+    LOG.info('Quota', `Event-driven quota refresh armed (${[...QUOTA_REFRESH_EVENTS].join(', ')}, ${debounceMs}ms debounce)`);
     return {
         stop() {
             stopped = true;

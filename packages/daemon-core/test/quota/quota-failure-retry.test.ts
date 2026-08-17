@@ -291,7 +291,7 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
     })
 })
 
-describe('event-driven refresh (agent:generating_completed)', () => {
+describe('event-driven refresh (agent:generating_completed, agent:stopped)', () => {
     function makeEventSource() {
         const listeners: Array<(event: any) => void> = []
         return {
@@ -381,5 +381,83 @@ describe('event-driven refresh (agent:generating_completed)', () => {
         await new Promise(r => setTimeout(r, 20))
 
         expect(fetchKimiQuota).not.toHaveBeenCalled()
+    })
+
+    // 2026-08-17 incident: a kimi session went ready → generating_started ×2 →
+    // agent:stopped with generating_completed never firing at all. The
+    // event-driven path never armed, so quota rode the 15-minute cadence and a
+    // routing decision minutes later used a stale cached value. This is the
+    // reproduction of that exact gap.
+    it('refreshes on agent:stopped — the session-died-without-completing case', async () => {
+        const source = makeEventSource()
+        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager })
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+
+        source.emit({ event: 'agent:ready', providerType: 'kimi' })
+        source.emit({ event: 'agent:generating_started', providerType: 'kimi' })
+        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        await vi.waitFor(() => expect(readQuotaCache()?.['kimi']?.status).toBe('ok'))
+
+        expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
+        handle.stop()
+    })
+
+    it('debounces agent:stopped the same as agent:generating_completed — repeated manual stops do not hammer the fetcher', async () => {
+        let now = 1_000_000
+        const source = makeEventSource()
+        const handle = setupQuotaEventRefresh(
+            { instanceManager: source.instanceManager },
+            { now: () => now },
+        )
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+
+        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        now += 5_000
+        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        now += 5_000
+        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        await vi.waitFor(() => expect(readQuotaCache()?.['kimi']?.status).toBe('ok'))
+        expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
+
+        now += 61_000 // past the debounce window
+        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        await vi.waitFor(() => expect(fetchKimiQuota).toHaveBeenCalledTimes(2))
+        handle.stop()
+    })
+
+    it('shares the debounce window across agent:stopped and agent:generating_completed for the same provider', async () => {
+        let now = 1_000_000
+        const source = makeEventSource()
+        const handle = setupQuotaEventRefresh(
+            { instanceManager: source.instanceManager },
+            { now: () => now },
+        )
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+
+        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        await vi.waitFor(() => expect(fetchKimiQuota).toHaveBeenCalledTimes(1))
+
+        now += 5_000
+        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        await new Promise(r => setTimeout(r, 20))
+
+        // Same provider, still inside the 60s debounce window: the stop event
+        // must not trigger a second fetch on top of the completion's.
+        expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
+        handle.stop()
+    })
+
+    it('never refetches a provider disabled on this machine on agent:stopped', async () => {
+        const source = makeEventSource()
+        const providerLoader = { isMachineProviderEnabled: (type: string) => type !== 'kimi' }
+        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager, providerLoader })
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+
+        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        await new Promise(r => setTimeout(r, 20))
+
+        expect(fetchKimiQuota).not.toHaveBeenCalled()
+        expect(readQuotaCache()?.['kimi']).toBeUndefined()
+        handle.stop()
     })
 })
