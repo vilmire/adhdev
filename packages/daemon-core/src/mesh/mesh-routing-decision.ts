@@ -1,7 +1,8 @@
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
-import { quotaSpreadBonusByProvider, type ProviderQuotaRiskSnapshot, type QuotaFactsContext } from './mesh-quota-routing.js';
-import { scoreSlotForTask, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { LOG } from '../logging/logger.js';
+import { quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, type ProviderQuotaRiskSnapshot, type QuotaFactsContext } from './mesh-quota-routing.js';
+import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
 
 export interface MeshIntraNodeLoser {
     providerType: string;
@@ -57,6 +58,25 @@ export interface ResolvedProviderSelection {
     selectionTrajectory?: MeshSelectionTrajectory;
 }
 
+interface ProviderSlotCandidate {
+    slot: NodeCapabilitySlot;
+    providerType: string;
+}
+
+interface ProviderQuotaRanking {
+    clear: string[];
+    gated: Array<{ providerType: string; block: { reason: string } }>;
+}
+
+export interface ProviderSelectionDiagnostics {
+    riskSnapshot: ProviderQuotaRiskSnapshot[];
+    quotaRiskSnapshot?: ProviderQuotaRiskSnapshot[];
+    quotaRisksOmitted?: number;
+    intraNodeLosers?: MeshIntraNodeLoser[];
+    intraNodeLosersOmitted?: number;
+    selectionTrajectory?: MeshSelectionTrajectory;
+}
+
 // Compact, durable routing rationale written into task_dispatched. Candidate arrays
 // are bounded by the provider resolver before they reach this type.
 export interface MeshTaskRoutingDecision {
@@ -80,6 +100,91 @@ export interface MeshTaskRoutingDecision {
 
 const ROUTING_ARRAY_MAX = 5;
 const ROUTING_DECISION_MAX_BYTES = 2_000;
+const INTRA_NODE_LOSERS_MAX = 2;
+
+/** Build the detailed info-log evidence and compact durable provider-selection
+ * fields without making the assignment engine carry observability formatting. */
+export function buildProviderSelectionDiagnostics(args: {
+    node: any;
+    nodeId: string;
+    meshId?: string;
+    task?: FitnessTask;
+    taskId?: string;
+    quotaRouting?: RepoMeshQuotaRoutingPolicy | null;
+    quotaFactsContext?: QuotaFactsContext | null;
+    quotaBonusByProvider?: Record<string, number>;
+    difficultyFloorRequired: boolean;
+    usableSlots: ProviderSlotCandidate[];
+    candidateSlots: ProviderSlotCandidate[];
+    ranked: ProviderQuotaRanking;
+    winner?: ProviderSlotCandidate;
+}): ProviderSelectionDiagnostics {
+    const now = Date.now();
+    const riskSnapshot = quotaRiskSnapshotForCandidates(args.node, args.ranked.clear, args.quotaRouting, now, args.quotaFactsContext);
+    const allRisks = quotaRiskSnapshotForCandidates(args.node, args.candidateSlots.map(candidate => candidate.providerType), args.quotaRouting, now, args.quotaFactsContext);
+    const riskByProvider = new Map(allRisks.map(snapshot => [snapshot.providerType, snapshot]));
+    const scoreDetails = args.task ? args.usableSlots.map(candidate => ({
+        providerType: candidate.providerType,
+        ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
+        capacityAvailable: slotHasCapacity(args.meshId ?? '', args.nodeId, args.node, candidate.slot),
+        difficultyEligible: !args.difficultyFloorRequired || slotDifficultyTierForTask(candidate.slot, args.task!.difficulty) !== undefined,
+        ...scoreSlotForTaskBreakdown(candidate.slot, args.task!, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
+    })) : [];
+    const quotaOrder = [
+        ...args.ranked.clear.map(providerType => ({ providerType, ...(riskByProvider.get(providerType)?.risk !== undefined ? { quotaRisk: riskByProvider.get(providerType)!.risk } : {}) })),
+        ...args.ranked.gated.map(entry => ({ providerType: entry.providerType, ...(riskByProvider.get(entry.providerType)?.risk !== undefined ? { quotaRisk: riskByProvider.get(entry.providerType)!.risk } : {}), gated: true })),
+    ];
+    if (args.taskId) {
+        LOG.info('MeshQueue', `ROUTING DECISION taskId=${args.taskId} nodeId=${args.nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrder)} winner=${args.ranked.clear[0] ?? 'none'}`);
+    }
+    if (!args.winner || !args.task) return { riskSnapshot };
+
+    const winner = args.winner;
+    const losers = args.usableSlots.filter(candidate => candidate.slot !== winner.slot).map(candidate => {
+        const risk = riskByProvider.get(candidate.providerType)?.risk;
+        const hasCapacity = slotHasCapacity(args.meshId ?? '', args.nodeId, args.node, candidate.slot);
+        const reason = (args.difficultyFloorRequired && !hasCapacity ? 'slot_capacity_exhausted' : undefined)
+            ?? (args.difficultyFloorRequired && !args.candidateSlots.includes(candidate) ? 'higher_difficulty_tier_deferred' : undefined)
+            ?? args.ranked.gated.find(entry => entry.providerType === candidate.providerType)?.block.reason
+            ?? (candidate.providerType === winner.providerType
+                ? (hasCapacity ? 'lower_slot_fitness' : 'slot_capacity_exhausted')
+                : (risk === undefined ? 'lower_slot_order' : 'lower_quota_rank'));
+        return {
+            providerType: candidate.providerType,
+            ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
+            fitnessScore: scoreSlotForTask(candidate.slot, args.task!, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
+            ...(risk !== undefined ? { quotaRisk: risk } : {}),
+            reason,
+        };
+    });
+    const candidates = scoreDetails.map(detail => ({
+        providerType: detail.providerType,
+        ...(detail.model ? { model: detail.model } : {}),
+        fitnessScore: detail.total,
+        capacityAvailable: detail.capacityAvailable,
+        difficultyEligible: detail.difficultyEligible,
+    }));
+    const winnerRisk = riskByProvider.get(winner.providerType)?.risk;
+    return {
+        riskSnapshot,
+        ...(riskSnapshot.length ? { quotaRiskSnapshot: riskSnapshot.slice(0, ROUTING_ARRAY_MAX) } : {}),
+        ...(riskSnapshot.length > ROUTING_ARRAY_MAX ? { quotaRisksOmitted: riskSnapshot.length - ROUTING_ARRAY_MAX } : {}),
+        ...(losers.length ? { intraNodeLosers: losers.slice(0, INTRA_NODE_LOSERS_MAX) } : {}),
+        ...(losers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: losers.length - INTRA_NODE_LOSERS_MAX } : {}),
+        selectionTrajectory: {
+            candidates: candidates.slice(0, ROUTING_ARRAY_MAX),
+            ...(candidates.length > ROUTING_ARRAY_MAX ? { candidatesOmitted: candidates.length - ROUTING_ARRAY_MAX } : {}),
+            quotaOrder: quotaOrder.slice(0, ROUTING_ARRAY_MAX),
+            ...(quotaOrder.length > ROUTING_ARRAY_MAX ? { quotaOrderOmitted: quotaOrder.length - ROUTING_ARRAY_MAX } : {}),
+            providerWinner: {
+                providerType: winner.providerType,
+                ...(winner.slot.model ? { model: winner.slot.model } : {}),
+                fitnessScore: scoreSlotForTask(winner.slot, args.task, args.quotaBonusByProvider?.[winner.slot.provider] ?? 0),
+                ...(winnerRisk !== undefined ? { quotaRisk: winnerRisk } : {}),
+            },
+        },
+    };
+}
 
 function serializedBytes(value: unknown): number {
     return Buffer.byteLength(JSON.stringify(value), 'utf8');

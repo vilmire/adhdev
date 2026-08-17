@@ -21,7 +21,7 @@ import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates, recordLastQuotaRanking, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, recordLastQuotaRanking, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -35,9 +35,9 @@ import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertProm
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, targetPinAgeMs, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
-import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, scoreSlotForTaskBreakdown, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
-import { buildAutoLaunchRoutingDecision, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
+import { buildAutoLaunchRoutingDecision, buildProviderSelectionDiagnostics, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { allowedClassifiedDifficultiesForSession, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel, taskMeetsSessionDifficultyFloor } from './mesh-difficulty-floor.js';
 
 export type { MeshTaskRoutingDecision } from './mesh-routing-decision.js';
@@ -1904,37 +1904,13 @@ async function resolveUsableProvider(
     // non-actionable) is never conflated with 'provider_priority_unusable'
     // (a slot configuration error, actionable).
     const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting, Date.now(), quotaFactsContext);
-    // OBSERVABILITY (quota-ranking): the risk snapshot backing `ranked.clear`'s
-    // order, plus the gated reasons, so a default-level log tail or a later mesh_status
-    // read can reconstruct WHY this order happened, not just what it was.
-    const riskSnapshot = quotaRiskSnapshotForCandidates(node, ranked.clear, quotaRouting, Date.now(), quotaFactsContext);
-    const allRiskSnapshots = quotaRiskSnapshotForCandidates(node, candidates.map(candidate => candidate.providerType), quotaRouting, Date.now(), quotaFactsContext);
-    const allRiskByProvider = new Map(allRiskSnapshots.map(snapshot => [snapshot.providerType, snapshot]));
-    const scoreDetails = task ? usableSlots.map(candidate => ({
-        providerType: candidate.providerType,
-        ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
-        capacityAvailable: slotHasCapacity(meshId ?? '', nodeId, node, candidate.slot),
-        difficultyEligible: !difficultyFloorRequired || slotDifficultyTierForTask(candidate.slot, task.difficulty) !== undefined,
-        ...scoreSlotForTaskBreakdown(candidate.slot, task, quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
-    })) : [];
-    const quotaOrderDetails = [
-        ...ranked.clear.map(providerType => ({
-            providerType,
-            ...(allRiskByProvider.get(providerType)?.risk !== undefined ? { quotaRisk: allRiskByProvider.get(providerType)!.risk } : {}),
-        })),
-        ...ranked.gated.map(entry => ({
-            providerType: entry.providerType,
-            ...(allRiskByProvider.get(entry.providerType)?.risk !== undefined ? { quotaRisk: allRiskByProvider.get(entry.providerType)!.risk } : {}),
-            gated: true,
-        })),
-    ];
-    // Default-level, one-line decision evidence. taskId is deliberately a stable
-    // grep token: post-incident diagnosis must not depend on debug logging being on.
-    // The durable ledger keeps only final scores; this line carries the full
-    // base/difficulty/tags/quotaBonus decomposition for every detected slot.
-    if (taskId) {
-        LOG.info('MeshQueue', `ROUTING DECISION taskId=${taskId} nodeId=${nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrderDetails)} winner=${ranked.clear[0] ?? 'none'}`);
-    }
+    const winner = ranked.clear.length
+        ? candidates.find(candidate => candidate.providerType === ranked.clear[0]) ?? candidates[0]
+        : undefined;
+    const { riskSnapshot, ...routingDiagnostics } = buildProviderSelectionDiagnostics({
+        node, nodeId, meshId, task, taskId, quotaRouting, quotaFactsContext,
+        quotaBonusByProvider, difficultyFloorRequired, usableSlots, candidateSlots, ranked, winner,
+    });
     if (!ranked.clear.length) {
         const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
         LOG.info('MeshQueue', `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
@@ -1945,75 +1921,25 @@ async function resolveUsableProvider(
         });
         return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}` };
     }
-    const winner = candidates.find(c => c.providerType === ranked.clear[0]) ?? candidates[0];
-    LOG.debug('MeshQueue', `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map(s => `${s.providerType}:${s.risk?.toFixed(1) ?? '?'}`).join(',')}] gated=[${ranked.gated.map(g => `${g.providerType}:${g.block.reason}`).join(',')}] winner=${winner.providerType}`);
+    const selectedWinner = winner!;
+    LOG.debug('MeshQueue', `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map(s => `${s.providerType}:${s.risk?.toFixed(1) ?? '?'}`).join(',')}] gated=[${ranked.gated.map(g => `${g.providerType}:${g.block.reason}`).join(',')}] winner=${selectedWinner.providerType}`);
     recordLastQuotaRanking(nodeId, {
         decidedAt: Date.now(),
-        winner: winner.providerType,
+        winner: selectedWinner.providerType,
         clear: riskSnapshot,
         gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })),
     });
-    const riskByProvider = allRiskByProvider;
-    const allLosers = usableSlots.filter(candidate => candidate.slot !== winner.slot).map(candidate => {
-        const gated = ranked.gated.find(entry => entry.providerType === candidate.providerType);
-        const risk = riskByProvider.get(candidate.providerType)?.risk;
-        const sameProvider = candidate.providerType === winner.providerType;
-        const candidateHasCapacity = slotHasCapacity(meshId ?? '', nodeId, node, candidate.slot);
-        const reason = (difficultyFloorRequired && !candidateHasCapacity ? 'slot_capacity_exhausted' : undefined)
-            ?? (difficultyFloorRequired && !candidateSlots.includes(candidate) ? 'higher_difficulty_tier_deferred' : undefined)
-            ?? gated?.block.reason
-            ?? (sameProvider
-                ? (candidateHasCapacity ? 'lower_slot_fitness' : 'slot_capacity_exhausted')
-                : (risk === undefined ? 'lower_slot_order' : 'lower_quota_rank'));
-        return {
-            providerType: candidate.providerType,
-            ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
-            ...(task ? { fitnessScore: scoreSlotForTask(candidate.slot, task, quotaBonusByProvider?.[candidate.slot.provider] ?? 0) } : {}),
-            ...(risk !== undefined ? { quotaRisk: risk } : {}),
-            reason,
-        };
-    });
-    const DIAGNOSTIC_CANDIDATES_MAX = 5;
-    // The trajectory is more valuable than an exhaustive loser tail. Keep the
-    // old loser field, but spend at most two entries on it so the complete four-
-    // stage trajectory remains below the routingDecision 2KB budget.
-    const INTRA_NODE_LOSERS_MAX = 2;
-    const trajectoryCandidates = scoreDetails.map(detail => ({
-        providerType: detail.providerType,
-        ...(detail.model ? { model: detail.model } : {}),
-        fitnessScore: detail.total,
-        capacityAvailable: detail.capacityAvailable,
-        difficultyEligible: detail.difficultyEligible,
-    }));
-    const winnerRisk = allRiskByProvider.get(winner.providerType)?.risk;
     return {
-        providerType: winner.providerType,
+        providerType: selectedWinner.providerType,
         ...(ranked.gated.length ? { quotaGated: ranked.gated } : {}),
-        ...(winner.slot.model ? { model: winner.slot.model } : {}),
-        ...(winner.slot.thinkingLevel ? { thinkingLevel: winner.slot.thinkingLevel } : {}),
+        ...(selectedWinner.slot.model ? { model: selectedWinner.slot.model } : {}),
+        ...(selectedWinner.slot.thinkingLevel ? { thinkingLevel: selectedWinner.slot.thinkingLevel } : {}),
         // The slot that won selection. Returned so the caller can enforce
         // "the launch model must be one this slot declares" — a preset
         // model must not widen what the operator configured. See
         // slot-model-enforcement.ts.
-        slot: winner.slot,
-        ...(riskSnapshot.length ? { quotaRiskSnapshot: riskSnapshot.slice(0, DIAGNOSTIC_CANDIDATES_MAX) } : {}),
-        ...(riskSnapshot.length > DIAGNOSTIC_CANDIDATES_MAX ? { quotaRisksOmitted: riskSnapshot.length - DIAGNOSTIC_CANDIDATES_MAX } : {}),
-        ...(allLosers.length ? { intraNodeLosers: allLosers.slice(0, INTRA_NODE_LOSERS_MAX) } : {}),
-        ...(allLosers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: allLosers.length - INTRA_NODE_LOSERS_MAX } : {}),
-        ...(task ? {
-            selectionTrajectory: {
-                candidates: trajectoryCandidates.slice(0, DIAGNOSTIC_CANDIDATES_MAX),
-                ...(trajectoryCandidates.length > DIAGNOSTIC_CANDIDATES_MAX ? { candidatesOmitted: trajectoryCandidates.length - DIAGNOSTIC_CANDIDATES_MAX } : {}),
-                quotaOrder: quotaOrderDetails.slice(0, DIAGNOSTIC_CANDIDATES_MAX),
-                ...(quotaOrderDetails.length > DIAGNOSTIC_CANDIDATES_MAX ? { quotaOrderOmitted: quotaOrderDetails.length - DIAGNOSTIC_CANDIDATES_MAX } : {}),
-                providerWinner: {
-                    providerType: winner.providerType,
-                    ...(winner.slot.model ? { model: winner.slot.model } : {}),
-                    fitnessScore: scoreSlotForTask(winner.slot, task, quotaBonusByProvider?.[winner.slot.provider] ?? 0),
-                    ...(winnerRisk !== undefined ? { quotaRisk: winnerRisk } : {}),
-                },
-            },
-        } : {}),
+        slot: selectedWinner.slot,
+        ...routingDiagnostics,
     };
 }
 
