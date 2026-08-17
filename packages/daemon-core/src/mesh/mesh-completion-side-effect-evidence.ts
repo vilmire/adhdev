@@ -45,6 +45,7 @@ import { LOG } from '../logging/logger.js';
 import { daemonIdsEquivalent, expandDaemonIdForms, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
+import { MESH_TASK_MODES, type MeshTaskMode } from './mesh-work-queue.js';
 
 const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
 
@@ -243,6 +244,225 @@ function parsePorcelainV2Paths(output: string): string[] {
         }
     }
     return paths;
+}
+
+// ─── Per-taskMode completion-evidence strategy (structural registry) ──────
+//
+// FALSE-COMPLETION-GIT-EVIDENCE gap 1: a completion is trusted purely off the worker's
+// self-reported transcript shape for EVERY task mode, not just code_change — a worker
+// that delegates to a subagent and returns can self-report "done" with nothing actually
+// verified regardless of mode. There is no single evidence check that fits every mode
+// (code_change: git; a read-only investigation: the ABSENCE of git changes; a test run:
+// something this codebase does not independently observe at all today), so the mapping
+// from taskMode to evidence STRATEGY is made structural — a Record<MeshTaskMode, ...>
+// literal — rather than left as an if/else chain a reader has to trust is exhaustive.
+// `MESH_TASK_MODES` (mesh-work-queue.ts) is iterated at module load via
+// assertTaskModeEvidenceStrategyIsExhaustive() so a 6th mode added to that enum without a
+// matching entry here fails FAST (a thrown error at import time) instead of silently
+// falling through to "unhandled". THIS is the answer to "where does a future validation
+// evidence hook get wired in": add a 'checkable' entry here with its own checker function,
+// nothing else in mesh-event-forwarding.ts needs to change (see resolveTaskModeEvidence).
+export type TaskModeEvidenceKind =
+    // A real, independent (worker-unfalsifiable) evidence check exists and runs.
+    | 'checkable'
+    // No independent evidence hook exists anywhere in this codebase today for this mode's
+    // completion path — a genuine, reported limitation (see the per-mode reason string),
+    // not silently-treated-as-verified. Never sets reviewRecommended (see the "cry wolf"
+    // note on notifyOnUnverified below); the ledger still records evidenceScope so the gap
+    // is visible to anyone reading the payload, and so a future evidence hook has an
+    // obvious slot: flip evidenceKind to 'checkable' and provide a checker.
+    | 'not_applicable_today'
+    // No side effects is the CORRECT, expected outcome for this mode — evidence-checking
+    // is structurally inapplicable (there is nothing to prove happened). Never checked,
+    // never scope-marked, never flagged.
+    | 'no_evidence_expected';
+
+export interface TaskModeEvidenceStrategy {
+    mode: MeshTaskMode;
+    kind: TaskModeEvidenceKind;
+    /** Human-readable justification, surfaced in the evidenceScope ledger marker's sibling field. */
+    reason: string;
+    /**
+     * Whether a `not_applicable_today` verdict should also set reviewRecommended (surfacing
+     * a verify note to the coordinator on EVERY completion of this mode), vs. staying a
+     * silent ledger-only marker. Deliberately false for validation/launch_app/convergence —
+     * flagging every single completion of an entire task mode would make the warning routine
+     * noise the coordinator learns to ignore (the boy-who-cried-wolf failure mode), which
+     * defeats the point of a review flag more thoroughly than never emitting one. The
+     * declaration surviving in completionDiagnostic.evidenceScope already satisfies "don't
+     * silently pass" — visible to anyone who reads the ledger/payload, without training the
+     * coordinator to tune out routine noise. Never true for 'checkable' or
+     * 'no_evidence_expected' kinds (irrelevant to them).
+     */
+    notifyOnUnverified: boolean;
+}
+
+// Deliberately typed as `Record<MeshTaskMode, ...>` (not `Partial<...>`) so TypeScript
+// itself rejects an incomplete map at compile time — the exhaustiveness guarantee this
+// registry exists to provide is enforced by the type checker, not only the runtime assert
+// below (defense in depth: the runtime assert also catches a MeshTaskMode value added
+// without a matching build having run yet, e.g. mixed dist/src versions).
+export const TASK_MODE_EVIDENCE_STRATEGY: Record<MeshTaskMode, TaskModeEvidenceStrategy> = {
+    code_change: {
+        mode: 'code_change',
+        kind: 'checkable',
+        reason: 'A real code change leaves a git trace (dirty file or new commit) attributable to this dispatch.',
+        notifyOnUnverified: false, // irrelevant — 'checkable' path sets reviewRecommended directly on a real miss
+    },
+    live_debug_readonly: {
+        mode: 'live_debug_readonly',
+        kind: 'no_evidence_expected',
+        reason: "No side effects is the CORRECT outcome — the write guardrail (mesh-task-mode-guardrail.ts) forbids mutation for this mode in the first place.",
+        notifyOnUnverified: false,
+    },
+    validation: {
+        mode: 'validation',
+        kind: 'not_applicable_today',
+        reason: "validationResults is parsed verbatim from the worker's own self-reported JSON footer (normalizeValidationResults, mesh-ledger.ts) — no real command execution or exit code is captured independently, tied to task completion.",
+        notifyOnUnverified: false,
+    },
+    launch_app: {
+        mode: 'launch_app',
+        kind: 'not_applicable_today',
+        reason: 'processArtifacts (pid/port/url) is self-reported with no liveness probe (port scan, process check, HTTP GET) tied to task completion.',
+        notifyOnUnverified: false,
+    },
+    convergence: {
+        mode: 'convergence',
+        kind: 'not_applicable_today',
+        reason: "Real, independent git-ancestry evidence exists (mesh-fast-forward.ts's fastForwardMeshNode) but lives solely on the separate mesh_fast_forward command path — never invoked from task completion. Also: unlike code_change, a convergence task's workspace being CLEAN is the NORMAL post-merge state, so the code_change git-clean check cannot simply be reused here without inverting its own signal.",
+        notifyOnUnverified: false,
+    },
+};
+
+/** Module-load-time exhaustiveness guard — see the registry's own doc comment above. */
+function assertTaskModeEvidenceStrategyIsExhaustive(): void {
+    const missing = MESH_TASK_MODES.filter((mode) => !(mode in TASK_MODE_EVIDENCE_STRATEGY));
+    if (missing.length > 0) {
+        throw new Error(`TASK_MODE_EVIDENCE_STRATEGY is missing an entry for taskMode(s): ${missing.join(', ')} — every MeshTaskMode must have a completion-evidence strategy (see mesh-completion-side-effect-evidence.ts)`);
+    }
+}
+assertTaskModeEvidenceStrategyIsExhaustive();
+
+/** Resolve a taskMode's evidence strategy, defaulting unknown/legacy string values to 'not_applicable_today' (conservative — never silently 'verified'). */
+export function resolveTaskModeEvidenceStrategy(mode: string | undefined): TaskModeEvidenceStrategy {
+    if (mode && mode in TASK_MODE_EVIDENCE_STRATEGY) return TASK_MODE_EVIDENCE_STRATEGY[mode as MeshTaskMode];
+    return {
+        mode: (mode as MeshTaskMode) ?? ('code_change' as MeshTaskMode), // placeholder; kind carries the real signal
+        kind: 'not_applicable_today',
+        reason: `Unrecognized or absent taskMode ('${mode ?? 'undefined'}') — no evidence strategy is registered for it.`,
+        notifyOnUnverified: false,
+    };
+}
+
+/**
+ * FALSE-COMPLETION-GIT-EVIDENCE (gap 1 — per-taskMode evidence, not a code_change-only
+ * special case): a GENUINE (non-weak) `completed` outcome is otherwise trusted purely off
+ * the worker's self-reported transcript shape for EVERY task mode, not only code_change —
+ * a worker that delegates to a subagent and returns can self-report completion with
+ * nothing actually done regardless of mode. Dispatches on TASK_MODE_EVIDENCE_STRATEGY
+ * (this file's structural registry — see its own doc comment for how a future evidence
+ * hook gets wired in) and MUTATES `metadataEvent` in place exactly like the code_change
+ * gate always has: stamping reviewRecommended/evidenceLevel/completionDiagnostic so the
+ * signal rides the already-wired reviewRecommended plumbing (buildMeshSystemMessage's
+ * coordinator verify note, the ledger's evidenceLevel/reviewRecommended fields) — no new
+ * status value.
+ *
+ * Factored OUT of mesh-event-forwarding.ts's markSessionTerminal (which only calls this
+ * one function) for two reasons: (1) that file is SHARED with other workers' concurrent
+ * changes — keeping its footprint to one call site minimizes merge-conflict surface; (2)
+ * this file already owns every other piece of the false-completion-evidence domain
+ * (checkGitEvidenceSync, resolveLocalCodeChangeWorkspace, the strategy registry), so the
+ * per-mode dispatch belongs here too.
+ *
+ * Fail-open throughout: any git-check failure/timeout/remote-node is caught internally
+ * and never propagates — a caller only needs to invoke this and move on, exactly as
+ * before extraction.
+ */
+export function applyTaskModeCompletionEvidence(
+    components: DaemonComponents,
+    args: {
+        meshId: string;
+        nodeId?: string;
+        meshNodeId?: string;
+        sessionId: string;
+        taskId: string;
+        taskMode: string | undefined;
+        preFlipAssignedAt: string | undefined;
+        timeoutMs: number;
+        metadataEvent: Record<string, unknown>;
+    },
+): void {
+    if (!args.taskMode) return;
+    const strategy = resolveTaskModeEvidenceStrategy(args.taskMode);
+    const setCompletionDiagnostic = (extra: Record<string, unknown>) => {
+        args.metadataEvent.completionDiagnostic = {
+            ...(args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
+                ? args.metadataEvent.completionDiagnostic as Record<string, unknown>
+                : {}),
+            ...extra,
+        };
+    };
+    if (strategy.kind === 'checkable' && args.taskMode === 'code_change') {
+        try {
+            const gateNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.meshNodeId);
+            const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, gateNodeId);
+            if (workspace) {
+                const gitCheck = checkGitEvidenceSync(workspace, args.preFlipAssignedAt, args.timeoutMs);
+                if (gitCheck.checked && gitCheck.noEvidenceSinceDispatch) {
+                    args.metadataEvent.reviewRecommended = true;
+                    args.metadataEvent.evidenceLevel = readNonEmptyString(args.metadataEvent.evidenceLevel) || 'reported';
+                    setCompletionDiagnostic({ noSideEffectsAtCompletion: true, evidenceScope: 'code_change_git' });
+                    LOG.info('MeshLedger', `code_change task ${args.taskId} (session ${args.sessionId}) completed with NO git evidence attributable to this dispatch — flagged reviewRecommended (${JSON.stringify(gitCheck.detail)})`);
+                }
+            }
+        } catch (e: any) {
+            // Fail-open: never let this probe surface as a task failure or block/delay the
+            // completion path it is only meant to annotate.
+            LOG.warn('MeshLedger', `False-completion git evidence check skipped for task ${args.taskId} (session ${args.sessionId}): ${e?.message || e}`);
+        }
+    } else if (strategy.kind === 'not_applicable_today') {
+        // No independent evidence hook exists today for this mode (reason carried on the
+        // strategy entry) — mark the scope explicitly so a consumer can distinguish "checked
+        // and clean" from "never checkable" rather than reading silence as verified.
+        // Deliberately NOT reviewRecommended by default (notifyOnUnverified is false for
+        // every registered mode today) — flagging EVERY completion of an entire task mode
+        // would make the warning routine noise the coordinator learns to ignore, defeating
+        // the point of a review flag more thoroughly than never emitting one. The declaration
+        // surviving in the ledger payload already satisfies "don't silently pass" without
+        // training the coordinator to tune out routine noise.
+        setCompletionDiagnostic({ evidenceScope: 'not_applicable_for_mode', evidenceScopeReason: strategy.reason });
+        if (strategy.notifyOnUnverified) {
+            args.metadataEvent.reviewRecommended = true;
+        }
+    } else if (strategy.kind === 'no_evidence_expected' && args.taskMode === 'live_debug_readonly') {
+        // READONLY-CONTRACT-VIOLATION (owner-requested extension): the inverse of the
+        // code_change check — for a read-only task, git EVIDENCE (not its absence) is the
+        // anomaly. isTaskReadonly / mesh-task-mode-guardrail.ts already reject an obviously
+        // mutating INSTRUCTION at enqueue time by matching keywords in the task message; this
+        // is the completion-time counterpart that catches what the text guardrail cannot — an
+        // ACTUAL file write regardless of what the message said (an approval-bypassed edit, a
+        // provider tool that mutates despite the read-only instruction, a stray write from an
+        // unrelated background process). Same attribution logic as code_change
+        // (checkGitEvidenceSync + preFlipAssignedAt) so a workspace already dirty BEFORE this
+        // task's dispatch (a prior task's leftover) is not blamed on this one. Same
+        // fail-open/local-only/bounded-timeout guarantees as the code_change path.
+        try {
+            const gateNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.meshNodeId);
+            const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, gateNodeId);
+            if (workspace) {
+                const gitCheck = checkGitEvidenceSync(workspace, args.preFlipAssignedAt, args.timeoutMs);
+                if (gitCheck.checked && !gitCheck.noEvidenceSinceDispatch) {
+                    args.metadataEvent.reviewRecommended = true;
+                    args.metadataEvent.evidenceLevel = readNonEmptyString(args.metadataEvent.evidenceLevel) || 'reported';
+                    setCompletionDiagnostic({ readonlyContractViolation: true, evidenceScope: 'live_debug_readonly_git' });
+                    LOG.warn('MeshLedger', `live_debug_readonly task ${args.taskId} (session ${args.sessionId}) completed with git evidence attributable to this dispatch — a read-only task should have produced NONE; flagged reviewRecommended (${JSON.stringify(gitCheck.detail)})`);
+                }
+            }
+        } catch (e: any) {
+            LOG.warn('MeshLedger', `Readonly-contract-violation check skipped for task ${args.taskId} (session ${args.sessionId}): ${e?.message || e}`);
+        }
+    }
 }
 
 export function scheduleTaskCompletionSideEffectEvidence(

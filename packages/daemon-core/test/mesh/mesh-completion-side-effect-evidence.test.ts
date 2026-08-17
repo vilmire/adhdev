@@ -21,7 +21,13 @@ vi.mock('../../src/config/config.js', () => ({
 
 import { createMesh, addNode } from '../../src/config/mesh-config.js';
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
-import { scheduleTaskCompletionSideEffectEvidence } from '../../src/mesh/mesh-completion-side-effect-evidence.js';
+import {
+    scheduleTaskCompletionSideEffectEvidence,
+    checkGitEvidenceSync,
+    resolveTaskModeEvidenceStrategy,
+    TASK_MODE_EVIDENCE_STRATEGY,
+} from '../../src/mesh/mesh-completion-side-effect-evidence.js';
+import { MESH_TASK_MODES } from '../../src/mesh/mesh-work-queue.js';
 
 function git(cwd: string, args: string[]): string {
     return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -147,5 +153,71 @@ describe('scheduleTaskCompletionSideEffectEvidence', () => {
         await new Promise(resolve => setTimeout(resolve, 300));
         const entries = readLedgerEntries(mesh.id, { kind: ['task_completion_no_side_effects'] });
         expect(entries.find(e => e.taskId === taskId)).toBeUndefined();
+    });
+});
+
+describe('TASK_MODE_EVIDENCE_STRATEGY (structural per-mode registry)', () => {
+    it('has an entry for every MeshTaskMode — the module-load-time exhaustiveness assert already ran (this is a redundant, explicit pin)', () => {
+        for (const mode of MESH_TASK_MODES) {
+            expect(TASK_MODE_EVIDENCE_STRATEGY[mode]).toBeDefined();
+            expect(TASK_MODE_EVIDENCE_STRATEGY[mode].mode).toBe(mode);
+            expect(typeof TASK_MODE_EVIDENCE_STRATEGY[mode].reason).toBe('string');
+            expect(TASK_MODE_EVIDENCE_STRATEGY[mode].reason.length).toBeGreaterThan(0);
+        }
+    });
+
+    it('code_change is checkable; live_debug_readonly expects no evidence; validation/launch_app/convergence are not_applicable_today', () => {
+        expect(TASK_MODE_EVIDENCE_STRATEGY.code_change.kind).toBe('checkable');
+        expect(TASK_MODE_EVIDENCE_STRATEGY.live_debug_readonly.kind).toBe('no_evidence_expected');
+        expect(TASK_MODE_EVIDENCE_STRATEGY.validation.kind).toBe('not_applicable_today');
+        expect(TASK_MODE_EVIDENCE_STRATEGY.launch_app.kind).toBe('not_applicable_today');
+        expect(TASK_MODE_EVIDENCE_STRATEGY.convergence.kind).toBe('not_applicable_today');
+    });
+
+    it('no registered mode sets notifyOnUnverified — flagging every completion of an entire unverifiable mode would be routine noise (owner-decided)', () => {
+        for (const mode of MESH_TASK_MODES) {
+            expect(TASK_MODE_EVIDENCE_STRATEGY[mode].notifyOnUnverified).toBe(false);
+        }
+    });
+
+    it('resolveTaskModeEvidenceStrategy defaults an unrecognized/legacy mode string to not_applicable_today (never silently "verified")', () => {
+        const resolved = resolveTaskModeEvidenceStrategy('some_future_mode_not_yet_registered');
+        expect(resolved.kind).toBe('not_applicable_today');
+        expect(resolved.notifyOnUnverified).toBe(false);
+    });
+
+    it('resolveTaskModeEvidenceStrategy defaults an absent mode to not_applicable_today too', () => {
+        const resolved = resolveTaskModeEvidenceStrategy(undefined);
+        expect(resolved.kind).toBe('not_applicable_today');
+    });
+});
+
+describe('checkGitEvidenceSync (gap 2 — deeper than clean/dirty)', () => {
+    it('reports noEvidenceSinceDispatch:false for a dirty file with no sinceIso reference (falls back to bare dirty check)', () => {
+        const repo = tempRepo('sync-no-since');
+        roots.push(repo);
+        writeFileSync(join(repo, 'file.txt'), 'changed\n');
+        const result = checkGitEvidenceSync(repo, undefined, 3000);
+        expect(result.checked).toBe(true);
+        expect(result.noEvidenceSinceDispatch).toBe(false);
+        expect(result.detail.dirty).toBe(true);
+    });
+
+    it('reports noEvidenceSinceDispatch:true for a clean, uncommitted-since repo (the base "nothing happened" case)', () => {
+        const repo = tempRepo('sync-clean');
+        roots.push(repo);
+        const result = checkGitEvidenceSync(repo, new Date().toISOString(), 3000);
+        expect(result.checked).toBe(true);
+        expect(result.noEvidenceSinceDispatch).toBe(true);
+        expect(result.detail.dirty).toBe(false);
+        expect(result.detail.newCommitSinceDispatch).toBe(false);
+    });
+
+    it('fails open (checked:false) for a non-git-repo workspace', () => {
+        const dir = join(tmpdir(), `adhdev-ces-not-a-repo-${randomUUID().slice(0, 8)}`);
+        mkdirSync(dir, { recursive: true });
+        roots.push(dir);
+        const result = checkGitEvidenceSync(dir, undefined, 3000);
+        expect(result.checked).toBe(false);
     });
 });

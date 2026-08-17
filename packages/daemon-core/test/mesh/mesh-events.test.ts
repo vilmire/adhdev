@@ -52,6 +52,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
 }))
 
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
+import { isWeakCompletionMetadata } from '../../src/mesh/mesh-events-utils.js'
 import { __clearMeshPendingEventsForTests, __persistUnstampedPendingEventForTests } from '../../src/mesh/mesh-events-pending.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches, recordTaskAutoLaunch, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
@@ -1711,6 +1712,102 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  // WEAK-EVIDENCE-SNAPSHOT-REGRESSION: pins the ordering fragility flagged in review at the
+  // exact mechanism level. markSessionTerminal's gap-3 fix stamps reviewRecommended=true onto
+  // args.metadataEvent for an emittedAfterFinalizationTimeout completion (to surface a review
+  // note without wedging the task). isWeakCompletionEvidence treats reviewRecommended===true as
+  // ONE OF ITS OWN weak-evidence signals (mesh-events-utils.ts). If markSessionTerminal's later
+  // uses (the outbox `weak:` annotation, and `genuineTerminal` gating the COMPLETION-PROPAGATION
+  // F2 flip-miss safety net near the end of the function) were to call isWeakCompletionEvidence
+  // LIVE again on args.metadataEvent — instead of reusing the `weakEvidenceAtEntry` boolean
+  // frozen BEFORE any mutation — they would read the gate's own side effect back as if it were
+  // original evidence, and wrongly reclassify an already-flagged completion as weak a second
+  // time. This first assertion proves that exact mechanism exists (i.e. that the hazard is
+  // real, not hypothetical): the SAME metadataEvent shape, evaluated once before and once after
+  // simulating the reviewRecommended stamp, flips its verdict.
+  //
+  // The second half is the integration-level guard: an emittedAfterFinalizationTimeout
+  // completion must still terminate ('completed', not left 'assigned' or silently dropped) and
+  // carry reviewRecommended, proving markSessionTerminal's actual multi-use of the frozen
+  // snapshot (weakCompleted, the reducer evidence, and genuineTerminal) produces the SAME
+  // observable outcome as before the ordering fix — the fix is a safety hardening for future
+  // code paths that read weakEvidenceAtEntry, not a behavior change to the paths already
+  // covered by the "gap 3" test above. A DIRECT F2-isolated integration test was attempted but
+  // is not currently constructible: for agent:generating_completed, EVENT_TO_LEDGER_KIND always
+  // maps to 'task_completed' and the ordinary ledger-append block (which runs unconditionally,
+  // keyed off directDispatchTaskIdForLedger derived from the SAME args.metadataEvent.taskId F2
+  // reads) always writes the terminal entry first, so findTerminalLedgerEvidenceForTask inside
+  // F2 always finds it and F2's OWN append is shadowed — this is existing, unrelated behavior,
+  // not something this fix changed. F2's only other side effect (endTaskDispatchInFlight) is
+  // itself a no-op unless the row's in-flight mark was set via beginTaskDispatchInFlight, which
+  // only the real dispatch path (mesh-queue-assignment.ts) sets — claimNextTask alone (as used
+  // in every other test in this file) never does. This gap is reported as a genuine test-surface
+  // limitation, not silently glossed over.
+  it('WEAK-EVIDENCE-SNAPSHOT-REGRESSION: isWeakCompletionEvidence treats its own reviewRecommended stamp as weak evidence — proves the ordering hazard is real', () => {
+    const baseEvent: Record<string, unknown> = {
+      completionDiagnostic: {
+        blockReason: 'missing_final_assistant',
+        finalAssistantPresent: false,
+        emittedAfterFinalizationTimeout: true,
+      },
+    }
+    // BEFORE the gap-3 stamp: emittedAfterFinalizationTimeout alone does not carry
+    // evidenceLevel/reviewRecommended, and isMissingFinalAssistantDiagnostic (the
+    // completionDiagnostic-shape check) is what makes this weak at entry.
+    expect(isWeakCompletionMetadata(baseEvent)).toBe(true)
+    // Simulate the gap-3 mutation exactly as markSessionTerminal performs it.
+    const afterStamp = { ...baseEvent, reviewRecommended: true }
+    // Still weak — but for a DIFFERENT reason now (reviewRecommended, not just the diagnostic
+    // shape). A live re-read after the stamp cannot tell these apart from the frozen original;
+    // it just sees "weak" either way. This is exactly why genuineTerminal/the outbox `weak:`
+    // field must reuse the FROZEN pre-mutation read (weakEvidenceAtEntry) rather than re-derive
+    // live — a live re-read would still classify this as weak even in a hypothetical future
+    // completion where reviewRecommended was the ONLY signal (e.g. a mode-specific flag set for
+    // an otherwise strong completion), which would then wrongly suppress logic gated on
+    // "genuinely weak at completion time".
+    expect(isWeakCompletionMetadata(afterStamp)).toBe(true)
+  })
+
+  it('WEAK-EVIDENCE-SNAPSHOT-REGRESSION integration: the ordering fix does not change the emittedAfterFinalizationTimeout completion outcome (still terminates + flagged)', () => {
+    const meshId = `mesh_weak_evidence_snapshot_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      const queued = enqueueTask(meshId, 'timed-out weak-completion task', { difficulty: 'medium' })
+      expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(queued.id)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        taskId: queued.id,
+        timestamp: Date.now(),
+        completionDiagnostic: {
+          blockReason: 'missing_final_assistant',
+          finalAssistantPresent: false,
+          emittedAfterFinalizationTimeout: true,
+        },
+      })
+
+      // Terminal, never wedged (weakCompleted must resolve false — the frozen read feeding it
+      // must not be perturbed by the reviewRecommended mutation that runs in the SAME function
+      // call, since that mutation happens strictly after weakCompleted is already computed).
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed'])
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('D1: a transient LOCAL dispatch rejection returns the task to pending with a retryable dispatch_failed ledger entry (not terminal failed)', async () => {
     // Regression: the local-dispatch catch in tryAssignQueueTask used to mark the task
     // terminal 'failed' with no ledger and no retry, while the remote-dispatch catch
@@ -2126,11 +2223,18 @@ describe('setupMeshEventForwarding', () => {
 
         expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
         const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
-        expect((completedEntry?.payload as any).completionDiagnostic).toMatchObject({
-          evidenceScope: 'not_applicable_for_mode',
-        })
+        const diag = (completedEntry?.payload as any).completionDiagnostic
+        expect(diag).toMatchObject({ evidenceScope: 'not_applicable_for_mode' })
+        // The structural registry's `reason` string rides along — a future reader inspecting
+        // the ledger sees WHY, not just that, the mode is unverifiable (TASK_MODE_EVIDENCE_STRATEGY
+        // in mesh-completion-side-effect-evidence.ts).
+        expect(typeof diag.evidenceScopeReason).toBe('string')
+        expect(diag.evidenceScopeReason.length).toBeGreaterThan(0)
         // Explicitly NOT reviewRecommended — an unverifiable mode is a disclosed limitation,
-        // not a suspected false completion; conflating the two would be a false positive.
+        // not a suspected false completion; conflating the two would be a false positive AND
+        // (per the owner's cry-wolf concern) would make the warning routine noise on every
+        // single completion of this mode. notifyOnUnverified is false for every registered
+        // mode today (TASK_MODE_EVIDENCE_STRATEGY), which this assertion pins.
         expect((completedEntry?.payload as any).reviewRecommended).not.toBe(true)
       } finally {
         cleanupMeshFiles(meshId)
@@ -2184,6 +2288,121 @@ describe('setupMeshEventForwarding', () => {
       expect(diag?.evidenceScope).toBeUndefined()
     } finally {
       cleanupMeshFiles(meshId)
+    }
+  })
+
+  // FALSE-COMPLETION-GIT-EVIDENCE gap 1 (owner-requested extension): the INVERSE of the
+  // code_change check. isTaskReadonly/mesh-task-mode-guardrail.ts already reject an obviously
+  // mutating INSTRUCTION at enqueue time by matching keywords in the task message — but a
+  // provider tool that mutates the workspace ANYWAY (an approval-bypassed edit, a background
+  // process, a genuinely broken read-only contract) leaves no trace in the task message the
+  // text guardrail scans. This test proves the completion-time counterpart catches what the
+  // enqueue-time text guardrail structurally cannot: an ACTUAL file write, checked via the
+  // same checkGitEvidenceSync + preFlipAssignedAt attribution machinery as the code_change
+  // gate, just with the pass/fail polarity inverted (evidence found = anomaly, not evidence
+  // absent = anomaly).
+  it('FALSE-COMPLETION-GIT-EVIDENCE gap 1 extension: live_debug_readonly flags reviewRecommended when the workspace WAS actually touched (readonly contract violation)', () => {
+    const meshId = `mesh_readonly_contract_violation_${Date.now()}`
+    const repo = tempGitRepo('readonly-violation')
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued readonly investigation task', {
+        taskMode: 'live_debug_readonly',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      // The read-only task's provider mutated the workspace anyway — AFTER dispatch, so it is
+      // attributable to this task (not a stale pre-existing leftover).
+      fs.writeFileSync(path.join(repo, 'should-not-exist.txt'), 'an edit that should not have happened\n')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-readonly-violation',
+        finalSummary: 'Investigation complete.',
+        workerResult: { status: 'success' },
+        timestamp: Date.now(),
+      })
+
+      // Still terminates completed — this is a review flag, not a rejection (mirrors the
+      // code_change gate's philosophy: surfacing a signal, not blocking completion).
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
+      expect((completedEntry?.payload as any).completionDiagnostic).toMatchObject({
+        readonlyContractViolation: true,
+        evidenceScope: 'live_debug_readonly_git',
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  it('FALSE-COMPLETION-GIT-EVIDENCE gap 1 extension control: live_debug_readonly does NOT flag a dirty file that PREDATES this task\'s dispatch (stale leftover, not this task\'s violation)', () => {
+    const meshId = `mesh_readonly_stale_dirty_${Date.now()}`
+    const repo = tempGitRepo('readonly-stale')
+    try {
+      // Stale leftover from a PRIOR task/session — must not be blamed on THIS read-only task.
+      fs.writeFileSync(path.join(repo, 'stale.txt'), 'leftover from something else\n')
+      const past = new Date(Date.now() - 60_000)
+      fs.utimesSync(path.join(repo, 'stale.txt'), past, past)
+
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued readonly investigation task', {
+        taskMode: 'live_debug_readonly',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-readonly-stale',
+        finalSummary: 'Investigation complete.',
+        workerResult: { status: 'success' },
+        timestamp: Date.now(),
+      })
+
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect((completedEntry?.payload as any).reviewRecommended).not.toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
     }
   })
 
