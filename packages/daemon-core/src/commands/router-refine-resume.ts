@@ -50,6 +50,18 @@ function resolveRefineResumeZombieCutoffMs(): number {
     return resolveTunedReconcileMs('MESH_REFINE_RESUME_ZOMBIE_CUTOFF_MS', 24 * 60 * 60_000, 5 * 60_000, 30 * 24 * 60 * 60_000);
 }
 
+// NOTIFY-GRADE-HORIZON: a close_stale dispatch younger than this is treated as
+// "plausibly still in flight this session" and pages the coordinator; older ones
+// are bookkeeping-only (see shouldNotifyRefineCloseOut in mesh-refine-zombie-sweep.ts).
+// Reuses the same 60s value as RESUME-DISPATCH-GRACE above — both answer "is this
+// young enough that the coordinator might genuinely still be waiting on it", just
+// on different sides of the zombie cutoff (grace defers re-dispatch; this horizon
+// gates the notification once we've already decided not to resume). A SEPARATE env
+// var so the two can be tuned independently without one accidentally moving the other.
+function resolveRefineCloseOutNotifyHorizonMs(): number {
+    return resolveTunedReconcileMs('MESH_REFINE_CLOSEOUT_NOTIFY_HORIZON_MS', 60_000, 0, 10 * 60_000);
+}
+
     /**
      * On daemon restart, scan all mesh ledgers for refine jobs that were dispatched
      * but never completed/failed (i.e. the daemon died mid-job). Re-queue each one,
@@ -65,11 +77,12 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
         try {
             const { listMeshes, getMesh } = await import('../config/mesh-config.js');
             const { readLedgerEntries, readArchivedTerminalKeys } = await import('../mesh/mesh-ledger.js');
-            const { selectOpenRefineDispatches, classifyRefineDispatch } = await import('../mesh/mesh-refine-zombie-sweep.js');
+            const { selectOpenRefineDispatches, classifyRefineDispatch, shouldNotifyRefineCloseOut } = await import('../mesh/mesh-refine-zombie-sweep.js');
             const meshIds: string[] = listMeshes().map(m => m.id).filter(Boolean) as string[];
             const nowMs = Date.now();
             const dispatchGraceMs = resolveRefineResumeDispatchGraceMs();
             const zombieCutoffMs = resolveRefineResumeZombieCutoffMs();
+            const notifyHorizonMs = resolveRefineCloseOutNotifyHorizonMs();
             for (const meshId of meshIds) {
                 const entries = readLedgerEntries(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'] });
 
@@ -161,8 +174,22 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                             : `[Refinery] Closing out stale refine job for node ${nodeId} (jobId=${jobId}) as failed — `
                                 + `dispatched ${ageMs}ms ago, past the ${zombieCutoffMs}ms zombie cutoff with no terminal entry in `
                                 + `the live ledger; not resuming.`);
+                        // Ledger truth is written unconditionally — mesh_refine_status and
+                        // history must stay complete regardless of whether this reaches the
+                        // coordinator's turn. Only the live push is gated below.
                         await appendRefineJobLedger(self, 'task_failed', zombieHandle, zombieResult);
-                        queueRefineJobEvent(self, 'refine:failed', zombieHandle, zombieResult);
+                        if (shouldNotifyRefineCloseOut(decision, notifyHorizonMs)) {
+                            queueRefineJobEvent(self, 'refine:failed', zombieHandle, zombieResult);
+                        } else {
+                            // NOTIFY-GRADE: leave a trace of the suppression itself — without
+                            // this, "why didn't a notification arrive" has no evidence trail.
+                            // See shouldNotifyRefineCloseOut in mesh-refine-zombie-sweep.ts for
+                            // why a close-out is bookkeeping, not news, past the notify horizon.
+                            LOG.info('Mesh', `[Refinery] Suppressed refine:failed close-out notification for node ${nodeId} `
+                                + `(jobId=${jobId}, disposition=${decision.disposition}, ageMs=${ageMs ?? 'unknown'}, `
+                                + `notifyHorizonMs=${notifyHorizonMs}) — ledger entry was still written; only the coordinator `
+                                + `push was skipped.`);
+                        }
                         continue;
                     }
 

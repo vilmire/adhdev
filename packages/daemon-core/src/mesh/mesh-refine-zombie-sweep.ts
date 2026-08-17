@@ -181,6 +181,17 @@ export function shouldNotifyRefineCloseOut(
     // A node that no longer exists has no actionable follow-up — never notify.
     if (decision.disposition === 'close_removed_node') return false;
     if (decision.disposition !== 'close_stale') return false;
-    if (decision.ageMs === undefined) return false;
+    // FAIL-OPEN on an unparseable dispatch timestamp, mirroring the DISPATCH-ACK-EVIDENCE
+    // precedent in mesh-skip-notify.ts (STALE-SCAN-BLOCKER): silently swallowing a real
+    // blocker is the worse failure than an occasional over-notify. classifyRefineDispatch
+    // can only ever PRODUCE 'close_stale' with ageMs defined (it is gated behind `ageMs !==
+    // undefined && ageMs >= zombieCutoffMs`), so this branch is unreachable through the real
+    // classifier today — but the type here is a Pick, not the classifier's return type, so a
+    // future caller (or a refactor of the classifier) could still hand this function a
+    // 'close_stale' decision with no age. When that happens we cannot tell "plausibly still
+    // running this session" from "ancient" — the accurate answer is unknown, not "safe to
+    // suppress" — so treat it as notify-worthy rather than let a corrupt/unparseable
+    // timestamp silently eat a real close-out.
+    if (decision.ageMs === undefined) return true;
     return decision.ageMs < notifyHorizonMs;
 }
