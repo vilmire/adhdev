@@ -1064,6 +1064,8 @@ export function claimNextTask(
         daemonNodeIds?: readonly string[];
         nodeIsWorktree?: boolean;
         assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
+        /** Classified task grades this concrete/unknown-model session can safely run. */
+        allowedTaskDifficulties?: readonly MeshTaskDifficulty[];
     },
 ): MeshWorkQueueEntry | null {
     return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags, opts);

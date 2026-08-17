@@ -35,11 +35,13 @@ import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertProm
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, targetPinAgeMs, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
-import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
+import { allowedClassifiedDifficultiesForSession, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel, taskMeetsSessionDifficultyFloor } from './mesh-difficulty-floor.js';
 
 export type { MeshTaskRoutingDecision } from './mesh-routing-decision.js';
+export { DIFFICULTY_FLOOR_REPORT_AFTER_MS, resetDifficultyFloorReportsForTests as __resetDifficultyFloorReportsForTests } from './mesh-difficulty-floor.js';
 
 // The four concerns below were split out of this module (pure move). Their public
 // symbols are re-exported here so the module's export surface — which several suites
@@ -335,10 +337,6 @@ function warnDispatchWarmupGetterMissingOnce(daemonId: string): void {
     LOG.warn('MeshQueue', `Mesh peer connection getter unavailable for ${String(daemonId).slice(0, 12)}; remote task-dispatch warmup deadline degraded to the combined connect+response window. Avoids a cold-open false-timeout but loses warm/cold precision — wire getMeshPeerConnectionStatus on this daemon.`);
 }
 
-// LEDGER-TASK-TRACEABILITY (A/D): the routing rationale captured at claim/dispatch
-// time so mesh_task_history / the dashboard can answer "why THIS node/provider/model".
-// All fields optional — the event-driven / idle drains don't compute a fitness score,
-// so they omit the extras and only `source` is always present.
 interface DeliverTaskContext {
     meshId: string;
     nodeId: string;
@@ -920,9 +918,9 @@ export function tryAssignQueueTask(
     // a genuinely remote (cross-daemon) candidate stays nodeId-matched from getRemoteIdleSessions.
     const localClaimAdapter = components.cliManager?.adapters?.get(sessionId) as { workingDir?: string } | undefined;
     let claimInstanceWorkspace = '';
-    let claimStampedNodeId = '';
+    let claimStampedNodeId = '', claimState: any;
     try {
-        const claimState = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+        claimState = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
         claimInstanceWorkspace = readNonEmptyString(claimState?.workspace);
         const claimSettings = (claimState?.settings as Record<string, unknown>) || {};
         claimStampedNodeId = readNonEmptyString(claimSettings.meshNodeId);
@@ -964,14 +962,12 @@ export function tryAssignQueueTask(
     // (the provider cap above) let opus borrow sonnet's headroom and run up to the
     // total, defeating the cost/rate-limit intent of pinning it.
     //
-    // The model comes from the auto-launch routing decision, which is the only claim
-    // path that KNOWS which model it launched with (idle/event drains claim into a
-    // session that already exists, and a live CLI instance does not report a model).
-    // Without it, this falls back to the provider cap alone — the pre-existing
-    // behavior, never looser.
+    // Auto-launch knows the selected model; idle/event claims use live model metadata
+    // when available and otherwise apply the conservative intersection of provider slots.
     const assignedModel = typeof routingDecision?.resolvedModel === 'string' && routingDecision.resolvedModel.trim()
         ? routingDecision.resolvedModel.trim()
-        : undefined;
+        : readSessionModel(claimState);
+    const allowedTaskDifficulties = allowedClassifiedDifficultiesForSession(node, nodeSlotsForCap, providerType, assignedModel);
     const claimingSlot = nodeSlotsForCap.find(s =>
         s.provider?.trim() === providerType && isModelAllowedBySlot(assignedModel, s));
     const slotMaxParallel = claimingSlot
@@ -1002,6 +998,7 @@ export function tryAssignQueueTask(
         ...(slotMaxParallel !== undefined ? { slotMaxParallel } : {}),
         daemonNodeIds,
         nodeIsWorktree,
+        ...(allowedTaskDifficulties ? { allowedTaskDifficulties } : {}),
         ...(assignedTranscriptProfile ? { assignedTranscriptProfile } : {}),
     });
     if (!task) {
@@ -1702,12 +1699,14 @@ function nodeHasLiveSessionPendingClaim(components: DaemonComponents, meshId: st
         // nodeSatisfiesRequiredTags gate, so it must not suppress the required-provider launch —
         // otherwise the task deadlocks (mismatched session blocks launch, yet cannot claim). Mirror
         // the claim path: pin the session's providerType onto this node and check the tags.
+        const sessionProviderType = state.type || readNonEmptyString(settings.providerType);
         if (task.requiredTags?.length) {
-            const sessionProviderType = state.type || readNonEmptyString(settings.providerType);
             if (sessionProviderType && !nodeSatisfiesRequiredTags(task.requiredTags, buildMeshNodeCapabilityTags(node, sessionProviderType))) {
                 return false; // provider mismatch → this session can't claim this task; not a pending claimer
             }
         }
+        const allowance = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), sessionProviderType, readSessionModel(state));
+        if (!taskMeetsSessionDifficultyFloor(task, allowance)) return false;
         return true; // live + unassigned + provider-capable → will claim the pending task itself
     });
 }
@@ -1723,13 +1722,19 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     model?: string;
     thinkingLevel?: string;
 }) {
-    recordTaskAutoLaunch(meshId, taskId, {
-        status: args.status,
-        reason: args.reason || args.error,
-        nodeId: args.nodeId,
-        providerType: args.providerType,
-        sessionId: args.sessionId,
-    });
+    const reason = args.reason || args.error;
+    const difficultyFloorSkip = args.status === 'skipped' && isDifficultyFloorWaitReason(reason);
+    if (difficultyFloorSkip) {
+        handleDifficultyFloorSkip({ meshId, taskId, reason: reason!, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId() });
+    } else {
+        recordTaskAutoLaunch(meshId, taskId, {
+            status: args.status,
+            reason,
+            nodeId: args.nodeId,
+            providerType: args.providerType,
+            sessionId: args.sessionId,
+        });
+    }
     recordAutoLaunchEvent(meshId, {
         phase: args.status,
         taskId,
@@ -1747,7 +1752,7 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     if (args.status === 'skipped') {
         if (isActionableSkipReason(args.reason)) {
             notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
-        } else if (args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
+        } else if (!difficultyFloorSkip && args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
             // FALSE-BLOCKER-CLONE-QUEUE (stale-event clear): the unmatch is now known to be a
             // self-resolving clone/bootstrap window — retract any earlier actionable blocker we
             // paged for this same task. Other transient/back-pressure reasons (cooldown, caps)
@@ -1760,6 +1765,8 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
         retractActionableSkipIfPreviouslyNotified(meshId, taskId);
     }
 }
+
+export const __markAutoLaunchForTests = markAutoLaunch;
 
 async function resolveUsableProvider(
     components: DaemonComponents,
@@ -1807,6 +1814,10 @@ async function resolveUsableProvider(
     const orderedSlots = task
         ? orderSlotsForProviderSelection(slots, meshId ?? '', nodeId, node, task, quotaBonusByProvider)
         : slots;
+    const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
+    if (difficultyFloorRequired && !orderedSlots.length) {
+        return { reason: `task_difficulty_floor_unavailable:${task!.difficulty}` };
+    }
 
     const failed: string[] = [];
     // DYNAMIC PROVIDER PRIORITY BY QUOTA: the loop no longer returns the FIRST
@@ -1817,9 +1828,7 @@ async function resolveUsableProvider(
     // so a gated provider sent the task to the next NODE even when this node
     // had another provider with quota to spare). Candidates are de-duped per
     // provider, keeping the first — best-ordered — slot for that provider.
-    const candidates: Array<{ slot: NodeCapabilitySlot; providerType: string }> = [];
     const usableSlots: Array<{ slot: NodeCapabilitySlot; providerType: string }> = [];
-    const seenProviders = new Set<string>();
     for (const slot of orderedSlots) {
         const requestedType = slot.provider;
         const normalizedType = typeof providerLoader.resolveAlias === 'function'
@@ -1852,16 +1861,32 @@ async function resolveUsableProvider(
         (components as any).onStatusChange?.();
         if (detected) {
             usableSlots.push({ slot, providerType: normalizedType });
-            if (!seenProviders.has(normalizedType)) {
-                seenProviders.add(normalizedType);
-                candidates.push({ slot, providerType: normalizedType });
-            }
             continue;
         }
         failed.push(`${requestedType}: not detected`);
     }
-    if (!candidates.length) {
+    if (!usableSlots.length) {
+        if (difficultyFloorRequired) {
+            return { reason: `task_difficulty_floor_unavailable:${task!.difficulty}` };
+        }
         return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
+    }
+
+    // HARD DIFFICULTY FLOOR: exclude lower and saturated slots before quota ranking,
+    // or WAIT when every sufficient slot is full. Freeform/legacy stay unchanged.
+    let candidateSlots = usableSlots;
+    if (difficultyFloorRequired) {
+        const available = usableSlots.filter(candidate => slotHasCapacity(meshId ?? '', nodeId, node, candidate.slot));
+        if (!available.length) return { reason: `task_difficulty_floor_wait:${task!.difficulty}` };
+        const tier = Math.min(...available.map(candidate => slotDifficultyTierForTask(candidate.slot, task!.difficulty) ?? Number.POSITIVE_INFINITY));
+        candidateSlots = available.filter(candidate => slotDifficultyTierForTask(candidate.slot, task!.difficulty) === tier);
+    }
+    const candidates: Array<{ slot: NodeCapabilitySlot; providerType: string }> = [];
+    const seenProviders = new Set<string>();
+    for (const candidate of candidateSlots) {
+        if (seenProviders.has(candidate.providerType)) continue;
+        seenProviders.add(candidate.providerType);
+        candidates.push(candidate);
     }
 
     // QUOTA GATE, inside the loop: split the usable candidates by the gate and
@@ -1903,9 +1928,12 @@ async function resolveUsableProvider(
         const gated = ranked.gated.find(entry => entry.providerType === candidate.providerType);
         const risk = riskByProvider.get(candidate.providerType)?.risk;
         const sameProvider = candidate.providerType === winner.providerType;
-        const reason = gated?.block.reason
+        const candidateHasCapacity = slotHasCapacity(meshId ?? '', nodeId, node, candidate.slot);
+        const reason = (difficultyFloorRequired && !candidateHasCapacity ? 'slot_capacity_exhausted' : undefined)
+            ?? (difficultyFloorRequired && !candidateSlots.includes(candidate) ? 'higher_difficulty_tier_deferred' : undefined)
+            ?? gated?.block.reason
             ?? (sameProvider
-                ? (slotHasCapacity(meshId ?? '', nodeId, node, candidate.slot) ? 'lower_slot_fitness' : 'slot_capacity_exhausted')
+                ? (candidateHasCapacity ? 'lower_slot_fitness' : 'slot_capacity_exhausted')
                 : (risk === undefined ? 'lower_slot_order' : 'lower_quota_rank'));
         return {
             providerType: candidate.providerType,

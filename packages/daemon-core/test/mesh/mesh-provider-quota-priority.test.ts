@@ -50,11 +50,15 @@ import {
     __resolveUsableProviderForTests,
     __isActionableSkipReasonForTests,
     __recordTaskDispatchedLedgerForTests,
+    __markAutoLaunchForTests,
+    __resetDifficultyFloorReportsForTests,
+    DIFFICULTY_FLOOR_REPORT_AFTER_MS,
 } from '../../src/mesh/mesh-queue-assignment.js';
 import { __replaceMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from '../../src/mesh/mesh-quota-routing.js';
 import { buildAutoLaunchRoutingDecision } from '../../src/mesh/mesh-routing-decision.js';
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
+import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js';
 
 const NODE_ID = 'node_quota_priority';
 const MESH_ID = 'mesh_quota_priority';
@@ -101,11 +105,11 @@ function exhaustedQuota(provider: string, over: Record<string, any> = {}) {
     });
 }
 
-async function resolve(node: any, quotaFactsContext?: { nodes?: any[] }) {
+async function resolve(node: any, quotaFactsContext?: { nodes?: any[] }, difficulty: 'easy' | 'medium' | 'difficult' | 'freeform' = 'difficult') {
     return __resolveUsableProviderForTests(
         makeComponents(), NODE_ID, node, MESH_ID,
         undefined,
-        { difficulty: 'difficult' as const, requiredTags: undefined },
+        { difficulty, requiredTags: undefined },
         null,
         quotaFactsContext,
     );
@@ -116,27 +120,24 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    vi.useRealTimers();
+    __resetDifficultyFloorReportsForTests();
     __resetMeshRuntimeStoreForTests();
     if (existsSync(testTmpDir)) rmSync(testTmpDir, { recursive: true, force: true });
 });
 
 describe('resolveUsableProvider — quota gate inside the selection loop', () => {
-    it('logs the selected sonnet slot score and identity, not the node-best opus score', async () => {
-        detectCliMocks.detected.add('claude-cli');
+    it('logs an explicitly resolved sonnet slot score and identity, not the node-best opus score', () => {
         const node = nodeWith([
             { provider: 'claude-cli', model: 'sonnet', difficulty: ['medium'], maxParallel: 3 },
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
         ]);
-        __replaceMeshQueueForTests(MESH_ID, [{
-            id: 'busy-opus', meshId: MESH_ID, message: 'busy', status: 'assigned',
-            assignedNodeId: NODE_ID, assignedProviderType: 'claude-cli', assignedModel: 'opus',
-            assignedSessionId: 'busy-session', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        }] as any);
-
-        const resolved = await resolve(node);
-        expect(resolved.model).toBe('sonnet');
         const decision = buildAutoLaunchRoutingDecision({
-            node, meshId: MESH_ID, task: { difficulty: 'difficult' }, resolved: resolved as any,
+            node, meshId: MESH_ID, task: { difficulty: 'difficult' },
+            resolved: {
+                providerType: 'claude-cli', model: 'sonnet',
+                slot: node.policy.slots[0],
+            },
             skippedCandidates: [],
             requiredTagsResult: { required: [], satisfied: true, missing: [] },
             effectiveModel: 'sonnet',
@@ -155,11 +156,98 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         expect(routing.selectedSlot).toEqual({ providerType: 'claude-cli', model: 'sonnet' });
     });
 
+    it('routes to available codex when opus is full, even when claude has higher quota-expiry risk', async () => {
+        detectCliMocks.detected.add('claude-cli').add('codex-cli');
+        const node = nodeWith([
+            { provider: 'claude-cli', model: 'sonnet', difficulty: ['medium'], maxParallel: 4 },
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
+            { provider: 'codex-cli', model: 'gpt-5.6-sol', difficulty: ['difficult'], maxParallel: 1 },
+        ], {
+            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
+            'codex-cli': okQuota('codex-cli', { weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
+        });
+        __replaceMeshQueueForTests(MESH_ID, [{
+            id: 'busy-opus', meshId: MESH_ID, message: 'busy', status: 'assigned',
+            assignedNodeId: NODE_ID, assignedProviderType: 'claude-cli', assignedModel: 'opus',
+            assignedSessionId: 'busy-opus-session', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }] as any);
+
+        const resolved = await resolve(node);
+        expect(resolved.providerType).toBe('codex-cli');
+        expect(resolved.model).toBe('gpt-5.6-sol');
+    });
+
+    it('keeps quota-risk ranking inside the lowest sufficient difficulty tier', async () => {
+        detectCliMocks.detected.add('claude-cli').add('codex-cli');
+        const node = nodeWith([
+            { provider: 'claude-cli', model: 'sonnet', difficulty: ['medium'], maxParallel: 1 },
+            { provider: 'codex-cli', model: 'gpt-5.6-sol', difficulty: ['difficult'], maxParallel: 1 },
+        ], {
+            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
+            'codex-cli': okQuota('codex-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
+        });
+
+        const resolved = await resolve(node, undefined, 'medium');
+        expect(resolved.providerType).toBe('claude-cli');
+        expect(resolved.model).toBe('sonnet');
+    });
+
+    it('keeps a difficult task pending when every difficult slot is full instead of selecting sonnet', async () => {
+        detectCliMocks.detected.add('claude-cli').add('codex-cli');
+        const node = nodeWith([
+            { provider: 'claude-cli', model: 'sonnet', difficulty: ['medium'], maxParallel: 4 },
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
+            { provider: 'codex-cli', model: 'gpt-5.6-sol', difficulty: ['difficult'], maxParallel: 1 },
+        ]);
+        const now = new Date().toISOString();
+        __replaceMeshQueueForTests(MESH_ID, [
+            { id: 'busy-opus', meshId: MESH_ID, message: 'busy', status: 'assigned', assignedNodeId: NODE_ID, assignedProviderType: 'claude-cli', assignedModel: 'opus', assignedSessionId: 'opus-session', createdAt: now, updatedAt: now },
+            { id: 'busy-codex', meshId: MESH_ID, message: 'busy', status: 'assigned', assignedNodeId: NODE_ID, assignedProviderType: 'codex-cli', assignedModel: 'gpt-5.6-sol', assignedSessionId: 'codex-session', createdAt: now, updatedAt: now },
+        ] as any);
+
+        const resolved = await resolve(node);
+        expect(resolved.providerType).toBeUndefined();
+        expect(resolved.reason).toBe('task_difficulty_floor_wait:difficult');
+        expect(__isActionableSkipReasonForTests(resolved.reason!)).toBe(false);
+    });
+
+    it('reports a continuous difficulty-floor wait once after ten minutes', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-08-17T00:00:00.000Z'));
+        __replaceMeshQueueForTests(MESH_ID, [{
+            id: 'floor-timeout-task', meshId: MESH_ID, message: 'hard task', status: 'pending', difficulty: 'difficult',
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }] as any);
+
+        __markAutoLaunchForTests(MESH_ID, 'floor-timeout-task', {
+            status: 'skipped', reason: 'task_difficulty_floor_wait:difficult', nodeId: NODE_ID,
+        });
+        expect(drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine')).toHaveLength(0);
+
+        vi.advanceTimersByTime(DIFFICULTY_FLOOR_REPORT_AFTER_MS);
+        __markAutoLaunchForTests(MESH_ID, 'floor-timeout-task', {
+            status: 'skipped', reason: 'task_difficulty_floor_wait:difficult', nodeId: NODE_ID,
+        });
+        const [event] = drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine') as any[];
+        expect(event?.metadataEvent).toEqual(expect.objectContaining({
+            source: 'mesh_queue_difficulty_floor_timeout',
+            taskId: 'floor-timeout-task',
+            reason: 'task_difficulty_floor_timeout',
+        }));
+        expect(event?.coordinatorMessage).toContain('explicit task-scoped downgrade');
+
+        __resetDifficultyFloorReportsForTests(); // simulate daemon restart: durable marker still dedupes
+        __markAutoLaunchForTests(MESH_ID, 'floor-timeout-task', {
+            status: 'skipped', reason: 'task_difficulty_floor_wait:difficult', nodeId: NODE_ID,
+        });
+        expect(drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine')).toHaveLength(0);
+    });
+
     it('persists bounded intra-node losers and the quota-risk snapshot in the task ledger', async () => {
         detectCliMocks.detected.add('claude-cli').add('kimi');
         const node = nodeWith([
             { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
-            { provider: 'claude-cli', model: 'sonnet', maxParallel: 1 },
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
         ], {
             kimi: okQuota('kimi', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
             'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
@@ -170,7 +258,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
             node, meshId: MESH_ID, task: { difficulty: 'difficult' }, resolved: resolved as any,
             skippedCandidates: [],
             requiredTagsResult: { required: [], satisfied: true, missing: [] },
-            effectiveModel: 'sonnet',
+            effectiveModel: 'opus',
         });
         __recordTaskDispatchedLedgerForTests({
             meshId: MESH_ID, nodeId: NODE_ID, sessionId: 'quota-session', providerType: 'claude-cli',
@@ -203,7 +291,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         const clone = {
             ...nodeWith([
                 { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
-                { provider: 'codex-cli', model: 'gpt-5.4', maxParallel: 1 },
+                { provider: 'codex-cli', model: 'gpt-5.4', difficulty: ['difficult'], maxParallel: 1 },
             ]),
             clonedFromNodeId: source.id,
         };
@@ -217,7 +305,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         detectCliMocks.detected.add('kimi').add('codex-cli');
         const node = nodeWith([
             { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
-            { provider: 'codex-cli', model: 'gpt-5.4', maxParallel: 1 },
+            { provider: 'codex-cli', model: 'gpt-5.4', difficulty: ['difficult'], maxParallel: 1 },
         ], {
             kimi: okQuota('kimi', {
                 status: 'error',
@@ -255,11 +343,10 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         detectCliMocks.detected.add('claude-cli').add('kimi');
         const sameReset = Date.now() + 5 * 24 * 60 * MIN;
         const node = nodeWith([
-            // claude-cli wins the static order (difficulty match +100) but only
-            // 40% weekly remaining; kimi (general slot) has 90% and must win
+            // Both providers are difficult-capable; kimi has 90% and must win
             // the risk tie (equal reset ⇒ risk is proportional to remaining).
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
-            { provider: 'kimi', model: 'kimi-code/k3', maxParallel: 2 },
+            { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
         ], {
             'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: sameReset } }),
             kimi: okQuota('kimi', { weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: sameReset } }),
@@ -277,9 +364,9 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
             // kimi wins the static order (difficulty match +100): 40% weekly
             // remaining but 5 days to spend it.
             { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
-            // claude-cli (general slot): only 20% remaining, but it evaporates
+            // claude-cli is equally difficult-capable: only 20% remains, but it evaporates
             // in 2 hours — the certain loss is spent first.
-            { provider: 'claude-cli', model: 'opus', maxParallel: 1 },
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
         ], {
             kimi: okQuota('kimi', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
             'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
@@ -292,7 +379,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         detectCliMocks.detected.add('claude-cli').add('kimi');
         const node = nodeWith([
             { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
-            { provider: 'claude-cli', model: 'opus', maxParallel: 1 },
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
         ], {
             // kimi reports nothing (quota tracking off / unknown) → sorts last
             // but stays gate-CLEAR; claude-cli is measured with headroom.
@@ -306,7 +393,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         detectCliMocks.detected.add('claude-cli').add('kimi');
         const node = nodeWith([
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
-            { provider: 'kimi', model: 'kimi-code/k3', maxParallel: 2 },
+            { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
         ], {
             'claude-cli': exhaustedQuota('claude-cli'),
             // kimi: no quota entry — never blocked by data it does not have.
@@ -319,7 +406,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         detectCliMocks.detected.add('claude-cli').add('kimi');
         const node = nodeWith([
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
-            { provider: 'kimi', model: 'kimi-code/k3', maxParallel: 2 },
+            { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
         ], {
             'claude-cli': exhaustedQuota('claude-cli'),
             kimi: exhaustedQuota('kimi'),
@@ -334,8 +421,8 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         expect(__isActionableSkipReasonForTests(resolved.reason!)).toBe(false);
     });
 
-    it('keeps provider_priority_unusable actionable for genuine slot/config problems', async () => {
-        // No CLI detected at all → configuration problem, actionable.
+    it('keeps a classified task pending when its sufficient provider is unavailable', async () => {
+        // A missing provider may recover; the bounded floor-wait reporter pages later.
         const node = nodeWith([
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
         ], {
@@ -343,8 +430,8 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         });
         const resolved = await resolve(node);
         expect(resolved.providerType).toBeUndefined();
-        expect(resolved.reason).toContain('provider_priority_unusable');
-        expect(__isActionableSkipReasonForTests(resolved.reason!)).toBe(true);
+        expect(resolved.reason).toBe('task_difficulty_floor_unavailable:difficult');
+        expect(__isActionableSkipReasonForTests(resolved.reason!)).toBe(false);
     });
 
     it('FAIL-OPEN regression guard: a fresh expired-token error does NOT block the provider', async () => {
@@ -377,7 +464,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         detectCliMocks.detected.add('claude-cli').add('kimi');
         const node = nodeWith([
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
-            { provider: 'kimi', model: 'kimi-code/k3', maxParallel: 2 },
+            { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
         ]);
         const resolved = await resolve(node);
         expect(resolved.providerType).toBe('claude-cli');

@@ -97,8 +97,8 @@ describe('provider selection orders slots by capacity, then fitness', () => {
         // With everything idle the best-fit slots are the two difficulty matches.
         // (claude-cli/opus first here is fine — it is only a preference, not a trap,
         // because a saturated opus now yields; see the next test.)
-        expect(order.slice(0, 2).map(s => s.provider).sort()).toEqual(['claude-cli', 'kimi']);
-        expect(order[order.length - 1].difficulty).toEqual(['medium']);
+        expect(order.map(s => s.provider).sort()).toEqual(['claude-cli', 'kimi']);
+        expect(order.every(s => s.difficulty?.includes('difficult'))).toBe(true);
     });
 
     it('★ a SATURATED claude-cli yields to the idle kimi slot (the live defect)', () => {
@@ -147,11 +147,29 @@ describe('provider selection orders slots by capacity, then fitness', () => {
         saturate(meshId, { 'claude-cli': 4, kimi: 2 });
 
         const order = __orderSlotsForProviderSelectionForTests(meshId, NODE_ID, TWO_PROVIDER_NODE, DIFFICULT);
-        // No slot has headroom → capacity key is inert and pure fitness decides,
-        // exactly as before the fix, so the downstream guard still reaches 'wait'.
+        // No eligible slot has headroom → the resolver returns a floor-wait result.
+        // The lower medium slot is never admitted as an escape hatch.
         expect(order[0].provider).toBe('claude-cli');
         expect(order[0].model).toBe('opus');
-        expect(order[order.length - 1].difficulty).toEqual(['medium']);
+        expect(order.every(s => s.difficulty?.includes('difficult'))).toBe(true);
+    });
+
+    it('treats freeform as unconstrained and excludes lower grades from ordered tasks', () => {
+        const meshId = freshMesh();
+        const graded = {
+            id: NODE_ID,
+            policy: { slots: [
+                { provider: 'easy', difficulty: ['easy'] },
+                { provider: 'mixed', difficulty: ['easy', 'medium'] },
+                { provider: 'hard', difficulty: ['difficult'] },
+                { provider: 'unclassified' },
+            ] },
+        };
+
+        const medium = __orderSlotsForProviderSelectionForTests(meshId, NODE_ID, graded, { difficulty: 'medium' });
+        expect(medium.map(s => s.provider).sort()).toEqual(['hard', 'mixed']);
+        const freeform = __orderSlotsForProviderSelectionForTests(meshId, NODE_ID, graded, { difficulty: 'freeform' });
+        expect(freeform).toHaveLength(4);
     });
 
     it('an uncapped slot is always considered available', () => {

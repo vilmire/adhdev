@@ -199,8 +199,9 @@ export function __buildSchedulingPoolForTests(
 // legacy providerPriority + the owning mesh's difficultyBrains so existing nodes
 // keep working (back-compat). The fitness scorer ranks a node for a
 // specific task by how well its best slot matches the task's difficulty and
-// required tags — with graceful fallback so a task is never blocked by a missing
-// exact match.
+// required tags. Explicit capability slots also enforce the task difficulty as a
+// hard minimum; legacy providerPriority-derived slots retain their old unconstrained
+// behavior because they carry no operator-authored capability declaration.
 // ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -210,14 +211,45 @@ export interface FitnessTask {
     requiredTags?: string[];
 }
 
+const ORDERED_DIFFICULTY_RANK: Partial<Record<MeshTaskDifficulty, number>> = {
+    easy: 0,
+    medium: 1,
+    difficult: 2,
+};
+
+/** The lowest declared slot grade that meets a classified task's minimum. `freeform`
+ *  is intentionally unranked: it means no difficulty constraint, not "above difficult". */
+export function slotDifficultyTierForTask(slot: NodeCapabilitySlot, difficulty: string | undefined): number | undefined {
+    if (!isMeshTaskDifficulty(difficulty) || difficulty === 'freeform') return undefined;
+    const taskRank = ORDERED_DIFFICULTY_RANK[difficulty];
+    if (taskRank === undefined || !slot.difficulty?.length) return undefined;
+    const sufficient = slot.difficulty
+        .map(value => ORDERED_DIFFICULTY_RANK[value])
+        .filter((rank): rank is number => rank !== undefined && rank >= taskRank);
+    return sufficient.length ? Math.min(...sufficient) : undefined;
+}
+
+/** Operator-authored slots make easy < medium < difficult a hard minimum. A freeform
+ *  task remains unconstrained, and legacy derived slots remain backward-compatible. */
+export function taskRequiresDifficultyFloor(node: any, task: FitnessTask): boolean {
+    return isMeshTaskDifficulty(task.difficulty)
+        && task.difficulty !== 'freeform'
+        && normalizeNodeCapabilitySlots(node?.policy?.slots).length > 0;
+}
+
+function slotsMeetingTaskDifficultyFloor(node: any, slots: NodeCapabilitySlot[], task: FitnessTask): NodeCapabilitySlot[] {
+    if (!taskRequiresDifficultyFloor(node, task)) return slots;
+    return slots.filter(slot => slotDifficultyTierForTask(slot, task.difficulty) !== undefined);
+}
+
 /**
  * Score how well one slot fits a task. Higher = better. A slot whose difficulty
  * range contains the task's difficulty scores highest; a general-purpose slot
  * (no declared difficulty) is a valid fallback; a slot whose capability tags cover
- * the task's requiredTags gets a capability bonus. `slot.difficulty` is a preference
- * hint, NOT a hard capacity floor: even a mismatch scores the +1 base and remains a
- * deliberate last-resort fallback after better matches fail capacity/quota gates
- * (for example, a difficult task may run in a medium slot).
+ * the task's requiredTags gets a capability bonus. This pure scorer deliberately
+ * retains a +1 mismatch score for diagnostics and legacy/unclassified callers; the
+ * production candidate builders enforce operator-authored `slot.difficulty` as a
+ * hard minimum before scores or quota ranking are allowed to choose a slot.
  *
  * `quotaBonus` is the QUOTA SPREAD axis (mesh-quota-routing.ts): a bounded
  * 0..spreadBonusMax headroom preference for the slot's provider, computed by
@@ -268,7 +300,7 @@ export function orderSlotsForProviderSelection(
     task: FitnessTask,
     quotaBonusByProvider?: Record<string, number>,
 ): NodeCapabilitySlot[] {
-    return [...slots].sort((a, b) => {
+    return [...slotsMeetingTaskDifficultyFloor(node, slots, task)].sort((a, b) => {
         const capDelta = Number(slotHasCapacity(meshId, nodeId, node, b))
             - Number(slotHasCapacity(meshId, nodeId, node, a));
         if (capDelta !== 0) return capDelta; // slots with headroom first
@@ -279,7 +311,7 @@ export function orderSlotsForProviderSelection(
 
 /** Best (slot, score) for a task on a node, or null when the node has no slots. */
 export function bestSlotForTask(node: any, task: FitnessTask, meshId?: string, quotaBonusByProvider?: Record<string, number>): { slot: NodeCapabilitySlot; score: number } | null {
-    const slots = resolveNodeCapabilitySlots(node, meshId);
+    const slots = slotsMeetingTaskDifficultyFloor(node, resolveNodeCapabilitySlots(node, meshId), task);
     if (!slots.length) return null;
     let best: { slot: NodeCapabilitySlot; score: number } | null = null;
     for (const slot of slots) {
@@ -295,16 +327,17 @@ export function nodeFitnessForTask(node: any, task: FitnessTask, meshId?: string
 }
 
 /**
- * Does `slot` accept tasks of `difficulty`? Mirrors scoreSlotForTask's two
- * positive-difficulty branches: an exact difficulty-list match, or a
- * general-purpose slot (no difficulty list) which accepts any difficulty.
- * An absent/invalid difficulty is covered by NOTHING.
+ * Does `slot` meet the task's difficulty floor? Ordered grades may run upward
+ * (easy → medium/difficult, medium → difficult) but never downward. `freeform`
+ * is unconstrained. An ungraded slot remains accepted here for legacy callers;
+ * explicit-slot routing rejects it earlier via taskRequiresDifficultyFloor.
  */
 export function slotCoversTaskDifficulty(slot: NodeCapabilitySlot | undefined, difficulty: string | undefined): boolean {
     if (!slot) return false;
     if (!isMeshTaskDifficulty(difficulty)) return false;
-    if (!slot.difficulty?.length) return true; // general-purpose slot: fallback for any difficulty
-    return slot.difficulty.includes(difficulty as MeshTaskDifficulty);
+    if (difficulty === 'freeform') return true;
+    if (!slot.difficulty?.length) return true;
+    return slotDifficultyTierForTask(slot, difficulty) !== undefined;
 }
 
 /**

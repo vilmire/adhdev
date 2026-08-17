@@ -50,9 +50,9 @@ export function isMeshTaskDifficulty(value: unknown): value is MeshTaskDifficult
 }
 
 /**
- * Shipped difficulty presets: NONE. `difficulty` is a ROUTING HINT only — the
- * node's capability slots are the sole authority on which model / thinking level
- * a task actually runs with.
+ * Shipped difficulty presets: NONE. Operator-authored capability slots are the
+ * authority: easy < medium < difficult is a hard minimum (freeform is explicitly
+ * unconstrained), while the preset map only supplies optional launch axes.
  *
  * WHY THIS IS EMPTY (it formerly shipped easy→haiku/low, medium→sonnet/medium,
  * difficult→opus/high):
@@ -140,9 +140,10 @@ export interface NodeCapabilitySlot {
      */
     thinkingLevel?: string
     /**
-     * Difficulty range this slot handles. Empty/absent = handles all difficulties
-     * (a general-purpose slot). A task's difficulty is matched against this range;
-     * no exact match falls back to the nearest/general slot (never blocks).
+     * Difficulty grades this slot handles. On an explicit-slot node these form a
+     * hard minimum: higher grades may run lower tasks, but lower grades never run
+     * higher tasks. Empty/absent is ungraded and only unconstrained freeform tasks
+     * use it; legacy providerPriority-derived slots remain backward-compatible.
      */
     difficulty?: MeshTaskDifficulty[]
     /** Capability tags this slot satisfies (matched against a task's requiredTags). */

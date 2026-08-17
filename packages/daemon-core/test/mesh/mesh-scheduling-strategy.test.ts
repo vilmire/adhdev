@@ -218,14 +218,16 @@ describe('mesh scheduling pipeline — fitness strategy', () => {
         expect(result[0]).toBe('b');
     });
 
-    it('a general-purpose slot outranks a mismatched-difficulty slot (fallback, never blocks)', () => {
+    it('lower and ungraded explicit slots are equally ineligible for a difficult task', () => {
         const meshId = `m-fit2-${randomUUID().slice(0, 8)}`;
         // node a: easy-only (mismatch for difficult); node b: no difficulty (general).
         const result = fitnessOrder(meshId, [
             { id: 'a', slots: [{ provider: 'codex-cli', difficulty: ['easy'] }] },
             { id: 'b', slots: [{ provider: 'claude-cli' }] },
         ], { difficulty: 'difficult' });
-        expect(result[0]).toBe('b');
+        // Both nodes score 0 under the hard floor, so deterministic input order is
+        // preserved; the assignment loop subsequently leaves the task pending.
+        expect(result).toEqual(['a', 'b']);
     });
 
     it('capability coverage breaks ties among equal-difficulty slots', () => {

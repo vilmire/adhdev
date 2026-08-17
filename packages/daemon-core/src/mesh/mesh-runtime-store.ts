@@ -1160,6 +1160,7 @@ export class MeshRuntimeStore {
             daemonNodeIds?: readonly string[];
             nodeIsWorktree?: boolean;
             assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
+            allowedTaskDifficulties?: readonly import('@adhdev/mesh-shared').MeshTaskDifficulty[];
         },
     ): MeshWorkQueueEntry | null {
         return this.transaction(() => {
@@ -1342,12 +1343,25 @@ export class MeshRuntimeStore {
                 return true;
             };
 
+            // DIFFICULTY HARD FLOOR (idle/event claim path): the auto-launch selector
+            // filters slots before ranking, but an already-running session reaches this
+            // atomic claim without that selector. Restrict classified candidates to the
+            // grades its concrete model can run (or the conservative intersection when
+            // the live model is unknown). Freeform/legacy rows remain unconstrained.
+            const allowedTaskDifficulties = opts?.allowedTaskDifficulties;
+            const difficultyAllows = (candidate: MeshWorkQueueEntry): boolean =>
+                !allowedTaskDifficulties
+                || candidate.difficulty === 'freeform'
+                || !candidate.difficulty
+                || allowedTaskDifficulties.includes(candidate.difficulty as import('@adhdev/mesh-shared').MeshTaskDifficulty);
+
             const entry = candidates.find(candidate =>
                 nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags)
                 && dependenciesSatisfied(candidate)
                 && notBeforeReady(candidate)
                 && convergenceAllows(candidate)
                 && targetMatches(candidate)
+                && difficultyAllows(candidate)
                 && parallelCapsAllow(candidate)
                 && nodeConflictAllows(candidate));
             if (!entry) return null;

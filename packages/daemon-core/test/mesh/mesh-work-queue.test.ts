@@ -120,6 +120,23 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(claimed2?.id).to.equal(t2.id);
     });
 
+    it('keeps an older difficult row pending when the claiming session only supports medium', () => {
+        const difficult = enqueueTask(meshId, 'difficult work', { difficulty: 'difficult' });
+        const medium = enqueueTask(meshId, 'medium work', { difficulty: 'medium' });
+
+        const mediumClaim = claimNextTask(meshId, 'node1', 'sonnet-session', [], {
+            allowedTaskDifficulties: ['easy', 'medium'],
+        });
+        expect(mediumClaim?.id).to.equal(medium.id);
+        expect(getQueue(meshId).find(task => task.id === difficult.id)?.status).to.equal('pending');
+        updateTaskStatus(meshId, medium.id, 'completed');
+
+        const difficultClaim = claimNextTask(meshId, 'node1', 'opus-session', [], {
+            allowedTaskDifficulties: ['easy', 'medium', 'difficult'],
+        });
+        expect(difficultClaim?.id).to.equal(difficult.id);
+    });
+
     it('does not let a node/session claim another task while one is still assigned', () => {
         const t1 = enqueueTask(meshId, 'task 1', { difficulty: 'medium' });
         const t2 = enqueueTask(meshId, 'task 2', { difficulty: 'medium' });

@@ -73,7 +73,7 @@ const SONNET_EASY_NODE = {
     policy: { slots: [{ provider: 'claude-cli', model: 'sonnet', difficulty: ['easy', 'medium'] }] },
 };
 
-/** Node with a general-purpose slot (no difficulty list) declaring sonnet. */
+/** Explicit ungraded slot: eligible only for unconstrained freeform routing. */
 const GENERAL_PURPOSE_NODE = {
     id: 'node_gp',
     policy: { slots: [{ provider: 'claude-cli', model: 'sonnet' }] },
@@ -125,14 +125,13 @@ describe('assignment precedence: preset yields to the difficulty-covering slot',
         if (d.outcome === 'run') expect(d.model).toBe('sonnet'); // slot's own model, not 'haiku'
     });
 
-    it('a general-purpose slot (no difficulty list) also covers → slot model runs', () => {
+    it('an explicit ungraded slot does not satisfy a classified task floor', () => {
         const meshId = freshMesh();
         enqueueTask(meshId, 'rename a variable', { difficulty: 'easy' });
         const [task] = getQueue(meshId);
 
         const d = __decideSlotForModelForTests(meshId, 'node_gp', GENERAL_PURPOSE_NODE, task);
-        expect(d.outcome).toBe('run');
-        if (d.outcome === 'run') expect(d.model).toBe('sonnet');
+        expect(d.outcome).toBe('notify');
     });
 
     it('★ explicit model → the slot never overrides it (guard still applies)', () => {
