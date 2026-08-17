@@ -243,6 +243,25 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         expect(drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine')).toHaveLength(0);
     });
 
+    it('applies the same bounded report to an all-provider quota wait', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-08-17T00:00:00.000Z'));
+        __replaceMeshQueueForTests(MESH_ID, [{
+            id: 'quota-timeout-task', meshId: MESH_ID, message: 'hard task', status: 'pending', difficulty: 'difficult',
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }] as any);
+        const reason = `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: claude-cli exhausted`;
+
+        __markAutoLaunchForTests(MESH_ID, 'quota-timeout-task', { status: 'skipped', reason, nodeId: NODE_ID });
+        vi.advanceTimersByTime(DIFFICULTY_FLOOR_REPORT_AFTER_MS);
+        __markAutoLaunchForTests(MESH_ID, 'quota-timeout-task', { status: 'skipped', reason, nodeId: NODE_ID });
+
+        const [event] = drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine') as any[];
+        expect(event?.metadataEvent).toEqual(expect.objectContaining({
+            taskId: 'quota-timeout-task', reason: 'task_difficulty_floor_timeout', difficulty: 'difficult',
+        }));
+    });
+
     it('persists bounded intra-node losers and the quota-risk snapshot in the task ledger', async () => {
         detectCliMocks.detected.add('claude-cli').add('kimi');
         const node = nodeWith([

@@ -1,6 +1,7 @@
 import { getQueue, recordTaskAutoLaunch, type MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { isModelAllowedBySlot } from './slot-model-enforcement.js';
+import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
 import { isMeshTaskDifficulty, normalizeNodeCapabilitySlots, type MeshTaskDifficulty, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
 
 export const DIFFICULTY_FLOOR_REPORT_AFTER_MS = 10 * 60_000;
@@ -64,7 +65,8 @@ export function readSessionModel(state: any): string | undefined {
 }
 
 export function isDifficultyFloorWaitReason(reason?: string): boolean {
-    return typeof reason === 'string' && reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX);
+    return typeof reason === 'string' && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX)
+        || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON));
 }
 
 export function resetDifficultyFloorReportsForTests(): void {
@@ -97,7 +99,7 @@ export function handleDifficultyFloorSkip(args: {
     if (waitedMs < DIFFICULTY_FLOOR_REPORT_AFTER_MS || difficultyFloorTimeoutReported.has(reportKey)) return;
 
     const task = previousTask ?? getQueue(args.meshId).find(candidate => candidate.id === args.taskId);
-    const difficulty = args.reason.split(':')[1] || task?.difficulty || 'classified';
+    const difficulty = task?.difficulty || args.reason.split(':')[1] || 'classified';
     const coordinatorMessage = `[System] Queued task ${args.taskId} has waited ${Math.round(waitedMs / 60_000)} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
     const queued = queuePendingMeshCoordinatorEvent({
         event: 'mesh:dispatch_blocked',
