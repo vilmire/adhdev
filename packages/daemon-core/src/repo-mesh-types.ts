@@ -276,7 +276,6 @@ export interface RepoMeshPolicy {
      * Defaults to false; root branch pushes/merges are not affected.
      */
     allowAutoPublishSubmoduleMainCommits?: boolean;
-    requireApprovalForDestructiveGit: boolean;
     dirtyWorkspaceBehavior: 'block' | 'warn' | 'checkpoint_then_continue';
     maxParallelTasks: number;
     allowedProviders?: string[];
@@ -596,7 +595,6 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requirePostTaskCheckpoint: true,
     requireApprovalForPush: true,
     allowAutoPublishSubmoduleMainCommits: false,
-    requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     // Mesh-wide task cap is effectively unlimited by default: the real concurrency
     // limits live per node / per capability slot (ORCHESTRATION_NODE_SLOTS.md), so a

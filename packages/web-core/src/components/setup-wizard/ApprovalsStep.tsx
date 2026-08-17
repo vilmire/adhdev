@@ -6,11 +6,12 @@
  *     MeshDetailView's "Safety & Git" section, but STAGED into the wizard
  *     draft (applied at final commit via update_mesh).
  *
- *     `requireApprovalForDestructiveGit` is deliberately OMITTED here even
- *     though MeshDetailView's advanced section still exposes it: the field has
- *     no enforcement reader daemon-side yet (dead field — UI/type/default
- *     exist, zero readers; mission M-DESTRUCTIVE-GIT-GATE-UNWIRED). A
- *     first-run wizard must not present a toggle that silently does nothing.
+ *     There is no destructive-git approval toggle here (or in MeshDetailView):
+ *     the policy field that used to back one (`requireApprovalForDestructiveGit`)
+ *     was removed — it had no daemon-side enforcement reader, so the toggle
+ *     could silently do nothing. The coordinator prompt's "ask before
+ *     destructive git ops" rule is now unconditional prose, not a
+ *     policy-gated setting, so there is nothing for a wizard step to stage.
  *
  *  2. MeshProviderAutoApproveSection — reused unchanged when the target
  *     mesh has a resolvable host node. It keeps its existing immediate-save
@@ -51,8 +52,8 @@ export default function ApprovalsStep({ policy, stagedPatch, onStage, autoApprov
 
     const current = (key: string) => (key in stagedPatch ? stagedPatch[key] : policy[key])
 
-    // Same row config as MeshDetailView's Safety & Git selects (minus the
-    // unwired requireApprovalForDestructiveGit row — see header).
+    // Same row config as MeshDetailView's Safety & Git selects (there is no
+    // destructive-git approval row — see header).
     const rows: Array<{ label: string; key: string; opts: Array<[string, string]>; val: (v: any) => string; parse: (v: string) => unknown }> = [
         { label: t('repoMesh.detail.checkpointBefore'), key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
         { label: t('repoMesh.detail.checkpointAfter'), key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },

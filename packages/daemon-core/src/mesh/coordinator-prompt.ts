@@ -386,7 +386,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     sections.push(ONBOARDING_SECTION);
 
     // ── Rules ──
-    sections.push(buildRulesSection(coordinatorCliType, mergeAndNormalizePolicy(undefined, mesh.policy)));
+    sections.push(buildRulesSection(coordinatorCliType));
 
     return sections.join('\n\n');
 }
@@ -461,7 +461,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         tools: TOOLS_SECTION,
         workflow: WORKFLOW_SECTION,
         onboarding: ONBOARDING_SECTION,
-        rules: buildRulesSection(coordinatorCliType, mergeAndNormalizePolicy(undefined, mesh.policy)),
+        rules: buildRulesSection(coordinatorCliType),
         toolExposurePreflight: TOOL_EXPOSURE_PREFLIGHT_SECTION,
     };
     return template.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, key) => {
@@ -1026,7 +1026,7 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
     if (policy.allowAutoPublishSubmoduleMainCommits) {
         rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main with non-force pushes after validation and patch-equivalence pass');
     }
-    if (policy.requireApprovalForDestructiveGit) rules.push('- **Ask for user approval** before destructive git operations (force push, reset, etc.)');
+    rules.push('- **Ask for user approval** before destructive git operations (force push, reset, etc.)');
 
     const dirtyBehavior = {
         block: '- **Do not** send tasks to nodes with dirty workspaces',
@@ -1170,7 +1170,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 
 `;
 
-function buildRulesSection(coordinatorCliType?: string, policy?: RepoMeshPolicy): string {
+function buildRulesSection(coordinatorCliType?: string): string {
     const coordinatorNote = coordinatorCliType
         ? `\n- **Coordinator runtime is not a delegation default.** This coordinator is running as \`${coordinatorCliType}\`, but delegated node sessions must follow the user's requested provider, not the coordinator's own runtime.`
         : '';
@@ -1178,13 +1178,10 @@ function buildRulesSection(coordinatorCliType?: string, policy?: RepoMeshPolicy)
     // Destructive-git approval is a prompt-level convention, not a code-enforced
     // gate — no handler in the mesh command path blocks force push / reset --hard /
     // history rewrite. This bullet is the only thing standing between a coordinator
-    // and running one unasked; it must state the current policy value (not a fixed
-    // claim) so it stays honest if a mesh operator turns the toggle off, and must not
-    // read as "the system prevents this" when it's actually "please don't."
-    const destructiveGitRequiresApproval = policy ? policy.requireApprovalForDestructiveGit : true;
-    const destructiveGitRule = destructiveGitRequiresApproval
-        ? '\n- **Never run destructive git operations without explicit user approval.** Force push (`push --force`/`--force-with-lease`), `git reset --hard`, and any history rewrite (`rebase`, `filter-branch`, `commit --amend` on already-pushed work) can destroy work that is not recoverable from the mesh ledger. This mesh\'s policy currently requires approval for these (see Policy above). Ask first and wait for a yes — there is no code-level gate backing this up, so skipping the ask is the only thing that can lose the user\'s work.'
-        : '\n- **This mesh\'s policy does not require approval for destructive git operations** (`requireApprovalForDestructiveGit` is off). Still treat force push, `git reset --hard`, and history rewrites as high-risk: prefer a non-destructive alternative when one exists, and mention what you did in your summary so the user can catch a mistake quickly.';
+    // and running one unasked, and it is unconditional: there is no policy toggle
+    // that can turn it off. It must not read as "the system prevents this" when
+    // it's actually "please don't."
+    const destructiveGitRule = '\n- **Never run destructive git operations without explicit user approval.** Force push (`push --force`/`--force-with-lease`), `git reset --hard`, and any history rewrite (`rebase`, `filter-branch`, `commit --amend` on already-pushed work) can destroy work that is not recoverable from the mesh ledger. Ask first and wait for a yes — there is no code-level gate backing this up, so skipping the ask is the only thing that can lose the user\'s work.';
 
     return `## Rules
 

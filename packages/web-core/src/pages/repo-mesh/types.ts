@@ -133,7 +133,6 @@ export const DEFAULT_MESH_POLICY: Record<string, any> = {
     requirePostTaskCheckpoint: true,
     requireApprovalForPush: true,
     allowAutoPublishSubmoduleMainCommits: false,
-    requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
     schedulingStrategy: 'first_eligible',
