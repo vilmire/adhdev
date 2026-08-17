@@ -1657,6 +1657,60 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  // FALSE-COMPLETION-GIT-EVIDENCE gap 3: the previous test proves the timeout gate keeps the
+  // task terminal (never wedges) — this test proves it ALSO now carries a review signal, so a
+  // slow/dying worker whose 30s finalization window expired with no final-assistant evidence
+  // is not silently trusted the same as a genuine, confirmed completion. Reverting the
+  // emittedAfterFinalizationTimeout reviewRecommended stamp in markSessionTerminal must turn
+  // this test red while the sibling "still completes" test above stays green (liveness intact).
+  it('FALSE-COMPLETION-GIT-EVIDENCE gap 3: a timed-out weak completion still flags reviewRecommended even though it terminates', async () => {
+    const meshId = `mesh_weak_queue_timeout_reviewflag_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit, coordinator } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+
+      const queued = enqueueTask(meshId, 'timed-out weak-completion task', { difficulty: 'medium' })
+      expect(claimNextTask(meshId, 'node_child_1', 'runtime-session-1')?.id).toBe(queued.id)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        taskId: queued.id,
+        timestamp: Date.now(),
+        completionDiagnostic: {
+          blockReason: 'missing_final_assistant',
+          finalAssistantPresent: false,
+          emittedAfterFinalizationTimeout: true,
+        },
+      })
+
+      // Liveness preserved: still terminates completed, never wedged.
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed'])
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
+      expect((completedEntry?.payload as any).completionDiagnostic).toMatchObject({
+        timedOutWithoutFinalAssistant: true,
+      })
+
+      // The flag reaches the coordinator notification too (same wired path the code_change
+      // git-evidence gate uses), not just the ledger.
+      await runMeshReconcileTick(components)
+      expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
+      const coordinatorMessage = coordinator.onEvent.mock.calls[0][1].input.textFallback
+      expect(coordinatorMessage).toMatch(/verify|insufficient/i)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('D1: a transient LOCAL dispatch rejection returns the task to pending with a retryable dispatch_failed ledger entry (not terminal failed)', async () => {
     // Regression: the local-dispatch catch in tryAssignQueueTask used to mark the task
     // terminal 'failed' with no ledger and no retry, while the remote-dispatch catch
@@ -1852,11 +1906,6 @@ describe('setupMeshEventForwarding', () => {
     const meshId = `mesh_false_completion_dirty_${Date.now()}`
     const repo = tempGitRepo('dirty')
     try {
-      // A genuine, still-uncommitted change — the ordinary "has evidence" case that must NOT
-      // be flagged. Proves the gate discriminates on git state rather than blanket-flagging
-      // every code_change completion.
-      fs.writeFileSync(path.join(repo, 'file.txt'), 'changed\n')
-
       meshConfigMocks.getMesh.mockReturnValue({
         id: meshId,
         nodes: [{ id: 'node_child_1', workspace: repo }],
@@ -1870,6 +1919,13 @@ describe('setupMeshEventForwarding', () => {
         targetNodeId: 'node_child_1',
       })
       claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      // A genuine, still-uncommitted change made AFTER dispatch (this is what a worker
+      // actually editing during the task looks like) — the ordinary "has evidence" case
+      // that must NOT be flagged. Proves the gate discriminates on git state rather than
+      // blanket-flagging every code_change completion. Written after claimNextTask so its
+      // mtime is attributable to THIS dispatch under the gap-2 mtime-vs-dispatch check.
+      fs.writeFileSync(path.join(repo, 'file.txt'), 'changed\n')
 
       const { components, emit } = createComponents(meshId, {
         meshNodeFor: meshId,
@@ -1897,6 +1953,237 @@ describe('setupMeshEventForwarding', () => {
     } finally {
       cleanupMeshFiles(meshId)
       fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  // FALSE-COMPLETION-GIT-EVIDENCE gap 2 (false-positive fix): a worker that COMMITS its
+  // change leaves a perfectly CLEAN working tree. A bare clean/dirty check (the pre-gap-2
+  // implementation) cannot distinguish this from "nothing happened" and would wrongly flag
+  // a genuinely good completion. Comparing the last commit's timestamp against the task's
+  // dispatch time fixes this. Reverting checkGitEvidenceSync's commit-timestamp comparison
+  // (falling back to bare dirty-check) must turn this test red.
+  it('FALSE-COMPLETION-GIT-EVIDENCE gap 2: does NOT flag reviewRecommended when the worker committed the change (clean tree, but HEAD moved since dispatch)', async () => {
+    const meshId = `mesh_false_completion_committed_${Date.now()}`
+    const repo = tempGitRepo('committed')
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued code change task', {
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      // git commit timestamps (`%cI`) are SECOND-precision, so the gap-2 commit-vs-dispatch
+      // comparison in checkGitEvidenceSync deliberately resolves a same-second commit as
+      // "not proven new" (a documented git limitation — see that function's comment). Cross
+      // a full second boundary here so this test exercises the unambiguous "commit definitely
+      // landed after dispatch" case rather than racing that precision floor.
+      await new Promise(resolve => setTimeout(resolve, 1100))
+
+      // The worker's real work: edit + commit, leaving a CLEAN tree.
+      fs.writeFileSync(path.join(repo, 'file.txt'), 'implemented\n')
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-m', 'implement the change'], { cwd: repo })
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-committed',
+        finalSummary: 'Implemented and committed the change.',
+        workerResult: { status: 'success', changedFiles: ['file.txt'], gitStatus: { committed: true } },
+        timestamp: Date.now(),
+      })
+
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry?.payload.taskId).toBe(queued.id)
+      expect((completedEntry?.payload as any).reviewRecommended).not.toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  // FALSE-COMPLETION-GIT-EVIDENCE gap 2 (false-negative fix): a dirty tree is only real
+  // evidence FOR THIS TASK if the change happened DURING the task, not before it. A file
+  // left dirty by an EARLIER task (mtime before this task's dispatch) must not let a
+  // brand-new false completion escape detection just because *something* in the workspace
+  // happens to be dirty. Reverting the mtime-vs-dispatch comparison (falling back to bare
+  // dirty-check) must turn this test red.
+  it('FALSE-COMPLETION-GIT-EVIDENCE gap 2: flags reviewRecommended when the only dirty file predates this task\'s dispatch (stale leftover, not this task\'s work)', async () => {
+    const meshId = `mesh_false_completion_stale_dirty_${Date.now()}`
+    const repo = tempGitRepo('stale-dirty')
+    try {
+      // Stale leftover from a PRIOR task, written and left dirty well before this task
+      // is ever dispatched.
+      fs.writeFileSync(path.join(repo, 'stale.txt'), 'leftover from a previous task\n')
+
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      // Backdate the stale file's mtime so it unambiguously predates dispatch even on a
+      // fast CI run where wall-clock deltas could otherwise be sub-millisecond.
+      const past = new Date(Date.now() - 60_000)
+      fs.utimesSync(path.join(repo, 'stale.txt'), past, past)
+
+      const queued = enqueueTask(meshId, 'queued code change task', {
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      // dispatch (claim) happens here, AFTER the stale file's backdated mtime.
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-stale',
+        finalSummary: 'Investigated and concluded no change was needed.',
+        workerResult: { status: 'success', changedFiles: [] },
+        timestamp: Date.now(),
+      })
+
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry?.payload.taskId).toBe(queued.id)
+      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  // FALSE-COMPLETION-GIT-EVIDENCE gap 1: per-taskMode evidence, not a code_change special
+  // case. validation/launch_app/convergence have NO independent completion-evidence hook
+  // anywhere in this codebase today (confirmed by code search — see the fix report) — this
+  // proves the gate marks that limitation explicitly (evidenceScope:'not_applicable_for_mode')
+  // rather than silently treating a self-reported completion in these modes as verified.
+  it.each(['validation', 'launch_app', 'convergence'] as const)(
+    "FALSE-COMPLETION-GIT-EVIDENCE gap 1: marks evidenceScope:'not_applicable_for_mode' for taskMode=%s (no independent evidence hook exists)",
+    (mode) => {
+      const meshId = `mesh_mode_evidence_${mode}_${Date.now()}`
+      try {
+        meshConfigMocks.getMesh.mockReturnValue({
+          id: meshId,
+          nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+          policy: {},
+        })
+        meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+        const queued = enqueueTask(meshId, `queued ${mode} task`, {
+          taskMode: mode,
+          difficulty: 'medium',
+          targetNodeId: 'node_child_1',
+        })
+        claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+        const { components, emit } = createComponents(meshId, {
+          meshNodeFor: meshId,
+          meshNodeId: 'node_child_1',
+        })
+        setupMeshEventForwarding(components)
+        emit({
+          event: 'agent:generating_completed',
+          instanceId: 'runtime-session-1',
+          targetSessionId: 'runtime-session-1',
+          meshNodeId: 'node_child_1',
+          taskId: queued.id,
+          providerType: 'claude-cli',
+          providerSessionId: `provider-history-${mode}`,
+          finalSummary: 'Done.',
+          workerResult: { status: 'success' },
+          timestamp: Date.now(),
+        })
+
+        expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+        const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+        expect((completedEntry?.payload as any).completionDiagnostic).toMatchObject({
+          evidenceScope: 'not_applicable_for_mode',
+        })
+        // Explicitly NOT reviewRecommended — an unverifiable mode is a disclosed limitation,
+        // not a suspected false completion; conflating the two would be a false positive.
+        expect((completedEntry?.payload as any).reviewRecommended).not.toBe(true)
+      } finally {
+        cleanupMeshFiles(meshId)
+      }
+    },
+  )
+
+  // FALSE-COMPLETION-GIT-EVIDENCE gap 1: live_debug_readonly is the inverse case — NO side
+  // effects is the CORRECT, expected outcome (the write guardrail forbids mutation for this
+  // mode), so it must never be flagged OR scope-marked. This is the completion path's mirror
+  // of the write-time guardrail already enforced in mesh-task-mode-guardrail.ts.
+  it('FALSE-COMPLETION-GIT-EVIDENCE gap 1: live_debug_readonly completions are never flagged or scope-marked (no side effects is correct here)', () => {
+    const meshId = `mesh_mode_evidence_readonly_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued readonly investigation task', {
+        taskMode: 'live_debug_readonly',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-readonly',
+        finalSummary: 'Investigation complete — root cause identified.',
+        workerResult: { status: 'success' },
+        timestamp: Date.now(),
+      })
+
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect((completedEntry?.payload as any).reviewRecommended).not.toBe(true)
+      const diag = (completedEntry?.payload as any).completionDiagnostic
+      expect(diag?.evidenceScope).toBeUndefined()
+    } finally {
+      cleanupMeshFiles(meshId)
     }
   })
 

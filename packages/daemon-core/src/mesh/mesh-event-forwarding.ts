@@ -20,7 +20,7 @@ import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { describeRecoveryRelaunchDecision, resolveRecoveryRelaunchProvider } from './mesh-quota-routing.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { scheduleTaskCompletionSideEffectEvidence, resolveLocalCodeChangeWorkspace, checkCodeChangeWorkspaceCleanSync } from './mesh-completion-side-effect-evidence.js';
+import { scheduleTaskCompletionSideEffectEvidence, resolveLocalCodeChangeWorkspace, checkGitEvidenceSync } from './mesh-completion-side-effect-evidence.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,
@@ -126,10 +126,10 @@ const meshByWorkspaceCache = new Map<string, { mesh: any; cachedAt: number }>();
 const MESH_WORKSPACE_CACHE_TTL_MS = 5_000;
 
 // FALSE-COMPLETION-GIT-EVIDENCE: worst-case wall-clock the synchronous
-// git-clean gate (checkCodeChangeWorkspaceCleanSync) may add to a code_change
-// completion's terminal-state decision before failing open. Short by design —
-// this runs on the hot synchronous event-forwarding path (see the file header
-// note in mesh-completion-side-effect-evidence.ts on why this can't be async).
+// git-evidence gate (checkGitEvidenceSync) may add to a code_change completion's
+// terminal-state decision before failing open. Short by design — this runs on
+// the hot synchronous event-forwarding path (see the file header note in
+// mesh-completion-side-effect-evidence.ts on why this can't be async).
 const FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS = 3_000;
 
 // MID-TURN-LIVE-STATE-GATE defense-in-depth. The hold deliberately contains no
@@ -1547,6 +1547,17 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // C2: prefer an exact taskId match when the completion event carries one —
         // it's immune to coordinator↔worker clock skew that can hide the assigned row.
         const eventTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
+        // FALSE-COMPLETION-GIT-EVIDENCE (gap 2 fix): snapshot the row's `updatedAt` BEFORE
+        // any flip below overwrites it — this is the assign/dispatch timestamp (last time
+        // the row transitioned INTO 'assigned', stamped by claimNextQueueTask/updateQueueEntry),
+        // and it is the only reference point available to test whether a git change is
+        // ATTRIBUTABLE to this task run rather than stale leftovers from an earlier one.
+        // Read-only, best-effort: a lookup failure here must never affect the terminal
+        // decision, so it silently yields undefined (checkGitEvidenceSync falls back to a
+        // bare dirty check when sinceIso is unavailable — see its own comment).
+        const preFlipAssignedAt = eventTaskId
+            ? (() => { try { return MeshRuntimeStore.getInstance().findQueueEntryById(args.meshId, eventTaskId)?.updatedAt; } catch { return undefined; } })()
+            : undefined;
         // WEAK-QUEUE-TENTATIVE (early-completed safety net, symmetric with the direct-dispatch
         // `tentativeIfDirect` guard below): a `completed` outcome whose evidence is WEAK — a
         // false-idle / missing_final_assistant emit (the CANON-C decoupled-immediate path that
@@ -1573,6 +1584,27 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const weakCompleted = outcome === 'completed'
             && isWeakCompletionEvidence(args.metadataEvent)
             && !emittedAfterFinalizationTimeout;
+        // FALSE-COMPLETION-GIT-EVIDENCE (gap 3 / timeout-gate-off): emittedAfterFinalizationTimeout
+        // deliberately forces weakCompleted to false — see the CRUCIAL SCOPE note above — so a
+        // worker that exhausted the full 30s finalization wait with NO final-assistant evidence
+        // still closes its task instead of wedging forever. That is the right call for liveness,
+        // but as written it also means the weak-evidence gate (the tentative-hold safety net that
+        // makes an answerless completion visible) is OFF exactly when a slow/dying worker is MOST
+        // likely to produce a false completion — the gate protects only the case that needed it
+        // least. Keep the liveness guarantee (still flips terminal, never wedges) but restore the
+        // signal: stamp reviewRecommended/evidenceLevel onto the SAME event object markSessionTerminal
+        // already mutates for the code_change git-clean gate below, so it rides the identical,
+        // already-wired path to the coordinator (buildMeshSystemMessage's verify note) and the
+        // ledger (the reviewRecommended OR-in at the task_completed append). No new status value;
+        // this only WIDENS which completions carry the flag.
+        if (outcome === 'completed' && emittedAfterFinalizationTimeout && isWeakCompletionEvidence(args.metadataEvent)) {
+            args.metadataEvent.reviewRecommended = true;
+            args.metadataEvent.completionDiagnostic = {
+                ...(completionDiagnostic || {}),
+                timedOutWithoutFinalAssistant: true,
+            };
+            LOG.info('MeshQueue', `Completion for session ${sessionId} exhausted the finalization wait with no confirmed final assistant — flipping terminal (never wedge) but flagged reviewRecommended`);
+        }
         // TURN-LEDGER (Stage 5): the reducer is the single causal authority for terminal
         // outcomes. A genuine terminal for a taskId-named completion is proposed BEFORE any
         // row flip; when an attempt exists and the proposal is REJECTED (stale attempt /
@@ -1651,41 +1683,75 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         if (weakCompleted && task) {
             LOG.info('MeshQueue', `Weak completion (${readNonEmptyString(args.metadataEvent.evidenceLevel) || 'missing_final_assistant'}) kept queue task ${task.id} tentative (session ${sessionId}); reconcile owns the genuine terminal`);
         }
-        // FALSE-COMPLETION-GIT-EVIDENCE: a GENUINE (non-weak) `completed` outcome for a
-        // `code_change` queue task is otherwise trusted purely off the worker's self-reported
-        // transcript shape — a worker that delegates to a subagent and returns can self-report
-        // completion with zero commits. mesh-completion-side-effect-evidence.ts already checks
-        // this, but ASYNCHRONOUSLY after this state transition commits, so nothing ever reads
-        // the result back into the decision. This is the synchronous counterpart: a bounded,
-        // fail-open, LOCAL-ONLY git-clean probe run BEFORE the notification is built, so a
-        // clean-tree completion can carry a review flag in the SAME state transition. On any
-        // failure/timeout/remote-node it silently no-ops — identical to today's behavior.
+        // FALSE-COMPLETION-GIT-EVIDENCE (gap 1 fix — per-taskMode evidence, not a
+        // code_change-only special case): a GENUINE (non-weak) `completed` outcome is
+        // otherwise trusted purely off the worker's self-reported transcript shape for
+        // EVERY task mode, not only code_change — a worker that delegates to a subagent
+        // and returns can self-report completion with nothing actually done regardless of
+        // mode. There is no single evidence check that fits every mode, so this branches
+        // per taskMode:
+        //   - code_change: git IS the right evidence (a real change leaves a git trace) —
+        //     checked below via checkGitEvidenceSync.
+        //   - live_debug_readonly: NO side effects is the CORRECT, expected outcome (the
+        //     write guardrail in mesh-task-mode-guardrail.ts forbids mutation for this mode
+        //     in the first place) — git evidence is structurally inapplicable here, so this
+        //     mode is deliberately EXCLUDED from the check rather than misapplied to it.
+        //   - validation / launch_app / convergence: as of this fix, NO independent
+        //     (worker-unfalsifiable) completion evidence exists anywhere in this codebase for
+        //     these three modes — confirmed by search: validation's `validationResults` is
+        //     parsed verbatim from the worker's own self-reported JSON footer
+        //     (normalizeValidationResults in mesh-ledger.ts) with no real command execution
+        //     tied to task completion; launch_app's `processArtifacts` (pid/port/url) is
+        //     likewise self-reported with no liveness probe; convergence's only real,
+        //     independent git-ancestry evidence (mesh-fast-forward.ts's fastForwardMeshNode)
+        //     exists solely on the separate mesh_fast_forward command path and is never
+        //     invoked from the completion path. Fabricating a check here would be exactly the
+        //     "trust the shape, not the truth" defect this fix exists to close — so these three
+        //     modes are explicitly marked evidenceScope:'not_applicable_for_mode' rather than
+        //     silently treated as verified. This is a genuine, reported limitation, not a gap
+        //     left unhandled: see the fix report's perTaskModeEvidence table.
         // Deliberately reuses the existing reviewRecommended/evidenceLevel plumbing
         // (isWeakCompletionEvidence, buildMeshSystemMessage's verify note, the ledger's
         // evidenceLevel field) rather than a new status value — see file header.
-        if (outcome === 'completed' && !weakCompleted && task?.taskMode === 'code_change') {
-            try {
-                const gateNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
-                const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, gateNodeId);
-                if (workspace) {
-                    const gitCheck = checkCodeChangeWorkspaceCleanSync(workspace, FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS);
-                    if (gitCheck.checked && gitCheck.clean) {
-                        args.metadataEvent.reviewRecommended = true;
-                        args.metadataEvent.evidenceLevel = readNonEmptyString(args.metadataEvent.evidenceLevel) || 'reported';
-                        args.metadataEvent.completionDiagnostic = {
-                            ...(args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
-                                ? args.metadataEvent.completionDiagnostic as Record<string, unknown>
-                                : {}),
-                            noSideEffectsAtCompletion: true,
-                        };
-                        LOG.info('MeshLedger', `code_change task ${task.id} (session ${sessionId}) completed with a CLEAN workspace — flagged reviewRecommended (no side effects at completion)`);
+        if (outcome === 'completed' && !weakCompleted && task?.taskMode) {
+            const mode = task.taskMode;
+            if (mode === 'code_change') {
+                try {
+                    const gateNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+                    const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, gateNodeId);
+                    if (workspace) {
+                        const gitCheck = checkGitEvidenceSync(workspace, preFlipAssignedAt, FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS);
+                        if (gitCheck.checked && gitCheck.noEvidenceSinceDispatch) {
+                            args.metadataEvent.reviewRecommended = true;
+                            args.metadataEvent.evidenceLevel = readNonEmptyString(args.metadataEvent.evidenceLevel) || 'reported';
+                            args.metadataEvent.completionDiagnostic = {
+                                ...(args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
+                                    ? args.metadataEvent.completionDiagnostic as Record<string, unknown>
+                                    : {}),
+                                noSideEffectsAtCompletion: true,
+                                evidenceScope: 'code_change_git',
+                            };
+                            LOG.info('MeshLedger', `code_change task ${task.id} (session ${sessionId}) completed with NO git evidence attributable to this dispatch — flagged reviewRecommended (${JSON.stringify(gitCheck.detail)})`);
+                        }
                     }
+                } catch (e: any) {
+                    // Fail-open: never let this probe surface as a task failure or block/delay the
+                    // completion path it is only meant to annotate.
+                    LOG.warn('MeshLedger', `False-completion git evidence check skipped for task ${task.id} (session ${sessionId}): ${e?.message || e}`);
                 }
-            } catch (e: any) {
-                // Fail-open: never let this probe surface as a task failure or block/delay the
-                // completion path it is only meant to annotate.
-                LOG.warn('MeshLedger', `False-completion git evidence check skipped for task ${task.id} (session ${sessionId}): ${e?.message || e}`);
+            } else if (mode === 'validation' || mode === 'launch_app' || mode === 'convergence') {
+                // No independent evidence hook exists today for these modes (see the comment
+                // above) — mark the scope explicitly so a consumer can distinguish "checked and
+                // clean" from "never checkable" rather than reading silence as verified.
+                args.metadataEvent.completionDiagnostic = {
+                    ...(args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
+                        ? args.metadataEvent.completionDiagnostic as Record<string, unknown>
+                        : {}),
+                    evidenceScope: 'not_applicable_for_mode',
+                };
             }
+            // live_debug_readonly: no branch — no side effects is the CORRECT outcome for this
+            // mode, so it is intentionally never flagged or scope-marked here.
         }
         // Fix A (early-terminal prevention): a false-idle completion (no confirmed final
         // assistant) for a DIRECT dispatch — i.e. no work-queue row matched — must not flip the

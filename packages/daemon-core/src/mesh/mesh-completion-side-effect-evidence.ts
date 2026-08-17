@@ -34,6 +34,8 @@
 // a pure local filesystem read — cheap, no network. A remote node's completion
 // is left unchecked (fails open) by resolveLocalCodeChangeWorkspace's isLocal guard.
 import { execFileSync } from 'node:child_process';
+import { statSync } from 'node:fs';
+import * as path from 'node:path';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { loadConfig } from '../config/config.js';
@@ -86,40 +88,161 @@ export function resolveLocalCodeChangeWorkspace(
     return workspace;
 }
 
-export interface SyncGitCleanCheckResult {
-    /** True when the check actually ran to completion (repo resolved, status read). */
+export interface SyncGitEvidenceResult {
+    /** True when the check actually ran to completion (repo resolved, status/log read). */
     checked: boolean;
-    /** Only meaningful when checked===true: true when the working tree has no diff. */
-    clean: boolean;
+    /**
+     * True when there is NO evidence of a change attributable to this task: the working
+     * tree has no diff AND no commit landed since `sinceIso`. False means evidence WAS
+     * found — either a dirty tree or a fresh commit. Only meaningful when checked===true.
+     */
+    noEvidenceSinceDispatch: boolean;
+    /**
+     * Diagnostic-only breakdown of what was actually observed, so a caller can log/report
+     * WHY noEvidenceSinceDispatch resolved the way it did instead of only the verdict.
+     */
+    detail: {
+        dirty: boolean;
+        /** True when `git log -1` shows a commit strictly after `sinceIso`. */
+        newCommitSinceDispatch: boolean;
+        /** Last-commit ISO timestamp, when readable. */
+        lastCommitAt?: string;
+    };
 }
 
 /**
- * Bounded, synchronous, fail-open "is this workspace a clean git repo" check.
- * Used ONLY by mesh-event-forwarding.ts's markSessionTerminal to gate the
- * terminal state decision itself (see the file-header note above for why this
- * needs a sync form distinct from the async getGitRepoStatus()).
+ * Bounded, synchronous, fail-open git-evidence probe for a code_change completion.
+ * Used ONLY by mesh-event-forwarding.ts's markSessionTerminal to gate the terminal
+ * state decision itself (see the file-header note above for why this needs a sync
+ * form distinct from the async getGitRepoStatus()).
  *
- * Fails open (`{checked:false, clean:false}`, clean is meaningless here) on ANY
- * git error, non-zero exit, or timeout — including a workspace that is not a
- * git repository. Callers MUST treat checked:false as "no evidence either way",
- * never as "dirty" or "clean". `timeoutMs` bounds the worst case this can add
- * to the synchronous completion path; keep it short (this runs on the hot
- * completion path, unlike the async diagnostic which has no such constraint).
+ * DEEPER THAN A CLEAN/DIRTY CHECK (gap 2 fix): a plain "is the tree dirty" check has
+ * two independent false results:
+ *   - FALSE POSITIVE (flags a genuinely good completion): a worker that COMMITS its
+ *     change leaves a perfectly clean working tree — plain dirty-check would flag this
+ *     as "no evidence" even though real work landed. Reading the last commit timestamp
+ *     and comparing it to `sinceIso` (the task's dispatch/assign time) fixes this.
+ *   - FALSE NEGATIVE (misses a false completion): ANY dirty file counts as "evidence"
+ *     under a bare dirty check — stale leftovers from a PRIOR task, or a subagent that
+ *     "delegated and scribbled something" unrelated, both pass. Comparing dirty files'
+ *     mtimes against `sinceIso` narrows this to changes that happened DURING this task's
+ *     window, not merely present at some point in the workspace's history.
+ * This is still not a semantic "did the worker do the RIGHT thing" check — see the
+ * dirtyDetectionDepth limitation in the fix report — but it is materially deeper than
+ * clean-vs-dirty: it requires the evidence to be TIME-ATTRIBUTABLE to this task.
+ *
+ * Fails open (`{checked:false, ...}`) on ANY git error, non-zero exit, or timeout —
+ * including a workspace that is not a git repository. Callers MUST treat checked:false
+ * as "no evidence either way", never as a positive or negative verdict. `timeoutMs`
+ * bounds the worst case this can add to the synchronous completion path; keep it short.
  */
-export function checkCodeChangeWorkspaceCleanSync(workspace: string, timeoutMs: number): SyncGitCleanCheckResult {
+export function checkGitEvidenceSync(workspace: string, sinceIso: string | undefined, timeoutMs: number): SyncGitEvidenceResult {
+    const deadline = Date.now() + timeoutMs;
+    const remaining = () => Math.max(1, deadline - Date.now());
     try {
-        const output = execFileSync(GIT, ['status', '--porcelain=v2'], {
+        const statusOutput = execFileSync(GIT, ['status', '--porcelain=v2'], {
             cwd: workspace,
             encoding: 'utf8',
-            timeout: timeoutMs,
+            timeout: remaining(),
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'ignore'],
         });
-        return { checked: true, clean: output.trim().length === 0 };
+        const changedPaths = parsePorcelainV2Paths(statusOutput);
+        const dirty = changedPaths.length > 0;
+
+        // FALSE-POSITIVE FIX: a clean tree with a commit newer than dispatch is real
+        // evidence (the worker committed), not "no side effects". Read unconditionally
+        // (cheap — a single `git log -1`) so a committed-and-clean completion is never
+        // mistaken for a no-op one.
+        let lastCommitAt: string | undefined;
+        let newCommitSinceDispatch = false;
+        try {
+            const logOutput = execFileSync(GIT, ['log', '-1', '--format=%cI'], {
+                cwd: workspace,
+                encoding: 'utf8',
+                timeout: remaining(),
+                windowsHide: true,
+                stdio: ['ignore', 'pipe', 'ignore'],
+            }).trim();
+            if (logOutput) {
+                lastCommitAt = logOutput;
+                if (sinceIso) {
+                    const commitMs = Date.parse(logOutput);
+                    const sinceMs = Date.parse(sinceIso);
+                    if (Number.isFinite(commitMs) && Number.isFinite(sinceMs)) {
+                        // `%cI` (strict ISO 8601) is SECOND-precision — git's commit timestamp
+                        // carries no milliseconds, a structural limit of git itself (not fixable
+                        // by reading a different format). A commit made within the same wall-clock
+                        // SECOND as dispatch is genuinely ambiguous from this signal alone: it could
+                        // be the pre-existing HEAD (dispatch landed a moment after repo setup) or a
+                        // brand-new commit (a very fast worker). Resolve the ambiguity conservatively
+                        // toward "not proven new" (strict > only, no floor/tolerance) — this can
+                        // under-detect a same-second real commit, but the dirty-file mtime check
+                        // below independently covers the far more common "worker edited but hasn't
+                        // committed yet" case, and a completion this fast is itself unusual enough
+                        // that the code_change git-evidence gate is not the primary safety net for
+                        // it. Sub-second commit precision does not exist in git — this is a
+                        // documented limitation, not an oversight (see dirtyDetectionDepth in the
+                        // fix report).
+                        newCommitSinceDispatch = commitMs > sinceMs;
+                    }
+                }
+            }
+        } catch {
+            // No commits yet (unborn HEAD) or log failed — leave newCommitSinceDispatch
+            // false; the dirty-file mtime check below is still evaluated independently.
+        }
+
+        // FALSE-NEGATIVE NARROWING: a dirty tree is only real evidence FOR THIS TASK if
+        // at least one changed file's mtime is after sinceIso — otherwise it is
+        // indistinguishable from stale leftovers the workspace already carried in from a
+        // prior task. Best-effort: stat() failures (deleted/renamed paths, permission
+        // issues) are skipped rather than failing the whole probe — a path git reports as
+        // changed but that can't be stat'd is conservatively treated as NOT proving
+        // recency (it does not clear noEvidenceSinceDispatch on its own).
+        let dirtyAttributableToDispatch = dirty && !sinceIso; // no dispatch time to compare against → cannot narrow, fall back to bare dirty
+        if (dirty && sinceIso) {
+            const sinceMs = Date.parse(sinceIso);
+            if (Number.isFinite(sinceMs)) {
+                for (const rel of changedPaths) {
+                    if (Date.now() > deadline) break; // stay inside the caller's bound
+                    try {
+                        const st = statSync(path.join(workspace, rel));
+                        if (st.mtimeMs >= sinceMs) { dirtyAttributableToDispatch = true; break; }
+                    } catch { /* path unreadable (deleted/renamed) — skip, don't fail the probe */ }
+                }
+            } else {
+                dirtyAttributableToDispatch = true; // unparseable sinceIso — fall back to bare dirty rather than silently dropping evidence
+            }
+        }
+
+        const hasEvidence = dirtyAttributableToDispatch || newCommitSinceDispatch;
+        return {
+            checked: true,
+            noEvidenceSinceDispatch: !hasEvidence,
+            detail: { dirty, newCommitSinceDispatch, ...(lastCommitAt ? { lastCommitAt } : {}) },
+        };
     } catch (e: any) {
-        LOG.warn('MeshLedger', `Sync git-clean check skipped for workspace ${workspace}: ${e?.message || e}`);
-        return { checked: false, clean: false };
+        LOG.warn('MeshLedger', `Sync git-evidence check skipped for workspace ${workspace}: ${e?.message || e}`);
+        return { checked: false, noEvidenceSinceDispatch: false, detail: { dirty: false, newCommitSinceDispatch: false } };
     }
+}
+
+/** Parse `git status --porcelain=v2` output into the list of changed file paths (relative). */
+function parsePorcelainV2Paths(output: string): string[] {
+    const paths: string[] = [];
+    for (const line of output.split('\n')) {
+        if (!line) continue;
+        if (line.startsWith('? ')) { paths.push(line.slice(2).trim()); continue; }
+        if (line.startsWith('1 ') || line.startsWith('2 ')) {
+            const fields = line.split(' ');
+            const rest = fields.slice(line.startsWith('2 ') ? 9 : 8).join(' ');
+            // A rename ('2 ' entries) separates old/new paths with a tab; take the new path.
+            const filePath = rest.split('\t')[0];
+            if (filePath) paths.push(filePath);
+        }
+    }
+    return paths;
 }
 
 export function scheduleTaskCompletionSideEffectEvidence(
@@ -146,6 +269,14 @@ export function scheduleTaskCompletionSideEffectEvidence(
                 const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, nodeId);
                 if (!workspace) return;
 
+                // NOTE: this async path intentionally stays a bare dirty check (no commit-time
+                // comparison like checkGitEvidenceSync's sync counterpart) — by the time this
+                // setImmediate callback runs, updateSessionTaskStatus has ALREADY overwritten the
+                // queue row's updatedAt to the completion timestamp, so there is no reliable
+                // dispatch-time reference left to compare against here. That timing gap is exactly
+                // why the deeper, sinceIso-aware check had to move into markSessionTerminal itself
+                // (synchronous, BEFORE the flip) — see mesh-event-forwarding.ts's preFlipAssignedAt
+                // capture. This async path remains a lower-fidelity, purely diagnostic ledger note.
                 const status = await getGitRepoStatus(workspace, { includeSubmodules: false });
                 if (!status.isGitRepo) return;
                 if (status.dirty) return; // has a diff — evidence is already consistent, nothing to downgrade
