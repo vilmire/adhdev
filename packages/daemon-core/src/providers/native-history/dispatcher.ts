@@ -199,13 +199,79 @@ function resolveClaudePath(workspace: string, sessionId: string): string | null 
     return null;
 }
 
+/**
+ * FLOOR-TIMING-WEDGE (fix 2 — binding persistence). Memo of runtime-resolved codex
+ * rollout paths, keyed by the session's stable spawn identity (workspace + spawn ms).
+ *
+ * WHY: findCodexPathByRuntime is a TIMEBOXED search — it only considers files whose
+ * mtime is within RECENT_WINDOW_MS (5 min) and whose session_meta timestamp is within
+ * SPAWN_BIND_GRACE_MS of this session's spawn. Both conditions are properties of the
+ * SEARCH, not of the binding: a session that resolved correctly at minute 2 stops
+ * resolving at minute 6 purely because its rollout mtime aged out of the window, even
+ * though the file is the same file and still on disk. Every later completion probe
+ * then reads null — no transcript, no proof of turn end, and (pre-fix-1) a permanent
+ * 'generating' wedge. The other resolution route, the PTY screen scrape for the
+ * uuid (extractProviderSessionIdFromScreen), is equally fragile: the header line it
+ * matches scrolls away, so the uuid can be lost mid-session too.
+ *
+ * The memo makes the binding STICKY: once this session has been matched to a rollout
+ * file by the strict timing rules, that answer is reused for the session's lifetime
+ * and no longer requires re-passing a workspace+timing match it already passed.
+ *
+ * Safety — the memo can only ever return the SAME file the strict search already
+ * accepted for the SAME session identity:
+ *   • The key includes sessionStartedAtMs, so two sessions in one workspace (and a
+ *     restarted session, which gets a new spawn stamp) never share an entry.
+ *   • It is only WRITTEN on a successful strict resolution — it can never invent a
+ *     binding the timing rules would have rejected.
+ *   • It is invalidated when the file disappears, so a deleted/rotated rollout falls
+ *     back to a fresh search rather than pinning a stale path.
+ *   • Entries are only kept for keyed (spawn-stamped) sessions; an unkeyed caller
+ *     (sessionStartedAtMs <= 0) is unchanged, since it has no identity to pin to.
+ */
+const codexRuntimeBindings = new Map<string, string>();
+
+function codexRuntimeBindingKey(workspace: string, sessionStartedAtMs: number): string | null {
+    if (!workspace || !(sessionStartedAtMs > 0)) return null;
+    return `${resolveRealPath(workspace)}::${sessionStartedAtMs}`;
+}
+
+/** Test/lifecycle hook: drop a session's sticky codex binding (or all of them). */
+export function clearCodexRuntimeBinding(workspace?: string, sessionStartedAtMs?: number): void {
+    if (workspace === undefined && sessionStartedAtMs === undefined) {
+        codexRuntimeBindings.clear();
+        return;
+    }
+    const key = codexRuntimeBindingKey(workspace || '', sessionStartedAtMs || 0);
+    if (key) codexRuntimeBindings.delete(key);
+}
+
 function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAtMs: number): string | null {
     // codex stores by UTC date: ~/.codex/sessions/<year>/<month>/<day>/<file>.jsonl
     const root = codexSessionsRoot();
+    // An explicit uuid is authoritative BOTH WAYS: a hit binds exactly, and a MISS
+    // returns null rather than falling through to the runtime search. The caller
+    // named a specific session; resolving some other file for it is precisely the
+    // "previous chat shows up before I type anything" defect (round 9 part b), so a
+    // requested-but-absent session must stay unresolved.
     if (sessionId && isUuidLikeSessionId(sessionId)) {
         return findCodexPathBySessionId(root, sessionId);
     }
-    return findCodexPathByRuntime(root, workspace, sessionStartedAtMs);
+
+    // Sticky binding: reuse this session's previously-proven file before re-running
+    // the timeboxed search, so an aged-out mtime cannot un-bind a live session.
+    const key = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
+    if (key) {
+        const pinned = codexRuntimeBindings.get(key);
+        if (pinned) {
+            if (fs.existsSync(pinned)) return pinned;
+            codexRuntimeBindings.delete(key); // stale entry — fall through to a fresh search
+        }
+    }
+
+    const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs);
+    if (resolved && key) codexRuntimeBindings.set(key, resolved);
+    return resolved;
 }
 
 function findCodexPathBySessionId(root: string, sessionId: string): string | null {
