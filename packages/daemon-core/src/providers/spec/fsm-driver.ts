@@ -37,6 +37,10 @@ import {
 } from './fsm-types.js';
 import { loadFsmSpec } from './fsm-loader.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
+import {
+    createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss,
+    type StartupDismissConfig, type StartupDismissState,
+} from '../../cli-adapters/startup-dismiss.js';
 import type { Control, DelegateTrigger } from './types.js';
 import { LOG } from '../../logging/logger.js';
 import { recordDebugTrace } from '../../logging/debug-trace.js';
@@ -397,6 +401,13 @@ export class FsmDriver implements ISpecDriver {
     /** Timer that re-runs evaluate() when a time-condition would flip true
      *  with no PTY frame to trigger it. */
     private wakeTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Boot-prompt dismissal (CliSpecV4.startup_dismiss — OPENCODE-UPDATE-MODAL
+     *  class). Config normalized once at start(); the shared decision engine
+     *  bounds writes by spawn window + attempt cap + per-snapshot dedupe. */
+    private startupDismissConfig: StartupDismissConfig | null = null;
+    private startupDismissState: StartupDismissState = createStartupDismissState();
+    /** Wall clock at start() — the spawn anchor for the dismiss window. */
+    private startupDismissSpawnAt = 0;
     /** Timer driving the focus-gated stall watchdog (refocus_when_stalled_ms).
      *  Re-arms itself while the machine is generating so a re-prime can fire
      *  even when the PTY has gone completely quiet. */
@@ -502,6 +513,9 @@ export class FsmDriver implements ISpecDriver {
         if (this.spec.pre_launch_trust) {
             applyPreLaunchTrust(this.spec.pre_launch_trust, this.opts.workingDir);
         }
+        this.startupDismissConfig = normalizeStartupDismissConfig(this.spec.startup_dismiss);
+        this.startupDismissState = createStartupDismissState();
+        this.startupDismissSpawnAt = now;
         this.adapter.start();
         // Prime focus-gated TUIs (see CliSpecV4.send_on_spawn). Written once,
         // shortly after spawn, so the input stream is awake before the first
@@ -530,6 +544,21 @@ export class FsmDriver implements ISpecDriver {
         for (const seq of seqs) {
             if (typeof seq === 'string' && seq.length > 0) this.adapter.send_keys(seq);
         }
+    }
+
+    /** Boot-prompt dismissal (CliSpecV4.startup_dismiss). Runs on every
+     *  reevaluation; the shared decision engine makes it a cheap no-op outside
+     *  the spawn window and bounds writes (attempt cap + per-snapshot dedupe),
+     *  so a prompt that survives the key can never become a key-spam loop. */
+    private maybeDismissStartupPrompt(screen: string, now: number): void {
+        if (!this.startupDismissConfig) return;
+        const verdict = decideStartupDismiss(
+            this.startupDismissConfig, this.startupDismissState, screen, this.startupDismissSpawnAt, now,
+        );
+        if (!verdict.dismiss) return;
+        recordStartupDismiss(this.startupDismissState, screen);
+        LOG.info('FsmDriver', `[${this.specTag()}] startup prompt matched /${verdict.matchedPattern}/ — sending dismiss key (attempt ${this.startupDismissState.attempts})`);
+        try { this.adapter.send_keys(this.startupDismissConfig.key); } catch { /* pty gone — nothing to dismiss */ }
     }
 
     dispatch(cmd: DashboardCommand): void {
@@ -802,6 +831,7 @@ export class FsmDriver implements ISpecDriver {
     private reevaluate(forceEmit = false): void {
         const now = Date.now();
         const screen = this.adapter.snapshot();
+        this.maybeDismissStartupPrompt(screen, now);
         const cursor = this.adapter.getCursorPosition();
         const currentLines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
 

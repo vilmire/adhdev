@@ -48,6 +48,10 @@ const DEFAULT_WINDOW_MS = 20_000;
 export function normalizeStartupDismissConfig(raw: unknown): StartupDismissConfig | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const config = raw as Record<string, unknown>;
+    // spec@4's `startup_dismiss` spells the bounds snake_case; the legacy
+    // manifest's `tui.startupDismiss` is camelCase. One normalizer serves both.
+    if (config.maxAttempts === undefined && config.max_attempts !== undefined) config.maxAttempts = config.max_attempts;
+    if (config.windowMs === undefined && config.window_ms !== undefined) config.windowMs = config.window_ms;
     const key = typeof config.key === 'string' && config.key.length > 0 ? config.key : null;
     const patternsRaw = Array.isArray(config.patterns) ? config.patterns : [];
     const patterns = patternsRaw

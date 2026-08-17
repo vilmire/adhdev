@@ -46,6 +46,31 @@ export function validateFsmSpec(raw: unknown): string[] {
         }
     }
 
+    if (spec.startup_dismiss !== undefined) {
+        const d = spec.startup_dismiss as { patterns?: unknown; key?: unknown };
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+            errs.push('startup_dismiss must be an object');
+        } else {
+            if (typeof d.key !== 'string' || !d.key) errs.push('startup_dismiss.key is required');
+            if (!Array.isArray(d.patterns) || d.patterns.length === 0) {
+                errs.push('startup_dismiss.patterns must be a non-empty array');
+            } else {
+                d.patterns.forEach((p, i) => {
+                    const rec = (p && typeof p === 'object' ? p : {}) as { regex?: unknown; flags?: unknown };
+                    if (typeof rec.regex !== 'string' || !rec.regex) {
+                        errs.push(`startup_dismiss.patterns[${i}].regex is required`);
+                        return;
+                    }
+                    try {
+                        new RegExp(rec.regex, typeof rec.flags === 'string' ? rec.flags : undefined);
+                    } catch {
+                        errs.push(`startup_dismiss.patterns[${i}].regex does not compile`);
+                    }
+                });
+            }
+        }
+    }
+
     if (spec.refocus_when_stalled_ms !== undefined) {
         if (typeof spec.refocus_when_stalled_ms !== 'number' || !(spec.refocus_when_stalled_ms > 0)) {
             errs.push('refocus_when_stalled_ms must be a positive number');

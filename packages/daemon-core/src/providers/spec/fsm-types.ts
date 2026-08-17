@@ -202,6 +202,21 @@ export interface PreLaunchTrust {
     key: string;
 }
 
+/**
+ * Declarative boot-prompt dismissal — see CliSpecV4.startup_dismiss. Shape
+ * mirrors the legacy manifest's `tui.startupDismiss` (spec@4 spelling is
+ * snake_case); both are normalized by cli-adapters/startup-dismiss.ts.
+ */
+export interface StartupDismiss {
+    patterns: Array<{ regex: string; flags?: string }>;
+    /** Key sequence written when a pattern matches (e.g. "\u001b" for Esc). */
+    key: string;
+    /** Max dismiss writes per session. Default 3. */
+    max_attempts?: number;
+    /** Only dismiss within this window after spawn (ms). Default 20000. */
+    window_ms?: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CliSpecV4 — the v4 runtime spec
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +268,19 @@ export interface CliSpecV4 {
      * CLIs without such a gate. See pre-launch-trust.ts.
      */
     pre_launch_trust?: PreLaunchTrust;
+    /**
+     * Boot-time prompt dismissal (OPENCODE-UPDATE-MODAL class): some CLIs open
+     * a dialog that hijacks the composer before the first input — e.g.
+     * opencode's "Update Available … Ask / Skip / Confirm" — dismissible with a
+     * key (its own footer hints Esc) and suppressible only via config files the
+     * daemon must not edit. When declared, the engine writes `key` whenever a
+     * pattern matches the screen. Bounded by construction (spawn window +
+     * attempt cap + per-snapshot dedupe in the shared decision engine,
+     * cli-adapters/startup-dismiss.ts) so it can never key-spam. Not an
+     * approval: a generic approval gate would press the affirmative and run
+     * the update. Omitted by CLIs without such a prompt.
+     */
+    startup_dismiss?: StartupDismiss;
     send_message: {
         submit_key: string;
         delay_ms_before_submit?: number;
