@@ -49,9 +49,12 @@ vi.mock('../../src/detection/cli-detector.js', () => ({
 import {
     __resolveUsableProviderForTests,
     __isActionableSkipReasonForTests,
+    __recordTaskDispatchedLedgerForTests,
 } from '../../src/mesh/mesh-queue-assignment.js';
-import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
+import { __replaceMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from '../../src/mesh/mesh-quota-routing.js';
+import { buildAutoLaunchRoutingDecision } from '../../src/mesh/mesh-routing-decision.js';
+import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 
 const NODE_ID = 'node_quota_priority';
 const MESH_ID = 'mesh_quota_priority';
@@ -118,6 +121,76 @@ afterEach(() => {
 });
 
 describe('resolveUsableProvider — quota gate inside the selection loop', () => {
+    it('logs the selected sonnet slot score and identity, not the node-best opus score', async () => {
+        detectCliMocks.detected.add('claude-cli');
+        const node = nodeWith([
+            { provider: 'claude-cli', model: 'sonnet', difficulty: ['medium'], maxParallel: 3 },
+            { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
+        ]);
+        __replaceMeshQueueForTests(MESH_ID, [{
+            id: 'busy-opus', meshId: MESH_ID, message: 'busy', status: 'assigned',
+            assignedNodeId: NODE_ID, assignedProviderType: 'claude-cli', assignedModel: 'opus',
+            assignedSessionId: 'busy-session', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }] as any);
+
+        const resolved = await resolve(node);
+        expect(resolved.model).toBe('sonnet');
+        const decision = buildAutoLaunchRoutingDecision({
+            node, meshId: MESH_ID, task: { difficulty: 'difficult' }, resolved: resolved as any,
+            skippedCandidates: [],
+            requiredTagsResult: { required: [], satisfied: true, missing: [] },
+            effectiveModel: 'sonnet',
+        });
+        __recordTaskDispatchedLedgerForTests({
+            meshId: MESH_ID, nodeId: NODE_ID, sessionId: 'sonnet-session', providerType: 'claude-cli',
+            task: { id: 'sonnet-task', meshId: MESH_ID, message: 'hard task', status: 'assigned' } as any,
+            transport: 'local', routingDecision: decision,
+        }, 'sonnet-delivery');
+
+        const entry = readLedgerEntries(MESH_ID, { kind: ['task_dispatched'] })
+            .find(candidate => candidate.taskId === 'sonnet-task');
+        const routing = (entry?.payload as any)?.routingDecision;
+        expect(routing.fitnessScore).toBe(1);
+        expect(routing.fitnessScore).not.toBe(101);
+        expect(routing.selectedSlot).toEqual({ providerType: 'claude-cli', model: 'sonnet' });
+    });
+
+    it('persists bounded intra-node losers and the quota-risk snapshot in the task ledger', async () => {
+        detectCliMocks.detected.add('claude-cli').add('kimi');
+        const node = nodeWith([
+            { provider: 'kimi', model: 'kimi-code/k3', difficulty: ['difficult'], maxParallel: 2 },
+            { provider: 'claude-cli', model: 'sonnet', maxParallel: 1 },
+        ], {
+            kimi: okQuota('kimi', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
+            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
+        });
+        const resolved = await resolve(node);
+        expect(resolved.providerType).toBe('claude-cli');
+        const decision = buildAutoLaunchRoutingDecision({
+            node, meshId: MESH_ID, task: { difficulty: 'difficult' }, resolved: resolved as any,
+            skippedCandidates: [],
+            requiredTagsResult: { required: [], satisfied: true, missing: [] },
+            effectiveModel: 'sonnet',
+        });
+        __recordTaskDispatchedLedgerForTests({
+            meshId: MESH_ID, nodeId: NODE_ID, sessionId: 'quota-session', providerType: 'claude-cli',
+            task: { id: 'quota-diagnostic-task', meshId: MESH_ID, message: 'hard task', status: 'assigned' } as any,
+            transport: 'local', routingDecision: decision,
+        }, 'quota-delivery');
+
+        const entry = readLedgerEntries(MESH_ID, { kind: ['task_dispatched'] })
+            .find(candidate => candidate.taskId === 'quota-diagnostic-task');
+        const routing = (entry?.payload as any)?.routingDecision;
+        expect(routing.quotaRiskSnapshot).toEqual([
+            expect.objectContaining({ providerType: 'claude-cli', risk: expect.any(Number) }),
+            expect.objectContaining({ providerType: 'kimi', risk: expect.any(Number) }),
+        ]);
+        expect(routing.intraNodeLosers).toEqual([
+            expect.objectContaining({ providerType: 'kimi', model: 'kimi-code/k3', fitnessScore: expect.any(Number), quotaRisk: expect.any(Number), reason: 'lower_quota_rank' }),
+        ]);
+        expect(Buffer.byteLength(JSON.stringify(routing), 'utf8')).toBeLessThan(2_000);
+    });
+
     it('routes a facts-less worktree clone from exhausted kimi to healthy codex using its source node facts', async () => {
         detectCliMocks.detected.add('kimi').add('codex-cli');
         const source = {

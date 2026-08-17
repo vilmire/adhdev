@@ -5,7 +5,7 @@ import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeScheduli
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { quotaSpreadBonusByProvider } from './mesh-quota-routing.js';
+import { quotaSpreadBonusByProvider, type QuotaFactsContext } from './mesh-quota-routing.js';
 import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { decideSlotForModel, isModelAllowedBySlot } from './slot-model-enforcement.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
@@ -135,7 +135,7 @@ export function __orderEligibleNodesForTests(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
     nodes: RankableNode[],
-    opts?: { bumpCursor?: boolean; task?: { difficulty?: string; requiredTags?: string[] }; quotaRouting?: RepoMeshQuotaRoutingPolicy | null },
+    opts?: { bumpCursor?: boolean; task?: { difficulty?: string; requiredTags?: string[] }; quotaRouting?: RepoMeshQuotaRoutingPolicy | null; quotaFactsContext?: QuotaFactsContext | null },
 ): RankableNode[] {
     return orderEligibleNodes(meshId, strategy, nodes, opts);
 }
@@ -214,8 +214,10 @@ export interface FitnessTask {
  * Score how well one slot fits a task. Higher = better. A slot whose difficulty
  * range contains the task's difficulty scores highest; a general-purpose slot
  * (no declared difficulty) is a valid fallback; a slot whose capability tags cover
- * the task's requiredTags gets a capability bonus. Never negative — the worst a
- * slot does is score 0 (still selectable as a last-resort fallback).
+ * the task's requiredTags gets a capability bonus. `slot.difficulty` is a preference
+ * hint, NOT a hard capacity floor: even a mismatch scores the +1 base and remains a
+ * deliberate last-resort fallback after better matches fail capacity/quota gates
+ * (for example, a difficult task may run in a medium slot).
  *
  * `quotaBonus` is the QUOTA SPREAD axis (mesh-quota-routing.ts): a bounded
  * 0..spreadBonusMax headroom preference for the slot's provider, computed by
@@ -348,7 +350,7 @@ export function orderEligibleNodes(
     meshId: string,
     strategy: RepoMeshSchedulingStrategy,
     nodes: RankableNode[],
-    opts?: { bumpCursor?: boolean; task?: FitnessTask; quotaRouting?: RepoMeshQuotaRoutingPolicy | null },
+    opts?: { bumpCursor?: boolean; task?: FitnessTask; quotaRouting?: RepoMeshQuotaRoutingPolicy | null; quotaFactsContext?: QuotaFactsContext | null },
 ): RankableNode[] {
     if (strategy === 'first_eligible' || nodes.length <= 1) {
         return nodes;
@@ -368,7 +370,7 @@ export function orderEligibleNodes(
         const bonusFor = (c: RankableNode): Record<string, number> => {
             let bonus = bonusCache.get(c.nodeId);
             if (!bonus) {
-                bonus = quotaSpreadBonusByProvider(c.node, opts.quotaRouting);
+                bonus = quotaSpreadBonusByProvider(c.node, opts.quotaRouting, Date.now(), opts.quotaFactsContext);
                 bonusCache.set(c.nodeId, bonus);
             }
             return bonus;

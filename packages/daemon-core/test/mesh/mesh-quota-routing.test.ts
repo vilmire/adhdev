@@ -734,6 +734,22 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
 });
 
 describe('quotaSpreadBonusByProvider — bounded headroom preference', () => {
+    it('inherits spread bonuses from a facts-less worktree clone source', () => {
+        const source = {
+            ...nodeWithQuota({
+                'claude-cli': okQuota({
+                    session: { usedPercent: 50, windowMinutes: 300, resetsAt: null },
+                    weekly: { usedPercent: 50, windowMinutes: 10080, resetsAt: null },
+                }),
+            }),
+            id: 'base-node',
+        };
+        const clone = { id: 'worktree-node', clonedFromNodeId: source.id };
+
+        expect(quotaSpreadBonusByProvider(clone, null, NOW, { nodes: [source, clone] }))
+            .toEqual({ 'claude-cli': 15 });
+    });
+
     it('scores full headroom at the cap and half headroom at half the cap', () => {
         const full = nodeWithQuota({
             'claude-cli': okQuota({

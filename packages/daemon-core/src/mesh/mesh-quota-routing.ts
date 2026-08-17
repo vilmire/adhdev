@@ -105,7 +105,7 @@ export const PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = 'provider_quota_exhausted';
  *  reasons above. */
 export const ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = 'all_providers_quota_gated';
 
-interface QuotaFactsContext {
+export interface QuotaFactsContext {
     nodes?: any[];
 }
 
@@ -137,6 +137,12 @@ function quotaEntryFor(
     if (!sourceNodeId || !Array.isArray(context?.nodes)) return null;
     const sourceNode = context.nodes.find(candidate => candidate !== node && meshNodeIdMatches(candidate, sourceNodeId));
     return sourceNode ? directQuotaEntryFor(sourceNode, providerType) : null;
+}
+
+function cloneSourceNodeFor(node: any, context?: QuotaFactsContext | null): any | undefined {
+    const sourceNodeId = typeof node?.clonedFromNodeId === 'string' ? node.clonedFromNodeId.trim() : '';
+    if (!sourceNodeId || !Array.isArray(context?.nodes)) return undefined;
+    return context.nodes.find(candidate => candidate !== node && meshNodeIdMatches(candidate, sourceNodeId));
 }
 
 /**
@@ -737,18 +743,23 @@ export function quotaSpreadBonusByProvider(
     node: any,
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
+    context?: QuotaFactsContext | null,
 ): Record<string, number> {
     const resolved = resolveQuotaRoutingPolicy(policy);
-    const facts = node?.nodeFacts;
-    const quota = facts?.quota;
     const out: Record<string, number> = {};
-    if (!quota || typeof quota !== 'object') return out;
-    const reportedAt = Number(facts.reportedAt);
-    if (!Number.isFinite(reportedAt) || reportedAt <= 0) return out;
-    for (const [provider, snapshot] of Object.entries(quota as Record<string, MeshNodeFactsProviderQuota>)) {
+    const directQuota = node?.nodeFacts?.quota;
+    const sourceQuota = cloneSourceNodeFor(node, context)?.nodeFacts?.quota;
+    const providers = new Set<string>([
+        ...Object.keys(sourceQuota && typeof sourceQuota === 'object' ? sourceQuota : {}),
+        ...Object.keys(directQuota && typeof directQuota === 'object' ? directQuota : {}),
+    ]);
+    for (const provider of providers) {
+        const entry = quotaEntryFor(node, provider, context);
+        if (!entry) continue;
+        const { facts, quota: snapshot } = entry;
         let bonus = 0;
         if (snapshot && typeof snapshot === 'object' && snapshot.status === 'ok'
-            && isQuotaSnapshotFresh({ reportedAt }, snapshot, policy, now)) {
+            && isQuotaSnapshotFresh(facts, snapshot, policy, now)) {
             const ratios = [remainingPercent(snapshot.session), remainingPercent(snapshot.weekly)]
                 .filter((r): r is number => r !== undefined)
                 .map(r => r / 100);
