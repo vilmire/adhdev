@@ -994,7 +994,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
       preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
       depends_on: { type: "array", items: { type: "string" }, description: "Task ids that must complete before this task becomes claimable. Cycles are rejected at enqueue." },
       dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
-      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id)." },
+      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). An unresolvable id is REJECTED at enqueue (mission_not_found), never silently attached \u2014 use mesh_mission_list to get a valid full id." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
       priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) \u2014 distinct from a node's schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue." },
       model: { type: "string", description: "Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default." },
@@ -1037,7 +1037,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             preferWorktree: { type: "boolean", description: "CamelCase alias for prefer_worktree." },
             depends_on: { type: "array", items: { type: "string" }, description: "Refs of sibling entries in THIS batch (forward references allowed) and/or EXISTING queue task ids that must complete before this task becomes claimable. Cycles and unknown values reject the whole batch." },
             dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
-            mission_id: { type: "string", description: "Per-task mission override; defaults to the top-level mission_id." },
+            mission_id: { type: "string", description: "Per-task mission override (full/exact id); defaults to the top-level mission_id. An unresolvable id rejects the WHOLE batch (atomic)." },
             missionId: { type: "string", description: "CamelCase alias for mission_id." },
             priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 task-level scheduling priority (same semantics as mesh_enqueue_task)." },
             model: { type: "string", description: "Optional model override for the agent that runs this task (best-effort at launch)." },
@@ -1051,7 +1051,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
           required: ["message", "difficulty"]
         }
       },
-      mission_id: { type: "string", description: "Mission every task in this batch belongs to unless an entry overrides it. For multi-task work, create the mission first (mesh_mission_upsert) and pass it here." },
+      mission_id: { type: "string", description: "Mission every task in this batch belongs to unless an entry overrides it (full/exact id). For multi-task work, create the mission first (mesh_mission_upsert) and pass it here. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
       block_duplicate: { type: "boolean", description: "G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response." },
       blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
@@ -1124,7 +1124,7 @@ var MESH_SEND_TASK_TOOL = {
       taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
       readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
       read_only: { type: "boolean", description: "Snake-case alias for readonly." },
-      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch." },
+      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
       difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." }
     },
@@ -1293,7 +1293,7 @@ var MESH_MISSION_UPSERT_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      mission_id: { type: "string", description: "Mission id to update. Omit to create a new mission. Ignored when mission_ids is provided." },
+      mission_id: { type: "string", description: "Full mission id (exact match) to update. Omit to create a new mission \u2014 do not guess/truncate an id to force a create. An id that does not resolve to an existing mission is REJECTED (mission_not_found), never silently created under that id \u2014 use mesh_mission_list to get a valid full id. Ignored when mission_ids is provided." },
       mission_ids: {
         type: "array",
         items: { type: "string" },
@@ -1564,7 +1564,7 @@ var MESH_FORGET_NOTE_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      note_id: { type: "string", description: "The ledger note id to retract (exact). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries." },
+      note_id: { type: "string", description: "The ledger note id to retract (full/exact \u2014 no prefix matching). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries. An id that does not match a live note returns success:false, code:note_not_found (the tombstone is still recorded, but nothing was actually retracted) \u2014 do not guess/truncate an id." },
       text: { type: "string", description: "Retract every operating note whose trimmed text exactly matches this string. Use when you do not have the note id." },
       reason: { type: "string", description: "Optional short reason for the retraction, recorded on the tombstone for audit." }
     }
@@ -4605,6 +4605,14 @@ function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
   const requiredTags = (0, import_daemon_core5.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  if (missionId && !(0, import_daemon_core5.getMeshMission)(ctx.mesh.id, missionId)) {
+    return {
+      ok: false,
+      code: "mission_not_found",
+      error: `mission '${missionId}' does not exist on this mesh \u2014 refusing to enqueue a task with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
+      extra: { missionId }
+    };
+  }
   const priority = (0, import_daemon_core5.normalizeMeshTaskPriority)(readString(args.priority)) || void 0;
   const model = readString(args.model) || void 0;
   const thinkingLevel = readString(args.thinkingLevel) || void 0;
@@ -4864,6 +4872,14 @@ async function meshEnqueueBatch(ctx, args) {
     });
   }
   const batchMissionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  if (batchMissionId && !(0, import_daemon_core5.getMeshMission)(ctx.mesh.id, batchMissionId)) {
+    return JSON.stringify({
+      success: false,
+      code: "mission_not_found",
+      error: `mission '${batchMissionId}' does not exist on this mesh \u2014 refusing to enqueue a batch with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
+      missionId: batchMissionId
+    });
+  }
   const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
   const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
   const specs = [];
@@ -5394,12 +5410,14 @@ async function meshForgetNote(ctx, args) {
       ...text ? { text } : {},
       ...typeof args.reason === "string" && args.reason.trim() ? { reason: args.reason.trim() } : {}
     });
+    const idTargetMissed = Boolean(noteId) && matched === 0;
     return JSON.stringify({
-      success: true,
+      success: !idTargetMissed,
       meshId: mesh.id,
       tombstoneId: tombstone.id,
       forgot: { noteId: noteId ?? null, text: text || null, matched },
-      note: matched > 0 ? `Retracted ${matched} operating note(s). Future coordinators on this mesh will no longer see them at launch. History is preserved (append-only tombstone).` : "No live operating note matched \u2014 recorded a tombstone anyway so any matching note appended later is also suppressed."
+      ...idTargetMissed ? { code: "note_not_found" } : {},
+      note: matched > 0 ? `Retracted ${matched} operating note(s). Future coordinators on this mesh will no longer see them at launch. History is preserved (append-only tombstone).` : idTargetMissed ? `No live operating note matched note_id '${noteId}' \u2014 likely a truncated/wrong id (this tool requires an exact match). A tombstone was still recorded so any matching note appended later is also suppressed, but nothing was actually retracted. Use mesh_task_history or mesh_record_note's returned noteId to get the full id.` : "No live operating note matched \u2014 recorded a tombstone anyway so any matching note appended later is also suppressed."
     }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
@@ -5538,7 +5556,7 @@ async function meshMissionUpsert(ctx, args) {
     });
   } catch (e) {
     const message = e?.message || String(e);
-    const code = message.includes("mission_title_required") ? "mission_title_required" : message.includes("invalid_mission_status") ? "invalid_mission_status" : void 0;
+    const code = message.includes("mission_title_required") ? "mission_title_required" : message.includes("invalid_mission_status") ? "invalid_mission_status" : message.includes("mission_not_found") ? "mission_not_found" : void 0;
     return JSON.stringify({ success: false, ...code ? { code } : {}, error: message });
   }
 }
@@ -7460,6 +7478,14 @@ async function meshSendTask(ctx, args) {
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  if (missionId && !(0, import_daemon_core5.getMeshMission)(ctx.mesh.id, missionId)) {
+    return JSON.stringify({
+      success: false,
+      code: "mission_not_found",
+      error: `mission '${missionId}' does not exist on this mesh \u2014 refusing to dispatch a task with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
+      missionId
+    });
+  }
   const difficultyRaw = readString(args.difficulty);
   if (!difficultyRaw || !isMeshTaskDifficulty(difficultyRaw)) {
     return JSON.stringify({
