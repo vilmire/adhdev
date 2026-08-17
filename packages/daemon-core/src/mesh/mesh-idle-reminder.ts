@@ -54,9 +54,25 @@
  *  - NEVER transitions a mission's status. It only surfaces a hint; the coordinator
  *    decides via mesh_mission_upsert.
  *  - Debounced per mission-set. Re-fires only when the debounce window has elapsed OR
- *    the set of active mission ids changed (a mission was closed/added), so a mesh that
- *    stays idle with the same active missions is nudged at most once per window.
+ *    a NEW mission id entered the active set since the last reminder (see
+ *    MISSION-SET-GROWTH-BYPASS below), so a mesh that stays idle with the same active
+ *    missions is nudged at most once per window.
  *  - Opt-out via policy.idleActiveMissionReminder === false.
+ *
+ *    MISSION-SET-GROWTH-BYPASS: `missionSetHash` fingerprints only the id set (sorted,
+ *    joined) — it never includes title/goal/updatedAt, so a content-only edit to an
+ *    existing mission (mesh_mission_upsert re-supplying the SAME mission_id with a
+ *    changed goal) does not change the hash and never bypassed the debounce. The actual
+ *    2026-08-17 repeat-fire trigger was a DIFFERENT, cheaper-to-hit path: any hash
+ *    difference — including the set merely SHRINKING (a mission closed) — bypassed the
+ *    window, and `shouldFireIdleReminder`'s hash-only signature could not distinguish
+ *    "a new mission needs attention now" from "one of the missions I already got nudged
+ *    about just got closed". The fix compares the actual id sets (not just their hash)
+ *    and bypasses ONLY on growth — a mission id present now that was absent from the
+ *    last-fired set. A same-or-shrunk set re-uses the normal 5-minute window. This keeps
+ *    the original intent (new work → immediate nudge) while a coordinator's routine
+ *    mission bookkeeping (status/goal updates, closing missions) no longer restarts the
+ *    spam clock.
  */
 
 import { LOG } from '../logging/logger.js';
@@ -113,8 +129,10 @@ export function localNonCoordinatorSessionBusy(
 }
 
 /**
- * Debounce window: while the mesh stays idle with the SAME active-mission set, re-fire
- * the reminder at most once per this interval. A changed mission set bypasses the window.
+ * Debounce window: while the mesh stays idle with the SAME-or-SHRUNK active-mission set,
+ * re-fire the reminder at most once per this interval. A GROWN mission set (a new active
+ * mission id appeared) bypasses the window — see MISSION-SET-GROWTH-BYPASS in the module
+ * doc comment for why growth-only, not any-change.
  */
 export const IDLE_REMINDER_DEBOUNCE_MS = 300_000; // 5 minutes
 
@@ -126,10 +144,32 @@ export function missionSetHash(missions: MeshMissionRecord[]): string {
     return missions.map(m => m.id).sort().join(',');
 }
 
+/** Parse a missionSetHash back into its id set. Inverse of missionSetHash's join(','). */
+function parseMissionSetHash(hash: string): Set<string> {
+    return new Set(hash.split(',').filter(id => id.length > 0));
+}
+
+/**
+ * True when `hash` contains at least one mission id absent from `prevHash` — i.e. the
+ * active-mission set GREW. A same-or-shrunk set (missions closed, or unchanged, or
+ * content-only edits that never touch the id set) is false: only growth signals "new work
+ * needs attention now."
+ */
+function missionSetGrew(prevHash: string, hash: string): boolean {
+    if (hash === prevHash) return false;
+    const prevIds = parseMissionSetHash(prevHash);
+    for (const id of parseMissionSetHash(hash)) {
+        if (!prevIds.has(id)) return true;
+    }
+    return false;
+}
+
 /**
  * Decide whether a reminder should fire this call, given the debounce marker. Pure so it
  * is independently testable. Re-fires when there is no prior marker, the debounce window
- * has elapsed, or the active-mission set changed since the last reminder.
+ * has elapsed, or a NEW mission id entered the active set since the last reminder (a
+ * same-or-shrunk set — including any content-only mission edit, since edits never change
+ * the id-only hash — stays debounced; see missionSetGrew).
  */
 export function shouldFireIdleReminder(
     last: { emittedAt: number; missionSetHash: string } | null,
@@ -139,7 +179,7 @@ export function shouldFireIdleReminder(
 ): boolean {
     if (!last) return true;
     if (now - last.emittedAt > debounceMs) return true;
-    return hash !== last.missionSetHash;
+    return missionSetGrew(last.missionSetHash, hash);
 }
 
 /**

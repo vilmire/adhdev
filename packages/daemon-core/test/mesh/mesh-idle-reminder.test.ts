@@ -101,6 +101,23 @@ describe('mesh idle-active-mission reminder', () => {
             const last = { emittedAt: 1000, missionSetHash: 'a,b' };
             expect(shouldFireIdleReminder(last, 'a,c', 1001)).toBe(true);
         });
+
+        // MISSION-SET-GROWTH-BYPASS: only GROWTH (a new id entering the set) bypasses the
+        // debounce window. A same-or-SHRUNK set stays debounced — closing a mission (or a
+        // content-only edit, which never touches the id-only hash anyway) must not restart
+        // the spam clock.
+        it('does NOT re-fire when the mission set only shrank (a mission was closed)', () => {
+            const last = { emittedAt: 1000, missionSetHash: 'a,b' };
+            expect(shouldFireIdleReminder(last, 'a', 1001)).toBe(false);
+        });
+        it('does NOT re-fire when the mission set is unchanged', () => {
+            const last = { emittedAt: 1000, missionSetHash: 'a,b' };
+            expect(shouldFireIdleReminder(last, 'a,b', 1001)).toBe(false);
+        });
+        it('re-fires when the set both drops one id and gains a different one (net growth of a new id)', () => {
+            const last = { emittedAt: 1000, missionSetHash: 'a,b' };
+            expect(shouldFireIdleReminder(last, 'a,c', 1001)).toBe(true);
+        });
     });
 
     describe('missionSetHash / message', () => {
@@ -299,6 +316,68 @@ describe('mesh idle-active-mission reminder', () => {
         const later = 1_000 + IDLE_REMINDER_DEBOUNCE_MS + 1;
         expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, later)).toBe(true);
         expect(coord.calls).toHaveLength(2);
+    });
+
+    // ── MISSION-SET-GROWTH-BYPASS: 2026-08-17 repeat-fire root cause ────────────────
+    //
+    // The coordinator re-upserting the SAME mission (same mission_id, edited goal text)
+    // is routine bookkeeping, not new work. missionSetHash never included goal text, so
+    // this was never the literal trigger — but ANY hash difference used to bypass the
+    // debounce, and upsertMeshMission's ledger write / status normalization made the
+    // mission's updatedAt (and, in the observed incidents, mission set membership via
+    // close+reopen bookkeeping) churn on every coordinator upsert. The net effect: routine
+    // mission maintenance kept re-arming the reminder. This test pins the direct case —
+    // re-upserting the same id with only goal text changed — never bypasses the window.
+    it('★does NOT re-fire when only an existing mission\'s goal text is edited (same mission_id)', () => {
+        const m = upsertMeshMission(meshId, { title: 'Ship pipeline', goal: 'original goal text' });
+        const coord = makeCoordinator();
+
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+
+        // Routine coordinator bookkeeping: re-upsert the SAME mission_id with new goal text.
+        // The active-mission id SET is unchanged (still just [m.id]) even though the
+        // mission record's content and updatedAt changed underneath it.
+        upsertMeshMission(meshId, { id: m.id, title: 'Ship pipeline', goal: 'revised goal text after progress' });
+
+        // Still well inside the 5-minute window, and no NEW mission id entered the set →
+        // must stay silent. Before the fix, any hash change (which this scenario did NOT
+        // even need to produce, since the id set is unchanged) would have been the trigger
+        // path for the broader class of routine-upsert re-fires.
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
+        expect(coord.calls).toHaveLength(1);
+    });
+
+    // The inverse must still hold: a GENUINELY new mission still nudges immediately, even
+    // inside the debounce window — the original bypass intent ("new work needs attention
+    // now") must survive the fix.
+    it('still fires immediately when a genuinely NEW mission is added inside the debounce window', () => {
+        upsertMeshMission(meshId, { title: 'Existing mission', goal: 'x' });
+        const coord = makeCoordinator();
+
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+
+        // A brand-new mission id enters the active set → growth → immediate re-fire, even
+        // though we are only 5s into the 5-minute window.
+        upsertMeshMission(meshId, { title: 'Newly discovered work', goal: 'y' });
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(true);
+        expect(coord.calls).toHaveLength(2);
+    });
+
+    // Closing a mission (a legitimate coordinator action) shrinks the set and must not
+    // re-arm the reminder for the remaining mission(s) either.
+    it('does NOT re-fire when a mission is closed and the surviving set is a subset of the last-fired set', () => {
+        const a = upsertMeshMission(meshId, { title: 'Mission A', goal: 'x' });
+        const b = upsertMeshMission(meshId, { title: 'Mission B', goal: 'y' });
+        const coord = makeCoordinator();
+
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(coord.calls).toHaveLength(1);
+
+        // Close mission B — the active set shrinks from {A, B} to {A}.
+        upsertMeshMission(meshId, { id: b.id, title: 'Mission B', status: 'completed' });
+        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
+        expect(coord.calls).toHaveLength(1);
+        void a;
     });
 
     it('no-op when policy.idleActiveMissionReminder === false', () => {
