@@ -6,6 +6,8 @@ import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
+import { migrateMeshGraphSchema } from './mesh-graph-schema.js';
+import { MeshGraphStore } from './mesh-graph-store.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -204,6 +206,14 @@ export class MeshRuntimeStore {
 
     transaction<T>(fn: () => T): T {
         return this.db.transaction(fn).immediate();
+    }
+
+    /** GRAPH-ORCHESTRATION Phase A: row-CRUD over the additive graph tables, bound to
+     * THIS handle so phase-B graph writes can join the one queue transaction. */
+    private graphStoreInstance: MeshGraphStore | undefined;
+    graphStore(): MeshGraphStore {
+        if (!this.graphStoreInstance) this.graphStoreInstance = new MeshGraphStore(this.db);
+        return this.graphStoreInstance;
     }
 
     private migrate(): void {
@@ -568,6 +578,8 @@ export class MeshRuntimeStore {
                 ON mesh_turn_held_suspensions(attempt_id, status);
         `);
         this.migrateMeshIsolationColumns();
+        // GRAPH-ORCHESTRATION Phase A: additive graph tables (CREATE IF NOT EXISTS only). See mesh-graph-schema.ts.
+        migrateMeshGraphSchema(this.db);
     }
 
     private tableColumns(table: string): Set<string> {
