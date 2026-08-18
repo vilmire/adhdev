@@ -8,6 +8,164 @@
 
 set -e
 
+# BEGIN release CI watch helpers
+run_gh_watch_with_timeout() {
+    local run_id="$1"
+    local repo="$2"
+    local timeout_seconds="$3"
+    local poll_seconds="${RELEASE_CI_WATCH_POLL_SECONDS:-2}"
+    local watch_pid
+    local started_at
+    local now
+
+    gh run watch "$run_id" --repo "$repo" --exit-status &
+    watch_pid=$!
+    started_at=$(date +%s)
+
+    while kill -0 "$watch_pid" 2>/dev/null; do
+        now=$(date +%s)
+        if [ $((now - started_at)) -ge "$timeout_seconds" ]; then
+            kill "$watch_pid" 2>/dev/null || true
+            wait "$watch_pid" 2>/dev/null || true
+            return 124
+        fi
+        sleep "$poll_seconds"
+    done
+
+    wait "$watch_pid"
+}
+
+watch_release_ci() {
+    local release_tag="$1"
+    local release_sha="$2"
+    local repo="${RELEASE_CI_REPO:-vilmire/adhdev}"
+    local workflow="${RELEASE_CI_WORKFLOW:-CI}"
+    local lookup_attempts="${RELEASE_CI_LOOKUP_ATTEMPTS:-10}"
+    local lookup_delay="${RELEASE_CI_LOOKUP_DELAY_SECONDS:-3}"
+    local watch_timeout="${RELEASE_CI_WATCH_TIMEOUT_SECONDS:-1800}"
+    local attempt=1
+    local run_ids=""
+    local run_id=""
+    local watch_status
+    local run_state
+    local run_status
+    local conclusion
+    local failed_jobs
+    local failed_steps
+    local publish_conclusion
+
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "⚠️  GitHub CLI (gh) is unavailable; skipping CI watch."
+        echo "   Verify manually: gh run list --repo $repo --workflow $workflow"
+        return 0
+    fi
+
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "⚠️  GitHub CLI is not authenticated; skipping CI watch."
+        echo "   Authenticate with 'gh auth login', then verify the $release_tag run manually."
+        return 0
+    fi
+
+    echo ""
+    echo "🔎 Finding CI run for $release_tag at $release_sha..."
+    while [ "$attempt" -le "$lookup_attempts" ]; do
+        if run_ids=$(gh run list \
+            --repo "$repo" \
+            --workflow "$workflow" \
+            --event push \
+            --branch "$release_tag" \
+            --limit 20 \
+            --json databaseId,displayTitle,event,headBranch,headSha \
+            --jq ".[] | select(.event == \"push\" and .headBranch == \"$release_tag\" and .headSha == \"$release_sha\") | .databaseId" \
+            2>/dev/null); then
+            run_id=$(printf '%s\n' "$run_ids" | head -n 1)
+        fi
+
+        if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            break
+        fi
+
+        if [ "$attempt" -lt "$lookup_attempts" ]; then
+            echo "   Run not visible yet (attempt $attempt/$lookup_attempts); retrying in ${lookup_delay}s..."
+            sleep "$lookup_delay"
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+        echo "⚠️  No matching CI run appeared for tag $release_tag and commit $release_sha."
+        echo "   Skipping CI watch; verify manually: gh run list --repo $repo --workflow $workflow"
+        return 0
+    fi
+
+    echo "⏳ Watching CI run $run_id (timeout: ${watch_timeout}s)..."
+    if run_gh_watch_with_timeout "$run_id" "$repo" "$watch_timeout"; then
+        echo "✅ CI run $run_id is green; npm publish completed."
+        return 0
+    else
+        watch_status=$?
+    fi
+
+    if [ "$watch_status" -eq 124 ]; then
+        echo "⚠️  CI watch timed out after ${watch_timeout}s for run $run_id."
+        echo "   The release remains pushed; verify manually: gh run view $run_id --repo $repo"
+        return 0
+    fi
+
+    if ! run_state=$(gh run view "$run_id" --repo "$repo" --json status,conclusion \
+        --jq '[.status, .conclusion] | @tsv' 2>/dev/null); then
+        echo "⚠️  CI watch ended but the run conclusion could not be read."
+        echo "   Verify manually: gh run view $run_id --repo $repo"
+        return 0
+    fi
+    IFS=$'\t' read -r run_status conclusion <<< "$run_state"
+
+    if [ "$conclusion" = "success" ]; then
+        echo "✅ CI run $run_id is green; npm publish completed."
+        return 0
+    fi
+
+    if [ "$run_status" != "completed" ] || [ -z "$conclusion" ] || [ "$conclusion" = "null" ]; then
+        echo "⚠️  CI watch stopped before run $run_id reached a conclusion."
+        echo "   The release remains pushed; verify manually: gh run view $run_id --repo $repo"
+        return 0
+    fi
+
+    failed_jobs=$(gh run view "$run_id" --repo "$repo" --json jobs \
+        --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null || true)
+    failed_steps=$(gh run view "$run_id" --repo "$repo" --json jobs \
+        --jq '.jobs[] | . as $job | .steps[] | select(.conclusion == "failure") | "\($job.name): \(.name)"' 2>/dev/null || true)
+    publish_conclusion=$(gh run view "$run_id" --repo "$repo" --json jobs \
+        --jq '.jobs[] | select(.name == "publish") | .conclusion' 2>/dev/null || true)
+
+    echo ""
+    echo "❌ CI run $run_id is red (conclusion: ${conclusion:-unknown})."
+    if [ -n "$failed_jobs" ]; then
+        echo "   Failed job(s):"
+        while IFS= read -r failed_job; do
+            [ -n "$failed_job" ] && echo "     • $failed_job"
+        done <<< "$failed_jobs"
+    fi
+    if [ -n "$failed_steps" ]; then
+        echo "   Failed step(s):"
+        while IFS= read -r failed_step; do
+            [ -n "$failed_step" ] && echo "     • $failed_step"
+        done <<< "$failed_steps"
+    fi
+
+    if [ "$publish_conclusion" = "skipped" ]; then
+        echo "❌ The publish job was skipped — this tag run published zero npm packages."
+    elif [ "$publish_conclusion" = "failure" ]; then
+        echo "❌ The publish job failed — npm publishing did not complete; check for partial publishes."
+    else
+        echo "❌ The publish job did not complete successfully (conclusion: ${publish_conclusion:-not found})."
+        echo "   Do not assume npm packages were published."
+    fi
+    echo "   Inspect the failure: gh run view $run_id --repo $repo --log-failed"
+    return 1
+}
+# END release CI watch helpers
+
 warn_if_node_release_runtime_old() {
     local node_version
     node_version=$(node -p "process.versions.node")
@@ -363,6 +521,10 @@ if [ -z "$REMOTE_TAG" ]; then
 fi
 echo "✅ Tag v$NEW_VERSION confirmed on remote"
 
+# Watch the tag-triggered run that already exists. This only reads Actions
+# state; it never dispatches or reruns a workflow.
+watch_release_ci "v$NEW_VERSION" "$HEAD_SHA"
+
 echo ""
 echo "✅ OSS v$NEW_VERSION released!"
 echo "   → CI will publish mesh-shared, session-host-core, mcp-server, daemon-core, and daemon-standalone to npm"
@@ -371,7 +533,7 @@ echo ""
 echo "⚠️  IMPORTANT: Wait for OSS CI to complete before deploying Cloud!"
 echo ""
 echo "   Check CI status:"
-echo "     gh run list --repo vilmire/adhdev -L 1"
+echo "     gh run list --repo vilmire/adhdev --workflow CI --branch v$NEW_VERSION"
 echo ""
 echo "   Verify npm publish:"
 echo "     npm view @adhdev/daemon-core version"
