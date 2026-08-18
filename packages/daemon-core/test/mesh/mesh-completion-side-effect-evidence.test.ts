@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -219,5 +219,42 @@ describe('checkGitEvidenceSync (gap 2 — deeper than clean/dirty)', () => {
         roots.push(dir);
         const result = checkGitEvidenceSync(dir, undefined, 3000);
         expect(result.checked).toBe(false);
+    });
+
+    // MTIME SLANT regression (CI-observed 2026-08-18): on Linux kernels with
+    // multigrain/coarse file timestamps (ubuntu-latest CI runners) a file written
+    // immediately AFTER dispatch can report an mtime slightly BEFORE the fine-grained
+    // dispatch timestamp — a strict mtime>=since comparison then false-verdicts
+    // "no evidence" (false reviewRecommended on code_change; missed readonly-contract
+    // violations). The slant must absorb sub-second clock-source skew...
+    it('still attributes a dirty file whose mtime reads slightly BEFORE sinceIso (coarse kernel/fs timestamp skew)', () => {
+        const repo = tempRepo('sync-slant');
+        roots.push(repo);
+        const file = join(repo, 'file.txt');
+        writeFileSync(file, 'changed\n');
+        // Simulate a coarse-timestamp kernel/fs: the write lands after dispatch, but
+        // the observed mtime lags the fine realtime clock (here: 500ms, inside the 1s
+        // slant; multigrain tick lag is ~4-10ms, 1s-granularity mounts up to ~1s).
+        const past = new Date(Date.now() - 500);
+        utimesSync(file, past, past);
+        const result = checkGitEvidenceSync(repo, new Date().toISOString(), 3000);
+        expect(result.checked).toBe(true);
+        expect(result.detail.dirty).toBe(true);
+        expect(result.noEvidenceSinceDispatch).toBe(false);
+    });
+
+    // ...while a genuinely stale leftover (the tests pin 60s) must remain
+    // unattributable — the slant must NOT resurrect it as this task's evidence.
+    it('does NOT attribute a dirty file backdated well beyond the slant (stale leftover stays stale)', () => {
+        const repo = tempRepo('sync-slant-stale');
+        roots.push(repo);
+        const file = join(repo, 'stale.txt');
+        writeFileSync(file, 'leftover\n');
+        const past = new Date(Date.now() - 60_000);
+        utimesSync(file, past, past);
+        const result = checkGitEvidenceSync(repo, new Date().toISOString(), 3000);
+        expect(result.checked).toBe(true);
+        expect(result.detail.dirty).toBe(true);
+        expect(result.noEvidenceSinceDispatch).toBe(true);
     });
 });

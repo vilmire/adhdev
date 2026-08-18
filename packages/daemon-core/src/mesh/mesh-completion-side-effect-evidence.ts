@@ -145,6 +145,14 @@ export interface SyncGitEvidenceResult {
 // spends it.
 export const FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS = 3_000;
 
+// Backward tolerance applied to the dirty-file mtime vs dispatch-time comparison in
+// checkGitEvidenceSync. Sized to absorb kernel/filesystem timestamp coarseness
+// (multigrain-tick lag ~10ms; 1s-granularity network/fuse mounts) while remaining
+// orders of magnitude below the age of a genuine stale leftover from a prior task
+// (the stale-attribution tests pin that at 60s). See the MTIME SLANT comment at the
+// comparison site for the full rationale and the CI failure this cures.
+const MTIME_ATTRIBUTION_SLANT_MS = 1_000;
+
 export function checkGitEvidenceSync(workspace: string, sinceIso: string | undefined, timeoutMs: number): SyncGitEvidenceResult {
     const deadline = Date.now() + timeoutMs;
     const remaining = () => Math.max(1, deadline - Date.now());
@@ -209,6 +217,22 @@ export function checkGitEvidenceSync(workspace: string, sinceIso: string | undef
         // issues) are skipped rather than failing the whole probe — a path git reports as
         // changed but that can't be stat'd is conservatively treated as NOT proving
         // recency (it does not clear noEvidenceSinceDispatch on its own).
+        //
+        // MTIME SLANT (CI-observed, 2026-08-18): the comparison below crosses TWO time
+        // sources — `sinceMs` comes from `new Date().toISOString()` (fine-grained
+        // CLOCK_REALTIME) while `st.mtimeMs` is stamped by the KERNEL at write time. On
+        // Linux kernels with multigrain/coarse file timestamps (6.6+; ubuntu-latest CI
+        // runners) an observed mtime can lag the fine realtime clock by up to a
+        // scheduler tick (~4-10ms, HZ-dependent), and some network/fuse filesystems
+        // truncate mtimes to 1s granularity. A strict `mtimeMs >= sinceMs` then judges
+        // a file written immediately AFTER dispatch as "predating dispatch" — observed
+        // as systematic CI-only failures of the FALSE-COMPLETION-GIT-EVIDENCE dirty
+        // control and readonly-contract-violation tests (darwin/APFS, with ns-precision
+        // mtimes, never reproduces it), and in production as false reviewRecommended
+        // flags on code_change completions plus missed readonly-contract violations on
+        // such kernels. The slant below absorbs that clock-source skew; it stays far
+        // below the 60s backdate the stale-leftover attribution tests pin and below any
+        // realistic prior-task leftover age, so stale-file discrimination is unchanged.
         let dirtyAttributableToDispatch = dirty && !sinceIso; // no dispatch time to compare against → cannot narrow, fall back to bare dirty
         if (dirty && sinceIso) {
             const sinceMs = Date.parse(sinceIso);
@@ -217,7 +241,7 @@ export function checkGitEvidenceSync(workspace: string, sinceIso: string | undef
                     if (Date.now() > deadline) break; // stay inside the caller's bound
                     try {
                         const st = statSync(path.join(workspace, rel));
-                        if (st.mtimeMs >= sinceMs) { dirtyAttributableToDispatch = true; break; }
+                        if (st.mtimeMs + MTIME_ATTRIBUTION_SLANT_MS >= sinceMs) { dirtyAttributableToDispatch = true; break; }
                     } catch { /* path unreadable (deleted/renamed) — skip, don't fail the probe */ }
                 }
             } else {
