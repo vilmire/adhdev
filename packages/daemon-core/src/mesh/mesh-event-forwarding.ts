@@ -18,7 +18,7 @@ import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
-import { describeRecoveryRelaunchDecision, resolveRecoveryRelaunchProvider } from './mesh-quota-routing.js';
+import { describeRecoveryRelaunchDecision, quotaFactsContextForLiveRouting, resolveRecoveryRelaunchProvider } from './mesh-quota-routing.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { scheduleTaskCompletionSideEffectEvidence, applyTaskModeCompletionEvidence, FALSE_COMPLETION_GIT_CHECK_TIMEOUT_MS } from './mesh-completion-side-effect-evidence.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
@@ -61,6 +61,7 @@ import {
     runIdleMaintenanceThenAssignQueue,
     maybeAutoFastForwardIdleNode,
     sessionHasActiveAssignment,
+    isLocalAutoLaunchNode,
     AUTO_LAUNCH_AWAIT_CLAIM_MS,
 } from './mesh-queue-assignment.js';
 import {
@@ -2279,7 +2280,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                 resolveNodeCapabilitySlots(node, args.meshId).map((s: any) => s.provider),
                                 mesh?.policy?.quotaRouting ?? null,
                                 Date.now(),
-                                mesh,
+                                // LIVE LOCAL READ: local nodes resolve against this
+                                // daemon's live quota cache, not the git_status-stamped
+                                // nodeFacts copy (mesh-quota-routing). Remote nodes keep
+                                // reading their reported nodeFacts.
+                                quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode),
                             )
                             : { action: 'block' as const };
                         const relaunchProviderType = relaunch.action === 'block' ? null : relaunch.providerType;

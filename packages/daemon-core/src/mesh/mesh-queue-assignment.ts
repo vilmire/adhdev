@@ -21,7 +21,7 @@ import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, recordLastQuotaRanking, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, recordLastQuotaRanking, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -820,7 +820,7 @@ export function tryAssignQueueTask(
     // in the launch path; fresh last-good windows remain measurable. Log-only
     // like the lease defer above — no ledger entry, so a repeatedly gated claim
     // does not flood the ledger every drain tick.
-    const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null, Date.now(), mesh);
+    const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null, Date.now(), quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode));
     if (quotaClaimTrace) quotaClaimTrace.evaluated += 1;
     if (quotaClaimBlock) {
         const observation = { nodeId, sessionId, providerType, block: quotaClaimBlock };
@@ -1778,7 +1778,7 @@ async function resolveUsableProvider(
     requiredTags?: string[],
     task?: FitnessTask,
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
-    quotaFactsContext?: { nodes?: any[] } | null,
+    quotaFactsContext?: QuotaFactsContext | null,
     taskId?: string,
 ): Promise<ResolvedProviderSelection & { quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }> }> {
     const providerLoader = components.providerLoader;
@@ -2279,7 +2279,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // pass it through for the 'fitness' strategy's task→slot ranking. The
                 // mesh's quotaRouting thresholds ride along so the fitness score can
                 // include the quota-headroom spread bonus (fail-open when unset).
-                { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: mesh },
+                { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode) },
             ).map((c: RankableNode) => c.node);
 
         // LEDGER-TASK-TRACEABILITY (A): accumulate the candidate nodes that were
@@ -2380,7 +2380,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
 
             autoLaunchInProgress.add(launchKey);
             try {
-                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, mesh, task.id);
+                const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode), task.id);
                 if (!resolved.providerType) {
                     // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
                     // loop (a gated first-choice provider falls through to the node's
@@ -2609,7 +2609,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags },
                     resolved: resolved as ResolvedProviderSelection & { providerType: string; slot: NodeCapabilitySlot },
                     quotaRouting: mesh?.policy?.quotaRouting ?? null,
-                    quotaFactsContext: mesh,
+                    quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode),
                     skippedCandidates,
                     requiredTagsResult: {
                         required: requiredTags,

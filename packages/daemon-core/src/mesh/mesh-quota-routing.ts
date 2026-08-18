@@ -74,8 +74,22 @@
  * Everything here is pure and synchronous: the bundle is already in memory on
  * the node record, and no function in this module may trigger a quota fetch —
  * the refresh timer owns fetching (quota/refresh.ts); readers only ever read.
+ *
+ * LIVE LOCAL READ: the nodeFacts quota bundle is a COPY restamped only on
+ * git_status ingest, so routing on it lags every refresh by an unbounded
+ * interval (observed 2026-08-18: a boot-time snapshot still gated — rather,
+ * failed open — 165 minutes later, routing tasks onto a weekly-100% provider).
+ * For a node that resolves to THIS daemon (or a worktree clone whose source
+ * does), callers inject the daemon's live quota cache through
+ * QuotaFactsContext.liveLocalQuota (liveLocalQuotaForRouting) and the gate
+ * routes on that instead. readQuotaCache() is a synchronous in-memory Map
+ * read — never a fetch — so the purity contract above is unchanged. Remote
+ * nodes keep reading nodeFacts: their measurement does not exist on this
+ * daemon, and no network call is made to get one.
  */
 import { meshNodeIdMatches, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import { LOG } from '../logging/logger.js';
+import { readQuotaCache } from '../quota/refresh.js';
 import {
     resolveQuotaRoutingPolicy,
     type RepoMeshQuotaRoutingPolicy,
@@ -105,8 +119,61 @@ export const PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = 'provider_quota_exhausted';
  *  reasons above. */
 export const ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = 'all_providers_quota_gated';
 
+export interface LiveLocalQuotaSource {
+    /** Snapshot of THIS daemon's live quota cache, taken by the caller when it
+     *  built the routing context (readQuotaCache() — an in-memory Map read,
+     *  never a fetch; the refresh timer in quota/refresh.ts owns fetching). */
+    entries: Record<string, MeshNodeFactsProviderQuota>;
+    /** Caller-supplied locality verdict (queue-assignment's
+     *  isLocalAutoLaunchNode), memoized per node object by
+     *  liveLocalQuotaForRouting so a ranking pass pays one verdict per node. */
+    isLocalNode(node: any): boolean;
+}
+
 export interface QuotaFactsContext {
     nodes?: any[];
+    /** Present only when the caller runs on the quota-OWNING daemon and had a
+     *  live cache to inject. Absent → the nodeFacts copies are read exactly as
+     *  before (remote nodes, tests, pre-measurement boot). */
+    liveLocalQuota?: LiveLocalQuotaSource | null;
+}
+
+/**
+ * Build the live-local-quota injection for one routing pass. Returns null when
+ * this daemon has measured nothing yet — callers then read the nodeFacts
+ * copies unchanged, preserving the pre-cache fail-open behaviour. The locality
+ * verdict is deliberately a PARAMETER (the caller's isLocalAutoLaunchNode):
+ * resolving it here would import config — a disk read — into a module whose
+ * contract is pure in-memory reads.
+ */
+export function liveLocalQuotaForRouting(
+    isLocalNode: (node: any) => boolean,
+): LiveLocalQuotaSource | null {
+    const entries = readQuotaCache();
+    if (!entries) return null;
+    const verdicts = new Map<any, boolean>();
+    return {
+        entries,
+        isLocalNode(node: any): boolean {
+            let verdict = verdicts.get(node);
+            if (verdict === undefined) {
+                verdict = !!node && isLocalNode(node) === true;
+                verdicts.set(node, verdict);
+            }
+            return verdict;
+        },
+    };
+}
+
+/** The context the quota-routing callers pass for one routing pass over
+ *  `mesh`: the node list plus the live local cache when this daemon has one.
+ *  `isLocalNode` is the caller's locality oracle (isLocalAutoLaunchNode) —
+ *  see liveLocalQuotaForRouting. */
+export function quotaFactsContextForLiveRouting(
+    mesh: any,
+    isLocalNode: (node: any) => boolean,
+): QuotaFactsContext {
+    return { nodes: mesh?.nodes, liveLocalQuota: liveLocalQuotaForRouting(isLocalNode) };
 }
 
 /** Read one provider entry directly from a node's facts bundle. */
@@ -130,12 +197,31 @@ function quotaEntryFor(
     node: any,
     providerType: string,
     context?: QuotaFactsContext | null,
+    now: number = Date.now(),
 ): { facts: { reportedAt: number }; quota: MeshNodeFactsProviderQuota } | null {
+    // LIVE LOCAL READ (see the module header): when the caller injected this
+    // daemon's live cache and the node — or its worktree-clone source, which
+    // shares the source's daemon — resolves to this daemon, route on the live
+    // measurement instead of the stale-able nodeFacts copy. A provider absent
+    // from the live cache (never measured, opted out) falls through to the
+    // copy below, and a remote node (no live source) always uses the copy.
+    const live = context?.liveLocalQuota;
+    if (live) {
+        const sourceNode = cloneSourceNodeFor(node, context);
+        if (live.isLocalNode(node) || (sourceNode !== undefined && live.isLocalNode(sourceNode))) {
+            const quota = live.entries[providerType];
+            if (quota && typeof quota === 'object') {
+                // Same daemon, same clock: no transit and no skew, so stamp
+                // reportedAt = now — quotaSnapshotAgeMs then reduces to
+                // now − updatedAt, and a cache entry that is itself old still
+                // fails open exactly like a stale copy.
+                return { facts: { reportedAt: now }, quota };
+            }
+        }
+    }
     const direct = directQuotaEntryFor(node, providerType);
     if (direct) return direct;
-    const sourceNodeId = typeof node?.clonedFromNodeId === 'string' ? node.clonedFromNodeId.trim() : '';
-    if (!sourceNodeId || !Array.isArray(context?.nodes)) return null;
-    const sourceNode = context.nodes.find(candidate => candidate !== node && meshNodeIdMatches(candidate, sourceNodeId));
+    const sourceNode = cloneSourceNodeFor(node, context);
     return sourceNode ? directQuotaEntryFor(sourceNode, providerType) : null;
 }
 
@@ -177,6 +263,37 @@ function remainingPercent(window: { usedPercent: number } | null | undefined): n
     const used = Number(window.usedPercent);
     if (!Number.isFinite(used)) return undefined;
     return Math.min(100, Math.max(0, 100 - used));
+}
+
+/** Rate limiter for the stale fail-open log below: at most one line per
+ *  (node, provider) per freshness window. Routing runs on every reconcile
+ *  tick, so an unthrottled line here would be pure polling spam. Bounded by
+ *  mesh size × provider count — it cannot grow unboundedly. */
+const staleFailOpenLoggedAt = new Map<string, number>();
+
+/** OBSERVABILITY: the stale fail-open branch is otherwise SILENT — a stale
+ *  snapshot gates nobody, so the only evidence used to be the ABSENCE of
+ *  quota-ranking output, which the 2026-08-18 copy-lag investigation had to
+ *  reverse-infer. One concise line per freshness window: provider, age, and
+ *  the threshold it exceeded. */
+function logStaleQuotaFailOpen(
+    node: any,
+    providerType: string,
+    facts: { reportedAt: number },
+    quota: { updatedAt: number },
+    policy: RepoMeshQuotaRoutingPolicy | null | undefined,
+    now: number,
+): void {
+    const staleAfterMs = resolveQuotaRoutingPolicy(policy).staleAfterMs;
+    const nodeId = typeof node?.nodeId === 'string' && node.nodeId ? node.nodeId
+        : typeof node?.id === 'string' && node.id ? node.id : 'unknown';
+    const key = `${nodeId} ${providerType}`;
+    const last = staleFailOpenLoggedAt.get(key);
+    if (last !== undefined && now - last < staleAfterMs) return;
+    staleFailOpenLoggedAt.set(key, now);
+    const ageMs = quotaSnapshotAgeMs(facts, quota, now);
+    const ageText = Number.isFinite(ageMs) ? `${Math.round(ageMs / 60_000)}m` : 'unparseable';
+    LOG.info('MeshQuota', `QUOTA GATE: provider '${providerType}' on node ${nodeId} fails open — snapshot age ${ageText} exceeds the ${Math.round(staleAfterMs / 60_000)}m freshness threshold`);
 }
 
 export interface ProviderQuotaGateBlock {
@@ -279,7 +396,7 @@ export function evaluateProviderQuotaGate(
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
 ): ProviderQuotaGateBlock | null {
-    const entry = quotaEntryFor(node, providerType, context);
+    const entry = quotaEntryFor(node, providerType, context, now);
     if (!entry) return null; // never reported → unknown, not blocked
     const { facts, quota } = entry;
     let sessionTrustworthy = true;
@@ -310,6 +427,7 @@ export function evaluateProviderQuotaGate(
         sessionTrustworthy = isRetainedWindowTrustworthy(quota.session, facts, quota, policy, now);
         weeklyTrustworthy = isRetainedWindowTrustworthy(quota.weekly, facts, quota, policy, now);
     } else if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
+        logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now);
         return null; // fail-open on stale
     }
     const resolved = resolveQuotaRoutingPolicy(policy);
@@ -395,7 +513,7 @@ function expiryRiskForRanking(
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
 ): ExpiryRisk | undefined {
-    const entry = quotaEntryFor(node, providerType, context);
+    const entry = quotaEntryFor(node, providerType, context, now);
     if (!entry) return undefined;
     const { facts, quota } = entry;
     if (quota.status !== 'ok') return undefined;
@@ -754,7 +872,7 @@ export function quotaSpreadBonusByProvider(
         ...Object.keys(directQuota && typeof directQuota === 'object' ? directQuota : {}),
     ]);
     for (const provider of providers) {
-        const entry = quotaEntryFor(node, provider, context);
+        const entry = quotaEntryFor(node, provider, context, now);
         if (!entry) continue;
         const { facts, quota: snapshot } = entry;
         let bonus = 0;
