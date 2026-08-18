@@ -30,6 +30,7 @@ import {
     buildNoProgressCompletionReconciliation,
 } from './mesh-events-stale.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
+import { registerMeshGraphQueueWakeHandler } from './mesh-graph-transition-runner.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
     buildMeshSystemMessage,
@@ -1567,6 +1568,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             : updateSessionTaskStatus(args.meshId, sessionId, outcome, {
                 occurredAt: occurredAtMs != null ? new Date(occurredAtMs).toISOString() : undefined,
                 taskId: eventTaskId,
+                // GRAPH-ORCHESTRATION Phase B: hand the normalized completion envelope to
+                // the choke point so the output version persists in the SAME transaction
+                // as the terminal flip (design :317-327 step 2).
+                envelope: {
+                    finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                    workerResult: readWorkerResultMetadata(args.metadataEvent),
+                    nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
+                    providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+                },
             });
         if (weakCompleted && task) {
             LOG.info('MeshQueue', `Weak completion (${readNonEmptyString(args.metadataEvent.evidenceLevel) || 'missing_final_assistant'}) kept queue task ${task.id} tentative (session ${sessionId}); reconcile owns the genuine terminal`);
@@ -2766,6 +2776,17 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
 }
 
 export function setupMeshEventForwarding(components: DaemonComponents) {
+    // GRAPH-ORCHESTRATION Phase B: drain target for the graph outbox's queue_wake
+    // events (design :323-327 step 9). The wake rides the ORDINARY triggerMeshQueue —
+    // the graph engine never dispatches directly. Registered here because this module
+    // owns DaemonComponents; the transition runner deliberately imports no dispatch code.
+    registerMeshGraphQueueWakeHandler((wakeMeshId) => {
+        setImmediate(() => {
+            triggerMeshQueue(components, wakeMeshId).catch((e: any) => {
+                LOG.warn('MeshQueue', `Graph queue-wake trigger failed (mesh ${wakeMeshId}): ${e?.message || e}`);
+            });
+        });
+    });
     components.instanceManager.onEvent((event) => {
         // --- Coordinator idle auto-flush (fast path) ---
         // When a coordinator session becomes idle, immediately flush any pending

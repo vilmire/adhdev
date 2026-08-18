@@ -10,6 +10,13 @@ import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { closeAttemptForReassignment, openTurnAttempt, proposeTurnCompletion, recordTurnAck, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
+// GRAPH-ORCHESTRATION Phase B: THE single terminal choke point (design :311-334).
+// updateTaskStatus / updateSessionTaskStatus delegate every terminal flip to it.
+import {
+    commitTaskTerminalAndAdvanceGraph,
+    type MeshTerminalCommitStatus,
+    type MeshTerminalCompletionEnvelope,
+} from './mesh-graph-transition-runner.js';
 import { sessionIdsEquivalent, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
 
@@ -1208,46 +1215,35 @@ export function updateTaskStatus(
             LOG.debug('MeshQueue', `Refusing updateTaskStatus(${taskId} → ${status}) on mesh ${meshId}: row is terminal (${entry.status}). A late writer (e.g. dispatch-failure requeue) must not resurrect a cancelled/completed/failed task. Pass force to override.`);
             return { entry, cascaded: [] as MeshWorkQueueEntry[] };
         }
-        const priorStatus = entry.status;
+        // GRAPH-ORCHESTRATION Phase B (design :311-334): EVERY terminal acceptance routes
+        // through the single transactional choke point. commitTaskTerminalAndAdvanceGraph
+        // owns, inside the one queue transaction: the attempt fence+settle, the normalized
+        // output version, the row flip, graph advancement, and the wake outbox.
+        //
+        // SETTLE OWNERSHIP (supersedes the d18e9838 inline block that used to live here):
+        // the proposeTurnCompletion settle is now performed INSIDE the runner as step 1 —
+        // exactly once per terminal transition, never twice. This function neither settles
+        // before delegating nor after; the runner's proposal is the same idempotent reducer
+        // call (an identical repeat returns committed+duplicate without mutating), so the
+        // call sites that pre-propose before invoking us (markSessionTerminal) are unaffected.
+        if (TERMINAL_TASK_STATUSES.has(status)) {
+            const commit = commitTaskTerminalAndAdvanceGraph({
+                meshId,
+                taskId,
+                status: status as MeshTerminalCommitStatus,
+                sessionId: entry.assignedSessionId,
+                source: 'stall_reconcile',
+                reason: `task_status_terminal:${status}`,
+            });
+            const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
+            return { entry: commit.entry ?? entry, cascaded };
+        }
         entry.status = status;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        // Any transition OFF `assigned` ends the single-flight dispatch window (terminal
-        // completion/failure, or the dispatch-failure requeue to `pending`).
+        // Any transition OFF `assigned` ends the single-flight dispatch window (the
+        // dispatch-failure requeue to `pending`).
         if (status !== 'assigned') endTaskDispatchInFlight(meshId, taskId);
-        // ATTEMPT-SETTLE-CHOKE-POINT: a terminal TASK row and a non-terminal ATTEMPT is an
-        // illegal pair — it reads as `status=generating` / `turnStage=generating` forever
-        // (and, with lease_deadline_ms=null, no reaper ever collects it), which blocks the
-        // next dispatch with `session_generating_busy`. This was previously each terminal
-        // writer's opt-in duty: reconcileTerminalViaReducer was called by three of the five
-        // reconcile paths and MISSED by two (the transcript reconcile and the watchdog
-        // early-complete) — the same class of miss recurred three times because a NEW
-        // terminal writer only has to forget the call.
-        //
-        // Settling HERE removes the opt-in entirely: every terminal task flip in the
-        // codebase goes through this one function (verified: the only writers are the
-        // reconcile/forwarding call sites plus cancelTask, which settles its own
-        // 'cancelled' outcome below), and it runs under the queue lock alongside the row
-        // write, so the row and the attempt cannot diverge.
-        //
-        // Idempotent by construction: proposeTurnCompletion returns
-        // {committed:true, duplicate:true} for a repeat of the SAME outcome, and rejects a
-        // conflicting one WITHOUT mutating the committed terminal. So the three call sites
-        // that already propose before calling us are unaffected — their proposal commits,
-        // ours is the idempotent duplicate. Best-effort: the reducer never fails the task
-        // write (pre-Stage-5 shadow mode, or a task with no attempt row at all).
-        if (TERMINAL_TASK_STATUSES.has(status) && !TERMINAL_TASK_STATUSES.has(priorStatus)) {
-            try {
-                proposeTurnCompletion({
-                    meshId,
-                    taskId,
-                    outcome: status as TurnTerminalOutcome,
-                    source: 'stall_reconcile',
-                    sessionId: entry.assignedSessionId,
-                    reason: `task_status_terminal:${status}`,
-                });
-            } catch { /* reducer unavailable — the row write above still stands */ }
-        }
-        const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
+        const cascaded: MeshWorkQueueEntry[] = [];
         return { entry, cascaded };
     });
     if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
@@ -1711,7 +1707,7 @@ export function updateSessionTaskStatus(
     meshId: string,
     sessionId: string,
     status: MeshTaskStatus,
-    opts?: { occurredAt?: string; taskId?: string },
+    opts?: { occurredAt?: string; taskId?: string; envelope?: MeshTerminalCompletionEnvelope },
 ): MeshWorkQueueEntry | null {
     const result = withQueueLock(meshId, () => {
         const store = MeshRuntimeStore.getInstance();
@@ -1730,13 +1726,30 @@ export function updateSessionTaskStatus(
             }
             return null;
         }
+        // GRAPH-ORCHESTRATION Phase B (design :311-334): the terminal branch delegates to
+        // the single choke point, exactly like updateTaskStatus. markSessionTerminal
+        // pre-proposes to the turn reducer BEFORE calling us as its accept/reject gate;
+        // the runner's step-1 settle is the idempotent duplicate of that proposal — one
+        // logical settle, never a double mutation.
+        if (TERMINAL_TASK_STATUSES.has(status)) {
+            const commit = commitTaskTerminalAndAdvanceGraph({
+                meshId,
+                taskId: entry.id,
+                status: status as MeshTerminalCommitStatus,
+                sessionId,
+                occurredAtMs: occurredAtIso ? Date.parse(occurredAtIso) : undefined,
+                source: 'provider_event',
+                envelope: opts?.envelope,
+            });
+            const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, entry.id) : [];
+            return { entry: commit.entry ?? entry, cascaded };
+        }
         entry.status = status;
         store.updateQueueEntry(entry);
         // The worker reported a terminal/non-assigned outcome — the dispatch is over;
         // release the single-flight mark so the task id can be re-dispatched later.
         if (status !== 'assigned') endTaskDispatchInFlight(meshId, entry.id);
-        const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, entry.id) : [];
-        return { entry, cascaded };
+        return { entry, cascaded: [] as MeshWorkQueueEntry[] };
     });
     if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
     return result ? result.entry : null;

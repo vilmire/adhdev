@@ -2,12 +2,12 @@
  * GRAPH-ORCHESTRATION Phase A — minimal persistence store for the graph
  * control-plane tables (design :98-191).
  *
- * ★ PHASE-A SCOPE: this is ROW CRUD ONLY — typed insert/read over the additive
- * schema, so the migration is exercisable and later phases have one storage
- * substrate. There is deliberately NO state machine here: no transition
- * runner, no materialization, no gate claim/release, no workspace saga, no
- * outbox draining (all phases B–D). Nothing in the scheduler reads these
- * tables.
+ * ★ PHASE-A SCOPE (updated in phase B): this is ROW CRUD ONLY — typed insert/read
+ * plus the narrow row-level updates the phase-B transition runner needs
+ * (node state, the materialization CAS, spec patch, graph status rollup, outbox
+ * delivery marks). There is deliberately NO state machine here: every transition
+ * DECISION lives in mesh-graph-transition-runner.ts; no gate claim/release, no
+ * workspace saga (phases C–D). Nothing in the scheduler reads these tables.
  *
  * The store is bound to the MeshRuntimeStore's existing better-sqlite3 handle
  * (MeshRuntimeStore.graphStore()) so phase-B graph writes can join the ONE
@@ -17,7 +17,10 @@
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import type {
     MeshGraphGateRow,
+    MeshGraphNodeState,
     MeshGraphOutboxRow,
+    MeshGraphOutboxStatus,
+    MeshGraphStatus,
     MeshGraphWorkspaceIntentRow,
     MeshTaskGraphEdgeRow,
     MeshTaskGraphNodeRow,
@@ -60,6 +63,15 @@ export class MeshGraphStore {
         return r ? mapGraphRow(r) : null;
     }
 
+    /** Phase-B rollup: graph status transition once every node reached a terminal-equivalent state. */
+    updateGraphStatus(graphId: string, status: MeshGraphStatus, nowIso: string, terminal = false): void {
+        this.db.prepare(`
+            UPDATE mesh_task_graphs
+            SET status = ?, updated_at = ?, terminal_at = CASE WHEN ? THEN ? ELSE terminal_at END
+            WHERE graph_id = ?
+        `).run(status, nowIso, terminal ? 1 : 0, nowIso, graphId);
+    }
+
     // ── mesh_task_graph_nodes ────────────────────────────────────────────────
 
     insertNode(row: MeshTaskGraphNodeRow): void {
@@ -83,6 +95,70 @@ export class MeshGraphStore {
             `SELECT * FROM mesh_task_graph_nodes WHERE graph_id = ? AND node_id = ?`
         ).get(graphId, nodeId) as any;
         return r ? mapNodeRow(r) : null;
+    }
+
+    /** Reverse lookup from a queue row to its backing graph node (phase B transition runner). */
+    findNodeByQueueTaskId(meshId: string, queueTaskId: string): MeshTaskGraphNodeRow | null {
+        const r = this.db.prepare(
+            `SELECT * FROM mesh_task_graph_nodes WHERE mesh_id = ? AND queue_task_id = ?`
+        ).get(meshId, queueTaskId) as any;
+        return r ? mapNodeRow(r) : null;
+    }
+
+    /**
+     * Terminal/state transition for one node (phase B step 4). Plain row write — the
+     * TRANSITION DECISION lives in the transition runner, not here.
+     */
+    updateNodeState(
+        graphId: string,
+        nodeId: string,
+        state: MeshGraphNodeState,
+        nowIso: string,
+        opts?: { skipReason?: string; failureReason?: string },
+    ): void {
+        this.db.prepare(`
+            UPDATE mesh_task_graph_nodes
+            SET state = ?, skip_reason = COALESCE(?, skip_reason),
+                failure_reason = COALESCE(?, failure_reason),
+                updated_at = ?, state_changed_at = ?
+            WHERE graph_id = ? AND node_id = ?
+        `).run(state, opts?.skipReason ?? null, opts?.failureReason ?? null, nowIso, nowIso, graphId, nodeId);
+    }
+
+    /**
+     * Phase-B materialization CAS (design :332-334): the update lands ONLY when the
+     * node's current materialization_version equals `expectedVersion`, so a replayed
+     * completion event — which regenerates the same digest from the same version —
+     * loses the race and performs no duplicate transition. Returns true when this
+     * call won the compare-and-set.
+     */
+    advanceNodeMaterializationCAS(
+        graphId: string,
+        nodeId: string,
+        expectedVersion: number,
+        patch: { state: MeshGraphNodeState; materializedDigest: string },
+        nowIso: string,
+    ): boolean {
+        const r = this.db.prepare(`
+            UPDATE mesh_task_graph_nodes
+            SET state = ?, materialization_version = ?, materialized_digest = ?,
+                updated_at = ?, state_changed_at = ?
+            WHERE graph_id = ? AND node_id = ? AND materialization_version = ?
+        `).run(patch.state, expectedVersion + 1, patch.materializedDigest, nowIso, nowIso, graphId, nodeId, expectedVersion);
+        return r.changes > 0;
+    }
+
+    /**
+     * Pre-assignment spec patch (design :285, :334). Bumps materialization_version so
+     * any digest computed from the pre-patch spec can never clear a block again.
+     * The `task_already_claimed` guard lives in the transition runner — this is the row write.
+     */
+    updateNodeBaseSpec(graphId: string, nodeId: string, baseSpecJson: string, nowIso: string): void {
+        this.db.prepare(`
+            UPDATE mesh_task_graph_nodes
+            SET base_spec_json = ?, materialization_version = materialization_version + 1, updated_at = ?
+            WHERE graph_id = ? AND node_id = ?
+        `).run(baseSpecJson, nowIso, graphId, nodeId);
     }
 
     listNodes(graphId: string): MeshTaskGraphNodeRow[] {
@@ -221,6 +297,22 @@ export class MeshGraphStore {
             `SELECT * FROM mesh_graph_outbox WHERE mesh_id = ? AND status = 'pending' ORDER BY created_at ASC`
         ).all(meshId) as any[];
         return rows.map(mapOutboxRow);
+    }
+
+    /** Phase-B drain bookkeeping: terminal delivery state for one outbox row. */
+    markOutboxEventStatus(
+        id: string,
+        status: MeshGraphOutboxStatus,
+        nowIso: string,
+        opts?: { incrementAttempt?: boolean; nextAttemptAtMs?: number },
+    ): void {
+        this.db.prepare(`
+            UPDATE mesh_graph_outbox
+            SET status = ?, updated_at = ?,
+                attempt_count = attempt_count + ?,
+                next_attempt_at_ms = COALESCE(?, next_attempt_at_ms)
+            WHERE id = ?
+        `).run(status, nowIso, opts?.incrementAttempt ? 1 : 0, opts?.nextAttemptAtMs ?? null, id);
     }
 }
 
