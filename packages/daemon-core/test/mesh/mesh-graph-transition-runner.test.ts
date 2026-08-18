@@ -904,12 +904,29 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
         //   - mesh-graph-transition-runner.ts: phase C1's run_if SKIP path, which
         //     cancels a still-PENDING placeholder for a node whose condition was
         //     false (design :356-359). It is inside the choke point by definition.
-        expect(offenders.sort()).toEqual(['mesh-graph-transition-runner.ts', 'mesh-work-queue.ts']);
-        // ...and in neither may a literal 'completed' write ever appear: every
+        //   - mesh-graph-gates.ts: phase C2's cancel_downstream deadline policy,
+        //     which cancels the still-PENDING placeholders of an expired gate's
+        //     downstream subtree (design :431-432). A timeout can never write
+        //     'completed' — it is never completion evidence.
+        expect(offenders.sort()).toEqual(['mesh-graph-gates.ts', 'mesh-graph-transition-runner.ts', 'mesh-work-queue.ts']);
+        // ...and in none of them may a literal 'completed' write ever appear: every
         // genuine completion routes through the choke point's typed parameter.
         const completedWrite = /\b(entry|dependent|queueEntry|task)\.status\s*=\s*'completed'/;
         expect(read('mesh-work-queue.ts')).not.toMatch(completedWrite);
         expect(read('mesh-graph-transition-runner.ts')).not.toMatch(completedWrite);
+        expect(read('mesh-graph-gates.ts')).not.toMatch(completedWrite);
+    });
+
+    it('the C2 cancel_downstream path never writes a terminal status onto an already-claimed row', () => {
+        // Same guard as the C1 skip path: the cancel is guarded on
+        // `status === 'pending'` and the check must PRECEDE the terminal write —
+        // an assigned/running task is immutable (design :334).
+        const src = read('mesh-graph-gates.ts');
+        const fn = src.slice(src.indexOf('function cancelGateDownstreamSubtree'));
+        const body = fn.slice(0, fn.indexOf('\n}\n'));
+        expect(body).toMatch(/entry\.status === 'pending'/);
+        expect(body.indexOf(`entry.status === 'pending'`))
+            .toBeLessThan(body.indexOf(`entry.status = 'cancelled'`));
     });
 
     it('the C1 skip path never writes a terminal status onto an already-claimed row', () => {
