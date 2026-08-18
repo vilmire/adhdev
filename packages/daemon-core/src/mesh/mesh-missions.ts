@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
+import { deriveDependencyFailures } from './mesh-graph-derived-failure.js';
 import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
@@ -76,7 +77,7 @@ export interface MeshMissionTaskAggregate {
     completed: number;
     failed: number;
     cancelled: number;
-    /** Pending tasks held back by a dependency failure (blockedReason set). */
+    /** Pending tasks held back by a dependency failure (explicit blockedReason or derived from predecessor statuses). */
     blocked: number;
     /** Latest updatedAt across the mission's tasks, or null with no tasks. */
     lastActivityAt: string | null;
@@ -278,7 +279,12 @@ export function getMeshMission(meshId: string, missionId: string): MeshMissionRe
 
 /** Aggregate task statuses for a mission at query time (no stored progress). */
 export function summarizeMissionTasks(meshId: string, missionId: string): MeshMissionTaskAggregate {
-    const tasks = getQueue(meshId).filter(task => task.missionId === missionId);
+    const queue = getQueue(meshId);
+    const tasks = queue.filter(task => task.missionId === missionId);
+    // Dependency status lookup spans the whole queue: a mission task may depend
+    // on a task outside the mission.
+    const statusById = new Map(queue.map(task => [task.id, task.status] as const));
+    const depMetaById = new Map(queue.map(task => [task.id, { blockedReason: task.blockedReason, cancelReason: task.cancelReason, status: task.status }] as const));
     const aggregate: MeshMissionTaskAggregate = {
         total: tasks.length,
         pending: 0,
@@ -295,7 +301,12 @@ export function summarizeMissionTasks(meshId: string, missionId: string): MeshMi
         else if (task.status === 'completed') aggregate.completed += 1;
         else if (task.status === 'failed') aggregate.failed += 1;
         else if (task.status === 'cancelled') aggregate.cancelled += 1;
-        if (task.status === 'pending' && task.blockedReason) aggregate.blocked += 1;
+        // C3: 'block' no longer writes blockedReason — a failed/cancelled
+        // predecessor is derived at view time (design :522-533).
+        if (task.status === 'pending'
+            && (task.blockedReason || deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0)) {
+            aggregate.blocked += 1;
+        }
         if (task.updatedAt && (!aggregate.lastActivityAt || task.updatedAt > aggregate.lastActivityAt)) {
             aggregate.lastActivityAt = task.updatedAt;
         }
