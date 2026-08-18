@@ -29,6 +29,8 @@ import {
     extractFinalSummaryFromMessagesAfter,
     readChatMessageTimestampMs,
     hasTrailingToolActivityAfterFinalAssistant,
+    countTrailingToolActivityAfterFinalAssistant,
+    selectFinalAssistantTurnEndMessage,
 } from '../chat-message-normalization.js';
 import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
 import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../../config/chat-history.js';
@@ -209,6 +211,43 @@ export function completionHasFinalAssistantMessage(messages: unknown, turnStarte
  * `observedAt` is the PTY snapshot clock, not the time this accessor ran:
  * after restart/rebind an old waiting_* frame must remain recognizably
  * older than a newly-written authoritative transcript final.
+ *
+ * MID-TURN-LIVE-STATE-GATE (broader false-idle RCA, mid-turn follow-up): a live,
+ * synchronous re-check of whether this session's CURRENT turn genuinely still has
+ * unresolved work. Exposed on the instance so the coordinator (mesh-event-forwarding) can
+ * independently re-verify an incoming agent:generating_completed for a LOCAL session
+ * before trusting it — defense-in-depth against a race where the completion emit and the
+ * coordinator's receipt straddle a state change (screen-redraw parse artifact, decoupled-
+ * immediate emit). Reuses the EXACT same discriminators the instance's own finalization
+ * gate (getCompletedFinalizationBlock) uses — hasAdapterPendingResponse() (adapter
+ * isWaitingForResponse / currentTurnScope / isProcessing() / a non-empty partial response)
+ * OR isModalParked() (a live approval/choice modal) — so a session this reports
+ * pending is, by construction, one the local finalization gate would also refuse to
+ * finalize right now.
+ *
+ * NATIVE-TRAILING-TOOL-GATE (rc.16 follow-up): the three adapter-state discriminators
+ * above are blind to a background shell tool that keeps a turn alive without the adapter
+ * reporting a pending response — e.g. a backgrounded `sleep 40 &` between narration
+ * bubbles on a write-lag native-source provider (claude-cli), which is deliberately
+ * un-floored (noExternalTranscriptSource omitted, mission f2f6da1b owner decision) so its
+ * transcript write-lag emits promptly. That un-flooring is correct for the ordinary
+ * fraction-of-a-second trail, but it also means the growth-hold / busy-lease protections
+ * in getCompletedFinalizationBlock never engage for claude-cli, so an interim final-
+ * LOOKING bubble followed by continuing tool calls can still finalize as a completion
+ * while the transcript demonstrably shows the turn still executing. Close that gap here,
+ * narrowly: for a native-source provider only, reuse the SAME bounded transcript read the
+ * class's own completion judgment already performs (probeNativeTranscriptSignals) and
+ * apply the SAME trailing-tool-activity veto the transcript-synth admission choke point
+ * uses (hasTrailingToolActivityAfterFinalAssistant) — the latest final-looking assistant
+ * bubble followed by tool/terminal activity is interim narration, not a turn end. Fail-open
+ * by construction: a non-native-source class (probe returns null), an unresolved
+ * transcript, or a read error never reaches the veto, so a missing/unavailable transcript
+ * can never wedge a session as "pending" forever.
+ *
+ * ★ NOT a substitute for terminal admission: these three discriminators are blind to a
+ * transcript that is simply still GROWING with no trailing tool bubble yet in the tail —
+ * that is what getTerminalAdmissionObservations below observes, and it is the shape the
+ * 2026-08-18 10:49 false completion took.
  */
 export function getLiveTurnPendingEvidence(host: EvidenceHost): {
     pending: boolean;
@@ -244,6 +283,93 @@ export function getLiveTurnPendingEvidence(host: EvidenceHost): {
         }
     } catch { /* fail open — a probe error must never fabricate pending evidence */ }
     return { pending: false };
+}
+
+/**
+ * TERMINAL-ADMISSION-ALL-PATHS (provider_event path): the observation bundle the
+ * mesh-side terminal-admission choke point needs, gathered HERE because this is
+ * where the data lives — the mesh layer must not reach into provider internals
+ * (import-boundary gate), so it duck-types this accessor off the live instance
+ * instead.
+ *
+ * WHY THIS EXISTS AT ALL. getLiveTurnPendingEvidence above already vetoes an
+ * adapter-pending, modal-parked, or trailing-tool turn. It is blind to one shape
+ * the 10:49 incident actually took: a transcript that is still GROWING. The
+ * completion engine DOES see that (it holds on `native_transcript_advancing`,
+ * decideCompletionVerdict rule 5), but that hold is instance-local and bounded —
+ * a provider-native event completion never passes through the engine flush at
+ * all, and the engine's own hold releases at the growth-quiet window. So the
+ * coordinator received `agent:generating_completed` for a session whose
+ * transcript had grown to msgCount=542 one second earlier, and nothing on the
+ * forwarding path re-asked the question.
+ *
+ * Every field is an OBSERVATION, never a verdict: the ordered rules stay in
+ * evaluateTerminalAdmission (mesh/mesh-terminal-admission.ts), which is the one
+ * place finality is decided.
+ *
+ * Fail-open by construction — an unavailable snapshot, a non-native-source
+ * class, or a read error yields `undefined` for the field it could not observe,
+ * and an undefined observation never manufactures a veto (rule 6 tests
+ * `typeof newest === 'number'`). A probe error must never wedge a completion.
+ */
+export interface TerminalAdmissionObservations {
+    activeModalPresent: boolean;
+    trailingActivityCount: number;
+    /** Newest transcript bubble of ANY kind (epoch ms) — rule 6's freshness probe. */
+    newestActivityAtMs?: number;
+    finalAssistantPresent: boolean;
+    nativeMarkersFieldPresent: boolean;
+    nativeMarkers?: NativeTurnTerminalMarker[];
+}
+
+export function getTerminalAdmissionObservations(host: EvidenceHost, nowMs: number): TerminalAdmissionObservations {
+    let activeModalPresent = false;
+    try { activeModalPresent = host.isModalParked() === true; } catch { /* fail open */ }
+
+    let trailingActivityCount = 0;
+    let newestActivityAtMs: number | undefined;
+    let finalAssistantPresent = false;
+    try {
+        const probe = host.probeNativeTranscriptSignals();
+        const messages = Array.isArray(probe?.messages) ? probe.messages as ChatMessage[] : null;
+        if (messages) {
+            trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
+            finalAssistantPresent = !!selectFinalAssistantTurnEndMessage(messages);
+            for (const msg of messages) {
+                const ts = readChatMessageTimestampMs(msg);
+                if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
+                if (newestActivityAtMs === undefined || ts > newestActivityAtMs) newestActivityAtMs = ts;
+            }
+        }
+        // TRANSCRIPT-GROWTH as a freshness observation. The snapshot's own mtime age
+        // is the authority the completion engine's growth-hold uses; when the tail
+        // carries no per-bubble timestamps (PTY-parsed providers) it is the ONLY
+        // freshness signal available. Take whichever proves the transcript is FRESHER
+        // — a newer observation can only strengthen rule 6's veto, never weaken it.
+        const snapshot = probe?.snapshot;
+        if (snapshot?.available === true && typeof snapshot.detail?.ageMs === 'number'
+            && Number.isFinite(snapshot.detail.ageMs)) {
+            const mtimeAtMs = nowMs - snapshot.detail.ageMs;
+            if (newestActivityAtMs === undefined || mtimeAtMs > newestActivityAtMs) {
+                newestActivityAtMs = mtimeAtMs;
+            }
+        }
+    } catch { /* fail open — a probe error must never fabricate a veto */ }
+
+    // Marker FIELD presence is the version-skew discriminator (see
+    // TerminalAdmissionInput.nativeMarkersFieldPresent): an instance that never
+    // populated the field has not proven "this turn has NOT ended", so admission
+    // must fall through to the shape rules rather than read an absent list as an
+    // authoritative empty one.
+    const markers = host.lastNativeTurnTerminalMarkers;
+    return {
+        activeModalPresent,
+        trailingActivityCount,
+        ...(newestActivityAtMs !== undefined ? { newestActivityAtMs } : {}),
+        finalAssistantPresent,
+        nativeMarkersFieldPresent: Array.isArray(markers),
+        ...(Array.isArray(markers) ? { nativeMarkers: markers } : {}),
+    };
 }
 
 export function recordPendingTranscriptProbe(host: EvidenceHost, pending: CompletedDebouncePending): ExternalTranscriptProbe | null {

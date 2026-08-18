@@ -57,6 +57,26 @@ import {
     collectLiveNodesWithSessions,
 } from './mesh-remote-event-pull.js';
 
+/**
+ * Newest transcript bubble of ANY kind (epoch ms), or undefined when nothing in the
+ * tail carries a usable timestamp.
+ *
+ * This is the freshness probe behind admission rule 6 (transcript_growing). Shared by
+ * BOTH producers in this file — the acked-hold/death-deadline synth and the terminal
+ * poll — because the whole point of item 3 is that the two must answer the "is the tail
+ * still moving?" question the same way. Undefined means "could not observe", which by
+ * construction never manufactures a veto at either call site.
+ */
+function readNewestChatActivityAtMs(messages: ChatMessage[]): number | undefined {
+    let newest: number | undefined;
+    for (const msg of messages) {
+        const ts = readChatMessageTimestampMs(msg);
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
+        if (newest === undefined || ts > newest) newest = ts;
+    }
+    return newest;
+}
+
 // PHASE 4 helper. For every active (non-terminal) direct dispatch this daemon
 // hosts, confirm the worker session is idle via a read_chat and — if a final
 // assistant summary is present but no terminal ledger exists for that dispatch —
@@ -299,6 +319,45 @@ export async function reconcileUnterminatedDirectDispatches(
             traceMeshEventDrop('reconcile_synth_veto_trailing_tool_activity', {
                 taskId, sessionId, nodeId, meshId: mesh.id, event: 'agent:generating_completed',
             });
+            continue;
+        }
+
+        // TERMINAL-ADMISSION-ALL-PATHS (item 3): FAIL-OPEN/FAIL-CLOSED SYMMETRY.
+        //
+        // The asymmetry this fixes lived inside this one file. The transcript POLL
+        // (pollAssignedTaskTerminalEvidence, below) refuses to complete a tail that is
+        // still MOVING — admission rule 6, the transcript_growing veto. This synth path
+        // had no equivalent: it vetoed trailing TOOL bubbles (just above) but was blind
+        // to a transcript that is simply still growing, so the same evidence that is
+        // fail-CLOSED for the poll was fail-OPEN for the synth. That gap matters most at
+        // the death deadline, which is exactly where a synth is most likely to fire on a
+        // worker that is slow rather than dead.
+        //
+        // Aligned here, on the SAME constant and the SAME freshness question, and placed
+        // beside the trailing-tool veto so it likewise covers EVERY synth path —
+        // never-acked first-idle, acked fast-track, and the death deadline.
+        //
+        // ★ WHAT THIS DELIBERATELY DOES NOT DO — the reclaim path stays alive.
+        // This veto refuses to manufacture a COMPLETION off a moving tail. It does not,
+        // and must not, disable RECOVERY of a genuinely dead session. The distinction the
+        // admission module draws (a timeout is never completion evidence, but recovery is
+        // still owed) is preserved exactly:
+        //   - a DEAD worker's transcript does not grow, so this veto never engages for it
+        //     and the death-deadline synth fires as before;
+        //   - the session-death read-failure backstop, the stranded-dispatch reclaim, and
+        //     the orphan prune are untouched — they are the paths that recover a wedged
+        //     row, and none of them route through here.
+        // So a task like the long-idle a09144fa case is still reclaimed; what can no
+        // longer happen is a moving transcript being stamped `completed` because a
+        // deadline expired.
+        const synthNewestActivityAtMs = readNewestChatActivityAtMs(messages);
+        if (synthNewestActivityAtMs !== undefined
+            && nowMs - synthNewestActivityAtMs < TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS) {
+            setHoldState(synthKey, mesh.id, { liveConfirmedSinceAck: true, consecutiveReadFailures: 0 });
+            LOG.info('MeshReconcile', `Mid-turn causal admission: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) — newest transcript bubble is ${nowMs - synthNewestActivityAtMs}ms old (< ${TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS}ms quiet window); the tail is still moving, holding the transcript synth`);
+            traceMeshEventDrop('reconcile_synth_veto_transcript_growing', {
+                taskId, sessionId, nodeId, meshId: mesh.id, event: 'agent:generating_completed',
+            }, `newestActivityAgeMs=${nowMs - synthNewestActivityAtMs}`);
             continue;
         }
 
@@ -909,15 +968,48 @@ export async function pollAssignedTaskTerminalEvidence(
     // anyway, and a provably-stale tail is declined here regardless of any other signal.
     const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
     const transcriptAtMs = Date.parse(evidence.transcriptMessageAt ?? '');
-    if (!(Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs >= dispatchedAtMs)) {
-        // Separate the two causes: an unparseable timestamp is a data problem, while a summary
-        // predating dispatch is a genuinely stale tail. They need different follow-up.
-        const unusable = !Number.isFinite(dispatchedAtMs) || !Number.isFinite(transcriptAtMs);
+    // A summary PROVABLY older than this task's dispatch is a prior task's tail — the
+    // original stale-tail veto, unchanged and still fail-closed.
+    if (Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs < dispatchedAtMs) {
         return declined(
-            unusable ? 'timestamp_unusable' : 'summary_predates_dispatch',
+            'summary_predates_dispatch',
             `dispatchTimestamp=${row.dispatchTimestamp ?? 'none'} transcriptMessageAt=${evidence.transcriptMessageAt ?? 'none'}`,
         );
     }
+    // TIMESTAMP-UNUSABLE DEMOTION (terminal-admission-all-paths, item 1).
+    //
+    // What this guard used to do: hard-return `timestamp_unusable` whenever EITHER
+    // timestamp failed to parse. Live measurement showed that pre-return firing 49/49
+    // times on this path — it declined every poll, which is why the admission gate below
+    // had never once run in production.
+    //
+    // Why it fired so often — the measured cause, not the assumed one. `transcriptMessageAt`
+    // is not "a field that happened to be empty". extractFinalAssistantSummaryEvidence
+    // returns `{ finalSummary: '' }` with NO transcriptMessageAt at all whenever
+    // selectFinalAssistantTurnEndMessage returns null. So `transcriptMessageAt=none`
+    // does not mean "undated bubble" — it overwhelmingly means "no final assistant bubble
+    // was selected in the tail", which on a tool-heavy coordinator session with
+    // tailLimit=10 is the normal reading. The guard was answering a SHAPE question with a
+    // TIMESTAMP verdict.
+    //
+    // What changes: an unusable/absent timestamp is no longer a hard pre-return. It is
+    // demoted to what it actually is — an ABSENCE of shape evidence — and handed to the
+    // admission choke point, which already answers it correctly and more precisely:
+    //   - rule 5 declines `no_final_assistant_summary` when no final assistant exists
+    //     (the real 43/49 case) — same refusal, honest reason;
+    //   - rule 3 can admit a provider-NATIVE turn-terminal marker first, which is the
+    //     case the old guard wrongly buried: a marker proves THIS turn ended even when
+    //     the tail carries no dated assistant bubble at all (codex's 19.5% empty-reply
+    //     turns), and it is scoped to the dispatch boundary so it cannot match a prior
+    //     turn's marker.
+    //
+    // ★ What is preserved: "no timestamp" still NEVER promotes to completed on shape
+    // evidence. The message-shape fallback (rule 8) is reachable only through rule 5,
+    // which requires a final assistant to have been selected — and selection is exactly
+    // what produces the timestamp. So a dated-tail-less transcript can only be admitted
+    // by a native marker, never by shape. The guard's original intent — do not manufacture
+    // a completion from an undated/pre-dispatch tail, let reclaim handle it — holds.
+    const dispatchBoundaryUnusable = !Number.isFinite(dispatchedAtMs) || !Number.isFinite(transcriptAtMs);
 
     // TX-FSM Stage 2 (EARLY-IDLE preamble guard): the final assistant bubble
     // must have SETTLED — see the opts doc above. A bubble younger than the
@@ -951,12 +1043,7 @@ export async function pollAssignedTaskTerminalEvidence(
     //     freshness veto, never bypassable by any deadline/backstop.
     const nowMs = Date.now();
     const trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
-    let newestActivityAtMs: number | undefined;
-    for (const msg of messages) {
-        const ts = readChatMessageTimestampMs(msg);
-        if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
-        if (newestActivityAtMs === undefined || ts > newestActivityAtMs) newestActivityAtMs = ts;
-    }
+    const newestActivityAtMs = readNewestChatActivityAtMs(messages);
     const transcriptGrowing = newestActivityAtMs !== undefined
         && nowMs - newestActivityAtMs < TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS;
     const activeModalPresent = hasNonEmptyModalButtons(payload.activeModal);
@@ -982,6 +1069,28 @@ export async function pollAssignedTaskTerminalEvidence(
         minFinalAssistantAgeMs: opts?.minFinalAssistantAgeMs,
     });
     if (!verdict.admit) return declined(verdict.reason, verdict.detail);
+
+    // ★ TIMESTAMP-UNUSABLE DEMOTION — the invariant the old hard pre-return used to
+    // guarantee structurally, re-asserted explicitly now that the demotion lets these
+    // cases reach the predicate at all.
+    //
+    // "No usable timestamp" must NEVER promote to completed on message-SHAPE evidence.
+    // Rules 5→8 already make that true by construction (`finalAssistantPresent` is
+    // `!!evidence.finalSummary`, produced by the SAME selectFinalAssistantTurnEndMessage
+    // call that produces transcriptMessageAt — so no final assistant ⇒ no timestamp ⇒
+    // rule 5 declines). That coupling is not obvious from either call site and a future
+    // change to either extractor could silently break it, turning "undated tail" back
+    // into "completed" — the exact failure the original guard existed to prevent. Pin it
+    // here: with an unusable dispatch/transcript boundary, ONLY a strong native marker
+    // (rule 3, itself dispatch-scoped) may admit. Anything else falls back to the
+    // reclaim path, as before.
+    if (dispatchBoundaryUnusable && verdict.evidenceLevel !== 'strong') {
+        return declined(
+            'timestamp_unusable',
+            `dispatchTimestamp=${row.dispatchTimestamp ?? 'none'} transcriptMessageAt=${evidence.transcriptMessageAt ?? 'none'}`
+            + ` — shape-only evidence (${verdict.reason}) cannot complete an undated tail; reclaim owns it`,
+        );
+    }
 
     // Admitted. Idle + a final assistant message dated after dispatch (weak), or a
     // native turn-terminal marker scoped to this turn (strong) = the worker finished

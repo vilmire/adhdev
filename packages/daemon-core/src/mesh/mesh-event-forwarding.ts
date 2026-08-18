@@ -71,6 +71,7 @@ import {
     readLiveTurnPendingEvidence,
     type LiveTurnEvidenceSource,
 } from './mesh-completion-live-gate.js';
+import { evaluateProviderEventAdmission } from './mesh-provider-event-admission.js';
 
 // ---------------------------------------------------------------------------
 // BOOTSTRAP-MSG: worktreeHasQueuedTask predicate (exported for unit testing)
@@ -752,6 +753,50 @@ function evaluateMeshEventSuppression(
                         },
                     };
                 }
+            }
+        }
+        // TERMINAL-ADMISSION-ALL-PATHS (provider_event): route this path — the one that
+        // actually produced the 10:49 false completion — through the single terminal-admission
+        // choke point. See mesh-provider-event-admission.ts for the incident, the narrow rule
+        // it enforces (transcript_growing only), and the liveness contract that keeps genuine
+        // completions flowing. A decline arms the SAME bounded content-free hold the live-state
+        // gate above uses, so it delays by at most the hold TTL and never drops.
+        {
+            const admission = evaluateProviderEventAdmission({
+                instance: components.instanceManager?.getInstance?.(eventSessionId),
+                providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+                // Dispatch boundary for native-marker turn scoping. Best-effort: an
+                // unresolvable attempt leaves it undefined, which only widens marker
+                // acceptance — it can never fabricate a veto.
+                turnStartedAtMs: (() => {
+                    const taskId = readNonEmptyString(args.metadataEvent.taskId);
+                    if (!taskId) return undefined;
+                    try {
+                        const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(args.meshId, taskId);
+                        const at = Date.parse(attempt?.acceptedAt || attempt?.createdAt || '');
+                        return Number.isFinite(at) ? at : undefined;
+                    } catch { return undefined; }
+                })(),
+            });
+            if (admission.kind === 'decline') {
+                const heldForRetry = holdCompletionForLiveStateRetry(
+                    components, args, eventSessionId, Date.now(), injectMeshSystemMessage);
+                LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): terminal admission declined (${admission.reason}) — ${admission.detail}${heldForRetry ? ' — bounded content-free retry armed' : ''}`);
+                traceMeshEventDrop(
+                    'provider_event_terminal_admission_declined',
+                    traceCtx,
+                    `${admission.reason} ${heldForRetry ? 'retry_held' : 'dropped'}`,
+                );
+                return {
+                    kind: 'suppress',
+                    result: {
+                        success: true,
+                        forwarded: 0,
+                        suppressed: true,
+                        terminalAdmissionDeclined: true,
+                        ...(heldForRetry ? { completionRetryHeld: true } : {}),
+                    },
+                };
             }
         }
         // NO-DISPATCH-NATIVE-COMPLETION-GATE (rc.16 follow-up): a session that was launched

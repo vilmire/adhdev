@@ -1271,37 +1271,19 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /**
-     * MID-TURN-LIVE-STATE-GATE (broader false-idle RCA, mid-turn follow-up): a live,
-     * synchronous re-check of whether this session's CURRENT turn genuinely still has
-     * unresolved work. Public wrapper so the coordinator (mesh-event-forwarding) can
-     * independently re-verify an incoming agent:generating_completed for a LOCAL session
-     * before trusting it — defense-in-depth against a race where the completion emit and the
-     * coordinator's receipt straddle a state change (screen-redraw parse artifact, decoupled-
-     * immediate emit). Reuses the EXACT same discriminators this instance's own finalization
-     * gate (getCompletedFinalizationBlock) uses — hasAdapterPendingResponse() (adapter
-     * isWaitingForResponse / currentTurnScope / isProcessing() / a non-empty partial response)
-     * OR isModalParked() (a live approval/choice modal) — so a session this method reports
-     * pending is, by construction, one the local finalization gate would also refuse to
-     * finalize right now.
-     *
-     * NATIVE-TRAILING-TOOL-GATE (rc.16 follow-up): the three adapter-state discriminators
-     * above are blind to a background shell tool that keeps a turn alive without the adapter
-     * reporting a pending response — e.g. a backgrounded `sleep 40 &` between narration
-     * bubbles on a write-lag native-source provider (claude-cli), which is deliberately
-     * un-floored (noExternalTranscriptSource omitted, mission f2f6da1b owner decision) so its
-     * transcript write-lag emits promptly. That un-flooring is correct for the ordinary
-     * fraction-of-a-second trail, but it also means the growth-hold / busy-lease protections
-     * in getCompletedFinalizationBlock never engage for claude-cli, so an interim final-
-     * LOOKING bubble followed by continuing tool calls can still finalize as a completion
-     * while the transcript demonstrably shows the turn still executing. Close that gap here,
-     * narrowly: for a native-source provider only, reuse the SAME bounded transcript read the
-     * class's own completion judgment already performs (probeNativeTranscriptSignals) and
-     * apply the SAME trailing-tool-activity veto the transcript-synth admission choke point
-     * uses (hasTrailingToolActivityAfterFinalAssistant) — the latest final-looking assistant
-     * bubble followed by tool/terminal activity is interim narration, not a turn end. Fail-open
-     * by construction: a non-native-source class (probe returns null), an unresolved
-     * transcript, or a read error never reaches the veto, so a missing/unavailable transcript
-     * can never wedge a session as "pending" forever.
+     * TERMINAL-ADMISSION-ALL-PATHS: observation bundle for the mesh-side terminal-
+     * admission choke point — see completion/evidence.ts (observations only, never a
+     * verdict; the ordered rules live in mesh/mesh-terminal-admission.ts).
+     */
+    getTerminalAdmissionObservations(nowMs?: number): evidence.TerminalAdmissionObservations {
+        return evidence.getTerminalAdmissionObservations(this as unknown as EvidenceHost, nowMs ?? Date.now());
+    }
+
+    /**
+     * MID-TURN-LIVE-STATE-GATE: boolean wrapper over getLiveTurnPendingEvidence above.
+     * The rationale for WHICH discriminators make a turn "pending" (adapter-pending /
+     * modal-parked / NATIVE-TRAILING-TOOL-GATE) lives with the implementation in
+     * completion/evidence.ts, not here.
      */
     hasLiveTurnPendingEvidence(): boolean {
         return this.getLiveTurnPendingEvidence().pending;
