@@ -1056,7 +1056,17 @@ var MESH_ENQUEUE_BATCH_TOOL = {
       block_duplicate: { type: "boolean", description: "G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response." },
       blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
       allow_duplicate: { type: "boolean", description: "G4: skip duplicate detection entirely for every entry (intentional re-enqueue)." },
-      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." }
+      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." },
+      on_dependency_failure: {
+        type: "string",
+        enum: ["block", "cancel"],
+        description: "on_dependency_failure controls downstream tasks when a required worker task fails or is cancelled. `block` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. `cancel` terminally cancels the dependent branch; it is not revived by predecessor retry."
+      },
+      onDependencyFailure: {
+        type: "string",
+        enum: ["block", "cancel"],
+        description: "CamelCase alias for on_dependency_failure."
+      }
     },
     required: ["tasks"]
   }
@@ -4894,7 +4904,8 @@ var BATCH_ENQUEUE_ERROR_CODES = [
   "task_graph_too_large",
   "empty_task_graph",
   "missing_task_difficulty",
-  "invalid_task_difficulty"
+  "invalid_task_difficulty",
+  "invalid_on_dependency_failure"
 ];
 async function meshEnqueueBatch(ctx, args) {
   const rawTasks = Array.isArray(args.tasks) ? args.tasks : void 0;
@@ -4913,6 +4924,20 @@ async function meshEnqueueBatch(ctx, args) {
     });
   }
   const batchMissionId = readString(args.missionId) || readString(args.mission_id) || void 0;
+  const rawFailurePolicy = args.on_dependency_failure ?? args.onDependencyFailure;
+  let onDependencyFailure;
+  if (rawFailurePolicy !== void 0) {
+    try {
+      onDependencyFailure = (0, import_daemon_core6.parseOnDependencyFailurePolicy)(rawFailurePolicy);
+    } catch (e) {
+      const message = e instanceof import_daemon_core6.MeshGraphPolicyError || e instanceof Error ? e.message : "invalid_on_dependency_failure";
+      return JSON.stringify({
+        success: false,
+        code: "invalid_on_dependency_failure",
+        error: message
+      });
+    }
+  }
   if (batchMissionId && !(0, import_daemon_core6.getMeshMission)(ctx.mesh.id, batchMissionId)) {
     return JSON.stringify({
       success: false,
@@ -5044,6 +5069,7 @@ async function meshEnqueueBatch(ctx, args) {
     source: "queue",
     atomic: true,
     enqueued: tasks.length,
+    ...onDependencyFailure ? { on_dependency_failure: onDependencyFailure } : {},
     tasks: tasks.map((task, i) => ({
       ...normalizedEntries[i].ref ? { ref: normalizedEntries[i].ref } : {},
       taskId: task.id,
@@ -5074,9 +5100,10 @@ async function meshViewQueue(ctx, args) {
     const view = normalizeQueueViewMode(args.view);
     const rawQueue = (0, import_daemon_core6.getQueue)(ctx.mesh.id);
     const statusById = new Map(rawQueue.map((task) => [task.id, task.status]));
+    const depMetaById = new Map(rawQueue.map((task) => [task.id, task]));
     const withDependencies = rawQueue.map((task) => {
       if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
-      const depState = (0, import_daemon_core6.describeTaskDependencyState)(task, statusById);
+      const depState = (0, import_daemon_core6.describeTaskDependencyState)(task, statusById, depMetaById);
       return { ...task, ...depState };
     });
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx);
