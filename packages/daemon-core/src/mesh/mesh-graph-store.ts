@@ -299,6 +299,22 @@ export class MeshGraphStore {
         return rows.map(mapOutboxRow);
     }
 
+    /**
+     * Every outbox row for a mesh regardless of delivery status — the graph's own
+     * event stream, used for audit/replay views and by the phase-C1 telemetry
+     * assertions. `listPendingOutboxEvents` is the drain path; this is the reader.
+     */
+    listOutboxEvents(meshId: string, graphId?: string): MeshGraphOutboxRow[] {
+        const rows = graphId
+            ? this.db.prepare(
+                `SELECT * FROM mesh_graph_outbox WHERE mesh_id = ? AND graph_id = ? ORDER BY created_at ASC`
+            ).all(meshId, graphId) as any[]
+            : this.db.prepare(
+                `SELECT * FROM mesh_graph_outbox WHERE mesh_id = ? ORDER BY created_at ASC`
+            ).all(meshId) as any[];
+        return rows.map(mapOutboxRow);
+    }
+
     /** Phase-B drain bookkeeping: terminal delivery state for one outbox row. */
     markOutboxEventStatus(
         id: string,

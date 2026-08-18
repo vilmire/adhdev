@@ -1196,6 +1196,16 @@ export function updateTaskStatus(
          * no-op. Terminal→terminal and any transition FROM a non-terminal state are unaffected.
          */
         force?: boolean;
+        /**
+         * GRAPH-ORCHESTRATION Phase C1: the normalized completion envelope this
+         * terminal carries, persisted as the task's next immutable output version
+         * and read by downstream `inputs_from` bindings / `run_if` conditions
+         * (design :145-171, :192-370). Symmetrical with updateSessionTaskStatus —
+         * a completion path that resolves the task by ID rather than by session
+         * (redrive, reconcile, native-signal reconciliation) must be able to carry
+         * its result too, or a graph consumer would bind against an empty envelope.
+         */
+        envelope?: MeshTerminalCompletionEnvelope;
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
@@ -1234,6 +1244,7 @@ export function updateTaskStatus(
                 sessionId: entry.assignedSessionId,
                 source: 'stall_reconcile',
                 reason: `task_status_terminal:${status}`,
+                envelope: opts?.envelope,
             });
             const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
             return { entry: commit.entry ?? entry, cascaded };

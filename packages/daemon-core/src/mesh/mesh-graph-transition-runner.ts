@@ -17,16 +17,18 @@
  *   3. Flip the upstream queue row to its terminal status.
  *   4. Advance affected graph nodes deterministically (upstream node →
  *      terminal; graph rollup when every node is terminal-equivalent).
- *   5. Eligibility check for nodes whose graph inputs are now settled.
- *      ★ B BOUNDARY: `run_if`/conditional-edge evaluation is NOT implemented —
- *      a node with ANY conditional edge carrying condition_json stays deferred
- *      (fails closed) until phase C1 evaluates it.
- *   6. Materialize eligible downstream worker nodes. ★ B BOUNDARY: this is
- *      IDENTITY materialization — the immutable base message becomes the final
- *      message and the active `dependsOn` projection is written from `requires`
- *      edges. `inputs_from` binding semantics (selector language, envelope
- *      rendering, size policy) are phase C1; a node whose base spec carries
- *      bindings stays blocked instead of being guessed at.
+ *   5. Evaluate `run_if` for nodes whose graph inputs are now settled ★ PHASE C1:
+ *      declarative all/any/not over exists/eq/ne/in leaves with JSON Pointer
+ *      selectors (mesh-graph-input-binding.ts). False ⇒ the node and its queue
+ *      placeholder go `skipped`, and outgoing edges resolve per `on_upstream_skip`
+ *      (default `skip` propagates; `omit_dependency` removes the edge from the
+ *      downstream queue projection — design :336-369).
+ *   6. Materialize eligible downstream worker nodes ★ PHASE C1: `inputs_from`
+ *      bindings are resolved against the upstream nodes' normalized completion
+ *      envelopes and appended to the IMMUTABLE base message as untrusted-evidence
+ *      envelopes; the active `dependsOn` projection is written from `requires`
+ *      edges minus skip-omitted ones. A node with no bindings still materializes
+ *      by identity, exactly as in phase B.
  *   7. Clear ONLY graph-owned blocks (`graph_materialization_pending:<nodeId>:
  *      <version>`) whose recorded generation matches the version just advanced.
  *      Non-graph blocks (e.g. `dependency_failed:*`) are never touched.
@@ -47,13 +49,15 @@
  * mutated while still 'pending' (an assigned task is immutable), and the node
  * row only advances from the exact expected version.
  *
- * ★ NON-GOALS for B: operator cancel / dependency-failure cascade / requeue-cap
+ * ★ NON-GOALS (still): operator cancel / dependency-failure cascade / requeue-cap
  * auto-fail remain legacy writers (they carry no completion envelope and already
- * settle their own attempts); gate release, skip propagation, and derived
- * failure policy are phases C2/C3.
+ * settle their own attempts); coordinator GATE release is phase C2 and DERIVED
+ * FAILURE policy (failed/cancelled rollups, cancel_downstream) is phase C3.
+ * `run_if` skip propagation IS implemented here (C1) because it is the other half
+ * of condition evaluation — a condition that can only ever block is not a
+ * condition. Failure-driven skip is a different axis and stays C3.
  */
 
-import { createHash } from 'crypto';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { proposeTurnCompletion, type CompletionProposalSource, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
@@ -65,6 +69,19 @@ import {
     type MeshTaskGraphEdgeRow,
     type MeshTaskGraphNodeRow,
 } from './mesh-graph-types.js';
+import {
+    assertDeliveryIntegrity,
+    canonicalJson,
+    evaluateRunIfCondition,
+    MeshMaterializationError,
+    parseInputBindings,
+    parseRunIfCondition,
+    renderMaterializedMessage,
+    resolveInputBindings,
+    sha256Hex,
+    type MeshBoundValueReceipt,
+    type MeshUpstreamOutput,
+} from './mesh-graph-input-binding.js';
 
 // ── Public contract ──────────────────────────────────────────────────────────
 
@@ -123,21 +140,6 @@ function parseGraphMaterializationBlock(reason: string | undefined): { nodeId: s
     const version = Number(rest.slice(sep + 1));
     if (!Number.isInteger(version) || version < 0) return null;
     return { nodeId: rest.slice(0, sep), version };
-}
-
-// ── Deterministic envelope/digest helpers (bounded CPU/string work only) ─────
-
-/** Canonical JSON: recursively sorted object keys so the same content yields the same digest. */
-function canonicalJson(value: unknown): string {
-    if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).filter(k => obj[k] !== undefined).sort();
-    return `{${keys.map(k => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
-}
-
-function sha256Hex(text: string): string {
-    return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
 // ── Queue wake outbox drain (steps 8-9) ───────────────────────────────────────
@@ -333,43 +335,79 @@ function advanceGraphForTerminalNode(
     });
 
     // Step 4b — graph rollup: every node terminal-equivalent → the graph completes.
-    // (Derived FAILURE policy — failed/cancelled rollups — is phase C3; B only
-    // auto-completes the all-succeeded graph. `nodes` is listed AFTER the step-4a
-    // update, so the just-transitioned node carries its fresh state here.)
+    // (Derived FAILURE policy — failed/cancelled rollups — is phase C3; only the
+    // all-succeeded graph auto-completes, where `skipped` counts as succeeded per
+    // design :357-359. `nodes` is listed AFTER the step-4a update, so the
+    // just-transitioned node carries its fresh state here.)
     const nodes = graphStore.listNodes(node.graphId);
     const byId = new Map(nodes.map(n => [n.nodeId, n] as const));
-    const isTerminalEquivalent = (n: MeshTaskGraphNodeRow): boolean =>
-        n.state === 'completed' || n.state === 'released' || n.state === 'skipped';
+    let graphRolledUp = false;
     if (nodes.every(isTerminalEquivalent)) {
         graphStore.updateGraphStatus(node.graphId, 'completed', nowIso, true);
         outbox.push({ kind: 'graph_completed', payload: { graphId: node.graphId } });
+        graphRolledUp = true;
     }
 
-    // Steps 5-7 only advance on SUCCESS. Failure/skip propagation (cancel_downstream,
-    // omit_on_skip, derived blocks) is phase C3 — the queue-level cascade that already
-    // exists in mesh-work-queue remains the failure mechanism in B.
+    // Steps 5-7 only advance on SUCCESS. FAILURE propagation (cancel_downstream,
+    // derived blocks) is phase C3 — the queue-level cascade that already exists in
+    // mesh-work-queue remains the failure mechanism. SKIP propagation, by contrast,
+    // is C1: it is the other half of `run_if` (design :356-369).
     const materialized: string[] = [];
     if (terminal.status === 'completed') {
         const edges = graphStore.listEdges(node.graphId);
-        const downstreamIds = new Set(
-            edges.filter(e => e.fromNodeId === node.nodeId).map(e => e.toNodeId),
-        );
-        for (const targetId of downstreamIds) {
-            const target = byId.get(targetId);
-            if (!target || target.kind !== 'worker_task' || !target.queueTaskId) continue;
-            if (target.state !== 'declared' && target.state !== 'blocked') continue;
-            const outcome = tryMaterializeDownstreamNode(store, target, edges, byId, nowIso);
-            if (outcome.materialized) {
-                materialized.push(target.nodeId);
-                outbox.push({
-                    kind: 'graph_node_materialized',
-                    payload: {
-                        graphId: target.graphId, nodeId: target.nodeId, ref: target.ref,
-                        taskId: target.queueTaskId, materializationVersion: target.materializationVersion + 1,
-                        digest: outcome.digest,
-                    },
-                });
+        // A skip cascades: skipping node X may make X's own descendants eligible to
+        // skip (default `skip`) or newly materializable (`omit_dependency`). Re-drive
+        // the frontier until it settles. `byId` is a live map the passes mutate, so
+        // each pass sees the previous pass's states. The graph is a DAG and every
+        // pass moves at least one node to a state it can never leave here, so the
+        // loop is bounded by the node count — plus a hard cap for a corrupt cycle.
+        let frontier = new Set([node.nodeId]);
+        for (let pass = 0; pass < nodes.length + 1 && frontier.size > 0; pass += 1) {
+            const nextFrontier = new Set<string>();
+            const downstreamIds = new Set(
+                edges.filter(e => frontier.has(e.fromNodeId)).map(e => e.toNodeId),
+            );
+            for (const targetId of downstreamIds) {
+                const target = byId.get(targetId);
+                if (!target || target.kind !== 'worker_task' || !target.queueTaskId) continue;
+                if (target.state !== 'declared' && target.state !== 'blocked') continue;
+                const outcome = settleDownstreamNode(store, target, edges, byId, nowIso);
+                if (outcome.kind === 'materialized') {
+                    materialized.push(target.nodeId);
+                    outbox.push({
+                        kind: 'graph_node_materialized',
+                        payload: {
+                            graphId: target.graphId, nodeId: target.nodeId, ref: target.ref,
+                            taskId: target.queueTaskId, materializationVersion: target.materializationVersion + 1,
+                            digest: outcome.digest, receipts: outcome.receipts,
+                        },
+                    });
+                } else if (outcome.kind === 'skipped') {
+                    nextFrontier.add(target.nodeId);
+                    outbox.push({
+                        kind: 'graph_node_skipped',
+                        payload: {
+                            graphId: target.graphId, nodeId: target.nodeId, ref: target.ref,
+                            taskId: target.queueTaskId, reason: outcome.reason,
+                        },
+                    });
+                } else if (outcome.kind === 'error') {
+                    outbox.push({
+                        kind: 'graph_node_materialization_failed',
+                        payload: {
+                            graphId: target.graphId, nodeId: target.nodeId, ref: target.ref,
+                            taskId: target.queueTaskId, blockedReason: outcome.blockedReason,
+                        },
+                    });
+                }
             }
+            frontier = nextFrontier;
+        }
+        // A skip can complete the graph (every remaining node terminal-equivalent).
+        // Re-check the rollup with the post-skip states.
+        if (!graphRolledUp && graphStore.listNodes(node.graphId).every(isTerminalEquivalent)) {
+            graphStore.updateGraphStatus(node.graphId, 'completed', nowIso, true);
+            outbox.push({ kind: 'graph_completed', payload: { graphId: node.graphId } });
         }
     }
 
@@ -394,67 +432,153 @@ function advanceGraphForTerminalNode(
     return materialized;
 }
 
+/** Graph-level terminal equivalence for the rollup (design :357-359). */
+function isTerminalEquivalent(n: MeshTaskGraphNodeRow): boolean {
+    return n.state === 'completed' || n.state === 'released' || n.state === 'skipped';
+}
+
+type SettleOutcome =
+    | { kind: 'deferred' }
+    | { kind: 'materialized'; digest: string; receipts: MeshBoundValueReceipt[] }
+    | { kind: 'skipped'; reason: string }
+    | { kind: 'error'; blockedReason: string };
+
 /**
- * Steps 5-7 for one downstream worker node: eligibility, identity materialization,
- * generation-checked block clearing. Never throws — an ineligible node simply
- * stays where it is (fail-closed).
+ * Steps 5-7 for one downstream worker node ★ PHASE C1: run_if evaluation + skip
+ * resolution, `inputs_from` binding, generation-checked block clearing.
+ *
+ * Never throws — a materialization failure becomes a `materialization_error:*`
+ * block on the still-pending queue row (design :278-283), which the UNCHANGED
+ * `taskDependenciesSatisfied` predicate already honours (any blockedReason ⇒ not
+ * claimable). The scheduler learns nothing new about graphs.
  */
-function tryMaterializeDownstreamNode(
+function settleDownstreamNode(
     store: MeshRuntimeStore,
     target: MeshTaskGraphNodeRow,
     edges: MeshTaskGraphEdgeRow[],
-    byId: ReadonlyMap<string, MeshTaskGraphNodeRow>,
+    byId: Map<string, MeshTaskGraphNodeRow>,
     nowIso: string,
-): { materialized: boolean; digest?: string } {
+): SettleOutcome {
     const graphStore = store.graphStore();
-    const requiresIn = edges.filter(e => e.toNodeId === target.nodeId && e.kind === 'requires');
-    const conditionalIn = edges.filter(e => e.toNodeId === target.nodeId && e.kind === 'conditional');
+    const incoming = edges.filter(e => e.toNodeId === target.nodeId && e.kind !== 'gate');
 
-    // Inputs settled: every `requires` source reached `completed`.
-    const settled = requiresIn.every(e => byId.get(e.fromNodeId)?.state === 'completed');
-    if (!settled) return { materialized: false };
+    // ── Step 5a — skip propagation over incoming edges (design :361-366) ──────
+    // An edge whose source is `skipped` either propagates the skip (default) or is
+    // OMITTED from the downstream queue projection. Only the latter lets the node
+    // materialize. `omit_dependency` is the explicit `omit_on_skip` edge flag.
+    const skippedSources = incoming.filter(e => byId.get(e.fromNodeId)?.state === 'skipped');
+    const propagatingSkip = skippedSources.find(e => !e.omitOnSkip);
+    if (propagatingSkip) {
+        const sourceRef = byId.get(propagatingSkip.fromNodeId)?.ref ?? propagatingSkip.fromNodeId;
+        return markNodeSkipped(store, target, `upstream_skipped:${sourceRef}`, nowIso);
+    }
+    // Edges surviving the skip resolution — the ACTIVE projection.
+    const activeIncoming = incoming.filter(e => byId.get(e.fromNodeId)?.state !== 'skipped');
+
+    // Inputs settled: every surviving source reached `completed`. A source that is
+    // still running (or blocked, or failed) leaves the node exactly where it is.
+    const settled = activeIncoming.every(e => byId.get(e.fromNodeId)?.state === 'completed');
+    if (!settled) return { kind: 'deferred' };
 
     const queueEntry = store.findQueueEntryById(target.meshId, target.queueTaskId!);
-    if (!queueEntry) return { materialized: false };
+    if (!queueEntry) return { kind: 'deferred' };
 
-    // Step 5 — ★ B BOUNDARY: run_if/condition evaluation is phase C1. A node with an
-    // unevaluated conditional input, or a base spec carrying inputs_from bindings
-    // (C1 materialization semantics), is DEFERRED: marked blocked with a graph-owned,
-    // generation-stamped block instead of being guessed at.
+    // Upstream envelopes, keyed by the source node's `ref` — the vocabulary both
+    // `inputs_from.from` and `run_if.from` use (design :212, :346). Read from the
+    // append-only mesh_task_outputs rows persisted at step 2, so a binding always
+    // sees the exact version that was accepted, never a live provider read.
+    const outputsByRef = collectUpstreamOutputs(store, activeIncoming, byId);
+
+    // ── Step 5b — run_if evaluation ★ C1 (design :336-355) ───────────────────
+    // Conditions live on conditional edges (`condition_json`) and/or on the node's
+    // own base spec (`run_if`). Both are the same declarative grammar. A malformed
+    // condition FAILS CLOSED as a materialization error — it never defaults to true.
     const baseSpec = safeParseJson(target.baseSpecJson);
-    const hasBindings = Array.isArray((baseSpec as any)?.inputs_from) && (baseSpec as any).inputs_from.length > 0;
-    const hasUnevaluatedCondition = conditionalIn.some(e => typeof e.conditionJson === 'string' && e.conditionJson.length > 0);
-    if (hasUnevaluatedCondition || hasBindings) {
-        if (target.state !== 'blocked') {
-            graphStore.updateNodeState(target.graphId, target.nodeId, 'blocked', nowIso);
-        }
-        const reason = graphMaterializationBlockReason(target.nodeId, target.materializationVersion);
-        if (queueEntry.status === 'pending' && queueEntry.blockedReason !== reason) {
-            // Never overwrite a non-graph block — the graph only owns its own shape.
-            const existing = parseGraphMaterializationBlock(queueEntry.blockedReason);
-            if (!queueEntry.blockedReason || existing) {
-                queueEntry.blockedReason = reason;
-                store.updateQueueEntry(queueEntry);
+    let conditionsHold = true;
+    let falseCondition: string | undefined;
+    try {
+        const conditions: unknown[] = [];
+        for (const edge of activeIncoming) {
+            if (edge.kind === 'conditional' && typeof edge.conditionJson === 'string' && edge.conditionJson.length > 0) {
+                const parsed = safeParseJson(edge.conditionJson);
+                if (parsed === undefined) {
+                    throw new MeshMaterializationError('invalid_condition', `edge condition_json is not valid JSON`, 'edge_json');
+                }
+                conditions.push(parsed);
             }
         }
-        return { materialized: false };
+        if ((baseSpec as any)?.run_if !== undefined) conditions.push((baseSpec as any).run_if);
+        for (const raw of conditions) {
+            const condition = parseRunIfCondition(raw);
+            if (!evaluateRunIfCondition(condition, ref => outputsByRef.get(ref)?.envelope ?? null)) {
+                conditionsHold = false;
+                falseCondition = describeConditionSource(raw);
+                break;
+            }
+        }
+    } catch (e) {
+        return blockWithMaterializationError(store, graphStore, target, queueEntry, e, nowIso);
     }
 
-    // Step 6 — identity materialization. CAS key (design :332-334): the node row
-    // advances ONLY from the expected materialization_version, and the queue row is
-    // mutated ONLY while still 'pending' (an assigned task is immutable — the
-    // single immediate transaction serializes the check and the write).
-    if (queueEntry.status !== 'pending') return { materialized: false };
+    if (!conditionsHold) {
+        // design :353-359 — `on_false: skip` is the only supported (and default)
+        // behaviour: the node and its queue placeholder go `skipped`, which is
+        // terminal for graph/mission accounting and deliberately NOT `completed`,
+        // so `taskDependenciesSatisfied` never sees it as satisfying a dependency.
+        const onFalse = (baseSpec as any)?.on_false;
+        if (onFalse !== undefined && onFalse !== 'skip') {
+            return blockWithMaterializationError(
+                store, graphStore, target, queueEntry,
+                new MeshMaterializationError('invalid_condition', `unsupported on_false '${String(onFalse)}' — only 'skip' is defined`, 'on_false'),
+                nowIso,
+            );
+        }
+        return markNodeSkipped(store, target, `run_if_false:${falseCondition ?? 'condition'}`, nowIso);
+    }
+
+    // ── Step 6 — materialization ★ C1 ────────────────────────────────────────
+    // CAS key (design :332-334): the node row advances ONLY from the expected
+    // materialization_version, and the queue row is mutated ONLY while still
+    // 'pending' (an assigned task is immutable — the single immediate transaction
+    // serializes the check and the write).
+    if (queueEntry.status !== 'pending') return { kind: 'deferred' };
+
+    // The base instruction is IMMUTABLE and comes first (design :299). Bindings are
+    // APPENDED to it — never interpolated into it (design :250-251).
     const baseMessage = typeof (baseSpec as any)?.message === 'string' && (baseSpec as any).message.trim()
         ? (baseSpec as any).message as string
         : queueEntry.message;
-    const dependsOn = requiresIn
+    // The queue projection: active `requires` edges only. A conditional edge is a
+    // control-flow edge, not an execution prerequisite — its source is already
+    // known-completed here, and projecting it would be redundant.
+    const dependsOn = activeIncoming
+        .filter(e => e.kind === 'requires')
         .map(e => byId.get(e.fromNodeId)?.queueTaskId)
         .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+    let rendered;
+    try {
+        const bindings = parseInputBindings(baseSpec);
+        const resolved = resolveInputBindings(bindings, outputsByRef);
+        rendered = renderMaterializedMessage(baseMessage, resolved, {
+            graphId: target.graphId,
+            nodeId: target.nodeId,
+            materializationVersion: target.materializationVersion + 1,
+        });
+        // design :306-309 — the binding-aware final-delivery guard. Encoding, size,
+        // and envelope integrity apply to the WHOLE delivery; instruction/permission
+        // classification stays on the base message (already validated at admission),
+        // so bound evidence can never rewrite the stored readonly/taskMode contract.
+        assertDeliveryIntegrity(rendered);
+    } catch (e) {
+        return blockWithMaterializationError(store, graphStore, target, queueEntry, e, nowIso);
+    }
+
     const digest = sha256Hex(canonicalJson({
         nodeId: target.nodeId,
         materializationVersion: target.materializationVersion + 1,
-        message: baseMessage,
+        message: rendered.message,
+        renderDigest: rendered.digest,
         dependsOn,
         targetNodeId: queueEntry.targetNodeId,
     }));
@@ -465,19 +589,145 @@ function tryMaterializeDownstreamNode(
         { state: 'materialized', materializedDigest: digest },
         nowIso,
     );
-    if (!won) return { materialized: false }; // replay/race: same digest already committed
+    if (!won) return { kind: 'deferred' }; // replay/race: same digest already committed
 
     // Step 7 — clear ONLY the graph-owned block whose generation matches the version
-    // just advanced. Any other blockedReason (dependency_failed, a stale generation)
-    // is left untouched.
-    queueEntry.message = baseMessage;
+    // just advanced. Any other blockedReason (dependency_failed, a stale generation,
+    // another subsystem's) is left untouched (design :998).
+    queueEntry.message = rendered.message;
     queueEntry.dependsOn = dependsOn;
+    clearMatchingGraphBlock(queueEntry, target);
+    store.updateQueueEntry(queueEntry);
+    syncNodeRowState(byId, target, 'materialized', { materializationVersion: target.materializationVersion + 1, materializedDigest: digest });
+    return { kind: 'materialized', digest, receipts: rendered.receipts };
+}
+
+/**
+ * Read every active upstream source's latest completion envelope, keyed by `ref`.
+ * A source with no persisted output maps to an entry with a null envelope, so a
+ * `required` binding against it fails with `required_input_missing` rather than
+ * silently binding nothing.
+ */
+function collectUpstreamOutputs(
+    store: MeshRuntimeStore,
+    activeIncoming: MeshTaskGraphEdgeRow[],
+    byId: ReadonlyMap<string, MeshTaskGraphNodeRow>,
+): Map<string, MeshUpstreamOutput> {
+    const graphStore = store.graphStore();
+    const outputs = new Map<string, MeshUpstreamOutput>();
+    for (const edge of activeIncoming) {
+        const source = byId.get(edge.fromNodeId);
+        if (!source?.queueTaskId) continue;
+        const ref = source.ref ?? source.nodeId;
+        if (outputs.has(ref)) continue;
+        const row = graphStore.getLatestOutput(source.queueTaskId);
+        outputs.set(ref, {
+            ref,
+            taskId: source.queueTaskId,
+            version: row?.version,
+            envelope: row ? safeParseJson(row.envelopeJson) ?? null : null,
+        });
+    }
+    return outputs;
+}
+
+/** A skipped node: terminal for graph/mission accounting, never `completed` (design :356-359). */
+function markNodeSkipped(
+    store: MeshRuntimeStore,
+    target: MeshTaskGraphNodeRow,
+    reason: string,
+    nowIso: string,
+): SettleOutcome {
+    const graphStore = store.graphStore();
+    graphStore.updateNodeState(target.graphId, target.nodeId, 'skipped', nowIso, { skipReason: reason });
+    target.state = 'skipped';
+    target.skipReason = reason;
+    // The queue placeholder goes `cancelled` — the queue has no `skipped` status, and
+    // `cancelled` is the one terminal status that is NOT `completed`, so the unchanged
+    // dependency predicate can never mistake a skipped placeholder for satisfied work.
+    const queueEntry = store.findQueueEntryById(target.meshId, target.queueTaskId!);
+    if (queueEntry && queueEntry.status === 'pending') {
+        queueEntry.status = 'cancelled';
+        queueEntry.blockedReason = `graph_skipped:${reason}`;
+        store.updateQueueEntry(queueEntry);
+    }
+    return { kind: 'skipped', reason };
+}
+
+/**
+ * A materialization failure blocks the still-pending node with a
+ * `materialization_error:*` reason (design :278-283). The coordinator may then patch
+ * the node's selector/size policy (bumping the generation) and retry.
+ */
+function blockWithMaterializationError(
+    store: MeshRuntimeStore,
+    graphStore: ReturnType<MeshRuntimeStore['graphStore']>,
+    target: MeshTaskGraphNodeRow,
+    queueEntry: MeshWorkQueueEntry,
+    error: unknown,
+    nowIso: string,
+): SettleOutcome {
+    const blockedReason = error instanceof MeshMaterializationError
+        ? error.blockedReason
+        : 'materialization_error:invalid_binding_spec';
+    if (target.state !== 'blocked') {
+        graphStore.updateNodeState(target.graphId, target.nodeId, 'blocked', nowIso, {
+            failureReason: error instanceof Error ? error.message : String(error),
+        });
+        target.state = 'blocked';
+    }
+    if (queueEntry.status === 'pending') {
+        // Never overwrite another subsystem's block (design :998) — only an absent
+        // block, a graph materialization block, or a prior materialization error.
+        const owned = !queueEntry.blockedReason
+            || parseGraphMaterializationBlock(queueEntry.blockedReason) !== null
+            || queueEntry.blockedReason.startsWith('materialization_error:');
+        if (owned && queueEntry.blockedReason !== blockedReason) {
+            queueEntry.blockedReason = blockedReason;
+            store.updateQueueEntry(queueEntry);
+        }
+    }
+    LOG.warn('MeshGraph', `Materialization blocked for node ${target.nodeId}: ${blockedReason}`);
+    return { kind: 'error', blockedReason };
+}
+
+/** Step 7's generation check, isolated so both call sites share one rule. */
+function clearMatchingGraphBlock(queueEntry: MeshWorkQueueEntry, target: MeshTaskGraphNodeRow): void {
     const block = parseGraphMaterializationBlock(queueEntry.blockedReason);
     if (block && block.nodeId === target.nodeId && block.version === target.materializationVersion) {
         delete queueEntry.blockedReason;
+        return;
     }
-    store.updateQueueEntry(queueEntry);
-    return { materialized: true, digest };
+    // A prior materialization ERROR on this same node is also graph-owned: once the
+    // render succeeds it must not keep the task blocked forever.
+    if (queueEntry.blockedReason?.startsWith('materialization_error:')) {
+        delete queueEntry.blockedReason;
+    }
+}
+
+/** Keep the in-memory node map consistent with the row just written, for later passes. */
+function syncNodeRowState(
+    byId: Map<string, MeshTaskGraphNodeRow>,
+    target: MeshTaskGraphNodeRow,
+    state: MeshGraphNodeState,
+    patch: { materializationVersion: number; materializedDigest: string },
+): void {
+    target.state = state;
+    target.materializationVersion = patch.materializationVersion;
+    target.materializedDigest = patch.materializedDigest;
+    byId.set(target.nodeId, target);
+}
+
+/** A stable, non-secret label naming which condition evaluated false (no bound values). */
+function describeConditionSource(raw: unknown): string {
+    const node = raw as Record<string, unknown> | undefined;
+    if (node && typeof node.from === 'string' && typeof node.select === 'string') {
+        return `${node.from}${node.select}`;
+    }
+    if (node && node.all !== undefined) return 'all';
+    if (node && node.any !== undefined) return 'any';
+    if (node && node.not !== undefined) return 'not';
+    return 'condition';
 }
 
 function safeParseJson(text: string): unknown {
