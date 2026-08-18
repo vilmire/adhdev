@@ -587,7 +587,10 @@ function propagateWatchdogTranscriptCompletion(
 function reconcileTerminalViaReducer(args: {
     meshId: string;
     taskId: string;
-    outcome: 'completed' | 'failed';
+    // 'cancelled' is accepted for the unsettled-attempt safety net, which mirrors the
+    // task row's OWN terminal status rather than inferring one; the reducer has always
+    // supported it (closeAttemptForReassignment commits the same outcome).
+    outcome: 'completed' | 'failed' | 'cancelled';
     source: 'transcript' | 'stall_reconcile';
     sessionId?: string;
     reason?: string;
@@ -1658,5 +1661,89 @@ export function reconcileZombieAssignedTasks(
             event: 'agent:generating_completed',
         }, `${reason} stale=${Math.round((nowMs - anchorMs) / 60000)}m`);
     }
+}
+
+// ── PHASE 2.7: unsettled-attempt safety net ────────────────────────────────
+//
+// ATTEMPT-SETTLE-CHOKE-POINT (backstop). The choke point in updateTaskStatus
+// settles the attempt for every terminal task flip, so in steady state this
+// sweep finds NOTHING. It exists for the pair the choke point structurally
+// cannot cover: a task row that reached a terminal status WITHOUT going
+// through updateTaskStatus — a direct store write, a crash between the row
+// write and the reducer proposal, or a future writer that bypasses the queue
+// module entirely.
+//
+// Why this pairing is worth a net at all: a terminal task with a live attempt
+// reports `status=generating` / `turnStage=generating` forever, and because
+// such an attempt typically carries lease_deadline_ms=null, the redrive lease
+// reaper never collects it either. The observable damage is not cosmetic — the
+// stale generating attempt trips `session_generating_busy` and genuinely
+// delays the next dispatch onto that session.
+//
+// DELIBERATELY LOUD: every settle here is logged at WARN and traced. A firing
+// of this sweep MEANS a terminal writer bypassed the choke point — that log is
+// the signal that a new leak path exists, which is exactly the diagnostic the
+// three previous recurrences of this defect lacked. Do not downgrade it to
+// debug to quiet the logs; find the writer instead.
+//
+// Conservative: grace-gated on the row's updatedAt so a terminal flip whose
+// reducer proposal is legitimately a few ticks behind is never pre-empted, and
+// the outcome proposed is exactly the task's own terminal status (never a
+// guess). The reducer remains the single terminal authority — a rejection
+// (stale attempt / already terminal differently) is respected, not overridden.
+const UNSETTLED_ATTEMPT_GRACE_MS = 60 * 1000; // 1 min — well past any in-tick reducer lag
+
+export function reconcileUnsettledTerminalAttempts(
+    mesh: { id: string },
+): number {
+    const meshId = mesh.id;
+    const terminalRows = getQueue(meshId, { status: ['completed', 'failed', 'cancelled'] });
+    if (!terminalRows.length) return 0;
+    const store = MeshRuntimeStore.getInstance();
+    const nowMs = Date.now();
+    let settled = 0;
+
+    for (const row of terminalRows) {
+        const attempt = (() => {
+            try { return store.getCurrentTurnAttempt(meshId, row.id); } catch { return null; }
+        })();
+        // No attempt row (pre-Stage-5 task) or already settled → nothing owed.
+        if (!attempt || attempt.terminalOutcome || isTerminalTurnStage(attempt.stage)) continue;
+
+        // Grace is anchored on the ATTEMPT's own updatedAt, NOT the queue row's: the
+        // store force-stamps queue updated_at to now on every write, so an unrelated
+        // touch of a long-terminal row would keep resetting a row-anchored grace and
+        // the net could never fire. The attempt's updatedAt genuinely tracks when the
+        // turn last progressed, which is exactly the "how long has this been stuck"
+        // question the grace is asking.
+        const anchor = Date.parse(attempt.updatedAt || attempt.createdAt || '');
+        if (!Number.isFinite(anchor) || nowMs - anchor < UNSETTLED_ATTEMPT_GRACE_MS) continue;
+
+        const outcome: 'completed' | 'failed' | 'cancelled' =
+            row.status === 'completed' ? 'completed' : row.status === 'cancelled' ? 'cancelled' : 'failed';
+
+        LOG.warn('MeshReconcile', `Unsettled attempt safety net: task ${row.id} on mesh ${meshId} is terminal `
+            + `(${row.status}) but attempt ${attempt.attemptId} is still ${attempt.stage} `
+            + `(lease=${attempt.leaseDeadlineMs ?? 'null'}, attempt idle ${Math.round((nowMs - anchor) / 1000)}s) — `
+            + `settling it as ${outcome}. THIS SHOULD NOT HAPPEN: a terminal writer bypassed the `
+            + `updateTaskStatus choke point; find it rather than relying on this net.`);
+        traceMeshEventStage('unsettled_attempt_safety_net', {
+            taskId: row.id,
+            sessionId: attempt.sessionId ?? row.assignedSessionId,
+            nodeId: row.assignedNodeId,
+            meshId,
+            event: 'agent:generating_completed',
+        }, `${row.status}->${outcome} stage=${attempt.stage}`);
+
+        if (reconcileTerminalViaReducer({
+            meshId,
+            taskId: row.id,
+            outcome,
+            source: 'stall_reconcile',
+            sessionId: attempt.sessionId ?? row.assignedSessionId,
+            reason: `unsettled_attempt_safety_net:${row.status}`,
+        })) settled += 1;
+    }
+    return settled;
 }
 

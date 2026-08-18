@@ -68,7 +68,20 @@ export type CompletionAuthorityDecision =
         attemptStage: string;
         attemptUpdatedAt: number | null;
     }
-    | { authoritative: false; reason: string };
+    | {
+        authoritative: false;
+        reason: string;
+        /**
+         * The concrete values behind a profile-contract rejection. The reason string
+         * alone ("evidence_source_profile_mismatch") says a contract was violated but
+         * not WHICH side is wrong, and the event payload is not in the drop trace — so
+         * a live recurrence could not be diagnosed without re-instrumenting and waiting
+         * for it to happen again. These fields are content-free (enum-ish provider
+         * classification labels, never prompt/transcript text), so they are safe on the
+         * trace path under the server content boundary.
+         */
+        detail?: { authorityClass?: string; evidenceSource?: string; timing?: string };
+    };
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
     return value && typeof value === 'object' && !Array.isArray(value)
@@ -139,14 +152,38 @@ export function evaluateAuthoritativeTranscriptCompletion(args: {
     }
     const authorityClass = readNonEmptyString(evidence.authorityClass);
     const timing = readNonEmptyString(evidence.timing);
+    const evidenceSource = readNonEmptyString(diagnostic.finalAssistantEvidenceSource);
+    const profileDetail = { authorityClass, evidenceSource, timing };
     if ((authorityClass !== 'native-source' && authorityClass !== 'pure-pty')
         || (timing !== 'floor' && timing !== 'hold' && timing !== 'immediate')) {
-        return { authoritative: false, reason: 'non_transcript_authority_profile' };
+        return { authoritative: false, reason: 'non_transcript_authority_profile', detail: profileDetail };
     }
-    const evidenceSource = readNonEmptyString(diagnostic.finalAssistantEvidenceSource);
-    if ((authorityClass === 'native-source' && evidenceSource !== 'external-native')
-        || (authorityClass === 'pure-pty' && evidenceSource !== 'parsed')) {
-        return { authoritative: false, reason: 'evidence_source_profile_mismatch' };
+    // EVIDENCE-SOURCE-PROFILE (widened, 2026-08-18): `authorityClass` says WHERE the
+    // provider's authoritative transcript lives (a static provider property);
+    // `evidenceSource` says WHICH probe produced THIS turn's evidence (a per-turn
+    // runtime outcome). They are independent axes, so the old strict bijection
+    // (native-source⇒external-native, pure-pty⇒parsed) rejected combinations the
+    // producing code deliberately emits — observed live as a dropped completion whose
+    // attempt then never settled:
+    //   - a native-source provider that is NOT lease-gated takes the parsed
+    //     short-circuit (completion/evidence.ts `!preferNativeOverParsed` → 'parsed');
+    //   - a lease-gated native-source provider whose native transcript is not yet
+    //     resolved falls back to 'parsed' by design (TX-FSM Stage 2.1, fail-open);
+    //   - a provider whose own turn-terminal marker answers directly reports
+    //     'native-signal' (NATIVE-TURN-SIGNAL — the turn ended on a tool call or an
+    //     empty reply, so no assistant bubble exists to parse);
+    //   - a point-sample miss rescued by the cached in-turn summary reports
+    //     'cached-summary' (NOTIF Defect-B), which is strictly an UPGRADE of evidence.
+    // What the gate actually needs to exclude is evidence that never established a
+    // final assistant at all — keep rejecting those, and admit the legitimate probes.
+    // The strong-evidence guarantees this gate relies on are enforced above and below
+    // regardless (cleanPath/weak contract, non-empty final content, causal identity,
+    // freshness), so widening here does not weaken the completion authority.
+    const ADMISSIBLE_EVIDENCE_SOURCES = new Set([
+        'external-native', 'parsed', 'native-signal', 'cached-summary',
+    ]);
+    if (!evidenceSource || !ADMISSIBLE_EVIDENCE_SOURCES.has(evidenceSource)) {
+        return { authoritative: false, reason: 'evidence_source_profile_mismatch', detail: profileDetail };
     }
     const finalSummary = readNonEmptyString(metadataEvent.finalSummary);
     const finalContentLength = readFiniteNumber(evidence.finalContentLength) ?? 0;

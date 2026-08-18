@@ -722,8 +722,24 @@ function evaluateMeshEventSuppression(
                     });
                     const heldForRetry = retryEligible
                         && holdCompletionForLiveStateRetry(components, args, eventSessionId, Date.now(), injectMeshSystemMessage);
-                    LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): current live evidence remains pending (${live.kind ?? 'unknown'}); transcript authority=${authority.authoritative ? 'fresh_but_not_newer' : authority.reason}${heldForRetry ? ' — bounded content-free retry armed' : ''}`);
-                    traceMeshEventDrop('mid_turn_live_state_pending', traceCtx, heldForRetry ? 'retry_held' : undefined);
+                    // ATTEMPT-SETTLE diagnostics: when the authority decision carries a
+                    // profile detail, name the concrete (authorityClass, evidenceSource,
+                    // timing) triple. The bare reason string told us a contract pair was
+                    // violated but not WHICH side was wrong, so a live drop could not be
+                    // diagnosed without waiting for another recurrence. Content-free
+                    // classification labels only — safe under the content boundary.
+                    const authorityDetail = !authority.authoritative && authority.detail
+                        ? ` [authorityClass=${authority.detail.authorityClass ?? 'none'}`
+                          + ` evidenceSource=${authority.detail.evidenceSource ?? 'none'}`
+                          + ` timing=${authority.detail.timing ?? 'none'}]`
+                        : '';
+                    LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): current live evidence remains pending (${live.kind ?? 'unknown'}); transcript authority=${authority.authoritative ? 'fresh_but_not_newer' : authority.reason}${authorityDetail}${heldForRetry ? ' — bounded content-free retry armed' : ''}`);
+                    traceMeshEventDrop(
+                        'mid_turn_live_state_pending',
+                        traceCtx,
+                        `${heldForRetry ? 'retry_held' : 'dropped'}`
+                        + `${authority.authoritative ? '' : ` authority=${authority.reason}${authorityDetail}`}`,
+                    );
                     return {
                         kind: 'suppress',
                         result: {

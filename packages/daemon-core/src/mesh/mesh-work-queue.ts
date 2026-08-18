@@ -9,7 +9,7 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { closeAttemptForReassignment, openTurnAttempt, proposeTurnCompletion, recordTurnAck } from './mesh-turn-ledger.js';
+import { closeAttemptForReassignment, openTurnAttempt, proposeTurnCompletion, recordTurnAck, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
 import { sessionIdsEquivalent, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
 
@@ -1208,11 +1208,45 @@ export function updateTaskStatus(
             LOG.debug('MeshQueue', `Refusing updateTaskStatus(${taskId} → ${status}) on mesh ${meshId}: row is terminal (${entry.status}). A late writer (e.g. dispatch-failure requeue) must not resurrect a cancelled/completed/failed task. Pass force to override.`);
             return { entry, cascaded: [] as MeshWorkQueueEntry[] };
         }
+        const priorStatus = entry.status;
         entry.status = status;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         // Any transition OFF `assigned` ends the single-flight dispatch window (terminal
         // completion/failure, or the dispatch-failure requeue to `pending`).
         if (status !== 'assigned') endTaskDispatchInFlight(meshId, taskId);
+        // ATTEMPT-SETTLE-CHOKE-POINT: a terminal TASK row and a non-terminal ATTEMPT is an
+        // illegal pair — it reads as `status=generating` / `turnStage=generating` forever
+        // (and, with lease_deadline_ms=null, no reaper ever collects it), which blocks the
+        // next dispatch with `session_generating_busy`. This was previously each terminal
+        // writer's opt-in duty: reconcileTerminalViaReducer was called by three of the five
+        // reconcile paths and MISSED by two (the transcript reconcile and the watchdog
+        // early-complete) — the same class of miss recurred three times because a NEW
+        // terminal writer only has to forget the call.
+        //
+        // Settling HERE removes the opt-in entirely: every terminal task flip in the
+        // codebase goes through this one function (verified: the only writers are the
+        // reconcile/forwarding call sites plus cancelTask, which settles its own
+        // 'cancelled' outcome below), and it runs under the queue lock alongside the row
+        // write, so the row and the attempt cannot diverge.
+        //
+        // Idempotent by construction: proposeTurnCompletion returns
+        // {committed:true, duplicate:true} for a repeat of the SAME outcome, and rejects a
+        // conflicting one WITHOUT mutating the committed terminal. So the three call sites
+        // that already propose before calling us are unaffected — their proposal commits,
+        // ours is the idempotent duplicate. Best-effort: the reducer never fails the task
+        // write (pre-Stage-5 shadow mode, or a task with no attempt row at all).
+        if (TERMINAL_TASK_STATUSES.has(status) && !TERMINAL_TASK_STATUSES.has(priorStatus)) {
+            try {
+                proposeTurnCompletion({
+                    meshId,
+                    taskId,
+                    outcome: status as TurnTerminalOutcome,
+                    source: 'stall_reconcile',
+                    sessionId: entry.assignedSessionId,
+                    reason: `task_status_terminal:${status}`,
+                });
+            } catch { /* reducer unavailable — the row write above still stands */ }
+        }
         const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
         return { entry, cascaded };
     });

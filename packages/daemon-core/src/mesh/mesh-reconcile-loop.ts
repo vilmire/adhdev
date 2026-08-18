@@ -99,6 +99,7 @@ import {
 import {
     recoverStrandedAssignedDispatches,
     reconcileZombieAssignedTasks,
+    reconcileUnsettledTerminalAttempts,
 } from './mesh-reconcile-stranded-dispatch.js';
 import {
     retryUnresolvedDelegateForwards,
@@ -118,6 +119,7 @@ export {
     __resetReclaimUnknownStreakForTests,
     restampReboundMeshWorkerAssignment,
     reconcileZombieAssignedTasks,
+    reconcileUnsettledTerminalAttempts,
 } from './mesh-reconcile-stranded-dispatch.js';
 export { __resetUnresolvedForwardRejectionCountsForTests } from './mesh-reconcile-unresolved-forward.js';
 
@@ -268,6 +270,15 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 reconcileZombieAssignedTasks(components, mesh, selfIds);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Assigned-zombie sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+            // ATTEMPT-SETTLE-CHOKE-POINT backstop: settle attempts left non-terminal
+            // under an already-terminal task row. The updateTaskStatus choke point makes
+            // this a no-op in steady state; a firing is logged loudly because it means a
+            // terminal writer bypassed the choke point.
+            try {
+                reconcileUnsettledTerminalAttempts(mesh);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Unsettled-attempt safety net failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
     }
