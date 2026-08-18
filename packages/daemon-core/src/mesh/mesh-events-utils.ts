@@ -202,17 +202,24 @@ function readEventTimestampValue(value: unknown): number {
 // emits this as completionDiagnostic.blockReason='missing_final_assistant' /
 // finalAssistantPresent=false. The diagnostic lives at the same `completionDiagnostic` field
 // on both a ledger terminal payload and a live metadata event, so one helper serves both.
+// P1-5a: the transcript-reconcile synth (mesh-events-stale) honestly records a plain-text
+// tail as transcriptFinalAssistantPresent=false on its terminal ledger — read that legacy
+// field too, so a WEAK synth ledger is not misjudged as strong terminal evidence here.
 export function isMissingFinalAssistantDiagnostic(record: Record<string, unknown> | undefined): boolean {
     const diag = readRecord(record?.completionDiagnostic);
-    return diag?.finalAssistantPresent === false || diag?.blockReason === 'missing_final_assistant';
+    return diag?.finalAssistantPresent === false
+        || diag?.transcriptFinalAssistantPresent === false
+        || diag?.blockReason === 'missing_final_assistant';
 }
 
 // A false-idle completion: the provider dropped to idle WITHOUT a confirmed final assistant
-// message (the completionDiagnostic missing-final-assistant signal). This is a strict SUBSET
-// of weak-completion evidence — it DELIBERATELY ignores evidenceLevel/reviewRecommended,
-// because isGenuineCompletionEvidence (coordinator) gates the truncated-terminal supersession
-// on the false-idle distinction alone. Folding evidenceLevel/reviewRecommended in here would
-// change that genuine-completion judgement, so keep this narrow.
+// message (the completionDiagnostic missing-final-assistant signal, incl. the legacy
+// transcriptFinalAssistantPresent=false the transcript-reconcile synth stamps). This is a
+// strict SUBSET of weak-completion evidence — it DELIBERATELY ignores evidenceLevel/
+// reviewRecommended, because isGenuineCompletionEvidence (coordinator) gates the
+// truncated-terminal supersession on the false-idle distinction alone. Folding
+// evidenceLevel/reviewRecommended in here would change that genuine-completion judgement,
+// so keep this narrow.
 export function isFalseIdleCompletion(record: Record<string, unknown>): boolean {
     return isMissingFinalAssistantDiagnostic(record);
 }
@@ -305,11 +312,16 @@ export function buildMeshSystemMessage(args: {
         const reviewRecommended = args.metadataEvent.reviewRecommended === true;
         // FALSEIDLE-b: a weak completion (missing final assistant / finalAssistantPresent=false /
         // insufficient evidence) is not trustworthy terminal evidence even when reviewRecommended
-        // is not set. Append an explicit verify hint so the coordinator does not declare the task
-        // done off a false idle. Only the weak case is affected — a genuine completion (final
-        // assistant confirmed, no weak diagnostic) carries no extra note and is unchanged.
+        // is not set. P1-4: it must not ASSERT completion — the message leads with candidate
+        // wording ("reported a possible completion … awaiting confirmation") plus an explicit
+        // verify hint, so the coordinator does not declare the task done off a false idle or a
+        // mid-turn transcript read. Only the weak case is affected — a genuine completion (final
+        // assistant confirmed, no weak diagnostic) is byte-identical to before.
         const weakCompletion = isWeakCompletionMetadata(args.metadataEvent);
-        const verifyTextNote = ' Completion evidence is weak — verify via mesh_read_chat or git status before declaring the task done; the worker may still be parked on an approval/modal.';
+        const completionLead = weakCompletion
+            ? `[System] ${args.nodeLabel} reported a possible completion (weak evidence) — awaiting confirmation${metadata}.`
+            : `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}.`;
+        const verifyTextNote = ' Completion evidence is weak — verify via mesh_read_chat or git status before declaring the task done; the worker may still be mid-turn or parked on an approval/modal.';
         // Auto-surface the worker's final summary directly into the coordinator chat so it
         // does not have to call mesh_read_chat just to see the result. The summary IS the
         // worker's final assistant message; embedding it here replaces the previous
@@ -326,14 +338,17 @@ export function buildMeshSystemMessage(args: {
             const verifyNote = reviewRecommended
                 ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done.'
                 : (weakCompletion ? verifyTextNote : '');
-            return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. Its final summary is included below — read it directly and only call mesh_read_chat if you need the full transcript.${verifyNote}\n\n--- ${args.nodeLabel} final summary ---\n${surfaced}`;
+            const summaryLead = weakCompletion
+                ? 'Its summary is included below — treat it as a candidate result, not a confirmed final one;'
+                : 'Its final summary is included below — read it directly and only call mesh_read_chat if you need the full transcript.';
+            return `${completionLead} ${summaryLead}${verifyNote}\n\n--- ${args.nodeLabel} final summary ---\n${surfaced}`;
         }
         const reviewNote = reviewRecommended
             ? ' Completion evidence is insufficient — verify via git status or provider_session_id before assuming the task is done. Use mesh_read_chat once if needed, but do not poll repeatedly.'
             : (weakCompletion
                 ? `${verifyTextNote} Use mesh_read_chat once if needed, but do not poll repeatedly.`
                 : ' Use mesh_read_chat once to review its final progress, but do not poll repeatedly.');
-        return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. This completion came from the agent status event path;${reviewNote}`;
+        return `${completionLead} This completion came from the agent status event path;${reviewNote}`;
     }
     if (args.event === 'agent:waiting_approval') {
         return `[System] ${args.nodeLabel} is waiting for approval to proceed${metadata}. You may use mesh_read_chat and mesh_approve to handle it.`;

@@ -26,7 +26,11 @@ import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
 import { readLedgerEntriesByKind } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
-import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
+import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, countTrailingToolActivityAfterFinalAssistant, selectFinalAssistantTurnEndMessage, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
+import { hasNonEmptyModalButtons } from '../commands/read-chat-presentation.js';
+import { providerHasNativeTurnSignal } from '../providers/completion/native-turn-signal.js';
+import type { NativeTurnTerminalMarker } from '../providers/completion/native-turn-signal.js';
+import { evaluateTerminalAdmission, TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS } from './mesh-terminal-admission.js';
 import { runSessionEvidenceCollection, resolveTaskEvidenceSessionId } from './mesh-turn-ledger.js';
 import type { ChatMessage } from '../types.js';
 import {
@@ -575,6 +579,25 @@ export interface AssignedTaskTerminalEvidence {
     providerType?: string;
     nodeId?: string;
     sessionId: string;
+    /**
+     * P0-1 (terminal-admission choke point): how the turn end was proven.
+     * 'strong' = a provider-native turn-terminal marker scoped to this turn
+     * (immediate terminal flow is justified); 'weak' = message-shape fallback
+     * only (idle + post-dispatch final assistant + quiet tail) — the caller
+     * must re-confirm before releasing queue/dependency state (P1-4).
+     * Absent on evidence produced before the admission choke point existed.
+     */
+    evidenceLevel?: 'strong' | 'weak';
+    /** The native marker that proved the turn end, when evidenceLevel is 'strong'. */
+    nativeMarker?: NativeTurnTerminalMarker;
+    /**
+     * P1-5: the full observation set the admission verdict was judged on
+     * (producer / providerObservedStatus / trailingActivityCount /
+     * nativeMarkerPresent / newestActivityAtMs / …). Threaded verbatim into
+     * the terminal ledger's completionDiagnostic.terminalAdmission so the
+     * ledger records the admission evidence the synth was judged on.
+     */
+    admissionSnapshot?: Record<string, unknown>;
 }
 
 // STARTED-REDRIVE-NATIVE-SOURCE-BLINDSPOT. Single-shot transcript poll that asks the NARROWER
@@ -632,6 +655,14 @@ async function fetchAssignedTaskChatTail(
         sessionId,
         targetSessionId: sessionId,
         tailLimit,
+        // P0-2 (terminal-admission incident): include the ACTIVITY surface. Without
+        // it the worker-side read strips tool/terminal bubbles from the tail, so the
+        // trailing-tool guard was BLIND — the 15-min redrive poll read a mid-turn
+        // kimi worker as "idle + final assistant preamble" because the trailing Edit
+        // tool call had been filtered out, and flipped the row completed 6s before
+        // the worker went busy again. This also makes pollAssignedTaskActivity see
+        // tool bubbles — strictly more accurate consumption evidence.
+        includeActivity: true,
         ...(node?.workspace ? { workspace: node.workspace } : {}),
         ...(providerType ? { agentType: providerType, providerType } : {}),
     };
@@ -794,6 +825,14 @@ export async function pollAssignedTaskTerminalEvidence(
          * the reclaim/grace paths.
          */
         minFinalAssistantAgeMs?: number;
+        /**
+         * P0-1 (terminal-admission choke point): who is asking, recorded in the
+         * admission snapshot + decline traces so a ledger completion can be
+         * paired with the producer that judged it
+         * ('redrive_deadline_transcript_evidence' | 'early_idle_transcript_evidence' | …).
+         * Defaults to 'transcript_poll' for legacy callers.
+         */
+        producer?: string;
     },
 ): Promise<AssignedTaskTerminalEvidence | null> {
     // DUP-CLAIM-REBIND (rc.35): read the session the ATTEMPT names, not the claim-time
@@ -852,35 +891,22 @@ export async function pollAssignedTaskTerminalEvidence(
     //
     // This does NOT loosen completion detection. The `!== 'idle'` test never protected against
     // a false completion — a genuinely generating provider reports `generating` here too, so a
-    // mid-turn worker is still refused. The guards that actually prove a turn-end all remain
-    // below and unchanged: a post-dispatch final assistant message, no trailing tool activity,
-    // and the settle window. When the field is absent (older remote daemon) the reader falls
-    // back to the projected status — i.e. the pre-fix behaviour, never a fabricated idle.
+    // mid-turn worker is still refused. When the field is absent (older remote daemon) the
+    // reader falls back to the projected status — i.e. the pre-fix behaviour, never a
+    // fabricated idle. The verdict itself is now applied inside the terminal-admission
+    // choke point below (rule 2), with ITS result passed verbatim so the fallback
+    // semantics are preserved exactly.
     const payloadStatus = readChatPayloadProviderObservedStatus(payload);
-    if (payloadStatus !== 'idle') return declined('session_not_idle', `status=${payloadStatus ?? 'unknown'} — mid-turn, not a turn-end`);
 
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
     const evidence = extractFinalAssistantSummaryEvidence(messages);
-    // idle but no assistant result yet → not a turn-end
-    if (!evidence.finalSummary) return declined('no_final_assistant_summary', `idle with ${messages.length} message(s) but no assistant result`);
-
-    // EARLY-IDLE-COMPLETION-FALSE-POSITIVE (poll defense-in-depth): a momentary idle read
-    // (startup-grace, or the sliver between an assistant preamble and the tool it fires) can
-    // show an assistant "Let me explore…" bubble FOLLOWED by trailing Read/Grep tool_use — a
-    // turn that is still executing, not a turn-end. selectFinalAssistantTurnEndMessage skips
-    // those trailing tool bubbles and would promote the preamble, so guard here: if a
-    // tool/terminal activity bubble trails the final assistant message, the worker is mid-turn
-    // — refuse the completion (fall through to the caller's reclaim/grace path). A genuinely
-    // finished pure-PTY worker ends on its final assistant with no trailing tool activity, so
-    // the kimi rescue is preserved.
-    if (hasTrailingToolActivityAfterFinalAssistant(messages)) {
-        return declined('trailing_tool_activity', 'tool/terminal bubble trails the final assistant — worker is mid-turn');
-    }
 
     // Stale-summary guard (same bar as PHASE 4): a reused session's transcript tail may hold a
     // PRIOR task's summary. Require the final assistant message to be dated at/after THIS task's
     // dispatch. When either timestamp is unusable, do NOT short-circuit — fall through so we never
     // synthesize a completion off a possibly-stale tail (the reclaim path is the safe default).
+    // Runs BEFORE the admission predicate: the admission snapshot needs the dispatch boundary
+    // anyway, and a provably-stale tail is declined here regardless of any other signal.
     const dispatchedAtMs = Date.parse(readNonEmptyString(row.dispatchTimestamp));
     const transcriptAtMs = Date.parse(evidence.transcriptMessageAt ?? '');
     if (!(Number.isFinite(dispatchedAtMs) && Number.isFinite(transcriptAtMs) && transcriptAtMs >= dispatchedAtMs)) {
@@ -897,7 +923,9 @@ export async function pollAssignedTaskTerminalEvidence(
     // must have SETTLED — see the opts doc above. A bubble younger than the
     // caller's settle window is treated as in-flight narration: veto (null),
     // exactly like the trailing-tool guard, so the streak re-accumulates and a
-    // genuine turn end completes one window later.
+    // genuine turn end completes one window later. Kept CALLER-SIDE (admission
+    // rule 7): the early-idle caller owns this window, the predicate does not
+    // duplicate it.
     if (typeof opts?.minFinalAssistantAgeMs === 'number' && opts.minFinalAssistantAgeMs > 0
         && Date.now() - transcriptAtMs < opts.minFinalAssistantAgeMs) {
         return declined(
@@ -906,18 +934,89 @@ export async function pollAssignedTaskTerminalEvidence(
         );
     }
 
-    // Idle + a final assistant message dated after dispatch = the worker finished this turn. We
-    // cannot distinguish a self-reported failure from the plain transcript tail here (that lives
-    // in buildTaskCompletionEvidence's structured-result path), and the alternative — re-driving a
-    // finished worker — is strictly worse, so a proven turn-end short-circuits to 'completed'.
+    // P0-1 (terminal-admission choke point): the finality decision is made ONE way,
+    // in evaluateTerminalAdmission — see mesh-terminal-admission.ts for the ordered
+    // rules and the incident they fix. This poll now gathers the observations only:
+    //
+    //   - activeModalPresent: a parked approval/question modal blocks the turn.
+    //   - nativeMarkers* (P0-2): when the provider has a native turn-terminal signal
+    //     AND the payload carried turnTerminalMarkers (a native read genuinely
+    //     happened — absent on old daemons / PTY fallbacks), the marker list is
+    //     authoritative: a scoped marker admits STRONG, its absence vetoes even a
+    //     perfect message shape (the incident veto).
+    //   - trailingActivityCount: tool/terminal bubbles after the final assistant
+    //     (EARLY-IDLE-COMPLETION-FALSE-POSITIVE — the preamble veto; now visible
+    //     because the tail fetch passes includeActivity).
+    //   - newestActivityAtMs: newest bubble of ANY kind — the transcript-growing
+    //     freshness veto, never bypassable by any deadline/backstop.
+    const nowMs = Date.now();
+    const trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
+    let newestActivityAtMs: number | undefined;
+    for (const msg of messages) {
+        const ts = readChatMessageTimestampMs(msg);
+        if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
+        if (newestActivityAtMs === undefined || ts > newestActivityAtMs) newestActivityAtMs = ts;
+    }
+    const transcriptGrowing = newestActivityAtMs !== undefined
+        && nowMs - newestActivityAtMs < TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS;
+    const activeModalPresent = hasNonEmptyModalButtons(payload.activeModal);
+    const nativeMarkersFieldPresent = 'turnTerminalMarkers' in payload;
+    const nativeMarkers = nativeMarkersFieldPresent && Array.isArray(payload.turnTerminalMarkers)
+        ? payload.turnTerminalMarkers as readonly NativeTurnTerminalMarker[]
+        : undefined;
+    const finalAssistantPresent = !!evidence.finalSummary;
+    const producer = readNonEmptyString(opts?.producer) || 'transcript_poll';
+    const verdict = evaluateTerminalAdmission({
+        producer,
+        providerType: providerType || undefined,
+        providerHasNativeMarker: providerHasNativeTurnSignal({ type: providerType }),
+        nativeMarkersFieldPresent,
+        nativeMarkers,
+        turnStartedAtMs: Number.isFinite(dispatchedAtMs) ? dispatchedAtMs : undefined,
+        providerObservedStatus: payloadStatus,
+        activeModalPresent,
+        finalAssistantPresent,
+        trailingActivityCount,
+        newestActivityAtMs,
+        nowMs,
+        minFinalAssistantAgeMs: opts?.minFinalAssistantAgeMs,
+    });
+    if (!verdict.admit) return declined(verdict.reason, verdict.detail);
+
+    // Admitted. Idle + a final assistant message dated after dispatch (weak), or a
+    // native turn-terminal marker scoped to this turn (strong) = the worker finished
+    // this turn. We cannot distinguish a self-reported failure from the plain
+    // transcript tail here (that lives in buildTaskCompletionEvidence's
+    // structured-result path), and the alternative — re-driving a finished worker —
+    // is strictly worse, so a proven turn-end short-circuits to 'completed'.
     //
     // WATCHDOG-FINALSUMMARY-LOST: carry the read evidence back to the caller so it can propagate a
     // finalSummary-bearing completion (not just flip the row). providerSessionId is best-effort from
     // the read payload — absent → daemon-level routing (unchanged from the reconcile paths).
+    // P1-5: the admission snapshot rides along so the caller can stamp it into the
+    // terminal ledger's completionDiagnostic.terminalAdmission.
     // POLL-TRACE: the accept side, so a poll that PREVENTED a wrong re-drive is as visible as one
     // that declined (the whole point is being able to tell those two apart after the fact).
+    const selectedFinalAssistant = finalAssistantPresent ? selectFinalAssistantTurnEndMessage(messages) : null;
+    const selectedFinalAssistantIndex = selectedFinalAssistant ? messages.lastIndexOf(selectedFinalAssistant) : -1;
+    const admissionSnapshot: Record<string, unknown> = {
+        producer,
+        providerType: providerType || undefined,
+        providerObservedStatus: payloadStatus,
+        activeModalPresent,
+        inTurnProgress: trailingActivityCount > 0 || transcriptGrowing,
+        transcriptGrowing,
+        trailingActivityCount,
+        nativeMarkerPresent: !!verdict.nativeMarker,
+        nativeMarkersFieldPresent,
+        finalAssistantPresent,
+        ...(selectedFinalAssistantIndex >= 0 ? { selectedFinalAssistantIndex } : {}),
+        ...(newestActivityAtMs !== undefined ? { newestActivityAtMs } : {}),
+        ...(Number.isFinite(dispatchedAtMs) ? { turnStartedAtMs: dispatchedAtMs } : {}),
+        polledAtMs: nowMs,
+    };
     traceMeshEventStage('poll_terminal_evidence_completed', traceCtx,
-        `idle with final assistant after dispatch — task is completed, re-drive prevented`);
+        `${verdict.reason} (${verdict.evidenceLevel}) — task is completed, re-drive prevented`);
     return {
         outcome: 'completed',
         finalSummary: evidence.finalSummary,
@@ -926,5 +1025,8 @@ export async function pollAssignedTaskTerminalEvidence(
         ...(providerType ? { providerType } : {}),
         ...(nodeId ? { nodeId } : {}),
         sessionId,
+        evidenceLevel: verdict.evidenceLevel,
+        ...(verdict.nativeMarker ? { nativeMarker: verdict.nativeMarker } : {}),
+        admissionSnapshot,
     };
 }

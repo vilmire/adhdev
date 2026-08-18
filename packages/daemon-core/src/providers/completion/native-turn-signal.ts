@@ -97,8 +97,13 @@ export function resolveNativeCompletionSignalSpec(
  * manifest this set can be emptied without touching any consumer — every call site reads
  * through providerHasNativeTurnSignal / resolveNativeCompletionSignalSpec, never a
  * provider name.
+ *
+ * 'kimi' is here for the same reason: the daemon's built-in spec executor already
+ * extracts kimi `turn.ended` markers (extractKimiTurnTerminalMarkers,
+ * spec/native-history-executor.ts), and kimi's published manifest cannot be drifted
+ * without a channel version bump.
  */
-const BUILTIN_TURN_SIGNAL_PROVIDER_TYPES: ReadonlySet<string> = new Set(['codex-cli']);
+const BUILTIN_TURN_SIGNAL_PROVIDER_TYPES: ReadonlySet<string> = new Set(['codex-cli', 'kimi']);
 
 /**
  * Whether this provider can answer "did the turn end?" authoritatively — either by

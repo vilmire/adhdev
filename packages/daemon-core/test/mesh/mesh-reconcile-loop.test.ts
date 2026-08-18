@@ -3880,6 +3880,10 @@ describe('runMeshReconcileTick', () => {
           category: 'cli',
           getState: () => ({ instanceId: sessionId, status: 'idle', type: 'claude-cli', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
         }
+        // Frozen timestamps: the P1-4 weak-candidate streak requires the SAME
+        // final-assistant evidence on consecutive ticks — per-call Date.now() would
+        // read as a moving transcript and reset the re-confirmation each tick.
+        const fixtureNow = Date.now()
         const readChat = vi.fn(async (cmd: string) => {
           if (cmd !== 'read_chat') return { success: true }
           return {
@@ -3887,8 +3891,8 @@ describe('runMeshReconcileTick', () => {
             status: 'idle',
             providerSessionId: 'claude-history-late',
             messages: [
-              { role: 'user', content: 'do work', timestamp: Date.now() - DELIVERED_NO_TURN_MS + 1_000 },
-              { role: 'assistant', content: 'All done — implemented and tests pass.', timestamp: Date.now() - 60_000 },
+              { role: 'user', content: 'do work', timestamp: fixtureNow - DELIVERED_NO_TURN_MS + 1_000 },
+              { role: 'assistant', content: 'All done — implemented and tests pass.', timestamp: fixtureNow - 60_000 },
             ],
           }
         })
@@ -3904,6 +3908,17 @@ describe('runMeshReconcileTick', () => {
         meshConfigMocks.listMeshes.mockReturnValue([mesh])
         meshConfigMocks.getMesh.mockReturnValue(mesh)
 
+        // P1-4 (weak completion candidate): the transcript evidence here is
+        // message-shape only (claude-cli has no native turn-terminal marker), so a
+        // single quiet poll now yields a CANDIDATE — the row is held and the
+        // completion promotes only after WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS (3)
+        // consecutive ticks re-admit the SAME evidence. This is the deliberate
+        // behavior change: a one-shot deadline flip from message-shape evidence was
+        // the incident class. Three identical quiet ticks → promotion.
+        await runMeshReconcileTick(components)
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+        await runMeshReconcileTick(components)
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
         await runMeshReconcileTick(components)
 
         // The transcript poll ran and the task was flipped 'completed' — NOT reclaimed/re-driven.

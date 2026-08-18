@@ -1,5 +1,6 @@
 import type { MessagePart, ModalInfo, ReadChatResult } from './contracts.js'
 import { normalizeMessageParts } from './contracts.js'
+import type { NativeTurnTerminalMarker } from './completion/native-turn-signal.js'
 import type { ChatBubbleState, ChatMessage } from '../types.js'
 import {
   CHAT_CONTRACT_VERSION_V1,
@@ -125,6 +126,33 @@ function validateModal(activeModal: unknown, status: ValidStatus, source: string
   return normalized
 }
 
+function validateTurnTerminalMarkers(value: unknown, source: string): NativeTurnTerminalMarker[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${source}: turnTerminalMarkers must be an array`)
+  }
+  return value.map((marker, index) => {
+    if (!isPlainObject(marker)) {
+      throw new Error(`${source}: turnTerminalMarkers[${index}] must be an object`)
+    }
+    if (!isFiniteNumber(marker.receivedAt)) {
+      throw new Error(`${source}: turnTerminalMarkers[${index}].receivedAt must be a finite number`)
+    }
+    if (marker.outcome !== 'completed' && marker.outcome !== 'aborted') {
+      throw new Error(`${source}: turnTerminalMarkers[${index}].outcome must be 'completed' or 'aborted'`)
+    }
+    if (typeof marker.summary !== 'string') {
+      throw new Error(`${source}: turnTerminalMarkers[${index}].summary must be a string`)
+    }
+    const normalized: NativeTurnTerminalMarker = {
+      receivedAt: marker.receivedAt,
+      outcome: marker.outcome,
+      summary: marker.summary,
+    }
+    if (typeof marker.turnId === 'string') normalized.turnId = marker.turnId
+    return normalized
+  })
+}
+
 function validateControlValues(controlValues: unknown, source: string): Record<string, string | number | boolean> | undefined {
   if (controlValues === undefined) return undefined
   if (!isPlainObject(controlValues)) {
@@ -224,6 +252,13 @@ export function validateReadChatResultPayload(raw: unknown, source = 'read_chat'
   if (typeof raw.providerSessionId === 'string') normalized.providerSessionId = raw.providerSessionId
   if (raw.transcriptAuthority === 'provider' || raw.transcriptAuthority === 'daemon') normalized.transcriptAuthority = raw.transcriptAuthority
   if (raw.coverage === 'full' || raw.coverage === 'tail' || raw.coverage === 'current-turn') normalized.coverage = raw.coverage
+  // (NATIVE-TURN-SIGNAL) Provider-native turn-terminal markers extracted by the
+  // daemon's native-history readers (kimi turn.ended, codex task_complete /
+  // turn_aborted). Present ONLY on read paths where a native transcript was
+  // genuinely read (possibly an empty array = "read happened, turn not ended");
+  // absent on old daemons / PTY fallbacks so mesh polls can pick the legacy
+  // inference path. Additive — no existing consumer reads it.
+  if (raw.turnTerminalMarkers !== undefined) normalized.turnTerminalMarkers = validateTurnTerminalMarkers(raw.turnTerminalMarkers, source)
 
   return normalized
 }

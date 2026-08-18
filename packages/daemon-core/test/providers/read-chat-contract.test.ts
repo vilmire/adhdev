@@ -98,4 +98,44 @@ describe('read chat contract validation', () => {
       controlValues: { model: { value: 'sonnet' } },
     }, 'test')).toThrow('controlValues.model must be string, number, or boolean')
   })
+
+  it('passes through native turn-terminal markers with light shape validation', () => {
+    const validated = validateReadChatResultPayload({
+      status: 'idle',
+      messages: [],
+      turnTerminalMarkers: [
+        { receivedAt: 1720000000000, outcome: 'completed', summary: 'done', turnId: '3' },
+        { receivedAt: 1720000001000, outcome: 'aborted', summary: '' },
+      ],
+    }, 'test')
+    expect(validated.turnTerminalMarkers).toEqual([
+      { receivedAt: 1720000000000, outcome: 'completed', summary: 'done', turnId: '3' },
+      { receivedAt: 1720000001000, outcome: 'aborted', summary: '' },
+    ])
+
+    // Empty array is valid: "native read happened, no terminal marker".
+    expect(validateReadChatResultPayload({
+      status: 'idle',
+      messages: [],
+      turnTerminalMarkers: [],
+    }, 'test').turnTerminalMarkers).toEqual([])
+
+    // Absent field stays absent (old daemon / PTY fallback signal).
+    expect(validateReadChatResultPayload({
+      status: 'idle',
+      messages: [],
+    }, 'test').turnTerminalMarkers).toBeUndefined()
+
+    expect(() => validateReadChatResultPayload({
+      status: 'idle',
+      messages: [],
+      turnTerminalMarkers: [{ receivedAt: 1720000000000, outcome: 'finished', summary: 'done' }],
+    }, 'test')).toThrow("turnTerminalMarkers[0].outcome must be 'completed' or 'aborted'")
+
+    expect(() => validateReadChatResultPayload({
+      status: 'idle',
+      messages: [],
+      turnTerminalMarkers: [{ outcome: 'completed', summary: 'done' }],
+    }, 'test')).toThrow('turnTerminalMarkers[0].receivedAt must be a finite number')
+  })
 })

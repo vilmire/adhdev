@@ -25,7 +25,8 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { readNonEmptyString, buildMeshSystemMessage } from './mesh-events-utils.js';
+import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
@@ -178,12 +179,30 @@ const ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS = 8_000;
 // unreadable tick clears the entry so the grace must re-accumulate from scratch.
 const assignedIdleFinalAssistantSince = new Map<string, number>();
 
+// P1-4 WEAK-COMPLETION-CANDIDATE: how many CONSECUTIVE reconcile ticks must admit the
+// SAME weak (message-shape) terminal evidence before the candidate is promoted to a
+// real completion. Message shape is exactly the evidence class the terminal-admission
+// incident burned (idle + quiet-valley preamble, 6s before the worker went busy
+// again), so a single weak admit never releases queue/dependency state anymore —
+// the re-confirm-then-promote streak is the time-based proof the transcript genuinely
+// settled. A STRONG admit (a native turn-terminal marker) skips this machinery
+// entirely: the provider's own turn-end record is the confirmation.
+const WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS = 3;
+
+// Per-row weak-candidate streak, keyed `${meshId}::${taskId}`. `finalAssistantAt`
+// pins the evidence the streak is confirming: a DIFFERENT final-assistant timestamp
+// means the transcript moved (the worker is still producing) — the count resets so
+// re-confirmation always covers identical, quiet evidence. Pruned each pass to the
+// currently-assigned rows; deleted on decline/promotion/deferral.
+const weakCompletionCandidateStreak = new Map<string, { count: number; finalAssistantAt?: string }>();
+
 // Test hook: clear the delivered-no-turn UNKNOWN streaks between cases.
 export function __resetReclaimUnknownStreakForTests(): void {
     deliveredNoTurnUnknownStreak.clear();
     deliveredUnconsumedUnknownStreak.clear();
     assignedIdleFinalAssistantSince.clear();
     queueHoldHardDeadlineAudited.clear();
+    weakCompletionCandidateStreak.clear();
 }
 
 // APPROVAL-INBOX-BLINDSPOT (Fix A.3): true when the assigned row's bound session is, per the
@@ -514,7 +533,7 @@ function propagateWatchdogTranscriptCompletion(
     row: { id: string; assignedNodeId?: string; assignedSessionId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
     evidence: AssignedTaskTerminalEvidence,
     source: string,
-    opts?: { boundedBackstop?: boolean },
+    opts?: { boundedBackstop?: boolean; terminalAdmission?: Record<string, unknown> },
 ): 'propagated' | 'deferred' | 'unavailable' {
     const sessionId = readNonEmptyString(row.assignedSessionId) || evidence.sessionId;
     if (!sessionId || !readNonEmptyString(evidence.finalSummary)) {
@@ -546,6 +565,10 @@ function propagateWatchdogTranscriptCompletion(
                 liveTurnPendingEvidence: resolveLiveTurnPendingEvidence(components, sessionId),
                 boundedBackstop: opts?.boundedBackstop === true,
             },
+            // P1-5: forward the poll's admission snapshot so the terminal ledger's
+            // completionDiagnostic.terminalAdmission records the evidence the synth
+            // was judged on.
+            ...(opts?.terminalAdmission ? { terminalAdmission: opts.terminalAdmission } : {}),
             source,
         });
         // reconciled → freshly queued the coordinator completion; alreadyTerminal → a terminal
@@ -724,6 +747,9 @@ export async function recoverStrandedAssignedDispatches(
     for (const key of [...assignedIdleFinalAssistantSince.keys()]) {
         if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) assignedIdleFinalAssistantSince.delete(key);
     }
+    for (const key of [...weakCompletionCandidateStreak.keys()]) {
+        if (key.startsWith(meshKeyPrefix) && !assignedKeys.has(key)) weakCompletionCandidateStreak.delete(key);
+    }
     // QUEUE-HOLD-HARD-DEADLINE audit keys carry a trailing `::${gate}`, so match on the
     // task prefix rather than the exact assigned key.
     for (const key of [...queueHoldHardDeadlineAudited]) {
@@ -774,8 +800,15 @@ export async function recoverStrandedAssignedDispatches(
                 // turn end completes one window later.
                 const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, row, {
                     minFinalAssistantAgeMs: ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS,
+                    producer: 'early_idle_transcript_evidence',
                 });
                 if (terminalEvidence) {
+                    // P1-4 NOTE: no weak-candidate machinery on this path — its own
+                    // continuous-idle streak (ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS of
+                    // unbroken idle-with-final-assistant) plus the settle window the
+                    // poll just enforced ARE the re-confirmation, so a weak admit here
+                    // flips exactly as before; only the admission snapshot + evidence
+                    // level are threaded through for ledger diagnostics (P1-5).
                     // MID-TURN-CAUSAL-ADMISSION (rc.16): propagate FIRST. When the unified guard
                     // defers (the LOCAL live adapter still reports the turn pending — transcript
                     // idle-with-final-assistant can straddle a genuinely mid-turn worker), HOLD
@@ -784,6 +817,7 @@ export async function recoverStrandedAssignedDispatches(
                     // and re-evaluates, releasing exactly once after the live state clears.
                     const propagation = propagateWatchdogTranscriptCompletion(
                         components, meshId, row, terminalEvidence, 'early_idle_transcript_evidence',
+                        { terminalAdmission: terminalEvidence.admissionSnapshot },
                     );
                     if (propagation === 'deferred') {
                         assignedIdleFinalAssistantSince.delete(idleTranscriptStreakKey);
@@ -818,6 +852,13 @@ export async function recoverStrandedAssignedDispatches(
                                     taskId: row.id,
                                     event: 'agent:generating_completed',
                                     source: 'early_idle_transcript_evidence',
+                                    // P1-5: stamp the admission evidence on the bare fallback
+                                    // write too (the propagated path carries it via
+                                    // terminalAdmission — see above).
+                                    ...(terminalEvidence.evidenceLevel ? { evidenceLevel: terminalEvidence.evidenceLevel } : {}),
+                                    ...(terminalEvidence.admissionSnapshot
+                                        ? { completionDiagnostic: { terminalAdmission: terminalEvidence.admissionSnapshot } }
+                                        : {}),
                                 },
                             });
                         } catch { /* best-effort ledger write */ }
@@ -1342,76 +1383,19 @@ export async function recoverStrandedAssignedDispatches(
             if (suspensionGate.kind === 'released' && suspensionGate.dropped > 0) {
                 LOG.info('MeshReconcile', `Dropped ${suspensionGate.dropped} held suspension(s) for task ${row.id} on mesh ${meshId}: worker session ${row.assignedSessionId ?? '?'} demonstrably dead — ${reclaimReason} proceeds to a new attempt`);
             }
-            // TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i): before re-driving, poll the worker
-            // transcript for terminal evidence — the SAME check PHASE 4 does for direct dispatches,
-            // now for this claim-path queue row. An autoLaunch/worktree worker's
-            // generating_started/completed events don't reliably reach the coordinator ledger, so
-            // the ledger check above (findTerminalLedgerEvidenceForTask) can be empty at the 15-min
-            // deadline for a task the worker actually FINISHED — and re-driving then re-injects the
-            // same prompt into the already-idle worker (the owner's symptom). If the worker is idle
-            // with a final assistant summary dated after dispatch, the task is done: flip it
-            // 'completed' instead of reclaiming. Conservative by construction (mid-turn / no
-            // summary / stale summary / unreadable → null → fall through to the reclaim below), so
-            // this can only PREVENT a wrong re-drive, never invent a completion. Runs only at the
-            // deadline (rare), so the extra read is not a hot-path cost.
-            const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, evidenceRow);
-            if (terminalEvidence) {
-                deliveredNoTurnUnknownStreak.delete(streakKey);
-                // TURN-LEDGER (Stage 5): transcript terminal evidence is a CompletionProposal
-                // like any other — the reducer arbitrates BEFORE the row flips. A rejection
-                // (e.g. the attempt already closed differently) skips every write below.
-                if (!reconcileTerminalViaReducer({
-                    meshId,
-                    taskId: row.id,
-                    outcome: terminalEvidence.outcome,
-                    source: 'transcript',
-                    sessionId: row.assignedSessionId,
-                    reason: 'redrive_deadline_transcript_evidence',
-                })) {
-                    continue;
-                }
-                // updateTaskStatus ends the single-flight dispatch window on any transition off
-                // 'assigned', so a later requeue/re-dispatch is never blocked by a stale mark.
-                updateTaskStatus(meshId, row.id, terminalEvidence.outcome);
-                // WATCHDOG-FINALSUMMARY-LOST: propagate the finalSummary-bearing completion to the
-                // coordinator (same [System] notification as the native path); only fall back to the
-                // bare summary-less ledger write when propagation could not run.
-                // MID-TURN-CAUSAL-ADMISSION: this is the BOUNDED max-wait net (the 15-min
-                // delivered-no-turn deadline) — boundedBackstop preserves the genuine-final
-                // fail-open semantics against the live-pending veto.
-                const propagation = propagateWatchdogTranscriptCompletion(
-                    components, meshId, evidenceRow, terminalEvidence, 'redrive_deadline_transcript_evidence',
-                    { boundedBackstop: true },
-                );
-                const propagated = propagation === 'propagated';
-                if (!propagated && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
-                    try {
-                        appendLedgerEntry(meshId, {
-                            kind: terminalEvidence.outcome === 'completed' ? 'task_completed' : 'task_failed',
-                            nodeId: row.assignedNodeId,
-                            sessionId: row.assignedSessionId,
-                            providerType: row.assignedProviderType,
-                            payload: {
-                                taskId: row.id,
-                                event: 'agent:generating_completed',
-                                source: 'redrive_deadline_transcript_evidence',
-                            },
-                        });
-                    } catch { /* best-effort ledger write */ }
-                }
-                LOG.warn('MeshReconcile', `Skipped delivered-no-turn re-drive for task ${row.id} on mesh ${meshId} `
-                    + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): worker transcript is idle with a `
-                    + `final assistant message after dispatch — the completion event was lost/late, task is ${terminalEvidence.outcome}, NOT re-driving`
-                    + `${propagated ? ' (finalSummary propagated to coordinator)' : ''}`);
-                traceMeshEventStage('redrive_deadline_transcript_completed', {
-                    taskId: row.id,
-                    sessionId: row.assignedSessionId,
-                    nodeId: row.assignedNodeId,
-                    meshId,
-                    event: 'agent:generating_completed',
-                }, `${reclaimReason} → transcript ${terminalEvidence.outcome}${propagated ? ' propagated' : ''}`);
-                continue;
-            }
+            // RC.20 GATE ORDER (P0-3): the ACTIVE-ATTEMPT gate and the NATIVE-SOURCE
+            // ACTIVITY gate run BEFORE the terminal-evidence poll below (they used to
+            // run after it — the poll flipped a mid-turn kimi worker to completed 6s
+            // before the worker went busy again, ahead of both gates that would have
+            // held it). The poll is now admission-choked (P0-1 — every accept goes
+            // through evaluateTerminalAdmission, and a weak admit only becomes a
+            // CANDIDATE, P1-4), so no order can falsely complete anymore; running the
+            // gates first simply gives the cheap, durable holds priority, and a
+            // genuinely finished worker (stale activity, bare 'consumed' stage) still
+            // reaches the poll. KNOWN TRADEOFF: a worker whose generating_started DID
+            // land but whose completion was lost keeps a live 'generating' stage and
+            // is held until QUEUE_HOLD_HARD_DEADLINE_MS yields — the safe direction,
+            // and bounded.
             // RC.20 ACTIVE-ATTEMPT GATE: a nonterminal attempt whose durable stage is a
             // LIVE-turn stage (generating / waiting_approval / waiting_choice / finalizing)
             // is positive causal evidence the prompt was consumed and the turn is owned —
@@ -1516,6 +1500,183 @@ export async function recoverStrandedAssignedDispatches(
                     }, `${noTurnProfile.class} quiet >${Math.round(NATIVE_SOURCE_ACTIVITY_STALE_MS / 1000)}s → ${reclaimReason} proceeds`);
                 }
             }
+            // TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i): before re-driving, poll the worker
+            // transcript for terminal evidence — the SAME check PHASE 4 does for direct dispatches,
+            // now for this claim-path queue row. An autoLaunch/worktree worker's
+            // generating_started/completed events don't reliably reach the coordinator ledger, so
+            // the ledger check above (findTerminalLedgerEvidenceForTask) can be empty at the 15-min
+            // deadline for a task the worker actually FINISHED — and re-driving then re-injects the
+            // same prompt into the already-idle worker (the owner's symptom). If the worker is idle
+            // with a final assistant summary dated after dispatch, the task is done: flip it
+            // 'completed' instead of reclaiming. Conservative by construction (mid-turn / no
+            // summary / stale summary / unreadable → null → fall through to the reclaim below), so
+            // this can only PREVENT a wrong re-drive, never invent a completion. Runs only at the
+            // deadline (rare), so the extra read is not a hot-path cost.
+            //
+            // P0-1: the poll's accept is decided by the terminal-admission choke point
+            // (evaluateTerminalAdmission). Its evidenceLevel drives what an accept MEANS here:
+            //   - STRONG (a native turn-terminal marker scoped to this turn) → the immediate
+            //     terminal flow below, exactly as before.
+            //   - WEAK (message-shape fallback) → P1-4 CANDIDATE: no queue flip, no terminal
+            //     ledger, no dependency release. The candidate is notified to the coordinator
+            //     once ("possible completion — awaiting confirmation") and must be re-admitted
+            //     with the SAME final-assistant evidence on WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS
+            //     consecutive ticks before it promotes. Each reconcile tick re-enters this path
+            //     for the still-assigned row, so confirmations happen on consecutive ticks; a
+            //     worker that resumes (fresh activity gate holds, or the poll declines) gets its
+            //     streak deleted below / by the prune.
+            const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, evidenceRow, {
+                producer: 'redrive_deadline_transcript_evidence',
+            });
+            if (terminalEvidence) {
+                deliveredNoTurnUnknownStreak.delete(streakKey);
+                const weakCandidateKey = `${meshId}::${row.id}`;
+                const weakAdmission = terminalEvidence.evidenceLevel === 'weak';
+                if (weakAdmission) {
+                    const candidate = weakCompletionCandidateStreak.get(weakCandidateKey) ?? { count: 0 };
+                    // Evidence changed (a NEWER final assistant bubble) → the previous
+                    // confirmations covered different evidence; re-confirm from scratch.
+                    if (candidate.finalAssistantAt !== undefined
+                        && candidate.finalAssistantAt !== terminalEvidence.transcriptMessageAt) {
+                        candidate.count = 0;
+                    }
+                    candidate.finalAssistantAt = terminalEvidence.transcriptMessageAt;
+                    candidate.count += 1;
+                    weakCompletionCandidateStreak.set(weakCandidateKey, candidate);
+                    if (candidate.count === 1) {
+                        // FIRST observation: surface the CANDIDATE to the coordinator. The
+                        // weak metadataEvent makes buildMeshSystemMessage lead with the
+                        // "possible completion — awaiting confirmation" wording (P1-4), so the
+                        // coordinator is informed WITHOUT the task being declared done.
+                        // NOTIF-DROP lesson: coordinatorMessage is REQUIRED — without it
+                        // injectPendingIntoCoordinator drains-without-inject and the row is
+                        // lost. Daemon-level routing (no target ids) is fine for a candidate.
+                        const nodeLabel = row.assignedNodeId ? `Node '${row.assignedNodeId}'` : 'Remote agent';
+                        const metadataEvent = {
+                            evidenceLevel: 'weak' as const,
+                            finalSummary: terminalEvidence.finalSummary,
+                            taskId: row.id,
+                            providerType: readNonEmptyString(row.assignedProviderType) || terminalEvidence.providerType,
+                            providerSessionId: terminalEvidence.providerSessionId,
+                            source: 'redrive_deadline_transcript_evidence',
+                            targetSessionId: terminalEvidence.sessionId,
+                        };
+                        try {
+                            queuePendingMeshCoordinatorEvent({
+                                event: 'agent:generating_completed',
+                                meshId,
+                                nodeLabel,
+                                nodeId: row.assignedNodeId,
+                                metadataEvent,
+                                coordinatorMessage: buildMeshSystemMessage({ event: 'agent:generating_completed', nodeLabel, metadataEvent }),
+                                queuedAt: nowMs,
+                            });
+                        } catch { /* best-effort candidate notification — the hold below still applies */ }
+                    }
+                    if (candidate.count < WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS) {
+                        traceMeshEventDrop('weak_completion_candidate_held', {
+                            taskId: row.id,
+                            sessionId: row.assignedSessionId,
+                            nodeId: row.assignedNodeId,
+                            meshId,
+                            event: 'agent:generating_completed',
+                        }, `weak message-shape completion candidate ${candidate.count}/${WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS} — awaiting re-confirmation`);
+                        continue;
+                    }
+                    // PROMOTION: enough consecutive identical quiet-poll re-confirmations.
+                    // Fall through to the terminal flow with the streak cleared.
+                    weakCompletionCandidateStreak.delete(weakCandidateKey);
+                } else {
+                    // STRONG admit (native marker): skip the candidate machinery entirely —
+                    // the provider's own turn-end record IS the confirmation.
+                    weakCompletionCandidateStreak.delete(weakCandidateKey);
+                }
+                // TURN-LEDGER (Stage 5): transcript terminal evidence is a CompletionProposal
+                // like any other — the reducer arbitrates BEFORE the row flips. A rejection
+                // (e.g. the attempt already closed differently) skips every write below.
+                if (!reconcileTerminalViaReducer({
+                    meshId,
+                    taskId: row.id,
+                    outcome: terminalEvidence.outcome,
+                    source: 'transcript',
+                    sessionId: row.assignedSessionId,
+                    reason: 'redrive_deadline_transcript_evidence',
+                })) {
+                    continue;
+                }
+                // WATCHDOG-FINALSUMMARY-LOST: propagate the finalSummary-bearing completion to the
+                // coordinator (same [System] notification as the native path); only fall back to the
+                // bare summary-less ledger write when propagation could not run.
+                // MID-TURN-CAUSAL-ADMISSION + P1-4: propagate BEFORE the row flip, and pass
+                // boundedBackstop ONLY for a STRONG admit — a native turn-terminal marker
+                // outranks a stale live-pending snapshot (the max-wait fail-open semantics).
+                // A WEAK promotion rides NO backstop: a live-pending veto DEFERS it (the fix
+                // for "bounded backstop must not ignore in_turn_progress" — weak/in-turn
+                // evidence never rides the backstop anymore). When deferred the streak is
+                // already deleted and we hold: no row flip, no ledger, no queued event.
+                const propagation = propagateWatchdogTranscriptCompletion(
+                    components, meshId, evidenceRow, terminalEvidence, 'redrive_deadline_transcript_evidence',
+                    {
+                        ...(weakAdmission ? {} : { boundedBackstop: true }),
+                        terminalAdmission: terminalEvidence.admissionSnapshot,
+                    },
+                );
+                if (propagation === 'deferred') {
+                    LOG.info('MeshReconcile', `Deferred redrive-deadline transcript completion for task ${row.id} on mesh ${meshId} `
+                        + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): the live adapter still reports `
+                        + `the turn pending — holding the weak promotion; it re-confirms from scratch next tick`);
+                    traceMeshEventDrop('redrive_completion_deferred_live_pending', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    });
+                    continue;
+                }
+                // updateTaskStatus ends the single-flight dispatch window on any transition off
+                // 'assigned', so a later requeue/re-dispatch is never blocked by a stale mark.
+                updateTaskStatus(meshId, row.id, terminalEvidence.outcome);
+                const propagated = propagation === 'propagated';
+                if (!propagated && !findTerminalLedgerEvidenceForTask({ meshId, taskId: row.id })) {
+                    try {
+                        appendLedgerEntry(meshId, {
+                            kind: terminalEvidence.outcome === 'completed' ? 'task_completed' : 'task_failed',
+                            nodeId: row.assignedNodeId,
+                            sessionId: row.assignedSessionId,
+                            providerType: row.assignedProviderType,
+                            payload: {
+                                taskId: row.id,
+                                event: 'agent:generating_completed',
+                                source: 'redrive_deadline_transcript_evidence',
+                                // P1-5: stamp the admission evidence on the bare fallback
+                                // write too (the propagated path carries it via
+                                // terminalAdmission — see propagateWatchdogTranscriptCompletion).
+                                ...(terminalEvidence.evidenceLevel ? { evidenceLevel: terminalEvidence.evidenceLevel } : {}),
+                                ...(terminalEvidence.admissionSnapshot
+                                    ? { completionDiagnostic: { terminalAdmission: terminalEvidence.admissionSnapshot } }
+                                    : {}),
+                            },
+                        });
+                    } catch { /* best-effort ledger write */ }
+                }
+                LOG.warn('MeshReconcile', `Skipped delivered-no-turn re-drive for task ${row.id} on mesh ${meshId} `
+                    + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}): worker transcript is idle with a `
+                    + `final assistant message after dispatch — the completion event was lost/late, task is ${terminalEvidence.outcome}, NOT re-driving`
+                    + `${propagated ? ' (finalSummary propagated to coordinator)' : ''}`);
+                traceMeshEventStage('redrive_deadline_transcript_completed', {
+                    taskId: row.id,
+                    sessionId: row.assignedSessionId,
+                    nodeId: row.assignedNodeId,
+                    meshId,
+                    event: 'agent:generating_completed',
+                }, `${reclaimReason} → transcript ${terminalEvidence.outcome} (${terminalEvidence.evidenceLevel ?? 'legacy'}${weakAdmission ? `, promoted after ${WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS} confirmations` : ''})${propagated ? ' propagated' : ''}`);
+                continue;
+            }
+            // The poll declined — any weak candidate it had been accumulating is void
+            // (the transcript moved / the turn is provably not over); re-confirmation
+            // starts from scratch on the next admit.
+            weakCompletionCandidateStreak.delete(streakKey);
             const reclaimedLost = reclaimStrandedAssignedTask(meshId, row.id, {
                 reason: reclaimReason,
                 ageMs: nowMs - dispatchedAtMs,

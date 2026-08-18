@@ -314,6 +314,49 @@ function hasTerminalLedgerAfterDispatch(args: {
     return false;
 }
 
+// P1-5a follow-up (synth idempotency): true when a terminal entry recorded after the dispatch
+// is THIS synth's own prior record — an entry this function wrote (completionDiagnostic.reason
+// === 'direct_task_transcript_reconciliation') for the same task carrying the same finalSummary.
+// hasTerminalLedgerAfterDispatch deliberately skips WEAK terminals (Fix C) so a genuine
+// completion can still be synthesized; now that this synth honestly stamps its weak ledgers
+// (evidenceLevel / finalAssistantPresent), a replay of the SAME synth (same summary) would slip
+// past that skip and double-write the terminal ledger. Dedup the identical replay; a later
+// synth carrying DIFFERENT (e.g. fuller/genuine) evidence still proceeds and supersedes.
+function hasIdenticalSynthesizedTerminal(args: {
+    meshId: string;
+    taskId: string;
+    sessionId?: string;
+    finalSummary: string;
+    dispatchEntryId?: string;
+    dispatchTimestamp?: string;
+}): boolean {
+    const entries = readLedgerEntriesByKind(args.meshId, ['task_dispatched', ...TERMINAL_LEDGER_KINDS]);
+    let afterDispatch = !args.dispatchEntryId && !args.dispatchTimestamp;
+    const dispatchTime = args.dispatchTimestamp ? new Date(args.dispatchTimestamp).getTime() : Number.NaN;
+    for (const entry of entries) {
+        if (!afterDispatch) {
+            if (args.dispatchEntryId && entry.id === args.dispatchEntryId) {
+                afterDispatch = true;
+                continue;
+            }
+            if (!args.dispatchEntryId && Number.isFinite(dispatchTime)) {
+                const entryTime = new Date(entry.timestamp).getTime();
+                if (Number.isFinite(entryTime) && entryTime >= dispatchTime) afterDispatch = true;
+            }
+            if (!afterDispatch) continue;
+        }
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
+        const diagnostic = readRecord(entry.payload?.completionDiagnostic);
+        if (readNonEmptyString(diagnostic?.reason) !== 'direct_task_transcript_reconciliation') continue;
+        if (readNonEmptyString(entry.payload?.finalSummary) !== args.finalSummary) continue;
+        const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
+        if (terminalTaskId && terminalTaskId !== args.taskId) continue;
+        if (terminalTaskId && terminalTaskId === args.taskId) return true;
+        if (args.sessionId && sessionIdsEquivalent(entry.sessionId, args.sessionId)) return true;
+    }
+    return false;
+}
+
 export function reconcileDirectDispatchCompletionFromTranscript(args: {
     meshId: string;
     nodeId?: string;
@@ -366,6 +409,14 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
      * the state clears (the terminal-ledger dedup above makes the release idempotent).
      */
     causalAdmission?: TranscriptSynthCausalAdmission;
+    /**
+     * P1-5b: OPTIONAL terminal-producer admission snapshot (terminal producer /
+     * providerObservedStatus / live-signal snapshot / nativeMarkerPresent /
+     * selectedFinalAssistantIndex / trailingActivityCount), supplied by a later change. When
+     * present it is merged verbatim into the terminal ledger payload's completionDiagnostic as
+     * `terminalAdmission`, so the ledger records the admission evidence the synth was judged on.
+     */
+    terminalAdmission?: Record<string, unknown>;
     source?: string;
 }): { reconciled: boolean; kind?: MeshLedgerKind; alreadyTerminal?: boolean; workerResult?: unknown; ledgerEntryId?: string; reason?: string } {
     const finalSummary = readNonEmptyString(args.finalSummary);
@@ -384,6 +435,20 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         sessionId: args.sessionId,
         dispatchEntryId: dispatch?.id,
         dispatchTimestamp: dispatch?.timestamp,
+    })) {
+        return { reconciled: false, alreadyTerminal: true, reason: 'terminal_ledger_entry_exists' };
+    }
+    // P1-5a follow-up: the skip-weak terminal scan above no longer stops a replay of THIS
+    // synth's own weak terminal (it is skipped by design so a genuine completion can supersede
+    // it). Dedup the identical replay (same synth diagnostic + same summary) so the synth stays
+    // idempotent; a later synth carrying different/fuller evidence still proceeds.
+    if (hasIdenticalSynthesizedTerminal({
+        meshId: args.meshId,
+        taskId: args.taskId,
+        sessionId: args.sessionId,
+        finalSummary,
+        dispatchEntryId: dispatch?.id,
+        dispatchTimestamp: dispatch?.timestamp || args.dispatchTimestamp,
     })) {
         return { reconciled: false, alreadyTerminal: true, reason: 'terminal_ledger_entry_exists' };
     }
@@ -472,14 +537,23 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
             providerSessionId: readNonEmptyString(args.providerSessionId),
             finalSummary,
             workerResult,
+            // P1-5b: stamp the SAME evidenceLevel the queued metadataEvent carries, so the
+            // shared weak predicates judge the terminal ledger and the live event identically
+            // (previously only the metadataEvent had it → a weak synth ledger read as strong).
+            evidenceLevel: selfAttributing ? 'sufficient' : 'weak',
             completionDiagnostic: {
                 reason: 'direct_task_transcript_reconciliation',
                 dispatchEntryId: dispatch?.id,
                 dispatchTimestamp: dispatch?.timestamp,
                 transcriptMessageAt: readNonEmptyString(args.transcriptMessageAt),
                 // Honestly reflect self-attribution: a plain-text tail did NOT prove a turn-final
-                // assistant message (only a self-attributing final_summary_json did).
+                // assistant message (only a self-attributing final_summary_json did). P1-5a: stamp
+                // BOTH fields — the shared isMissingFinalAssistantDiagnostic predicate reads
+                // finalAssistantPresent, so a weak synth ledger must carry it to be judged weak.
                 transcriptFinalAssistantPresent: selfAttributing,
+                finalAssistantPresent: selfAttributing,
+                // P1-5b: terminal-producer admission snapshot (optional; supplied by a later change).
+                ...(args.terminalAdmission ? { terminalAdmission: args.terminalAdmission } : {}),
             },
             evidence,
         },

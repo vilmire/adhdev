@@ -199,6 +199,10 @@ describe('providerHasNativeTurnSignal — who gets the native path', () => {
         expect(providerHasNativeTurnSignal({ type: 'codex-cli', nativeHistory: { mode: 'native-source' } })).toBe(true);
     });
 
+    it('kimi qualifies via its built-in reader (extractKimiTurnTerminalMarkers) even without a manifest declaration', () => {
+        expect(providerHasNativeTurnSignal({ type: 'kimi', nativeHistory: { mode: 'native-source' } })).toBe(true);
+    });
+
     it('ANY provider qualifies by manifest declaration alone — no code change needed', () => {
         expect(providerHasNativeTurnSignal({
             type: 'some-future-cli',

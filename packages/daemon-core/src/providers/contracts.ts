@@ -47,6 +47,13 @@ export interface ReadChatResult {
   /** Provider-owned transcript authority/coverage hints for daemon/dashboard sync. */
   transcriptAuthority?: 'provider' | 'daemon';
   coverage?: 'full' | 'tail' | 'current-turn';
+  /**
+   * Provider-native turn-terminal markers (kimi turn.ended, codex
+   * task_complete/turn_aborted) surfaced by the daemon's native-history
+   * readers. Present only when a native transcript was genuinely read on this
+   * read path; absent on PTY/mirror fallbacks.
+   */
+  turnTerminalMarkers?: import('./completion/native-turn-signal.js').NativeTurnTerminalMarker[];
   /** Provider-driven UI effects derived from chat state */
   effects?: ProviderEffect[];
 }

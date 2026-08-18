@@ -297,33 +297,50 @@ export function isTranscriptChromeOnlyText(text: string | null | undefined): boo
 export function hasTrailingToolActivityAfterFinalAssistant(
   messages: ChatMessage[] | null | undefined,
 ): boolean {
-  if (!Array.isArray(messages) || messages.length === 0) return false;
-  let sawTrailingToolActivity = false;
+  return countTrailingToolActivityAfterFinalAssistant(messages) > 0;
+}
+
+/**
+ * Counting sibling of hasTrailingToolActivityAfterFinalAssistant (P0-2 of the
+ * terminal-admission choke point): the SAME scan, returning HOW MANY
+ * tool/terminal activity bubbles trail the final assistant bubble instead of a
+ * bare boolean. The terminal-admission predicate records the count in its
+ * admission snapshot (P1-5 ledger diagnostics) so a later reader can see
+ * exactly how much in-flight activity vetoed (or didn't) the completion.
+ * Returns 0 in exactly the cases the boolean returned false — no trailing
+ * activity, no final assistant bubble, an empty streaming tail, or a trailing
+ * user bubble holding the last word.
+ */
+export function countTrailingToolActivityAfterFinalAssistant(
+  messages: ChatMessage[] | null | undefined,
+): number {
+  if (!Array.isArray(messages) || messages.length === 0) return 0;
+  let trailingToolActivity = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg) continue;
     const classification = classifyChatMessageVisibility(msg);
     // A trailing user-facing assistant/model bubble with real text ends the scan:
-    // whether we saw a tool AFTER it is the verdict.
+    // how many tools sit AFTER it is the verdict.
     if (classification.isUserFacing && (msg.role === 'assistant' || msg.role === 'model')) {
-      if (flattenContent(msg.content).trim()) return sawTrailingToolActivity;
+      if (flattenContent(msg.content).trim()) return trailingToolActivity;
       // Empty streaming assistant bubble — keep scanning back past it, same as
       // selectFinalAssistantTurnEndMessage (which returns null here); an empty tail
       // isn't a turn end, so there is nothing to veto.
-      return false;
+      return 0;
     }
     if (classification.isUserFacing) {
       // A trailing user bubble (freshly dispatched task, no reply) → no assistant
       // turn end below it to veto.
-      return false;
+      return 0;
     }
     // Non-user-facing activity/internal bubble sitting AFTER the (not-yet-seen)
     // assistant bubble. Only tool/terminal activity signals an in-flight turn.
     if (classification.kind === 'tool' || classification.kind === 'terminal') {
-      sawTrailingToolActivity = true;
+      trailingToolActivity += 1;
     }
   }
-  return false;
+  return 0;
 }
 
 export const BUILTIN_CHAT_MESSAGE_KINDS = ['standard', 'thought', 'tool', 'terminal', 'system'] as const;

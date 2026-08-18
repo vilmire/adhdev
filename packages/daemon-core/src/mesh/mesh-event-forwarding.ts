@@ -813,7 +813,14 @@ function evaluateMeshEventSuppression(
             // event carries genuine completion evidence, let it through so it is recorded and
             // re-attributed to the latest task (the normal task_completed path below).
             const supersedesWeakTerminal = isWeakCompletionEvidence(terminal.payload)
-                && isGenuineCompletionEvidence(args.metadataEvent);
+                && isGenuineCompletionEvidence(args.metadataEvent)
+                // P1-5a follow-up: a weak SYNTH terminal is supersedable by a later GENUINE
+                // completion, but a re-injected reconcile replay (same synth event, same
+                // summary) is NOT a genuine completion — it must still dedup against its own
+                // terminal (NOTIF-MISS FIX 2 "no regression" invariant). Gate the supersession
+                // on the incoming event being a REAL provider completion, the same bar
+                // supersedesSynthesizedTerminal below applies.
+                && isRealProviderCompletionEvent(args.metadataEvent);
             // CANON-B (direct-dispatch completion race): a FAST direct dispatch (mesh_send_task)
             // to an already-idle, previously-used session can have its genuine completion reach
             // this coordinator handler BEFORE the dispatching side records the new task's dispatch
