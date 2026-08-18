@@ -408,11 +408,11 @@ describe('graph advancement under the one transaction (steps 4-9)', () => {
             // A block the graph does NOT own must survive materialization...
             const entryB = getQueue(id).find(t => t.id === taskB.id)!;
             MeshRuntimeStore.getInstance().updateQueueEntry({
-                ...entryB, blockedReason: 'dependency_failed:some-other', updatedAt: nowIso(),
+                ...entryB, blockedReason: 'quarantine:manual', updatedAt: nowIso(),
             } as any);
             updateTaskStatus(id, taskA.id, 'completed');
             const after = getQueue(id).find(t => t.id === taskB.id)!;
-            expect(after.blockedReason).toBe('dependency_failed:some-other');
+            expect(after.blockedReason).toBe('quarantine:manual');
             // ...and a STALE-generation graph block must survive too (only the exact
             // generation just advanced may clear).
             const gs = MeshRuntimeStore.getInstance().graphStore();

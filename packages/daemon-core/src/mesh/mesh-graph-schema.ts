@@ -15,6 +15,7 @@
  */
 
 import type { Database as DatabaseHandle } from 'better-sqlite3';
+import { migrateLegacyDependencyFailedQueueBlocks } from './mesh-graph-derived-failure.js';
 
 export function migrateMeshGraphSchema(db: DatabaseHandle): void {
     db.exec(`
@@ -207,4 +208,9 @@ export function migrateMeshGraphSchema(db: DatabaseHandle): void {
         CREATE INDEX IF NOT EXISTS idx_mesh_graph_outbox_graph
             ON mesh_graph_outbox(graph_id, status);
     `);
+
+    // C3 (design :561-564): clear only exact `dependency_failed:<taskId>`
+    // blockedReason markers. Other system holds are left untouched. The first
+    // upgraded view derives the same user-visible reason from current statuses.
+    migrateLegacyDependencyFailedQueueBlocks(db);
 }

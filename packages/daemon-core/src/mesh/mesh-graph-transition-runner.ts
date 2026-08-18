@@ -49,13 +49,14 @@
  * mutated while still 'pending' (an assigned task is immutable), and the node
  * row only advances from the exact expected version.
  *
- * ★ NON-GOALS (still): operator cancel / dependency-failure cascade / requeue-cap
- * auto-fail remain legacy writers (they carry no completion envelope and already
- * settle their own attempts); coordinator GATE release is phase C2 and DERIVED
- * FAILURE policy (failed/cancelled rollups, cancel_downstream) is phase C3.
+ * ★ NON-GOALS (still): operator cancel / requeue-cap auto-fail remain legacy
+ * writers (they carry no completion envelope and already settle their own
+ * attempts); coordinator GATE release is phase C2. C3 derived failure + public
+ * policy lives in mesh-graph-derived-failure.ts and is hooked from the
+ * failed/cancelled branch below — it does not rewrite C1 skip as failure.
  * `run_if` skip propagation IS implemented here (C1) because it is the other half
  * of condition evaluation — a condition that can only ever block is not a
- * condition. Failure-driven skip is a different axis and stays C3.
+ * condition.
  */
 
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -83,6 +84,11 @@ import {
     type MeshUpstreamOutput,
 } from './mesh-graph-input-binding.js';
 import { mergeWorktreeAffinityTag, resolveWorkspaceRefForMaterialize } from './mesh-graph-workspace-bind.js';
+import {
+    applyGraphCancelCascade,
+    classifyGraphRollup,
+    projectGraphPublicPolicy,
+} from './mesh-graph-derived-failure.js';
 
 // ── Public contract ──────────────────────────────────────────────────────────
 
@@ -335,24 +341,71 @@ function advanceGraphForTerminalNode(
         payload: { graphId: node.graphId, nodeId: node.nodeId, ref: node.ref, outcome: terminal.status, taskId: terminal.taskId },
     });
 
-    // Step 4b — graph rollup: every node terminal-equivalent → the graph completes.
-    // (Derived FAILURE policy — failed/cancelled rollups — is phase C3; only the
-    // all-succeeded graph auto-completes, where `skipped` counts as succeeded per
-    // design :357-359. `nodes` is listed AFTER the step-4a update, so the
-    // just-transitioned node carries its fresh state here.)
+    // Step 4b — graph rollup + C3 derived failure / cancel cascade.
+    // `skipped` counts as succeeded per design :357-359. Failed/cancelled
+    // rollups and `on_dependency_failure` live in mesh-graph-derived-failure.ts.
+    // `nodes` is listed AFTER the step-4a update, so the just-transitioned
+    // node carries its fresh state here.
     const nodes = graphStore.listNodes(node.graphId);
     const byId = new Map(nodes.map(n => [n.nodeId, n] as const));
-    let graphRolledUp = false;
-    if (nodes.every(isTerminalEquivalent)) {
-        graphStore.updateGraphStatus(node.graphId, 'completed', nowIso, true);
-        outbox.push({ kind: 'graph_completed', payload: { graphId: node.graphId } });
-        graphRolledUp = true;
+    const graph = graphStore.getGraph(node.graphId);
+    const failurePolicy = projectGraphPublicPolicy(graph?.policyJson).on_dependency_failure;
+
+    if ((terminal.status === 'failed' || terminal.status === 'cancelled') && failurePolicy === 'cancel') {
+        const edges = graphStore.listEdges(node.graphId);
+        const cascade = applyGraphCancelCascade(
+            store,
+            nodes,
+            edges,
+            node,
+            nowIso,
+            (target, reason) => {
+                graphStore.updateNodeState(target.graphId, target.nodeId, 'cancelled', nowIso, {
+                    failureReason: reason,
+                });
+            },
+        );
+        for (const taskId of cascade.cancelledTaskIds) {
+            const entry = store.findQueueEntryById(node.meshId, taskId);
+            if (entry && entry.status === 'pending') {
+                entry.status = 'cancelled';
+                entry.cancelledAt = nowIso;
+                entry.cancelReason = `dependency_failed:${terminal.taskId}`;
+                store.updateQueueEntry(entry);
+            }
+        }
+        for (const nodeId of cascade.cancelledNodeIds) {
+            const target = byId.get(nodeId);
+            outbox.push({
+                kind: 'graph_node_cancelled',
+                payload: {
+                    graphId: node.graphId, nodeId, ref: target?.ref,
+                    taskId: target?.queueTaskId, reason: `dependency_failed:${node.ref ?? node.nodeId}`,
+                },
+            });
+        }
+    } else if (terminal.status === 'failed' || terminal.status === 'cancelled') {
+        // `block` (default): do not mutate dependents, do not strip dependsOn,
+        // do not rewrite the failure as a skip. Views derive dependencyFailures.
+        const dependents = graphStore.listEdges(node.graphId)
+            .filter(e => e.fromNodeId === node.nodeId && e.kind !== 'gate')
+            .map(e => byId.get(e.toNodeId))
+            .filter((n): n is MeshTaskGraphNodeRow => !!n && n.kind === 'worker_task');
+        outbox.push({
+            kind: 'graph_derived_failure',
+            payload: {
+                graphId: node.graphId,
+                nodeId: node.nodeId,
+                ref: node.ref,
+                taskId: terminal.taskId,
+                outcome: terminal.status,
+                policy: 'block',
+                dependentNodeIds: dependents.map(d => d.nodeId),
+                dependentTaskIds: dependents.map(d => d.queueTaskId).filter(Boolean),
+            },
+        });
     }
 
-    // Steps 5-7 only advance on SUCCESS. FAILURE propagation (cancel_downstream,
-    // derived blocks) is phase C3 — the queue-level cascade that already exists in
-    // mesh-work-queue remains the failure mechanism. SKIP propagation, by contrast,
-    // is C1: it is the other half of `run_if` (design :356-369).
     const materialized: string[] = [];
     if (terminal.status === 'completed') {
         const edges = graphStore.listEdges(node.graphId);
@@ -404,12 +457,18 @@ function advanceGraphForTerminalNode(
             }
             frontier = nextFrontier;
         }
-        // A skip can complete the graph (every remaining node terminal-equivalent).
-        // Re-check the rollup with the post-skip states.
-        if (!graphRolledUp && graphStore.listNodes(node.graphId).every(isTerminalEquivalent)) {
-            graphStore.updateGraphStatus(node.graphId, 'completed', nowIso, true);
-            outbox.push({ kind: 'graph_completed', payload: { graphId: node.graphId } });
-        }
+    }
+
+    // C3 rollup: completed (all success-terminal including skip), failed, or
+    // cancelled. In-flight gates leave the graph unrolled (C2). Under `block`
+    // a failed worker leaves dependents pending, so the graph stays `active`.
+    const rolled = classifyGraphRollup(graphStore.listNodes(node.graphId));
+    if (rolled && graph?.status !== rolled) {
+        graphStore.updateGraphStatus(node.graphId, rolled, nowIso, true);
+        const kind = rolled === 'completed' ? 'graph_completed'
+            : rolled === 'failed' ? 'graph_failed'
+            : 'graph_cancelled';
+        outbox.push({ kind, payload: { graphId: node.graphId, status: rolled } });
     }
 
     // Step 8 — outbox rows join THIS transaction (design :185-190). One queue_wake
@@ -431,11 +490,6 @@ function advanceGraphForTerminalNode(
         });
     }
     return materialized;
-}
-
-/** Graph-level terminal equivalence for the rollup (design :357-359). */
-function isTerminalEquivalent(n: MeshTaskGraphNodeRow): boolean {
-    return n.state === 'completed' || n.state === 'released' || n.state === 'skipped';
 }
 
 type SettleOutcome =

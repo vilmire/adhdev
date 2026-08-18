@@ -124,6 +124,16 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
             blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
             allow_duplicate: { type: 'boolean', description: 'G4: skip duplicate detection entirely for every entry (intentional re-enqueue).' },
             allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
+            on_dependency_failure: {
+                type: 'string',
+                enum: ['block', 'cancel'],
+                description: 'on_dependency_failure controls downstream tasks when a required worker task fails or is cancelled. `block` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. `cancel` terminally cancels the dependent branch; it is not revived by predecessor retry.',
+            },
+            onDependencyFailure: {
+                type: 'string',
+                enum: ['block', 'cancel'],
+                description: 'CamelCase alias for on_dependency_failure.',
+            },
         },
         required: ['tasks'],
     },

@@ -1044,6 +1044,11 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
         rules.push('- Delegated-worker completions are **auto-silenced**: the routine idle/completion push for a task you dispatch is suppressed once (approval-needed, failure, and long-running alerts still notify the owner normally)');
     }
 
+    const failurePolicy = policy.onDependencyFailure === 'cancel' ? 'cancel' : 'block';
+    rules.push(
+        `- on_dependency_failure: **${failurePolicy}** — controls downstream tasks when a required worker task fails or is cancelled. \`block\` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. \`cancel\` terminally cancels the dependent branch; it is not revived by predecessor retry.`,
+    );
+
     return `## Policy\n${rules.join('\n')}`;
 }
 

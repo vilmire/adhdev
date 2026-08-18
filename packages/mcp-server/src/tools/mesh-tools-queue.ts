@@ -25,6 +25,8 @@ import {
     compactQueueRow,
     compactQueueRows,
     describeTaskDependencyState,
+    parseOnDependencyFailurePolicy,
+    MeshGraphPolicyError,
     enqueueTask,
     enqueueTaskGraph,
     getMeshMission,
@@ -551,6 +553,7 @@ const BATCH_ENQUEUE_ERROR_CODES = [
     'empty_task_graph',
     'missing_task_difficulty',
     'invalid_task_difficulty',
+    'invalid_on_dependency_failure',
 ] as const;
 
 /**
@@ -570,6 +573,8 @@ export async function meshEnqueueBatch(
         missionId?: string; mission_id?: string;
         allowDuplicate?: boolean; allow_duplicate?: boolean;
         blockDuplicate?: boolean; block_duplicate?: boolean;
+        on_dependency_failure?: string;
+        onDependencyFailure?: string;
     },
 ): Promise<string> {
     const rawTasks = Array.isArray(args.tasks) ? args.tasks : undefined;
@@ -594,6 +599,24 @@ export async function meshEnqueueBatch(
     // below), so its own per-entry existence check inside the normalizer never sees this
     // value. Validate it here up front — same reject-loudly convention, applied once for
     // the whole batch rather than once per entry.
+    const rawFailurePolicy = (args as { on_dependency_failure?: unknown; onDependencyFailure?: unknown }).on_dependency_failure
+        ?? (args as { onDependencyFailure?: unknown }).onDependencyFailure;
+    let onDependencyFailure: 'block' | 'cancel' | undefined;
+    if (rawFailurePolicy !== undefined) {
+        try {
+            onDependencyFailure = parseOnDependencyFailurePolicy(rawFailurePolicy);
+        } catch (e) {
+            const message = e instanceof MeshGraphPolicyError || e instanceof Error
+                ? e.message
+                : 'invalid_on_dependency_failure';
+            return JSON.stringify({
+                success: false,
+                code: 'invalid_on_dependency_failure',
+                error: message,
+            });
+        }
+    }
+
     if (batchMissionId && !getMeshMission(ctx.mesh.id, batchMissionId)) {
         return JSON.stringify({
             success: false,
@@ -746,6 +769,7 @@ export async function meshEnqueueBatch(
         source: 'queue',
         atomic: true,
         enqueued: tasks.length,
+        ...(onDependencyFailure ? { on_dependency_failure: onDependencyFailure } : {}),
         tasks: tasks.map((task, i) => ({
             ...(normalizedEntries[i].ref ? { ref: normalizedEntries[i].ref } : {}),
             taskId: task.id,
@@ -784,9 +808,10 @@ export async function meshViewQueue(
         const rawQueue = getQueue(ctx.mesh.id);
         // M1: annotate dependency state (waitingOn, dependenciesSatisfied) at view time.
         const statusById = new Map(rawQueue.map(task => [task.id, task.status]));
+        const depMetaById = new Map(rawQueue.map(task => [task.id, task] as const));
         const withDependencies = rawQueue.map(task => {
             if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
-            const depState = describeTaskDependencyState(task, statusById);
+            const depState = describeTaskDependencyState(task, statusById, depMetaById);
             return { ...task, ...depState };
         });
         // Live-probe nodes BEFORE judging staleness so the staleness check can be

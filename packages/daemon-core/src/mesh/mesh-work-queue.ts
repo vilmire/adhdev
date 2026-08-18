@@ -17,6 +17,11 @@ import {
     type MeshTerminalCommitStatus,
     type MeshTerminalCompletionEnvelope,
 } from './mesh-graph-transition-runner.js';
+import {
+    deriveDependencyFailures,
+    resolveOnDependencyFailurePolicy,
+    type MeshDependencyFailure,
+} from './mesh-graph-derived-failure.js';
 import { sessionIdsEquivalent, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
 
@@ -222,9 +227,10 @@ export interface MeshWorkQueueEntry {
      */
     difficulty?: string;
     /**
-     * M1: why this task is held back (e.g. "dependency_failed:<taskId>").
-     * Only set by the system on dependency failure under the 'block' policy;
-     * waiting-on-dependency state is computed at view time, not stored.
+     * Independent system hold (materialization, gate, workspace, policy,
+     * quarantine). C3 derived failure does NOT write `dependency_failed:*` here
+     * (design :522-533); views derive `dependencyFailures` from predecessor
+     * statuses instead. A C1 skip placeholder may carry `graph_skipped:*`.
      */
     blockedReason?: string;
     /** The node that actually claimed and is executing the task */
@@ -1085,7 +1091,7 @@ export type DependencyFailurePolicy = 'block' | 'cancel';
 function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy {
     try {
         const policy = (getMesh(meshId)?.policy ?? {}) as Record<string, unknown>;
-        return policy.onDependencyFailure === 'cancel' ? 'cancel' : 'block';
+        return resolveOnDependencyFailurePolicy(policy.onDependencyFailure ?? policy.on_dependency_failure);
     } catch {
         return 'block';
     }
@@ -1093,11 +1099,13 @@ function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy
 
 /**
  * Apply the mesh's onDependencyFailure policy to pending dependents of a task
- * that just reached a failed/cancelled terminal state.
+ * that just reached a failed/cancelled terminal state (design :522-538).
  *
- * - 'block' (default): dependents stay pending with blockedReason
- *   "dependency_failed:<taskId>" so an operator can requeue/cancel them.
- * - 'cancel': dependents are cancelled (cascading to their own dependents).
+ * - 'block' (default): derive the hold from current predecessor statuses.
+ *   Do NOT write `blockedReason`. The unchanged predicate stays false until
+ *   every dependsOn id is `completed`. Predecessor retry unblocks automatically.
+ * - 'cancel': explicit transactional cancellation cascade. Terminal; not
+ *   revived by predecessor retry.
  *
  * Must be called inside the queue lock of the triggering transition.
  */
@@ -1105,11 +1113,13 @@ function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy
  * Cascade a dependency failure. Returns the dependents whose status was flipped to
  * `cancelled` (the 'cancel' policy) so the caller can trigger mission_close_candidate
  * detection for their missions too — a cascade can be the very transition that leaves
- * a *different* mission all-terminal. Under the 'block' policy nothing goes terminal
- * (dependents are only marked blocked), so the returned list is empty.
+ * a *different* mission all-terminal. Under the 'block' policy nothing is mutated
+ * (and nothing goes terminal), so the returned list is empty.
  */
 function propagateDependencyFailure(meshId: string, failedTaskId: string): MeshWorkQueueEntry[] {
     const policy = resolveDependencyFailurePolicy(meshId);
+    // C3 (design :522-529): `block` is derived. Do not mutate dependents.
+    if (policy !== 'cancel') return [];
     const store = MeshRuntimeStore.getInstance();
     const cancelled: MeshWorkQueueEntry[] = [];
     const frontier = [failedTaskId];
@@ -1121,17 +1131,12 @@ function propagateDependencyFailure(meshId: string, failedTaskId: string): MeshW
         for (const dependent of dependents) {
             if (seen.has(dependent.id)) continue;
             seen.add(dependent.id);
-            if (policy === 'cancel') {
-                dependent.status = 'cancelled';
-                dependent.cancelledAt = new Date().toISOString();
-                dependent.cancelReason = `dependency_failed:${currentId}`;
-                store.updateQueueEntry(dependent);
-                cancelled.push(dependent);
-                frontier.push(dependent.id); // cascade to transitive dependents
-            } else {
-                dependent.blockedReason = `dependency_failed:${currentId}`;
-                store.updateQueueEntry(dependent);
-            }
+            dependent.status = 'cancelled';
+            dependent.cancelledAt = new Date().toISOString();
+            dependent.cancelReason = `dependency_failed:${currentId}`;
+            store.updateQueueEntry(dependent);
+            cancelled.push(dependent);
+            frontier.push(dependent.id); // cascade to transitive dependents
         }
     }
     return cancelled;
@@ -1809,12 +1814,14 @@ export function taskDependenciesSatisfied(
 export function describeTaskDependencyState(
     entry: Pick<MeshWorkQueueEntry, 'dependsOn' | 'blockedReason'>,
     statusById: Map<string, MeshTaskStatus | string>,
-): { waitingOn: string[]; dependenciesSatisfied: boolean } {
+    depMetaById?: ReadonlyMap<string, Pick<MeshWorkQueueEntry, 'blockedReason' | 'cancelReason' | 'status'>>,
+): { waitingOn: string[]; dependenciesSatisfied: boolean; dependencyFailures: MeshDependencyFailure[] } {
     const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
     const waitingOn = deps.filter(depId => statusById.get(depId) !== 'completed');
     return {
         waitingOn,
         dependenciesSatisfied: taskDependenciesSatisfied(entry, statusById),
+        dependencyFailures: deriveDependencyFailures(entry.dependsOn, statusById, depMetaById),
     };
 }
 

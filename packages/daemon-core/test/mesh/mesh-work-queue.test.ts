@@ -718,7 +718,7 @@ describe('M1 — task dependencies + mission grouping', () => {
         expect(second?.id).to.equal(b.id);
     });
 
-    it('dependency failure under default block policy holds dependents pending with blockedReason', () => {
+    it('dependency failure under default block policy holds dependents pending without writing blockedReason', () => {
         const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' });
         const b = enqueueTask(meshId, 'task B', { dependsOn: [a.id],
     difficulty: 'medium',
@@ -726,16 +726,25 @@ describe('M1 — task dependencies + mission grouping', () => {
 
         updateTaskStatus(meshId, a.id, 'failed');
 
-        const after = getQueue(meshId).find(t => t.id === b.id);
+        const queue = getQueue(meshId);
+        const after = queue.find(t => t.id === b.id);
         expect(after?.status).to.equal('pending');
-        expect(after?.blockedReason).to.equal(`dependency_failed:${a.id}`);
+        expect(after?.blockedReason).to.equal(undefined);
+        expect(after?.dependsOn).to.deep.equal([a.id]);
+        const statusById = new Map(queue.map(t => [t.id, t.status]));
+        const depMetaById = new Map(queue.map(t => [t.id, t] as const));
+        const view = describeTaskDependencyState(after!, statusById, depMetaById);
+        expect(view.dependenciesSatisfied).to.equal(false);
+        expect(view.dependencyFailures).to.deep.equal([{ taskId: a.id, status: 'failed' }]);
 
-        // Blocked task is not claimable even though its dep is terminal.
+        // Derived hold: not claimable even though no blockedReason was written.
         expect(claimNextTask(meshId, 'node-1', 'session-1')).to.equal(null);
 
-        // Operator requeue clears the block.
-        const requeued = requeueTask(meshId, b.id, { force: true });
-        expect(requeued?.blockedReason).to.equal(undefined);
+        // Predecessor retry → success unblocks the dependent without requeueing it.
+        requeueTask(meshId, a.id, { force: true });
+        updateTaskStatus(meshId, a.id, 'completed');
+        const claimed = claimNextTask(meshId, 'node-1', 'session-1');
+        expect(claimed?.id).to.equal(b.id);
     });
 
     it('self-cycle and 2-node cycle enqueues are rejected with clear errors', () => {
@@ -794,6 +803,7 @@ describe('M1 — task dependencies + mission grouping', () => {
         const state = describeTaskDependencyState({ dependsOn: ['dep-1', 'dep-2', 'dep-missing'] }, statusById);
         expect(state.waitingOn).to.deep.equal(['dep-2', 'dep-missing']);
         expect(state.dependenciesSatisfied).to.equal(false);
+        expect(state.dependencyFailures).to.deep.equal([]);
 
         const satisfied = describeTaskDependencyState({ dependsOn: ['dep-1'] }, statusById);
         expect(satisfied.waitingOn).to.deep.equal([]);
@@ -811,7 +821,9 @@ describe('M1 — task dependencies + mission grouping', () => {
         updateSessionTaskStatus(meshId, 'session-1', 'failed');
 
         const after = getQueue(meshId).find(t => t.id === b.id);
-        expect(after?.blockedReason).to.equal(`dependency_failed:${a.id}`);
+        expect(after?.blockedReason).to.equal(undefined);
+        expect(after?.status).to.equal('pending');
+        expect(after?.dependsOn).to.deep.equal([a.id]);
     });
 });
 

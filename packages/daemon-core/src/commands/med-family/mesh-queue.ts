@@ -82,10 +82,12 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                 : undefined;
             const rawQueue = getQueue(meshId, { status: status as any });
             // M1: annotate dependency state at view time (waitingOn / dependenciesSatisfied).
-            const statusById = new Map(getQueue(meshId).map(task => [task.id, task.status]));
+            const allQueue = getQueue(meshId);
+            const statusById = new Map(allQueue.map(task => [task.id, task.status]));
+            const depMetaById = new Map(allQueue.map(task => [task.id, task] as const));
             const queue = rawQueue.map(task =>
                 Array.isArray(task.dependsOn) && task.dependsOn.length > 0
-                    ? { ...task, ...describeTaskDependencyState(task, statusById) }
+                    ? { ...task, ...describeTaskDependencyState(task, statusById, depMetaById) }
                     : task);
             const summary = getMeshQueueStats(meshId);
             return {

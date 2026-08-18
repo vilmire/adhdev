@@ -413,6 +413,14 @@ export interface RepoMeshPolicy {
      * coordinator routes on whatever was reported.
      */
     quotaRouting?: RepoMeshQuotaRoutingPolicy;
+    /**
+     * C3 (design :541-550): downstream behaviour when a required worker task
+     * fails or is cancelled. `block` (default) keeps dependents pending and
+     * recovers automatically if the predecessor is retried and later completes.
+     * `cancel` terminally cancels the dependent branch. Invalid values fail
+     * config validation instead of silently becoming `block`.
+     */
+    onDependencyFailure?: 'block' | 'cancel';
 }
 
 /**
@@ -623,6 +631,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // routine idle push for a coordinator-driven task (approval/failure notifications
     // are never affected — see coordinatorIdlePushPolicy).
     coordinatorIdlePushPolicy: 'always',
+    onDependencyFailure: 'block',
 };
 
 /**
@@ -937,6 +946,19 @@ export function mergeAndNormalizePolicy(
         policy.quotaRouting = quotaRouting;
     } else {
         delete policy.quotaRouting;
+    }
+    // C3: invalid onDependencyFailure fails validation instead of silently
+    // becoming `block` (design :548-550). Persist only the non-default so
+    // existing meshes.json stays byte-identical.
+    if (policy.onDependencyFailure === undefined || policy.onDependencyFailure === 'block') {
+        delete policy.onDependencyFailure;
+    } else if (policy.onDependencyFailure === 'cancel') {
+        policy.onDependencyFailure = 'cancel';
+    } else {
+        throw new Error(
+            `invalid_on_dependency_failure: must be 'block' or 'cancel' (got ${JSON.stringify(policy.onDependencyFailure)}). `
+            + 'Invalid values are rejected; they do not silently become \'block\'.',
+        );
     }
     return policy;
 }
@@ -1769,8 +1791,16 @@ export interface RepoMeshQueueTask {
     missionId?: string;
     /** G6 task-level scheduling priority ('low' | 'normal' | 'high'); absent = normal. */
     priority?: string;
-    /** M1 dependency-failure block marker ("dependency_failed:<taskId>") under the 'block' policy. */
+    /**
+     * Independent system hold. C3 derived failure does not write
+     * `dependency_failed:*` here; views expose `dependencyFailures` instead.
+     */
     blockedReason?: string;
+    /**
+     * C3 public projection (design :524-527): failed/cancelled predecessor ids
+     * derived from current statuses. Skipped placeholders are excluded.
+     */
+    dependencyFailures?: Array<{ taskId: string; status: 'failed' | 'cancelled'; reason?: string }>;
     /** Task-mode contract (code_change | validation | live_debug_readonly | launch_app | convergence). */
     taskMode?: string;
     /** QUEUE-NODE-SERIALIZATION read-only axis (orthogonal to taskMode). */
