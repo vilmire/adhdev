@@ -2,12 +2,13 @@
  * GRAPH-ORCHESTRATION Phase A — minimal persistence store for the graph
  * control-plane tables (design :98-191).
  *
- * ★ PHASE-A SCOPE (updated in phase B): this is ROW CRUD ONLY — typed insert/read
- * plus the narrow row-level updates the phase-B transition runner and
- * phase-D workspace saga need (node state, the materialization CAS, spec
- * patch, graph status rollup, outbox delivery marks, workspace lease/state
+ * ★ PHASE-A SCOPE (updated in phases B/C2): this is ROW CRUD ONLY — typed insert/read
+ * plus the narrow row-level updates the phase-B transition runner, the phase-C2
+ * gate claim/release/sweep (mesh-graph-gates.ts), and the phase-D workspace saga
+ * need (node state, the materialization CAS, spec patch, graph status rollup,
+ * outbox delivery marks, gate lease/release writes, workspace lease/state
  * writes). There is deliberately NO state machine here: transition DECISIONS
- * live in mesh-graph-transition-runner.ts (B) and
+ * live in mesh-graph-transition-runner.ts (B), mesh-graph-gates.ts (C2), and
  * mesh-graph-workspace-saga.ts (D). Nothing in the scheduler reads these
  * tables.
  *
@@ -19,6 +20,7 @@
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import type {
     MeshGraphGateRow,
+    MeshGraphGateState,
     MeshGraphNodeState,
     MeshGraphOutboxRow,
     MeshGraphOutboxStatus,
@@ -246,6 +248,91 @@ export class MeshGraphStore {
     getGate(gateId: string): MeshGraphGateRow | null {
         const r = this.db.prepare(`SELECT * FROM mesh_graph_gates WHERE gate_id = ?`).get(gateId) as any;
         return r ? mapGateRow(r) : null;
+    }
+
+    /** Reverse lookup from a graph node (kind `coordinator_gate`) to its gate row (phase C2). */
+    findGateByNodeId(graphId: string, nodeId: string): MeshGraphGateRow | null {
+        const r = this.db.prepare(
+            `SELECT * FROM mesh_graph_gates WHERE graph_id = ? AND node_id = ?`
+        ).get(graphId, nodeId) as any;
+        return r ? mapGateRow(r) : null;
+    }
+
+    listGatesByGraph(graphId: string): MeshGraphGateRow[] {
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_graph_gates WHERE graph_id = ? ORDER BY created_at ASC`
+        ).all(graphId) as any[];
+        return rows.map(mapGateRow);
+    }
+
+    /** Phase-C2 timeout sweep: gates of one mesh, optionally narrowed to states (e.g. awaiting/claimed). */
+    listGatesByMesh(meshId: string, states?: readonly string[]): MeshGraphGateRow[] {
+        if (states && states.length > 0) {
+            const placeholders = states.map(() => '?').join(',');
+            const rows = this.db.prepare(
+                `SELECT * FROM mesh_graph_gates WHERE mesh_id = ? AND state IN (${placeholders}) ORDER BY created_at ASC`
+            ).all(meshId, ...states) as any[];
+            return rows.map(mapGateRow);
+        }
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_graph_gates WHERE mesh_id = ? ORDER BY created_at ASC`
+        ).all(meshId) as any[];
+        return rows.map(mapGateRow);
+    }
+
+    /**
+     * Row write for phase C2 (claim / release / deadline sweep). `undefined`
+     * fields are left unchanged; explicit `null` clears a nullable field. The
+     * optional generation CAS rejects a stale fenced writer: the update lands
+     * only while the row still carries `cas.leaseGeneration`.
+     */
+    patchGate(
+        gateId: string,
+        patch: {
+            state?: MeshGraphGateState;
+            leaseOwnerSessionId?: string | null;
+            leaseGeneration?: number;
+            fencingToken?: string | null;
+            leaseExpiresAt?: string | null;
+            deadlineAt?: string | null;
+            releaseOutcome?: string | null;
+            releaseEvidenceJson?: string | null;
+            releaseEvidenceDigest?: string | null;
+            releaseIdempotencyKey?: string | null;
+        },
+        nowIso: string,
+        cas?: { leaseGeneration: number },
+    ): boolean {
+        const current = this.getGate(gateId);
+        if (!current) return false;
+        if (cas && current.leaseGeneration !== cas.leaseGeneration) return false;
+        const next = {
+            state: patch.state ?? current.state,
+            leaseOwnerSessionId: patch.leaseOwnerSessionId === undefined ? current.leaseOwnerSessionId ?? null : patch.leaseOwnerSessionId,
+            leaseGeneration: patch.leaseGeneration ?? current.leaseGeneration,
+            fencingToken: patch.fencingToken === undefined ? current.fencingToken ?? null : patch.fencingToken,
+            leaseExpiresAt: patch.leaseExpiresAt === undefined ? current.leaseExpiresAt ?? null : patch.leaseExpiresAt,
+            deadlineAt: patch.deadlineAt === undefined ? current.deadlineAt ?? null : patch.deadlineAt,
+            releaseOutcome: patch.releaseOutcome === undefined ? current.releaseOutcome ?? null : patch.releaseOutcome,
+            releaseEvidenceJson: patch.releaseEvidenceJson === undefined ? current.releaseEvidenceJson ?? null : patch.releaseEvidenceJson,
+            releaseEvidenceDigest: patch.releaseEvidenceDigest === undefined ? current.releaseEvidenceDigest ?? null : patch.releaseEvidenceDigest,
+            releaseIdempotencyKey: patch.releaseIdempotencyKey === undefined ? current.releaseIdempotencyKey ?? null : patch.releaseIdempotencyKey,
+        };
+        const r = this.db.prepare(`
+            UPDATE mesh_graph_gates
+            SET state = ?, lease_owner_session_id = ?, lease_generation = ?, fencing_token = ?,
+                lease_expires_at = ?, deadline_at = ?, release_outcome = ?,
+                release_evidence_json = ?, release_evidence_digest = ?,
+                release_idempotency_key = ?, updated_at = ?
+            WHERE gate_id = ? AND lease_generation = ?
+        `).run(
+            next.state, next.leaseOwnerSessionId, next.leaseGeneration, next.fencingToken,
+            next.leaseExpiresAt, next.deadlineAt, next.releaseOutcome,
+            next.releaseEvidenceJson, next.releaseEvidenceDigest,
+            next.releaseIdempotencyKey, nowIso,
+            gateId, current.leaseGeneration,
+        );
+        return r.changes > 0;
     }
 
     // ── mesh_graph_workspace_intents ─────────────────────────────────────────

@@ -51,11 +51,16 @@
  *
  * ★ NON-GOALS (still): operator cancel / requeue-cap auto-fail remain legacy
  * writers (they carry no completion envelope and already settle their own
- * attempts); coordinator GATE release is phase C2. C3 derived failure + public
+ * attempts). The coordinator GATE contract (claim/release/leases/deadline sweep)
+ * landed in phase C2: the runner owns the gate-OPEN transition inside this choke
+ * point (design :402-405) plus the settle-time gate guard; the coordinator-facing
+ * claim/release/sweep live in mesh-graph-gates.ts and re-enter this file only
+ * through its exported settle/advance helpers. C3 derived failure + public
  * policy lives in mesh-graph-derived-failure.ts and is hooked from the
- * failed/cancelled branch below — it does not rewrite C1 skip as failure.
- * `run_if` skip propagation IS implemented here (C1) because it is the other half
- * of condition evaluation — a condition that can only ever block is not a
+ * failed/cancelled branch below — it does not rewrite C1 skip as failure, and
+ * `block` does not write `dependency_failed:*` onto dependents. `run_if` skip
+ * propagation IS implemented here (C1) because it is the other half of
+ * condition evaluation — a condition that can only ever block is not a
  * condition.
  */
 
@@ -149,6 +154,25 @@ function parseGraphMaterializationBlock(reason: string | undefined): { nodeId: s
     return { nodeId: rest.slice(0, sep), version };
 }
 
+// ── Coordinator-gate queue blocks (phase C2) ─────────────────────────────────
+
+const GATE_BLOCK_PREFIX = 'coordinator_gate:';
+
+/**
+ * The blockedReason a coordinator gate puts on its downstream queue rows
+ * (design :22, :402-405). Graph-owned: only the gate's own fenced release (or
+ * the deadline sweep) may clear it — never a timeout and never the scheduler.
+ */
+export function coordinatorGateBlockReason(gateId: string): string {
+    return `${GATE_BLOCK_PREFIX}${gateId}`;
+}
+
+export function parseCoordinatorGateBlock(reason: string | undefined): { gateId: string } | null {
+    if (!reason || !reason.startsWith(GATE_BLOCK_PREFIX)) return null;
+    const gateId = reason.slice(GATE_BLOCK_PREFIX.length);
+    return gateId.length > 0 ? { gateId } : null;
+}
+
 // ── Queue wake outbox drain (steps 8-9) ───────────────────────────────────────
 
 /**
@@ -170,7 +194,8 @@ export function __resetMeshGraphTransitionRunnerForTests(): void {
  * Step 9 — drain pending graph outbox rows AFTER the state-change transaction
  * committed. `queue_wake` events invoke the registered wake handler; every other
  * kind is a durable notification record whose consumers arrive with later phases
- * (gates C2, views E) — draining marks it delivered so it is never double-fired.
+ * (gate events are drained by phase C2's gate engine; views arrive with E) —
+ * draining marks it delivered so it is never double-fired.
  * Best-effort per row: a failing wake leaves the row pending with a retry stamp.
  */
 export function drainMeshGraphOutbox(meshId: string): number {
@@ -423,7 +448,18 @@ function advanceGraphForTerminalNode(
             );
             for (const targetId of downstreamIds) {
                 const target = byId.get(targetId);
-                if (!target || target.kind !== 'worker_task' || !target.queueTaskId) continue;
+                if (!target) continue;
+                // ★ PHASE C2 — a gate target is NOT a worker (design :402-405):
+                // once its predecessors are satisfied the terminal transaction
+                // moves it to `awaiting_coordinator`, blocks its downstream with
+                // `coordinator_gate:<gateId>`, and emits `graph_gate_awaiting`.
+                // It deliberately does NOT materialize or wake downstream — the
+                // gate is an intentional STOP until a fenced release lands.
+                if (target.kind === 'coordinator_gate') {
+                    maybeOpenCoordinatorGate(store, target, edges, byId, nowIso);
+                    continue;
+                }
+                if (target.kind !== 'worker_task' || !target.queueTaskId) continue;
                 if (target.state !== 'declared' && target.state !== 'blocked') continue;
                 const outcome = settleDownstreamNode(store, target, edges, byId, nowIso);
                 if (outcome.kind === 'materialized') {
@@ -492,7 +528,140 @@ function advanceGraphForTerminalNode(
     return materialized;
 }
 
-type SettleOutcome =
+/** Graph-level terminal equivalence for the rollup (design :357-359). */
+export function isTerminalEquivalent(n: MeshTaskGraphNodeRow): boolean {
+    return n.state === 'completed' || n.state === 'released' || n.state === 'skipped';
+}
+
+/**
+ * ★ PHASE C2 (design :402-405) — open a coordinator gate whose predecessors are
+ * satisfied. Called from the terminal frontier loop (and from a gate release
+ * when a released gate unblocks a FOLLOW-ON gate). One call:
+ *
+ *   - moves the gate row `declared -> awaiting_coordinator` and stamps
+ *     `deadline_at` from the node spec's `deadline_seconds` (lease expiry is a
+ *     CLAIM-time concern; the deadline starts when the gate becomes workable);
+ *   - mirrors the node state to `awaiting_coordinator`;
+ *   - blocks every downstream worker row with `coordinator_gate:<gateId>`
+ *     (never clobbering a foreign block such as `dependency_failed:*`);
+ *   - inserts `graph_gate_awaiting` into the outbox (SAME transaction);
+ *   - moves the graph to `waiting_gate` when it was `active`.
+ *
+ * It deliberately does NOT wake downstream — the gate is an intentional stop.
+ * Returns true when this call opened the gate.
+ */
+export function maybeOpenCoordinatorGate(
+    store: MeshRuntimeStore,
+    gateNode: MeshTaskGraphNodeRow,
+    edges: MeshTaskGraphEdgeRow[],
+    byId: Map<string, MeshTaskGraphNodeRow>,
+    nowIso: string,
+): boolean {
+    const graphStore = store.graphStore();
+    if (gateNode.state !== 'declared' && gateNode.state !== 'blocked') return false;
+    const gate = graphStore.findGateByNodeId(gateNode.graphId, gateNode.nodeId);
+    if (!gate || gate.state !== 'declared') return false;
+    const incoming = edges.filter(e => e.toNodeId === gateNode.nodeId);
+    const satisfied = incoming.every(e => {
+        const sourceState = byId.get(e.fromNodeId)?.state;
+        return sourceState === 'completed' || sourceState === 'released'
+            || (sourceState === 'skipped' && e.omitOnSkip);
+    });
+    if (!satisfied) return false;
+
+    const spec = safeParseJson(gateNode.baseSpecJson) as Record<string, unknown> | undefined;
+    const deadlineSeconds = typeof spec?.deadline_seconds === 'number' ? spec.deadline_seconds : undefined;
+    const deadlineAt = deadlineSeconds && deadlineSeconds > 0
+        ? new Date(Date.parse(nowIso) + deadlineSeconds * 1000).toISOString()
+        : undefined;
+    // No `deadline_seconds` in the spec leaves any pre-stamped deadline untouched.
+    graphStore.patchGate(gate.gateId, {
+        state: 'awaiting_coordinator',
+        ...(deadlineAt ? { deadlineAt } : {}),
+    }, nowIso);
+    graphStore.updateNodeState(gateNode.graphId, gateNode.nodeId, 'awaiting_coordinator', nowIso);
+    gateNode.state = 'awaiting_coordinator';
+    byId.set(gateNode.nodeId, gateNode);
+
+    // Block the downstream worker rows with the gate-owned hold. A foreign
+    // block is left untouched (design :998) — the settle-time gate guard below
+    // still stops materialization even when the visible block is not ours.
+    const block = coordinatorGateBlockReason(gate.gateId);
+    for (const edge of edges.filter(e => e.fromNodeId === gateNode.nodeId)) {
+        const target = byId.get(edge.toNodeId);
+        if (!target || target.kind !== 'worker_task' || !target.queueTaskId) continue;
+        if (target.state !== 'declared' && target.state !== 'blocked') continue;
+        if (target.state !== 'blocked') {
+            graphStore.updateNodeState(target.graphId, target.nodeId, 'blocked', nowIso);
+            target.state = 'blocked';
+            byId.set(target.nodeId, target);
+        }
+        const entry = store.findQueueEntryById(target.meshId, target.queueTaskId);
+        if (!entry || entry.status !== 'pending') continue;
+        const owned = !entry.blockedReason
+            || parseGraphMaterializationBlock(entry.blockedReason) !== null
+            || parseCoordinatorGateBlock(entry.blockedReason) !== null
+            || entry.blockedReason.startsWith('materialization_error:');
+        if (owned && entry.blockedReason !== block) {
+            entry.blockedReason = block;
+            store.updateQueueEntry(entry);
+        }
+    }
+
+    graphStore.insertOutboxEvent({
+        id: newMeshGraphOutboxId(),
+        meshId: gateNode.meshId,
+        graphId: gateNode.graphId,
+        kind: 'graph_gate_awaiting',
+        payload: JSON.stringify({
+            graphId: gateNode.graphId, gateId: gate.gateId, nodeId: gateNode.nodeId,
+            ref: gate.ref ?? gateNode.ref, action: gate.action,
+            instructions: gate.instructions, deadlineAt,
+        }),
+        status: 'pending',
+        attemptCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+    });
+    const graph = graphStore.getGraph(gateNode.graphId);
+    if (graph?.status === 'active') {
+        graphStore.updateGraphStatus(gateNode.graphId, 'waiting_gate', nowIso);
+    }
+    return true;
+}
+
+/**
+ * ★ PHASE C2 (design :338, :417-419) — a RELEASED gate exposes its outcome as
+ * an upstream "output" so downstream `run_if` / `inputs_from` can select
+ * `/gate_outcome`, `/result/...`, `/evidence/...` with the same JSON Pointer
+ * machinery as worker envelopes. An unreleased gate yields null — its outcome
+ * is never visible before the fenced release commits.
+ */
+function gateOutcomeOutputForNode(
+    graphStore: ReturnType<MeshRuntimeStore['graphStore']>,
+    gateNode: MeshTaskGraphNodeRow,
+): MeshUpstreamOutput | null {
+    const gate = graphStore.findGateByNodeId(gateNode.graphId, gateNode.nodeId);
+    if (!gate || gate.state !== 'released') return null;
+    const stored = typeof gate.releaseEvidenceJson === 'string'
+        ? safeParseJson(gate.releaseEvidenceJson) as Record<string, unknown> | undefined
+        : undefined;
+    return {
+        ref: gateNode.ref ?? gate.ref ?? gateNode.nodeId,
+        envelope: {
+            gate_outcome: gate.releaseOutcome,
+            action: gate.action,
+            gate_id: gate.gateId,
+            ref: gate.ref ?? gateNode.ref,
+            result: stored?.result,
+            evidence: stored?.evidence,
+            evidence_digest: gate.releaseEvidenceDigest,
+            released_at: gate.updatedAt,
+        },
+    };
+}
+
+export type SettleOutcome =
     | { kind: 'deferred' }
     | { kind: 'materialized'; digest: string; receipts: MeshBoundValueReceipt[] }
     | { kind: 'skipped'; reason: string }
@@ -507,7 +676,7 @@ type SettleOutcome =
  * `taskDependenciesSatisfied` predicate already honours (any blockedReason ⇒ not
  * claimable). The scheduler learns nothing new about graphs.
  */
-function settleDownstreamNode(
+export function settleDownstreamNode(
     store: MeshRuntimeStore,
     target: MeshTaskGraphNodeRow,
     edges: MeshTaskGraphEdgeRow[],
@@ -516,6 +685,16 @@ function settleDownstreamNode(
 ): SettleOutcome {
     const graphStore = store.graphStore();
     const incoming = edges.filter(e => e.toNodeId === target.nodeId && e.kind !== 'gate');
+
+    // ★ PHASE C2 gate guard (design :402-405): an incoming `gate` edge is an
+    // intentional STOP. Until that gate's node is `released` the target can
+    // never materialize, however settled its worker inputs are — a later
+    // upstream completion must not side-step an awaiting/claimed gate, and a
+    // TIMEOUT is never passage (there is no auto-release, design :431-432).
+    const gateIncoming = edges.filter(e => e.toNodeId === target.nodeId && e.kind === 'gate');
+    for (const edge of gateIncoming) {
+        if (byId.get(edge.fromNodeId)?.state !== 'released') return { kind: 'deferred' };
+    }
 
     // ── Step 5a — skip propagation over incoming edges (design :361-366) ──────
     // An edge whose source is `skipped` either propagates the skip (default) or is
@@ -543,6 +722,16 @@ function settleDownstreamNode(
     // append-only mesh_task_outputs rows persisted at step 2, so a binding always
     // sees the exact version that was accepted, never a live provider read.
     const outputsByRef = collectUpstreamOutputs(store, activeIncoming, byId);
+    // ★ PHASE C2: released gates contribute their outcome envelope so downstream
+    // run_if / inputs_from can consume `/gate_outcome`, `/result/...` (design
+    // :338). An unreleased gate contributes nothing — and the guard above has
+    // already deferred this node in that case.
+    for (const edge of gateIncoming) {
+        const gateNode = byId.get(edge.fromNodeId);
+        if (!gateNode) continue;
+        const output = gateOutcomeOutputForNode(graphStore, gateNode);
+        if (output && !outputsByRef.has(output.ref)) outputsByRef.set(output.ref, output);
+    }
 
     // ── Step 5b — run_if evaluation ★ C1 (design :336-355) ───────────────────
     // Conditions live on conditional edges (`condition_json`) and/or on the node's
@@ -779,6 +968,13 @@ function clearMatchingGraphBlock(queueEntry: MeshWorkQueueEntry, target: MeshTas
     // A prior materialization ERROR on this same node is also graph-owned: once the
     // render succeeds it must not keep the task blocked forever.
     if (queueEntry.blockedReason?.startsWith('materialization_error:')) {
+        delete queueEntry.blockedReason;
+        return;
+    }
+    // ★ PHASE C2: a `coordinator_gate:<gateId>` hold is graph-owned and the
+    // materialization that reaches this point could only happen AFTER the gate's
+    // fenced release (the settle guard defers otherwise) — clear it with the rest.
+    if (parseCoordinatorGateBlock(queueEntry.blockedReason)) {
         delete queueEntry.blockedReason;
     }
 }
