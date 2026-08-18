@@ -3,11 +3,13 @@
  * control-plane tables (design :98-191).
  *
  * ★ PHASE-A SCOPE (updated in phase B): this is ROW CRUD ONLY — typed insert/read
- * plus the narrow row-level updates the phase-B transition runner needs
- * (node state, the materialization CAS, spec patch, graph status rollup, outbox
- * delivery marks). There is deliberately NO state machine here: every transition
- * DECISION lives in mesh-graph-transition-runner.ts; no gate claim/release, no
- * workspace saga (phases C–D). Nothing in the scheduler reads these tables.
+ * plus the narrow row-level updates the phase-B transition runner and
+ * phase-D workspace saga need (node state, the materialization CAS, spec
+ * patch, graph status rollup, outbox delivery marks, workspace lease/state
+ * writes). There is deliberately NO state machine here: transition DECISIONS
+ * live in mesh-graph-transition-runner.ts (B) and
+ * mesh-graph-workspace-saga.ts (D). Nothing in the scheduler reads these
+ * tables.
  *
  * The store is bound to the MeshRuntimeStore's existing better-sqlite3 handle
  * (MeshRuntimeStore.graphStore()) so phase-B graph writes can join the ONE
@@ -22,6 +24,7 @@ import type {
     MeshGraphOutboxStatus,
     MeshGraphStatus,
     MeshGraphWorkspaceIntentRow,
+    MeshGraphWorkspaceSagaState,
     MeshTaskGraphEdgeRow,
     MeshTaskGraphNodeRow,
     MeshTaskGraphRow,
@@ -271,6 +274,144 @@ export class MeshGraphStore {
             `SELECT * FROM mesh_graph_workspace_intents WHERE graph_id = ? AND workspace_ref = ?`
         ).get(graphId, workspaceRef) as any;
         return r ? mapWorkspaceIntentRow(r) : null;
+    }
+
+    listWorkspaceIntents(graphId: string): MeshGraphWorkspaceIntentRow[] {
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_graph_workspace_intents WHERE graph_id = ? ORDER BY created_at ASC`
+        ).all(graphId) as any[];
+        return rows.map(mapWorkspaceIntentRow);
+    }
+
+    listWorkspaceIntentsByMesh(meshId: string, states?: readonly MeshGraphWorkspaceSagaState[]): MeshGraphWorkspaceIntentRow[] {
+        if (states && states.length > 0) {
+            const placeholders = states.map(() => '?').join(',');
+            const rows = this.db.prepare(
+                `SELECT * FROM mesh_graph_workspace_intents WHERE mesh_id = ? AND saga_state IN (${placeholders}) ORDER BY created_at ASC`
+            ).all(meshId, ...states) as any[];
+            return rows.map(mapWorkspaceIntentRow);
+        }
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_graph_workspace_intents WHERE mesh_id = ? ORDER BY created_at ASC`
+        ).all(meshId) as any[];
+        return rows.map(mapWorkspaceIntentRow);
+    }
+
+    /**
+     * Intents whose saga lease is missing or expired. The D worker claims these
+     * with a higher fencing generation (design :506-507).
+     */
+    listExpiredWorkspaceLeases(meshId: string, nowIso: string): MeshGraphWorkspaceIntentRow[] {
+        const rows = this.db.prepare(`
+            SELECT * FROM mesh_graph_workspace_intents
+            WHERE mesh_id = ?
+              AND saga_state IN ('declared', 'preparing', 'compensating')
+              AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+            ORDER BY created_at ASC
+        `).all(meshId, nowIso) as any[];
+        return rows.map(mapWorkspaceIntentRow);
+    }
+
+    listWorkspaceIntentsByCreatedNodeId(meshId: string, createdNodeId: string): MeshGraphWorkspaceIntentRow[] {
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_graph_workspace_intents WHERE mesh_id = ? AND created_node_id = ?`
+        ).all(meshId, createdNodeId) as any[];
+        return rows.map(mapWorkspaceIntentRow);
+    }
+
+    /**
+     * Lease CAS. Succeeds when the row is unleased, expired, or already owned
+     * by `leaseOwner`. A live foreign lease is left untouched. Same-owner
+     * refresh keeps the generation; a takeover increments it (design :506-507).
+     */
+    claimWorkspaceIntentLease(
+        graphId: string,
+        workspaceRef: string,
+        leaseOwner: string,
+        fencingToken: string,
+        leaseExpiresAt: string,
+        nowIso: string,
+    ): { claimed: boolean; generation: number; fencingToken?: string; refreshed: boolean } {
+        const current = this.getWorkspaceIntent(graphId, workspaceRef);
+        if (!current) return { claimed: false, generation: 0, refreshed: false };
+        const expired = !current.leaseExpiresAt || current.leaseExpiresAt <= nowIso;
+        const sameOwner = current.leaseOwner === leaseOwner;
+        if (current.leaseOwner && !expired && !sameOwner) {
+            return { claimed: false, generation: current.leaseGeneration, fencingToken: current.fencingToken, refreshed: false };
+        }
+        if (sameOwner && !expired) {
+            const r = this.db.prepare(`
+                UPDATE mesh_graph_workspace_intents
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE graph_id = ? AND workspace_ref = ? AND lease_generation = ? AND lease_owner = ?
+            `).run(leaseExpiresAt, nowIso, graphId, workspaceRef, current.leaseGeneration, leaseOwner);
+            return {
+                claimed: r.changes > 0,
+                generation: current.leaseGeneration,
+                fencingToken: current.fencingToken,
+                refreshed: r.changes > 0,
+            };
+        }
+        const nextGen = current.leaseGeneration + 1;
+        const r = this.db.prepare(`
+            UPDATE mesh_graph_workspace_intents
+            SET lease_owner = ?, lease_generation = ?, fencing_token = ?, lease_expires_at = ?, updated_at = ?
+            WHERE graph_id = ? AND workspace_ref = ? AND lease_generation = ?
+              AND (lease_owner IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ? OR lease_owner = ?)
+        `).run(leaseOwner, nextGen, fencingToken, leaseExpiresAt, nowIso, graphId, workspaceRef, current.leaseGeneration, nowIso, leaseOwner);
+        return { claimed: r.changes > 0, generation: nextGen, fencingToken, refreshed: false };
+    }
+
+    /**
+     * Row write for D. `undefined` fields are left unchanged; `null` lastError
+     * clears. The optional generation CAS rejects a stale fenced writer.
+     */
+    patchWorkspaceIntent(
+        graphId: string,
+        workspaceRef: string,
+        patch: {
+            sagaState?: MeshGraphWorkspaceSagaState;
+            ownerTag?: string | null;
+            createdNodeId?: string | null;
+            createdWorktreePath?: string | null;
+            lastError?: string | null;
+            baseRevision?: string | null;
+            branchIdentity?: string | null;
+            leaseOwner?: string | null;
+            fencingToken?: string | null;
+            leaseExpiresAt?: string | null;
+        },
+        nowIso: string,
+        cas?: { leaseGeneration: number },
+    ): boolean {
+        const current = this.getWorkspaceIntent(graphId, workspaceRef);
+        if (!current) return false;
+        if (cas && current.leaseGeneration !== cas.leaseGeneration) return false;
+        const next = {
+            sagaState: patch.sagaState ?? current.sagaState,
+            ownerTag: patch.ownerTag === undefined ? current.ownerTag ?? null : patch.ownerTag,
+            createdNodeId: patch.createdNodeId === undefined ? current.createdNodeId ?? null : patch.createdNodeId,
+            createdWorktreePath: patch.createdWorktreePath === undefined ? current.createdWorktreePath ?? null : patch.createdWorktreePath,
+            lastError: patch.lastError === undefined ? current.lastError ?? null : patch.lastError,
+            baseRevision: patch.baseRevision === undefined ? current.baseRevision ?? null : patch.baseRevision,
+            branchIdentity: patch.branchIdentity === undefined ? current.branchIdentity ?? null : patch.branchIdentity,
+            leaseOwner: patch.leaseOwner === undefined ? current.leaseOwner ?? null : patch.leaseOwner,
+            fencingToken: patch.fencingToken === undefined ? current.fencingToken ?? null : patch.fencingToken,
+            leaseExpiresAt: patch.leaseExpiresAt === undefined ? current.leaseExpiresAt ?? null : patch.leaseExpiresAt,
+        };
+        const r = this.db.prepare(`
+            UPDATE mesh_graph_workspace_intents
+            SET saga_state = ?, owner_tag = ?, created_node_id = ?, created_worktree_path = ?,
+                last_error = ?, base_revision = ?, branch_identity = ?, lease_owner = ?,
+                fencing_token = ?, lease_expires_at = ?, updated_at = ?
+            WHERE graph_id = ? AND workspace_ref = ? AND lease_generation = ?
+        `).run(
+            next.sagaState, next.ownerTag, next.createdNodeId, next.createdWorktreePath,
+            next.lastError, next.baseRevision, next.branchIdentity, next.leaseOwner,
+            next.fencingToken, next.leaseExpiresAt, nowIso,
+            graphId, workspaceRef, current.leaseGeneration,
+        );
+        return r.changes > 0;
     }
 
     // ── mesh_graph_outbox ────────────────────────────────────────────────────

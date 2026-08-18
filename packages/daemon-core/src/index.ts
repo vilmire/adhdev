@@ -323,6 +323,27 @@ export type { AnyLedgerSlice, MeshLedgerReconciliationEvidence, MeshLedgerReplic
 // ── Mesh Work Queue (GUPP) ──
 export { enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult } from './mesh/mesh-work-queue.js';
+export {
+    declareWorkspaceIntents,
+    setWorkspaceBaseRevision,
+    runWorkspaceSagaTick,
+    recoverExpiredWorkspaceSagas,
+    compensateWorkspaceIntent,
+} from './mesh/mesh-graph-workspace-saga.js';
+export {
+    classifyWorkspaceCompensationSafety,
+    WORKSPACE_DELETE_REFUSALS,
+} from './mesh/mesh-graph-workspace-safety.js';
+export {
+    deriveWorkspaceBranchIdentity,
+    deriveWorkspaceOwnerTag,
+    WORKSPACE_OWNER_GIT_CONFIG_KEY,
+    WORKSPACE_SAGA_LEASE_MS,
+} from './mesh/mesh-graph-workspace-identity.js';
+export { WorkspaceSagaPermanentError } from './mesh/mesh-graph-workspace-ports.js';
+export type { GraphWorkspaceDeclaration, WorkspaceSagaTickResult, WorkspaceSagaStepResult } from './mesh/mesh-graph-workspace-saga.js';
+export type { WorkspaceDeleteRefusal, WorkspaceInspectReport, WorkspaceSafetySnapshot } from './mesh/mesh-graph-workspace-safety.js';
+export type { WorkspaceSagaPorts } from './mesh/mesh-graph-workspace-ports.js';
 // Shared node-health resolver + launch gate (single source of truth for the auto-launch
 // gate AND the MAGI fan-out planner — they must agree on what "launchable health" means).
 export { deriveMeshNodeHealthFromGit, resolveEffectiveMeshNodeHealth, isMeshNodeHealthLaunchable } from './mesh/mesh-node-identity.js';

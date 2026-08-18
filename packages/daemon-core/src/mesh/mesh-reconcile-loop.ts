@@ -106,6 +106,7 @@ import {
     scheduleUnresolvedForwardNudge,
     clearUnresolvedForwardNudge,
 } from './mesh-reconcile-unresolved-forward.js';
+import { recoverExpiredWorkspaceSagas } from './mesh-graph-workspace-saga.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
 // the reconcile-loop test suite) keep their `from './mesh-reconcile-loop.js'` paths.
@@ -379,6 +380,22 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             await reconcileUnterminatedDirectDispatches(components, mesh, selfIds, localDaemonId);
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Completion reconcile failed for mesh ${mesh.id}: ${e?.message || e}`);
+        }
+    }
+
+    // ── PHASE 5.5: graph workspace-saga lease recovery (orchestration D) ─────
+    // Expired workspace-intent leases resume preparation or compensation with a
+    // higher fencing generation (design :506-507). Git/FS work stays outside the
+    // queue transaction. Isolated per mesh so a saga fault cannot kill the tick.
+    if (store) {
+        for (const mesh of listMeshes()) {
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
+            try {
+                await recoverExpiredWorkspaceSagas(mesh.id);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Workspace saga recover failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
         }
     }
 

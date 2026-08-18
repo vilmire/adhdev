@@ -82,6 +82,7 @@ import {
     type MeshBoundValueReceipt,
     type MeshUpstreamOutput,
 } from './mesh-graph-input-binding.js';
+import { mergeWorktreeAffinityTag, resolveWorkspaceRefForMaterialize } from './mesh-graph-workspace-bind.js';
 
 // ── Public contract ──────────────────────────────────────────────────────────
 
@@ -536,6 +537,29 @@ function settleDownstreamNode(
         return markNodeSkipped(store, target, `run_if_false:${falseCondition ?? 'condition'}`, nowIso);
     }
 
+    // Phase D — delayed workspace_ref (design :468-473, :323-326). An unresolved
+    // ref stays blocked without a target. A ready intent binds targetNodeId and
+    // the worktree=<branch> affinity tag. run_if / inputs_from stay C1 above/below.
+    const workspaceBind = resolveWorkspaceRefForMaterialize(graphStore, target.graphId, baseSpec);
+    if (workspaceBind.kind === 'unresolved') {
+        if (target.state !== 'blocked') {
+            graphStore.updateNodeState(target.graphId, target.nodeId, 'blocked', nowIso);
+        }
+        const reason = graphMaterializationBlockReason(target.nodeId, target.materializationVersion);
+        if (queueEntry.status === 'pending' && queueEntry.blockedReason !== reason) {
+            const existing = parseGraphMaterializationBlock(queueEntry.blockedReason);
+            if (!queueEntry.blockedReason || existing) {
+                queueEntry.blockedReason = reason;
+                store.updateQueueEntry(queueEntry);
+            }
+        }
+        return { kind: 'deferred' };
+    }
+    if (workspaceBind.kind === 'ready') {
+        queueEntry.targetNodeId = workspaceBind.nodeId;
+        queueEntry.requiredTags = mergeWorktreeAffinityTag(queueEntry.requiredTags, workspaceBind.worktreeTag);
+    }
+
     // ── Step 6 — materialization ★ C1 ────────────────────────────────────────
     // CAS key (design :332-334): the node row advances ONLY from the expected
     // materialization_version, and the queue row is mutated ONLY while still
@@ -761,4 +785,67 @@ export function patchPendingGraphNodeBaseSpec(graphId: string, nodeId: string, b
         graphStore.updateNodeBaseSpec(graphId, nodeId, baseSpecJson, new Date().toISOString());
         return graphStore.getNode(graphId, nodeId)!;
     });
+}
+
+/**
+ * Phase D activation: after a workspace intent becomes `ready`, retry identity
+ * materialization for still-declared/blocked worker nodes that name that
+ * workspace_ref. Uses the same CAS / graph-block rules as the terminal path.
+ * Does not evaluate inputs_from / run_if (C1).
+ */
+export function rematerializePendingGraphNodesForWorkspace(graphId: string, workspaceRef: string): string[] {
+    const store = MeshRuntimeStore.getInstance();
+    const nowIso = new Date().toISOString();
+    const result = store.transaction(() => {
+        const graphStore = store.graphStore();
+        const graph = graphStore.getGraph(graphId);
+        if (!graph) return { meshId: null as string | null, materialized: [] as string[] };
+        const nodes = graphStore.listNodes(graphId);
+        const edges = graphStore.listEdges(graphId);
+        const byId = new Map(nodes.map(n => [n.nodeId, n]));
+        const materialized: string[] = [];
+        for (const target of nodes) {
+            if (target.kind !== 'worker_task' || !target.queueTaskId) continue;
+            if (target.state !== 'declared' && target.state !== 'blocked') continue;
+            const spec = safeParseJson(target.baseSpecJson);
+            const bind = resolveWorkspaceRefForMaterialize(graphStore, graphId, spec);
+            if (bind.kind === 'none' || bind.workspaceRef !== workspaceRef) continue;
+            const outcome = settleDownstreamNode(store, target, edges, byId, nowIso);
+            if (outcome.kind === 'materialized') {
+                materialized.push(target.nodeId);
+                graphStore.insertOutboxEvent({
+                    id: newMeshGraphOutboxId(),
+                    meshId: graph.meshId,
+                    graphId,
+                    kind: 'graph_node_materialized',
+                    payload: JSON.stringify({
+                        graphId, nodeId: target.nodeId, ref: target.ref,
+                        taskId: target.queueTaskId, reason: 'workspace_ready',
+                    }),
+                    status: 'pending',
+                    attemptCount: 0,
+                    createdAt: nowIso,
+                    updatedAt: nowIso,
+                });
+            }
+        }
+        if (materialized.length > 0) {
+            graphStore.insertOutboxEvent({
+                id: newMeshGraphOutboxId(),
+                meshId: graph.meshId,
+                graphId,
+                kind: 'queue_wake',
+                payload: JSON.stringify({ meshId: graph.meshId, reason: 'workspace_ready', graphId }),
+                status: 'pending',
+                attemptCount: 0,
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            });
+        }
+        return { meshId: graph.meshId, materialized };
+    });
+    if (result.meshId) {
+        try { drainMeshGraphOutbox(result.meshId); } catch { /* drain is best-effort */ }
+    }
+    return result.materialized;
 }
