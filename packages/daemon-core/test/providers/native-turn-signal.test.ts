@@ -17,7 +17,7 @@ import {
     selectTurnTerminalMarker,
     providerHasNativeTurnSignal,
     type NativeTurnTerminalMarker,
-} from '../../src/providers/completion/native-turn-signal';
+} from '../../src/chat/native-turn-signal';
 
 let tmpDir = '';
 

@@ -34,6 +34,14 @@ import {
     normalizeReadChatTailLimit,
 } from './read-chat-message-filters.js';
 import { decideCliReadChatSource, supportsCliNativeTranscript } from './read-chat-source-decision.js';
+// (NATIVE-TURN-SIGNAL) turn-terminal marker selection — pure-move extraction
+// (file-size gate); logic unchanged, see the module header.
+import {
+    readChatNativeTurnTerminalMarkers,
+    readLiveCodexWorkspaceNativeHistory,
+    selectAdapterTurnTerminalMarkers,
+    selectHistoryTurnTerminalMarkers,
+} from './chat-commands-read-turn-markers.js';
 import {
     buildReadChatCommandResult,
     collapseAdjacentDuplicateChatMessages,
@@ -1065,43 +1073,6 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     };
 }
 
-function readLiveCodexWorkspaceNativeHistory(agentStr: string, args: {
-    canonicalHistory?: ProviderModule['canonicalHistory'];
-    workspace?: string;
-    offset: number;
-    limit: number;
-    excludeRecentCount: number;
-    historyBehavior?: ProviderModule['historyBehavior'];
-    scripts?: ProviderScripts;
-}): (ReturnType<typeof readProviderChatHistory> & { lookup: 'workspace' }) | null {
-    if (agentStr !== 'codex-cli') return null;
-    const workspace = typeof args.workspace === 'string' ? args.workspace.trim() : '';
-    if (!workspace) return null;
-    const history = readProviderChatHistory(agentStr, {
-        canonicalHistory: args.canonicalHistory,
-        workspace,
-        offset: args.offset,
-        limit: args.limit,
-        excludeRecentCount: args.excludeRecentCount,
-        historyBehavior: args.historyBehavior,
-        scripts: args.scripts as any,
-    });
-    return { ...(history as any), lookup: 'workspace' };
-}
-
-// (NATIVE-TURN-SIGNAL) Extract the provider-native turn-terminal markers from a
-// native-history read result so they can ride the read_chat result payload to
-// the mesh completion poll. Returns an array (possibly EMPTY — "native read
-// happened, no terminal marker yet" = turn not ended) ONLY when a native
-// transcript was genuinely read on this path (source === 'provider-native');
-// returns undefined otherwise so the field stays ABSENT on PTY/mirror/fail-
-// closed reads — the version-skew signal the poll uses to pick its legacy
-// inference fallback. Never fabricate the array for a read that did not happen.
-function readChatNativeTurnTerminalMarkers(nativeHistoryResult: any): unknown[] | undefined {
-    if (!nativeHistoryResult || nativeHistoryResult.source !== 'provider-native') return undefined;
-    return Array.isArray(nativeHistoryResult.turnTerminalMarkers) ? nativeHistoryResult.turnTerminalMarkers : [];
-}
-
 // (A2.2) isNativeHistoryFreshEnough removed. The v1 freshness comparison
 // (native_newest vs pty_newest with a 5-minute mtime grace window) was the
 // direct cause of the plipping behaviour: PTY arrived every turn so native
@@ -1918,16 +1889,13 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 };
             }
             LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length} returnedMsgCount=${returnedMessages.length}`);
-            // (NATIVE-TURN-SIGNAL) Surface the provider-native turn-terminal
-            // markers to the mesh completion poll. Present ONLY when this
-            // session's native transcript was genuinely read AND safely
-            // attributed (selected as the message source, or safe-mapped) — an
-            // aliased co-located transcript's terminal record must never end
-            // this turn. Empty array = "native read happened, turn not ended";
-            // absent = "no trustworthy native read" → poll uses legacy fallback.
-            const turnTerminalMarkers = (primary.nativeSelected || safeMapping)
-                ? (readChatNativeTurnTerminalMarkers(nativeHistory) ?? liveSelectedNativeTurnTerminalMarkers)
-                : liveSelectedNativeTurnTerminalMarkers;
+            // (NATIVE-TURN-SIGNAL) marker selection — see chat-commands-read-turn-markers.ts.
+            const turnTerminalMarkers = selectAdapterTurnTerminalMarkers({
+                nativeSelected: primary.nativeSelected,
+                safeMapping,
+                nativeHistory,
+                liveSelected: liveSelectedNativeTurnTerminalMarkers,
+            });
             return buildReadChatCommandResult({
                 messages: selectedMessages,
                 status: selectedStatus,
@@ -2116,16 +2084,13 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ptyStatusApprovalOnly: false,
             });
 
-            // (NATIVE-TURN-SIGNAL) Same rule as the adapter path: surface the
-            // provider-native turn-terminal markers only when this session's
-            // native transcript was genuinely read AND safely attributed
-            // (selected by the machine, or safe-mapped). Empty array = "native
-            // read happened, turn not ended"; absent = legacy fallback for the
-            // poll. The soft-pending dead-end below is deliberately left
-            // without the field (native not safely mappable there).
-            const historyTurnTerminalMarkers = (decision.nativeSelected || safeMapping)
-                ? readChatNativeTurnTerminalMarkers(history)
-                : undefined;
+            // (NATIVE-TURN-SIGNAL) marker selection — same rule as the adapter
+            // path; see chat-commands-read-turn-markers.ts.
+            const historyTurnTerminalMarkers = selectHistoryTurnTerminalMarkers({
+                nativeSelected: decision.nativeSelected,
+                safeMapping,
+                history,
+            });
 
             if (supportsNative && !decision.nativeSelected) {
                 // Native-only content preservation (hermes chat_tail gap).

@@ -53,7 +53,7 @@ export interface ReadChatResult {
    * readers. Present only when a native transcript was genuinely read on this
    * read path; absent on PTY/mirror fallbacks.
    */
-  turnTerminalMarkers?: import('./completion/native-turn-signal.js').NativeTurnTerminalMarker[];
+  turnTerminalMarkers?: import('../chat/native-turn-signal.js').NativeTurnTerminalMarker[];
   /** Provider-driven UI effects derived from chat state */
   effects?: ProviderEffect[];
 }

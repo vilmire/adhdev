@@ -28,7 +28,7 @@ import {
   resolveNativeCompletionSignalSpec,
   type NativeCompletionSignalSpec,
   type NativeTurnTerminalMarker,
-} from '../completion/native-turn-signal.js';
+} from '../../chat/native-turn-signal.js';
 
 /**
  * (NATIVE-TURN-SIGNAL) codex's turn-terminal declaration.

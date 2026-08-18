@@ -1,6 +1,6 @@
 import type { MessagePart, ModalInfo, ReadChatResult } from './contracts.js'
 import { normalizeMessageParts } from './contracts.js'
-import type { NativeTurnTerminalMarker } from './completion/native-turn-signal.js'
+import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js'
 import type { ChatBubbleState, ChatMessage } from '../types.js'
 import {
   CHAT_CONTRACT_VERSION_V1,

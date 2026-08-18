@@ -26,7 +26,7 @@ import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter } from '../chat-message-normalization.js';
 import type { ProviderModule } from '../contracts.js';
 import type { CompletionFinalAssistantEvidence } from '../cli-provider-instance-types.js';
-import type { NativeTurnTerminalMarker } from './native-turn-signal.js';
+import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import type { SignalSnapshot } from '../spec/signal-envelope.js';
 
 /**

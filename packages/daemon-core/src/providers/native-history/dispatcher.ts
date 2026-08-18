@@ -14,7 +14,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { NativeTurnTerminalMarker } from '../completion/native-turn-signal.js';
+import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import { readSession as readClaudeCliSession } from './claude-cli-transcript.js';
 import { readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';

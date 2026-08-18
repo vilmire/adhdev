@@ -29,7 +29,7 @@ import {
     resolveNativeCompletionSignalSpec,
     selectTurnTerminalMarker,
     type NativeTurnTerminalMarker,
-} from './completion/native-turn-signal.js';
+} from '../chat/native-turn-signal.js';
 import { TranscriptSignalSource } from './transcript-signal-source.js';
 import { resolveBusyLeaseGate } from './busy-lease-gate.js';
 import type { SignalSnapshot } from './spec/signal-envelope.js';

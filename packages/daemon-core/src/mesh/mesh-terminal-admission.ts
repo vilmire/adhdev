@@ -52,8 +52,8 @@
 // the row, and it can never manufacture one.
 // ---------------------------------------------------------------------------
 
-import { selectTurnTerminalMarker } from '../providers/completion/native-turn-signal.js';
-import type { NativeTurnTerminalMarker } from '../providers/completion/native-turn-signal.js';
+import { selectTurnTerminalMarker } from '../chat/native-turn-signal.js';
+import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js';
 
 // How fresh the newest transcript bubble of ANY kind may be before the tail is
 // judged "still growing" and message-shape evidence is refused (rule 6).

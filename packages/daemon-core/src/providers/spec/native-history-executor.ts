@@ -43,7 +43,7 @@ import {
     isTranscriptClaimedByOther,
     transcriptClaimOwnerToken,
 } from '../native-history/transcript-claim-registry.js';
-import type { NativeTurnTerminalMarker } from '../completion/native-turn-signal.js';
+import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 
 export interface NativeHistoryInput {
     agentType?: string;

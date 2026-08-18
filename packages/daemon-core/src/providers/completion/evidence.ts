@@ -34,7 +34,7 @@ import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
 import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../../config/chat-history.js';
 import { loadPersistedProviderSessionPins } from '../../config/state-store.js';
 import { buildExternalTranscriptProbe } from '../cli-provider-transcript-merge.js';
-import type { NativeTurnTerminalMarker } from './native-turn-signal.js';
+import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import type {
     CompletedDebouncePending,
     CompletionFinalAssistantEvidence,
