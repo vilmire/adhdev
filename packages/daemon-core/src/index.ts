@@ -145,6 +145,11 @@ export type {
 } from './repo-mesh-types.js';
 export {
   DEFAULT_MESH_POLICY,
+  // The routing gate's staleness threshold (staleAfterMs default) is the SINGLE
+  // source for every "is this quota reading too old to trust" surface — the
+  // mcp-server mesh_status compact summary and daemonQuotas age/stale markers
+  // import it from here rather than duplicating the value.
+  DEFAULT_QUOTA_ROUTING_POLICY,
   resolveDelegatedWorkerAutoApprove,
   delegatedWorkerAutoApproveSettings,
   resolveDelegatedWorkerDangerousModeAllow,

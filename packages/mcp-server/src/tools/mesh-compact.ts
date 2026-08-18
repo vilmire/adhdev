@@ -5,11 +5,20 @@
  * change. Slims the LLM-facing node copy: compact git snapshot, the canonical
  * preserved-marker list, the full per-node compaction (compactMeshStatusNode), the
  * quiet-node minimal stub (minimalCompactNode), node severity / noteworthiness
- * ranking, and the per-node session summary. Imports only the shared large-value
- * elider; the mesh_status node-array byte-budget bounding stays in mesh-tools.ts and
- * imports these back, so there is no runtime import cycle.
+ * ranking, and the per-node session summary. Imports the shared large-value
+ * elider plus daemon-core's DEFAULT_QUOTA_ROUTING_POLICY (the single source for
+ * the quota staleness threshold the compact quota summary flags against), so
+ * there is no runtime import cycle.
  */
 import { elideLargeNestedValue } from './mesh-tool-shared.js';
+import { DEFAULT_QUOTA_ROUTING_POLICY } from '@adhdev/daemon-core';
+
+// Staleness threshold for quota readings, single-sourced from the daemon-core
+// routing gate (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs) — NEVER re-declared
+// here. The gate fails OPEN past this age; the surface must flag the same age
+// as `stale` so a coordinator never reads a number the gate itself would no
+// longer trust as current.
+const QUOTA_STALE_AFTER_MS = DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs;
 
 // Compact-mode git snapshot for LLM callers: keep the coordinator-relevant scalar
 // signals (branch/upstream/ahead/behind/dirty/headCommit) and the submodules array
@@ -63,6 +72,53 @@ function summarizeCompactSubmodules(submodules: any): Record<string, unknown> | 
 // field HERE once and both fold paths preserve it; never hand-list it in two places.
 const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'quota', 'isLocalWorktree'] as const;
 
+/** Age of a quota snapshot's own reading in ms; null when updatedAt is absent. */
+export function quotaSnapshotAgeMs(snapshot: any, now: number = Date.now()): number | null {
+    const updatedAt = typeof snapshot?.updatedAt === 'number' ? snapshot.updatedAt : NaN;
+    if (!Number.isFinite(updatedAt)) return null;
+    return Math.max(0, now - updatedAt);
+}
+
+/** Same threshold the routing gate uses (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs). */
+export function isQuotaSnapshotStale(snapshot: any, now: number = Date.now()): boolean {
+    const ageMs = quotaSnapshotAgeMs(snapshot, now);
+    return ageMs === null || ageMs >= QUOTA_STALE_AFTER_MS;
+}
+
+// Terse age for the compact string: minutes ("2m", "165m"), matching how
+// operators actually talk about quota reading age; unknown age renders "?".
+function formatQuotaSnapshotAge(snapshot: any, now: number): string {
+    const ageMs = quotaSnapshotAgeMs(snapshot, now);
+    if (ageMs === null) return '?';
+    return `${Math.round(ageMs / 60_000)}m`;
+}
+
+/**
+ * Pure-additive freshness annotation for the top-level `daemonQuotas` fold:
+ * every per-provider snapshot keeps ALL existing fields (updatedAt included)
+ * and gains computed `ageMs`/`stale` so a coordinator never has to do the
+ * epoch-ms subtraction itself — it empirically doesn't, and reads a stale
+ * boot-refresh snapshot as the current value. `stale` uses the SAME threshold
+ * as the routing gate (QUOTA_STALE_AFTER_MS above).
+ */
+export function annotateQuotaSnapshotFreshness(quota: any, now: number = Date.now()): any {
+    if (!quota || typeof quota !== 'object' || Array.isArray(quota)) return quota;
+    const out: Record<string, unknown> = {};
+    for (const [provider, snapshot] of Object.entries(quota as Record<string, any>)) {
+        if (!snapshot || typeof snapshot !== 'object') {
+            out[provider] = snapshot;
+            continue;
+        }
+        const ageMs = quotaSnapshotAgeMs(snapshot, now);
+        out[provider] = {
+            ...snapshot,
+            ageMs: ageMs ?? -1,
+            stale: isQuotaSnapshotStale(snapshot, now),
+        };
+    }
+    return out;
+}
+
 /**
  * Fold a node's reported quota bundle into a terse per-provider marker.
  *
@@ -72,27 +128,53 @@ const MESH_COMPACT_PRESERVED_MARKER_FIELDS = ['dataFreshness', 'quota', 'isLocal
  * comparing what it sees here against where work actually lands is debugging
  * through exactly this string.
  *
- * Compact shape is one short string per provider ("38%/12%" = session/weekly,
- * or a bare status word when the node could not read one) because the raw
- * bundle is ~4 nested objects per provider and would cost more bytes on every
- * node than the whole rest of the compact entry. A provider that FAILED still
- * appears, carrying its failureKind: "this node looked and could not tell" is a
- * different diagnosis from "this node never reported", and collapsing the two
- * into an absent key would destroy exactly the distinction worth having.
+ * Compact shape is one short string per provider:
+ *   "7d 82% · 5h 15% · 2m"                — weekly/session used%, reading age
+ *   "7d 82% · 5h — · 165m stale"          — `—` = axis not measured; past the
+ *                                           routing staleness threshold → "stale"
+ *   "7d 16% · 5h — · 1m · refreshing"     — metadata.lastGoodWindows: numbers are
+ *                                           a retained last-good reading, kept
+ *                                           visible instead of dropped
+ *   "unavailable:cli-unavailable"          — no numbers at all: status[:failureKind]
+ *
+ * Rules encoded here (each one is a past misread):
+ *   - WEEKLY (7d) FIRST with an explicit axis label — the weekly budget is the
+ *     provider-selection axis, and an unlabeled "9%/90%" pair got read as
+ *     whichever number came first.
+ *   - AGE ALWAYS — the direct cause of a live misroute was a coordinator
+ *     treating a 165-minute-old boot-refresh snapshot as the current value.
+ *   - lastGoodWindows keeps its numbers — daemon-core carryForwardLastGoodWindows
+ *     deliberately retains the last good reading across a transient failure;
+ *     dropping the numbers here (the old "error:expired-token" fold) threw
+ *     away exactly the signal that carry-forward preserved.
+ * A provider that FAILED still appears, carrying its failureKind: "this node
+ * looked and could not tell" is a different diagnosis from "this node never
+ * reported", and collapsing the two into an absent key would destroy exactly
+ * the distinction worth having.
  */
-export function summarizeNodeQuota(quota: any): Record<string, string> | undefined {
+export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record<string, string> | undefined {
     if (!quota || typeof quota !== 'object' || Array.isArray(quota)) return undefined;
     const out: Record<string, string> = {};
     for (const [provider, snapshot] of Object.entries(quota as Record<string, any>)) {
         if (!snapshot || typeof snapshot !== 'object') continue;
         const status = typeof snapshot.status === 'string' ? snapshot.status : 'unknown';
-        if (status !== 'ok') {
+        const lastGood = snapshot.metadata?.lastGoodWindows === true;
+        const pct = (w: any): string | undefined => (w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : undefined);
+        const weekly = pct(snapshot.weekly);
+        const session = pct(snapshot.session);
+        // Only a snapshot with NO usable numbers at all degrades to the bare
+        // status[:failureKind] word — any retained reading stays visible.
+        if (weekly === undefined && session === undefined) {
             const kind = typeof snapshot.metadata?.failureKind === 'string' ? snapshot.metadata.failureKind : undefined;
             out[provider] = kind ? `${status}:${kind}` : status;
             continue;
         }
-        const pct = (w: any): string => (w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : '—');
-        out[provider] = `${pct(snapshot.session)}/${pct(snapshot.weekly)}`;
+        const age = formatQuotaSnapshotAge(snapshot, now);
+        const stale = isQuotaSnapshotStale(snapshot, now);
+        let line = `7d ${weekly ?? '—'} · 5h ${session ?? '—'} · ${age}${stale ? ' stale' : ''}`;
+        if (lastGood) line += ' · refreshing';
+        else if (status !== 'ok') line += ` · ${status}`;
+        out[provider] = line;
     }
     return Object.keys(out).length > 0 ? out : undefined;
 }

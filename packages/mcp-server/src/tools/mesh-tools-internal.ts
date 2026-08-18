@@ -213,6 +213,7 @@ export {
     messageContent,
 } from './chat-compact.js';
 export {
+    annotateQuotaSnapshotFreshness,
     compactMeshStatusNode,
     compactNodeSeverity,
     isNoteworthyCompactNode,

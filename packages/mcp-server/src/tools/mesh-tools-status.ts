@@ -7,6 +7,7 @@ import {
     COMPACT_MAX_ACTIVE_WORK_ROWS,
     COMPACT_MISSIONS_BYTE_BUDGET,
     COMPACT_NODES_TOTAL_BYTE_BUDGET,
+    annotateQuotaSnapshotFreshness,
     assignFullGitSnapshot,
     buildActiveWorkPollingGuidance,
     buildBranchConvergence,
@@ -515,7 +516,12 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         const daemonId = typeof entry?.daemonId === 'string' && entry.daemonId ? entry.daemonId : '';
         if (!daemonId) continue;
         if (entry?.machine && !(daemonId in daemonMachines)) daemonMachines[daemonId] = entry.machine;
-        if (entry?.quota && !(daemonId in daemonQuotas)) daemonQuotas[daemonId] = entry.quota;
+        // Pure-additive freshness annotation: the raw snapshot keeps every field
+        // (updatedAt included) and gains computed ageMs/stale so a coordinator
+        // never has to subtract epoch ms itself — it doesn't, and a stale
+        // boot-refresh snapshot then reads as the current value. `stale` uses
+        // the routing gate's own threshold (see mesh-compact.ts).
+        if (entry?.quota && !(daemonId in daemonQuotas)) daemonQuotas[daemonId] = annotateQuotaSnapshotFreshness(entry.quota);
     }
 
     // Per-daemon failed-upgrade fold. A detached daemon upgrade answers
@@ -627,9 +633,9 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                 // `sessions` folds to `daemonSessions` in compact mode only.
                 //
                 // `quota` is deliberately NOT pointer-ized: compactMeshStatusNode already
-                // folds it to one short "38%/12%" string per provider, so the per-node
-                // copy is a few dozen bytes and is exactly the signal a coordinator wants
-                // inline when picking a node. The full bundle is in daemonQuotas.
+                // folds it to one short "7d X% · 5h Y% · <age>" string per provider, so the
+                // per-node copy is a few dozen bytes and is exactly the signal a coordinator
+                // wants inline when picking a node. The full bundle is in daemonQuotas.
                 if (next.machine && typeof next.machine === 'object') {
                     const m = next.machine as Record<string, unknown>;
                     next.machine = {

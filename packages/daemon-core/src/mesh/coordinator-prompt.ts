@@ -381,6 +381,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
 
     // ── Workflow ──
     sections.push(WORKFLOW_SECTION);
+    sections.push(QUOTA_SECTION);
 
     // ── Onboarding / Reinit ──
     sections.push(ONBOARDING_SECTION);
@@ -460,6 +461,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         policy: buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)),
         tools: TOOLS_SECTION,
         workflow: WORKFLOW_SECTION,
+        quota: QUOTA_SECTION,
         onboarding: ONBOARDING_SECTION,
         rules: buildRulesSection(coordinatorCliType),
         toolExposurePreflight: TOOL_EXPOSURE_PREFLIGHT_SECTION,
@@ -1108,6 +1110,13 @@ const TOOLS_SECTION = `## Available Tools
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
 Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools from the table above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
+
+const QUOTA_SECTION = `## Provider Quota
+
+\`mesh_status\` per-provider quota reads \`7d X% · 5h Y% · <age>\` — used% on the weekly (7d) and session (5h) axes; \`—\` = axis not measured.
+- **Pick providers by the 7d (weekly) axis** — it is the slow budget and the selection criterion. The 5h (session) axis is a short-term block that recovers at its \`resetsAt\`; a near-full 5h window with an imminent reset is not a reason to avoid the provider.
+- **A \`stale\` or \`refreshing\` number is NOT a current value.** \`stale\` = reading older than the routing staleness threshold; \`refreshing\` = a retained last-good reading while the refetch is failing. Never judge routing from one, and never declare a provider exhausted — or available — on its basis; re-check \`mesh_status\` first.
+- **To pin a provider, use \`required_tags: ["provider=<type>"]\`.** The \`model\` parameter does NOT fix the provider.`;
 
 const WORKFLOW_SECTION = `## Orchestration Workflow
 
