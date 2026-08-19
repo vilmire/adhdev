@@ -1277,6 +1277,71 @@ describe('Repo Mesh coordinator prompt — batch-first orchestration (P4)', () =
     expect(p).toContain('A mesh with idle nodes or a short plan does not remove this requirement')
   })
 
+  it('P4-b/D1: pre-refutes the three self-justifications that actually produce a single, not just the trigger question', () => {
+    // ★ The binary question alone reproduces only HALF of 3.b0's mechanism. What makes
+    // b0 work is two layers: (1) a binary question over an observable property, and
+    // (2) a PRE-EMPTIVE refutation of its own escape hatch (":1159" — "A mesh with
+    // several nodes does not remove this requirement" / "idle base nodes are not a
+    // reason to skip cloning"). A rule that asks the question but leaves the excuses
+    // standing is answerable in the coordinator's favour every time.
+    const p = prompt()
+
+    // (1) "The only thing I'm sure of is this one task." Refuted by pointing at the
+    // confusion it rests on: confidence is not step count. In the observed session TWO
+    // steps were settled simultaneously and it still went out as two separate singles.
+    expect(p).toContain('is not evidence of a single')
+    expect(p).toContain('That feeling is about your confidence, not about how many steps are settled')
+    expect(p).toContain('Count the steps you would actually dispatch')
+
+    // (2) "I can't pick the next step until I see the result." Refuted by turning the
+    // sentence on itself: deciding FROM a result presupposes the step exists; what is
+    // unknown is the branch, which is exactly what run_if/inputs_from/gates encode.
+    expect(p).toContain('states that the next step EXISTS')
+    expect(p).toContain('What the result decides is *which branch you take*, not *whether* there is a follow-up')
+
+    // (3) "A gate/batch is overhead." Refuted with the actual cost accounting, and the
+    // one true exception named so the refutation stays honest (a dependent-less gate IS
+    // waste — which is precisely what the P3 runtime advisory reports).
+    expect(p).toContain('is not overhead when something follows it')
+    expect(p).toContain('The only genuinely wasteful gate is one nothing depends on')
+  })
+
+  it('P4/D1: draws the boundary between under-declaring and speculating, so the rebuttals cannot invert the anti-speculation guard', () => {
+    // ★ The hazard in pushing hard against "I'll just enqueue the next one later" is
+    // inducing the OPPOSITE error — padding batches with invented steps. Both failures
+    // must be nameable and mutually exclusive, or the strengthened rule trades one
+    // wrong behavior for another.
+    const p = prompt()
+
+    expect(p).toContain('**The line between the two failures.**')
+    // The discriminator: does the step exist in the plan — not whether it is fully
+    // specified. This is what keeps "known but branch-dependent" on the batch side.
+    expect(p).toContain('the test is whether the step exists in your plan, not whether its details are settled')
+    expect(p).toContain('They never both apply to the same step')
+
+    // The tie-break must resolve to the HONEST answer with a recorded reason, rather
+    // than to either default — otherwise ambiguity silently favours one failure mode.
+    expect(p).toContain('enqueue the single and record `future_step_not_specifiable`')
+
+    // The original guard survives verbatim alongside the new boundary.
+    expect(p).toContain('Do not invent speculative downstream instructions merely to form a batch')
+  })
+
+  it('P4/D2: states the gate↔downstream pairing in the PROMPT, not only in the P3 runtime advisory', () => {
+    // ★ P3 explains materializedCount: 0 in the gate-release RESPONSE — i.e. after the
+    // coordinator has already spent the claim/release round-trip. The premise it rests
+    // on ("a gate pays off only when something depends on it") was never stated up
+    // front, so the lesson could only ever be learned by committing the mistake first.
+    // Same content, moved ahead of the action.
+    const p = prompt()
+
+    expect(p).toContain('**A gate and its dependents are one unit**')
+    expect(p).toContain('a gate earns its keep only when some task names it in `gated_by`')
+    // The waste case is named in the same terms the runtime advisory uses, so the
+    // prompt sentence and the response message reinforce rather than compete.
+    expect(p).toContain('A gate nothing depends on opens nothing and is pure claim/release overhead')
+  })
+
   it('P4-a: batch-first has a dedicated Rules bullet with an imperative back-reference, like 3.b0 and 3.b1', () => {
     const p = prompt()
     const rules = p.slice(p.indexOf('## Rules'))
