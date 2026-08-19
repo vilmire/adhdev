@@ -551,6 +551,62 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  // EVIDENCE-LEVEL-UNIFY (regression): unifying the ledger's evidenceLevel with the earlier
+  // applyTaskModeCompletionEvidence stamp must stay ONE-WAY — into the ledger payload only.
+  // The first cut also wrote the resolved level BACK onto metadataEvent so a later
+  // buildMeshSystemMessage read would agree, which regressed six tests across three files.
+  // metadataEvent.evidenceLevel is load-bearing for DEDUP, not only wording:
+  // buildPendingEventFingerprint keys terminal completions `::weak` / `::genuine` off
+  // isWeakCompletionMetadata, which reads that field. Since workerResult.source === 'default'
+  // is the ORDINARY plain-text-finalSummary completion (not an anomaly), the write-back moved
+  // routine completions into the `::weak` slot — where an earlier weak synth for the same
+  // taskId swallows the genuine completion (EARLYNOTIFY-GATEBYPASS) — and reworded every
+  // ordinary completion to "reported a possible completion (weak evidence)".
+  //
+  // A unit test of resolveUnifiedCompletionEvidenceLevel cannot catch this: the merge function
+  // is correct in isolation; the defect is where its result is applied. Pin it here instead.
+  it('EVIDENCE-LEVEL-UNIFY: ledger takes the strict evidenceLevel without weakening the coordinator-facing metadataEvent', () => {
+    const meshId = `mesh_evlevel_oneway_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const { components, emit, coordinator } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'codex-cli',
+        providerSessionId: 'codex-history-oneway',
+        // Plain text, not JSON → resolveWorkerResult falls through to source 'default',
+        // so the ledger-side computed level is 'insufficient'.
+        finalSummary: 'done',
+        timestamp: Date.now(),
+      })
+
+      // The LEDGER keeps the strict verdict — this half of the unify fix must survive.
+      const completion = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')
+      expect(completion).toBeTruthy()
+      expect((completion!.payload as any).evidenceLevel).toBe('insufficient')
+      expect((completion!.payload as any).reviewRecommended).toBe(true)
+
+      // The COORDINATOR-facing message must NOT be downgraded by that ledger-only verdict:
+      // an ordinary completion still reads as a completion, and its metadata carries no
+      // evidence_level=insufficient suffix.
+      expect(coordinator.onEvent).toHaveBeenCalled()
+      const [, payload] = coordinator.onEvent.mock.calls[0]
+      expect(payload.input.textFallback).toContain('has completed its task')
+      expect(payload.input.textFallback).not.toContain('evidence_level=insufficient')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('queues agent:generating_completed and the reconcile tick injects it into the live CLI coordinator', async () => {
     const meshId = `mesh_completion_pending_${Date.now()}`
     try {
