@@ -40,6 +40,7 @@ var import_daemon_core = require("@adhdev/daemon-core");
 var DEFAULT_IPC_PORT = import_daemon_core.IDENTITY.defaultPort;
 var DEFAULT_IPC_PATH = "/ipc";
 var DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15e3;
+var IPC_COMMAND_TIMEOUT_ENV = "ADHDEV_IPC_COMMAND_TIMEOUT_MS";
 var IPC_COMMAND_TIMEOUTS_MS = {
   mesh_relay_command: 12e4,
   agent_command: 3e4,
@@ -67,6 +68,42 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   refine_mesh_node: 3e4,
   batch_refine_mesh_nodes: 3e4
 };
+var IPC_PROBE_RETRYABLE_COMMANDS = /* @__PURE__ */ new Set([
+  "get_status_metadata",
+  "get_mesh",
+  "mesh_status",
+  "git_status",
+  "git_diff_summary",
+  "git_log",
+  "git_diff_file",
+  "read_chat",
+  "get_spec_debug",
+  "get_chat_debug_bundle",
+  "list_coordinator_prompts",
+  "list_provider_availability"
+]);
+var IPC_PROBE_RETRY_MAX_ENV = "ADHDEV_IPC_PROBE_RETRY_MAX";
+var IPC_PROBE_RETRY_BACKOFF_MS_ENV = "ADHDEV_IPC_PROBE_RETRY_BACKOFF_MS";
+var DEFAULT_IPC_PROBE_RETRY_MAX = 1;
+var DEFAULT_IPC_PROBE_RETRY_BACKOFF_MS = 2e3;
+function parsePositiveInt(raw, fallback) {
+  if (raw === void 0 || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+function resolveDefaultCommandTimeoutMs() {
+  const parsed = parsePositiveInt(process.env[IPC_COMMAND_TIMEOUT_ENV], DEFAULT_IPC_COMMAND_TIMEOUT_MS);
+  return parsed > 0 ? parsed : DEFAULT_IPC_COMMAND_TIMEOUT_MS;
+}
+function resolveProbeRetryMax() {
+  return parsePositiveInt(process.env[IPC_PROBE_RETRY_MAX_ENV], DEFAULT_IPC_PROBE_RETRY_MAX);
+}
+function resolveProbeRetryBackoffMs() {
+  return parsePositiveInt(process.env[IPC_PROBE_RETRY_BACKOFF_MS_ENV], DEFAULT_IPC_PROBE_RETRY_BACKOFF_MS);
+}
+function isRetryableProbeCommand(type) {
+  return IPC_PROBE_RETRYABLE_COMMANDS.has(type);
+}
 var WS_CONNECTING = 0;
 var WS_OPEN = 1;
 var POOL_IDLE_EVICT_MS = 5 * 6e4;
@@ -76,9 +113,10 @@ function buildRequestId() {
   return `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 function getTimeoutMs(type, nestedCommand) {
+  const fallback = resolveDefaultCommandTimeoutMs();
   return Math.max(
-    IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
-    IPC_COMMAND_TIMEOUTS_MS[nestedCommand] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS
+    IPC_COMMAND_TIMEOUTS_MS[type] ?? fallback,
+    IPC_COMMAND_TIMEOUTS_MS[nestedCommand] ?? fallback
   );
 }
 function getOrCreateConnection(WebSocketCtor, url) {
@@ -203,7 +241,20 @@ var IpcTransport = class {
       args
     });
   }
-  sendIpcCommand(type, args) {
+  async sendIpcCommand(type, args) {
+    const maxRetries = isRetryableProbeCommand(type) ? resolveProbeRetryMax() : 0;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.sendIpcCommandOnce(type, args);
+      } catch (e) {
+        if (!e?.ipcTimeout || attempt >= maxRetries) throw e;
+        const backoffMs = resolveProbeRetryBackoffMs();
+        console.error(`[ipc] probe command '${type}' timed out; retrying (${attempt + 1}/${maxRetries}) in ${backoffMs}ms \u2014 read-only command, safe to re-send`);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+  }
+  sendIpcCommandOnce(type, args) {
     const WebSocketCtor = globalThis.WebSocket;
     if (!WebSocketCtor) {
       return Promise.reject(new Error("WebSocket is not available in this Node runtime; Node 20+ is required for daemon IPC mode"));
@@ -229,7 +280,9 @@ var IpcTransport = class {
       }
       const timer = setTimeout(() => {
         conn.pending.delete(requestId);
-        reject(new Error(`Daemon IPC ${diagnosticParts.join(" ")} timed out after ${Math.round(timeoutMs / 1e3)}s (requestId=${requestId})`));
+        const error = new Error(`Daemon IPC ${diagnosticParts.join(" ")} timed out after ${Math.round(timeoutMs / 1e3)}s (requestId=${requestId})`);
+        error.ipcTimeout = true;
+        reject(error);
       }, timeoutMs);
       conn.pending.set(requestId, { resolve, reject, timer });
       conn.lastUsedAt = Date.now();
