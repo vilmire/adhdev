@@ -34,6 +34,8 @@ import {
     recordGraphEnqueueCommitted,
     recordGraphEnqueueValidationFailed,
     recordGraphEnqueueRolledBack,
+    recordSingleEnqueueDecision,
+    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     enqueueTask,
     enqueueTaskGraph,
     getMeshMission,
@@ -405,6 +407,7 @@ export async function meshEnqueueTask(
     args: EnqueueTaskArgsShape & {
         allowDuplicate?: boolean; allow_duplicate?: boolean;
         blockDuplicate?: boolean; block_duplicate?: boolean;
+        orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
     const normalized = normalizeEnqueueTaskArgs(ctx, args, 'mesh_enqueue_task');
@@ -420,6 +423,34 @@ export async function meshEnqueueTask(
     // allow_duplicate=true silences the warning entirely (explicit intentional re-enqueue).
     const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
     const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
+
+    // ── design :692-731 — the single surface's enqueue-decision record ────────
+    //
+    // The design asked the single tool to REQUIRE an orchestration_decision; it is
+    // optional here because phase F is warn-only (mesh-tool-schemas.ts :58-59) and a
+    // required field would reject legacy/external clients. An omitted record is not
+    // an error, it is the `decision_missing` datapoint: without it a coordinator that
+    // never declares is indistinguishable from one with no eligible singles.
+    // Nothing below can fail or alter the enqueue — this is provenance only.
+    //
+    // ★ Both advisory strings are COMPOSED IN daemon-core and only forwarded here.
+    // This file is a pinned scheduling surface (design :984-986) and may not contain
+    // graph-layer vocabulary even inside a user-facing message — see the note on
+    // MESH_DECLARED_ELIGIBLE_SINGLE_HINT for why the enforcing scan has no
+    // prose exemption.
+    const rawDecision = args.orchestration_decision ?? args.orchestrationDecision;
+    const decisionMissing = rawDecision === undefined || rawDecision === null;
+    const orchestration = normalizeOrchestrationDecision(rawDecision, 'single');
+    const orchestrationWarning = {
+        ...(orchestration.batchCapabilityAvailable ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable } : {}),
+        ...(orchestration.declaredEligibleSingle
+            ? {
+                declaredEligibleSingle: true,
+                declaredEligibleSingleHint: MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
+            }
+            : {}),
+        ...(decisionMissing ? { orchestrationDecisionMissing: true } : {}),
+    };
 
     // ── G4: enqueue duplicate detection ──────────────────────────────────────
     // TASKBUBBLE-DUP is the recurring class where the SAME task is enqueued twice
@@ -450,6 +481,20 @@ export async function meshEnqueueTask(
             ...(notBefore ? { notBefore } : {}),
             ...(maxRetries !== undefined ? { maxRetries } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+        });
+        // design :697-731 — recorded for the single surface the same way the batch
+        // surface records it, so batch adoption is countable without transcript
+        // scraping. Written AFTER the insert so a failed enqueue leaves no decision row.
+        recordSingleEnqueueDecision(ctx.mesh.id, {
+            taskId: task.id,
+            ...(missionId ? { missionId } : {}),
+            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+            decision: orchestration.decision,
+            ...(decisionMissing ? { decisionMissing: true } : {}),
+            ...(orchestration.declaredEligibleSingle ? { declaredEligibleSingle: true } : {}),
+            ...(orchestration.batchCapabilityAvailable
+                ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable.reportedReason }
+                : {}),
         });
         const duplicateWarning = duplicateSuspect
             ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: 'An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time.' }
@@ -483,6 +528,7 @@ export async function meshEnqueueTask(
                 ...duplicateWarning,
                 ...missionWarning,
                 ...worktreeAdvisory,
+                ...orchestrationWarning,
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });
@@ -532,6 +578,7 @@ export async function meshEnqueueTask(
                 ...duplicateWarning,
                 ...missionWarning,
                 ...worktreeAdvisory,
+                ...orchestrationWarning,
                 queueTrigger,
                 ...buildQueueTriggerGuidance(queueTrigger),
             });

@@ -1222,3 +1222,127 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('no code-level gate backing this up')
   })
 })
+
+describe('Repo Mesh coordinator prompt — batch-first orchestration (P4)', () => {
+  // GRAPH-ADOPTION P4. Observed, not hypothetical: a coordinator session with
+  // graph-shaped work in front of it called mesh_enqueue_batch ZERO times.
+  //
+  // The measured asymmetry this addresses: in the Rules section, exactly two rules
+  // had a DEDICATED bullet whose whole subject was that rule plus an imperative
+  // back-reference ("Apply Workflow 3.b0" / "3.b1") — and both were followed 100%
+  // of the time. batch-first (3.a) had NO such bullet; it appeared only as a clause
+  // inside two rules about OTHER subjects, each listing batch and task as co-equal
+  // options, which flattens the preference instead of stating it.
+  //
+  // Two structural fixes are asserted here, and one is deliberately NOT made:
+  //   - the trigger is a BINARY, checkable question (like 3.b0's "does this verify a
+  //     physical environment, or only change code?") rather than a predicate about
+  //     the coordinator's own private momentary awareness ("the currently known plan
+  //     contains two or more steps"), which has no observable referent;
+  //   - batch-first gets the same dedicated-bullet + imperative-back-reference shape
+  //     as the two rules that are actually followed.
+  //   - ★ the anti-speculation guard STAYS. Inventing downstream steps to pad a batch
+  //     is a real harm, and the frontier case where a single genuinely is correct must
+  //     remain expressible.
+  const meshFixture = () => ({
+    id: 'mesh_1',
+    name: 'ADHDev',
+    repoIdentity: 'github.com/acme/adhdev',
+    nodes: [{ id: 'node_1', workspace: '/repo', daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  })
+  const prompt = () => buildCoordinatorSystemPrompt({ mesh: meshFixture() as any, coordinatorCliType: 'claude-cli' })
+
+  it('P4-b: states the batch trigger as a binary question about a checkable fact, not about the coordinator\'s own awareness', () => {
+    const p = prompt()
+
+    // The question itself: will I read this result and then dispatch more work?
+    // Its referent is an intention the coordinator can actually check, unlike
+    // "the currently known plan contains two or more graph steps".
+    expect(p).toContain('will I read its result and then dispatch more work')
+
+    // Both answers must be spelled out, so the check terminates in an action.
+    expect(p).toContain('You will act on the result → `mesh_enqueue_batch`')
+    expect(p).toContain('The result goes to the user and nothing follows → `mesh_enqueue_task`')
+
+    // ★ The specific escape hatch the old wording licensed: "I need to see the result
+    // first" read as a reason to skip the graph, when it is precisely what inputs_from
+    // and gates encode. Every one of the observed misses was this case.
+    expect(p).toContain('is HOW a graph edge is expressed, not a reason to skip the graph')
+    expect(p).toContain('An investigation you plan to act on is, by this test, a declarable two-step plan')
+
+    // 3.b0 pre-refutes its own escape hatch ("A mesh with several nodes does not
+    // remove this requirement"); 3.a must do the same rather than supply one.
+    expect(p).toContain('A mesh with idle nodes or a short plan does not remove this requirement')
+  })
+
+  it('P4-a: batch-first has a dedicated Rules bullet with an imperative back-reference, like 3.b0 and 3.b1', () => {
+    const p = prompt()
+    const rules = p.slice(p.indexOf('## Rules'))
+
+    // The shape that correlates with 100% compliance: a bullet whose subject IS the
+    // rule, naming the workflow step imperatively.
+    expect(rules).toContain('- **Batch is the default enqueue surface.** Apply Workflow 3.a:')
+
+    // The two rules this shape is copied from must still be present and unchanged in
+    // kind — this change adds a third, it does not replace them.
+    expect(rules).toContain('Apply Workflow 3.b0')
+    expect(rules).toContain('Apply Workflow 3.b1')
+  })
+
+  it('P4-c: the sub-agent and front-load rules no longer present batch and task as co-equal options', () => {
+    const p = prompt()
+
+    // Same subjects as before (delegate everything / front-load instructions), but
+    // the enqueue surfaces are now ordered rather than listed as a flat fork.
+    expect(p).toContain('must be delegated through `mesh_enqueue_batch` (the default — see Workflow 3.a), falling back to `mesh_enqueue_task` only for a terminal single step')
+    expect(p).toContain('in whichever dispatch surface Workflow 3.a selects')
+
+    // ★ The original subjects survive — this is a rewording, not a deletion.
+    expect(p).toContain('**Never use local sub-agents.**')
+    expect(p).toContain('**Front-load immutable task instructions.**')
+    expect(p).toContain('`mesh_magi_review`')
+    expect(p).toContain('`inputs_from` bindings')
+
+    // The flattening phrasings themselves must be gone.
+    expect(p).not.toContain('`mesh_enqueue_batch` for a currently known multi-step graph, `mesh_enqueue_task` for one ready task')
+    expect(p).not.toContain('in `mesh_enqueue_batch` / `mesh_enqueue_task` / `mesh_send_task`')
+  })
+
+  it('P4: the anti-speculation guard is PRESERVED — a genuine frontier single stays correct', () => {
+    const p = prompt()
+
+    // ★ Over-forcing batches is its own harm: a fabricated downstream step is worse
+    // than a single enqueue. This guard must survive the batch-first push.
+    expect(p).toContain('Do not invent speculative downstream instructions merely to form a batch')
+    expect(p).toContain('is single-task enqueue correct')
+
+    // But it must read as "check the three surfaces FIRST", not as a ready-made
+    // justification available before any check.
+    expect(p).toContain('check the three declaration surfaces before concluding a step is unstatable')
+  })
+
+  it('P4: the single surface is told to declare WHY it was single', () => {
+    const p = prompt()
+    expect(p).toContain('`orchestration_decision`')
+    // The closed enum, so the coordinator can pick a legal value without guessing.
+    for (const reason of [
+      'only_one_step_known', 'future_step_not_specifiable', 'same_session_continuation',
+      'legacy_client', 'operator_override',
+    ]) {
+      expect(p).toContain(reason)
+    }
+  })
+
+  it('P4: stays provider-neutral — no rule is written for one CLI', () => {
+    // The prompt is shared by claude / codex / hermes / antigravity coordinators.
+    const p = prompt()
+    const rules = p.slice(p.indexOf('## Rules'))
+    const batchBullet = rules.split('\n').find(l => l.includes('Batch is the default enqueue surface'))!
+    expect(batchBullet).toBeTruthy()
+    for (const provider of ['claude', 'codex', 'hermes', 'antigravity', 'Claude Code']) {
+      expect(batchBullet).not.toContain(provider)
+    }
+  })
+})

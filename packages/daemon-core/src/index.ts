@@ -402,6 +402,8 @@ export {
     recordGraphEnqueueCommitted,
     recordGraphEnqueueValidationFailed,
     recordGraphEnqueueRolledBack,
+    recordSingleEnqueueDecision,
+    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     recordGraphGateClaimed,
     recordGraphGateReleased,
     recordGraphGateExpired,

@@ -165,6 +165,21 @@ export type MeshLedgerKind =
     | 'graph_enqueue_committed'
     | 'graph_enqueue_validation_failed'
     | 'graph_enqueue_rolled_back'
+    // design :697-731 — the enqueue-decision record for the SINGLE-task surface.
+    //
+    // ★ Its own kind rather than a graph_enqueue_committed with empty graph fields:
+    // a single enqueue commits no graph, so it has no graphId, batchId or planDigest,
+    // and synthesizing them would corrupt every graph count that joins on those. The
+    // design's two adoption metrics are computed from the two kinds together —
+    // "declared eligible singles" is exactly the subset of THIS kind whose
+    // orchestrationDecision.known_graph_steps >= 2.
+    //
+    // Same content boundary as the graph kinds: identifiers, counts, enums. The task
+    // MESSAGE is never written here; taskId is the join key to the task rows.
+    // payload: { taskId, enqueueSurface: 'single', missionId?, coordinatorSessionId?,
+    //            orchestrationDecision, declaredEligibleSingle?, decisionMissing?,
+    //            batchCapabilityAvailable? }
+    | 'single_enqueue_decision'
     // Coordinator gate lifecycle (design :740-750). payload:
     //   { graphId, gateId, ref?, action, outcome?, generation, ownerSessionId?,
     //     releaseDigest?, materializedNodeIds?, policy?, ambiguousExternalOutcome? }

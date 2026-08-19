@@ -1085,7 +1085,17 @@ var MESH_ENQUEUE_TASK_TOOL = {
       block_duplicate: { type: "boolean", description: "G4 (duplicate detection, block mode). Default false = warn-only: if an in-flight (pending/assigned) task with the same message (+ target node when pinned) already exists, the task is still enqueued but the response carries duplicateSuspect. Set true to REFUSE the enqueue with code duplicate_suspect instead (structural TASKBUBBLE-DUP defense \u2014 use when re-sending a task that a slow prior turn may have already enqueued)." },
       blockDuplicate: { type: "boolean", description: "CamelCase alias for block_duplicate." },
       allow_duplicate: { type: "boolean", description: "G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction." },
-      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." }
+      allowDuplicate: { type: "boolean", description: "CamelCase alias for allow_duplicate." },
+      // design :692 — "The single tool should require an orchestration_decision".
+      // OPTIONAL here on purpose: Phase F is warn-only (see the discovery-meta note
+      // above), and a required field would break legacy/external clients that
+      // predate it. An omitted record degrades to decision_missing, which is itself
+      // the signal — never an enqueue failure.
+      orchestration_decision: {
+        type: "object",
+        description: "Record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. On this single-task surface, single_reason says why one task was right \u2014 one of only_one_step_known, future_step_not_specifiable, same_session_continuation, legacy_client, operator_override. output_needed / workspace_unresolved / coordinator_action_between are NOT blockers any more (mesh_enqueue_batch covers them via inputs_from, workspace_ref and coordinator gates); reporting one returns a batch_capability_available warning. Optional and never rejected: omitting it is recorded as decision_missing, and declaring known_graph_steps >= 2 here is recorded as a declared eligible single. Provenance only \u2014 it never changes execution."
+      },
+      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." }
     },
     required: ["message", "difficulty"]
   }
@@ -1506,7 +1516,7 @@ var MESH_CHECKPOINT_TOOL = {
 };
 var MESH_MISSION_UPSERT_TOOL = {
   name: "mesh_mission_upsert",
-  description: "Create or update a persistent mission record so the plan survives coordinator restarts. Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses \u2014 there is no separate progress field. Single mission: pass title (and optionally mission_id to update an existing one). Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.",
+  description: "Create or update a persistent mission record so the plan survives coordinator restarts. Create a mission before enqueueing a multi-task batch, then submit that plan as ONE mesh_enqueue_batch carrying the mission_id (a top-level mission_id applies to every entry; mesh_enqueue_task is the single-step fallback). Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses \u2014 there is no separate progress field. Single mission: pass title (and optionally mission_id to update an existing one). Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1636,7 +1646,7 @@ var MESH_PLAN_ONBOARDING_TOOL = {
 };
 var MESH_ADD_NODE_TOOL = {
   name: "mesh_add_node",
-  description: "Register a workspace as a node in an EXISTING mesh \u2014 the second bootstrap step after mesh_create (or to add more nodes later). Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it \u2014 the local base node is added by the daemon that created the mesh. This is a persistent mesh write: call mesh_plan_onboarding first and obtain explicit user approval. The implementation re-runs that preflight before writing. NOTE: this registers an EXISTING directory as a node (including auto-detected linked worktrees). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead \u2014 that runs the actual `git worktree add`. Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task.",
+  description: "Register a workspace as a node in an EXISTING mesh \u2014 the second bootstrap step after mesh_create (or to add more nodes later). Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it \u2014 the local base node is added by the daemon that created the mesh. This is a persistent mesh write: call mesh_plan_onboarding first and obtain explicit user approval. The implementation re-runs that preflight before writing. NOTE: this registers an EXISTING directory as a node (including auto-detected linked worktrees). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead \u2014 that runs the actual `git worktree add`. Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task. That immediate-targeting path is right when the node is the only thing you were waiting on; when the work behind it is a multi-step plan, prefer declaring the whole plan in one mesh_enqueue_batch instead of registering, then enqueueing step by step.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1655,7 +1665,7 @@ var MESH_ADD_NODE_TOOL = {
 };
 var MESH_CLONE_NODE_TOOL = {
   name: "mesh_clone_node",
-  description: "Create a new worktree-based node from an existing node for isolated parallel work. Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_plan_onboarding with operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight.",
+  description: "Create a new worktree-based node from an existing node for isolated parallel work. Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_plan_onboarding with operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight. Call this directly when you need the worktree NOW and will target it right away. When the worktree only exists to host a plan you already know, that plan can be submitted as one mesh_enqueue_batch: declare the worktree in the top-level `workspaces` array and point its tasks at it with `workspace_ref`, so preparation happens as part of the graph instead of a manual clone followed by step-by-step enqueues.",
   inputSchema: {
     type: "object",
     properties: {
@@ -5042,6 +5052,7 @@ async function meshGraphGateRelease(ctx, args) {
       duplicate: result.duplicate
     });
     const queueTrigger = result.materializedNodeIds.length > 0 ? await triggerMeshQueueAndReport(ctx) : void 0;
+    const releasedNothingDownstream = !result.duplicate && result.materializedNodeIds.length === 0 && result.downstreamNodeCount === 0 && result.graphCompleted !== true;
     return JSON.stringify({
       success: true,
       released: true,
@@ -5054,6 +5065,10 @@ async function meshGraphGateRelease(ctx, args) {
       outcome,
       materializedNodeIds: result.materializedNodeIds,
       materializedCount: result.materializedNodeIds.length,
+      ...result.downstreamNodeCount !== void 0 ? { downstreamNodeCount: result.downstreamNodeCount } : {},
+      ...releasedNothingDownstream ? {
+        noDownstreamAdvisory: "This gate opened nothing downstream: no task declared it in gated_by, so claiming and releasing it bought no scheduling while the rest of the graph is still outstanding. Declare the next step in the same batch and point it at this gate with gated_by, so releasing the gate dispatches it \u2014 or drop the gate and enqueue that step directly."
+      } : {},
       ...queueTrigger ? { queueTrigger } : {},
       ...result.duplicate ? { duplicateHint: "This idempotency_key + payload was already committed; nothing changed. Re-sending an identical release is safe." } : {}
     });
@@ -5293,6 +5308,17 @@ async function meshEnqueueTask(ctx, args) {
   } = normalized.value;
   const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
   const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
+  const rawDecision = args.orchestration_decision ?? args.orchestrationDecision;
+  const decisionMissing = rawDecision === void 0 || rawDecision === null;
+  const orchestration = (0, import_daemon_core6.normalizeOrchestrationDecision)(rawDecision, "single");
+  const orchestrationWarning = {
+    ...orchestration.batchCapabilityAvailable ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable } : {},
+    ...orchestration.declaredEligibleSingle ? {
+      declaredEligibleSingle: true,
+      declaredEligibleSingleHint: import_daemon_core6.MESH_DECLARED_ELIGIBLE_SINGLE_HINT
+    } : {},
+    ...decisionMissing ? { orchestrationDecisionMissing: true } : {}
+  };
   const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, message, targetNodeId);
   if (duplicateSuspect && blockDuplicate) {
     return JSON.stringify({
@@ -5317,6 +5343,15 @@ async function meshEnqueueTask(ctx, args) {
       ...notBefore ? { notBefore } : {},
       ...maxRetries !== void 0 ? { maxRetries } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
+    });
+    (0, import_daemon_core6.recordSingleEnqueueDecision)(ctx.mesh.id, {
+      taskId: task.id,
+      ...missionId ? { missionId } : {},
+      ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
+      decision: orchestration.decision,
+      ...decisionMissing ? { decisionMissing: true } : {},
+      ...orchestration.declaredEligibleSingle ? { declaredEligibleSingle: true } : {},
+      ...orchestration.batchCapabilityAvailable ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable.reportedReason } : {}
     });
     const duplicateWarning = duplicateSuspect ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: "An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time." } : {};
     const missionWarning = buildMissionInactiveWarning(ctx, missionId) ?? {};
@@ -5347,6 +5382,7 @@ async function meshEnqueueTask(ctx, args) {
         ...duplicateWarning,
         ...missionWarning,
         ...worktreeAdvisory,
+        ...orchestrationWarning,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });
@@ -5375,6 +5411,7 @@ async function meshEnqueueTask(ctx, args) {
         ...duplicateWarning,
         ...missionWarning,
         ...worktreeAdvisory,
+        ...orchestrationWarning,
         queueTrigger,
         ...buildQueueTriggerGuidance(queueTrigger)
       });

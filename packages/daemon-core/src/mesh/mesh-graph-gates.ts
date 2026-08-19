@@ -283,6 +283,25 @@ export interface MeshGraphGateReleaseResult {
     duplicate: boolean;
     gate?: MeshGraphGateRow;
     materializedNodeIds: string[];
+    /**
+     * How many graph nodes point at this gate (its direct downstream edges), i.e. how
+     * much this gate was gating. Reported so the caller can tell the two very different
+     * meanings of `materializedNodeIds: []` apart: a gate with dependents that
+     * materialized none of them (they were skipped or still blocked) versus a gate with
+     * NO dependents at all — a TERMINAL gate, which materializes nothing by construction
+     * and is a legitimate end of a graph, not an anomaly.
+     *
+     * `undefined` on a replayed (duplicate) release: that path returns before the edges
+     * are read, and a replay's downstream was already advanced by the original release.
+     */
+    downstreamNodeCount?: number;
+    /**
+     * True when THIS release completed the graph (every node terminal-equivalent). A
+     * graph may legitimately end at a gate, so this distinguishes "the approval was the
+     * final act of a plan that did real work" from a gate that simply gated nothing.
+     * `undefined` on a replayed release, which performs no rollup.
+     */
+    graphCompleted?: boolean;
 }
 
 /**
@@ -414,9 +433,11 @@ export function releaseMeshGraphGate(input: MeshGraphGateReleaseInput): MeshGrap
         // may legitimately END at a gate. Restore `active` when other gates wait.
         const freshNodes = graphStore.listNodes(gate.graphId);
         const graph = graphStore.getGraph(gate.graphId);
+        let graphCompleted = false;
         if (graph && freshNodes.every(isTerminalEquivalent)) {
             graphStore.updateGraphStatus(gate.graphId, 'completed', nowIso, true);
             insertGateOutbox(graphStore, gate.meshId, gate.graphId, 'graph_completed', { graphId: gate.graphId }, nowIso);
+            graphCompleted = true;
         } else if (graph?.status === 'waiting_gate') {
             const stillWaiting = graphStore.listGatesByGraph(gate.graphId)
                 .some(g => g.gateId !== gate.gateId && (g.state === 'awaiting_coordinator' || g.state === 'claimed'));
@@ -433,7 +454,16 @@ export function releaseMeshGraphGate(input: MeshGraphGateReleaseInput): MeshGrap
                 meshId: gate.meshId, reason: 'graph_gate_released', graphId: gate.graphId, gateId: gate.gateId,
             }, nowIso);
         }
-        return { released: true, duplicate: false, gate: graphStore.getGate(gate.gateId)!, materializedNodeIds };
+        return {
+            released: true,
+            duplicate: false,
+            gate: graphStore.getGate(gate.gateId)!,
+            materializedNodeIds,
+            // Read from the edge set this release already walked — a gate with an empty
+            // directDownstream is terminal, and terminal gates materialize nothing by design.
+            downstreamNodeCount: directDownstream.size,
+            graphCompleted,
+        };
     });
     try { drainMeshGraphOutbox(input.meshId); } catch { /* drain is best-effort; the committed state stands */ }
     return result;

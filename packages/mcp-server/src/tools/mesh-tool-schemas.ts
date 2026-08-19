@@ -120,6 +120,18 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
             allow_duplicate: { type: 'boolean', description: 'G4. Set true to skip duplicate detection entirely (no warning, no block) for an intentional re-enqueue of the same instruction.' },
             allowDuplicate: { type: 'boolean', description: 'CamelCase alias for allow_duplicate.' },
+            // design :692 — "The single tool should require an orchestration_decision".
+            // OPTIONAL here on purpose: Phase F is warn-only (see the discovery-meta note
+            // above), and a required field would break legacy/external clients that
+            // predate it. An omitted record degrades to decision_missing, which is itself
+            // the signal — never an enqueue failure.
+            orchestration_decision: {
+                type: 'object',
+                description: 'Record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. On this single-task surface, single_reason says why one task was right — one of only_one_step_known, future_step_not_specifiable, same_session_continuation, legacy_client, operator_override. '
+                    + 'output_needed / workspace_unresolved / coordinator_action_between are NOT blockers any more (mesh_enqueue_batch covers them via inputs_from, workspace_ref and coordinator gates); reporting one returns a batch_capability_available warning. '
+                    + 'Optional and never rejected: omitting it is recorded as decision_missing, and declaring known_graph_steps >= 2 here is recorded as a declared eligible single. Provenance only — it never changes execution.',
+            },
+            orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
         },
         required: ['message', 'difficulty'],
     },
@@ -606,7 +618,7 @@ export const MESH_CHECKPOINT_TOOL = {
 export const MESH_MISSION_UPSERT_TOOL = {
     name: 'mesh_mission_upsert',
     description: 'Create or update a persistent mission record so the plan survives coordinator restarts. '
-        + 'Create a mission before enqueueing a multi-task batch, attach tasks via mesh_enqueue_task mission_id, and update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
+        + 'Create a mission before enqueueing a multi-task batch, then submit that plan as ONE mesh_enqueue_batch carrying the mission_id (a top-level mission_id applies to every entry; mesh_enqueue_task is the single-step fallback). Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
         + 'Single mission: pass title (and optionally mission_id to update an existing one). '
         + 'Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.',
     inputSchema: {
@@ -775,7 +787,8 @@ export const MESH_ADD_NODE_TOOL = {
         + 'Mirrors `adhdev mesh add-node <mesh_id>` with --workspace / --read-only / --provider-priority. A node is a repo checkout on a daemon that the coordinator can launch agents on and delegate tasks to. '
         + 'mesh_id is REQUIRED in standard mode (pass the id returned by mesh_create); in mesh mode it defaults to the active mesh. workspace is the absolute path to the repo checkout ON THE DAEMON that owns it — the local base node is added by the daemon that created the mesh. '
         + 'This is a persistent mesh write: call mesh_plan_onboarding first and obtain explicit user approval. The implementation re-runs that preflight before writing. NOTE: this registers an EXISTING directory as a node (including auto-detected linked worktrees). To CREATE a fresh git worktree + branch for isolated parallel work, use mesh_clone_node instead — that runs the actual `git worktree add`. '
-        + 'Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task.',
+        + 'Returns node_id + workspace so you can immediately target the node with mesh_launch_session / mesh_send_task / mesh_enqueue_task. '
+        + 'That immediate-targeting path is right when the node is the only thing you were waiting on; when the work behind it is a multi-step plan, prefer declaring the whole plan in one mesh_enqueue_batch instead of registering, then enqueueing step by step.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -796,7 +809,8 @@ export const MESH_ADD_NODE_TOOL = {
 export const MESH_CLONE_NODE_TOOL = {
     name: 'mesh_clone_node',
     description: 'Create a new worktree-based node from an existing node for isolated parallel work. '
-        + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_plan_onboarding with operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight.',
+        + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously. This writes a branch, worktree and mesh node: call mesh_plan_onboarding with operation=clone_worktree and obtain explicit user approval first; the implementation re-runs the clean/source preflight. '
+        + 'Call this directly when you need the worktree NOW and will target it right away. When the worktree only exists to host a plan you already know, that plan can be submitted as one mesh_enqueue_batch: declare the worktree in the top-level `workspaces` array and point its tasks at it with `workspace_ref`, so preparation happens as part of the graph instead of a manual clone followed by step-by-step enqueues.',
     inputSchema: {
         type: 'object' as const,
         properties: {

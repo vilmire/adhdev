@@ -261,36 +261,45 @@ test('F-1: ★ the discovery instruction precedes the workflow and the tool tabl
 test('F-1: the prompt carries the batch-first eligibility text and its safety boundary', () => {
     const prompt = realCoordinatorPrompt();
 
+    // ★ GRAPH-ADOPTION P4-b restated the ELIGIBILITY TRIGGER, not the rule's content.
+    // The original phrasing ("whenever the currently known plan contains two or more
+    // graph steps") is a predicate over the coordinator's own private, momentary
+    // awareness — it has no observable referent, so it cannot actually be checked, and
+    // measured adoption was zero. It is now a binary question about a checkable fact,
+    // matching the shape of Workflow 3.b0, which is followed 100% of the time. What
+    // this test protects is unchanged: the trigger exists, the whole plan goes in one
+    // batch, the single fallback has a stated condition, and the anti-speculation
+    // boundary sits with the rule.
     assert.ok(
-        prompt.includes(
-            'submit one `mesh_enqueue_batch` whenever the currently known plan contains two or more graph steps',
-        ),
-        'batch-first eligibility rule missing',
+        prompt.includes('will I read its result and then dispatch more work'),
+        'batch-first eligibility trigger missing',
     );
     assert.ok(
-        prompt.includes('Submit the whole materializable plan once; do not wait and enqueue each known step separately.'),
+        prompt.includes('You will act on the result → `mesh_enqueue_batch`'),
+        'the trigger must resolve to the batch surface when a successor is intended',
+    );
+    assert.ok(
+        prompt.includes('Submit the whole materializable plan in ONE batch.'),
         'the "submit the whole plan once" clause is missing',
     );
     assert.ok(
-        prompt.includes(
-            'Use `mesh_enqueue_task` only when exactly one new worker task is currently known and there is no known downstream step to declare',
-        ),
+        prompt.includes('The result goes to the user and nothing follows → `mesh_enqueue_task`'),
         'single-task fallback condition missing',
     );
 
     // ★ Without this boundary the batch-first rule actively backfires: a coordinator
     // pressured to "form a batch" invents downstream tasks it cannot faithfully state.
     assert.ok(
-        prompt.includes('Do not invent speculative downstream instructions merely to form a batch.'),
+        prompt.includes('Do not invent speculative downstream instructions merely to form a batch'),
         'the anti-speculation safety boundary is missing',
     );
     assert.ok(
-        prompt.includes('If none can state the future step faithfully, single-task enqueue is correct.'),
+        prompt.includes('is single-task enqueue correct'),
         'the safety boundary must end by blessing the single-task enqueue',
     );
 
     // The boundary has to sit WITH the rule it constrains, not elsewhere in the prompt.
-    const ruleAt = prompt.indexOf('Batch-first rule:');
+    const ruleAt = prompt.indexOf('**Batch-first rule.**');
     const boundaryAt = prompt.indexOf('Do not invent speculative downstream instructions');
     assert.ok(ruleAt >= 0 && boundaryAt > ruleAt, 'the safety boundary must follow the batch-first rule');
 });
@@ -308,11 +317,20 @@ test('F-1: difficulty is stated for batch worker entries as well as the single-t
 test('F-1: delegation routing and front-loading name the batch surface', () => {
     const prompt = realCoordinatorPrompt();
 
+    // ★ P4-c: this rule's SUBJECT is "never use local sub-agents" — it names the
+    // enqueue surfaces only in passing. It previously listed batch and task as
+    // co-equal options ("batch for a multi-step graph, task for one ready task"),
+    // which re-flattens the very preference Workflow 3.a states, in a rule the
+    // coordinator reads far more often than the workflow. It now orders them.
     assert.ok(
         prompt.includes(
-            'ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_batch` for a currently known multi-step graph, `mesh_enqueue_task` for one ready task, or `mesh_send_task` for a same-session continuation',
+            'must be delegated through `mesh_enqueue_batch` (the default — see Workflow 3.a), falling back to `mesh_enqueue_task` only for a terminal single step',
         ),
-        'the no-local-sub-agents routing rule still names only the single-task surface',
+        'the no-local-sub-agents routing rule must name batch as the default, not as one of two equal options',
+    );
+    assert.ok(
+        prompt.includes('`mesh_send_task` for a same-session continuation'),
+        'the same-session continuation route must survive the rewording',
     );
     assert.ok(
         prompt.includes(
@@ -344,9 +362,15 @@ test('F: warn-only — no batch_required enforcement is shipped in this phase', 
     );
 
     // The prompt must still describe the single tool as usable, not forbidden.
+    // ★ P4 sharpened the batch-first trigger; it must NOT have crossed into forbidding
+    // the single surface, which would be enforcement smuggled in through wording.
     const prompt = realCoordinatorPrompt();
     assert.ok(
-        prompt.includes('single-task enqueue is correct'),
+        prompt.includes('is single-task enqueue correct'),
         'the warn phase must keep an explicitly correct single-task path',
+    );
+    assert.ok(
+        prompt.includes('The result goes to the user and nothing follows → `mesh_enqueue_task`'),
+        'the single surface must keep a stated case where it is the right answer',
     );
 });

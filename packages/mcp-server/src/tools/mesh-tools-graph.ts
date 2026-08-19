@@ -412,6 +412,27 @@ export async function meshGraphGateRelease(
         const queueTrigger = result.materializedNodeIds.length > 0
             ? await triggerMeshQueueAndReport(ctx)
             : undefined;
+        // ── P3: interpret materializedCount: 0 ───────────────────────────────────
+        //
+        // `materializedCount: 0` is otherwise silent — the coordinator has no way to tell
+        // whether it is fine or means the batch bought nothing. Three cases:
+        //
+        //   1. dependents exist, none materialized → they were skipped or are still blocked
+        //      by another gate/dependency. Ordinary graph behavior, visible in
+        //      mesh_graph_view. NOT flagged.
+        //   2. no dependents, and this release COMPLETED the graph → the approval was the
+        //      final act of a plan that did its work first. Legitimate: a graph may end at
+        //      a gate (the release rollup treats a released gate as terminal-equivalent).
+        //      NOT flagged — this is the terminal-gate suppression.
+        //   3. no dependents, and the graph did NOT complete here → nothing declared this
+        //      gate in gated_by while work remains outstanding, so the claim/release
+        //      round-trip gated nothing. This is the one worth flagging.
+        //
+        // Advisory only: never an error, never blocks, never changes the release.
+        const releasedNothingDownstream = !result.duplicate
+            && result.materializedNodeIds.length === 0
+            && result.downstreamNodeCount === 0
+            && result.graphCompleted !== true;
         return JSON.stringify({
             success: true,
             released: true,
@@ -424,6 +445,14 @@ export async function meshGraphGateRelease(
             outcome,
             materializedNodeIds: result.materializedNodeIds,
             materializedCount: result.materializedNodeIds.length,
+            ...(result.downstreamNodeCount !== undefined ? { downstreamNodeCount: result.downstreamNodeCount } : {}),
+            ...(releasedNothingDownstream
+                ? {
+                    noDownstreamAdvisory: 'This gate opened nothing downstream: no task declared it in gated_by, so claiming and releasing it '
+                        + 'bought no scheduling while the rest of the graph is still outstanding. Declare the next step in the same batch and point '
+                        + 'it at this gate with gated_by, so releasing the gate dispatches it — or drop the gate and enqueue that step directly.',
+                }
+                : {}),
             ...(queueTrigger ? { queueTrigger } : {}),
             ...(result.duplicate
                 ? { duplicateHint: 'This idempotency_key + payload was already committed; nothing changed. Re-sending an identical release is safe.' }
