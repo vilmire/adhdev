@@ -6,6 +6,7 @@ import {
     meshEnqueueBatch,
     meshGraphGateClaim,
     meshGraphGateRelease,
+    meshGraphGateAbandon,
     meshGraphView,
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
@@ -580,4 +581,133 @@ test('E-4: a single-tool decision claiming a superseded blocker gets the batch_c
     } as any));
     assert.equal(res.success, true);
     assert.equal(res.batchCapabilityAvailable, undefined);
+});
+
+// ── E-4: `mesh_graph_gate_abandon` — the graph can reach a terminal state ────
+//
+// ★ The defect this closes: cancelling the work behind a gate left the gate
+// `awaiting_coordinator` with no tool able to touch it — the C3 cancel cascade
+// skips gate nodes by design, the deadline sweep skips gates with no deadline,
+// and `classifyGraphRollup` refuses to classify while any gate is unsettled. The
+// graph could reach NO terminal state, not even `cancelled`. Every test here goes
+// through the REAL MCP tool, because "callable by a coordinator" is the deliverable.
+
+test('E-4: mesh_graph_gate_abandon is registered and demands a reason', () => {
+    const tool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_graph_gate_abandon');
+    assert.ok(tool, 'mesh_graph_gate_abandon is not published in ALL_MESH_TOOLS');
+    for (const field of ['gate_id', 'reason']) {
+        assert.ok(
+            (tool!.inputSchema as any).required.includes(field),
+            `mesh_graph_gate_abandon must require ${field}`,
+        );
+    }
+    // ★ The description must not read as a way THROUGH a gate — that is the
+    // force-release the module header forbids, and an LLM picks tools by prose.
+    assert.match(tool!.description, /NOT A PASS/i);
+    assert.match(tool!.description, /mesh_graph_gate_release/);
+});
+
+test('E-4: abandoning a stranded gate cancels downstream and lets the graph go terminal', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    const batch = await enqueueGatedBatch(ctx);
+    const gateId = batch.gates[0].gateId;
+    const buildTaskId = batch.tasks.find((t: any) => t.ref === 'build').taskId;
+    const deployTaskId = batch.tasks.find((t: any) => t.ref === 'deploy').taskId;
+
+    updateTaskStatus(meshId, buildTaskId, 'completed');
+    // The gate is open and holding deploy — and it has no deadline, so nothing
+    // in the system will ever close it on its own.
+    const before = JSON.parse(await meshGraphView(ctx, { graph_id: batch.graphId }));
+    assert.equal(before.graphs[0].status, 'waiting_gate');
+
+    const res = JSON.parse(await meshGraphGateAbandon(ctx, {
+        gate_id: gateId,
+        reason: 'implementation task cancelled — nothing left to land',
+    }));
+    assert.equal(res.success, true);
+    assert.equal(res.abandoned, true);
+    // ★ Abandon opened NOTHING.
+    assert.deepEqual(res.materializedNodeIds, []);
+    assert.equal(res.cancelledCount, 1);
+
+    // Downstream is cancelled, not dispatched.
+    const deploy = getQueue(meshId).find(t => t.id === deployTaskId)!;
+    assert.equal(deploy.status, 'cancelled');
+
+    // ★ THE DoD: a graph that could reach no terminal state now reaches one.
+    const after = JSON.parse(await meshGraphView(ctx, { graph_id: batch.graphId, include_terminal: true }));
+    assert.equal(after.graphs[0].status, 'cancelled');
+    assert.ok(after.graphs[0].terminalAt, 'the graph must be stamped terminal');
+    assert.deepEqual(after.graphs[0].nextCoordinatorAction ?? [], []);
+});
+
+test('E-4: an abandoned gate can never then be claimed or released through the tools', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    const batch = await enqueueGatedBatch(ctx);
+    const gateId = batch.gates[0].gateId;
+    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+
+    const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
+    assert.equal(claim.claimed, true);
+    // A live lease is protected: the holder may be mid-action.
+    const refused = JSON.parse(await meshGraphGateAbandon(ctx, { gate_id: gateId, reason: 'cleanup' }));
+    assert.equal(refused.success, false);
+    assert.equal(refused.code, 'gate_lease_held');
+
+    const forced = JSON.parse(await meshGraphGateAbandon(ctx, { gate_id: gateId, reason: 'holder is dead', force: true }));
+    assert.equal(forced.abandoned, true);
+
+    const reclaim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
+    assert.equal(reclaim.claimed, false);
+    assert.equal(reclaim.code, 'gate_terminal:cancelled');
+
+    // The pre-abandon fence is worthless — abandon is terminal, not a pause.
+    const release = JSON.parse(await meshGraphGateRelease(ctx, {
+        gate_id: gateId, fencing_token: claim.fencingToken, lease_generation: claim.leaseGeneration,
+        idempotency_key: 'k-after-abandon', outcome: 'passed',
+    }));
+    assert.equal(release.success, false);
+    assert.equal(release.code, 'gate_not_claimed');
+});
+
+test('E-4: a RELEASED gate is refused, and re-abandoning is a safe no-op', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    const batch = await enqueueGatedBatch(ctx);
+    const gateId = batch.gates[0].gateId;
+    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
+    await meshGraphGateRelease(ctx, {
+        gate_id: gateId, fencing_token: claim.fencingToken, lease_generation: claim.leaseGeneration,
+        idempotency_key: 'rel-1', outcome: 'passed',
+    });
+
+    const tooLate = JSON.parse(await meshGraphGateAbandon(ctx, { gate_id: gateId, reason: 'too late' }));
+    assert.equal(tooLate.success, false);
+    assert.equal(tooLate.code, 'gate_terminal:released');
+
+    // A second graph, abandoned twice.
+    const ctx2 = makeCtx(nextMeshId(), recordingLocalTransport());
+    const b2 = await enqueueGatedBatch(ctx2);
+    updateTaskStatus(ctx2.mesh.id, b2.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    const first = JSON.parse(await meshGraphGateAbandon(ctx2, { gate_id: b2.gates[0].gateId, reason: 'once' }));
+    assert.equal(first.duplicate, false);
+    const second = JSON.parse(await meshGraphGateAbandon(ctx2, { gate_id: b2.gates[0].gateId, reason: 'twice' }));
+    assert.equal(second.abandoned, true);
+    assert.equal(second.duplicate, true);
+});
+
+test('E-4: the abandon is recorded in the ledger, distinctly from a release', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId, recordingLocalTransport());
+    const batch = await enqueueGatedBatch(ctx);
+    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    await meshGraphGateAbandon(ctx, { gate_id: batch.gates[0].gateId, reason: 'branch dropped' });
+
+    const kinds = readLedgerEntries(meshId, { limit: 200 }).map((e: any) => e.kind);
+    assert.ok(kinds.includes('graph_gate_abandoned'), 'the abandon must be auditable');
+    // ★ It must NOT read as an approval in the audit trail.
+    assert.ok(!kinds.includes('graph_gate_released'), 'an abandon must never be logged as a release');
 });

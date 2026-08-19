@@ -635,6 +635,7 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_graph_view",
   "mesh_graph_gate_claim",
   "mesh_graph_gate_release",
+  "mesh_graph_gate_abandon",
   "mesh_queue_cancel",
   "mesh_queue_requeue",
   "mesh_send_task",
@@ -1270,6 +1271,22 @@ var MESH_GRAPH_GATE_RELEASE_TOOL = {
       }
     },
     required: ["gate_id", "fencing_token", "lease_generation", "idempotency_key", "outcome"]
+  }
+};
+var MESH_GRAPH_GATE_ABANDON_TOOL = {
+  name: "mesh_graph_gate_abandon",
+  description: "Give up on a coordinator gate that can never be opened, so its graph can reach a terminal state. Use this when the work behind a gate was cancelled or is no longer wanted \u2014 e.g. you cancelled the implementation tasks and the refinery/land gate is now stranded with nothing to land. Without it that gate stays awaiting_coordinator forever and the graph can reach NO terminal state at all, not even cancelled. \u2605 ABANDON IS NOT A PASS. It materializes NOTHING: every downstream task this gate was holding is CANCELLED, not opened, and no outcome/result/evidence is produced for downstream run_if or inputs_from. If you actually want the downstream work to run, use mesh_graph_gate_release instead \u2014 that is the only way through a gate, and this tool is deliberately not a shortcut around it. Needs no fencing token (it grants no passage), but a gate whose lease is still LIVE under another coordinator is refused unless you pass force=true \u2014 that holder may be mid-action on a real external side effect (a merge, a publish, a deploy). Abandoning an already-abandoned gate is a safe no-op; a RELEASED gate can never be abandoned, because its downstream already ran.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      gate_id: { type: "string", description: "The gate to abandon (from mesh_graph_view)." },
+      gateId: { type: "string", description: "CamelCase alias for gate_id." },
+      reason: { type: "string", description: "Why this gate is being given up \u2014 recorded on the gate node, on every cancelled downstream row, and in the provenance ledger. Required: an abandon with no stated reason is indistinguishable from a mistake later." },
+      force: { type: "boolean", description: "Abandon even though another coordinator holds a LIVE lease. Only when you know that holder is dead \u2014 otherwise you may strand an external side effect it is mid-way through." },
+      coordinator_session_id: { type: "string", description: "Recorded as who abandoned the gate. Defaults to this coordinator session." },
+      coordinatorSessionId: { type: "string", description: "CamelCase alias for coordinator_session_id." }
+    },
+    required: ["gate_id", "reason"]
   }
 };
 var MESH_GRAPH_VIEW_TOOL = {
@@ -2134,6 +2151,7 @@ var ALL_MESH_TOOLS = [
   MESH_GRAPH_VIEW_TOOL,
   MESH_GRAPH_GATE_CLAIM_TOOL,
   MESH_GRAPH_GATE_RELEASE_TOOL,
+  MESH_GRAPH_GATE_ABANDON_TOOL,
   MESH_QUEUE_CANCEL_TOOL,
   MESH_QUEUE_REQUEUE_TOOL,
   MESH_SEND_TASK_TOOL,
@@ -5094,6 +5112,95 @@ async function meshGraphGateRelease(ctx, args) {
       ...code === "stale_fence" ? { hint: "Another coordinator has claimed this gate since your claim. Your token is stale \u2014 re-claim before releasing." } : {},
       ...code === "gate_release_conflict" ? { hint: "This idempotency_key was already used with a DIFFERENT payload. Use a new key, or re-send the identical payload." } : {}
     });
+  }
+}
+async function meshGraphGateAbandon(ctx, args) {
+  recordMeshCoordinatorToolCall(ctx, "mesh_graph_gate_abandon");
+  const gateId = readString(args.gate_id) || readString(args.gateId);
+  const reason = readString(args.reason);
+  const missing = [
+    !gateId ? "gate_id" : null,
+    !reason ? "reason" : null
+  ].filter((f) => f !== null);
+  if (missing.length > 0) {
+    return JSON.stringify({
+      success: false,
+      code: "missing_abandon_fields",
+      missing,
+      error: `mesh_graph_gate_abandon requires ${missing.join(", ")}. The reason is recorded on the gate, on every cancelled downstream row, and in the provenance ledger \u2014 an abandon with no stated reason is indistinguishable from a mistake when someone reads it back later.`
+    });
+  }
+  const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
+  try {
+    const result = (0, import_daemon_core6.abandonMeshGraphGate)({
+      meshId: ctx.mesh.id,
+      gateId,
+      reason,
+      ...coordinatorSessionId ? { coordinatorSessionId } : {},
+      ...args.force === true ? { force: true } : {}
+    });
+    if (!result.abandoned) {
+      return JSON.stringify({
+        success: false,
+        abandoned: false,
+        code: result.reason ?? "gate_not_abandonable",
+        gateId,
+        ...result.gate ? { gateState: result.gate.state, action: result.gate.action } : {},
+        error: describeAbandonRefusal(result.reason, result.gate?.state)
+      });
+    }
+    const duplicate = result.reason === "gate_already_abandoned";
+    if (!duplicate) {
+      (0, import_daemon_core6.recordGraphGateAbandoned)(ctx.mesh.id, {
+        graphId: result.gate.graphId,
+        gateId,
+        ref: result.gate.ref,
+        action: result.gate.action,
+        // The gate row already carries `cancelled`; the PRIOR state is what
+        // says whether this closed an open gate or a stranded expired one.
+        priorState: result.gate.state,
+        reason,
+        ...coordinatorSessionId ? { coordinatorSessionId } : {},
+        ...args.force === true ? { force: true } : {},
+        cancelledNodeIds: result.cancelledNodeIds,
+        ...result.graphStatus ? { graphStatus: result.graphStatus } : {}
+      });
+    }
+    return JSON.stringify({
+      success: true,
+      abandoned: true,
+      // Re-abandoning an abandoned gate is a safe no-op, so a retried cleanup
+      // never has to tell "I did it" from "it was already done".
+      duplicate,
+      gateId,
+      graphId: result.gate.graphId,
+      ...result.gate.ref ? { ref: result.gate.ref } : {},
+      gateState: result.gate.state,
+      cancelledNodeIds: result.cancelledNodeIds,
+      cancelledCount: result.cancelledNodeIds.length,
+      ...result.cancelledTaskIds.length > 0 ? { cancelledTaskIds: result.cancelledTaskIds } : {},
+      ...result.graphStatus ? { graphStatus: result.graphStatus } : {},
+      materializedNodeIds: [],
+      note: "Abandon is not a pass: nothing was materialized and no gate outcome was produced. Everything this gate was holding is cancelled. If the graph still shows a non-terminal status, another gate or an in-flight worker is still outstanding \u2014 check mesh_graph_view."
+    });
+  } catch (e) {
+    const message = e?.message || String(e);
+    return JSON.stringify({ success: false, abandoned: false, gateId, error: message });
+  }
+}
+function describeAbandonRefusal(reason, state) {
+  switch (reason) {
+    case "gate_not_found":
+      return "No such gate on this mesh. Use mesh_graph_view to list gates.";
+    case "gate_lease_held":
+      return "Another coordinator holds a LIVE lease on this gate, and it may be mid-action on a real external side effect (a merge, a publish, a deploy). Wait for the lease to lapse, or pass force=true if you know that holder is dead.";
+    case "gate_abandon_race":
+      return "The gate moved (a concurrent claim or release) while this abandon was committing. Re-read it with mesh_graph_view and decide again \u2014 it may no longer need abandoning.";
+    default:
+      if (reason?.startsWith("gate_terminal:")) {
+        return `The gate is already terminal (${state ?? reason.slice("gate_terminal:".length)}) and cannot be abandoned. A RELEASED gate already let its downstream run, so abandoning it would claim closure over work that is in flight or finished \u2014 cancel that work directly instead.`;
+      }
+      return `The gate could not be abandoned (${reason ?? "unknown reason"}).`;
   }
 }
 async function meshGraphView(ctx, args) {
@@ -11079,6 +11186,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_graph_gate_release":
             text = await meshGraphGateRelease(meshCtx, a);
+            break;
+          case "mesh_graph_gate_abandon":
+            text = await meshGraphGateAbandon(meshCtx, a);
             break;
           case "mesh_queue_cancel":
             text = await meshQueueCancel(meshCtx, a);

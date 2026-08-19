@@ -32,7 +32,14 @@
  * imports — the runner never imports this module):
  *   - runner: gate OPEN (declared → awaiting_coordinator) inside the terminal
  *     choke point, the settle-time gate guard, and the gate-owned block clear.
- *   - here:   the coordinator-facing verbs (claim / release) and the sweep.
+ *   - here:   the coordinator-facing verbs (claim / release / abandon) and the sweep.
+ *
+ * ★ `abandon` is the design's `-> cancelled` edge (:399), and it is the ONLY
+ * non-release terminal a coordinator can write. It is CLOSURE, not passage:
+ * downstream is cancelled, never materialized, and no outcome/evidence is
+ * produced. Without it a gate whose work was cancelled stays
+ * `awaiting_coordinator` forever and `classifyGraphRollup` can never roll the
+ * graph — not even to `cancelled`. See `abandonMeshGraphGate` below.
  *
  * NOT HERE (by design): MCP/JSON-RPC tool exposure (phase E), failure-driven
  * rollups beyond the deadline policies (phase C3), and any daemon-executed
@@ -48,6 +55,7 @@ import {
     type MeshGraphGateRow,
     type MeshTaskGraphNodeRow,
 } from './mesh-graph-types.js';
+import { classifyGraphRollup } from './mesh-graph-derived-failure.js';
 import {
     drainMeshGraphOutbox,
     graphMaterializationBlockReason,
@@ -552,6 +560,176 @@ function clearReleasedGateHold(store: MeshRuntimeStore, target: MeshTaskGraphNod
     }
 }
 
+// ── mesh_graph_gate_abandon (design :399 — the `-> cancelled` edge) ───────────
+
+export interface MeshGraphGateAbandonInput {
+    meshId: string;
+    gateId: string;
+    /** Free-form operator reason, recorded on the gate node and the cancelled downstream rows. */
+    reason: string;
+    /**
+     * Who is abandoning. Recorded for provenance. Deliberately NOT matched
+     * against `leaseOwnerSessionId`: the whole point of abandon is to close a
+     * gate whose owner is gone.
+     */
+    coordinatorSessionId?: string;
+    /**
+     * A LIVE foreign lease is refused by default — the holder may be mid-action
+     * on an external side effect, and abandoning under them would strand it.
+     * Set true to abandon anyway (an operator who knows the holder is dead).
+     */
+    force?: boolean;
+    nowMs?: number;
+}
+
+export interface MeshGraphGateAbandonResult {
+    abandoned: boolean;
+    /** gate_not_found / gate_already_abandoned / gate_terminal:<state> / gate_lease_held / gate_abandon_race. */
+    reason?: string;
+    gate?: MeshGraphGateRow;
+    /** Downstream worker nodes cancelled by this abandon. */
+    cancelledNodeIds: string[];
+    /** Their still-pending queue placeholders, now `cancelled`. */
+    cancelledTaskIds: string[];
+    /** The graph status this abandon rolled the graph to, when it rolled at all. */
+    graphStatus?: string;
+}
+
+/** The block/cancel reason an abandoned gate stamps on the work it closes. */
+export function coordinatorGateAbandonedReason(gateId: string): string {
+    return `coordinator_gate_abandoned:${gateId}`;
+}
+
+/**
+ * ★ Abandon a gate that can never be opened — the ONLY non-release terminal a
+ * coordinator can write, and deliberately NOT a pass.
+ *
+ * WHY THIS EXISTS. Cancelling the tasks behind a gate leaves the gate itself
+ * `awaiting_coordinator` forever: `applyGraphCancelCascade` skips gate nodes by
+ * design (C3 owns workers, C2 owns gates), the deadline sweep skips gates with
+ * no `deadline_at` (and `deadline_seconds` is optional), and
+ * `classifyGraphRollup` returns null while ANY gate is unsettled. The graph
+ * could therefore reach no terminal state at all — not even `cancelled`. The
+ * `cancelled` gate state was in the enum and in the design's own state diagram
+ * (:399 `awaiting_coordinator -> cancelled`) from the start; this is its writer.
+ *
+ * ★ HOW IT DIFFERS FROM RELEASE — the invariant this must never break:
+ *   - release is PASSAGE: it materializes downstream, clears gate holds, and
+ *     exposes `outcome`/`result`/`evidence` to downstream bindings.
+ *   - abandon is CLOSURE: it materializes NOTHING. Downstream held work is
+ *     cancelled, never opened. There is no outcome, no evidence, no patch
+ *     surface. Nothing downstream of an abandoned gate can ever run.
+ * Making abandon materialize downstream would be exactly backwards, and making
+ * it settle the gate as `released` would let "give up" masquerade as "approved".
+ *
+ * ★ IT IS NOT A TIMEOUT PATH. The sweep still cannot pass a gate; abandon is an
+ * EXPLICIT operator/coordinator act with a recorded reason. It does not consult
+ * the deadline, and elapsed time never triggers it.
+ *
+ * ★ FENCING IS NOT BYPASSED — it is scoped. Abandon requires no fencing token
+ * because it grants no passage, but a LIVE foreign lease still refuses
+ * (`gate_lease_held`) unless `force` is set: the holder may be mid-action. The
+ * CAS on `leaseGeneration` still guards the write, so a concurrent claim/release
+ * that moved the row loses the race (`gate_abandon_race`) instead of being
+ * silently overwritten.
+ */
+export function abandonMeshGraphGate(input: MeshGraphGateAbandonInput): MeshGraphGateAbandonResult {
+    const store = MeshRuntimeStore.getInstance();
+    const nowMs = input.nowMs ?? Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const result = store.transaction((): MeshGraphGateAbandonResult => {
+        const graphStore = store.graphStore();
+        const gate = graphStore.getGate(input.gateId);
+        if (!gate || gate.meshId !== input.meshId) {
+            return { abandoned: false, reason: 'gate_not_found', cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        if (gate.state === 'cancelled') {
+            // Idempotent: abandoning an abandoned gate is a no-op success, so a
+            // retried cleanup never has to distinguish "I did it" from "it was done".
+            return { abandoned: true, reason: 'gate_already_abandoned', gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        if (gate.state === 'released') {
+            // A released gate already let its downstream run. Abandoning it would
+            // claim closure over work that is in flight or finished.
+            return { abandoned: false, reason: `gate_terminal:${gate.state}`, gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+        if (!input.force && gate.state === 'claimed' && gate.leaseExpiresAt && gate.leaseExpiresAt > nowIso) {
+            return { abandoned: false, reason: 'gate_lease_held', gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+
+        const abandonReason = `${coordinatorGateAbandonedReason(gate.gateId)}:${input.reason}`;
+        const won = graphStore.patchGate(gate.gateId, {
+            state: 'cancelled',
+            // Drop the lease: an abandoned gate has no owner and no live fence.
+            leaseOwnerSessionId: null,
+            fencingToken: null,
+            leaseExpiresAt: null,
+        }, nowIso, { leaseGeneration: gate.leaseGeneration });
+        if (!won) {
+            return { abandoned: false, reason: 'gate_abandon_race', gate, cancelledNodeIds: [], cancelledTaskIds: [] };
+        }
+
+        const node = graphStore.getNode(gate.graphId, gate.nodeId);
+        if (node && node.state !== 'cancelled') {
+            graphStore.updateNodeState(gate.graphId, gate.nodeId, 'cancelled', nowIso, { failureReason: abandonReason });
+        }
+
+        // ★ Downstream is CANCELLED, never materialized. Reuse the same subtree
+        // walk `cancel_downstream` uses so abandon and the timeout policy agree
+        // on what "everything this gate was gating" means.
+        const cancelledNodeIds = node ? cancelGateDownstreamSubtree(store, node, nowIso, abandonReason) : [];
+        const cancelledTaskIds: string[] = [];
+        for (const nodeId of cancelledNodeIds) {
+            const target = graphStore.getNode(gate.graphId, nodeId);
+            if (target?.queueTaskId) cancelledTaskIds.push(target.queueTaskId);
+        }
+
+        // Rollup: with this gate settled, the graph may now be able to reach a
+        // terminal state it could not reach before — that is the whole point.
+        const graph = graphStore.getGraph(gate.graphId);
+        let graphStatus: string | undefined;
+        const rolled = classifyGraphRollup(graphStore.listNodes(gate.graphId));
+        if (graph && rolled && graph.status !== rolled) {
+            graphStore.updateGraphStatus(gate.graphId, rolled, nowIso, true);
+            graphStatus = rolled;
+            insertGateOutbox(graphStore, gate.meshId, gate.graphId,
+                rolled === 'completed' ? 'graph_completed' : rolled === 'failed' ? 'graph_failed' : 'graph_cancelled',
+                { graphId: gate.graphId, status: rolled }, nowIso);
+        } else if (graph?.status === 'waiting_gate') {
+            // Other gates still hold the graph; drop back to `active` only when
+            // this was the last one waiting.
+            const stillWaiting = graphStore.listGatesByGraph(gate.graphId)
+                .some(g => g.gateId !== gate.gateId && (g.state === 'awaiting_coordinator' || g.state === 'claimed'));
+            if (!stillWaiting) {
+                graphStore.updateGraphStatus(gate.graphId, 'active', nowIso);
+                graphStatus = 'active';
+            }
+        }
+
+        insertGateOutbox(graphStore, gate.meshId, gate.graphId, 'graph_gate_abandoned', {
+            graphId: gate.graphId, gateId: gate.gateId, nodeId: gate.nodeId, ref: gate.ref,
+            action: gate.action, priorState: gate.state, reason: input.reason,
+            ...(input.coordinatorSessionId ? { coordinatorSessionId: input.coordinatorSessionId } : {}),
+            ...(input.force ? { force: true } : {}),
+            ...(cancelledNodeIds.length > 0 ? { cancelledNodeIds } : {}),
+        }, nowIso);
+        // ★ Deliberately NO `queue_wake`: abandon opens nothing, so there is
+        // nothing for the scheduler to pick up.
+
+        return {
+            abandoned: true,
+            gate: graphStore.getGate(gate.gateId)!,
+            cancelledNodeIds,
+            cancelledTaskIds,
+            ...(graphStatus ? { graphStatus } : {}),
+        };
+    });
+    if (result.abandoned) {
+        try { drainMeshGraphOutbox(input.meshId); } catch { /* drain is best-effort; the committed state stands */ }
+    }
+    return result;
+}
+
 // ── Deadline / timeout sweep (design :425-439) ────────────────────────────────
 
 export interface MeshGraphGateSweepResult {
@@ -621,12 +799,22 @@ function isCancelExempt(state: MeshTaskGraphNodeRow['state']): boolean {
 }
 
 /**
- * `cancel_downstream`: mark every non-terminal descendant node `cancelled` and
- * cancel its STILL-PENDING queue placeholder with a gate-owned reason. An
- * already-assigned/running row is not force-flipped here — the derived-failure
- * cascade for in-flight work is phase C3's contract.
+ * `cancel_downstream` (and abandon): mark every non-terminal descendant node
+ * `cancelled` and cancel its STILL-PENDING queue placeholder with a gate-owned
+ * reason. An already-assigned/running row is not force-flipped here — the
+ * derived-failure cascade for in-flight work is phase C3's contract.
+ *
+ * `reason` distinguishes the two callers: a deadline expiry stamps
+ * `coordinator_gate_timeout:<nodeId>`, an explicit abandon stamps
+ * `coordinator_gate_abandoned:<gateId>:<operator reason>`. They must stay
+ * distinguishable — one is elapsed time, the other is a decision.
  */
-function cancelGateDownstreamSubtree(store: MeshRuntimeStore, gateNode: MeshTaskGraphNodeRow, nowIso: string): string[] {
+function cancelGateDownstreamSubtree(
+    store: MeshRuntimeStore,
+    gateNode: MeshTaskGraphNodeRow,
+    nowIso: string,
+    reason = `coordinator_gate_timeout:${gateNode.nodeId}`,
+): string[] {
     const graphStore = store.graphStore();
     const nodes = graphStore.listNodes(gateNode.graphId);
     const edges = graphStore.listEdges(gateNode.graphId);
@@ -643,13 +831,13 @@ function cancelGateDownstreamSubtree(store: MeshRuntimeStore, gateNode: MeshTask
                 const target = byId.get(edge.toNodeId);
                 if (!target || isCancelExempt(target.state)) continue;
                 graphStore.updateNodeState(target.graphId, target.nodeId, 'cancelled', nowIso, {
-                    failureReason: `coordinator_gate_timeout:${gateNode.nodeId}`,
+                    failureReason: reason,
                 });
                 if (target.queueTaskId) {
                     const entry = store.findQueueEntryById(target.meshId, target.queueTaskId);
                     if (entry && entry.status === 'pending') {
                         entry.status = 'cancelled';
-                        entry.blockedReason = `coordinator_gate_timeout:${gateNode.nodeId}`;
+                        entry.blockedReason = reason;
                         store.updateQueueEntry(entry);
                     }
                 }

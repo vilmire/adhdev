@@ -13,6 +13,7 @@
  * ── What is exposed, and what is deliberately NOT ────────────────────────────
  *  - `mesh_graph_gate_claim`   → claimMeshGraphGate   (design :407-408)
  *  - `mesh_graph_gate_release` → releaseMeshGraphGate (design :409-421)
+ *  - `mesh_graph_gate_abandon` → abandonMeshGraphGate (design :399)
  *  - `mesh_graph_view`         → buildMeshGraphViews  (design :759-775)
  *
  * There is NO tool that expires, force-releases, or auto-passes a gate. The
@@ -21,6 +22,20 @@
  * evidence). Adding a coordinator-callable "force release" would reintroduce the
  * exact M-TERMINAL-ADMISSION-GATE defect class the gate contract exists to
  * prevent — do not add one.
+ *
+ * ★ `mesh_graph_gate_abandon` is NOT that force-release, and the distinction is
+ * the whole reason it is safe to expose. A force-release would GRANT passage
+ * without the evidence a release requires — that is the forbidden class. Abandon
+ * DENIES passage permanently: it settles the gate `cancelled` (the design's own
+ * `-> cancelled` edge, :399), materializes nothing, produces no outcome or
+ * evidence for downstream bindings, and cancels every downstream node the gate
+ * was holding. It exists because a gate whose work was cancelled is otherwise
+ * uncloseable — the C3 cancel cascade skips gate nodes by design, the deadline
+ * sweep skips gates that have no deadline at all, and `classifyGraphRollup`
+ * refuses to classify a graph while any gate is unsettled — so the graph could
+ * reach NO terminal state, not even `cancelled`. If you ever find yourself
+ * widening abandon so that it opens something downstream, stop: that is the
+ * force-release this header forbids, wearing a different name.
  *
  * ── Error shape ──────────────────────────────────────────────────────────────
  * The C2 core signals rejection two ways, and both are preserved verbatim:
@@ -35,10 +50,12 @@
 import {
     claimMeshGraphGate,
     releaseMeshGraphGate,
+    abandonMeshGraphGate,
     buildMeshGraphViews,
     requestUsesGraphV2,
     recordGraphGateClaimed,
     recordGraphGateReleased,
+    recordGraphGateAbandoned,
     readString,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
@@ -480,6 +497,131 @@ export async function meshGraphGateRelease(
                 ? { hint: 'This idempotency_key was already used with a DIFFERENT payload. Use a new key, or re-send the identical payload.' }
                 : {}),
         });
+    }
+}
+
+/**
+ * `mesh_graph_gate_abandon` (design :399 — the `awaiting_coordinator -> cancelled` edge).
+ *
+ * ★ THE ONE THING THIS TOOL IS NOT: a way past a gate. It exists because a gate
+ * whose work was cancelled is otherwise UNCLOSEABLE — the cancel cascade skips
+ * gate nodes by design, the deadline sweep skips gates with no deadline (and
+ * `deadline_seconds` is optional), and the rollup refuses to classify a graph
+ * while any gate is unsettled. So the graph could reach no terminal state at all.
+ *
+ * Abandon closes that hole WITHOUT weakening the gate contract, because it is
+ * strictly destructive: it materializes nothing, produces no outcome/evidence for
+ * downstream bindings, and CANCELS every downstream node the gate was holding. A
+ * coordinator that wants downstream to run still has exactly one option —
+ * `mesh_graph_gate_release`. This is not the "force release" the C2 header
+ * forbids: that tool would GRANT passage on no evidence, which is the
+ * M-TERMINAL-ADMISSION-GATE defect class. This one denies passage permanently.
+ */
+export async function meshGraphGateAbandon(
+    ctx: MeshContext,
+    args: {
+        gate_id?: string; gateId?: string;
+        reason?: string;
+        force?: boolean;
+        coordinator_session_id?: string; coordinatorSessionId?: string;
+    },
+): Promise<string> {
+    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_abandon');
+    const gateId = readString(args.gate_id) || readString(args.gateId);
+    const reason = readString(args.reason);
+    const missing = [
+        !gateId ? 'gate_id' : null,
+        !reason ? 'reason' : null,
+    ].filter((f): f is string => f !== null);
+    if (missing.length > 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'missing_abandon_fields',
+            missing,
+            error: `mesh_graph_gate_abandon requires ${missing.join(', ')}. `
+                + 'The reason is recorded on the gate, on every cancelled downstream row, and in the provenance ledger — '
+                + 'an abandon with no stated reason is indistinguishable from a mistake when someone reads it back later.',
+        });
+    }
+    const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
+
+    try {
+        const result = abandonMeshGraphGate({
+            meshId: ctx.mesh.id,
+            gateId: gateId!,
+            reason: reason!,
+            ...(coordinatorSessionId ? { coordinatorSessionId } : {}),
+            ...(args.force === true ? { force: true } : {}),
+        });
+        if (!result.abandoned) {
+            return JSON.stringify({
+                success: false,
+                abandoned: false,
+                code: result.reason ?? 'gate_not_abandonable',
+                gateId,
+                ...(result.gate ? { gateState: result.gate.state, action: result.gate.action } : {}),
+                error: describeAbandonRefusal(result.reason, result.gate?.state),
+            });
+        }
+        const duplicate = result.reason === 'gate_already_abandoned';
+        if (!duplicate) {
+            recordGraphGateAbandoned(ctx.mesh.id, {
+                graphId: result.gate!.graphId,
+                gateId: gateId!,
+                ref: result.gate!.ref,
+                action: result.gate!.action,
+                // The gate row already carries `cancelled`; the PRIOR state is what
+                // says whether this closed an open gate or a stranded expired one.
+                priorState: result.gate!.state,
+                reason: reason!,
+                ...(coordinatorSessionId ? { coordinatorSessionId } : {}),
+                ...(args.force === true ? { force: true } : {}),
+                cancelledNodeIds: result.cancelledNodeIds,
+                ...(result.graphStatus ? { graphStatus: result.graphStatus } : {}),
+            });
+        }
+        return JSON.stringify({
+            success: true,
+            abandoned: true,
+            // Re-abandoning an abandoned gate is a safe no-op, so a retried cleanup
+            // never has to tell "I did it" from "it was already done".
+            duplicate,
+            gateId,
+            graphId: result.gate!.graphId,
+            ...(result.gate!.ref ? { ref: result.gate!.ref } : {}),
+            gateState: result.gate!.state,
+            cancelledNodeIds: result.cancelledNodeIds,
+            cancelledCount: result.cancelledNodeIds.length,
+            ...(result.cancelledTaskIds.length > 0 ? { cancelledTaskIds: result.cancelledTaskIds } : {}),
+            ...(result.graphStatus ? { graphStatus: result.graphStatus } : {}),
+            materializedNodeIds: [],
+            note: 'Abandon is not a pass: nothing was materialized and no gate outcome was produced. Everything this gate was '
+                + 'holding is cancelled. If the graph still shows a non-terminal status, another gate or an in-flight worker is '
+                + 'still outstanding — check mesh_graph_view.',
+        });
+    } catch (e: any) {
+        const message = e?.message || String(e);
+        return JSON.stringify({ success: false, abandoned: false, gateId, error: message });
+    }
+}
+
+function describeAbandonRefusal(reason: string | undefined, state?: string): string {
+    switch (reason) {
+        case 'gate_not_found':
+            return 'No such gate on this mesh. Use mesh_graph_view to list gates.';
+        case 'gate_lease_held':
+            return 'Another coordinator holds a LIVE lease on this gate, and it may be mid-action on a real external side effect '
+                + '(a merge, a publish, a deploy). Wait for the lease to lapse, or pass force=true if you know that holder is dead.';
+        case 'gate_abandon_race':
+            return 'The gate moved (a concurrent claim or release) while this abandon was committing. Re-read it with mesh_graph_view '
+                + 'and decide again — it may no longer need abandoning.';
+        default:
+            if (reason?.startsWith('gate_terminal:')) {
+                return `The gate is already terminal (${state ?? reason.slice('gate_terminal:'.length)}) and cannot be abandoned. `
+                    + 'A RELEASED gate already let its downstream run, so abandoning it would claim closure over work that is in '
+                    + 'flight or finished — cancel that work directly instead.';
+            }
+            return `The gate could not be abandoned (${reason ?? 'unknown reason'}).`;
     }
 }
 

@@ -21,9 +21,17 @@
  * ── nextCoordinatorAction ────────────────────────────────────────────────────
  * The design asks for "next required coordinator action" (:762). It is reported
  * ONLY for states where a coordinator genuinely has to act — an awaiting/claimed
- * gate, an expired `hold` gate needing reclaim, or a compensation-required
- * workspace. Ordinary in-flight work reports nothing: inventing an action for a
- * running graph is what drives the polling behaviour the mesh rules forbid.
+ * gate, an expired `hold` gate needing reclaim, an ORPHANED gate that can only be
+ * abandoned, or a compensation-required workspace. Ordinary in-flight work reports
+ * nothing: inventing an action for a running graph is what drives the polling
+ * behaviour the mesh rules forbid.
+ *
+ * ★ Every action's `detail` must name a tool that actually exists. The
+ * `gate_reclaim` text used to end with "or cancel the branch explicitly", which
+ * pointed at nothing — there was no cleanup verb at all, so a coordinator that
+ * followed the advice found no way to do it. It now names
+ * `mesh_graph_gate_abandon`, and `gate_abandon` is reported outright for the
+ * orphan case that advice was really describing.
  */
 
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -128,7 +136,7 @@ export interface MeshGraphView {
     workspaces: MeshGraphWorkspaceView[];
     /** Only populated when a coordinator genuinely must act. */
     nextCoordinatorAction?: Array<{
-        kind: 'gate_awaiting' | 'gate_claimed' | 'gate_reclaim' | 'workspace_compensation';
+        kind: 'gate_awaiting' | 'gate_claimed' | 'gate_reclaim' | 'gate_abandon' | 'workspace_compensation';
         detail: string;
         gateId?: string;
         workspaceRef?: string;
@@ -287,8 +295,41 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
         const nodeStates: Record<string, number> = {};
         for (const node of nodes) nodeStates[node.state] = (nodeStates[node.state] ?? 0) + 1;
 
+        // ★ Orphan detection. A gate whose downstream work is ALL terminal-and-
+        // unrunnable (cancelled/failed/skipped) has nothing left to open: releasing
+        // it would materialize nothing. It is the stranded case that makes a graph
+        // uncloseable, because the C3 cancel cascade deliberately leaves gate nodes
+        // alone and the deadline sweep skips gates with no deadline. Reported so the
+        // coordinator is pointed at abandon instead of hunting for a cleanup verb.
+        const orphanedGateIds = new Set<string>();
+        for (const gate of gates) {
+            if (gate.state !== 'awaiting_coordinator' && gate.state !== 'claimed' && gate.state !== 'expired') continue;
+            const downstream = edges
+                .filter(e => e.fromNodeId === gate.nodeId)
+                .map(e => byId.get(e.toNodeId))
+                .filter((n): n is NonNullable<typeof n> => !!n);
+            // A TERMINAL gate (no downstream at all) is legitimate — a graph may end
+            // at a gate — so it is never an orphan. Only a gate that HAD dependents
+            // and lost every one of them is.
+            if (downstream.length === 0) continue;
+            if (downstream.every(n => n.state === 'cancelled' || n.state === 'failed' || n.state === 'skipped')) {
+                orphanedGateIds.add(gate.gateId);
+            }
+        }
+
         const actions: NonNullable<MeshGraphView['nextCoordinatorAction']> = [];
         for (const gate of gateViews) {
+            if (orphanedGateIds.has(gate.gateId)) {
+                actions.push({
+                    kind: 'gate_abandon',
+                    gateId: gate.gateId,
+                    detail: `Gate '${gate.ref ?? gate.gateId}' (${gate.action}) is ORPHANED: every task it was gating is already `
+                        + 'cancelled, failed or skipped, so releasing it would open nothing. While it stays unsettled this graph '
+                        + 'cannot reach ANY terminal state — not even cancelled. Close it with mesh_graph_gate_abandon and a reason. '
+                        + 'Abandon cancels what the gate was holding; it never passes the gate.',
+                });
+                continue;
+            }
             if (gate.state === 'awaiting_coordinator') {
                 actions.push({
                     kind: 'gate_awaiting',
@@ -316,7 +357,8 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
                     kind: 'gate_reclaim',
                     gateId: gate.gateId,
                     detail: `Gate '${gate.ref ?? gate.gateId}' passed its deadline under on_timeout=hold — downstream is still held. `
-                        + 'Reclaim it (optionally with extend_deadline_seconds) to resume, or cancel the branch explicitly. '
+                        + 'Reclaim it with mesh_graph_gate_claim (optionally with extend_deadline_seconds) to resume, '
+                        + 'or give it up with mesh_graph_gate_abandon, which cancels what it was holding instead of opening it. '
                         + 'A timeout is never passage: the gate cannot release itself.',
                 });
             }

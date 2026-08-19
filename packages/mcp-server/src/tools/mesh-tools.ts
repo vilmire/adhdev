@@ -32,6 +32,7 @@ export {
     MESH_GRAPH_VIEW_TOOL,
     MESH_GRAPH_GATE_CLAIM_TOOL,
     MESH_GRAPH_GATE_RELEASE_TOOL,
+    MESH_GRAPH_GATE_ABANDON_TOOL,
     MESH_INIT_TOOL,
     MESH_REINIT_TOOL,
     MESH_WRITE_MESH_JSON_CONFIG_TOOL,
@@ -99,6 +100,7 @@ export {
 export {
     meshGraphGateClaim,
     meshGraphGateRelease,
+    meshGraphGateAbandon,
     meshGraphView,
 } from './mesh-tools-graph.js';
 

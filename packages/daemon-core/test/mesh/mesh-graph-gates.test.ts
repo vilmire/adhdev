@@ -55,6 +55,7 @@ import {
     claimMeshGraphGate,
     coordinatorGateBlockReason,
     releaseMeshGraphGate,
+    abandonMeshGraphGate,
     sweepMeshGraphGateTimeouts,
 } from '../../src/mesh/mesh-graph-gates.js';
 import {
@@ -70,6 +71,7 @@ import {
     getQueue,
     updateTaskStatus,
 } from '../../src/mesh/mesh-work-queue.js';
+import { buildMeshGraphViews } from '../../src/mesh/mesh-graph-view.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 function meshId(tag: string): string {
@@ -708,6 +710,356 @@ describe('coordinator death and timeout — sweep never releases', () => {
             const before = outboxKinds(id, g.graphId).length;
             sweepMeshGraphGateTimeouts(id, t0 + 2_000_000);
             expect(outboxKinds(id, g.graphId).length).toBe(before);
+        } finally {
+            cleanup(id);
+        }
+    });
+});
+
+// ── Abandon: the `-> cancelled` edge (design :399) ────────────────────────────
+//
+// ★ WHY THIS SUITE EXISTS. Before abandon, a gate whose work was cancelled could
+// never be closed, and so its GRAPH could never reach a terminal state at all:
+//   - the C3 cancel cascade skips coordinator_gate nodes by design;
+//   - the deadline sweep skips gates with no `deadline_at`, and `deadline_seconds`
+//     is optional (see the "no deadline → nothing expires" test just above);
+//   - `classifyGraphRollup` returns null while ANY gate is unsettled.
+// The `cancelled` gate state was in the enum and in the design's own diagram from
+// the start; only the writer was missing. These tests pin BOTH halves: that
+// abandon closes the graph, and that it is never a way THROUGH the gate.
+
+describe('abandonMeshGraphGate — closure, never passage', () => {
+    it('★ the orphan case: a deadline-less gate whose work is cancelled leaves the graph un-terminal until abandoned', () => {
+        const id = meshId('abandon_orphan');
+        try {
+            // No deadline_seconds — exactly the gate the sweep can never reach.
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            expect(gs().getGate(g.gateId)!.deadlineAt).toBeFalsy();
+
+            // The downstream task is cancelled out from under the gate (the
+            // `inputs_from` mistake that produced the real stranded gate).
+            gs().updateNodeState(g.graphId, g.nodeB!, 'cancelled', nowIso(), { failureReason: 'operator_cancel' });
+
+            // BEFORE abandon: the gate holds the graph hostage. No sweep helps.
+            sweepMeshGraphGateTimeouts(id, Date.now() + 10_000_000);
+            expect(gs().getGate(g.gateId)!.state).toBe('awaiting_coordinator');
+            expect(gs().getGraph(g.graphId)!.status).toBe('waiting_gate');
+            expect(gs().getGraph(g.graphId)!.terminalAt).toBeFalsy();
+
+            const res = abandonMeshGraphGate({
+                meshId: id, gateId: g.gateId, reason: 'implementation task cancelled; nothing left to land',
+            });
+
+            expect(res.abandoned).toBe(true);
+            expect(gs().getGate(g.gateId)!.state).toBe('cancelled');
+            expect(gs().getNode(g.graphId, g.nodeG)!.state).toBe('cancelled');
+            // ★ THE DoD: the graph can now reach a terminal state.
+            const graph = gs().getGraph(g.graphId)!;
+            expect(graph.status).toBe('cancelled');
+            expect(graph.terminalAt).toBeTruthy();
+            expect(res.graphStatus).toBe('cancelled');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('★ abandon does NOT materialize downstream — it cancels it', () => {
+        const id = meshId('abandon_no_mat');
+        try {
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            // Downstream is alive and held by the gate — the case where a
+            // force-release WOULD have opened it.
+            expect(getQueue(id).find(t => t.id === g.taskB!.id)!.blockedReason)
+                .toBe(coordinatorGateBlockReason(g.gateId));
+
+            const res = abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'branch no longer wanted' });
+            expect(res.abandoned).toBe(true);
+
+            // Downstream is CANCELLED, never materialized and never woken.
+            expect(res.cancelledNodeIds).toEqual([g.nodeB]);
+            expect(gs().getNode(g.graphId, g.nodeB!)!.state).toBe('cancelled');
+            const entryB = getQueue(id).find(t => t.id === g.taskB!.id)!;
+            expect(entryB.status).toBe('cancelled');
+            expect(entryB.blockedReason).toContain(`coordinator_gate_abandoned:${g.gateId}`);
+            // The placeholder message was never replaced — no materialization ran.
+            expect(entryB.message).toBe('placeholder B — replaced at release');
+
+            const kinds = outboxKinds(id, g.graphId);
+            expect(kinds).toContain('graph_gate_abandoned');
+            expect(kinds).not.toContain('graph_node_materialized');
+            expect(kinds).not.toContain('graph_gate_released');
+            // Abandon opens nothing, so there is nothing for the scheduler to take.
+            expect(kinds.filter(k => k === 'queue_wake')).toEqual([]);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('★ abandon produces NO gate outcome or evidence — it can never read as a pass', () => {
+        const id = meshId('abandon_no_outcome');
+        try {
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'giving up' });
+
+            const gate = gs().getGate(g.gateId)!;
+            expect(gate.state).toBe('cancelled');
+            // A downstream `run_if` reading /gate_outcome must find nothing.
+            expect(gate.releaseOutcome).toBeFalsy();
+            expect(gate.releaseEvidenceJson).toBeFalsy();
+            expect(gate.releaseEvidenceDigest).toBeFalsy();
+            expect(gate.releaseIdempotencyKey).toBeFalsy();
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('an abandoned gate can never afterwards be claimed or released', () => {
+        const id = meshId('abandon_shut');
+        try {
+            const g = buildGateGraph(id);
+            const claim = openAndClaim(id, g, 'sess-1');
+            abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'dead', force: true });
+
+            const reclaim = claimMeshGraphGate({ meshId: id, gateId: g.gateId, coordinatorSessionId: 'sess-2' });
+            expect(reclaim.claimed).toBe(false);
+            expect(reclaim.reason).toBe('gate_terminal:cancelled');
+
+            // The pre-abandon fence is worthless: abandon is terminal, not a pause.
+            expect(() => releaseMeshGraphGate({
+                meshId: id, gateId: g.gateId,
+                fencingToken: claim.fencingToken!, leaseGeneration: claim.leaseGeneration!,
+                idempotencyKey: 'k1', outcome: 'passed',
+            })).toThrow(/gate_not_claimed/);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('refuses a LIVE foreign lease unless forced — the holder may be mid-action', () => {
+        const id = meshId('abandon_lease');
+        try {
+            const g = buildGateGraph(id);
+            openAndClaim(id, g, 'sess-live');
+
+            const refused = abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'cleanup' });
+            expect(refused.abandoned).toBe(false);
+            expect(refused.reason).toBe('gate_lease_held');
+            expect(gs().getGate(g.gateId)!.state).toBe('claimed');
+            expect(gs().getNode(g.graphId, g.nodeB!)!.state).not.toBe('cancelled');
+
+            const forced = abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'holder is dead', force: true });
+            expect(forced.abandoned).toBe(true);
+            expect(gs().getGate(g.gateId)!.state).toBe('cancelled');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('a RELEASED gate cannot be abandoned — its downstream already ran', () => {
+        const id = meshId('abandon_released');
+        try {
+            const g = buildGateGraph(id);
+            const claim = openAndClaim(id, g);
+            releaseMeshGraphGate({
+                meshId: id, gateId: g.gateId,
+                fencingToken: claim.fencingToken!, leaseGeneration: claim.leaseGeneration!,
+                idempotencyKey: 'rel-1', outcome: 'passed',
+            });
+
+            const res = abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'too late' });
+            expect(res.abandoned).toBe(false);
+            expect(res.reason).toBe('gate_terminal:released');
+            expect(gs().getGate(g.gateId)!.state).toBe('released');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('is idempotent: re-abandoning is a no-op success that cancels nothing twice', () => {
+        const id = meshId('abandon_idem');
+        try {
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            const first = abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'once' });
+            expect(first.abandoned).toBe(true);
+            expect(first.cancelledNodeIds).toEqual([g.nodeB]);
+            const eventsAfterFirst = outboxKinds(id, g.graphId).length;
+
+            const second = abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'twice' });
+            expect(second.abandoned).toBe(true);
+            expect(second.reason).toBe('gate_already_abandoned');
+            expect(second.cancelledNodeIds).toEqual([]);
+            expect(outboxKinds(id, g.graphId).length).toBe(eventsAfterFirst);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('abandoning an expired hold gate closes the graph the sweep left stranded', () => {
+        const id = meshId('abandon_expired');
+        try {
+            const t0 = Date.now();
+            const g = buildGateGraph(id, { gateSpec: { deadline_seconds: 1 }, onTimeout: 'hold' });
+            openGate(id, g);
+            sweepMeshGraphGateTimeouts(id, t0 + 2_000);
+            // `hold` deliberately leaves the gate reclaimable and the graph open.
+            expect(gs().getGate(g.gateId)!.state).toBe('expired');
+            expect(gs().getGraph(g.graphId)!.terminalAt).toBeFalsy();
+
+            const res = abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'nobody is going to land this' });
+            expect(res.abandoned).toBe(true);
+            expect(gs().getGraph(g.graphId)!.status).toBe('cancelled');
+            expect(gs().getGraph(g.graphId)!.terminalAt).toBeTruthy();
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('★ the timeout contract still holds: elapsed time never abandons a gate either', () => {
+        const id = meshId('abandon_not_timeout');
+        try {
+            const t0 = Date.now();
+            const g = buildGateGraph(id, { gateSpec: { deadline_seconds: 1 }, onTimeout: 'hold' });
+            openGate(id, g);
+            // Sweeping far past every deadline must NEVER produce `released` — and
+            // must not produce `cancelled` on its own either: abandon is an
+            // explicit act with a recorded reason, never a consequence of time.
+            sweepMeshGraphGateTimeouts(id, t0 + 100_000_000);
+            const gate = gs().getGate(g.gateId)!;
+            expect(gate.state).toBe('expired');
+            expect(gate.state).not.toBe('released');
+            expect(gate.state).not.toBe('cancelled');
+            expect(outboxKinds(id, g.graphId)).not.toContain('graph_gate_abandoned');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('leaves other gates alone: a two-gate graph stays open until both settle', () => {
+        const id = meshId('abandon_two_gates');
+        try {
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            // A second, independent gate on the same graph, already awaiting.
+            const now = nowIso();
+            const nodeG2 = randomUUID();
+            const gate2 = randomUUID();
+            gs().insertNode({
+                graphId: g.graphId, nodeId: nodeG2, meshId: id, ref: 'publish', kind: 'coordinator_gate',
+                state: 'awaiting_coordinator', baseSpecJson: '{}', materializationVersion: 0,
+                createdAt: now, updatedAt: now,
+            });
+            gs().insertGate({
+                gateId: gate2, graphId: g.graphId, nodeId: nodeG2, meshId: id, ref: 'publish',
+                state: 'awaiting_coordinator', action: 'publish', leaseGeneration: 0,
+                onTimeout: 'hold', createdAt: now, updatedAt: now,
+            });
+
+            abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'first branch dropped' });
+            expect(gs().getGate(gate2)!.state).toBe('awaiting_coordinator');
+            // The graph must NOT roll terminal while the second gate is unsettled.
+            expect(gs().getGraph(g.graphId)!.terminalAt).toBeFalsy();
+
+            abandonMeshGraphGate({ meshId: id, gateId: gate2, reason: 'second branch dropped too' });
+            expect(gs().getGraph(g.graphId)!.status).toBe('cancelled');
+            expect(gs().getGraph(g.graphId)!.terminalAt).toBeTruthy();
+        } finally {
+            cleanup(id);
+        }
+    });
+});
+
+// ── The view must point at tools that EXIST (mesh-graph-view.ts) ─────────────
+//
+// ★ The `gate_reclaim` advice used to end with "or cancel the branch explicitly",
+// which named no tool and matched no feature — a coordinator that followed it
+// found nothing to call. These pin that every action names a real verb, and that
+// the orphan case is surfaced outright rather than left for the reader to infer.
+
+describe('mesh_graph_view — coordinator actions name real tools', () => {
+    it('★ reports gate_abandon for an ORPHANED gate whose downstream is all terminal', () => {
+        const id = meshId('view_orphan');
+        try {
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            gs().updateNodeState(g.graphId, g.nodeB!, 'cancelled', nowIso(), { failureReason: 'operator_cancel' });
+
+            const view = buildMeshGraphViews(id, { graphId: g.graphId })[0];
+            const action = view.nextCoordinatorAction!.find(a => a.gateId === g.gateId)!;
+            expect(action.kind).toBe('gate_abandon');
+            expect(action.detail).toContain('mesh_graph_gate_abandon');
+            expect(action.detail).toContain('ORPHANED');
+            // It must not ALSO tell the coordinator to claim and release it —
+            // releasing an orphan opens nothing.
+            expect(view.nextCoordinatorAction!.filter(a => a.gateId === g.gateId)).toHaveLength(1);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('a gate with LIVE downstream is gate_awaiting, not an orphan', () => {
+        const id = meshId('view_live');
+        try {
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            const action = buildMeshGraphViews(id, { graphId: g.graphId })[0]
+                .nextCoordinatorAction!.find(a => a.gateId === g.gateId)!;
+            expect(action.kind).toBe('gate_awaiting');
+            expect(action.detail).toContain('mesh_graph_gate_claim');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('a TERMINAL gate (no downstream at all) is never reported as an orphan', () => {
+        const id = meshId('view_terminal_gate');
+        try {
+            // design :423 — a graph may legitimately END at a gate. Having nothing
+            // downstream is not the same as having lost everything downstream.
+            const g = buildGateGraph(id, { terminalGate: true });
+            openGate(id, g);
+            const action = buildMeshGraphViews(id, { graphId: g.graphId })[0]
+                .nextCoordinatorAction!.find(a => a.gateId === g.gateId)!;
+            expect(action.kind).toBe('gate_awaiting');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('★ the expired-hold advice names mesh_graph_gate_abandon, not a nonexistent "cancel the branch"', () => {
+        const id = meshId('view_expired_advice');
+        try {
+            const t0 = Date.now();
+            const g = buildGateGraph(id, { gateSpec: { deadline_seconds: 1 }, onTimeout: 'hold' });
+            openGate(id, g);
+            sweepMeshGraphGateTimeouts(id, t0 + 2_000);
+
+            const action = buildMeshGraphViews(id, { graphId: g.graphId })[0]
+                .nextCoordinatorAction!.find(a => a.gateId === g.gateId)!;
+            expect(action.kind).toBe('gate_reclaim');
+            expect(action.detail).toContain('mesh_graph_gate_abandon');
+            expect(action.detail).not.toContain('cancel the branch explicitly');
+            // The timeout contract is still stated in the advice itself.
+            expect(action.detail).toContain('A timeout is never passage');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('an abandoned gate stops asking for coordinator action', () => {
+        const id = meshId('view_after_abandon');
+        try {
+            const g = buildGateGraph(id);
+            openGate(id, g);
+            abandonMeshGraphGate({ meshId: id, gateId: g.gateId, reason: 'dropped' });
+
+            const view = buildMeshGraphViews(id, { graphId: g.graphId, activeOnly: false })[0];
+            expect(view.status).toBe('cancelled');
+            expect(view.nextCoordinatorAction ?? []).toEqual([]);
+            expect(view.gates.find(x => x.gateId === g.gateId)!.state).toBe('cancelled');
         } finally {
             cleanup(id);
         }

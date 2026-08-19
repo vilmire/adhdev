@@ -367,8 +367,10 @@ export { WorkspaceSagaPermanentError } from './mesh/mesh-graph-workspace-ports.j
 export {
     claimMeshGraphGate,
     releaseMeshGraphGate,
+    abandonMeshGraphGate,
     sweepMeshGraphGateTimeouts,
     coordinatorGateBlockReason,
+    coordinatorGateAbandonedReason,
     MESH_GATE_DEFAULT_LEASE_SECONDS,
     MESH_GATE_NAMED_OUTCOMES,
     MESH_GATE_RELEASE_PATCH_KEYS,
@@ -379,6 +381,8 @@ export type {
     MeshGraphGateReleaseInput,
     MeshGraphGateReleaseResult,
     MeshGraphGateReleasePatch,
+    MeshGraphGateAbandonInput,
+    MeshGraphGateAbandonResult,
     MeshGraphGateSweepResult,
 } from './mesh/mesh-graph-gates.js';
 export {
@@ -412,6 +416,7 @@ export {
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     recordGraphGateClaimed,
     recordGraphGateReleased,
+    recordGraphGateAbandoned,
     recordGraphGateExpired,
     MESH_VALID_SINGLE_REASONS,
     MESH_SUPERSEDED_SINGLE_REASONS,
