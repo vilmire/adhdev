@@ -18,6 +18,12 @@ import { IDENTITY } from '@adhdev/daemon-core';
 const DEFAULT_IPC_PORT = IDENTITY.defaultPort;
 const DEFAULT_IPC_PATH = '/ipc';
 const DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15_000;
+// P5 (2026-08-18 freeze RCA): the 15s default is now env-overridable
+// (ADHDEV_IPC_COMMAND_TIMEOUT_MS) as an operator escape hatch. This is symptom
+// relief ONLY — it cannot prevent the daemon event-loop freeze that caused the
+// timeouts; the fixes for that are the Refinery concurrency cap and the probe
+// retry below. Per-command table entries above still win over this default.
+const IPC_COMMAND_TIMEOUT_ENV = 'ADHDEV_IPC_COMMAND_TIMEOUT_MS';
 // IPC (layer-1) is the OUTERMOST deadline. For a REMOTE node the coordinator wraps
 // the verb in `mesh_relay_command` (120s here), so getTimeoutMs() already covers the
 // relay/responder budget. But for a LOCAL node commandForNode() sends the BARE verb
@@ -53,6 +59,63 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   batch_refine_mesh_nodes: 30_000,
 };
 
+// IPC-PROBE-TIMEOUT-RETRY (2026-08-18 RCA, verdict D — whole-process freeze):
+// the daemon's event loop blacked out for 28–34s under Refinery load and probe
+// commands false-timed-out 0.6s before the process resumed; a manual retry
+// 1–2 minutes later succeeded. Automate that: a read-only probe that TIMES OUT
+// gets one automatic retry after a short backoff (a fresh full deadline
+// window), instead of surfacing a spurious failure to the user.
+//
+// SAFETY: retry is restricted to this allowlist of pure read-only probes —
+// commands with no state to mutate, so re-sending them can never duplicate an
+// effect. Mutating verbs (task dispatch, merge, push, refine, queue ops,
+// mesh_forward_event — which CONSUMES pending events on some handlers) are
+// deliberately ABSENT: a retried dispatch could double-execute, which is
+// strictly worse than the timeout it was meant to hide. Never add a verb here
+// without proving its handler is side-effect free.
+const IPC_PROBE_RETRYABLE_COMMANDS: ReadonlySet<string> = new Set([
+  'get_status_metadata',
+  'get_mesh',
+  'mesh_status',
+  'git_status',
+  'git_diff_summary',
+  'git_log',
+  'git_diff_file',
+  'read_chat',
+  'get_spec_debug',
+  'get_chat_debug_bundle',
+  'list_coordinator_prompts',
+  'list_provider_availability',
+]);
+const IPC_PROBE_RETRY_MAX_ENV = 'ADHDEV_IPC_PROBE_RETRY_MAX';
+const IPC_PROBE_RETRY_BACKOFF_MS_ENV = 'ADHDEV_IPC_PROBE_RETRY_BACKOFF_MS';
+const DEFAULT_IPC_PROBE_RETRY_MAX = 1;
+const DEFAULT_IPC_PROBE_RETRY_BACKOFF_MS = 2_000;
+
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function resolveDefaultCommandTimeoutMs(): number {
+  const parsed = parsePositiveInt(process.env[IPC_COMMAND_TIMEOUT_ENV], DEFAULT_IPC_COMMAND_TIMEOUT_MS);
+  return parsed > 0 ? parsed : DEFAULT_IPC_COMMAND_TIMEOUT_MS;
+}
+
+export function resolveProbeRetryMax(): number {
+  return parsePositiveInt(process.env[IPC_PROBE_RETRY_MAX_ENV], DEFAULT_IPC_PROBE_RETRY_MAX);
+}
+
+export function resolveProbeRetryBackoffMs(): number {
+  return parsePositiveInt(process.env[IPC_PROBE_RETRY_BACKOFF_MS_ENV], DEFAULT_IPC_PROBE_RETRY_BACKOFF_MS);
+}
+
+/** Probe-class allowlist check (exported for tests and for the retry loop). */
+export function isRetryableProbeCommand(type: string): boolean {
+  return IPC_PROBE_RETRYABLE_COMMANDS.has(type);
+}
+
 // WS readyState constants (same as browser)
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
@@ -82,9 +145,10 @@ function buildRequestId(): string {
 }
 
 export function getTimeoutMs(type: string, nestedCommand: string): number {
+  const fallback = resolveDefaultCommandTimeoutMs();
   return Math.max(
-    IPC_COMMAND_TIMEOUTS_MS[type] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
-    IPC_COMMAND_TIMEOUTS_MS[nestedCommand] ?? DEFAULT_IPC_COMMAND_TIMEOUT_MS,
+    IPC_COMMAND_TIMEOUTS_MS[type] ?? fallback,
+    IPC_COMMAND_TIMEOUTS_MS[nestedCommand] ?? fallback,
   );
 }
 
@@ -243,7 +307,27 @@ export class IpcTransport {
     });
   }
 
-  private sendIpcCommand(type: string, args: Record<string, unknown>): Promise<any> {
+  private async sendIpcCommand(type: string, args: Record<string, unknown>): Promise<any> {
+    // IPC-PROBE-TIMEOUT-RETRY: one bounded retry, only for allowlisted
+    // read-only probes, and only on a TIMEOUT (the freeze symptom) — never on
+    // a semantic failure reply and never for a mutating verb (see the
+    // allowlist's safety note). A relayed probe (mesh_relay_command wrapping
+    // get_status_metadata) is intentionally NOT retried here: its 120s budget
+    // already dwarfs the observed freeze windows.
+    const maxRetries = isRetryableProbeCommand(type) ? resolveProbeRetryMax() : 0;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.sendIpcCommandOnce(type, args);
+      } catch (e: any) {
+        if (!e?.ipcTimeout || attempt >= maxRetries) throw e;
+        const backoffMs = resolveProbeRetryBackoffMs();
+        console.error(`[ipc] probe command '${type}' timed out; retrying (${attempt + 1}/${maxRetries}) in ${backoffMs}ms — read-only command, safe to re-send`);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+      }
+    }
+  }
+
+  private sendIpcCommandOnce(type: string, args: Record<string, unknown>): Promise<any> {
     const WebSocketCtor = globalThis.WebSocket;
     if (!WebSocketCtor) {
       return Promise.reject(new Error('WebSocket is not available in this Node runtime; Node 20+ is required for daemon IPC mode'));
@@ -274,7 +358,12 @@ export class IpcTransport {
 
       const timer = setTimeout(() => {
         conn.pending.delete(requestId);
-        reject(new Error(`Daemon IPC ${diagnosticParts.join(' ')} timed out after ${Math.round(timeoutMs / 1000)}s (requestId=${requestId})`));
+        const error = new Error(`Daemon IPC ${diagnosticParts.join(' ')} timed out after ${Math.round(timeoutMs / 1000)}s (requestId=${requestId})`);
+        // Tagged so the retry loop in sendIpcCommand can tell a TIMEOUT (the
+        // freeze symptom, retryable for read-only probes) apart from a
+        // semantic failure reply or a connection error (neither retried).
+        (error as any).ipcTimeout = true;
+        reject(error);
       }, timeoutMs);
 
       conn.pending.set(requestId, { resolve, reject, timer });

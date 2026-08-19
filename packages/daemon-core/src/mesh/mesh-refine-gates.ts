@@ -23,6 +23,7 @@ import { basename as pathBasename, join as pathJoin, resolve as pathResolve } fr
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
+import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import type { CommandRouterResult } from '../commands/router.js';
 
 // Fix (4): resolve the git executable to an absolute path once on win32. A bare `git` handed to
@@ -2689,7 +2690,7 @@ export async function runMeshRefineValidationGate(
                     encoding: 'utf8',
                     timeout,
                     maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-                    env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
+                    env: { ...process.env, CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
                     ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
                 });
                 summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
@@ -2748,7 +2749,7 @@ export async function runMeshRefineValidationGate(
                 encoding: 'utf8',
                 timeout,
                 maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-                env: { ...process.env, CI: process.env.CI || '1', ...(candidate.env || {}) },
+                env: { ...process.env, CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
                 ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             });
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
