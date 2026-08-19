@@ -339,3 +339,34 @@ export function recordGraphGateExpired(
         ...(p.cancelledNodeIds?.length ? { cancelledNodeIds: p.cancelledNodeIds } : {}),
     });
 }
+
+/**
+ * design :399 — a coordinator ABANDONED a gate (the `-> cancelled` edge).
+ *
+ * ★ Recorded separately from `graph_gate_released` on purpose: an abandon
+ * granted no passage and produced no outcome or evidence, so folding it into the
+ * release ledger would make "gave up" indistinguishable from "approved" in the
+ * audit trail. The operator `reason` is a human-authored justification, so it is
+ * truncated like every other free-text provenance field.
+ */
+export function recordGraphGateAbandoned(
+    meshId: string,
+    p: {
+        graphId: string; gateId: string; ref?: string; action: string; priorState: string;
+        reason: string; coordinatorSessionId?: string; force?: boolean;
+        cancelledNodeIds?: string[]; graphStatus?: string;
+    },
+): void {
+    safeAppend(meshId, 'graph_gate_abandoned', {
+        graphId: p.graphId,
+        gateId: p.gateId,
+        ...(p.ref ? { ref: p.ref } : {}),
+        action: p.action,
+        priorState: p.priorState,
+        reason: p.reason.slice(0, 500),
+        ...(p.coordinatorSessionId ? { coordinatorSessionId: p.coordinatorSessionId } : {}),
+        ...(p.force ? { force: true } : {}),
+        ...(p.cancelledNodeIds?.length ? { cancelledNodeIds: p.cancelledNodeIds } : {}),
+        ...(p.graphStatus ? { graphStatus: p.graphStatus } : {}),
+    });
+}

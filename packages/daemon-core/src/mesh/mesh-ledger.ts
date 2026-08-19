@@ -186,6 +186,13 @@ export type MeshLedgerKind =
     | 'graph_gate_claimed'
     | 'graph_gate_released'
     | 'graph_gate_expired'
+    // A coordinator gave up on a gate (design :399, the `-> cancelled` edge).
+    // Distinct from `graph_gate_released` ON PURPOSE: an abandon granted no
+    // passage and produced no outcome or evidence, so folding the two together
+    // would make "gave up" read as "approved" in the audit trail. payload:
+    //   { graphId, gateId, ref?, action, priorState, reason, coordinatorSessionId?,
+    //     force?, cancelledNodeIds?, graphStatus? }
+    | 'graph_gate_abandoned'
     ;
 
 export interface MeshLedgerEntry {

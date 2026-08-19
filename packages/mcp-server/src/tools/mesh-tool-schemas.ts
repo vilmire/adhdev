@@ -332,6 +332,29 @@ export const MESH_GRAPH_GATE_RELEASE_TOOL = {
     },
 };
 
+export const MESH_GRAPH_GATE_ABANDON_TOOL = {
+    name: 'mesh_graph_gate_abandon',
+    description: 'Give up on a coordinator gate that can never be opened, so its graph can reach a terminal state. Use this when the work behind a gate was cancelled or is no longer wanted — '
+        + 'e.g. you cancelled the implementation tasks and the refinery/land gate is now stranded with nothing to land. Without it that gate stays awaiting_coordinator forever and the graph can '
+        + 'reach NO terminal state at all, not even cancelled. '
+        + '★ ABANDON IS NOT A PASS. It materializes NOTHING: every downstream task this gate was holding is CANCELLED, not opened, and no outcome/result/evidence is produced for downstream run_if or inputs_from. '
+        + 'If you actually want the downstream work to run, use mesh_graph_gate_release instead — that is the only way through a gate, and this tool is deliberately not a shortcut around it. '
+        + 'Needs no fencing token (it grants no passage), but a gate whose lease is still LIVE under another coordinator is refused unless you pass force=true — that holder may be mid-action on a real '
+        + 'external side effect (a merge, a publish, a deploy). Abandoning an already-abandoned gate is a safe no-op; a RELEASED gate can never be abandoned, because its downstream already ran.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            gate_id: { type: 'string', description: 'The gate to abandon (from mesh_graph_view).' },
+            gateId: { type: 'string', description: 'CamelCase alias for gate_id.' },
+            reason: { type: 'string', description: 'Why this gate is being given up — recorded on the gate node, on every cancelled downstream row, and in the provenance ledger. Required: an abandon with no stated reason is indistinguishable from a mistake later.' },
+            force: { type: 'boolean', description: 'Abandon even though another coordinator holds a LIVE lease. Only when you know that holder is dead — otherwise you may strand an external side effect it is mid-way through.' },
+            coordinator_session_id: { type: 'string', description: 'Recorded as who abandoned the gate. Defaults to this coordinator session.' },
+            coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
+        },
+        required: ['gate_id', 'reason'],
+    },
+};
+
 export const MESH_GRAPH_VIEW_TOOL = {
     name: 'mesh_graph_view',
     description: 'Inspect orchestration GRAPHS on this mesh: node states and refs, active edges, materialization receipts, coordinator gates (with who holds the lease and what is blocked), '
@@ -1350,6 +1373,7 @@ export const ALL_MESH_TOOLS = [
     MESH_GRAPH_VIEW_TOOL,
     MESH_GRAPH_GATE_CLAIM_TOOL,
     MESH_GRAPH_GATE_RELEASE_TOOL,
+    MESH_GRAPH_GATE_ABANDON_TOOL,
     MESH_QUEUE_CANCEL_TOOL,
     MESH_QUEUE_REQUEUE_TOOL,
     MESH_SEND_TASK_TOOL,
