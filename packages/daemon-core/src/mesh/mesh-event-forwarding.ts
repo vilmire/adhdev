@@ -515,6 +515,30 @@ export function resolveGraphEnvelopeWorkerResult(metadataEvent: Record<string, u
     return extractJsonObjectFromSummary(readNonEmptyString(metadataEvent.finalSummary) || undefined);
 }
 
+/**
+ * EVIDENCE-LEVEL-UNIFY: the ledger-append block in markSessionTerminal computes its own
+ * evidenceLevel ('insufficient'/'sufficient') from completionEvidence.workerResult.source,
+ * independent of whatever applyTaskModeCompletionEvidence (mesh-completion-side-effect-
+ * evidence.ts, called earlier in the same function) already stamped onto
+ * metadataEvent.evidenceLevel (its git-clean gate stamps 'reported' as a fallback-only
+ * marker, i.e. only when nothing was set yet). Left unmerged, the ledger entry and the
+ * coordinator-facing message (buildMeshSystemMessage, called later off the SAME
+ * metadataEvent object) disagreed on the same completion — e.g. ledger='insufficient' /
+ * reviewRecommended=true while the message suffix showed only 'evidence_level=reported'.
+ *
+ * 'insufficient' is the strictly weak signal — isWeakCompletionEvidence
+ * (mesh-events-utils.ts) treats only 'insufficient'/'weak' as weak, NOT 'reported' — so this
+ * never downgrades away from 'insufficient', mirroring the reviewRecommended merge next to
+ * this block's call site (never downgrade the NOTIF Defect-2b verdict).
+ */
+export function resolveUnifiedCompletionEvidenceLevel(args: {
+    computedLevel: 'insufficient' | 'sufficient' | undefined;
+    priorLevel: string | undefined;
+}): string | undefined {
+    if (args.computedLevel === 'insufficient' || args.priorLevel === 'insufficient') return 'insufficient';
+    return args.computedLevel || args.priorLevel;
+}
+
 // (FALSEIDLE-BGCHILD-b) A later genuine completion of the SAME task that carries a
 // substantively different — and fuller — final summary than the recorded terminal is the REAL
 // final that an earlier (false-idle) completion pre-empted, not a duplicate. The background-child
@@ -2241,11 +2265,29 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     // worker-result-shaped, e.g. a MAGI envelope) is concrete evidence and must
                     // resolve to 'sufficient' — resolveWorkerResult now upgrades that case so a
                     // complete, valid answer is no longer mislabelled insufficient/reviewRecommended.
-                    ...(completionEvidence
-                        ? completionEvidence.workerResult.source === 'default'
-                            ? { evidenceLevel: 'insufficient', reviewRecommended: true }
-                            : { evidenceLevel: 'sufficient' }
-                        : {}),
+                    //
+                    // EVIDENCE-LEVEL-UNIFY: merged with whatever applyTaskModeCompletionEvidence
+                    // already stamped onto args.metadataEvent.evidenceLevel earlier in
+                    // markSessionTerminal — see resolveUnifiedCompletionEvidenceLevel's doc comment
+                    // for why an unmerged computation here made the ledger and the coordinator
+                    // notification (buildMeshSystemMessage, reading the same metadataEvent object
+                    // later) disagree on the same completion. The resolved value is written back
+                    // onto args.metadataEvent so that later read agrees with what the ledger
+                    // persists here.
+                    ...(() => {
+                        const computedLevel = completionEvidence
+                            ? completionEvidence.workerResult.source === 'default' ? 'insufficient' as const : 'sufficient' as const
+                            : undefined;
+                        const resolvedLevel = resolveUnifiedCompletionEvidenceLevel({
+                            computedLevel,
+                            priorLevel: readNonEmptyString(args.metadataEvent.evidenceLevel),
+                        });
+                        if (!resolvedLevel) return {};
+                        args.metadataEvent.evidenceLevel = resolvedLevel;
+                        return resolvedLevel === 'insufficient'
+                            ? { evidenceLevel: resolvedLevel, reviewRecommended: true }
+                            : { evidenceLevel: resolvedLevel };
+                    })(),
                     // FALSE-COMPLETION-GIT-EVIDENCE: markSessionTerminal's synchronous git-clean
                     // gate stamps this onto metadataEvent BEFORE this ledger append runs — OR it
                     // into reviewRecommended (never downgrade the NOTIF Defect-2b verdict above)
