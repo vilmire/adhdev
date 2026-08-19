@@ -721,11 +721,81 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
 // The dormant mesh_direct_delivered_events table that backed it was dropped in
 // MeshRuntimeStore.migrateMeshIsolationColumns (DROP TABLE IF EXISTS, migration step 5).
 
+/**
+ * DUPNOTIF-DURABLE (gap_b): TTL for the drain-independent terminal-completion dedup
+ * record. Deliberately long relative to the 10-minute completion-event TTL: the
+ * duplicate producers this closes are NOT near-simultaneous. The measured failure had
+ * a coordinator drain in between (`reconcileDirectDispatchCompletionFromTranscript` is
+ * reachable from both mesh-completion-synthesis and mesh-reconcile-stranded-dispatch,
+ * seconds-to-minutes apart), and the TURN-LEDGER outbox redelivery can fire after a
+ * process restart. One hour covers both while still bounding the table.
+ */
+const TERMINAL_COMPLETION_DEDUP_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * DUPNOTIF-DURABLE (gap_b): terminal completions get a dedup record that OUTLIVES the
+ * drain; every other event keeps the pre-existing drain-scoped semantics.
+ *
+ * Scoped to terminal completions on purpose. A progress/alert event legitimately
+ * recurs — `mesh:dispatch_blocked` must be able to page the coordinator again for the
+ * same task after the first page was consumed (that is the ACTIONABLE-SKIP-FINGERPRINT
+ * contract, which reads the `reason` into the fingerprint precisely so a *different*
+ * blocker is not swallowed). Making dedup durable for those would re-open the
+ * too-few-notifications defect this must not regress. A task's terminal completion, by
+ * contrast, is exactly-once by definition: it happens once, so a second arrival for the
+ * same (task, weak|genuine) identity is always a duplicate producer, never news.
+ */
+function isDurablyDedupedEvent(event: PendingMeshCoordinatorEvent): boolean {
+    if (!TERMINAL_COMPLETION_EVENTS.has(event.event)) return false;
+    // Only the taskId-anchored terminal fingerprint is exactly-once. A terminal event
+    // with no taskId falls through to the generic session+timestamp fingerprint, which
+    // is not a stable identity for the same completion across producers — durably
+    // suppressing on it could silence an unrelated later completion of that session.
+    const metadata = readRecord(event.metadataEvent) || {};
+    const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord(metadata.payload)?.taskId);
+    return !!taskId;
+}
+
+/**
+ * DUPNOTIF-DURABLE (gap_b): record that this terminal completion fingerprint has been
+ * queued, in a store that is NOT cleared by the coordinator draining the row.
+ *
+ * The pre-existing `hasPendingEventFingerprint` check is `WHERE drained = 0`, so once
+ * the coordinator consumed the first completion the SAME fingerprint stopped reading as
+ * a duplicate — a second producer (or the TURN-LEDGER outbox crash-recovery redelivery,
+ * whose exactly-once guarantee rested on that one drain-gated check) queued a second
+ * identical [System] completion. Measured live: session 3845d986 surfaced one final
+ * summary three times.
+ *
+ * The UNIQUE (mesh_id, fingerprint) index is not a substitute: `deletePendingEventsById`
+ * hard-deletes rows to free the fingerprint for the unresolved-delegate outbox, so the
+ * index-level collision is not durable either.
+ */
+function recordDurableTerminalDedup(event: PendingMeshCoordinatorEvent, fingerprint: string): void {
+    if (!isDurablyDedupedEvent(event)) return;
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        store.recordCompletionFingerprint(event.meshId, `pending::${fingerprint}`, TERMINAL_COMPLETION_DEDUP_TTL_MS);
+        store.sweepExpiredFingerprints();
+    } catch {
+        // Best-effort: a store failure here costs a possible duplicate notification,
+        // which is strictly better than dropping the completion entirely.
+    }
+}
+
 export function hasPendingCoordinatorEventDuplicate(event: PendingMeshCoordinatorEvent): boolean {
     const fingerprint = buildPendingEventFingerprint(event);
     if (!fingerprint.trim()) return false;
     try {
-        return MeshRuntimeStore.getInstance().hasPendingEventFingerprint(event.meshId, fingerprint);
+        const store = MeshRuntimeStore.getInstance();
+        if (store.hasPendingEventFingerprint(event.meshId, fingerprint)) return true;
+        // gap_b: drain-independent check for terminal completions. Namespaced with a
+        // `pending::` prefix so it can never collide with the completion-event
+        // fingerprints mesh-event-forwarding writes into the same table.
+        if (isDurablyDedupedEvent(event) && store.hasCompletionFingerprint(event.meshId, `pending::${fingerprint}`)) {
+            return true;
+        }
+        return false;
     } catch {
         // Store unavailable: report "no duplicate" so the caller still attempts the
         // persist (which surfaces the real store failure) rather than silently
@@ -1215,6 +1285,10 @@ function persistPendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent):
             dispatchedBy: event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
             intendedFor: event.intendedFor ? JSON.stringify(event.intendedFor) : null,
         });
+        // DUPNOTIF-DURABLE (gap_b): stamp the drain-independent dedup record AFTER a
+        // successful insert, so a persist that threw does not leave behind a marker
+        // that would suppress the retry of an event that was never queued.
+        recordDurableTerminalDedup(event, fingerprint);
         return true;
     } catch (e: any) {
         // ERROR, not warn: with the JSONL mirror retired this is total loss of the

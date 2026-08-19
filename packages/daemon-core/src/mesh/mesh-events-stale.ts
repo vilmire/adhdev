@@ -314,9 +314,42 @@ function hasTerminalLedgerAfterDispatch(args: {
     return false;
 }
 
+/**
+ * DUPNOTIF-DURABLE (gap_a): is the recorded synth summary the SAME synth as this one?
+ *
+ * The original check was string equality, and that is the hole. This function has TWO
+ * live producers — mesh-completion-synthesis and mesh-reconcile-stranded-dispatch both
+ * call reconcileDirectDispatchCompletionFromTranscript for the same stalled task,
+ * seconds apart. Each scrapes the worker's transcript independently, so an unstable
+ * scrape offset (one extra trailing line, a truncation boundary landing differently)
+ * makes the two summaries of the SAME completion differ by a few characters — equality
+ * fails, both pass the gate, and both write a terminal ledger entry. Measured live:
+ * session 3845d986 emitted one final summary three times.
+ *
+ * Mirrors the prefix/length comparison supersedesTruncatedTerminalSummary already uses
+ * (mesh-event-forwarding.ts), read in the opposite direction: there it decides "the new
+ * one is meaningfully FULLER, let it supersede"; here it decides "the new one is NOT
+ * meaningfully fuller, so it is a replay — dedup it".
+ *
+ * Conservative by construction, and deliberately the exact complement of that function's
+ * threshold: a genuinely fuller later synth (more than 32 chars of new text) is still
+ * treated as new and still supersedes, so the Fix C weak-supersede design — a real
+ * completion overwriting a false idle — keeps working.
+ */
+function isReplayOfRecordedSynthSummary(recorded: string, incoming: string): boolean {
+    if (recorded === incoming) return true;
+    if (!recorded || !incoming) return false;
+    // One is a prefix of the other → same text, different scrape offset. Same synth.
+    const [shorter, longer] = recorded.length <= incoming.length ? [recorded, incoming] : [incoming, recorded];
+    if (!longer.startsWith(shorter)) return false;
+    // Only a trivial amount of extra text → still the same summary, re-scraped.
+    return longer.length <= shorter.length + 32;
+}
+
 // P1-5a follow-up (synth idempotency): true when a terminal entry recorded after the dispatch
 // is THIS synth's own prior record — an entry this function wrote (completionDiagnostic.reason
-// === 'direct_task_transcript_reconciliation') for the same task carrying the same finalSummary.
+// === 'direct_task_transcript_reconciliation') for the same task carrying the same finalSummary
+// (gap_a: "same" is a near-match, not string equality — see isReplayOfRecordedSynthSummary).
 // hasTerminalLedgerAfterDispatch deliberately skips WEAK terminals (Fix C) so a genuine
 // completion can still be synthesized; now that this synth honestly stamps its weak ledgers
 // (evidenceLevel / finalAssistantPresent), a replay of the SAME synth (same summary) would slip
@@ -348,7 +381,10 @@ function hasIdenticalSynthesizedTerminal(args: {
         if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
         const diagnostic = readRecord(entry.payload?.completionDiagnostic);
         if (readNonEmptyString(diagnostic?.reason) !== 'direct_task_transcript_reconciliation') continue;
-        if (readNonEmptyString(entry.payload?.finalSummary) !== args.finalSummary) continue;
+        // gap_a: near-match, not exact match — two producers scraping the same transcript
+        // independently can differ by a few trailing characters. See
+        // isReplayOfRecordedSynthSummary.
+        if (!isReplayOfRecordedSynthSummary(readNonEmptyString(entry.payload?.finalSummary), args.finalSummary)) continue;
         const terminalTaskId = readNonEmptyString(entry.payload?.taskId);
         if (terminalTaskId && terminalTaskId !== args.taskId) continue;
         if (terminalTaskId && terminalTaskId === args.taskId) return true;

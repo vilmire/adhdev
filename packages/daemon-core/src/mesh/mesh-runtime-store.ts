@@ -2786,7 +2786,19 @@ export class MeshRuntimeStore {
 
     /** Remove all pending-event rows (drained included) for a mesh — mesh deletion / test cleanup. */
     clearPendingEventsForMesh(meshId: string): number {
-        return this.db.prepare('DELETE FROM mesh_pending_events WHERE mesh_id = ?').run(meshId).changes;
+        const changes = this.db.prepare('DELETE FROM mesh_pending_events WHERE mesh_id = ?').run(meshId).changes;
+        // DUPNOTIF-DURABLE (gap_b): the terminal-completion dedup record deliberately
+        // OUTLIVES its pending row (that is the whole point — the row is deleted by
+        // retention/outbox expiry while the same completion can still be re-produced).
+        // It is still per-mesh pending-event state, so a "clear this mesh's pending
+        // events" must take it too; otherwise a cleared mesh keeps suppressing
+        // completions for tasks whose rows are gone. Namespaced `pending::<fingerprint>`,
+        // so this cannot touch the mesh-event-forwarding completion fingerprints sharing
+        // the table.
+        this.db.prepare(
+            `DELETE FROM mesh_completion_fingerprints WHERE mesh_id = ? AND fingerprint LIKE 'pending::%'`
+        ).run(meshId);
+        return changes;
     }
 
     pendingEventCount(meshId: string): number {
