@@ -60,6 +60,9 @@ import {
     runMeshRefineValidationGate,
     truncateValidationOutput,
 } from '../mesh/mesh-refine-gates.js';
+// REFINE-CONCURRENCY-CAP: process-wide serial execution of refine pipelines —
+// see mesh-refine-concurrency.ts for the freeze RCA this comes from.
+import { runWithRefineExecutionSlot } from '../mesh/mesh-refine-concurrency.js';
 
 export function buildRefineJobKey(self: DaemonCommandRouter, meshId: string, nodeId: string): string {
         return `${meshId}:${nodeId}`;
@@ -2494,7 +2497,11 @@ export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId:
         queueRefineBatchJobEvent(self, 'refine:accepted', handle);
 
         setImmediate(() => {
-            void finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args);
+            // REFINE-CONCURRENCY-CAP: the batch pipeline runs through the shared
+            // execution slot — a second accepted job waits instead of overlapping
+            // its 19-gate npm/vitest load with the running one.
+            void runWithRefineExecutionSlot(`batch ${handle.jobId} (mesh ${meshId})`,
+                () => finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args));
         });
 
         // Return the accepted handle plus the plan so the coordinator sees the target set.
@@ -2878,7 +2885,11 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
             // 0 no matter how large the repo or how many submodules the branch touches —
             // measured at ~63ms on a small repo, but the accept path must not pay it at all.
             void recordRefineAcceptBaseDivergence(self, handle, node);
-            void finishMeshRefineJob(self, handle, args);
+            // REFINE-CONCURRENCY-CAP: the pipeline runs through the shared execution
+            // slot — a second accepted job waits instead of overlapping its gate load
+            // with the running one (the accept above already returned `accepted`).
+            void runWithRefineExecutionSlot(`job ${handle.jobId} (node ${handle.targetNodeId})`,
+                () => finishMeshRefineJob(self, handle, args));
         });
 
         return handle;

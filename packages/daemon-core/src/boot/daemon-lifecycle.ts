@@ -48,6 +48,7 @@ import { setupQuotaRefreshLoop, setupQuotaEventRefresh, refreshQuotaCacheOnBoot,
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
+import { startEventLoopMonitor } from './event-loop-monitor.js';
 import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
 
 // ─── Init Config ───
@@ -158,6 +159,11 @@ export interface DaemonComponents {
     // Verified-channel staleness probe (24h read-only listing → dashboard
     // badge data). Stopped during shutdownDaemonComponents.
     providerStalenessProbe?: { stop(): void };
+    // EVENT-LOOP-LAG-HEARTBEAT: periodic perf_hooks event-loop-lag sampler.
+    // Emits a WARN naming the blackout duration when the whole process was
+    // frozen (machine saturation) — turning "handler slow vs process frozen"
+    // from log-gap inference into a direct measurement (2026-08-18 RCA).
+    eventLoopMonitor?: { stop(): void };
     // Canonical status/daemon identity (e.g. `standalone_<machineId>` /
     // `daemon_<machineId>`). This is the SAME id the MCP layer stamps as a
     // worker's meshCoordinatorDaemonId (ctx.localDaemonId, sourced from
@@ -648,6 +654,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 12. Resume any refine jobs that were interrupted by a previous daemon restart.
     setImmediate(() => void router.resumePendingRefineJobsOnStartup());
 
+    // 12a. EVENT-LOOP-LAG-HEARTBEAT: start the event-loop-lag sampler AFTER the
+    // logger is installed (step 1) so a post-freeze WARN lands in the dated
+    // daemon log. Unref'd, never throws, 10s interval / 5s WARN threshold.
+    components.eventLoopMonitor = startEventLoopMonitor();
+
     // 13. Re-arm any persisted restart_daemon_node whenIdle schedules that were
     // pending when this daemon last exited (expired ones are audited + dropped).
     setImmediate(() => router.resumeDeferredRestartsOnStartup());
@@ -693,11 +704,13 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
+        eventLoopMonitor,
     } = components;
 
     // 1. Stop timers
     poller.stop();
     cdpInitializer.stop();
+    try { eventLoopMonitor?.stop(); } catch { /* noop */ }
     try { meshReconcileLoop?.stop(); } catch { /* noop */ }
     try { quotaRefreshLoop?.stop(); } catch { /* noop */ }
     try { quotaEventRefresh?.stop(); } catch { /* noop */ }
