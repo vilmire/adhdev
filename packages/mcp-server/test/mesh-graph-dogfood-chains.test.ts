@@ -30,6 +30,10 @@ import { getQueue, updateTaskStatus, readLedgerEntries, runWorkspaceSagaTick } f
 // through daemon-core's in-process store API — exactly like the phase-E harness
 // in mesh-graph-tools.test.ts. The claim under test is the design's "4/4": any
 // divergence is reported as a DEFECT, not patched over.
+//
+// One such divergence WAS found and is now fixed: an admission-time
+// inputs_from/run_if binding against a gate ref deadlocked the downstream node.
+// The last test in this file pins the designed (:338) behaviour it now has.
 
 const NODE_MAC = 'node_mac_base';
 
@@ -517,8 +521,9 @@ test('G-4 fail: ci_wait released with a FAIL outcome — root-bump never runs an
     // NOTE — the gate-outcome condition is declared through the release-time
     // PATCH surface (design :415: the permitted patch keys are exactly
     // run_if/on_false/inputs_from/workspace_ref). The admission-time spelling of
-    // the same condition (`run_if` with `from: <gate ref>` in the batch) hits
-    // the defect pinned by the G-DEFECT test below.
+    // the same condition (`run_if` with `from: <gate ref>` in the batch) is
+    // equivalent and covered by the design-:338 test below; it deadlocked until
+    // the gate-ref binding fix, which is why this chain uses the patch surface.
     const meshId = nextMeshId();
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = JSON.parse(await meshEnqueueBatch(ctx, {
@@ -581,14 +586,29 @@ test('G-4 fail: ci_wait released with a FAIL outcome — root-bump never runs an
     assert.match((byRef.get('root_bump') as any).skipReason ?? '', /^run_if_false:/);
 });
 
-// ── G-DEFECT: admission-time gate-outcome binding deadlocks ──────────────────
+// ── Admission-time gate-outcome binding (design :338) ────────────────────────
 // The four-chain table (design :921-933) claims 4/4 expressible, and the tool
 // schema tells the coordinator that a release's structured result/evidence
 // "become readable by downstream tasks through run_if and inputs_from"
 // (mesh-tool-schemas.ts :239). Declaring that binding AT ADMISSION — the
-// spelling the schema advertises — deadlocks the downstream node.
+// spelling the schema advertises — used to DEADLOCK the downstream node.
+//
+// ★ FIXED. The admission wired a `requires` (inputs_from) or `conditional`
+// (run_if) edge FROM THE GATE NODE, and settleDownstreamNode demands
+// state==='completed' from every non-`gate` incoming source. A released gate
+// node is 'released', NEVER 'completed', so the downstream node deferred
+// forever: the release committed, materialized nothing, and the task stayed
+// behind a graph_materialization_pending block no later event cleared.
+//
+// mesh-graph-plan.ts now routes a bound gate ref into the SAME `gate`-edge
+// emission as `gated_by` (deduplicated) instead of a requires/conditional edge,
+// so the gate edge stays the one carrier of gate ordering and the runner's
+// existing gateOutcomeOutputForNode supplies the outcome envelope to the
+// binding. Both spellings — admission-time (here) and the release-time patch
+// surface (design :415, used by G-1/G-3/G-4-fail) — now behave identically.
+// Unit-level regression: daemon-core test/mesh/mesh-graph-gate-ref-binding.test.ts.
 
-test('G-DEFECT ★ admission-time inputs_from/run_if against a GATE ref never materializes (diverges from design :338)', async () => {
+test('admission-time inputs_from/run_if against a GATE ref materializes off the release (design :338)', async () => {
     for (const variant of ['inputs_from', 'run_if'] as const) {
         const meshId = nextMeshId();
         const ctx = makeCtx(meshId, recordingLocalTransport());
@@ -613,42 +633,36 @@ test('G-DEFECT ★ admission-time inputs_from/run_if against a GATE ref never ma
         });
         assert.equal(release.success, true, JSON.stringify(release));
 
-        // ── DESIGNED (design :338 — skipped; see DEFECT below) ──────────────
-        //   assert.equal(release.materializedCount, 1);
-        //   const row = queueRow(meshId, taskId(batch, 'downstream'));
-        //   assert.equal(row.blockedReason, undefined);
-        //   // inputs_from variant: row.message contains 'deadbeef';
-        //   // run_if variant: the node materializes because the outcome is 'passed'.
-        //
-        // DEFECT: the admission wires a `requires` edge (inputs_from,
-        // oss/packages/daemon-core/src/mesh/mesh-graph-plan.ts:505-512) or a
-        // `conditional` edge (run_if, mesh-graph-plan.ts:497-504) FROM THE GATE
-        // NODE, and settleDownstreamNode demands state==='completed' from every
-        // non-`gate` incoming source
-        // (oss/packages/daemon-core/src/mesh/mesh-graph-transition-runner.ts:687,714-715).
-        // A released gate node is 'released', NEVER 'completed' — so the
-        // downstream node defers forever: the release commits, materializes
-        // nothing, and the task is stuck behind a graph_materialization_pending
-        // block no later event clears. The daemon-core C2 tests only exercise
-        // hand-forged rows WITHOUT those edges, so the batch-v2 admission path
-        // regressed unseen. Repro: this test. Severity: high — the four-chain
-        // table's chains 1/3/4 cannot bind gate outcomes at admission time;
-        // the working spelling is the release-time patch surface (design :415),
-        // which G-1/G-3/G-4-fail use.
-        //
-        // The OBSERVED (defective) state is pinned so this test turns RED the
-        // day the defect is fixed — flip to the designed assertions then.
-        assert.equal(release.materializedCount, 0, `DEFECT (${variant}): the release materializes nothing`);
-        const stuck = queueRow(meshId, taskId(batch, 'downstream'));
-        assert.equal(stuck.status, 'pending');
-        assert.match(
-            stuck.blockedReason ?? '',
-            /^graph_materialization_pending:/,
-            `DEFECT (${variant}): downstream is stuck behind a graph hold after a successful gate release`,
+        // ── DESIGNED (design :338) ──────────────────────────────────────────
+        // The fenced release itself materializes the downstream node: the gate
+        // edge is satisfied by the release, and the outcome envelope is in scope
+        // for the binding. No later event is needed, and no hold survives.
+        assert.equal(release.materializedCount, 1, `(${variant}): the release must materialize the bound node`);
+        const row = queueRow(meshId, taskId(batch, 'downstream'));
+        assert.equal(row.status, 'pending');
+        assert.equal(
+            row.blockedReason,
+            undefined,
+            `(${variant}): no graph hold may survive a successful gate release`,
         );
+
+        if (variant === 'inputs_from') {
+            // C1 binding semantics: the release `result` is APPENDED to the
+            // immutable base instruction and marked untrusted, attributed to the
+            // gate ref it came from.
+            assert.ok(row.message.startsWith('consume the gate outcome'));
+            assert.match(row.message, /deadbeef/);
+            assert.match(row.message, /trust="untrusted"/);
+            assert.match(row.message, /source_ref="gate"/);
+        }
+
         const view = await viewGraph(ctx, batch.graphId);
         const node = view.nodes.find((n: any) => n.ref === 'downstream');
-        assert.equal(node.state, 'blocked', `DEFECT (${variant}): the node never leaves blocked`);
-        assert.notEqual(view.status, 'completed', `DEFECT (${variant}): the graph can never settle`);
+        assert.equal(node.state, 'materialized', `(${variant}): the node must leave blocked on release`);
+
+        // ★ C2 still holds: the gate went through a real fenced release, not an
+        // auto-pass — the node is materialized BECAUSE the release committed.
+        assert.equal(view.gates.find((g: any) => g.ref === 'gate').state, 'released');
+        assert.equal(view.gates.find((g: any) => g.ref === 'gate').releaseOutcome, 'passed');
     }
 });
