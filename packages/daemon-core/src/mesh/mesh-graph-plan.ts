@@ -494,11 +494,31 @@ export function commitMeshGraphPlan(req: MeshGraphPlanRequest): MeshGraphPlanRes
                 if (!fromNodeId) continue;
                 addEdge(fromNodeId, nodeIdByIndex[i], 'requires', omitOnSkip);
             }
+            // ★ A binding that reads a GATE ref becomes a `gate` edge, NOT a
+            // `requires`/`conditional` one (gate-ref binding deadlock). Reading a
+            // gate outcome is the DESIGNED usage — design P3 is literally "gate
+            // outcome drives run_if and conditional skip" — but the ordering it
+            // implies is gate ordering, and only the `gate` edge expresses that:
+            //   * `settleDownstreamNode` demands every non-`gate` incoming source
+            //     reach `completed`, and a released gate node terminates at
+            //     `released`. A `requires`/`conditional` edge out of a gate is
+            //     therefore UNSATISFIABLE — the downstream node deferred forever,
+            //     silently, with no error. That was the deadlock.
+            //   * Such an edge is also the exact side-step :288-292 forbids for
+            //     `depends_on`: a gate must never look like an ordinary dependency
+            //     that completion alone can satisfy.
+            // Collected here and emitted below through the SAME path as `gated_by`,
+            // so binding a gate ref implies its gate edge even when `gated_by` is
+            // omitted — otherwise the node would have no gate ordering at all and
+            // could materialize and read the outcome BEFORE the release commits.
+            const gateRefsForNode = new Set<string>((t.gated_by ?? []).map(r => r.trim()).filter(Boolean));
+
             // A `run_if` reading an upstream ref is a CONDITIONAL edge (design
             // :141): control flow, not an execution prerequisite.
             for (const sourceRef of collectRunIfSourceRefs(t.run_if)) {
                 const fromNodeId = nodeIdByRef.get(sourceRef);
                 if (!fromNodeId || fromNodeId === nodeIdByIndex[i]) continue;
+                if (gateNodeIdByRef.has(sourceRef)) { gateRefsForNode.add(sourceRef); continue; }
                 if (edges.some(e => e.fromNodeId === fromNodeId && e.toNodeId === nodeIdByIndex[i])) continue;
                 addEdge(fromNodeId, nodeIdByIndex[i], 'conditional', omitOnSkip);
             }
@@ -507,13 +527,17 @@ export function commitMeshGraphPlan(req: MeshGraphPlanRequest): MeshGraphPlanRes
             for (const sourceRef of collectInputSourceRefs(t.inputs_from)) {
                 const fromNodeId = nodeIdByRef.get(sourceRef);
                 if (!fromNodeId || fromNodeId === nodeIdByIndex[i]) continue;
+                if (gateNodeIdByRef.has(sourceRef)) { gateRefsForNode.add(sourceRef); continue; }
                 if (edges.some(e => e.fromNodeId === fromNodeId && e.toNodeId === nodeIdByIndex[i] && e.kind === 'requires')) continue;
                 addEdge(fromNodeId, nodeIdByIndex[i], 'requires', omitOnSkip);
             }
-            // `gated_by` → a `gate` edge, the one edge kind the C2 settle guard
-            // treats as an intentional stop (never satisfiable by completion).
-            for (const gateRef of t.gated_by ?? []) {
-                const fromNodeId = gateNodeIdByRef.get(gateRef.trim());
+            // `gated_by` (and any gate ref bound above) → a `gate` edge, the one
+            // edge kind the C2 settle guard treats as an intentional stop (never
+            // satisfiable by completion). The runner feeds the released gate's
+            // outcome envelope into the binding scope (gateOutcomeOutputForNode),
+            // so the binding still resolves off this single edge.
+            for (const gateRef of gateRefsForNode) {
+                const fromNodeId = gateNodeIdByRef.get(gateRef);
                 if (!fromNodeId) continue;
                 addEdge(fromNodeId, nodeIdByIndex[i], 'gate', false);
             }
