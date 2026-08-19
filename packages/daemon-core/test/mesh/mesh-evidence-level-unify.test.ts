@@ -11,7 +11,18 @@ import { describe, expect, it } from 'vitest';
 // a genuinely evidence-insufficient completion as merely 'reported'.
 //
 // resolveUnifiedCompletionEvidenceLevel is the merge the ledger-append block now applies
-// before writing evidenceLevel to both the ledger payload and back onto metadataEvent.
+// before writing evidenceLevel to the LEDGER PAYLOAD.
+//
+// The merge is deliberately ONE-WAY: the resolved value is NOT written back onto
+// metadataEvent. See the "EVIDENCE-LEVEL-UNIFY: ledger takes the strict evidenceLevel
+// without weakening the coordinator-facing metadataEvent" regression test in
+// mesh-events.test.ts — metadataEvent.evidenceLevel also keys the pending-event dedup
+// fingerprint (`::weak` / `::genuine`), so stamping the ledger's verdict back onto it made
+// ordinary completions collide with earlier weak synths and get swallowed.
+//
+// NOTE these unit tests exercise the merge FUNCTION only, and it was correct in isolation
+// even while the surrounding application of its result was regressing six integration
+// tests. Do not treat a green run here as evidence that the boundary is intact.
 
 import { resolveUnifiedCompletionEvidenceLevel } from '../../src/mesh/mesh-event-forwarding.js';
 

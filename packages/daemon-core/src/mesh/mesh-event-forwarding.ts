@@ -1187,14 +1187,26 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     // resolve to 'sufficient' — resolveWorkerResult now upgrades that case so a
                     // complete, valid answer is no longer mislabelled insufficient/reviewRecommended.
                     //
-                    // EVIDENCE-LEVEL-UNIFY: merged with whatever applyTaskModeCompletionEvidence
-                    // already stamped onto args.metadataEvent.evidenceLevel earlier in
-                    // markSessionTerminal — see resolveUnifiedCompletionEvidenceLevel's doc comment
-                    // for why an unmerged computation here made the ledger and the coordinator
-                    // notification (buildMeshSystemMessage, reading the same metadataEvent object
-                    // later) disagree on the same completion. The resolved value is written back
-                    // onto args.metadataEvent so that later read agrees with what the ledger
-                    // persists here.
+                    // EVIDENCE-LEVEL-UNIFY: the LEDGER value is merged with whatever
+                    // applyTaskModeCompletionEvidence already stamped onto
+                    // args.metadataEvent.evidenceLevel earlier in markSessionTerminal, so a
+                    // 'reported' stamp can never make the ledger forget a locally-computed
+                    // 'insufficient' (and vice versa). See resolveUnifiedCompletionEvidenceLevel.
+                    //
+                    // ONE-WAY ON PURPOSE — do NOT write the resolved level back onto
+                    // args.metadataEvent. That mutation looks like the natural way to make the
+                    // later buildMeshSystemMessage read agree with the ledger, but
+                    // metadataEvent.evidenceLevel is load-bearing for DEDUP, not just wording:
+                    // buildPendingEventFingerprint (mesh-events-pending.ts) keys terminal
+                    // completions `…::weak` / `…::genuine` off isWeakCompletionMetadata, which
+                    // reads this very field. Stamping 'insufficient' back onto an ordinary
+                    // completion (workerResult.source === 'default' is the COMMON plain-text
+                    // finalSummary case, not an anomaly) moves it into the `::weak` slot, where
+                    // it collides with an earlier weak synth for the same taskId and the
+                    // genuine completion is dropped as a duplicate — the exact swallow that
+                    // EARLYNOTIFY-GATEBYPASS guards against. The ledger records the stricter
+                    // verdict; the coordinator-facing weakness signal stays owned by the
+                    // producers that set it deliberately.
                     ...(() => {
                         const computedLevel = completionEvidence
                             ? completionEvidence.workerResult.source === 'default' ? 'insufficient' as const : 'sufficient' as const
@@ -1204,7 +1216,6 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                             priorLevel: readNonEmptyString(args.metadataEvent.evidenceLevel),
                         });
                         if (!resolvedLevel) return {};
-                        args.metadataEvent.evidenceLevel = resolvedLevel;
                         return resolvedLevel === 'insufficient'
                             ? { evidenceLevel: resolvedLevel, reviewRecommended: true }
                             : { evidenceLevel: resolvedLevel };
