@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 
 import {
   buildSubmodulePublishRequiredNextStep,
+  collectTrivialFastForwardGitlinkResolutions,
   convergeDivergedSubmoduleGitlinks,
   rootRebaseResolvingGitlinks,
   runMeshRefinePatchEquivalenceGate,
@@ -468,5 +469,235 @@ describe('parallel-refine published-twin (Gap #1/Gap #2 regression)', () => {
     const nextStep = buildSubmodulePublishRequiredNextStep(gate.unreachable)
     expect(nextStep).toContain('Ask the user for explicit approval')
     expect(nextStep).toContain(`sub@${localOnly}`)
+  })
+})
+
+/**
+ * Build the DETACHED-HEAD OBJECT-FETCH scenario — the exact production shape that
+ * false-blocked a sibling batch at `patch_equivalence_classification` while all 19
+ * validation gates passed and the content merged cleanly.
+ *
+ * Two properties matter, and both are the normal state of a real submodule:
+ *
+ *   (a) the worktree's submodule and the base workspace's submodule are SEPARATE
+ *       clones — they do not share an object store, so the base-side commit is
+ *       genuinely absent from the worktree until it is fetched;
+ *   (b) the base workspace's submodule is on a **detached HEAD** and **no local
+ *       branch points at the base-side commit**, and that commit was never pushed
+ *       to origin.
+ *
+ * Under (b) the historical `+refs/heads/*:refs/adhdev-refine-base/*` refspec could
+ * not name the object at all, so the fetch brought back nothing, the ancestry
+ * check saw a missing commit, and the run reported `not_diverged` → defer →
+ * blocked_review. Auto-converge never got its chance even though a rebase would
+ * have succeeded with zero conflicts.
+ *
+ *   sub:  subMB ──> subBase   (base side — detached, NO branch, NOT on origin)
+ *              └──> subBranch (branch side, non-conflicting)
+ */
+function setupDetachedBaseSubmodule() {
+  const tmp = makeTmp()
+  const submoduleOrigin = join(tmp, 'sub-origin')
+  const base = join(tmp, 'base')
+
+  initRepo(submoduleOrigin)
+  const subMB = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'sub v1')
+
+  // Root base repo pinned at the submodule merge-base.
+  initRepo(base)
+  commitFile(base, 'top.txt', 'top\n', 'root init')
+  git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+  git(base, ['add', 'sub'])
+  git(base, ['commit', '-q', '-m', 'pin sub at merge-base'])
+  const rootMB = git(base, ['rev-parse', 'HEAD'])
+
+  // The worktree is created BEFORE the base-side submodule commit exists and gets
+  // its own independent clone of the submodule, so (a) holds.
+  const wt = join(tmp, 'wt')
+  git(base, ['worktree', 'add', '-q', '--detach', wt, rootMB])
+  git(wt, ['checkout', '-q', '-b', 'feat'])
+  git(wt, ['submodule', 'update', '-q', '--init'])
+
+  // base side: commit INSIDE the base workspace's submodule on a detached HEAD.
+  const baseSubRepo = join(base, 'sub')
+  git(baseSubRepo, ['checkout', '-q', '--detach', subMB])
+  writeFileSync(join(baseSubRepo, 'mod.txt'), 'v1\nbase-line\n', 'utf-8')
+  git(baseSubRepo, ['add', 'mod.txt'])
+  git(baseSubRepo, ['commit', '-q', '-m', 'sub base edit (detached, unpublished)'])
+  const subBase = git(baseSubRepo, ['rev-parse', 'HEAD'])
+  git(base, ['add', 'sub'])
+  writeFileSync(join(base, 'sibling.txt'), 'sibling\n', 'utf-8')
+  git(base, ['add', 'sibling.txt'])
+  git(base, ['commit', '-q', '-m', 'base: sub->subBase + sibling'])
+  const baseHead = git(base, ['rev-parse', 'HEAD'])
+
+  // branch side: an independent, non-conflicting submodule commit off subMB.
+  const wtSubRepo = join(wt, 'sub')
+  git(wtSubRepo, ['checkout', '-q', '--detach', subMB])
+  writeFileSync(join(wtSubRepo, 'other.txt'), 'branch-line\n', 'utf-8')
+  git(wtSubRepo, ['add', 'other.txt'])
+  git(wtSubRepo, ['commit', '-q', '-m', 'sub branch add'])
+  const subBranch = git(wtSubRepo, ['rev-parse', 'HEAD'])
+  git(wt, ['add', 'sub'])
+  writeFileSync(join(wt, 'ours.txt'), 'ours\n', 'utf-8')
+  git(wt, ['add', 'ours.txt'])
+  git(wt, ['commit', '-q', '-m', 'branch: sub->subBranch + ours'])
+  const branchHead = git(wt, ['rev-parse', 'HEAD'])
+
+  return { base, wt, baseHead, branchHead, subMB, subBase, subBranch, baseSubRepo, wtSubRepo }
+}
+
+describe('detached-HEAD base submodule object fetch (M-REFINE-SUBMODULE-OBJECT-FETCH-GAP)', () => {
+  it('auto-converges when the base-side commit is reachable from NO local branch (detached HEAD, unpublished)', () => {
+    const { base, wt, baseHead, branchHead, subBase, subBranch, baseSubRepo, wtSubRepo } = setupDetachedBaseSubmodule()
+
+    // ★ Fixture invariants — these ARE the failure condition. If any of them stops
+    // holding, this test silently stops covering the regression.
+    // 1. The base workspace's submodule is on a detached HEAD...
+    expect(() => git(baseSubRepo, ['symbolic-ref', '-q', 'HEAD'])).toThrow()
+    // 2. ...and NO local branch there points at the base-side commit, so the old
+    //    `+refs/heads/*` refspec is structurally unable to fetch it.
+    const baseBranchTips = git(baseSubRepo, ['for-each-ref', '--format=%(objectname)', 'refs/heads/'])
+      .split('\n').map(s => s.trim()).filter(Boolean)
+    expect(baseBranchTips).not.toContain(subBase)
+    // 3. It is not on the submodule's origin either (no remote fallback).
+    expect(() => git(baseSubRepo, ['merge-base', '--is-ancestor', subBase, 'refs/remotes/origin/main'])).toThrow()
+    // 4. And it is genuinely absent from the worktree's submodule object store.
+    expect(() => git(wtSubRepo, ['cat-file', '-e', `${subBase}^{commit}`])).toThrow()
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+
+    // The fetch now reaches the detached commit → divergence is judged → converge runs.
+    expect(result.converged).toBe(true)
+    expect(result.resolutions).toHaveLength(1)
+    const [res] = result.resolutions
+    expect(res.path).toBe('sub')
+    expect(result.gitlinks[0].action).toBe('rebased')
+    // Base side is a strict ancestor of the rebased tip (linear history)...
+    expect(git(wtSubRepo, ['merge-base', '--is-ancestor', subBase, res.rebasedCommit])).toBe('')
+    // ...and the branch-side work survived the replay (nothing silently lost).
+    expect(res.rebasedCommit).not.toBe(subBranch)
+    expect(git(wtSubRepo, ['ls-tree', '-r', '--name-only', res.rebasedCommit])).toMatch(/other\.txt/)
+    expect(git(wtSubRepo, ['ls-tree', '-r', '--name-only', res.rebasedCommit])).toMatch(/mod\.txt/)
+  })
+
+  it('end-to-end: the converged branch passes the patch-equivalence gate', async () => {
+    const { base, wt, baseHead, branchHead } = setupDetachedBaseSubmodule()
+
+    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    expect(converge.converged).toBe(true)
+    const rebased = rootRebaseResolvingGitlinks(wt, baseHead, converge.resolutions)
+    expect(rebased.ok).toBe(true)
+    const pe = await runMeshRefinePatchEquivalenceGate(base, baseHead, rebased.branchHead!)
+    expect(pe.status).toBe('passed')
+    expect(pe.equivalent).toBe(true)
+  })
+
+  it('the trivial-ff collector also sees a detached, branchless base-side commit', () => {
+    // Same object-availability path, other consumer. The BASE side holds the
+    // commit that is unreachable from any local branch, so the collector cannot
+    // answer the ancestry question without the fetch: base advanced the submodule
+    // to a descendant (branch is strictly behind) → the correct resolution is the
+    // BASE-side commit. Without the fetch fix the collector cannot see it and
+    // returns [], and the plain root rebase then aborts on the gitlink.
+    const tmp = makeTmp()
+    const submoduleOrigin = join(tmp, 'sub-origin')
+    const base = join(tmp, 'base')
+    initRepo(submoduleOrigin)
+    const s1 = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'v1')
+    initRepo(base)
+    commitFile(base, 'top.txt', 'top\n', 'init')
+    git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'pin v1'])
+    const rootMB = git(base, ['rev-parse', 'HEAD'])
+
+    // Worktree gets its own submodule clone, pinned at s1, and advances only the root.
+    const wt = join(tmp, 'wt')
+    git(base, ['worktree', 'add', '-q', '--detach', wt, rootMB])
+    git(wt, ['checkout', '-q', '-b', 'feat'])
+    git(wt, ['submodule', 'update', '-q', '--init'])
+    writeFileSync(join(wt, 'ours.txt'), 'ours\n', 'utf-8')
+    git(wt, ['add', 'ours.txt'])
+    git(wt, ['commit', '-q', '-m', 'branch: ours'])
+    const branchHead = git(wt, ['rev-parse', 'HEAD'])
+
+    // Base advances the submodule on a DETACHED HEAD, unpublished → s2 exists
+    // only in the base workspace's submodule, reachable from no branch there.
+    const baseSubRepo = join(base, 'sub')
+    git(baseSubRepo, ['checkout', '-q', '--detach', s1])
+    writeFileSync(join(baseSubRepo, 'mod.txt'), 'v2\n', 'utf-8')
+    git(baseSubRepo, ['add', 'mod.txt'])
+    git(baseSubRepo, ['commit', '-q', '-m', 'v2'])
+    const s2 = git(baseSubRepo, ['rev-parse', 'HEAD'])
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'base: bump sub v2'])
+    const baseHead = git(base, ['rev-parse', 'HEAD'])
+
+    // Fixture invariants: s2 is on no local branch of the base submodule, and is
+    // absent from the worktree's submodule object store.
+    const baseBranchTips = git(baseSubRepo, ['for-each-ref', '--format=%(objectname)', 'refs/heads/'])
+      .split('\n').map(s => s.trim()).filter(Boolean)
+    expect(baseBranchTips).not.toContain(s2)
+    expect(() => git(join(wt, 'sub'), ['cat-file', '-e', `${s2}^{commit}`])).toThrow()
+
+    const resolutions = collectTrivialFastForwardGitlinkResolutions(wt, base, baseHead, branchHead)
+    // branch (s1) is an ancestor of base (s2) → resolve to the more-advanced base side.
+    expect(resolutions).toEqual([{ path: 'sub', rebasedCommit: s2 }])
+  })
+
+  it('reports submodule_commit_unavailable — NOT not_diverged — when the object cannot be obtained', () => {
+    // ★ The observability half of the fix. When the base-side commit is truly
+    // unobtainable (the base workspace's submodule checkout is gone), the run must
+    // say "could not determine", not make the positive claim "not divergent".
+    // Conflating the two is what sent the coordinator chasing a stale-daemon theory.
+    const { base, wt, baseHead, branchHead, subBase, baseSubRepo } = setupDetachedBaseSubmodule()
+
+    // Remove the only source of the base-side object.
+    rmSync(baseSubRepo, { recursive: true, force: true })
+    expect(() => git(join(wt, 'sub'), ['cat-file', '-e', `${subBase}^{commit}`])).toThrow()
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    expect(result.converged).toBe(false)
+    expect(result.reason).toBe('submodule_commit_unavailable')
+    expect(result.reason).not.toBe('not_diverged')
+    expect(result.resolutions).toHaveLength(0)
+    const [entry] = result.gitlinks
+    expect(entry.action).toBe('skipped_commit_unavailable')
+    expect(entry.unavailable).toContain('base')
+    expect(entry.path).toBe('sub')
+  })
+
+  it('still reports not_diverged for a real strict fast-forward (no false undeterminable)', () => {
+    // Guard the other direction: the new reason must not swallow the genuine
+    // not_diverged case. Both commits present, strict ff → unchanged wording.
+    const tmp = makeTmp()
+    const submoduleOrigin = join(tmp, 'sub-origin')
+    const base = join(tmp, 'base')
+    initRepo(submoduleOrigin)
+    const s1 = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'v1')
+    const s2 = commitFile(submoduleOrigin, 'mod.txt', 'v2\n', 'v2')
+    initRepo(base)
+    commitFile(base, 'top.txt', 'top\n', 'init')
+    git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+    git(join(base, 'sub'), ['fetch', '-q', 'origin'])
+    git(join(base, 'sub'), ['checkout', '-q', s1])
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'pin v1'])
+    const baseHead = git(base, ['rev-parse', 'HEAD'])
+    const wt = join(tmp, 'wt')
+    git(base, ['worktree', 'add', '-q', '--detach', wt, baseHead])
+    git(wt, ['checkout', '-q', '-b', 'feat'])
+    git(wt, ['submodule', 'update', '-q', '--init'])
+    git(join(wt, 'sub'), ['fetch', '-q', 'origin'])
+    git(join(wt, 'sub'), ['checkout', '-q', s2])
+    git(wt, ['add', 'sub'])
+    git(wt, ['commit', '-q', '-m', 'bump sub v2'])
+    const branchHead = git(wt, ['rev-parse', 'HEAD'])
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    expect(result.converged).toBe(false)
+    expect(result.reason).toBe('not_diverged')
+    expect(result.gitlinks[0].action).toBe('skipped_not_diverged')
   })
 })

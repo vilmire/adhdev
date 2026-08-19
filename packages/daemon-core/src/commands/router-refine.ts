@@ -704,6 +704,17 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                             convergeReason: converge.reason,
                             gitlinks: converge.gitlinks,
                         });
+                        if (converge.reason === 'submodule_commit_unavailable') {
+                            // ★Loud, because this reason means "we could not judge", not "there
+                            // is nothing to converge". Silently defaulting to the not_diverged
+                            // wording is what previously made this look like a stale daemon.
+                            LOG.warn('Mesh', `[Refinery] Could NOT determine submodule gitlink divergence for node ${node.id} — `
+                                + `a gitlink commit is missing from the local submodule object store (auto-converge could not run): `
+                                + converge.gitlinks
+                                    .filter(g => g.action === 'skipped_commit_unavailable')
+                                    .map(g => `${g.path} (missing: ${(g.unavailable || []).join('+') || 'unknown'}; base=${(g.baseCommit || '?').slice(0, 12)} branch=${(g.branchCommit || '?').slice(0, 12)})`)
+                                    .join(', '));
+                        }
                         recordMeshRefineStage(refineStages, 'sync_base', 'passed', syncStarted, {
                             ahead: divergence.ahead,
                             behind: divergence.behind,
