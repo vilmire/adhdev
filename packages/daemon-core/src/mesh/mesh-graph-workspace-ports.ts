@@ -76,8 +76,21 @@ export class WorkspaceSagaPermanentError extends Error {
     }
 }
 
+export interface WorkspaceBaseRevisionRequest {
+    meshId: string;
+    graphId: string;
+    workspaceRef: string;
+    sourceNodeId?: string;
+}
+
 export interface WorkspaceSagaPorts {
     nowMs(): number;
+    /**
+     * Derive the base revision from the declared source node when the declaration
+     * omitted `base_revision`. Returns undefined when it cannot be resolved — the
+     * saga then stays `declared` rather than cloning from an unknown base.
+     */
+    resolveBaseRevision(req: WorkspaceBaseRevisionRequest): Promise<string | undefined>;
     createWorktree(req: WorkspaceCloneRequest): Promise<WorkspaceCloneResult>;
     findOwnedWorktree(req: WorkspaceInspectRequest): Promise<WorkspaceCloneResult | null>;
     inspectWorktree(req: WorkspaceInspectRequest): Promise<WorkspaceInspectReport>;
@@ -100,6 +113,7 @@ export function createDefaultWorkspaceSagaPorts(opts: DefaultWorkspaceSagaPortOp
     void opts.registerNode;
     return {
         nowMs: () => Date.now(),
+        resolveBaseRevision: req => defaultResolveBaseRevision(req),
         createWorktree: req => defaultCreateWorktree(req),
         findOwnedWorktree: req => defaultFindOwnedWorktree(req),
         inspectWorktree: req => defaultInspectWorktree(req),
@@ -143,6 +157,53 @@ async function gitConfigSet(cwd: string, key: string, value: string): Promise<vo
     await execFileAsync('git', ['config', key, value], {
         cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true, env: gitChildEnv(),
     });
+}
+
+/**
+ * Derive the base revision from the declared source node, mirroring what
+ * `clone_mesh_node` already does for an operator-driven worktree clone
+ * (commands/med-family/mesh-crud.ts `clone_mesh_node`): resolve the source
+ * node's repo, then branch from the branch that repo currently has checked out.
+ *
+ * `clone_mesh_node` reaches the same place implicitly — it forwards an absent
+ * `baseBranch` to createWorktree, which omits the `git worktree add` start ref
+ * so git branches from the source repo's HEAD. The saga cannot rely on that
+ * implicit path because it PERSISTS the resolved base revision: the recorded
+ * value is later re-read by the ahead-probe in defaultInspectWorktree, which
+ * compensation safety depends on. So we resolve the same revision explicitly
+ * and store it, instead of leaving the intent's baseRevision null forever.
+ *
+ * Returns undefined (never throws) whenever the mesh, node, repo, or git call
+ * is unavailable — an unresolvable base leaves the saga `declared`, which is
+ * the pre-existing safe behaviour.
+ */
+async function defaultResolveBaseRevision(req: WorkspaceBaseRevisionRequest): Promise<string | undefined> {
+    let repoRoot: string;
+    try {
+        ({ repoRoot } = resolveSourceRepo(req.meshId, req.sourceNodeId));
+    } catch {
+        return undefined;
+    }
+    // Symbolic branch name first: it is what an operator would have typed as
+    // base_revision, and it keeps the remote-freshness resolution in
+    // createWorktree (resolveWorktreeBaseStartPoint) meaningful — a raw SHA
+    // would silently disable it.
+    try {
+        const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true, env: gitChildEnv(),
+        });
+        const branch = stdout.trim();
+        if (branch && branch !== 'HEAD') return branch;
+    } catch { /* fall through to the detached-HEAD sha probe */ }
+    // Detached HEAD: a sha is still a usable, deterministic base.
+    try {
+        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+            cwd: repoRoot, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true, env: gitChildEnv(),
+        });
+        return stdout.trim() || undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 async function defaultCreateWorktree(req: WorkspaceCloneRequest): Promise<WorkspaceCloneResult> {

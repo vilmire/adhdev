@@ -471,6 +471,39 @@ export interface MeshUpstreamOutput {
 }
 
 /**
+ * Enumerate the pointers that WOULD have resolved, appended to the
+ * required_input_missing message.
+ *
+ * A bare "found nothing at '/worker_result/x'" cannot be acted on: the author
+ * cannot tell whether the upstream produced no output at all, produced an
+ * envelope shaped differently than they assumed, or simply spelled the pointer
+ * wrong. Listing the real keys turns a guess-and-retry loop into one correction.
+ *
+ * Only key NAMES are listed — never values — so this stays a structural hint and
+ * carries no worker content into the error text. It descends exactly one level
+ * into `worker_result` because that is where bindings actually point.
+ */
+function describeAvailablePointers(upstream: MeshUpstreamOutput | undefined): string {
+    if (!upstream) return ' (no output is recorded for that ref yet)';
+    const envelope = upstream.envelope;
+    if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+        return ' (that ref has an output, but its envelope is not an object)';
+    }
+    const pointers: string[] = [];
+    for (const key of Object.keys(envelope as Record<string, unknown>)) {
+        pointers.push(`/${key}`);
+        if (key !== 'worker_result') continue;
+        const workerResult = (envelope as Record<string, unknown>).worker_result;
+        if (!workerResult || typeof workerResult !== 'object' || Array.isArray(workerResult)) continue;
+        for (const sub of Object.keys(workerResult as Record<string, unknown>)) {
+            pointers.push(`/worker_result/${sub}`);
+        }
+    }
+    if (pointers.length === 0) return ' (that ref\'s envelope is empty)';
+    return `. Available pointers on ref '${upstream.ref}': ${pointers.join(', ')}`;
+}
+
+/**
  * Resolve every binding against the upstream outputs, applying redaction, control
  * stripping, per-binding size policy, and the combined-material cap.
  *
@@ -495,7 +528,8 @@ export function resolveInputBindings(
                 // instruction whose evidence silently vanished.
                 throw new MeshMaterializationError(
                     'required_input_missing',
-                    `required binding '${binding.as}' found nothing at '${binding.select}' of ref '${binding.from}'`,
+                    `required binding '${binding.as}' found nothing at '${binding.select}' of ref '${binding.from}'`
+                        + describeAvailablePointers(upstream),
                     binding.as,
                 );
             }

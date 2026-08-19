@@ -292,9 +292,36 @@ async function advanceWorkspaceIntent(
         return compensateClaimedIntent({ ...intent, ownerTag }, ports, generation);
     }
 
-    if (intent.sagaState === 'declared' && !intent.baseRevision) {
-        // design :509-511 — stay declared until the base revision materializes.
-        return { graphId, workspaceRef, sagaState: 'declared', action: 'skipped_no_base' };
+    let baseRevision = intent.baseRevision;
+    if (intent.sagaState === 'declared' && !baseRevision) {
+        // A declaration that named a source node but omitted base_revision used to
+        // park here FOREVER: this branch wrote nothing, logged nothing, and the
+        // reconcile tick re-entered it every few seconds. The one designed escape
+        // (setWorkspaceBaseRevision) has no production caller, so the graph could
+        // never leave 'declared'. Derive the base from the source node the SAME way
+        // clone_mesh_node does — that node is precisely the evidence needed to
+        // interpret "base revision", and it was on the declaration all along.
+        const derived = await ports.resolveBaseRevision({
+            meshId: intent.meshId,
+            graphId,
+            workspaceRef,
+            sourceNodeId: intent.sourceNodeId,
+        }).catch(() => undefined);
+        if (derived) {
+            store.transaction(() => {
+                store.graphStore().patchWorkspaceIntent(graphId, workspaceRef, {
+                    baseRevision: derived,
+                }, nowIso, { leaseGeneration: generation });
+            });
+            baseRevision = derived;
+            LOG.info('MeshGraphWorkspace', `derived base revision '${derived}' for ${graphId}/${workspaceRef} from source node ${intent.sourceNodeId ?? 'base'}`);
+        } else {
+            // design :509-511 — still no base: stay declared. Unlike before, the
+            // reason is now visible (mesh_graph_view surfaces a declared_no_base
+            // action) instead of failing silently.
+            LOG.debug('MeshGraphWorkspace', `${graphId}/${workspaceRef} stays declared: no base_revision and none derivable from source node ${intent.sourceNodeId ?? '(none declared)'}`);
+            return { graphId, workspaceRef, sagaState: 'declared', action: 'skipped_no_base' };
+        }
     }
 
     store.transaction(() => {
@@ -304,7 +331,7 @@ async function advanceWorkspaceIntent(
         }, nowIso, { leaseGeneration: generation });
     });
 
-    return prepareClaimedIntent({ ...intent, sagaState: 'preparing', ownerTag }, ports, generation, faults);
+    return prepareClaimedIntent({ ...intent, baseRevision, sagaState: 'preparing', ownerTag }, ports, generation, faults);
 }
 
 async function prepareClaimedIntent(

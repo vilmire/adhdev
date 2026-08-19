@@ -128,7 +128,7 @@ export interface MeshGraphView {
     workspaces: MeshGraphWorkspaceView[];
     /** Only populated when a coordinator genuinely must act. */
     nextCoordinatorAction?: Array<{
-        kind: 'gate_awaiting' | 'gate_claimed' | 'gate_reclaim' | 'workspace_compensation';
+        kind: 'gate_awaiting' | 'gate_claimed' | 'gate_reclaim' | 'workspace_compensation' | 'workspace_declared_no_base';
         detail: string;
         gateId?: string;
         workspaceRef?: string;
@@ -327,6 +327,19 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
                     kind: 'workspace_compensation',
                     workspaceRef: ws.workspaceRef,
                     detail: `Workspace '${ws.workspaceRef}' needs manual compensation: ${ws.lastError ?? 'compensation refused'}.`,
+                });
+            } else if (ws.sagaState === 'declared' && !ws.baseRevision) {
+                // The saga parks a base-less intent in 'declared' and retries silently.
+                // The retry is only productive once a base revision exists, so this IS a
+                // required coordinator action, not ordinary in-flight work — without it
+                // the graph looks alive while making no progress at all.
+                actions.push({
+                    kind: 'workspace_declared_no_base',
+                    workspaceRef: ws.workspaceRef,
+                    detail: `Workspace '${ws.workspaceRef}' is stuck in 'declared': no base_revision was given and none could be derived from `
+                        + `${ws.sourceNodeId ? `source node '${ws.sourceNodeId}' (its repo is unreachable on this daemon, or git could not resolve its HEAD)` : 'a source node, because the declaration named none'}. `
+                        + 'The workspace will never clone and every task bound to it stays blocked. '
+                        + `Re-declare the workspace with an explicit base_revision (e.g. 'main')${ws.sourceNodeId ? '' : ' and a source_node_id'}.`,
                 });
             }
         }

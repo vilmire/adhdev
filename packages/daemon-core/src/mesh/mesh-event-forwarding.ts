@@ -2,7 +2,7 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries, readLedgerEntriesByKind } from './mesh-ledger.js';
+import { appendLedgerEntry, buildTaskCompletionEvidence, extractJsonObjectFromSummary, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries, readLedgerEntriesByKind } from './mesh-ledger.js';
 import type { SessionRecoveryContext } from './mesh-ledger.js';
 import { updateSessionTaskStatus, updateTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue, REDRIVE_RECLAIM_REASONS, REDRIVE_SUPERSEDE_WINDOW_MS } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -479,6 +479,40 @@ function isRealProviderCompletionEvent(metadataEvent: Record<string, unknown>): 
 function isGenuineCompletionEvidence(metadataEvent: Record<string, unknown>): boolean {
     if (isFalseIdleCompletion(metadataEvent)) return false;
     return !!readWorkerResultMetadata(metadataEvent) || !!readNonEmptyString(metadataEvent.finalSummary);
+}
+
+/**
+ * The worker result for the GRAPH OUTPUT ENVELOPE (design :149-163), which is what
+ * downstream `inputs_from` pointers like `/worker_result/validationResults` select
+ * against.
+ *
+ * readWorkerResultMetadata alone reads only pre-populated event fields
+ * (workerResult / meshWorkerResult / structuredResult). Across daemon-core exactly
+ * ONE writer ever sets those: the remote-relay passthrough. A LOCAL completion has
+ * no writer at all, so the envelope's worker_result was always undefined and every
+ * documented pointer into it silently missed — the failure this fixes.
+ *
+ * The ledger's own evidence record has always fallen back to parsing the worker's
+ * trailing JSON block out of the final summary (resolveWorkerResult →
+ * extractJsonObjectFromSummary). This applies the same fallback to the envelope so
+ * both surfaces agree on what the worker reported.
+ *
+ * REMOTE-RELAY SAFETY: the pre-populated metadata is checked FIRST and returned
+ * as-is. A relayed completion therefore takes exactly the path it took before this
+ * change; the parse only runs when there was nothing to relay. It is a pure
+ * fallback, never an override.
+ *
+ * Shape note: the parsed object is passed through unnormalized, matching how a
+ * relayed workerResult is passed through — so `/worker_result/<field>` selects the
+ * worker's own reported keys (status, changedFiles, validationResults, gitStatus,
+ * errors, nextAction) exactly as documented. extractJsonObjectFromSummary already
+ * requires that worker-result shape before it will match, so a stray JSON blob in
+ * the summary is not mistaken for a result.
+ */
+function resolveGraphEnvelopeWorkerResult(metadataEvent: Record<string, unknown>): Record<string, unknown> | undefined {
+    const explicit = readWorkerResultMetadata(metadataEvent);
+    if (explicit) return explicit;
+    return extractJsonObjectFromSummary(readNonEmptyString(metadataEvent.finalSummary) || undefined);
 }
 
 // (FALSEIDLE-BGCHILD-b) A later genuine completion of the SAME task that carries a
@@ -1637,7 +1671,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 // as the terminal flip (design :317-327 step 2).
                 envelope: {
                     finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
-                    workerResult: readWorkerResultMetadata(args.metadataEvent),
+                    workerResult: resolveGraphEnvelopeWorkerResult(args.metadataEvent),
                     nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
                     providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
                 },

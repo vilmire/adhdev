@@ -832,7 +832,14 @@ function readStringArray(value: unknown): string[] {
     return value.map(item => readNonEmptyString(item)).filter(Boolean) as string[];
 }
 
-function extractJsonObjectFromSummary(summary?: string): Record<string, unknown> | undefined {
+/**
+ * Exported for the graph output envelope (mesh-event-forwarding
+ * buildGraphEnvelopeWorkerResult), which needs the SAME final-summary parse the
+ * ledger evidence record has always used — otherwise `envelope.worker_result`
+ * is empty for every locally-completed task and documented pointers like
+ * `/worker_result/validationResults` resolve to nothing.
+ */
+export function extractJsonObjectFromSummary(summary?: string): Record<string, unknown> | undefined {
     const text = readNonEmptyString(summary);
     if (!text) return undefined;
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);

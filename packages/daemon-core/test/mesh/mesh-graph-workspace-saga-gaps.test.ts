@@ -98,12 +98,15 @@ function createFakePorts(opts?: {
     sessions?: { sessionIds: string[]; unknown?: boolean };
     assigned?: string[];
     failClone?: Error;
+    /** Base revision the source node resolves to; undefined = underivable (default). */
+    derivedBaseRevision?: string;
 }): { ports: WorkspaceSagaPorts; clones: number; removes: number; trees: Map<string, FakeTree> } {
     const trees = new Map<string, FakeTree>();
     let clones = 0;
     let removes = 0;
     const ports: WorkspaceSagaPorts = {
         nowMs: () => Date.now(),
+        resolveBaseRevision: async () => opts?.derivedBaseRevision,
         createWorktree: async req => {
             if (opts?.failClone) throw opts.failClone;
             clones += 1;
