@@ -627,8 +627,9 @@ function buildMagiPanelProposal(detected, opts = {}) {
 var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_status",
   "mesh_list_nodes",
-  "mesh_enqueue_task",
+  // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
   "mesh_enqueue_batch",
+  "mesh_enqueue_task",
   "mesh_view_queue",
   // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
   "mesh_graph_view",
@@ -1030,9 +1031,30 @@ var MESH_LIST_NODES_TOOL = {
     }
   }
 };
+var ENQUEUE_TOOL_GROUP = "mesh.enqueue";
+var ENQUEUE_TOOL_GROUP_MEMBERS = ["mesh_enqueue_batch", "mesh_enqueue_task"];
+var ENQUEUE_DISCOVERY_KEYWORDS = ["enqueue", "delegate", "task", "graph", "dependency"];
+var ENQUEUE_RANK_QUERIES = ["enqueue", "delegate"];
+var ENQUEUE_BATCH_DISCOVERY_META = {
+  toolGroup: ENQUEUE_TOOL_GROUP,
+  toolGroupMembers: ENQUEUE_TOOL_GROUP_MEMBERS,
+  discoveryKeywords: ENQUEUE_DISCOVERY_KEYWORDS,
+  discoveryRankQueries: ENQUEUE_RANK_QUERIES,
+  discoveryRank: 0,
+  enqueueRole: "default"
+};
+var ENQUEUE_TASK_DISCOVERY_META = {
+  toolGroup: ENQUEUE_TOOL_GROUP,
+  toolGroupMembers: ENQUEUE_TOOL_GROUP_MEMBERS,
+  discoveryKeywords: ENQUEUE_DISCOVERY_KEYWORDS,
+  discoveryRankQueries: ENQUEUE_RANK_QUERIES,
+  discoveryRank: 10,
+  enqueueRole: "single_task_fallback"
+};
 var MESH_ENQUEUE_TASK_TOOL = {
   name: "mesh_enqueue_task",
-  description: "Add a new task to the mesh work queue. Idle nodes will automatically pull and execute tasks from this queue. Use this instead of mesh_send_task when you do not need to target a specific node. For a dependency-wired MULTI-task graph prefer mesh_enqueue_batch: it inserts the whole set atomically and lets depends_on reference batch-local refs, so no half-registered chain can be left behind. Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection (by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).",
+  description: "SINGLE-TASK FALLBACK. Use only when exactly one new worker task is currently known and no downstream graph step can yet be declared. If two or more steps are known\u2014including steps that need outputs, worktree preparation, a condition, or a coordinator action\u2014load and use mesh_enqueue_batch instead. Same-session continuation belongs in mesh_send_task. Adds the task to the mesh work queue; idle nodes automatically pull and execute from it. Use this instead of mesh_send_task when you do not need to target a specific node. Supports task-level priority (high tasks are pulled ahead of older normal/low tasks), not_before delayed execution (hold a task pending until a time), maxRetries (auto-fail after N requeues), and duplicate detection (by default warns in the response when an in-flight task with the same message+target already exists; pass block_duplicate=true to refuse instead, or allow_duplicate=true to silence the warning).",
+  _meta: ENQUEUE_TASK_DISCOVERY_META,
   inputSchema: {
     type: "object",
     properties: {
@@ -1070,7 +1092,8 @@ var MESH_ENQUEUE_TASK_TOOL = {
 };
 var MESH_ENQUEUE_BATCH_TOOL = {
   name: "mesh_enqueue_batch",
-  description: "G5: atomically enqueue a dependency-wired set of tasks \u2014 either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). Use this instead of N sequential mesh_enqueue_task calls whenever you are wiring a multi-task graph: give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed \u2014 array order does not matter). A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own. Beyond plain ordering it also accepts a full orchestration graph, so you can submit the WHOLE known plan once instead of enqueueing each step as the previous one finishes: `inputs_from` binds selected predecessor outputs into a later task (no hand-copying worker text), `run_if` branches on those outputs, `gates` declare steps that stop for a coordinator action (Refinery landing, approval, CI wait, publish, deploy) with downstream tasks pointing at them via `gated_by`, and `workspaces` + `workspace_ref` prepare a worktree later for a task that needs one. These are strictly additive: a batch using only message/depends_on behaves exactly as before. Only graph-using batches create a graph, inspectable with mesh_graph_view.",
+  description: "DEFAULT enqueue surface for a plan with two or more known graph steps. Atomically persists the graph plan and worker queue entries. Supports batch-local refs, completion dependencies, selected predecessor outputs through `inputs_from`, declarative `run_if`, delayed `workspace_ref` preparation, and coordinator gates. Worker dispatch still requires the shared dependency predicate: all active worker dependencies completed and no system block. Git workspace preparation is a compensated saga and is reported separately from DB atomicity. Atomicity in detail: either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). Give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed \u2014 array order does not matter). A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own. `inputs_from` binds selected predecessor outputs into a later task (no hand-copying worker text), `run_if` branches on those outputs, `gates` declare steps that stop for a coordinator action (Refinery landing, approval, CI wait, publish, deploy) with downstream tasks pointing at them via `gated_by`, and `workspaces` + `workspace_ref` prepare a worktree later for a task that needs one. These are strictly additive: a batch using only message/depends_on behaves exactly as before. Only graph-using batches create a graph, inspectable with mesh_graph_view.",
+  _meta: ENQUEUE_BATCH_DISCOVERY_META,
   inputSchema: {
     type: "object",
     properties: {
@@ -2083,8 +2106,11 @@ var MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_LIST_NODES_TOOL,
-  MESH_ENQUEUE_TASK_TOOL,
+  // GRAPH-ORCHESTRATION Phase F — batch BEFORE task. Registry order is what a
+  // client that lists tools without ranking sees first, so the default enqueue
+  // surface leads and the single-task fallback follows it.
   MESH_ENQUEUE_BATCH_TOOL,
+  MESH_ENQUEUE_TASK_TOOL,
   MESH_VIEW_QUEUE_TOOL,
   // GRAPH-ORCHESTRATION Phase E — placed next to the queue/enqueue tools so a
   // coordinator that loaded the batch schema also discovers how to pass a gate.
