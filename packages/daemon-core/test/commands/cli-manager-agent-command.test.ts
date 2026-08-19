@@ -224,4 +224,152 @@ describe('DaemonCliManager agent_command', () => {
     expect(result).toMatchObject({ success: true, status: 'generating' })
     expect(sendMessage).toHaveBeenCalledWith('next task')
   })
+
+  // ── interrupt_capability / interrupt_turn dispatch (delivery_mode 'interrupt') ──
+  // createManager()'s mock adapter models a legacy (non-spec-driven) adapter — it
+  // has no getInterruptCapability/interruptTurn methods, same shape as any adapter
+  // that predates this feature. Both actions must fail closed rather than throwing
+  // or silently reporting success, so a caller probing an adapter that cannot
+  // interrupt gets a clear 'unsupported' answer, not a crash or a false positive.
+  describe('interrupt_capability / interrupt_turn on an adapter with no interrupt support', () => {
+    it('interrupt_capability reports unsupported, not an exception', async () => {
+      const { manager } = createManager('generating')
+
+      const result = await manager.handleCliCommand('agent_command', {
+        targetSessionId: 'session-1',
+        agentType: 'hermes-cli',
+        cliType: 'hermes-cli',
+        action: 'interrupt_capability',
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        supported: false,
+        reason: 'interrupt_not_implemented',
+      })
+      expect(String(result?.message || '')).toContain('hermes-cli')
+    })
+
+    it('interrupt_turn is REJECTED, not silently treated as success', async () => {
+      const { manager, sendMessage } = createManager('generating')
+
+      const result = await manager.handleCliCommand('agent_command', {
+        targetSessionId: 'session-1',
+        agentType: 'hermes-cli',
+        cliType: 'hermes-cli',
+        action: 'interrupt_turn',
+      })
+
+      expect(result).toMatchObject({
+        success: false,
+        interrupted: false,
+        reason: 'interrupt_not_implemented',
+      })
+      expect(String(result?.error || '')).toContain('cannot interrupt')
+      // No prompt should have been sent as a side effect of a failed interrupt.
+      expect(sendMessage).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── interrupt_turn on an adapter that DOES support it — dispatch wiring only.
+  // Capability resolution/PTY-write correctness itself is covered by
+  // cli-adapter-interrupt-turn.test.ts; this locks that handleCliCommand routes
+  // the adapter's outcome through verbatim rather than reshaping or swallowing it.
+  describe('interrupt_capability / interrupt_turn on an adapter that supports it', () => {
+    function createInterruptibleManager(outcome:
+      | { ok: true; keyName: string; bytes: number; confidence: string }
+      | { ok: false; reason: string; message: string },
+    ) {
+      const sendMessage = vi.fn(async () => {})
+      const interruptTurn = vi.fn(async () => outcome)
+      const getInterruptCapability = vi.fn(() => (
+        outcome.ok
+          ? { supported: true, keyName: outcome.keyName, confidence: outcome.confidence }
+          : { supported: false, reason: outcome.reason, message: outcome.message }
+      ))
+      const adapter = {
+        cliType: 'claude-cli',
+        cliName: 'Claude Code',
+        workingDir: '/repo',
+        spawn: vi.fn(async () => {}),
+        sendMessage,
+        forceSendMessage: vi.fn(async () => {}),
+        getStatus: vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] })),
+        getScriptParsedStatus: vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] })),
+        getPartialResponse: vi.fn(() => ''),
+        shutdown: vi.fn(),
+        cancel: vi.fn(),
+        isProcessing: vi.fn(() => true),
+        isReady: vi.fn(() => false),
+        setOnStatusChange: vi.fn(),
+        interruptTurn,
+        getInterruptCapability,
+      }
+      const manager = new DaemonCliManager({
+        getServerConn: () => null,
+        getP2p: () => null,
+        onStatusChange: vi.fn(),
+        removeAgentTracking: vi.fn(),
+        getInstanceManager: () => null,
+      }, {
+        resolve: vi.fn(() => ({ type: 'claude-cli', category: 'cli' })),
+        getMeta: vi.fn(() => ({ type: 'claude-cli', category: 'cli' })),
+      } as any)
+      manager.adapters.set('session-1', adapter as any)
+      return { manager, adapter, interruptTurn, getInterruptCapability }
+    }
+
+    it('interrupt_turn success is passed through with keyName/confidence', async () => {
+      const { manager, interruptTurn } = createInterruptibleManager({
+        ok: true, keyName: 'Ctrl-C', bytes: 1, confidence: 'proven',
+      })
+
+      const result = await manager.handleCliCommand('agent_command', {
+        targetSessionId: 'session-1',
+        agentType: 'claude-cli',
+        cliType: 'claude-cli',
+        action: 'interrupt_turn',
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        interrupted: true,
+        keyName: 'Ctrl-C',
+        confidence: 'proven',
+      })
+      expect(interruptTurn).toHaveBeenCalledTimes(1)
+    })
+
+    it('interrupt_turn failure (e.g. not_busy) is reported as success:false, not thrown', async () => {
+      const { manager } = createInterruptibleManager({
+        ok: false, reason: 'not_busy', message: 'Session is idle; nothing to interrupt.',
+      })
+
+      const result = await manager.handleCliCommand('agent_command', {
+        targetSessionId: 'session-1',
+        agentType: 'claude-cli',
+        cliType: 'claude-cli',
+        action: 'interrupt_turn',
+      })
+
+      expect(result).toMatchObject({ success: false, interrupted: false, reason: 'not_busy' })
+      expect(result?.error).toContain('idle')
+    })
+
+    it('interrupt_capability probe never calls interruptTurn (read-only)', async () => {
+      const { manager, interruptTurn } = createInterruptibleManager({
+        ok: true, keyName: 'Ctrl-C', bytes: 1, confidence: 'declared',
+      })
+
+      const result = await manager.handleCliCommand('agent_command', {
+        targetSessionId: 'session-1',
+        agentType: 'claude-cli',
+        cliType: 'claude-cli',
+        action: 'interrupt_capability',
+      })
+
+      expect(result).toMatchObject({ success: true, supported: true, keyName: 'Ctrl-C', confidence: 'declared' })
+      expect(interruptTurn).not.toHaveBeenCalled()
+    })
+  })
 })
