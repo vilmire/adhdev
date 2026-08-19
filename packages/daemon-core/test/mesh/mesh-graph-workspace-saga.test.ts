@@ -54,6 +54,7 @@ import {
     setWorkspaceBaseRevision,
 } from '../../src/mesh/mesh-graph-workspace-saga.js';
 import { WorkspaceSagaPermanentError, type WorkspaceSagaPorts } from '../../src/mesh/mesh-graph-workspace-ports.js';
+import { buildMeshGraphViews } from '../../src/mesh/mesh-graph-view.js';
 import { classifyWorkspaceCompensationSafety } from '../../src/mesh/mesh-graph-workspace-safety.js';
 import {
     __clearMeshQueueForTests,
@@ -280,6 +281,151 @@ describe('delayed workspace_ref binding (design :441-478)', () => {
             await runWorkspaceSagaTick(id, fake.ports);
             expect(fake.clones).toBe(1);
             expect(MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!.sagaState).toBe('ready');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    // The defect this pins: a declaration that omitted base_revision parked in
+    // 'declared' FOREVER. The branch returned skipped_no_base without writing,
+    // logging or erroring, and the reconcile tick re-entered it every few seconds;
+    // the one designed escape (setWorkspaceBaseRevision, exercised above) has no
+    // production caller, so nothing ever supplied the missing revision.
+    it('derives the base revision from the source node instead of parking in declared forever', async () => {
+        const id = meshId('derive_base');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id, { baseRevision: undefined });
+            MeshRuntimeStore.getInstance().graphStore().patchWorkspaceIntent(
+                graphId, workspaceRef, { baseRevision: null }, nowIso(),
+            );
+            const fake = createFakePorts({ derivedBaseRevision: 'main' });
+            const tick = await runWorkspaceSagaTick(id, fake.ports);
+
+            // One tick — no operator call in between — leaves 'declared' behind.
+            expect(tick.steps[0]?.action).not.toBe('skipped_no_base');
+            expect(tick.steps[0]?.sagaState).toBe('ready');
+            expect(fake.clones).toBe(1);
+
+            // The derived revision is PERSISTED, not merely used in-flight: the
+            // ahead-probe that compensation safety depends on re-reads it later.
+            const intent = MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!;
+            expect(intent.baseRevision).toBe('main');
+            expect(intent.sagaState).toBe('ready');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('passes the derived revision to the clone rather than cloning from an unknown base', async () => {
+        const id = meshId('derive_base_clone_arg');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id, { baseRevision: undefined });
+            MeshRuntimeStore.getInstance().graphStore().patchWorkspaceIntent(
+                graphId, workspaceRef, { baseRevision: null }, nowIso(),
+            );
+            const seen: Array<string | undefined> = [];
+            const fake = createFakePorts({ derivedBaseRevision: 'release/v2' });
+            const ports: WorkspaceSagaPorts = {
+                ...fake.ports,
+                createWorktree: req => { seen.push(req.baseRevision); return fake.ports.createWorktree(req); },
+            };
+            await runWorkspaceSagaTick(id, ports);
+            expect(seen).toEqual(['release/v2']);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('stays declared — the pre-existing safe behaviour — when the source node yields no revision', async () => {
+        const id = meshId('derive_base_unresolvable');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id, { baseRevision: undefined });
+            MeshRuntimeStore.getInstance().graphStore().patchWorkspaceIntent(
+                graphId, workspaceRef, { baseRevision: null }, nowIso(),
+            );
+            // derivedBaseRevision omitted → the port resolves to undefined.
+            const fake = createFakePorts();
+            const tick = await runWorkspaceSagaTick(id, fake.ports);
+            expect(tick.steps[0]?.action).toBe('skipped_no_base');
+            expect(fake.clones).toBe(0);
+            expect(MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!.sagaState).toBe('declared');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('a throwing resolveBaseRevision degrades to declared, never to a clone from an unknown base', async () => {
+        const id = meshId('derive_base_throws');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id, { baseRevision: undefined });
+            MeshRuntimeStore.getInstance().graphStore().patchWorkspaceIntent(
+                graphId, workspaceRef, { baseRevision: null }, nowIso(),
+            );
+            const fake = createFakePorts();
+            const ports: WorkspaceSagaPorts = {
+                ...fake.ports,
+                resolveBaseRevision: async () => { throw new Error('git is unreachable'); },
+            };
+            const tick = await runWorkspaceSagaTick(id, ports);
+            expect(tick.steps[0]?.action).toBe('skipped_no_base');
+            expect(fake.clones).toBe(0);
+            expect(MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!.sagaState).toBe('declared');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('never re-derives over a base revision that was declared explicitly', async () => {
+        const id = meshId('derive_base_no_override');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id, { baseRevision: 'main' });
+            let derivations = 0;
+            const fake = createFakePorts({ derivedBaseRevision: 'some-other-branch' });
+            const ports: WorkspaceSagaPorts = {
+                ...fake.ports,
+                resolveBaseRevision: async () => { derivations += 1; return 'some-other-branch'; },
+            };
+            await runWorkspaceSagaTick(id, ports);
+            expect(derivations).toBe(0);
+            expect(MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!.baseRevision).toBe('main');
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    // The paired half of the fix: when derivation genuinely cannot resolve, the
+    // saga still stays declared — but the stall must stop being SILENT. Before
+    // this, a graph parked here looked alive while making no progress at all, with
+    // nothing written, logged, or surfaced anywhere a coordinator would look.
+    it('mesh_graph_view names a base-less declared workspace as a required coordinator action', async () => {
+        const id = meshId('view_declared_no_base');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id, { baseRevision: undefined });
+            MeshRuntimeStore.getInstance().graphStore().patchWorkspaceIntent(
+                graphId, workspaceRef, { baseRevision: null }, nowIso(),
+            );
+            await runWorkspaceSagaTick(id, createFakePorts().ports);
+
+            const view = buildMeshGraphViews(id, { graphId })[0]!;
+            const action = view.nextCoordinatorAction?.find(a => a.kind === 'workspace_declared_no_base');
+            expect(action).toBeDefined();
+            expect(action!.workspaceRef).toBe(workspaceRef);
+            // Actionable, not just present: it must name the source node it tried and
+            // say what the operator has to do.
+            expect(action!.detail).toContain('local-base');
+            expect(action!.detail).toMatch(/base_revision/);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('raises no such action once a base revision exists', async () => {
+        const id = meshId('view_no_action_when_based');
+        try {
+            const { graphId } = seedGraphWithWorkspace(id, { baseRevision: 'main' });
+            await runWorkspaceSagaTick(id, createFakePorts().ports);
+            const view = buildMeshGraphViews(id, { graphId })[0]!;
+            expect(view.nextCoordinatorAction?.some(a => a.kind === 'workspace_declared_no_base')).toBeFalsy();
         } finally {
             cleanup(id);
         }

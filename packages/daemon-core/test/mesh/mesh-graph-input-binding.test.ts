@@ -288,3 +288,74 @@ describe('untrusted evidence envelope', () => {
             .toThrowError(/envelope count mismatch/);
     });
 });
+
+// ── required_input_missing diagnostics (design :281) ────────────────────────
+//
+// fail-closed is CORRECT and stays. What was missing is actionability: a bare
+// "found nothing at '/worker_result/x'" cannot be acted on, because the author
+// cannot tell whether the upstream produced no output at all, produced a
+// differently-shaped envelope, or whether they simply mis-spelled the pointer.
+
+describe('required_input_missing names the pointers that would have resolved', () => {
+    it('still throws required_input_missing — fail-closed is unchanged', () => {
+        expect(() => resolveInputBindings(bind(), upstream('a', { worker_result: { other: 1 } })))
+            .toThrowError(MeshMaterializationError);
+        try {
+            resolveInputBindings(bind(), upstream('a', { worker_result: { other: 1 } }));
+        } catch (err) {
+            expect((err as MeshMaterializationError).code).toBe('required_input_missing');
+        }
+    });
+
+    it('enumerates top-level and worker_result pointers', () => {
+        expect(() => resolveInputBindings(
+            bind(),
+            upstream('a', { final_summary: 'done', worker_result: { status: 'completed', nextAction: 'merge' } }),
+        )).toThrowError(/\/final_summary.*\/worker_result\/status.*\/worker_result\/nextAction/s);
+    });
+
+    it('lists key NAMES only — never upstream values, so no worker content leaks into the error', () => {
+        let message = '';
+        try {
+            resolveInputBindings(bind(), upstream('a', {
+                worker_result: { status: 'completed', secretish: 'DO-NOT-LEAK-THIS-VALUE' },
+            }));
+        } catch (err) { message = (err as Error).message; }
+        expect(message).toContain('/worker_result/secretish');
+        expect(message).not.toContain('DO-NOT-LEAK-THIS-VALUE');
+        expect(message).not.toContain('completed');
+    });
+
+    it('distinguishes "no output recorded for that ref" from "output exists, wrong pointer"', () => {
+        expect(() => resolveInputBindings(bind(), new Map()))
+            .toThrowError(/no output is recorded for that ref yet/);
+        expect(() => resolveInputBindings(bind(), upstream('a', { final_summary: 'done' })))
+            .toThrowError(/Available pointers/);
+    });
+
+    it('describes a non-object and an empty envelope without throwing on them', () => {
+        expect(() => resolveInputBindings(bind(), upstream('a', 'just a string')))
+            .toThrowError(/envelope is not an object/);
+        expect(() => resolveInputBindings(bind(), upstream('a', [1, 2])))
+            .toThrowError(/envelope is not an object/);
+        expect(() => resolveInputBindings(bind(), upstream('a', {})))
+            .toThrowError(/envelope is empty/);
+    });
+
+    it('does not descend below worker_result — the hint stays a hint, not a dump', () => {
+        let message = '';
+        try {
+            resolveInputBindings(bind(), upstream('a', {
+                worker_result: { nested: { deep: { deeper: 'x' } } },
+            }));
+        } catch (err) { message = (err as Error).message; }
+        expect(message).toContain('/worker_result/nested');
+        expect(message).not.toContain('/worker_result/nested/deep');
+    });
+
+    it('leaves an OPTIONAL missing binding on its silent, auditable path', () => {
+        const resolved = resolveInputBindings(bind({ required: false }), upstream('a', { worker_result: {} }));
+        expect(resolved).toHaveLength(1);
+        expect(resolved[0]?.receipt.present).toBe(false);
+    });
+});

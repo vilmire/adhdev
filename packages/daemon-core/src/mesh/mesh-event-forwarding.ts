@@ -509,7 +509,7 @@ function isGenuineCompletionEvidence(metadataEvent: Record<string, unknown>): bo
  * requires that worker-result shape before it will match, so a stray JSON blob in
  * the summary is not mistaken for a result.
  */
-function resolveGraphEnvelopeWorkerResult(metadataEvent: Record<string, unknown>): Record<string, unknown> | undefined {
+export function resolveGraphEnvelopeWorkerResult(metadataEvent: Record<string, unknown>): Record<string, unknown> | undefined {
     const explicit = readWorkerResultMetadata(metadataEvent);
     if (explicit) return explicit;
     return extractJsonObjectFromSummary(readNonEmptyString(metadataEvent.finalSummary) || undefined);
