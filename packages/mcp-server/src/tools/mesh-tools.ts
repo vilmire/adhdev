@@ -29,6 +29,9 @@ export {
     MESH_ENQUEUE_TASK_TOOL,
     MESH_FAST_FORWARD_NODE_TOOL,
     MESH_GIT_STATUS_TOOL,
+    MESH_GRAPH_VIEW_TOOL,
+    MESH_GRAPH_GATE_CLAIM_TOOL,
+    MESH_GRAPH_GATE_RELEASE_TOOL,
     MESH_INIT_TOOL,
     MESH_REINIT_TOOL,
     MESH_WRITE_MESH_JSON_CONFIG_TOOL,
@@ -91,6 +94,13 @@ export {
     meshQueueRequeue,
     meshViewQueue,
 } from './mesh-tools-queue.js';
+
+// GRAPH-ORCHESTRATION Phase E — coordinator gate verbs + the graph view.
+export {
+    meshGraphGateClaim,
+    meshGraphGateRelease,
+    meshGraphView,
+} from './mesh-tools-graph.js';
 
 export {
     meshMissionList,

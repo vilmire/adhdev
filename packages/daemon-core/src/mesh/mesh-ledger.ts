@@ -143,6 +143,34 @@ export type MeshLedgerKind =
     // payload: { taskId, sessionId, nodeId, workspace, gitDirty: false, changedFiles: 0,
     //            reason: 'no_side_effects' }
     | 'task_completion_no_side_effects'
+    // GRAPH-ORCHESTRATION Phase E — enqueue/graph provenance (design :733-757).
+    //
+    // ★ CONTENT BOUNDARY: these payloads carry IDENTIFIERS, COUNTS, ENUMS and
+    // DIGESTS only. Design :737-738 is explicit — "Message contents and bound
+    // output values are excluded; only sizes and digests are emitted." A task
+    // message, a bound upstream value, or a gate's free-text instructions must
+    // never be written into a graph ledger payload; a digest or a byte count is
+    // the correct way to make one auditable.
+    //
+    // graph_enqueue_committed payload:
+    //   { graphId, batchId, enqueueSurface, schemaVersion, planDigest, missionId?,
+    //     coordinatorSessionId?, taskCount, gateCount, workspaceCount,
+    //     dependencyEdgeCount, onDependencyFailure, orchestrationDecision?, replayed? }
+    // graph_enqueue_validation_failed payload: { code, batchId?, taskCount?, gateCount? }
+    // graph_enqueue_rolled_back payload: { batchId?, code, taskCount? }
+    //   ★ design :752-753 — a rollback record MUST be written in a FRESH
+    //   transaction after the failed graph transaction, otherwise the audit row
+    //   rolls back together with the data it exists to describe. The ledger is a
+    //   separate JSONL append, so this holds by construction here.
+    | 'graph_enqueue_committed'
+    | 'graph_enqueue_validation_failed'
+    | 'graph_enqueue_rolled_back'
+    // Coordinator gate lifecycle (design :740-750). payload:
+    //   { graphId, gateId, ref?, action, outcome?, generation, ownerSessionId?,
+    //     releaseDigest?, materializedNodeIds?, policy?, ambiguousExternalOutcome? }
+    | 'graph_gate_claimed'
+    | 'graph_gate_released'
+    | 'graph_gate_expired'
     ;
 
 export interface MeshLedgerEntry {

@@ -24,6 +24,10 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_enqueue_task',
     'mesh_enqueue_batch',
     'mesh_view_queue',
+    // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
+    'mesh_graph_view',
+    'mesh_graph_gate_claim',
+    'mesh_graph_gate_release',
     'mesh_queue_cancel',
     'mesh_queue_requeue',
     'mesh_send_task',

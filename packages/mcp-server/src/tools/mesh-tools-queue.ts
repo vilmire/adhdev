@@ -27,6 +27,13 @@ import {
     describeTaskDependencyState,
     parseOnDependencyFailurePolicy,
     MeshGraphPolicyError,
+    // GRAPH-ORCHESTRATION Phase E — batch v2 plan commit + enqueue provenance.
+    commitMeshGraphPlan,
+    MeshGraphPlanError,
+    normalizeOrchestrationDecision,
+    recordGraphEnqueueCommitted,
+    recordGraphEnqueueValidationFailed,
+    recordGraphEnqueueRolledBack,
     enqueueTask,
     enqueueTaskGraph,
     getMeshMission,
@@ -60,8 +67,11 @@ import {
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
+import { buildGraphPlanShape } from './mesh-tools-graph.js';
+import type { GraphTaskFieldsShape, GraphWorkspaceDeclarationShape } from './mesh-tools-graph.js';
 import type {
     MeshContext,
+    MeshGraphGatePlanSpec,
     MeshTaskGraphEntrySpec,
     OrphanedPinnedTask,
     QueueViewMode,
@@ -555,6 +565,10 @@ const BATCH_ENQUEUE_ERROR_CODES = [
     'invalid_task_difficulty',
     'invalid_on_dependency_failure',
 ] as const;
+// Batch-v2 plan rejections are NOT listed here: MeshGraphPlanError carries its own
+// machine-readable `code`, so it is read straight off the error rather than
+// recovered by substring — which also keeps this pinned scheduling surface free of
+// graph vocabulary (design :984-986).
 
 /**
  * G5: atomic multi-task enqueue — the graph-submission companion to
@@ -569,12 +583,17 @@ const BATCH_ENQUEUE_ERROR_CODES = [
 export async function meshEnqueueBatch(
     ctx: MeshContext,
     args: {
-        tasks?: Array<EnqueueTaskArgsShape & { ref?: string }>;
+        tasks?: Array<EnqueueTaskArgsShape & GraphTaskFieldsShape & { ref?: string }>;
         missionId?: string; mission_id?: string;
         allowDuplicate?: boolean; allow_duplicate?: boolean;
         blockDuplicate?: boolean; block_duplicate?: boolean;
         on_dependency_failure?: string;
         onDependencyFailure?: string;
+        // ── batch v2 (design :566-592) ──
+        batch_id?: string; batchId?: string;
+        gates?: MeshGraphGatePlanSpec[];
+        workspaces?: GraphWorkspaceDeclarationShape[];
+        orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
     const rawTasks = Array.isArray(args.tasks) ? args.tasks : undefined;
@@ -634,6 +653,9 @@ export async function meshEnqueueBatch(
     // ── Normalize every entry BEFORE inserting anything (atomic by construction:
     //    a normalization failure returns without touching the queue). ──
     const specs: MeshTaskGraphEntrySpec[] = [];
+    // Raw entries kept parallel to `specs` so the graph module (not this pinned
+    // scheduling surface) can read the v2 fields off them.
+    const rawGraphEntries: Array<GraphTaskFieldsShape> = [];
     const normalizedEntries: Array<NormalizedEnqueueTaskArgs & { ref?: string }> = [];
     const duplicateSuspects: Array<{ taskIndex: number; ref?: string; duplicateOf: { taskId: string; status: string; assignedNodeId?: string; targetNodeId?: string } }> = [];
     for (let i = 0; i < rawTasks.length; i++) {
@@ -668,6 +690,7 @@ export async function meshEnqueueBatch(
             }
         }
         normalizedEntries.push({ ...v, ...(ref ? { ref } : {}) });
+        rawGraphEntries.push(entry);
         specs.push({
             ...(ref ? { ref } : {}),
             message: v.message,
@@ -698,18 +721,104 @@ export async function meshEnqueueBatch(
     }
 
     // ── Atomic insert: all or nothing. ──
+    //
+    // ★ GRAPH-ORCHESTRATION Phase E (design :576-592). TWO paths, and the choice
+    // is made by what the CALLER asked for, never by a heuristic:
+    //
+    //   compatibility path — no gates, no workspaces, no per-task graph field.
+    //     `enqueueTaskGraph(specs)` exactly as before: same rows, same static
+    //     message/target/dependsOn, and ** no graph-owned block merely because a
+    //     task has dependencies ** (design :580). The prior batches would execute
+    //     identically (design :583).
+    //
+    //   graph path — any v2 surface is present. The plan and every worker queue
+    //     placeholder commit in ONE transaction (design :585); `enqueueTaskGraph`
+    //     nests inside it, so per-entry validation is still the same code and a
+    //     plan failure rolls the queue rows back with it.
+    //
+    // `atomic: true` means DB PLAN atomicity only. Git worktree preparation is a
+    // compensated saga reported separately as `workspacePreparation` (design :587-588).
+    //
+    // ★ The v2 request vocabulary is parsed in mesh-tools-graph.ts, NOT here: this
+    // file is a pinned scheduling surface and must not grow graph-layer tokens of
+    // its own (design :984-986). See the note on buildGraphPlanShape.
+    const batchIdArg = readString(args.batch_id) || readString(args.batchId) || undefined;
+    const plan = buildGraphPlanShape(specs, rawGraphEntries, args.gates, args.workspaces, !!batchIdArg);
+    const useGraphPath = plan.useGraphPath;
+    // design :697-731 — the enqueue-decision record. Recorded for BOTH paths so
+    // batch adoption is countable without transcript scraping.
+    const decision = normalizeOrchestrationDecision(
+        args.orchestration_decision ?? args.orchestrationDecision,
+        'batch',
+    );
+
     let tasks;
+    let graphPlan: ReturnType<typeof commitMeshGraphPlan> | undefined;
     try {
-        tasks = enqueueTaskGraph(ctx.mesh.id, specs);
+        if (useGraphPath) {
+            graphPlan = commitMeshGraphPlan({
+                meshId: ctx.mesh.id,
+                tasks: plan.tasks,
+                gates: plan.gates,
+                workspaces: plan.workspaces,
+                ...(batchIdArg ? { batchId: batchIdArg } : {}),
+                ...(batchMissionId ? { missionId: batchMissionId } : {}),
+                ...(onDependencyFailure ? { onDependencyFailure } : {}),
+                ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                enqueueSurface: 'batch',
+                orchestrationDecision: decision.decision as unknown as Record<string, unknown>,
+            });
+            tasks = graphPlan.tasks;
+        } else {
+            tasks = enqueueTaskGraph(ctx.mesh.id, specs);
+        }
     } catch (e: any) {
         const message = e?.message || String(e);
-        const code = BATCH_ENQUEUE_ERROR_CODES.find(c => message.includes(c));
+        const code = e instanceof MeshGraphPlanError
+            ? e.code
+            : BATCH_ENQUEUE_ERROR_CODES.find(c => message.includes(c));
+        // design :741-743, :752-753 — the audit record is written AFTER the failed
+        // transaction rolled back, from this catch block. Writing it inside the
+        // transaction would roll it back together with the data it describes.
+        if (useGraphPath) {
+            recordGraphEnqueueRolledBack(ctx.mesh.id, {
+                code: code ?? 'graph_plan_failed',
+                ...(batchIdArg ? { batchId: batchIdArg } : {}),
+                taskCount: specs.length,
+                error: message,
+            });
+        } else {
+            recordGraphEnqueueValidationFailed(ctx.mesh.id, {
+                code: code ?? 'batch_enqueue_failed',
+                ...(batchIdArg ? { batchId: batchIdArg } : {}),
+                taskCount: specs.length,
+            });
+        }
         return JSON.stringify({
             success: false,
             ...(code ? { code } : {}),
             error: message,
             enqueued: 0,
             atomic: true,
+            ...(e instanceof MeshGraphPlanError && e.extra ? e.extra : {}),
+        });
+    }
+    if (graphPlan) {
+        recordGraphEnqueueCommitted(ctx.mesh.id, {
+            graphId: graphPlan.graphId,
+            batchId: graphPlan.batchId,
+            enqueueSurface: 'batch',
+            schemaVersion: 2,
+            planDigest: graphPlan.planDigest,
+            ...(batchMissionId ? { missionId: batchMissionId } : {}),
+            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+            taskCount: graphPlan.tasks.length,
+            gateCount: graphPlan.gates.length,
+            workspaceCount: graphPlan.workspaces.length,
+            dependencyEdgeCount: graphPlan.dependencyEdgeCount,
+            onDependencyFailure: onDependencyFailure ?? 'block',
+            orchestrationDecision: decision.decision,
+            ...(graphPlan.replayed ? { replayed: true } : {}),
         });
     }
 
@@ -745,12 +854,18 @@ export async function meshEnqueueBatch(
     // already-completed existing task still counts as satisfied.
     let eagerPushDeferredCount = 0;
     if (ctx.transport instanceof IpcTransport) {
-        const dependencyStatusById = new Map(
-            getQueue(ctx.mesh.id).map(t => [t.id, t.status] as const),
-        );
+        const liveQueue = getQueue(ctx.mesh.id);
+        const dependencyStatusById = new Map(liveQueue.map(t => [t.id, t.status] as const));
+        // Re-read each row from the LIVE queue rather than trusting the insert-time
+        // snapshot: a system block may have been applied to a row AFTER it was
+        // returned, and the predicate refuses any row carrying a blockedReason.
+        // This is NOT a second gate — the identical predicate call below is still
+        // the only decision; this only makes sure it sees the row's current state.
+        const liveById = new Map(liveQueue.map(t => [t.id, t] as const));
         const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
         const dispatchPromises: Promise<void>[] = [];
-        tasks.forEach((task, i) => {
+        tasks.forEach((snapshot, i) => {
+            const task = liveById.get(snapshot.id) ?? snapshot;
             if (!taskDependenciesSatisfied(task, dependencyStatusById)) {
                 eagerPushDeferredCount++;
                 return;
@@ -770,11 +885,49 @@ export async function meshEnqueueBatch(
         atomic: true,
         enqueued: tasks.length,
         ...(onDependencyFailure ? { on_dependency_failure: onDependencyFailure } : {}),
+        // ── batch v2 additive response fields (design :582) ──
+        // Present only on the graph path: an old-path batch creates no graph, so
+        // reporting a graphId for it would be a lie.
+        ...(graphPlan
+            ? {
+                graphId: graphPlan.graphId,
+                batchId: graphPlan.batchId,
+                planDigest: graphPlan.planDigest,
+                // design :585-588 — DB atomicity NEVER implies the git worktree exists.
+                workspacePreparation: graphPlan.workspacePreparation,
+                ...(graphPlan.replayed
+                    ? {
+                        replayed: true,
+                        replayedHint: 'A graph with this batch_id and an identical plan digest already existed; nothing was re-inserted. '
+                            + 'Re-sending the same batch_id with a DIFFERENT plan is rejected as batch_id_conflict.',
+                    }
+                    : {}),
+                ...(graphPlan.gates.length > 0
+                    ? {
+                        gates: graphPlan.gates,
+                        gateHint: 'Gates are declared shut. When their predecessors complete they open (awaiting_coordinator) and BLOCK their '
+                            + 'downstream tasks. Pass one with mesh_graph_gate_claim → do the action yourself → mesh_graph_gate_release. '
+                            + 'The daemon never performs a gate action and a deadline can only expire a gate, never pass it.',
+                    }
+                    : {}),
+                ...(graphPlan.workspaces.length > 0 ? { workspaces: graphPlan.workspaces } : {}),
+                ...(graphPlan.heldNodeIds.length > 0
+                    ? {
+                        graphHeldTasks: graphPlan.heldNodeIds.length,
+                        graphHeldHint: 'Tasks declaring graph features (bound upstream outputs, a condition, a delayed worktree, or a gate) '
+                            + 'are held until the graph settles them — that is what makes their final instruction knowable. Tasks with only '
+                            + 'plain dependencies are NOT held; they use the unchanged queue dependency predicate.',
+                    }
+                    : {}),
+            }
+            : {}),
+        ...(decision.batchCapabilityAvailable ? { batchCapabilityAvailable: decision.batchCapabilityAvailable } : {}),
         tasks: tasks.map((task, i) => ({
             ...(normalizedEntries[i].ref ? { ref: normalizedEntries[i].ref } : {}),
             taskId: task.id,
             status: task.status,
             taskMode: task.taskMode,
+            ...(graphPlan?.nodeIdByIndex[i] ? { nodeId: graphPlan.nodeIdByIndex[i] } : {}),
             ...(Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
             ...(task.targetNodeId ? { targetNodeId: task.targetNodeId } : {}),
             ...(task.priority ? { priority: task.priority } : {}),

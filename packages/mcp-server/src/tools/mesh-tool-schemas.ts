@@ -80,7 +80,11 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
     name: 'mesh_enqueue_batch',
     description: 'G5: atomically enqueue a dependency-wired set of tasks — either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). '
         + 'Use this instead of N sequential mesh_enqueue_task calls whenever you are wiring a multi-task graph: give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed — array order does not matter). '
-        + 'A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own.',
+        + 'A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own. '
+        + 'Beyond plain ordering it also accepts a full orchestration graph, so you can submit the WHOLE known plan once instead of enqueueing each step as the previous one finishes: '
+        + '`inputs_from` binds selected predecessor outputs into a later task (no hand-copying worker text), `run_if` branches on those outputs, `gates` declare steps that stop for a coordinator action '
+        + '(Refinery landing, approval, CI wait, publish, deploy) with downstream tasks pointing at them via `gated_by`, and `workspaces` + `workspace_ref` prepare a worktree later for a task that needs one. '
+        + 'These are strictly additive: a batch using only message/depends_on behaves exactly as before. Only graph-using batches create a graph, inspectable with mesh_graph_view.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -114,10 +118,69 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
                         max_retries: { type: 'number', description: 'P3 retry cap (same semantics as mesh_enqueue_task).' },
                         maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
+                        // ── batch v2 graph fields (design :568-570). All optional; a batch
+                        //    using none of them takes the unchanged compatibility path. ──
+                        inputs_from: {
+                            type: 'array',
+                            description: 'Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker\'s text into the instruction. Each entry is {from: <ref of a predecessor task or gate>, select: <RFC-6901 JSON Pointer into that step\'s completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest — they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable.',
+                            items: { type: 'object' },
+                        },
+                        inputsFrom: { type: 'array', description: 'CamelCase alias for inputs_from.', items: { type: 'object' } },
+                        run_if: { type: 'object', description: 'Declarative condition deciding whether this task runs at all, evaluated against predecessor outputs and released gate outcomes (e.g. only run the deploy when the gate outcome was `passed`). A condition that is false SKIPS the task — skipped is terminal and, deliberately, is NOT treated as completed, so it never satisfies a downstream dependency. A malformed condition fails closed rather than defaulting to true.' },
+                        runIf: { type: 'object', description: 'CamelCase alias for run_if.' },
+                        on_false: { type: 'string', enum: ['skip'], description: 'What to do when run_if is false. Only `skip` is defined (and is the default).' },
+                        onFalse: { type: 'string', enum: ['skip'], description: 'CamelCase alias for on_false.' },
+                        on_upstream_skip: { type: 'string', enum: ['skip', 'omit_dependency'], description: 'What happens to this task when an upstream step is SKIPPED. `skip` (default) propagates the skip. `omit_dependency` drops that edge from this task\'s dependency projection so it can still run — the explicit way to say "run anyway if that branch was not taken".' },
+                        onUpstreamSkip: { type: 'string', enum: ['skip', 'omit_dependency'], description: 'CamelCase alias for on_upstream_skip.' },
+                        workspace_ref: { type: 'string', description: 'Run this task in a worktree declared in the top-level `workspaces` array, prepared LATER rather than before the batch is accepted. The task stays held until that worktree is ready, then it is pinned to it automatically. Worktree preparation is a compensated saga: it is reported separately as workspacePreparation and is never part of the batch\'s DB atomicity.' },
+                        workspaceRef: { type: 'string', description: 'CamelCase alias for workspace_ref.' },
+                        gated_by: { type: 'array', items: { type: 'string' }, description: 'Refs of gates in this batch\'s `gates` array that must be RELEASED before this task may run. This is how you say "do not start until I have landed/approved/deployed". Do NOT put a gate ref in depends_on — a gate is an intentional stop, not an ordinary queue dependency, and listing one there is rejected.' },
+                        gatedBy: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for gated_by.' },
                     },
                     required: ['message', 'difficulty'],
                 },
             },
+            gates: {
+                type: 'array',
+                description: 'Coordinator GATES: graph steps that intentionally stop progress until YOU act (Refinery landing, approval, CI wait, publish, deploy). The daemon never performs the action and never auto-passes a gate — you claim it (mesh_graph_gate_claim), do the thing, then release it (mesh_graph_gate_release). Declare the gate here and point downstream tasks at it with gated_by, so the whole plan can be submitted at once instead of waiting to enqueue the later steps by hand. Gate refs share ONE namespace with task and workspace refs.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        ref: { type: 'string', description: 'Label for this gate; downstream tasks name it in gated_by.' },
+                        action: { type: 'string', enum: ['refinery', 'approval', 'ci_wait', 'publish', 'deploy', 'custom'], description: 'What kind of action this gate is waiting for. A metadata label only — it tells you (and the view) what the gate means; the daemon never executes it.' },
+                        instructions: { type: 'string', description: 'What the coordinator must do at this gate, shown when the gate opens.' },
+                        depends_on: { type: 'array', items: { type: 'string' }, description: 'Refs of tasks/gates in this batch that must complete before this gate OPENS for a coordinator.' },
+                        on_timeout: { type: 'string', enum: ['hold', 'cancel_downstream', 'fail_graph'], description: 'What happens when the gate passes its deadline. `hold` (default) keeps downstream blocked for an explicit reclaim; `cancel_downstream` cancels the pending downstream branch; `fail_graph` fails the graph. There is deliberately NO auto-release option: a timeout is never treated as the action having succeeded.' },
+                        deadline_seconds: { type: 'number', description: 'Seconds from when the gate OPENS until its on_timeout policy fires.' },
+                        lease_seconds: { type: 'number', description: 'Default claim lease length for this gate (a claim may override it).' },
+                        eligible_coordinator_session_id: { type: 'string', description: 'Restrict claiming to one coordinator session.' },
+                    },
+                    required: ['ref'],
+                },
+            },
+            workspaces: {
+                type: 'array',
+                description: 'Worktrees to prepare LATER for tasks that name them via workspace_ref — the way to plan "clone a worktree, then work in it" as one batch instead of enqueueing, waiting, and enqueueing again. Preparation is a compensated saga with owned-resource cleanup: it happens outside the batch transaction and is reported as workspacePreparation, so `atomic: true` never claims the git side effects happened.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        ref: { type: 'string', description: 'Label tasks use in workspace_ref. Shares one namespace with task and gate refs.' },
+                        source_node_id: { type: 'string', description: 'Node whose workspace the worktree is cloned from.' },
+                        purpose: { type: 'string', description: 'Short label folded into the derived branch name.' },
+                        base_revision: { type: 'string', description: 'Base revision to prepare from.' },
+                        desired_path: { type: 'string', description: 'Optional explicit worktree path.' },
+                        cleanup_on_graph_failure: { type: 'boolean', description: 'Remove the worktree this graph created if the graph fails. Only ever removes a worktree the saga itself owns.' },
+                    },
+                    required: ['ref'],
+                },
+            },
+            batch_id: { type: 'string', description: 'Your own idempotency key for this batch. Re-sending the SAME batch_id with an identical plan replays and inserts nothing new; the same batch_id with a different plan is rejected (batch_id_conflict). Use it whenever a retry might duplicate work. Supplying it records the batch as a graph (so the key can be enforced), which is why the response then carries graphId — task behavior is unchanged.' },
+            batchId: { type: 'string', description: 'CamelCase alias for batch_id.' },
+            orchestration_decision: {
+                type: 'object',
+                description: 'Optional record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. It is stored as provenance with the graph and never changes execution.',
+            },
+            orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
             mission_id: { type: 'string', description: 'Mission every task in this batch belongs to unless an entry overrides it (full/exact id). For multi-task work, create the mission first (mesh_mission_upsert) and pass it here. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
             block_duplicate: { type: 'boolean', description: 'G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response.' },
@@ -136,6 +199,94 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
             },
         },
         required: ['tasks'],
+    },
+};
+
+// ── GRAPH-ORCHESTRATION Phase E: the coordinator gate + graph view surface ──
+// design :759-763 (view), :407-421 (claim/release), :425-439 (timeout policy).
+
+export const MESH_GRAPH_GATE_CLAIM_TOOL = {
+    name: 'mesh_graph_gate_claim',
+    description: 'Take the lease on a coordinator GATE that is awaiting a coordinator. A gate is a graph step that intentionally STOPS progress '
+        + 'until a human/coordinator does something the daemon must not do itself — a Refinery landing, an approval, waiting on CI, a publish, a deploy. '
+        + 'The daemon NEVER performs a gate action and NEVER auto-passes a gate: the only way through is your own mesh_graph_gate_release. '
+        + 'Claim returns a monotonically increasing leaseGeneration and an opaque fencingToken — you MUST present both at release, so keep them. '
+        + 'A gate whose lease has lapsed can be taken over by a new claim at a HIGHER generation; when that happens the response sets '
+        + 'ambiguousExternalOutcome, meaning the previous owner may already have performed the external side effect — reconcile external evidence '
+        + '(did the merge/publish already land?) before doing it again. Use mesh_graph_view to find gates awaiting a coordinator.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            gate_id: { type: 'string', description: 'The gate to claim (from mesh_graph_view or the mesh_enqueue_batch response).' },
+            gateId: { type: 'string', description: 'CamelCase alias for gate_id.' },
+            lease_seconds: { type: 'number', description: 'How long to hold the lease before it lapses. Defaults to the gate spec\'s lease_seconds, then 900s. Pick a duration that covers the real action — a lapsed lease cannot release (elapsed time is never completion evidence).' },
+            leaseSeconds: { type: 'number', description: 'CamelCase alias for lease_seconds.' },
+            extend_deadline_seconds: { type: 'number', description: 'Push the gate DEADLINE out by this many seconds from now. Distinct from the lease: the deadline is when the on_timeout policy (hold / cancel_downstream / fail_graph) fires. Reclaiming a gate that expired under on_timeout=hold does NOT refresh its deadline unless you pass this, so the next sweep would expire it again.' },
+            extendDeadlineSeconds: { type: 'number', description: 'CamelCase alias for extend_deadline_seconds.' },
+            coordinator_session_id: { type: 'string', description: 'Owner session for the lease. Defaults to this coordinator session; pass explicitly only when driving a gate on behalf of another session.' },
+            coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
+        },
+        required: ['gate_id'],
+    },
+};
+
+export const MESH_GRAPH_GATE_RELEASE_TOOL = {
+    name: 'mesh_graph_gate_release',
+    description: 'Release a coordinator gate you hold the lease on — the ONLY way a gate lets its downstream work run. Requires the leaseGeneration + fencingToken '
+        + 'from your mesh_graph_gate_claim: a stale generation or wrong token is refused (stale_fence), and an EXPIRED lease can never release (re-claim first, '
+        + 'and reconcile whether the external action already happened). Pass an idempotency_key of your choosing: re-sending the identical release with the same key '
+        + 'is a safe no-op success, while the same key with a DIFFERENT payload is rejected as a conflict. `outcome` (passed / failed / rejected, or an action-specific label) '
+        + 'and any structured `result` / `evidence` become readable by downstream tasks through run_if and inputs_from, so a gate decision can steer the rest of the graph. '
+        + 'Validation failures roll the WHOLE release back: the gate stays claimed and downstream stays blocked.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            gate_id: { type: 'string', description: 'The gate being released.' },
+            gateId: { type: 'string', description: 'CamelCase alias for gate_id.' },
+            fencing_token: { type: 'string', description: 'The opaque token returned by mesh_graph_gate_claim. Required.' },
+            fencingToken: { type: 'string', description: 'CamelCase alias for fencing_token.' },
+            lease_generation: { type: 'number', description: 'The leaseGeneration returned by mesh_graph_gate_claim. Required — a stale generation is refused.' },
+            leaseGeneration: { type: 'number', description: 'CamelCase alias for lease_generation.' },
+            idempotency_key: { type: 'string', description: 'Your own key for this release. Re-sending the identical release with the same key is a no-op success; the same key with a different payload is a conflict. Required.' },
+            idempotencyKey: { type: 'string', description: 'CamelCase alias for idempotency_key.' },
+            outcome: { type: 'string', description: 'The gate outcome: passed | failed | rejected, or an action-specific structured label. Downstream run_if conditions read it as /gate_outcome.' },
+            result: { type: 'object', description: 'Optional action-specific structured result, exposed to downstream bindings as /result/... (e.g. the merged commit sha).' },
+            evidence: { type: 'object', description: 'Optional evidence references/digests, exposed to downstream bindings as /evidence/... .' },
+            patches: {
+                type: 'array',
+                description: 'Optional pre-assignment patches to DIRECT downstream nodes. Only run_if, on_false, inputs_from and workspace_ref may be patched — message, routing, permissions, task mode and model are immutable by policy, and a task that is already claimed cannot be patched at all.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        node: { type: 'string', description: 'Ref or node id of a DIRECT downstream node of this gate.' },
+                        base_spec_patch: { type: 'object', description: 'Keys to merge into that node\'s spec. Allowed keys: run_if, on_false, inputs_from, workspace_ref.' },
+                        baseSpecPatch: { type: 'object', description: 'CamelCase alias for base_spec_patch.' },
+                    },
+                    required: ['node'],
+                },
+            },
+        },
+        required: ['gate_id', 'fencing_token', 'lease_generation', 'idempotency_key', 'outcome'],
+    },
+};
+
+export const MESH_GRAPH_VIEW_TOOL = {
+    name: 'mesh_graph_view',
+    description: 'Inspect orchestration GRAPHS on this mesh: node states and refs, active edges, materialization receipts, coordinator gates (with who holds the lease and what is blocked), '
+        + 'delayed workspace sagas, derived dependency failures, and the next action a coordinator actually has to take. Read-only. Defaults to in-flight graphs; pass include_terminal=true for completed ones. '
+        + 'Only mesh_enqueue_batch requests that use graph features (gates, inputs_from, run_if, workspace_ref) create a graph — a plain depends_on batch runs on the ordinary queue and appears in mesh_view_queue instead. '
+        + 'Do not poll this waiting for generating work; use it when you need to know why something is blocked or which gate is waiting on you.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            graph_id: { type: 'string', description: 'Show exactly this graph (including terminal ones).' },
+            graphId: { type: 'string', description: 'CamelCase alias for graph_id.' },
+            batch_id: { type: 'string', description: 'Show the graph committed under this batch_id.' },
+            batchId: { type: 'string', description: 'CamelCase alias for batch_id.' },
+            include_terminal: { type: 'boolean', description: 'Include completed/failed/cancelled graphs. Default false (in-flight only).' },
+            includeTerminal: { type: 'boolean', description: 'CamelCase alias for include_terminal.' },
+            limit: { type: 'number', description: 'Max graphs to return (default 20).' },
+        },
     },
 };
 
@@ -1115,6 +1266,11 @@ export const ALL_MESH_TOOLS = [
     MESH_ENQUEUE_TASK_TOOL,
     MESH_ENQUEUE_BATCH_TOOL,
     MESH_VIEW_QUEUE_TOOL,
+    // GRAPH-ORCHESTRATION Phase E — placed next to the queue/enqueue tools so a
+    // coordinator that loaded the batch schema also discovers how to pass a gate.
+    MESH_GRAPH_VIEW_TOOL,
+    MESH_GRAPH_GATE_CLAIM_TOOL,
+    MESH_GRAPH_GATE_RELEASE_TOOL,
     MESH_QUEUE_CANCEL_TOOL,
     MESH_QUEUE_REQUEUE_TOOL,
     MESH_SEND_TASK_TOOL,

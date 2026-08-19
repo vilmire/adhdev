@@ -107,6 +107,8 @@ import {
     clearUnresolvedForwardNudge,
 } from './mesh-reconcile-unresolved-forward.js';
 import { recoverExpiredWorkspaceSagas } from './mesh-graph-workspace-saga.js';
+import { sweepMeshGraphGateTimeouts } from './mesh-graph-gates.js';
+import { recordGraphGateExpired } from './mesh-graph-provenance.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
 // the reconcile-loop test suite) keep their `from './mesh-reconcile-loop.js'` paths.
@@ -380,6 +382,49 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             await reconcileUnterminatedDirectDispatches(components, mesh, selfIds, localDaemonId);
         } catch (e: any) {
             LOG.warn('MeshReconcile', `Completion reconcile failed for mesh ${mesh.id}: ${e?.message || e}`);
+        }
+    }
+
+    // ── PHASE 5.4: coordinator-gate deadline sweep (orchestration C2, wired in E) ──
+    // ★ The sweep can only EXPIRE a gate, never release one (design :431-432):
+    // elapsed time is never completion evidence. `hold` retains downstream blocks
+    // for an explicit reclaim, `cancel_downstream` cancels the pending downstream
+    // subtree, `fail_graph` fails the graph. There is deliberately NO auto_release
+    // policy — do not add one.
+    //
+    // A LAPSED LEASE is reported but never acts: only a new claim at a HIGHER
+    // fencing generation may take a gate over, and that is a coordinator decision
+    // (the previous owner may already have performed the external side effect).
+    //
+    // Cheap by construction: one indexed query per mesh over gates in
+    // awaiting_coordinator/claimed. Isolated per mesh so a sweep fault cannot kill
+    // the tick.
+    if (store) {
+        for (const mesh of listMeshes()) {
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
+            try {
+                const gateStore = store.graphStore();
+                // Snapshot the policy/deadline BEFORE the sweep mutates the rows —
+                // afterwards the gate is `expired` and the reason for expiry would
+                // have to be re-derived.
+                const preSweep = new Map(
+                    gateStore.listGatesByMesh(mesh.id, ['awaiting_coordinator', 'claimed'])
+                        .map(g => [g.gateId, { graphId: g.graphId, onTimeout: g.onTimeout, deadlineAt: g.deadlineAt }]),
+                );
+                const swept = sweepMeshGraphGateTimeouts(mesh.id);
+                for (const gateId of swept.expiredGateIds) {
+                    const meta = preSweep.get(gateId);
+                    recordGraphGateExpired(mesh.id, {
+                        gateId,
+                        graphId: meta?.graphId,
+                        policy: meta?.onTimeout ?? 'hold',
+                        deadlineAt: meta?.deadlineAt,
+                    });
+                }
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Graph gate sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
         }
     }
 

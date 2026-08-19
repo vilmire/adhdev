@@ -355,6 +355,65 @@ export {
     WORKSPACE_SAGA_LEASE_MS,
 } from './mesh/mesh-graph-workspace-identity.js';
 export { WorkspaceSagaPermanentError } from './mesh/mesh-graph-workspace-ports.js';
+// ── GRAPH-ORCHESTRATION Phase E: the coordinator-facing surface ──
+// C2 built claim/release/sweep but deliberately left MCP exposure to E; these are
+// the exports the mesh_graph_gate_claim / mesh_graph_gate_release tools call.
+export {
+    claimMeshGraphGate,
+    releaseMeshGraphGate,
+    sweepMeshGraphGateTimeouts,
+    coordinatorGateBlockReason,
+    MESH_GATE_DEFAULT_LEASE_SECONDS,
+    MESH_GATE_NAMED_OUTCOMES,
+    MESH_GATE_RELEASE_PATCH_KEYS,
+} from './mesh/mesh-graph-gates.js';
+export type {
+    MeshGraphGateClaimInput,
+    MeshGraphGateClaimResult,
+    MeshGraphGateReleaseInput,
+    MeshGraphGateReleaseResult,
+    MeshGraphGateReleasePatch,
+    MeshGraphGateSweepResult,
+} from './mesh/mesh-graph-gates.js';
+export {
+    commitMeshGraphPlan,
+    computeMeshGraphPlanDigest,
+    isAdvancedGraphTask,
+    requestUsesGraphV2,
+    MeshGraphPlanError,
+} from './mesh/mesh-graph-plan.js';
+export type {
+    MeshGraphPlanRequest,
+    MeshGraphPlanResult,
+    MeshGraphGatePlanSpec,
+    MeshGraphTaskPlanSpec,
+} from './mesh/mesh-graph-plan.js';
+export { buildMeshGraphViews } from './mesh/mesh-graph-view.js';
+export type {
+    MeshGraphView,
+    MeshGraphNodeView,
+    MeshGraphEdgeView,
+    MeshGraphGateView,
+    MeshGraphWorkspaceView,
+    BuildMeshGraphViewOptions,
+} from './mesh/mesh-graph-view.js';
+export {
+    normalizeOrchestrationDecision,
+    recordGraphEnqueueCommitted,
+    recordGraphEnqueueValidationFailed,
+    recordGraphEnqueueRolledBack,
+    recordGraphGateClaimed,
+    recordGraphGateReleased,
+    recordGraphGateExpired,
+    MESH_VALID_SINGLE_REASONS,
+    MESH_SUPERSEDED_SINGLE_REASONS,
+} from './mesh/mesh-graph-provenance.js';
+export type {
+    GraphEnqueueProvenance,
+    NormalizedOrchestrationDecision,
+    OrchestrationDecisionNormalizeResult,
+} from './mesh/mesh-graph-provenance.js';
+export type { MeshGraphGateRow, MeshTaskGraphNodeRow, MeshTaskGraphRow } from './mesh/mesh-graph-types.js';
 export type { GraphWorkspaceDeclaration, WorkspaceSagaTickResult, WorkspaceSagaStepResult } from './mesh/mesh-graph-workspace-saga.js';
 export type { WorkspaceDeleteRefusal, WorkspaceInspectReport, WorkspaceSafetySnapshot } from './mesh/mesh-graph-workspace-safety.js';
 export type { WorkspaceSagaPorts } from './mesh/mesh-graph-workspace-ports.js';

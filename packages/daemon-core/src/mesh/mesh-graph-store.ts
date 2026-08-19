@@ -68,6 +68,41 @@ export class MeshGraphStore {
         return r ? mapGraphRow(r) : null;
     }
 
+    /**
+     * Phase-E graph listing for the graph view / metrics (design :759-775). Newest
+     * first so a view without an explicit graph id shows current work. `statuses`
+     * narrows to e.g. the in-flight set.
+     */
+    listGraphsByMesh(meshId: string, opts?: { statuses?: readonly MeshGraphStatus[]; limit?: number }): MeshTaskGraphRow[] {
+        const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
+        const statuses = opts?.statuses;
+        if (statuses && statuses.length > 0) {
+            const placeholders = statuses.map(() => '?').join(',');
+            const rows = this.db.prepare(
+                `SELECT * FROM mesh_task_graphs WHERE mesh_id = ? AND status IN (${placeholders})
+                 ORDER BY created_at DESC LIMIT ?`
+            ).all(meshId, ...statuses, limit) as any[];
+            return rows.map(mapGraphRow);
+        }
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_task_graphs WHERE mesh_id = ? ORDER BY created_at DESC LIMIT ?`
+        ).all(meshId, limit) as any[];
+        return rows.map(mapGraphRow);
+    }
+
+    /**
+     * Phase-E: replace the graph's normalized policy document. Used at plan-commit
+     * time to attach the enqueue-decision provenance record next to the persisted
+     * `on_dependency_failure` (design :697-710, :733-738). Deliberately a whole-
+     * document write — the policy is normalized once at commit and never patched
+     * field-by-field afterwards.
+     */
+    updateGraphPolicyJson(graphId: string, policyJson: string, nowIso: string): void {
+        this.db.prepare(
+            `UPDATE mesh_task_graphs SET policy_json = ?, updated_at = ? WHERE graph_id = ?`
+        ).run(policyJson, nowIso, graphId);
+    }
+
     /** Phase-B rollup: graph status transition once every node reached a terminal-equivalent state. */
     updateGraphStatus(graphId: string, status: MeshGraphStatus, nowIso: string, terminal = false): void {
         this.db.prepare(`

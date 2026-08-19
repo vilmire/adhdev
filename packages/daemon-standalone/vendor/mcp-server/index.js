@@ -630,6 +630,10 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_enqueue_task",
   "mesh_enqueue_batch",
   "mesh_view_queue",
+  // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
+  "mesh_graph_view",
+  "mesh_graph_gate_claim",
+  "mesh_graph_gate_release",
   "mesh_queue_cancel",
   "mesh_queue_requeue",
   "mesh_send_task",
@@ -1066,7 +1070,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
 };
 var MESH_ENQUEUE_BATCH_TOOL = {
   name: "mesh_enqueue_batch",
-  description: "G5: atomically enqueue a dependency-wired set of tasks \u2014 either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). Use this instead of N sequential mesh_enqueue_task calls whenever you are wiring a multi-task graph: give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed \u2014 array order does not matter). A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own.",
+  description: "G5: atomically enqueue a dependency-wired set of tasks \u2014 either EVERY task in the batch is inserted or NONE is (a mid-batch error such as a dependency cycle, invalid difficulty, or guardrail violation rolls the whole batch back). Use this instead of N sequential mesh_enqueue_task calls whenever you are wiring a multi-task graph: give each task a batch-local `ref` label and name sibling refs in `depends_on` (forward references allowed \u2014 array order does not matter). A depends_on value that is not a ref in this batch must be an EXISTING queue task id; anything else is rejected. Per-task fields are the same as mesh_enqueue_task. Top-level mission_id applies to every task that lacks its own. Beyond plain ordering it also accepts a full orchestration graph, so you can submit the WHOLE known plan once instead of enqueueing each step as the previous one finishes: `inputs_from` binds selected predecessor outputs into a later task (no hand-copying worker text), `run_if` branches on those outputs, `gates` declare steps that stop for a coordinator action (Refinery landing, approval, CI wait, publish, deploy) with downstream tasks pointing at them via `gated_by`, and `workspaces` + `workspace_ref` prepare a worktree later for a task that needs one. These are strictly additive: a batch using only message/depends_on behaves exactly as before. Only graph-using batches create a graph, inspectable with mesh_graph_view.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1099,11 +1103,70 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             not_before: { type: "number", description: "G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string)." },
             notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
             max_retries: { type: "number", description: "P3 retry cap (same semantics as mesh_enqueue_task)." },
-            maxRetries: { type: "number", description: "CamelCase alias for max_retries." }
+            maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
+            // ── batch v2 graph fields (design :568-570). All optional; a batch
+            //    using none of them takes the unchanged compatibility path. ──
+            inputs_from: {
+              type: "array",
+              description: "Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker's text into the instruction. Each entry is {from: <ref of a predecessor task or gate>, select: <RFC-6901 JSON Pointer into that step's completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest \u2014 they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable.",
+              items: { type: "object" }
+            },
+            inputsFrom: { type: "array", description: "CamelCase alias for inputs_from.", items: { type: "object" } },
+            run_if: { type: "object", description: "Declarative condition deciding whether this task runs at all, evaluated against predecessor outputs and released gate outcomes (e.g. only run the deploy when the gate outcome was `passed`). A condition that is false SKIPS the task \u2014 skipped is terminal and, deliberately, is NOT treated as completed, so it never satisfies a downstream dependency. A malformed condition fails closed rather than defaulting to true." },
+            runIf: { type: "object", description: "CamelCase alias for run_if." },
+            on_false: { type: "string", enum: ["skip"], description: "What to do when run_if is false. Only `skip` is defined (and is the default)." },
+            onFalse: { type: "string", enum: ["skip"], description: "CamelCase alias for on_false." },
+            on_upstream_skip: { type: "string", enum: ["skip", "omit_dependency"], description: 'What happens to this task when an upstream step is SKIPPED. `skip` (default) propagates the skip. `omit_dependency` drops that edge from this task\'s dependency projection so it can still run \u2014 the explicit way to say "run anyway if that branch was not taken".' },
+            onUpstreamSkip: { type: "string", enum: ["skip", "omit_dependency"], description: "CamelCase alias for on_upstream_skip." },
+            workspace_ref: { type: "string", description: "Run this task in a worktree declared in the top-level `workspaces` array, prepared LATER rather than before the batch is accepted. The task stays held until that worktree is ready, then it is pinned to it automatically. Worktree preparation is a compensated saga: it is reported separately as workspacePreparation and is never part of the batch's DB atomicity." },
+            workspaceRef: { type: "string", description: "CamelCase alias for workspace_ref." },
+            gated_by: { type: "array", items: { type: "string" }, description: 'Refs of gates in this batch\'s `gates` array that must be RELEASED before this task may run. This is how you say "do not start until I have landed/approved/deployed". Do NOT put a gate ref in depends_on \u2014 a gate is an intentional stop, not an ordinary queue dependency, and listing one there is rejected.' },
+            gatedBy: { type: "array", items: { type: "string" }, description: "CamelCase alias for gated_by." }
           },
           required: ["message", "difficulty"]
         }
       },
+      gates: {
+        type: "array",
+        description: "Coordinator GATES: graph steps that intentionally stop progress until YOU act (Refinery landing, approval, CI wait, publish, deploy). The daemon never performs the action and never auto-passes a gate \u2014 you claim it (mesh_graph_gate_claim), do the thing, then release it (mesh_graph_gate_release). Declare the gate here and point downstream tasks at it with gated_by, so the whole plan can be submitted at once instead of waiting to enqueue the later steps by hand. Gate refs share ONE namespace with task and workspace refs.",
+        items: {
+          type: "object",
+          properties: {
+            ref: { type: "string", description: "Label for this gate; downstream tasks name it in gated_by." },
+            action: { type: "string", enum: ["refinery", "approval", "ci_wait", "publish", "deploy", "custom"], description: "What kind of action this gate is waiting for. A metadata label only \u2014 it tells you (and the view) what the gate means; the daemon never executes it." },
+            instructions: { type: "string", description: "What the coordinator must do at this gate, shown when the gate opens." },
+            depends_on: { type: "array", items: { type: "string" }, description: "Refs of tasks/gates in this batch that must complete before this gate OPENS for a coordinator." },
+            on_timeout: { type: "string", enum: ["hold", "cancel_downstream", "fail_graph"], description: "What happens when the gate passes its deadline. `hold` (default) keeps downstream blocked for an explicit reclaim; `cancel_downstream` cancels the pending downstream branch; `fail_graph` fails the graph. There is deliberately NO auto-release option: a timeout is never treated as the action having succeeded." },
+            deadline_seconds: { type: "number", description: "Seconds from when the gate OPENS until its on_timeout policy fires." },
+            lease_seconds: { type: "number", description: "Default claim lease length for this gate (a claim may override it)." },
+            eligible_coordinator_session_id: { type: "string", description: "Restrict claiming to one coordinator session." }
+          },
+          required: ["ref"]
+        }
+      },
+      workspaces: {
+        type: "array",
+        description: 'Worktrees to prepare LATER for tasks that name them via workspace_ref \u2014 the way to plan "clone a worktree, then work in it" as one batch instead of enqueueing, waiting, and enqueueing again. Preparation is a compensated saga with owned-resource cleanup: it happens outside the batch transaction and is reported as workspacePreparation, so `atomic: true` never claims the git side effects happened.',
+        items: {
+          type: "object",
+          properties: {
+            ref: { type: "string", description: "Label tasks use in workspace_ref. Shares one namespace with task and gate refs." },
+            source_node_id: { type: "string", description: "Node whose workspace the worktree is cloned from." },
+            purpose: { type: "string", description: "Short label folded into the derived branch name." },
+            base_revision: { type: "string", description: "Base revision to prepare from." },
+            desired_path: { type: "string", description: "Optional explicit worktree path." },
+            cleanup_on_graph_failure: { type: "boolean", description: "Remove the worktree this graph created if the graph fails. Only ever removes a worktree the saga itself owns." }
+          },
+          required: ["ref"]
+        }
+      },
+      batch_id: { type: "string", description: "Your own idempotency key for this batch. Re-sending the SAME batch_id with an identical plan replays and inserts nothing new; the same batch_id with a different plan is rejected (batch_id_conflict). Use it whenever a retry might duplicate work. Supplying it records the batch as a graph (so the key can be enforced), which is why the response then carries graphId \u2014 task behavior is unchanged." },
+      batchId: { type: "string", description: "CamelCase alias for batch_id." },
+      orchestration_decision: {
+        type: "object",
+        description: "Optional record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. It is stored as provenance with the graph and never changes execution."
+      },
+      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." },
       mission_id: { type: "string", description: "Mission every task in this batch belongs to unless an entry overrides it (full/exact id). For multi-task work, create the mission first (mesh_mission_upsert) and pass it here. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
       block_duplicate: { type: "boolean", description: "G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response." },
@@ -1122,6 +1185,74 @@ var MESH_ENQUEUE_BATCH_TOOL = {
       }
     },
     required: ["tasks"]
+  }
+};
+var MESH_GRAPH_GATE_CLAIM_TOOL = {
+  name: "mesh_graph_gate_claim",
+  description: "Take the lease on a coordinator GATE that is awaiting a coordinator. A gate is a graph step that intentionally STOPS progress until a human/coordinator does something the daemon must not do itself \u2014 a Refinery landing, an approval, waiting on CI, a publish, a deploy. The daemon NEVER performs a gate action and NEVER auto-passes a gate: the only way through is your own mesh_graph_gate_release. Claim returns a monotonically increasing leaseGeneration and an opaque fencingToken \u2014 you MUST present both at release, so keep them. A gate whose lease has lapsed can be taken over by a new claim at a HIGHER generation; when that happens the response sets ambiguousExternalOutcome, meaning the previous owner may already have performed the external side effect \u2014 reconcile external evidence (did the merge/publish already land?) before doing it again. Use mesh_graph_view to find gates awaiting a coordinator.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      gate_id: { type: "string", description: "The gate to claim (from mesh_graph_view or the mesh_enqueue_batch response)." },
+      gateId: { type: "string", description: "CamelCase alias for gate_id." },
+      lease_seconds: { type: "number", description: "How long to hold the lease before it lapses. Defaults to the gate spec's lease_seconds, then 900s. Pick a duration that covers the real action \u2014 a lapsed lease cannot release (elapsed time is never completion evidence)." },
+      leaseSeconds: { type: "number", description: "CamelCase alias for lease_seconds." },
+      extend_deadline_seconds: { type: "number", description: "Push the gate DEADLINE out by this many seconds from now. Distinct from the lease: the deadline is when the on_timeout policy (hold / cancel_downstream / fail_graph) fires. Reclaiming a gate that expired under on_timeout=hold does NOT refresh its deadline unless you pass this, so the next sweep would expire it again." },
+      extendDeadlineSeconds: { type: "number", description: "CamelCase alias for extend_deadline_seconds." },
+      coordinator_session_id: { type: "string", description: "Owner session for the lease. Defaults to this coordinator session; pass explicitly only when driving a gate on behalf of another session." },
+      coordinatorSessionId: { type: "string", description: "CamelCase alias for coordinator_session_id." }
+    },
+    required: ["gate_id"]
+  }
+};
+var MESH_GRAPH_GATE_RELEASE_TOOL = {
+  name: "mesh_graph_gate_release",
+  description: "Release a coordinator gate you hold the lease on \u2014 the ONLY way a gate lets its downstream work run. Requires the leaseGeneration + fencingToken from your mesh_graph_gate_claim: a stale generation or wrong token is refused (stale_fence), and an EXPIRED lease can never release (re-claim first, and reconcile whether the external action already happened). Pass an idempotency_key of your choosing: re-sending the identical release with the same key is a safe no-op success, while the same key with a DIFFERENT payload is rejected as a conflict. `outcome` (passed / failed / rejected, or an action-specific label) and any structured `result` / `evidence` become readable by downstream tasks through run_if and inputs_from, so a gate decision can steer the rest of the graph. Validation failures roll the WHOLE release back: the gate stays claimed and downstream stays blocked.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      gate_id: { type: "string", description: "The gate being released." },
+      gateId: { type: "string", description: "CamelCase alias for gate_id." },
+      fencing_token: { type: "string", description: "The opaque token returned by mesh_graph_gate_claim. Required." },
+      fencingToken: { type: "string", description: "CamelCase alias for fencing_token." },
+      lease_generation: { type: "number", description: "The leaseGeneration returned by mesh_graph_gate_claim. Required \u2014 a stale generation is refused." },
+      leaseGeneration: { type: "number", description: "CamelCase alias for lease_generation." },
+      idempotency_key: { type: "string", description: "Your own key for this release. Re-sending the identical release with the same key is a no-op success; the same key with a different payload is a conflict. Required." },
+      idempotencyKey: { type: "string", description: "CamelCase alias for idempotency_key." },
+      outcome: { type: "string", description: "The gate outcome: passed | failed | rejected, or an action-specific structured label. Downstream run_if conditions read it as /gate_outcome." },
+      result: { type: "object", description: "Optional action-specific structured result, exposed to downstream bindings as /result/... (e.g. the merged commit sha)." },
+      evidence: { type: "object", description: "Optional evidence references/digests, exposed to downstream bindings as /evidence/... ." },
+      patches: {
+        type: "array",
+        description: "Optional pre-assignment patches to DIRECT downstream nodes. Only run_if, on_false, inputs_from and workspace_ref may be patched \u2014 message, routing, permissions, task mode and model are immutable by policy, and a task that is already claimed cannot be patched at all.",
+        items: {
+          type: "object",
+          properties: {
+            node: { type: "string", description: "Ref or node id of a DIRECT downstream node of this gate." },
+            base_spec_patch: { type: "object", description: "Keys to merge into that node's spec. Allowed keys: run_if, on_false, inputs_from, workspace_ref." },
+            baseSpecPatch: { type: "object", description: "CamelCase alias for base_spec_patch." }
+          },
+          required: ["node"]
+        }
+      }
+    },
+    required: ["gate_id", "fencing_token", "lease_generation", "idempotency_key", "outcome"]
+  }
+};
+var MESH_GRAPH_VIEW_TOOL = {
+  name: "mesh_graph_view",
+  description: "Inspect orchestration GRAPHS on this mesh: node states and refs, active edges, materialization receipts, coordinator gates (with who holds the lease and what is blocked), delayed workspace sagas, derived dependency failures, and the next action a coordinator actually has to take. Read-only. Defaults to in-flight graphs; pass include_terminal=true for completed ones. Only mesh_enqueue_batch requests that use graph features (gates, inputs_from, run_if, workspace_ref) create a graph \u2014 a plain depends_on batch runs on the ordinary queue and appears in mesh_view_queue instead. Do not poll this waiting for generating work; use it when you need to know why something is blocked or which gate is waiting on you.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      graph_id: { type: "string", description: "Show exactly this graph (including terminal ones)." },
+      graphId: { type: "string", description: "CamelCase alias for graph_id." },
+      batch_id: { type: "string", description: "Show the graph committed under this batch_id." },
+      batchId: { type: "string", description: "CamelCase alias for batch_id." },
+      include_terminal: { type: "boolean", description: "Include completed/failed/cancelled graphs. Default false (in-flight only)." },
+      includeTerminal: { type: "boolean", description: "CamelCase alias for include_terminal." },
+      limit: { type: "number", description: "Max graphs to return (default 20)." }
+    }
   }
 };
 var MESH_VIEW_QUEUE_TOOL = {
@@ -1955,6 +2086,11 @@ var ALL_MESH_TOOLS = [
   MESH_ENQUEUE_TASK_TOOL,
   MESH_ENQUEUE_BATCH_TOOL,
   MESH_VIEW_QUEUE_TOOL,
+  // GRAPH-ORCHESTRATION Phase E — placed next to the queue/enqueue tools so a
+  // coordinator that loaded the batch schema also discovers how to pass a gate.
+  MESH_GRAPH_VIEW_TOOL,
+  MESH_GRAPH_GATE_CLAIM_TOOL,
+  MESH_GRAPH_GATE_RELEASE_TOOL,
   MESH_QUEUE_CANCEL_TOOL,
   MESH_QUEUE_REQUEUE_TOOL,
   MESH_SEND_TASK_TOOL,
@@ -4667,6 +4803,277 @@ async function meshListNodes(ctx) {
   }, null, 2);
 }
 
+// src/tools/mesh-tools-graph.ts
+function readGraphTaskFields(entry) {
+  const inputsFrom = entry.inputs_from ?? entry.inputsFrom;
+  const runIf = entry.run_if ?? entry.runIf;
+  const onFalse = entry.on_false ?? entry.onFalse;
+  const onUpstreamSkip = readString(entry.on_upstream_skip) || readString(entry.onUpstreamSkip) || void 0;
+  const workspaceRef = readString(entry.workspace_ref) || readString(entry.workspaceRef) || void 0;
+  const rawGatedBy = entry.gated_by ?? entry.gatedBy;
+  const gatedBy = Array.isArray(rawGatedBy) ? rawGatedBy.map((g) => readString(g)).filter((g) => !!g) : void 0;
+  return {
+    ...inputsFrom !== void 0 ? { inputs_from: inputsFrom } : {},
+    ...runIf !== void 0 ? { run_if: runIf } : {},
+    ...onFalse !== void 0 ? { on_false: onFalse } : {},
+    ...onUpstreamSkip ? { on_upstream_skip: onUpstreamSkip } : {},
+    ...workspaceRef ? { workspace_ref: workspaceRef } : {},
+    ...gatedBy && gatedBy.length > 0 ? { gated_by: gatedBy } : {}
+  };
+}
+function normalizeWorkspaceDeclarations(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((w) => ({
+    ref: readString(w?.ref) || "",
+    ...readString(w?.source_node_id ?? w?.sourceNodeId) ? { source_node_id: readString(w.source_node_id ?? w.sourceNodeId) } : {},
+    ...readString(w?.purpose) ? { purpose: readString(w.purpose) } : {},
+    ...readString(w?.base_revision ?? w?.baseRevision) ? { base_revision: readString(w.base_revision ?? w.baseRevision) } : {},
+    ...readString(w?.desired_path ?? w?.desiredPath) ? { desired_path: readString(w.desired_path ?? w.desiredPath) } : {},
+    ...(w?.cleanup_on_graph_failure ?? w?.cleanupOnGraphFailure) === true ? { cleanup_on_graph_failure: true } : {}
+  }));
+}
+function buildGraphPlanShape(specs, rawEntries, gates, workspaces, hasExplicitBatchId) {
+  const gateSpecs = Array.isArray(gates) ? gates : [];
+  const workspaceSpecs = normalizeWorkspaceDeclarations(workspaces);
+  const tasks = specs.map((spec, i) => ({ ...spec, ...readGraphTaskFields(rawEntries[i] ?? {}) }));
+  return {
+    tasks,
+    gates: gateSpecs,
+    workspaces: workspaceSpecs,
+    useGraphPath: hasExplicitBatchId || (0, import_daemon_core6.requestUsesGraphV2)({ tasks, gates: gateSpecs, workspaces: workspaceSpecs })
+  };
+}
+var GATE_RELEASE_ERROR_CODES = [
+  "gate_not_found",
+  "gate_release_conflict",
+  "gate_already_released",
+  "gate_not_claimed",
+  "stale_fence",
+  "gate_lease_expired",
+  "gate_upstream_unsettled",
+  "gate_patch_not_downstream",
+  "gate_patch_forbidden",
+  "task_already_claimed",
+  "graph_node_not_found"
+];
+function classifyGateError(message) {
+  return GATE_RELEASE_ERROR_CODES.find((code) => message.startsWith(`${code}:`) || message.includes(`${code}:`));
+}
+function resolveGateSession(ctx, explicit) {
+  return readString(explicit) || ctx.coordinatorSessionId || void 0;
+}
+async function meshGraphGateClaim(ctx, args) {
+  (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_graph_gate_claim" });
+  const gateId = readString(args.gate_id) || readString(args.gateId);
+  if (!gateId) {
+    return JSON.stringify({
+      success: false,
+      code: "missing_gate_id",
+      error: "mesh_graph_gate_claim requires gate_id. Use mesh_graph_view to list gates awaiting a coordinator."
+    });
+  }
+  const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
+  if (!coordinatorSessionId) {
+    return JSON.stringify({
+      success: false,
+      code: "missing_coordinator_session",
+      error: "No coordinator session id is available for this call, so a gate lease cannot be attributed to an owner. Pass coordinator_session_id explicitly."
+    });
+  }
+  const leaseSeconds = readNumber(args.lease_seconds ?? args.leaseSeconds);
+  const extendDeadlineSeconds = readNumber(args.extend_deadline_seconds ?? args.extendDeadlineSeconds);
+  try {
+    const result = (0, import_daemon_core6.claimMeshGraphGate)({
+      meshId: ctx.mesh.id,
+      gateId,
+      coordinatorSessionId,
+      ...leaseSeconds !== void 0 ? { leaseSeconds } : {},
+      ...extendDeadlineSeconds !== void 0 ? { extendDeadlineSeconds } : {}
+    });
+    if (!result.claimed) {
+      return JSON.stringify({
+        success: false,
+        claimed: false,
+        code: result.reason ?? "gate_not_claimable",
+        gateId,
+        ...result.gate ? { gateState: result.gate.state, action: result.gate.action } : {},
+        error: describeClaimRefusal(result.reason, result.gate?.state)
+      });
+    }
+    (0, import_daemon_core6.recordGraphGateClaimed)(ctx.mesh.id, {
+      graphId: result.gate.graphId,
+      gateId,
+      ref: result.gate.ref,
+      action: result.gate.action,
+      generation: result.leaseGeneration,
+      ownerSessionId: coordinatorSessionId,
+      leaseExpiresAt: result.leaseExpiresAt,
+      ambiguousExternalOutcome: result.ambiguousExternalOutcome,
+      previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId
+    });
+    return JSON.stringify({
+      success: true,
+      claimed: true,
+      gateId,
+      graphId: result.gate.graphId,
+      ...result.gate.ref ? { ref: result.gate.ref } : {},
+      action: result.gate.action,
+      ...result.gate.instructions ? { instructions: result.gate.instructions } : {},
+      // ★ Both values are REQUIRED by mesh_graph_gate_release. Losing them
+      // means the lease must lapse before anyone can act on the gate again.
+      leaseGeneration: result.leaseGeneration,
+      fencingToken: result.fencingToken,
+      leaseExpiresAt: result.leaseExpiresAt,
+      ...result.deadlineAt ? { deadlineAt: result.deadlineAt } : {},
+      onTimeout: result.gate.onTimeout,
+      ...result.ambiguousExternalOutcome ? {
+        ambiguousExternalOutcome: true,
+        previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId,
+        ambiguousExternalOutcomeHint: "This claim TOOK OVER from a previous owner whose lease lapsed. That owner may already have performed the external side effect (merge, publish, deploy). Reconcile external evidence \u2014 check whether the action already landed \u2014 BEFORE performing it again, then release with the real outcome."
+      } : {},
+      nextStep: "Perform the gate action yourself, then call mesh_graph_gate_release with this leaseGeneration + fencingToken and an idempotency_key. The daemon never performs a gate action and never auto-releases: the gate stays shut until you release it (a deadline can only EXPIRE it, never pass it)."
+    });
+  } catch (e) {
+    const message = e?.message || String(e);
+    return JSON.stringify({ success: false, claimed: false, gateId, code: classifyGateError(message), error: message });
+  }
+}
+function describeClaimRefusal(reason, state) {
+  switch (reason) {
+    case "gate_not_found":
+      return "No such gate on this mesh. Use mesh_graph_view to list gates.";
+    case "gate_not_eligible":
+      return "This gate is restricted to a different coordinator session (eligible_coordinator_session_id).";
+    case "gate_not_awaiting":
+      return "The gate is still `declared` \u2014 its predecessors have not completed yet, so it is not open for a coordinator. Wait for the upstream work; the gate opens itself when its predecessors settle.";
+    case "gate_lease_held":
+      return "Another coordinator holds a LIVE lease on this gate. Wait for the lease to lapse \u2014 a live lease is never taken over, because the holder may be mid-action.";
+    case "gate_claim_race":
+      return "Another claim won the race for this gate. Re-read the gate state and retry if it is still awaiting.";
+    default:
+      if (reason?.startsWith("gate_terminal:")) {
+        return `The gate is terminal (${state ?? reason.slice("gate_terminal:".length)}) and cannot be claimed. A released gate stays released; an expired gate under cancel_downstream/fail_graph has already applied its policy.`;
+      }
+      return `The gate could not be claimed (${reason ?? "unknown reason"}).`;
+  }
+}
+async function meshGraphGateRelease(ctx, args) {
+  (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_graph_gate_release" });
+  const gateId = readString(args.gate_id) || readString(args.gateId);
+  const fencingToken = readString(args.fencing_token) || readString(args.fencingToken);
+  const leaseGeneration = readNumber(args.lease_generation ?? args.leaseGeneration);
+  const idempotencyKey = readString(args.idempotency_key) || readString(args.idempotencyKey);
+  const outcome = readString(args.outcome);
+  const missing = [
+    !gateId ? "gate_id" : null,
+    !fencingToken ? "fencing_token" : null,
+    leaseGeneration === void 0 ? "lease_generation" : null,
+    !idempotencyKey ? "idempotency_key" : null,
+    !outcome ? "outcome" : null
+  ].filter((f) => f !== null);
+  if (missing.length > 0) {
+    return JSON.stringify({
+      success: false,
+      code: "missing_release_fields",
+      missing,
+      error: `mesh_graph_gate_release requires ${missing.join(", ")}. fencing_token and lease_generation come from the mesh_graph_gate_claim response; idempotency_key is yours to choose and makes a retried release a no-op instead of a double release.`
+    });
+  }
+  const patches = (args.patches ?? []).map((p) => ({
+    node: readString(p?.node) || "",
+    baseSpecPatch: p?.base_spec_patch ?? p?.baseSpecPatch ?? {}
+  })).filter((p) => p.node.length > 0);
+  try {
+    const result = (0, import_daemon_core6.releaseMeshGraphGate)({
+      meshId: ctx.mesh.id,
+      gateId,
+      fencingToken,
+      leaseGeneration,
+      idempotencyKey,
+      outcome,
+      ...args.result !== void 0 ? { result: args.result } : {},
+      ...args.evidence !== void 0 ? { evidence: args.evidence } : {},
+      ...patches.length > 0 ? { patches } : {}
+    });
+    (0, import_daemon_core6.recordGraphGateReleased)(ctx.mesh.id, {
+      graphId: result.gate.graphId,
+      gateId,
+      ref: result.gate.ref,
+      action: result.gate.action,
+      outcome,
+      generation: leaseGeneration,
+      releaseDigest: result.gate.releaseEvidenceDigest,
+      materializedNodeIds: result.materializedNodeIds,
+      duplicate: result.duplicate
+    });
+    const queueTrigger = result.materializedNodeIds.length > 0 ? await triggerMeshQueueAndReport(ctx) : void 0;
+    return JSON.stringify({
+      success: true,
+      released: true,
+      // A replayed release (same key + same digest) is a NO-OP SUCCESS, not an
+      // error — that is what makes a retried release safe (design :420-421).
+      duplicate: result.duplicate,
+      gateId,
+      graphId: result.gate.graphId,
+      ...result.gate.ref ? { ref: result.gate.ref } : {},
+      outcome,
+      materializedNodeIds: result.materializedNodeIds,
+      materializedCount: result.materializedNodeIds.length,
+      ...queueTrigger ? { queueTrigger } : {},
+      ...result.duplicate ? { duplicateHint: "This idempotency_key + payload was already committed; nothing changed. Re-sending an identical release is safe." } : {}
+    });
+  } catch (e) {
+    const message = e?.message || String(e);
+    const code = classifyGateError(message);
+    return JSON.stringify({
+      success: false,
+      released: false,
+      gateId,
+      ...code ? { code } : {},
+      error: message,
+      ...code === "gate_lease_expired" ? {
+        hint: "The lease expired before the release. Elapsed time is never completion evidence, so the release is refused. Re-claim the gate (you get a HIGHER generation), reconcile whether the external action already landed, then release."
+      } : {},
+      ...code === "stale_fence" ? { hint: "Another coordinator has claimed this gate since your claim. Your token is stale \u2014 re-claim before releasing." } : {},
+      ...code === "gate_release_conflict" ? { hint: "This idempotency_key was already used with a DIFFERENT payload. Use a new key, or re-send the identical payload." } : {}
+    });
+  }
+}
+async function meshGraphView(ctx, args) {
+  (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_graph_view" });
+  try {
+    await refreshMeshFromDaemon(ctx);
+    const graphId = readString(args.graph_id) || readString(args.graphId);
+    const batchId = readString(args.batch_id) || readString(args.batchId);
+    const includeTerminal = args.include_terminal === true || args.includeTerminal === true;
+    const graphs = (0, import_daemon_core6.buildMeshGraphViews)(ctx.mesh.id, {
+      ...graphId ? { graphId } : {},
+      ...batchId ? { batchId } : {},
+      activeOnly: !includeTerminal,
+      ...readNumber(args.limit) !== void 0 ? { limit: readNumber(args.limit) } : {}
+    });
+    const pendingActions = graphs.flatMap((g) => (g.nextCoordinatorAction ?? []).map((a) => ({ graphId: g.graphId, ...a })));
+    return JSON.stringify({
+      success: true,
+      meshId: ctx.mesh.id,
+      graphCount: graphs.length,
+      ...graphId || batchId ? {} : { scope: includeTerminal ? "all" : "in_flight" },
+      graphs,
+      ...pendingActions.length > 0 ? { pendingCoordinatorActions: pendingActions } : {},
+      ...graphs.length === 0 ? {
+        hint: graphId || batchId ? "No graph with that id on this mesh." : "No in-flight orchestration graphs. Only mesh_enqueue_batch requests that use graph features (gates, inputs_from, run_if, workspace_ref) create a graph; a plain depends_on batch runs on the unchanged queue path. Pass include_terminal=true to see completed graphs."
+      } : {}
+    });
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) });
+  }
+}
+function readNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return void 0;
+}
+
 // src/tools/mesh-tools-queue.ts
 function normalizeDedupMessage(message) {
   return (message || "").trim().replace(/\s+/g, " ").toLowerCase();
@@ -5002,6 +5409,7 @@ async function meshEnqueueBatch(ctx, args) {
   const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
   const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
   const specs = [];
+  const rawGraphEntries = [];
   const normalizedEntries = [];
   const duplicateSuspects = [];
   for (let i = 0; i < rawTasks.length; i++) {
@@ -5033,6 +5441,7 @@ async function meshEnqueueBatch(ctx, args) {
       }
     }
     normalizedEntries.push({ ...v, ...ref ? { ref } : {} });
+    rawGraphEntries.push(entry);
     specs.push({
       ...ref ? { ref } : {},
       message: v.message,
@@ -5061,18 +5470,75 @@ async function meshEnqueueBatch(ctx, args) {
       atomic: true
     });
   }
+  const batchIdArg = readString(args.batch_id) || readString(args.batchId) || void 0;
+  const plan = buildGraphPlanShape(specs, rawGraphEntries, args.gates, args.workspaces, !!batchIdArg);
+  const useGraphPath = plan.useGraphPath;
+  const decision = (0, import_daemon_core6.normalizeOrchestrationDecision)(
+    args.orchestration_decision ?? args.orchestrationDecision,
+    "batch"
+  );
   let tasks;
+  let graphPlan;
   try {
-    tasks = (0, import_daemon_core6.enqueueTaskGraph)(ctx.mesh.id, specs);
+    if (useGraphPath) {
+      graphPlan = (0, import_daemon_core6.commitMeshGraphPlan)({
+        meshId: ctx.mesh.id,
+        tasks: plan.tasks,
+        gates: plan.gates,
+        workspaces: plan.workspaces,
+        ...batchIdArg ? { batchId: batchIdArg } : {},
+        ...batchMissionId ? { missionId: batchMissionId } : {},
+        ...onDependencyFailure ? { onDependencyFailure } : {},
+        ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {},
+        enqueueSurface: "batch",
+        orchestrationDecision: decision.decision
+      });
+      tasks = graphPlan.tasks;
+    } else {
+      tasks = (0, import_daemon_core6.enqueueTaskGraph)(ctx.mesh.id, specs);
+    }
   } catch (e) {
     const message = e?.message || String(e);
-    const code = BATCH_ENQUEUE_ERROR_CODES.find((c) => message.includes(c));
+    const code = e instanceof import_daemon_core6.MeshGraphPlanError ? e.code : BATCH_ENQUEUE_ERROR_CODES.find((c) => message.includes(c));
+    if (useGraphPath) {
+      (0, import_daemon_core6.recordGraphEnqueueRolledBack)(ctx.mesh.id, {
+        code: code ?? "graph_plan_failed",
+        ...batchIdArg ? { batchId: batchIdArg } : {},
+        taskCount: specs.length,
+        error: message
+      });
+    } else {
+      (0, import_daemon_core6.recordGraphEnqueueValidationFailed)(ctx.mesh.id, {
+        code: code ?? "batch_enqueue_failed",
+        ...batchIdArg ? { batchId: batchIdArg } : {},
+        taskCount: specs.length
+      });
+    }
     return JSON.stringify({
       success: false,
       ...code ? { code } : {},
       error: message,
       enqueued: 0,
-      atomic: true
+      atomic: true,
+      ...e instanceof import_daemon_core6.MeshGraphPlanError && e.extra ? e.extra : {}
+    });
+  }
+  if (graphPlan) {
+    (0, import_daemon_core6.recordGraphEnqueueCommitted)(ctx.mesh.id, {
+      graphId: graphPlan.graphId,
+      batchId: graphPlan.batchId,
+      enqueueSurface: "batch",
+      schemaVersion: 2,
+      planDigest: graphPlan.planDigest,
+      ...batchMissionId ? { missionId: batchMissionId } : {},
+      ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
+      taskCount: graphPlan.tasks.length,
+      gateCount: graphPlan.gates.length,
+      workspaceCount: graphPlan.workspaces.length,
+      dependencyEdgeCount: graphPlan.dependencyEdgeCount,
+      onDependencyFailure: onDependencyFailure ?? "block",
+      orchestrationDecision: decision.decision,
+      ...graphPlan.replayed ? { replayed: true } : {}
     });
   }
   const distinctMissionIds = [...new Set(specs.map((s) => s.missionId).filter((m) => !!m))];
@@ -5095,12 +5561,13 @@ async function meshEnqueueBatch(ctx, args) {
   const queueTrigger = await triggerMeshQueueAndReport(ctx);
   let eagerPushDeferredCount = 0;
   if (ctx.transport instanceof IpcTransport) {
-    const dependencyStatusById = new Map(
-      (0, import_daemon_core6.getQueue)(ctx.mesh.id).map((t) => [t.id, t.status])
-    );
+    const liveQueue = (0, import_daemon_core6.getQueue)(ctx.mesh.id);
+    const dependencyStatusById = new Map(liveQueue.map((t) => [t.id, t.status]));
+    const liveById = new Map(liveQueue.map((t) => [t.id, t]));
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const dispatchPromises = [];
-    tasks.forEach((task, i) => {
+    tasks.forEach((snapshot, i) => {
+      const task = liveById.get(snapshot.id) ?? snapshot;
       if (!(0, import_daemon_core6.taskDependenciesSatisfied)(task, dependencyStatusById)) {
         eagerPushDeferredCount++;
         return;
@@ -5123,11 +5590,36 @@ async function meshEnqueueBatch(ctx, args) {
     atomic: true,
     enqueued: tasks.length,
     ...onDependencyFailure ? { on_dependency_failure: onDependencyFailure } : {},
+    // ── batch v2 additive response fields (design :582) ──
+    // Present only on the graph path: an old-path batch creates no graph, so
+    // reporting a graphId for it would be a lie.
+    ...graphPlan ? {
+      graphId: graphPlan.graphId,
+      batchId: graphPlan.batchId,
+      planDigest: graphPlan.planDigest,
+      // design :585-588 — DB atomicity NEVER implies the git worktree exists.
+      workspacePreparation: graphPlan.workspacePreparation,
+      ...graphPlan.replayed ? {
+        replayed: true,
+        replayedHint: "A graph with this batch_id and an identical plan digest already existed; nothing was re-inserted. Re-sending the same batch_id with a DIFFERENT plan is rejected as batch_id_conflict."
+      } : {},
+      ...graphPlan.gates.length > 0 ? {
+        gates: graphPlan.gates,
+        gateHint: "Gates are declared shut. When their predecessors complete they open (awaiting_coordinator) and BLOCK their downstream tasks. Pass one with mesh_graph_gate_claim \u2192 do the action yourself \u2192 mesh_graph_gate_release. The daemon never performs a gate action and a deadline can only expire a gate, never pass it."
+      } : {},
+      ...graphPlan.workspaces.length > 0 ? { workspaces: graphPlan.workspaces } : {},
+      ...graphPlan.heldNodeIds.length > 0 ? {
+        graphHeldTasks: graphPlan.heldNodeIds.length,
+        graphHeldHint: "Tasks declaring graph features (bound upstream outputs, a condition, a delayed worktree, or a gate) are held until the graph settles them \u2014 that is what makes their final instruction knowable. Tasks with only plain dependencies are NOT held; they use the unchanged queue dependency predicate."
+      } : {}
+    } : {},
+    ...decision.batchCapabilityAvailable ? { batchCapabilityAvailable: decision.batchCapabilityAvailable } : {},
     tasks: tasks.map((task, i) => ({
       ...normalizedEntries[i].ref ? { ref: normalizedEntries[i].ref } : {},
       taskId: task.id,
       status: task.status,
       taskMode: task.taskMode,
+      ...graphPlan?.nodeIdByIndex[i] ? { nodeId: graphPlan.nodeIdByIndex[i] } : {},
       ...Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {},
       ...task.targetNodeId ? { targetNodeId: task.targetNodeId } : {},
       ...task.priority ? { priority: task.priority } : {},
@@ -10376,6 +10868,15 @@ async function startMcpServer(opts) {
             break;
           case "mesh_view_queue":
             text = await meshViewQueue(meshCtx, a);
+            break;
+          case "mesh_graph_view":
+            text = await meshGraphView(meshCtx, a);
+            break;
+          case "mesh_graph_gate_claim":
+            text = await meshGraphGateClaim(meshCtx, a);
+            break;
+          case "mesh_graph_gate_release":
+            text = await meshGraphGateRelease(meshCtx, a);
             break;
           case "mesh_queue_cancel":
             text = await meshQueueCancel(meshCtx, a);

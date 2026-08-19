@@ -1059,8 +1059,11 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_status\` | Nodes' health, git state, sessions, branch convergence |
 | \`mesh_list_nodes\` | List nodes with workspace paths |
 | \`mesh_enqueue_task\` | Add a task to the pull-based queue; idle nodes auto-claim |
-| \`mesh_enqueue_batch\` | Atomically enqueue a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK) |
+| \`mesh_enqueue_batch\` | Atomically enqueue a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Also carries the full graph surface: \`inputs_from\`, \`run_if\`, \`gates\` + \`gated_by\`, \`workspaces\` + \`workspace_ref\` |
 | \`mesh_view_queue\` | Queue status — pending/assigned/completed/failed/cancelled |
+| \`mesh_graph_view\` | Inspect orchestration graphs — node states, gates awaiting you, workspace sagas, why something is blocked |
+| \`mesh_graph_gate_claim\` | Take the lease on a gate awaiting a coordinator; returns the fencing token + generation a release needs |
+| \`mesh_graph_gate_release\` | Pass a gate you hold — the ONLY way through one (no timeout ever passes a gate) |
 | \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
 | \`mesh_queue_requeue\` | Return a task to pending for retry |
 | \`mesh_send_task\` | Push a task straight to a specific node/session |
