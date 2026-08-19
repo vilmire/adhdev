@@ -1323,7 +1323,7 @@ var MESH_QUEUE_CANCEL_TOOL = {
 };
 var MESH_QUEUE_REQUEUE_TOOL = {
   name: "mesh_queue_requeue",
-  description: "Return a mesh queue task to pending for retry. By default clears stale assigned owner and target session so another live session can claim it. When the task has exceeded its retry cap it is auto-failed instead; use force=true to override.",
+  description: "Return a mesh queue task to pending for retry, optionally re-targeting it and/or REWRITING its instruction. By default clears stale assigned owner and target session so another live session can claim it. When the task has exceeded its retry cap it is auto-failed instead; use force=true to override. This is also the way OUT of parking: a task whose target-session pin went stale is PARKED (held, still addressed, claimable by nobody) and any requeue unparks it \u2014 see parkedTasks in mesh_view_queue.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1333,7 +1333,8 @@ var MESH_QUEUE_REQUEUE_TOOL = {
       target_session_id: { type: "string", description: "Optional replacement target runtime session ID." },
       clear_target_node: { type: "boolean", description: "When true, remove any existing target node constraint." },
       keep_target_session: { type: "boolean", description: "When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets." },
-      force: { type: "boolean", description: "When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery." }
+      force: { type: "boolean", description: "When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery." },
+      message: { type: "string", description: "Optional REPLACEMENT instruction for the task. Use when the situation moved on while the task waited \u2014 the common case for a parked delta, e.g. the worker already finished the part your correction was about, so the original wording would now be wrong or redundant. Preserves the task id, mission linkage and dependents (unlike cancel + re-enqueue). Omitted or blank leaves the existing message untouched." }
     },
     required: ["task_id"]
   }
@@ -5760,6 +5761,16 @@ async function meshViewQueue(ctx, args) {
       via: e.payload?.via,
       failedAt: e.payload?.dispatchFailedAt || e.timestamp
     }));
+    const parkedTasks = fullQueue.filter((task) => task?.parked?.reason).map((task) => ({
+      taskId: task.id,
+      parkedAt: task.parked.parkedAt,
+      reason: task.parked.reason,
+      originalTargetSessionId: task.parked.targetSessionId,
+      originalTargetNodeId: task.parked.targetNodeId,
+      currentTargetSessionId: task.targetSessionId,
+      missionId: task.missionId,
+      message: summarizeTaskMessage(task.message)
+    }));
     const staleAssignedTasks = maintenance.staleAssignedTasks || [];
     const requestedHistoricalRows = queue.some((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
@@ -5814,6 +5825,11 @@ async function meshViewQueue(ctx, args) {
       historicalCount: summary.historicalCount,
       visibleActiveCount: visibleSummary.activeCount,
       visibleHistoricalCount: visibleSummary.historicalCount,
+      ...parkedTasks.length > 0 ? {
+        parkedTasks,
+        parkedTaskCount: parkedTasks.length,
+        parkedTaskNote: "PARKED tasks are held for an explicit coordinator decision and are claimable by NOBODY \u2014 their delta was addressed to a session whose pin went stale, and the daemon deliberately will not re-home it onto another session. Nothing will move them until you act. Exits: mesh_queue_requeue(task_id, target_session_id=<live session>) to re-target, or with clear_target_session=true to let any compatible session take it; add message=<rewritten instruction> to the same call if the situation moved on while it waited; mesh_queue_cancel(task_id) if it is moot. Any requeue unparks the task. Left untouched they are failed (with a notification) once past the parked-task retention window."
+      } : {},
       staleAssignedTasks: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
       staleAssignedCount: maintenance.staleAssignedCount,
       queueMaintenance: maintenanceForResponse,
@@ -5919,6 +5935,7 @@ async function meshQueueRequeue(ctx, args) {
     const clearTargetNode = args.clear_target_node === true || args.clearTargetNode === true;
     const clearTargetSession = targetSessionId ? false : !keepTargetSession;
     const force = args.force === true;
+    const message = typeof args.message === "string" && args.message.trim() ? args.message : void 0;
     if (ctx.transport instanceof IpcTransport) {
       const raw = await ctx.transport.command("requeue_mesh_queue_task", {
         meshId: ctx.mesh.id,
@@ -5928,7 +5945,8 @@ async function meshQueueRequeue(ctx, args) {
         ...targetSessionId ? { targetSessionId } : {},
         clearTargetNode,
         clearTargetSession,
-        force
+        force,
+        ...message ? { message } : {}
       });
       const result = unwrapCommandPayload(raw) || {};
       if (result.success === false) {
@@ -5959,7 +5977,8 @@ async function meshQueueRequeue(ctx, args) {
       targetSessionId,
       clearTargetNode,
       clearTargetSession,
-      force
+      force,
+      ...message ? { message } : {}
     });
     if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
     if (task.status === "failed" && task.cancelReason?.startsWith("max_retries_exceeded")) {
