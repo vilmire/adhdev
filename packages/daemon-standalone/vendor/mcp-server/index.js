@@ -1353,7 +1353,13 @@ var MESH_SEND_TASK_TOOL = {
       read_only: { type: "boolean", description: "Snake-case alias for readonly." },
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
-      difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." }
+      difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." },
+      delivery_mode: {
+        type: "string",
+        enum: ["when_idle", "interrupt"],
+        description: "How to deliver when the target session is BUSY. Default 'when_idle': never disturbs the running turn \u2014 the task is queued and auto-delivered the moment the session goes idle. \u2605'interrupt' ABORTS the turn currently in flight by pressing the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers this task once the session settles. THE WORK IN PROGRESS IS DISCARDED \u2014 whatever the agent had not yet finished is lost, and any partial edits it was mid-way through are left as they are. Use it only when the running turn is genuinely going the wrong way and finishing it is worse than losing it. If the target provider cannot interrupt (no stop control declared, or an empty stop key), the dispatch is REJECTED rather than quietly falling back to when_idle \u2014 so a steering attempt never reports success while the session actually runs on to completion under the old instructions. Re-send with 'when_idle' if delivery-after-completion is acceptable. Has no effect on an idle session (delivered immediately either way)."
+      },
+      deliveryMode: { type: "string", enum: ["when_idle", "interrupt"], description: "CamelCase alias for delivery_mode." }
     },
     required: ["node_id", "session_id", "message", "difficulty"]
   }
@@ -8426,8 +8432,107 @@ async function meshSendTask(ctx, args) {
       }
       if (explicitTargetSession && !isIdleSessionRecord(explicitTargetSession) && !isTerminalSessionRecord(explicitTargetSession)) {
         const sessionStatus = typeof explicitTargetSession?.status === "string" ? explicitTargetSession.status : "unknown";
-        const { resolveDeliveryDecision } = await import("@adhdev/daemon-core");
-        const policyResult = resolveDeliveryDecision(sessionStatus, { kind: "task" });
+        const { resolveDeliveryDecision, normalizeDeliveryMode } = await import("@adhdev/daemon-core");
+        const modeInput = args.delivery_mode ?? args.deliveryMode;
+        const { mode: deliveryMode, unrecognized: unrecognizedDeliveryMode } = normalizeDeliveryMode(modeInput);
+        let interruptSupported = false;
+        let interruptUnsupportedMessage;
+        let interruptConfidence;
+        if (deliveryMode === "interrupt") {
+          try {
+            const probe = unwrapCommandPayload(await commandForNode(ctx, node, "agent_command", {
+              targetSessionId: args.session_id,
+              agentType: resolvedProviderType,
+              cliType: resolvedProviderType,
+              providerType: resolvedProviderType,
+              action: "interrupt_capability"
+            }));
+            interruptSupported = probe?.supported === true;
+            interruptUnsupportedMessage = typeof probe?.message === "string" ? probe.message : void 0;
+            interruptConfidence = typeof probe?.confidence === "string" ? probe.confidence : void 0;
+          } catch (e) {
+            interruptSupported = false;
+            interruptUnsupportedMessage = `Could not determine interrupt capability for provider '${resolvedProviderType}' on node '${args.node_id}': ${e?.message || e}. Refusing to interrupt on an unverified capability.`;
+          }
+        }
+        const policyResult = resolveDeliveryDecision(sessionStatus, {
+          kind: "task",
+          deliveryMode,
+          interruptSupported,
+          ...interruptUnsupportedMessage ? { interruptUnsupportedMessage } : {}
+        });
+        if (policyResult.decision === "rejected" && policyResult.reason === "interrupt_unsupported_for_provider") {
+          return JSON.stringify({
+            success: false,
+            dispatched: false,
+            decision: "interrupt_unsupported",
+            reason: policyResult.reason,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            sessionStatus,
+            providerType: resolvedProviderType,
+            requestedDeliveryMode: deliveryMode,
+            message: policyResult.message,
+            nextAction: `Re-send this task with delivery_mode 'when_idle' to have it delivered when session '${args.session_id}' finishes on its own, or stop the session and launch a fresh one if the in-flight work must not complete.`
+          });
+        }
+        if (policyResult.decision === "interrupt") {
+          const interruptResult = unwrapCommandPayload(await commandForNode(ctx, node, "agent_command", {
+            targetSessionId: args.session_id,
+            agentType: resolvedProviderType,
+            cliType: resolvedProviderType,
+            providerType: resolvedProviderType,
+            action: "interrupt_turn",
+            dispatchSource: "mesh-tools-session:mesh_send_task:interrupt"
+          }));
+          if (interruptResult?.success !== true || interruptResult?.interrupted !== true) {
+            return JSON.stringify({
+              success: false,
+              dispatched: false,
+              decision: "interrupt_failed",
+              reason: interruptResult?.reason || "interrupt_rejected",
+              nodeId: args.node_id,
+              sessionId: args.session_id,
+              sessionStatus,
+              providerType: resolvedProviderType,
+              error: interruptResult?.error || "The provider did not accept the interrupt.",
+              nextAction: `Nothing was cancelled and nothing was delivered. Re-send with delivery_mode 'when_idle', or inspect the session with mesh_read_terminal before retrying.`
+            });
+          }
+          const interruptedTask = (0, import_daemon_core6.enqueueTask)(ctx.mesh.id, message, {
+            targetNodeId: args.node_id,
+            targetSessionId: args.session_id,
+            taskMode,
+            difficulty,
+            ...readonly ? { readonly: true } : {},
+            ...missionId ? { missionId } : {},
+            ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
+          });
+          return JSON.stringify({
+            success: true,
+            dispatched: false,
+            decision: "interrupted_and_queued",
+            taskId: interruptedTask.id,
+            reason: policyResult.reason,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            sessionStatus,
+            providerType: resolvedProviderType,
+            taskMode: taskMode || void 0,
+            interrupt: {
+              sent: true,
+              key: interruptResult?.keyName,
+              // 'declared' means the stop key is declared by the spec but the
+              // busy->idle effect was not measured live for this provider.
+              confidence: interruptResult?.confidence || interruptConfidence || "declared"
+            },
+            turnDiscarded: true,
+            message: `Interrupted the in-flight turn on session '${args.session_id}' via ${interruptResult?.keyName || "the stop control"}. That turn was cancelled and its unfinished work is lost. Task '${interruptedTask.id}' is pinned to this session and delivers as soon as it reports idle.`,
+            nextAction: interruptResult?.confidence === "proven" ? `Track with mesh_status; no manual resend needed.` : `Interrupt support for '${resolvedProviderType}' is DECLARED by its spec but not live-verified. Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.`,
+            ...unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {},
+            ...buildMissionInactiveWarning(ctx, missionId) ?? {}
+          });
+        }
         if (policyResult.decision === "queued") {
           const queuedTask = (0, import_daemon_core6.enqueueTask)(ctx.mesh.id, message, {
             targetNodeId: args.node_id,
@@ -8450,6 +8555,12 @@ async function meshSendTask(ctx, args) {
             taskMode: taskMode || void 0,
             message: policyResult.message,
             nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' \u2014 it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
+            // A misspelled delivery_mode silently became when_idle. Say so — a
+            // caller who meant to interrupt must not read this queued result as
+            // "my steering landed".
+            ...unrecognizedDeliveryMode ? {
+              deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' was ignored; this task was queued (when_idle) and the running turn was NOT interrupted. Valid values are 'when_idle' and 'interrupt'.`
+            } : {},
             ...buildMissionInactiveWarning(ctx, missionId) ?? {}
           });
         }
