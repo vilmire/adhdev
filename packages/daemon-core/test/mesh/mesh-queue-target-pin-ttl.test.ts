@@ -40,7 +40,9 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMocks.detectCLI }))
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, getQueue, claimNextTask, cancelTask, expireTaskTargetPin } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, getQueue, claimNextTask, cancelTask, parkTaskTargetPin } from '../../src/mesh/mesh-work-queue.js'
+import { __resetTargetPinGeneratingCreditForTests } from '../../src/mesh/mesh-skip-notify.js'
+import { PARK_REASON_PIN_EXPIRED } from '../../src/mesh/mesh-task-parking.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js'
 import { getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests } from '../../src/mesh/mesh-turn-ledger.js'
@@ -126,6 +128,7 @@ function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __resetMeshRuntimeStoreForTests()
   __resetAutoLaunchAwaitClaimBackoffForTests()
+  __resetTargetPinGeneratingCreditForTests()
   meshConfigMocks.getMesh.mockReset()
   try { fs.rmSync(testTmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
 }
@@ -155,7 +158,7 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
     }
   })
 
-  it('(b) STALE unobservable target (live REMOTE node, session not locally observable): the pin expires past the TTL and the task becomes claimable — retry budget untouched', async () => {
+  it('(b) STALE unobservable target (live REMOTE node, session not locally observable): the pin expires past the TTL and the task is PARKED — never silently re-homed, retry budget untouched', async () => {
     const meshId = `mesh_ttl_remote_${randomUUID().slice(0, 8)}`
     __resetTurnLedgerMetricsForTests()
     try {
@@ -168,21 +171,27 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
       await triggerMeshQueue(components, meshId)
 
       const after = task(meshId, t.id)!
-      // The stale session pin is EXPIRED; the node pin is kept (the node is alive).
-      expect(after.targetSessionId).toBeUndefined()
+      // ★ PIN-PARKING (behaviour change): the stale pin is PARKED, not cleared. The
+      // address is PRESERVED — both on the row (which is what keeps it unclaimable via
+      // the tier-1 claim SELECT) and mirrored in `parked` for the coordinator's benefit.
+      expect(after.parked?.reason).toBe(PARK_REASON_PIN_EXPIRED)
+      expect(after.parked?.targetSessionId).toBe('remote-sess')
+      expect(after.parked?.parkedAt).toBeTruthy()
+      expect(after.targetSessionId).toBe('remote-sess')
       expect(after.targetNodeId).toBe(REMOTE_NODE_ID)
       expect(after.status).toBe('pending')
-      expect(after.requeueReason).toBe('target_session_pin_expired_unclaimed')
-      expect(after.autoLaunch?.reason).toBe('target_session_pin_expired')
-      // No retry-budget cost — this is an un-wedging operation, not a retry.
+      expect(after.autoLaunch?.reason).toBe('target_session_pin_parked')
+      // No retry-budget cost — parking is a holding operation, not a retry.
       expect(after.requeueCount ?? 0).toBe(0)
-      // Content-free metric for the clear.
-      expect(getTurnLedgerMetrics().targetPinClearedByReason['target_session_pin_expired_unclaimed']).toBe(1)
+      // Content-free metric for the transition.
+      expect(getTurnLedgerMetrics().targetPinClearedByReason[PARK_REASON_PIN_EXPIRED]).toBe(1)
 
-      // Claimable by ANY compatible session now (no longer walled behind the pin).
-      const claimed = claimNextTask(meshId, REMOTE_NODE_ID, 'any-compatible-session', [])
-      expect(claimed?.id).toBe(t.id)
-      expect(claimed?.status).toBe('assigned')
+      // ★ THE REGRESSION THIS FILE NOW GUARDS: no silent succession. A parked task is
+      // claimable by NOBODY — not another compatible session…
+      expect(claimNextTask(meshId, REMOTE_NODE_ID, 'any-compatible-session', [])).toBeNull()
+      // …and not even the session it is still pinned to (the coordinator was asked to
+      // re-confirm this delta's premise; delivering it anyway would defeat the park).
+      expect(claimNextTask(meshId, REMOTE_NODE_ID, 'remote-sess', [])).toBeNull()
     } finally {
       cleanup(meshId)
     }
@@ -241,8 +250,8 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
 
       const after = task(meshId, t.id)!
       expect(after.status).toBe('cancelled')
-      // The pin-expiry mutation itself refuses non-pending rows.
-      expect(expireTaskTargetPin(meshId, t.id, { reason: 'target_session_pin_expired_unclaimed' })).toBeNull()
+      // The parking mutation itself refuses non-pending rows.
+      expect(parkTaskTargetPin(meshId, t.id, { reason: PARK_REASON_PIN_EXPIRED })).toBeNull()
       expect(task(meshId, t.id)!.status).toBe('cancelled')
     } finally {
       cleanup(meshId)

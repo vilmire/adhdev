@@ -1057,6 +1057,34 @@ export async function meshViewQueue(
                 via: e.payload?.via,
                 failedAt: e.payload?.dispatchFailedAt || e.timestamp,
             }));
+        // PIN-PARKING: surface parked rows as their own section rather than leaving
+        // them to be spotted among the pending rows.
+        //
+        // A parked task is pending-shaped but behaves nothing like pending work: no
+        // session will ever claim it and no timer will re-home it, so it is invisible
+        // in every "is anything moving?" signal the coordinator actually reads
+        // (activeWork, autoLaunch, the status counts). Left to blend in, it is a queue
+        // row that looks like progress and is in fact a dead end — which is the same
+        // silent loss parking was introduced to prevent, one layer up. Named
+        // explicitly, with its original addressee and the reason it parked, it is
+        // something the coordinator can act on.
+        //
+        // Deliberately NOT compacted away: this array is bounded by how many pins go
+        // stale (single digits in practice, and each entry a handful of ids), and
+        // hiding it in compact mode would defeat its purpose for exactly the busy
+        // meshes where it matters most.
+        const parkedTasks = fullQueue
+            .filter((task: any) => task?.parked?.reason)
+            .map((task: any) => ({
+                taskId: task.id,
+                parkedAt: task.parked.parkedAt,
+                reason: task.parked.reason,
+                originalTargetSessionId: task.parked.targetSessionId,
+                originalTargetNodeId: task.parked.targetNodeId,
+                currentTargetSessionId: task.targetSessionId,
+                missionId: task.missionId,
+                message: summarizeTaskMessage(task.message),
+            }));
         const staleAssignedTasks = (maintenance as any).staleAssignedTasks || [];
         const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
         const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
@@ -1132,6 +1160,14 @@ export async function meshViewQueue(
             historicalCount: summary.historicalCount,
             visibleActiveCount: visibleSummary.activeCount,
             visibleHistoricalCount: visibleSummary.historicalCount,
+            ...(parkedTasks.length > 0 ? {
+                parkedTasks,
+                parkedTaskCount: parkedTasks.length,
+                parkedTaskNote: 'PARKED tasks are held for an explicit coordinator decision and are claimable by NOBODY — their delta was addressed to a session whose pin went stale, and the daemon deliberately will not re-home it onto another session. '
+                    + 'Nothing will move them until you act. Exits: mesh_queue_requeue(task_id, target_session_id=<live session>) to re-target, or with clear_target_session=true to let any compatible session take it; '
+                    + 'add message=<rewritten instruction> to the same call if the situation moved on while it waited; mesh_queue_cancel(task_id) if it is moot. Any requeue unparks the task. '
+                    + 'Left untouched they are failed (with a notification) once past the parked-task retention window.',
+            } : {}),
             staleAssignedTasks: compact ? staleAssignedTasks.slice(0, 10).map(compactQueueRow) : staleAssignedTasks,
             staleAssignedCount: (maintenance as any).staleAssignedCount,
             queueMaintenance: maintenanceForResponse,
@@ -1299,6 +1335,7 @@ export async function meshQueueRequeue(
         keep_target_session?: boolean;
         keepTargetSession?: boolean;
         force?: boolean;
+        message?: string;
     },
 ): Promise<string> {
     try {
@@ -1312,6 +1349,9 @@ export async function meshQueueRequeue(
         // otherwise clear the stale target session unless the caller asked to keep it.
         const clearTargetSession = targetSessionId ? false : !keepTargetSession;
         const force = args.force === true;
+        // PIN-PARKING (edit): optional instruction rewrite. Blank-guarded in
+        // requeueTask so an empty string never blanks a task's only instruction.
+        const message = typeof args.message === 'string' && args.message.trim() ? args.message : undefined;
 
         // CANON-IDENTITY cross-process single-flight: the in-flight guard set
         // (daemon-core mesh-task-inflight) is process-LOCAL. In IpcTransport (cloud /
@@ -1335,6 +1375,7 @@ export async function meshQueueRequeue(
                 clearTargetNode,
                 clearTargetSession,
                 force,
+                ...(message ? { message } : {}),
             });
             const result = unwrapCommandPayload(raw) || {};
             // Refused (in-flight / live-generating guard) or daemon error → surface verbatim
@@ -1368,6 +1409,7 @@ export async function meshQueueRequeue(
             clearTargetNode,
             clearTargetSession,
             force,
+            ...(message ? { message } : {}),
         });
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
         if (task.status === 'failed' && task.cancelReason?.startsWith('max_retries_exceeded')) {

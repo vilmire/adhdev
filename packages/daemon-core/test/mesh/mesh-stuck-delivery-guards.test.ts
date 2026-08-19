@@ -109,10 +109,16 @@ describe('expired target pin reaches the coordinator (defect A — the real one)
     expect(guidance).toMatch(/evidence === 'delivered'/)
   })
 
-  it('the expiry skip is recorded with the reason the classifier matches', () => {
+  it('the park skip is recorded with the reason the classifier matches', () => {
     // The notifier is driven by markAutoLaunch's reason string; a mismatch here makes the
     // classifier entry above dead code.
-    expect(assignment).toContain("markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_pin_expired' })")
+    //
+    // PIN-PARKING: the expiry no longer clears the pin, it PARKS the task, and the skip
+    // reason moved with it (target_session_pin_expired → PARKED_SKIP_REASON). Asserted
+    // through the shared constant rather than a literal so the two cannot drift apart
+    // silently — a rename now breaks the import, not just this string match.
+    expect(assignment).toContain("markAutoLaunch(meshId, task.id, { status: 'skipped', reason: PARKED_SKIP_REASON })")
+    expect(assignment).toContain("from './mesh-task-parking.js'")
   })
 })
 

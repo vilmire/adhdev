@@ -1,6 +1,6 @@
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { LOG } from '../logging/logger.js';
-import { getQueue, expireTaskTargetPin } from './mesh-work-queue.js';
+import { getQueue } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -13,6 +13,7 @@ import { loadConfig } from '../config/config.js';
 import { SLOT_MODEL_ABSENT_SKIP_REASON } from './slot-model-enforcement.js';
 import { isLocalAutoLaunchNode, resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX } from './mesh-queue-observability.js';
+import { PARKED_SKIP_REASON, PARKED_TASK_RETENTION_MS } from './mesh-task-parking.js';
 
 // Fix (1): actionable dispatch-skip notification.
 //
@@ -49,6 +50,14 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     // premise the delta was meant to correct. The coordinator must know its
     // addressed message lost its address.
     'target_session_pin_expired',
+    // PIN-PARKING: the reason above's successor. The pin no longer CLEARS on expiry
+    // (that silently re-homed a context-bound delta onto an arbitrary session); the
+    // task PARKS instead — held, still addressed, claimable by nobody. That state is
+    // by construction actionable and terminal-until-touched: nothing in the daemon
+    // will ever move a parked task, so if the coordinator is not told, the work is
+    // lost exactly as surely as if it had been dropped. Both reasons stay listed —
+    // the old one so a version-skewed daemon's rows still page.
+    PARKED_SKIP_REASON,
     // SLOT MODEL GUARD (absent): no slot on the node declares the task's model.
     // Permanent — no amount of waiting produces a slot, so the coordinator must
     // re-drive (adjust difficulty, target another node, ask the owner). Its
@@ -148,6 +157,121 @@ export const TARGET_SESSION_PIN_TTL_MS = 15 * 60_000;
 export function targetPinAgeMs(task: MeshWorkQueueEntry, nowMs: number = Date.now()): number | null {
     const anchorMs = Date.parse(task.requeuedAt || task.createdAt || '');
     return Number.isFinite(anchorMs) ? nowMs - anchorMs : null;
+}
+
+/**
+ * TTL-WHILE-WORKING: does the pin's TTL run right now, or is the addressee
+ * demonstrably busy earning it?
+ *
+ * The defect this fixes (measured live 2026-08-19: `unclaimed 902s ≥ ttl 900s`,
+ * dropped 2 seconds over the line, on the very `agent:ready` where the worker
+ * finished): the TTL was pure wall-clock age from requeuedAt/createdAt, so it
+ * ran while the pinned session was actively generating. That inverts the pin's
+ * purpose. A pin means "append this to THAT session's context"; the more work
+ * that session is doing, the more valuable the pin is and the more likely a
+ * 15-minute wall-clock budget elapses. The pin therefore died soonest in exactly
+ * the case it was written for — the session that day was implementing P2/P3/P4
+ * in one turn, which trivially exceeds 15 minutes of legitimate work.
+ *
+ * The corrected basis is UNPRODUCTIVE waiting: the TTL only advances while the
+ * addressee is NOT visibly working. Concretely, a `GENERATING` verdict from the
+ * local instance manager suspends the clock for that tick.
+ *
+ * ★ The never-expiring hole this deliberately does NOT open. Suspension requires
+ * POSITIVE evidence of work — `resolveSessionBusyVerdict === 'GENERATING'`, which
+ * only a live LOCAL session can produce. Every weaker state keeps the clock
+ * running:
+ *   - IDLE_CONFIRMED — alive but idle. It could claim the row and is not; that is
+ *     precisely the stale-pin case, so waiting must count.
+ *   - UNKNOWN — remote, or gone. Absence of evidence is not evidence of work; a
+ *     remote session that never claims is the original RC.20 wedge, and treating
+ *     unknown as busy would make its pin immortal.
+ * So a pin can be held open only by a session this daemon can watch generating,
+ * and the moment that stops the bounded TTL resumes. Suspension is also evaluated
+ * per tick against live state — it can never be latched on.
+ *
+ * Because the clock is suspended rather than reset, generating time is not
+ * REFUNDED either: a session that alternates work and idling still exhausts the
+ * TTL across its idle stretches, so a pin whose addressee never actually claims
+ * remains bounded.
+ */
+export interface TargetPinTtlVerdict {
+    /** The pin has waited past the TTL in unproductive time → park it. */
+    expired: boolean;
+    /** Unproductive age used for the decision, in ms (null when unmeasurable). */
+    ageMs: number | null;
+    /** True when the clock is suspended this tick because the addressee is generating. */
+    suspended: boolean;
+}
+
+/**
+ * Accumulated GENERATING time per pinned task, subtracted from wall-clock age.
+ *
+ * In-memory and best-effort by design: on a daemon restart a task starts
+ * accumulating again from zero, which can only make the TTL fire EARLIER (less
+ * credited work), never later. Erring toward expiry is the safe direction —
+ * parking is recoverable, an immortal pin is not.
+ */
+const targetPinGeneratingCreditMs = new Map<string, { creditMs: number; lastSeenMs: number }>();
+
+/** Drop credit bookkeeping for tasks that are no longer pinned/pending. */
+export function forgetTargetPinGeneratingCredit(meshId: string, taskId: string): void {
+    targetPinGeneratingCreditMs.delete(`${meshId}::${taskId}`);
+}
+
+export function resolveTargetPinTtlVerdict(
+    components: DaemonComponents,
+    task: MeshWorkQueueEntry,
+    nowMs: number = Date.now(),
+): TargetPinTtlVerdict {
+    const wallAgeMs = targetPinAgeMs(task, nowMs);
+    if (wallAgeMs === null) return { expired: false, ageMs: null, suspended: false };
+
+    const targetSessionId = readNonEmptyString(task.targetSessionId);
+    const key = `${task.meshId}::${task.id}`;
+    const prior = targetPinGeneratingCreditMs.get(key);
+
+    // Positive evidence of work only — see the never-expiring-hole note above.
+    const generating = !!targetSessionId
+        && resolveSessionBusyVerdict(components, targetSessionId) === 'GENERATING';
+
+    let creditMs = prior?.creditMs ?? 0;
+    if (generating && prior) {
+        // Credit the interval since the last observation, bounded by that gap so a
+        // long scheduler stall cannot mint unbounded credit.
+        creditMs += Math.max(0, nowMs - prior.lastSeenMs);
+    }
+    targetPinGeneratingCreditMs.set(key, { creditMs, lastSeenMs: nowMs });
+
+    const unproductiveAgeMs = Math.max(0, wallAgeMs - creditMs);
+    return {
+        // A tick on which the addressee is OBSERVABLY GENERATING never expires the pin,
+        // independently of the accumulated credit.
+        //
+        // The credit ledger alone is not sufficient here, and the difference is the
+        // whole live defect. Credit only accrues from the SECOND observation onward
+        // (the first has no prior interval to bank), and it is in-memory — so a pin
+        // that crossed the wall-clock TTL while the daemon was not watching, or before
+        // a restart, would arrive at its very first post-restart observation with zero
+        // credit and expire on the spot, while the session it is addressed to is
+        // visibly mid-turn. That is exactly the observed failure (`unclaimed 902s`
+        // logged on an `agent:ready`, i.e. at the end of real work) reproduced by a
+        // different route.
+        //
+        // Gating on the live verdict makes "is the addressee working right now?" the
+        // decisive question and leaves the credit ledger as what it should be: an
+        // optimisation that stops intermittent work from silently burning the budget.
+        // It cannot make a pin immortal — the verdict is re-evaluated every tick from
+        // live state and only a LOCAL, observably-generating session can produce it.
+        expired: !generating && unproductiveAgeMs >= TARGET_SESSION_PIN_TTL_MS,
+        ageMs: unproductiveAgeMs,
+        suspended: generating,
+    };
+}
+
+/** Test hook: reset the generating-credit ledger between cases. */
+export function __resetTargetPinGeneratingCreditForTests(): void {
+    targetPinGeneratingCreditMs.clear();
 }
 
 interface DeadTargetVerdict {
@@ -315,6 +439,26 @@ function actionableSkipGuidance(reason: string, evidence?: TaskDeliveryEvidence)
         summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
         nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign.",
     };
+    if (reason === PARKED_SKIP_REASON) {
+        // PIN-PARKING. Unlike the cleared-pin reason below, there is no ambiguity to
+        // resolve about claimability: nothing will move this task until the
+        // coordinator does. The delivery evidence still matters though — it decides
+        // whether the right exit is "re-send it" or "the worker already has it, just
+        // cancel the park" — so the same three-way branch drives the recommendation.
+        const base = 'it was pinned to a specific session, that pin went stale, and the task is now PARKED — deliberately held for you rather than re-homed onto another session, because a delta written for one session\'s context becomes a context-free instruction anywhere else';
+        if (evidence === 'consumed') return {
+            summary: `${base}. The delivery record shows the addressed session DID receive and start acting on this message, so the parked row is a bookkeeping remnant, not a lost delta`,
+            nextAction: 'Do NOT re-send it. Confirm with mesh_read_chat / mesh_read_terminal that the work is under way, then clear the park with mesh_queue_cancel (or requeue it only if you genuinely want it run again).',
+        };
+        if (evidence === 'delivered') return {
+            summary: `${base}. The message WAS handed to that session's transport but no turn start was echoed, so whether it acted on it is unconfirmed`,
+            nextAction: 'Check the session (mesh_read_chat / mesh_read_terminal) before acting. If it is already handling it, cancel the parked row; if not, mesh_queue_requeue with target_session_id=<live session> — and pass message=<rewritten instruction> if the situation moved on while it waited.',
+        };
+        return {
+            summary: `${base}. No delivery to that session was ever recorded, so the message did not reach it and the worker is still acting on its previous instructions`,
+            nextAction: 'Re-target it with mesh_queue_requeue(target_session_id=<live session>), or drop the pin with clear_target_session to let any compatible session take it. Re-read the work produced meanwhile and pass message=<rewritten instruction> if the delta is now partly stale; mesh_queue_cancel if it is moot.',
+        };
+    }
     if (reason === 'target_session_pin_expired') {
         // DISPATCH-ACK-EVIDENCE. This guidance used to assert, unconditionally, that the
         // addressed session "never received this delta" and to instruct a re-send. That is an
@@ -409,7 +553,7 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // DISPATCH-ACK-EVIDENCE: resolve what the delivery records actually witness for this task
     // so the pin-expiry guidance can distinguish "certainly not received" from "unknown".
     // Only read for the reason that branches on it — every other reason is unaffected.
-    const evidence = reason === 'target_session_pin_expired'
+    const evidence = reason === 'target_session_pin_expired' || reason === PARKED_SKIP_REASON
         ? resolveTaskDeliveryEvidence(meshId, taskId)
         : undefined;
     const { summary, nextAction } = actionableSkipGuidance(reason!, evidence);
@@ -431,7 +575,12 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // (a genuinely offline node does need a human), so the reason stays actionable — only
     // the certainty of the wording is corrected to match what the code actually knows.
     const reachabilityResult = reason!.startsWith('remote_auto_launch');
-    const closing = reason === 'target_session_pin_expired'
+    const closing = reason === PARKED_SKIP_REASON
+        // PIN-PARKING: the strongest closing clause in this function, because parking
+        // is the one state where NOTHING in the daemon will ever advance the task —
+        // no retry, no timeout, no other session. Silence here is loss.
+        ? `This task is claimable by NOBODY until you act on it — no session will pick it up and no timer will re-home it. It is held for ${Math.round(PARKED_TASK_RETENTION_MS / 3_600_000)}h and then failed (with another notification), so it is never silently discarded. Parked rows are listed under parkedTasks in mesh_view_queue, and any mesh_queue_requeue unparks it — including one that only rewrites its message.`
+        : reason === 'target_session_pin_expired'
         ? 'The stale pin has already been cleared, so the task is now claimable by any compatible session — the action above is about the session it was originally addressed to.'
         : providerAvailabilityResult
             ? 'This result needs action if it persists: a later provider-status refresh or an already-starting usable session can clear it, but a genuinely missing, disabled, or misconfigured provider will keep the task pending until you fix that configuration.'

@@ -625,6 +625,17 @@ function hasPendingRefineTerminalEventDuplicate(event: PendingMeshCoordinatorEve
 // swallowed by the earlier weak one.
 const TERMINAL_COMPLETION_EVENTS = new Set(['agent:generating_completed', 'agent:stopped']);
 
+/**
+ * ACTIONABLE-SKIP-FINGERPRINT: events whose dedup identity includes the skip
+ * `reason`. These are coordinator ALERTS about why a task is not progressing —
+ * two different blockers for one task are two different things to tell the
+ * coordinator, so collapsing them by taskId alone silently drops the second.
+ * See the note inside buildPendingEventFingerprint.
+ */
+const COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT: ReadonlySet<string> = new Set([
+    'mesh:dispatch_blocked',
+]);
+
 export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent): string {
     const metadata = readRecord(event.metadataEvent) || {};
     // Bootstrap events are node-scoped: dedup by meshId+event+nodeId only.
@@ -667,6 +678,29 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
     const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord(metadata.payload)?.taskId);
     const jobId = readRefineJobId(event);
     const timestamp = metadata.timestamp !== undefined && metadata.timestamp !== null ? String(metadata.timestamp) : '';
+    // ACTIONABLE-SKIP-FINGERPRINT: a coordinator ALERT is identified by (task, REASON),
+    // not by task alone.
+    //
+    // The defect (measured live 2026-08-19). `mesh:dispatch_blocked` carries no
+    // `timestamp`, so every alert about one task collapsed onto a single fingerprint.
+    // A still-undrained earlier page for that task therefore SUPPRESSED every later
+    // one — including the pin-expiry page, which is the notification of record for "a
+    // delta addressed to a specific session lost its addressee". The reason had been
+    // registered in ACTIONABLE_SKIP_REASON_PREFIXES precisely to stop that silence
+    // (after a prior 74-minute incident), and the emit path built the event correctly;
+    // it was discarded one layer lower, at INFO, as a duplicate of an unrelated alert.
+    //
+    // The in-memory de-dup in mesh-skip-notify DOES key on the reason and correctly
+    // lets a reason CHANGE through — which is exactly why the gap survived review: the
+    // layer everyone reads is right, and the suppression happens in a layer the reason
+    // never reached. Including it here makes the two agree.
+    //
+    // Scoped to alert events so no other dedup behaviour shifts: repeats of the SAME
+    // reason still collapse (the 4s reconcile loop cannot spam), while a genuinely
+    // different blocker is no longer swallowed by an older one.
+    const alertReason = COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT.has(event.event)
+        ? readNonEmptyString(metadata.reason)
+        : undefined;
     return [
         event.meshId,
         event.event,
@@ -676,6 +710,7 @@ export function buildPendingEventFingerprint(event: PendingMeshCoordinatorEvent)
         taskId || '',
         jobId || '',
         timestamp || '',
+        ...(alertReason ? [alertReason] : []),
     ].join('::');
 }
 

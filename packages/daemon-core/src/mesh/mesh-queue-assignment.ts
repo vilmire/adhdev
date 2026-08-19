@@ -6,7 +6,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, expireTaskTargetPin } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
@@ -34,7 +34,8 @@ import { decideSlotForModel, isModelAllowedBySlot, SLOT_MODEL_ABSENT_SKIP_REASON
 import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, noteTargetPinCleared, rebindAttemptToLiveHolder } from './mesh-turn-ledger.js';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
-import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, targetPinAgeMs, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
+import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
+import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, buildProviderSelectionDiagnostics, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
@@ -2095,6 +2096,19 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_parallel_tasks_reached' });
             continue;
         }
+        // PIN-PARKING: a parked row awaits a COORDINATOR decision, so no daemon-side
+        // self-heal may touch it. Must stay BEFORE the pin branch below: the dead-target
+        // self-heal would otherwise "rescue" a parked task by requeueing it with the
+        // session pin cleared — silently re-homing the very delta parking protects.
+        if (taskIsParked(task)) {
+            settleParkedQueueTask(
+                meshId,
+                task,
+                reason => markAutoLaunch(meshId, task.id, { status: 'skipped', reason }),
+                failRetentionExpiredParkedTask,
+            );
+            continue;
+        }
         if (task.targetSessionId) {
             // DEAD-TARGET-SELFHEAL: before the unconditional target_session_constraint skip,
             // check whether the pinned session/node has DIED (absent from the live mesh). A
@@ -2123,28 +2137,14 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_dead_requeued' });
                 continue;
             }
-            // RC.20 TARGET-PIN TTL: the pin is NOT provably dead (live session, or a
-            // remote/unobservable one the dead-target verdict must not guess about) — yet
-            // it has gone UNCLAIMED past the bounded TTL, so it will never deliver through
-            // the claim path. Expire the pin (no retry-budget cost) so the task becomes
-            // claimable by any compatible session, instead of wedging 'pending' forever.
-            // A live compatible session claims within seconds, so reaching the TTL is
-            // positive evidence the pin is stale, not a race with a healthy claim.
-            const pinAgeMs = targetPinAgeMs(task);
-            if (pinAgeMs !== null && pinAgeMs >= TARGET_SESSION_PIN_TTL_MS) {
-                const expired = expireTaskTargetPin(meshId, task.id, { reason: 'target_session_pin_expired_unclaimed' });
-                if (expired) {
-                    noteTargetPinCleared('target_session_pin_expired_unclaimed');
-                    traceMeshEventDrop('target_session_pin_expired', {
-                        taskId: task.id,
-                        sessionId: readNonEmptyString(task.targetSessionId),
-                        nodeId: readNonEmptyString(task.targetNodeId),
-                        meshId,
-                        event: 'agent:ready',
-                    }, `unclaimed ${Math.round(pinAgeMs / 1000)}s ≥ ttl ${Math.round(TARGET_SESSION_PIN_TTL_MS / 1000)}s → pin cleared, claimable`);
-                    LOG.warn('MeshQueue', `TARGET-PIN-TTL: task ${task.id} (mesh ${meshId}) stayed pinned-but-unclaimed for ${Math.round(pinAgeMs / 1000)}s (ttl ${Math.round(TARGET_SESSION_PIN_TTL_MS / 1000)}s); expired the stale target pin so a compatible session can claim it.`);
-                }
-                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_pin_expired' });
+            // TARGET-PIN TTL → PARKING. The pin is NOT provably dead (a live session, or a
+            // remote/unobservable one the dead-target verdict must not guess about) but has
+            // waited past the bounded TTL, measured over UNPRODUCTIVE time only. On expiry
+            // the task PARKS rather than unpinning: a cleared pin let any compatible session
+            // claim a delta written for one session's context — a wrong delivery, not a late
+            // one. See mesh-task-parking.
+            if (parkExpiredTargetPin(meshId, task, resolveTargetPinTtlVerdict(components, task), TARGET_SESSION_PIN_TTL_MS, (m, t, r) => parkTaskTargetPin(m, t, { reason: r }))) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: PARKED_SKIP_REASON });
                 continue;
             }
             markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' });

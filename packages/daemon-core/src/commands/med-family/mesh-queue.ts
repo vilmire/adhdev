@@ -175,6 +175,11 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                 // default to avoid a duplicate second dispatch; an explicit operator
                 // force overrides that guard (and the retry cap).
                 force: args?.force === true,
+                // PIN-PARKING (edit): optional instruction rewrite, so a coordinator in
+                // IPC/cloud mode has the same exit from parking as the in-process path.
+                // Without this the field would be silently dropped exactly where the
+                // multi-coordinator topology needs it most.
+                message: typeof args?.message === 'string' ? args.message : undefined,
             });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
             // The single-flight guard returns the row UNCHANGED (still 'assigned') when it

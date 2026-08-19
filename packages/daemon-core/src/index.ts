@@ -327,7 +327,13 @@ export type { AnyLedgerSlice, MeshLedgerReconciliationEvidence, MeshLedgerReplic
 
 // ── Mesh Work Queue (GUPP) ──
 export { enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
-export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult } from './mesh/mesh-work-queue.js';
+export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
+export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
+// PIN-PARKING: a stale target pin PARKS the task (held, still addressed, claimable by
+// nobody) instead of silently re-homing a context-bound delta onto another session.
+// The coordinator-facing exits are mesh_view_queue (parkedTasks), mesh_queue_requeue
+// (re-target / rewrite / unpark) and mesh_queue_cancel. See mesh-task-parking.ts.
+export { taskIsParked, parkedAgeMs, parkedTaskRetentionExpired, buildParkedTaskNotice, notifyCoordinatorOfParkedTaskDropped, PARKED_TASK_RETENTION_MS, PARKED_SKIP_REASON, PARK_REASON_PIN_EXPIRED, PARK_RETENTION_EXPIRED_REASON } from './mesh/mesh-task-parking.js';
 export {
     MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT,
     parseOnDependencyFailurePolicy,

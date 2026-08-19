@@ -24,6 +24,15 @@ import {
 } from './mesh-graph-derived-failure.js';
 import { sessionIdsEquivalent, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
+import {
+    PARK_REASON_PIN_EXPIRED,
+    PARK_RETENTION_EXPIRED_REASON,
+    PARKED_TASK_RETENTION_MS,
+    buildParkingRecord,
+    logTaskParked,
+    parkedTaskRetentionExpired,
+    taskIsParked,
+} from './mesh-task-parking.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
@@ -132,11 +141,41 @@ export type {
 } from './mesh-task-mode-guardrail.js';
 
 
+/**
+ * PIN-PARKING: the record stamped on a task whose target pin went stale and was
+ * therefore PARKED — held for an explicit coordinator decision instead of being
+ * silently re-homed onto whatever session happened to be free.
+ *
+ * Rides in the payload JSON (no column migration); absent on every legacy row and
+ * on every normally-dispatched task, so its presence IS the parked predicate (see
+ * `taskIsParked` in mesh-task-parking.ts). The row stays `pending` — parking is an
+ * addressing state, not a lifecycle status, and inventing a sixth MeshTaskStatus
+ * would mean auditing every `status === 'pending'` reader in the scheduler.
+ */
+export interface MeshTaskParking {
+    /** Why it parked (e.g. target_session_pin_expired_parked). */
+    reason: string;
+    /** ISO timestamp of the park — the anchor the retention sweep measures from. */
+    parkedAt: string;
+    /** The session the task was ORIGINALLY addressed to, preserved across a later re-target. */
+    targetSessionId?: string;
+    /** The node pin at park time, likewise preserved. */
+    targetNodeId?: string;
+}
+
 export interface MeshWorkQueueEntry {
     id: string;
     meshId: string;
     message: string;
     status: MeshTaskStatus;
+    /**
+     * PIN-PARKING: present ⇔ the task is parked awaiting a coordinator decision.
+     * A parked row keeps its `targetSessionId` (which is what already makes it
+     * unclaimable by anyone else through the tier-1 claim SELECT) and is refused
+     * even to that pinned session by the claim gate's explicit parked guard.
+     * Cleared by any requeue — that is the unpark.
+     */
+    parked?: MeshTaskParking;
     taskMode?: MeshTaskMode;
     /**
      * QUEUE-NODE-SERIALIZATION: explicit read-only axis, orthogonal to taskMode. When
@@ -1310,6 +1349,13 @@ export function cancelTask(
         entry.status = 'cancelled';
         entry.cancelledAt = now;
         if (opts?.reason) entry.cancelReason = opts.reason;
+        // PIN-PARKING: cancelling a parked task IS a coordinator decision — the "it is
+        // no longer wanted" exit — so the row stops being parked. Without this the
+        // cancelled row would keep matching taskIsParked and go on being listed as
+        // awaiting a decision that has already been made. (The parked→cancelled
+        // transition needs no other guard: cancelTask is status-agnostic by design and
+        // a parked row is an ordinary 'pending' row to it.)
+        delete entry.parked;
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
         delete entry.assignedProviderType;
@@ -1400,6 +1446,21 @@ export type RequeueResult =
     | { status: 'failed_max_retries'; entry: MeshWorkQueueEntry; maxRetries: number; requeueCount: number }
     | { status: 'not_found' };
 
+/**
+ * PIN-PARKING (edit): apply a requeue's optional instruction rewrite in place.
+ *
+ * Blank-guarded rather than "set whatever was passed": an omitted field and an
+ * empty string arrive indistinguishably through the MCP tool boundary, and
+ * blanking a task's only instruction would leave a dispatchable row that tells
+ * its worker nothing. Absent/blank ⇒ the message is left exactly as it was.
+ */
+function applyRequeueMessageEdit(entry: MeshWorkQueueEntry, message?: string): void {
+    if (typeof message !== 'string') return;
+    const next = message.trim();
+    if (!next || next === entry.message) return;
+    entry.message = next;
+}
+
 export function requeueTask(
     meshId: string,
     taskId: string,
@@ -1437,6 +1498,25 @@ export function requeueTask(
          * cannot be exhausted by a single dispatch failure the worker never saw.
          */
         dispatchFailure?: boolean;
+        /**
+         * PIN-PARKING (edit): REWRITE the task's instruction as part of the requeue.
+         *
+         * This exists because "the situation changed while the task waited" is the
+         * normal case for a parked delta, not an edge case — the observed instance
+         * being a worker that had already finished the very part the delta was
+         * written to correct. Before this, the queue had NO message mutator at all
+         * (requeueTask could re-target but not re-word), so a coordinator whose delta
+         * had gone stale could only cancel and re-enqueue, losing the row's identity,
+         * its mission linkage, and everything that depends on its id.
+         *
+         * Placed on requeue rather than on a new tool because requeue is already the
+         * "put this task back with different addressing" mutator; re-wording is the
+         * same operation on a different field, and every caller that must not be
+         * surprised by it (the dispatch-failure retry, the dead-target self-heal)
+         * simply never passes it. An empty/blank string is ignored — clearing a task's
+         * only instruction would produce a row that can be dispatched but says nothing.
+         */
+        message?: string;
     } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
@@ -1491,6 +1571,10 @@ export function requeueTask(
             entry.requeuedAt = new Date().toISOString();
             entry.dispatchFailureCount = dispatchFailures;
             if (opts?.reason) entry.requeueReason = opts.reason;
+            applyRequeueMessageEdit(entry, opts?.message);
+            // PIN-PARKING: any requeue is an explicit coordinator decision about this
+            // row's addressing — which is exactly what parking was waiting for. Unpark.
+            delete entry.parked;
             // Escalating backoff (dispatch attempt 1→2: DISPATCH_RETRY_BACKOFF_BASE_MS,
             // 2→3: ×2, …), so a re-dispatch lands after the session has had more time to
             // finish booting rather than racing the same window that just failed —
@@ -1530,6 +1614,12 @@ export function requeueTask(
         entry.requeuedAt = new Date().toISOString();
         entry.requeueCount = currentCount + 1;
         if (opts?.reason) entry.requeueReason = opts.reason;
+        applyRequeueMessageEdit(entry, opts?.message);
+        // PIN-PARKING: an explicit requeue IS the coordinator decision parking waits
+        // for, whatever the new addressing is — so it always unparks. Note this runs
+        // on the ordinary requeue path too (not only for parked rows), which is
+        // harmless: `delete` on an absent field is a no-op for every normal task.
+        delete entry.parked;
         // DISPATCH-BOOT-RACE: a caller-supplied backoff holds the row pending until the
         // session has had time to finish booting, instead of an immediate re-claim that
         // races the exact window that failed the first attempt. Absent → immediately
@@ -1548,21 +1638,36 @@ export function requeueTask(
 }
 
 /**
- * RC.20 (target-session wedge): clear a STALE target pin (targetSessionId, and
- * optionally targetNodeId) from a still-PENDING task so it becomes claimable by any
- * compatible session — WITHOUT consuming the task's retry budget (requeueCount is
- * untouched; the pin expiry is an un-wedging operation, not a retry). This is the
- * documented bounded rule behind the TARGET_SESSION_PIN_TTL_MS expiry in the
- * auto-launch scan: a pin that has gone unclaimed past the TTL is expired rather than
- * leaving the task pending forever behind the target_session_constraint skip.
+ * PIN-PARKING (replaces the RC.20 pin CLEAR): a stale target pin PARKS the task —
+ * it is held, still addressed, for an explicit coordinator decision — instead of
+ * being cleared so any compatible session can claim it.
+ *
+ * The behaviour change and its rationale are documented in mesh-task-parking.ts.
+ * In short: a `targetSessionId` pin marks a DELTA written for one session's
+ * context, and re-homing it onto an arbitrary session is not a late delivery but
+ * an incorrect one. The session-stop path already refused to auto-retarget for
+ * exactly this reason; this makes the TTL path agree with it.
+ *
+ * What parking does NOT do, deliberately:
+ *  - it does not clear `targetSessionId`. Keeping the pin is what keeps the row
+ *    invisible to every other session through the tier-1 claim SELECT, so no new
+ *    gate has to hold the line (see mesh-task-parking.ts).
+ *  - it does not consume the retry budget. Parking is an un-wedging/holding
+ *    operation, not an execution attempt — `requeueCount` is untouched, exactly
+ *    as the pin expiry it replaces was.
+ *  - it does not go terminal. The task is still `pending` and still recoverable
+ *    by requeue; only the retention sweep can turn a forgotten park into a
+ *    (notified) failure.
  *
  * Guarded to 'pending' rows only — an assigned/completed/cancelled row is never
- * mutated (explicit operator cancellation stays terminal).
+ * mutated (explicit operator cancellation stays terminal) — and idempotent: an
+ * already-parked row returns null so a re-park cannot restamp `parkedAt` and
+ * reset the retention clock on every reconcile tick.
  */
-export function expireTaskTargetPin(
+export function parkTaskTargetPin(
     meshId: string,
     taskId: string,
-    opts?: { reason?: string; clearTargetNode?: boolean } & MeshQueueMutationOptions,
+    opts?: { reason?: string } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
@@ -1570,18 +1675,58 @@ export function expireTaskTargetPin(
         if (!entry) return null;
         if (entry.status !== 'pending') return null;
         if (!entry.targetSessionId && !entry.targetNodeId) return null;
-        const clearedSession = entry.targetSessionId;
-        const clearedNode = opts?.clearTargetNode ? entry.targetNodeId : undefined;
-        delete entry.targetSessionId;
-        if (opts?.clearTargetNode) delete entry.targetNodeId;
-        entry.updatedAt = new Date().toISOString();
-        if (opts?.reason) entry.requeueReason = opts.reason;
+        // Idempotent: never restamp an existing park (that would reset the
+        // retention clock every tick and make a forgotten row immortal).
+        if (taskIsParked(entry)) return null;
+        const reason = opts?.reason || PARK_REASON_PIN_EXPIRED;
+        const now = new Date().toISOString();
+        entry.parked = buildParkingRecord(entry, reason, now);
+        entry.updatedAt = now;
+        entry.requeueReason = reason;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        LOG.warn('MeshQueue', `Expired stale target pin on task ${taskId} (mesh ${meshId}): `
-            + `cleared${clearedSession ? ` targetSessionId=${clearedSession}` : ''}${clearedNode ? ` targetNodeId=${clearedNode}` : ''} `
-            + `(${opts?.reason ?? 'target_pin_expired'}) — the task is now claimable by any compatible session`);
+        logTaskParked(meshId, taskId, reason, entry.targetSessionId);
         return entry;
     });
+}
+
+/**
+ * PIN-PARKING retention: fail a parked task the coordinator never came back for.
+ *
+ * The owner's constraint on this sweep is that cleanup must not reintroduce the
+ * silent drop parking exists to prevent, so this is deliberately NOT a delete: the
+ * row goes to `failed` with a stated reason, stays in the queue as an auditable
+ * record, propagates dependency failure like any other terminal transition (so
+ * dependents unblock instead of waiting forever), and the caller pairs it with a
+ * coordinator notification. Returns the entry when it swept, null otherwise.
+ */
+export function failRetentionExpiredParkedTask(
+    meshId: string,
+    taskId: string,
+    opts?: { retentionMs?: number } & MeshQueueMutationOptions,
+): MeshWorkQueueEntry | null {
+    requireMeshHostQueueOwner(opts);
+    const result = withQueueLock(meshId, () => {
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
+        if (entry.status !== 'pending' || !taskIsParked(entry)) return null;
+        if (!parkedTaskRetentionExpired(entry, Date.now(), opts?.retentionMs)) return null;
+        const hours = Math.round((opts?.retentionMs ?? PARKED_TASK_RETENTION_MS) / 3_600_000);
+        entry.status = 'failed';
+        entry.cancelReason = `${PARK_RETENTION_EXPIRED_REASON}: parked for over ${hours}h `
+            + `(addressed to session ${entry.parked?.targetSessionId || 'unknown'}) with no coordinator decision`;
+        entry.updatedAt = new Date().toISOString();
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        const cascaded = propagateDependencyFailure(meshId, taskId);
+        LOG.warn('MeshQueue', `PIN-PARKING retention: task ${taskId} (mesh ${meshId}) stayed parked past ${hours}h with no coordinator decision; failed it (dependents unblocked). This is reported to the coordinator, never a silent drop.`);
+        return { entry, cascaded, missionAffected: true };
+    });
+    if (result?.missionAffected) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    return result ? result.entry : null;
+}
+
+/** Every currently-parked pending task on the mesh (for views + the retention sweep). */
+export function getParkedTasks(meshId: string): MeshWorkQueueEntry[] {
+    return getQueue(meshId, { status: ['pending'] }).filter(taskIsParked);
 }
 
 /**

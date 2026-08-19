@@ -6,6 +6,7 @@ import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger.js';
 import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
+import { taskIsParked } from './mesh-task-parking.js';
 import { migrateMeshGraphSchema } from './mesh-graph-schema.js';
 import { MeshGraphStore } from './mesh-graph-store.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
@@ -1386,10 +1387,25 @@ export class MeshRuntimeStore {
                 || !candidate.difficulty
                 || allowedTaskDifficulties.includes(candidate.difficulty as import('@adhdev/mesh-shared').MeshTaskDifficulty);
 
+            // PIN-PARKING: a PARKED row is claimable by nobody — not even the session it
+            // is still pinned to. Parking means "this delta's addressee went stale and the
+            // coordinator has not yet decided what to do with it"; letting the original
+            // session claim it later would deliver an instruction whose premise the
+            // coordinator was explicitly asked to re-confirm, which is the same
+            // wrong-context delivery parking exists to prevent.
+            //
+            // Keeping the pin already hides the row from every OTHER session (the tier-1
+            // SELECT only offers a session-pinned row to that session), so this guard is
+            // the one remaining hole — and being in the shared candidate filter, it is
+            // fail-closed against any future change to those queries. Unparking happens
+            // exclusively through requeueTask.
+            const notParked = (candidate: MeshWorkQueueEntry): boolean => !taskIsParked(candidate);
+
             const entry = candidates.find(candidate =>
                 nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags)
                 && dependenciesSatisfied(candidate)
                 && notBeforeReady(candidate)
+                && notParked(candidate)
                 && convergenceAllows(candidate)
                 && targetMatches(candidate)
                 && difficultyAllows(candidate)
