@@ -52,7 +52,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { reconcileUnterminatedDirectDispatches } from '../../src/mesh/mesh-completion-synthesis.js'
+import { reconcileUnterminatedDirectDispatches, __peekNonIdleEscapeTrackForTests, __resetNonIdleEscapeTracksForTests } from '../../src/mesh/mesh-completion-synthesis.js'
 import { reconcileDirectDispatchCompletionFromTranscript } from '../../src/mesh/mesh-events-stale.js'
 import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, __resetReclaimUnknownStreakForTests } from '../../src/mesh/mesh-reconcile-loop.js'
 import {
@@ -79,6 +79,7 @@ function cleanup(meshId: string) {
   __resetMeshRuntimeStoreForTests()
   __resetReconcileInFlightSynthDebounceForTests()
   __resetReclaimUnknownStreakForTests()
+  __resetNonIdleEscapeTracksForTests()
   meshConfigMocks.listMeshes.mockReturnValue([])
   meshConfigMocks.getMesh.mockReset()
   for (const suffix of ['.queue.json', '.jsonl', '.pending-events.jsonl']) {
@@ -437,6 +438,12 @@ describe('MID-TURN-CAUSAL-ADMISSION: transcript-synth completion ingresses', () 
   // ── Req 4 (watchdog ingress): the early-idle propagation must DEFER — no row flip, no
   //    bare ledger, no queued completion — while the live adapter reports pending, then
   //    release exactly once after the state clears. ──
+  // ── Req 4 (watchdog ingress): the early-idle propagation must DEFER — no row flip, no
+  //    bare ledger, no queued completion — while the live adapter reports pending, then
+  //    release exactly once after the state clears. Post-2026-08-18 the path additionally
+  //    carries the P1-4 weak-candidate streak (3 consecutive identical admits) and the
+  //    INSTANT-ACK guard (a bubble <30s after dispatch is not a candidate), so the
+  //    timeline below keeps the bubble 31s past dispatch and drives the extra ticks. ──
   it('watchdog early-idle propagation defers under live-pending evidence and releases exactly once after it clears', async () => {
     const meshId = `mesh_causal_watchdog_${Date.now()}`
     const nodeId = NODE_ID
@@ -466,7 +473,10 @@ describe('MID-TURN-CAUSAL-ADMISSION: transcript-synth completion ingresses', () 
           providerSessionId: 'kimi-history-6',
           messages: [
             { role: 'user', content: 'do work', timestamp: dispatchAt + 500 },
-            { role: 'assistant', content: summary, timestamp: dispatchAt + 500 },
+            // 31s after dispatch: outside the INSTANT-ACK window (30s) so the bubble
+            // is a turn-end candidate; each poll tick lands ≥9s later so the settle
+            // window (8s) is satisfied too.
+            { role: 'assistant', content: summary, timestamp: dispatchAt + 31_000 },
           ],
         }
       })
@@ -482,26 +492,49 @@ describe('MID-TURN-CAUSAL-ADMISSION: transcript-synth completion ingresses', () 
       meshConfigMocks.getMesh.mockReturnValue(mesh)
 
       await runMeshReconcileTick(components) // arm the continuous-idle streak
-      vi.setSystemTime(Date.now() + 9_000)
-      await runMeshReconcileTick(components) // grace elapsed — poll passes, but live adapter is pending
+      vi.setSystemTime(dispatchAt + 40_000)
+      await runMeshReconcileTick(components) // poll admits (weak) → candidate 1/3, HELD
+
+      // CANDIDATE, not a completion: the row is NOT flipped, no terminal ledger; the
+      // single queued event is the weak-candidate notification ("possible completion").
+      expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(1)
+      expect(completionsQueued(meshId)[0].coordinatorMessage).toContain('possible completion')
+
+      vi.setSystemTime(dispatchAt + 49_000)
+      await runMeshReconcileTick(components) // candidate 2/3, still held
+      expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+
+      vi.setSystemTime(dispatchAt + 58_000)
+      await runMeshReconcileTick(components) // candidate 3/3 → promotion, but the live adapter is pending → DEFERRED
 
       // DEFERRED: the row is NOT flipped, no terminal ledger, no queued completion.
       expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
       expect(terminalLedgerEntries(meshId)).toHaveLength(0)
-      expect(completionsQueued(meshId)).toHaveLength(0)
 
-      // Live state clears; the streak re-accumulates and the completion releases exactly once.
+      // Live state clears; the streak + candidate count re-accumulate and the
+      // completion releases exactly once.
       livePending = false
-      await runMeshReconcileTick(components) // re-arm
-      vi.setSystemTime(Date.now() + 9_000)
-      await runMeshReconcileTick(components) // release
+      await runMeshReconcileTick(components) // re-arm the idle streak
+      vi.setSystemTime(dispatchAt + 67_000)
+      await runMeshReconcileTick(components) // candidate 1/3 again
+      vi.setSystemTime(dispatchAt + 76_000)
+      await runMeshReconcileTick(components) // candidate 2/3
+      vi.setSystemTime(dispatchAt + 85_000)
+      await runMeshReconcileTick(components) // candidate 3/3 → promote + propagate → release
 
       expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('completed')
       expect(terminalLedgerEntries(meshId)).toHaveLength(1)
+      // TaskId-anchored weak-fingerprint dedup (mesh-events-pending DUPNOTIF): the
+      // candidate notification and the promoted (weak-stamped) completion share one
+      // pending slot, so the queue surfaces ONE event — the candidate wording carries
+      // the summary; the terminal ledger + row flip above are the authoritative record.
       expect(completionsQueued(meshId)).toHaveLength(1)
       expect(completionsQueued(meshId)[0].coordinatorMessage).toContain(summary)
 
-      vi.setSystemTime(Date.now() + 9_000)
+      vi.setSystemTime(dispatchAt + 94_000)
       await runMeshReconcileTick(components) // idempotent — still exactly once
       expect(terminalLedgerEntries(meshId)).toHaveLength(1)
       expect(completionsQueued(meshId)).toHaveLength(1)
@@ -512,23 +545,21 @@ describe('MID-TURN-CAUSAL-ADMISSION: transcript-synth completion ingresses', () 
   })
 })
 
-// FLOOR-COMPLETION-NON-IDLE-ESCAPE (bounded PHASE-4 non-idle rescue net).
+// NON-IDLE-ESCAPE-AS-WEAK-CANDIDATE (2026-08-18 false-completion fix).
 //
-// A floor-class worker (codex-cli / kimi / cursor / opencode) whose CLI state engine
-// wedged in `generating` — final assistant scrolled outside the PTY live-frame-tail
-// while the native transcript holds it (the cli-state-engine transcript-finish defer
-// bug) — reads non-idle FOREVER, so PHASE 4's idle gate never rescues it even past
-// the acked death deadline. The escape under test lets the death-deadline synth fire
-// off a `generating` read, but ONLY under strictly stronger evidence than the idle
-// path (acked dispatch + past the death deadline + generating specifically + final
-// assistant present + no trailing tool activity + PROVABLE post-dispatch causality;
-// unparseable timestamps fail closed here, unlike the idle path).
-describe('FLOOR-COMPLETION-NON-IDLE-ESCAPE: PHASE 4 bounded non-idle death-deadline escape', () => {
-  // ── Core: the wedged floor-class worker shape — acked, past the death deadline,
-  //    reads 'generating' forever, but the transcript holds a causally-proven final
-  //    assistant. The synth commits through the death-deadline backstop (bounded
-  //    fail-open: it overrides even live-turn-pending evidence). ──
-  it('synthesizes for an acked dispatch past the death deadline that reads generating with a post-dispatch final assistant', async () => {
+// The OLD floor-class non-idle escape synthesized a COMPLETED terminal off a
+// `generating` read once the acked death deadline expired — the direct cause of
+// two same-day false completions (kimi a3dc0a3e: a "on it" preamble 13s after
+// dispatch was notified as the final answer while the worker ran for 39 more
+// minutes; grok b01e5a01 likewise). A timeout is never completion evidence: the
+// escape now only records a WEAK CANDIDATE (hold) — never a terminal — and its
+// deadline anchor RE-ARMS whenever the transcript tail moves (the same
+// "PTY quiet but transcript advancing" signal the stall watchdog observes).
+describe('NON-IDLE-ESCAPE-AS-WEAK-CANDIDATE: PHASE 4 non-idle escape never completes off a generating read', () => {
+  // ── Incident wire (b): acked, death deadline long past, live probe reads
+  //    'generating', tail STATIC with a causally-proven final assistant. The old
+  //    code synthesized a completion here; the fix records a weak candidate only. ──
+  it('records only a weak candidate — never a completion — past the death deadline with a static generating tail', async () => {
     const meshId = `mesh_nonidle_escape_${Date.now()}`
     process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
     try {
@@ -549,20 +580,72 @@ describe('FLOOR-COMPLETION-NON-IDLE-ESCAPE: PHASE 4 bounded non-idle death-deadl
           ],
         }
       })
-      // Live-pending TRUE: the wedged engine still holds the turn open — the
-      // death-deadline boundedBackstop must override the live-pending veto, same as
-      // the idle death-deadline path.
+      // Live-pending TRUE: the wedged engine still holds the turn open — even so,
+      // no timeout may promote this to completed.
       const components = makePhase4Components({ isLivePending: () => true, readChat })
 
       await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
-      expect(terminalLedgerEntries(meshId)).toHaveLength(1)
-      expect(completionsQueued(meshId)).toHaveLength(1)
-      expect(completionsQueued(meshId)[0].coordinatorMessage).toContain('Done — the answer landed in the native transcript only.')
+      // First tick only anchors the stillness measurement — no candidate yet.
+      expect(__peekNonIdleEscapeTrackForTests(meshId, taskId)?.candidateRecorded).toBe(false)
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
 
-      // Idempotent — a second tick does not double-synthesize.
+      // Second tick: tail static for the (zeroed) deadline window → weak candidate
+      // recorded — and STILL no terminal, no queued completion, row held.
       await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
-      expect(terminalLedgerEntries(meshId)).toHaveLength(1)
-      expect(completionsQueued(meshId)).toHaveLength(1)
+      expect(__peekNonIdleEscapeTrackForTests(meshId, taskId)?.candidateRecorded).toBe(true)
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+      expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
+
+      // Further static ticks: candidate stays recorded once, never a completion.
+      await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  // ── Incident wire (a): dispatch+13s "on it" preamble, then the transcript keeps
+  //    ADVANCING (39 minutes of real work). The moving tail re-arms the escape
+  //    anchor every tick: no candidate, no completion, ever. ──
+  it('re-arms the escape anchor while the transcript keeps advancing (no candidate, no completion)', async () => {
+    const meshId = `mesh_nonidle_advancing_${Date.now()}`
+    process.env.MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS = '0'
+    try {
+      const taskId = `task-${randomUUID().slice(0, 8)}`
+      const dispatchAtMs = Date.now() - 39 * 60_000 // ack 39min ago — the incident's timeline
+      seedDispatch(meshId, taskId, { ageMs: 39 * 60_000 })
+      updateDirectDispatchStatus(meshId, SESSION_ID, 'acked', taskId)
+
+      // Dated post-dispatch bubbles (so the OLD escape's strict-causality + quiet-tail
+      // guards pass and it WOULD synthesize on the first tick — the injection check),
+      // while the CONTENT keeps growing every tick: the tail is moving, so the fix
+      // re-arms the escape anchor and never records even a candidate.
+      let workChunks = 0
+      const readChat = vi.fn(async (cmd: string) => {
+        if (cmd !== 'read_chat') return { success: true }
+        workChunks += 1
+        return {
+          success: true,
+          status: 'generating',
+          providerSessionId: 'kimi-history-nonidle-adv',
+          messages: [
+            { role: 'user', content: 'do the task', timestamp: dispatchAtMs + 500 },
+            { role: 'assistant', content: `핸들러 위치부터 찾겠습니다. (${'작업 진행 중. '.repeat(workChunks)})`, timestamp: dispatchAtMs + 13_000 },
+          ],
+        }
+      })
+      const components = makePhase4Components({ isLivePending: () => true, readChat })
+
+      for (let tick = 0; tick < 5; tick++) {
+        await reconcileUnterminatedDirectDispatches(components, phase4Mesh(meshId), [], 'daemon-local')
+      }
+      // The tail moved every tick → the anchor re-armed every tick → no candidate.
+      expect(__peekNonIdleEscapeTrackForTests(meshId, taskId)?.candidateRecorded ?? false).toBe(false)
+      expect(terminalLedgerEntries(meshId)).toHaveLength(0)
+      expect(completionsQueued(meshId)).toHaveLength(0)
+      expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
     } finally {
       cleanup(meshId)
     }

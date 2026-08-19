@@ -799,6 +799,19 @@ function evaluateMeshEventSuppression(
                     },
                 };
             }
+            // TERMINAL-ADMISSION-OBSERVABILITY (2026-08-18): the decline above was the
+            // ONLY verdict ever logged, so after a false completion it was impossible to
+            // tell "the gate admitted" from "the gate never observed" (the 14e39b9e gap —
+            // a decline here did not bind the OTHER terminal path that admitted the same
+            // transcript 7s later). Trace both non-decline verdicts:
+            //   - admit → terminal_admission_admitted (evidenceLevel:reason)
+            //   - unobserved → terminal_admission_not_enforced:<reason>
+            if (admission.kind === 'admit') {
+                traceMeshEventStage('terminal_admission_admitted', traceCtx,
+                    `${admission.evidenceLevel}:${admission.reason}`);
+            } else {
+                traceMeshEventStage('terminal_admission_not_enforced', traceCtx, admission.reason);
+            }
         }
         // NO-DISPATCH-NATIVE-COMPLETION-GATE (rc.16 follow-up): a session that was launched
         // but never given ANY task can still emit its own native agent:generating_completed off
@@ -1493,9 +1506,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // CRUCIAL SCOPE: this covers only the PREMATURE decoupled-immediate emit
         // (emittedAfterFinalizationTimeout !== true). A weak completion that already waited out the
         // full 30s COMPLETED_FINALIZATION_MAX_WAIT_MS window (emittedAfterFinalizationTimeout=true)
-        // is a GENUINE — if answerless — terminal: the worker exhausted its finalization wait and
-        // is done, so it flips 'completed' as before (a tool-only turn that never produced an
-        // assistant bubble must still close its task). A `failed` outcome or a completion with
+        // is handled by the FINALIZATION-TIMEOUT-FORCE branch below: the caller flips it terminal
+        // as 'failed' (never wedge) — but NEVER 'completed', because a timeout is not completion
+        // evidence (2026-08-18 opencode 92d11091: force-emitted completion with an empty summary,
+        // zero commits, work never started). A `failed` outcome or a completion with
         // genuine evidence flips terminal as before too.
         const completionDiagnostic = args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
             ? args.metadataEvent.completionDiagnostic as Record<string, unknown>
@@ -1523,27 +1537,24 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             && weakEvidenceAtEntry
             && !emittedAfterFinalizationTimeout;
         // FALSE-COMPLETION-GIT-EVIDENCE (gap 3 / timeout-gate-off): emittedAfterFinalizationTimeout
-        // deliberately forces weakCompleted to false — see the CRUCIAL SCOPE note above — so a
-        // worker that exhausted the full 30s finalization wait with NO final-assistant evidence
-        // still closes its task instead of wedging forever. That is the right call for liveness,
-        // but as written it also means the weak-evidence gate (the tentative-hold safety net that
-        // makes an answerless completion visible) is OFF exactly when a slow/dying worker is MOST
-        // likely to produce a false completion — the gate protects only the case that needed it
-        // least. Keep the liveness guarantee (still flips terminal, never wedges) but restore the
-        // signal: stamp reviewRecommended/evidenceLevel onto the SAME event object markSessionTerminal
-        // already mutates for the code_change git-clean gate below, so it rides the identical,
-        // already-wired path to the coordinator (buildMeshSystemMessage's verify note) and the
-        // ledger (the reviewRecommended OR-in at the task_completed append). No new status value;
-        // this only WIDENS which completions carry the flag. Gated on weakEvidenceAtEntry (the
-        // frozen read above), not a fresh isWeakCompletionEvidence call — this IS the mutation
-        // the ordering-safety note above warns about, so it must not read its own prior output.
-        if (outcome === 'completed' && emittedAfterFinalizationTimeout && weakEvidenceAtEntry) {
+        // forces weakCompleted to false — see the CRUCIAL SCOPE note above. Pre-fix this flipped the
+        // row to 'completed' with only a reviewRecommended flag — the gate was OFF exactly when a
+        // slow/dying worker is MOST likely to produce a false completion (the 92d11091 incident:
+        // "completed" with an empty summary and zero work). Now the caller records the event as a
+        // FORCED TERMINATION instead: outcome 'failed' (the row still flips terminal — the
+        // never-wedge liveness guarantee holds — but as a visible failure, not a completion), and
+        // this block keeps stamping reviewRecommended + timedOutWithoutFinalAssistant so the
+        // ledger and the coordinator message (buildMeshSystemMessage's forced-termination branch)
+        // both say "no response, forcibly terminated". Gated on weakEvidenceAtEntry (the frozen
+        // read above), not a fresh isWeakCompletionEvidence call — this IS the mutation the
+        // ordering-safety note above warns about, so it must not read its own prior output.
+        if (emittedAfterFinalizationTimeout && weakEvidenceAtEntry) {
             args.metadataEvent.reviewRecommended = true;
             args.metadataEvent.completionDiagnostic = {
                 ...(completionDiagnostic || {}),
                 timedOutWithoutFinalAssistant: true,
             };
-            LOG.info('MeshQueue', `Completion for session ${sessionId} exhausted the finalization wait with no confirmed final assistant — flipping terminal (never wedge) but flagged reviewRecommended`);
+            LOG.info('MeshQueue', `Completion for session ${sessionId} exhausted the finalization wait with no confirmed final assistant — recording FORCED TERMINATION (outcome=${outcome}; terminal, never wedge) flagged reviewRecommended; NOT a completion`);
         }
         // TURN-LEDGER (Stage 5): the reducer is the single causal authority for terminal
         // outcomes. A genuine terminal for a taskId-named completion is proposed BEFORE any
@@ -1731,6 +1742,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     }
 
     let completedTaskForLedger: { id?: string; taskMode?: string } | null = null;
+    // FINALIZATION-TIMEOUT-FORCE (2026-08-18 false-completion fix): a weak completion
+    // emitted AFTER the finalization wait expired (emittedAfterFinalizationTimeout) is
+    // recorded as a FORCED TERMINATION — outcome 'failed', ledger task_failed, and a
+    // coordinator message that says "no response, forcibly terminated" — never as
+    // 'completed'. A timeout is never completion evidence; the liveness guarantee is
+    // preserved because the row still flips TERMINAL (failed), just not to 'completed'.
+    // Set in the agent:generating_completed branch; read by the ledger append below.
+    let forcedTimeoutNoResponse = false;
     // Fix B: direct-dispatch taskId used to attribute the terminal ledger entry when no
     // work-queue row matches (resolved BEFORE markSessionTerminal flips the dispatch terminal).
     let directDispatchTaskIdForLedger: string | undefined;
@@ -1757,7 +1776,16 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // A false-idle completion of a direct dispatch is recorded but kept tentative (the
             // dispatch row stays active for the reconcile fallback); a genuine completion is terminal.
             const isFalseIdle = isFalseIdleCompletion(args.metadataEvent);
-            completedTaskForLedger = markSessionTerminal(sessionId, 'completed', eventTimestamp, { tentativeIfDirect: isFalseIdle });
+            // FINALIZATION-TIMEOUT-FORCE: a weak completion emitted only because the finalization
+            // wait expired is a forced termination, not a completion — flip 'failed' (terminal,
+            // never wedge) so the task is visibly unconfirmed instead of falsely completed.
+            // Computed BEFORE markSessionTerminal mutates args.metadataEvent (the frozen-read
+            // ordering contract inside it), so this equals its weakEvidenceAtEntry snapshot.
+            forcedTimeoutNoResponse = isWeakCompletionEvidence(args.metadataEvent)
+                && (args.metadataEvent.completionDiagnostic
+                    && typeof args.metadataEvent.completionDiagnostic === 'object'
+                    && (args.metadataEvent.completionDiagnostic as Record<string, unknown>).emittedAfterFinalizationTimeout === true) === true;
+            completedTaskForLedger = markSessionTerminal(sessionId, forcedTimeoutNoResponse ? 'failed' : 'completed', eventTimestamp, { tentativeIfDirect: isFalseIdle });
             if (nodeId && providerType) {
                 // OVEREAGER-REMOTE-IDLE (Defect A+B): re-register the now-idle remote session into
                 // the remote-idle store, symmetric with the agent:ready branch. Previously
@@ -1799,8 +1827,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // M1-3: wake dependents of the completed task. The maintenance path above
             // only assigns to the completing session; dependents may be claimable by
             // other idle sessions, so run a full queue trigger when any are waiting.
+            // A forced-termination (finalization timeout, no response) is NOT a completion
+            // — dependents are not woken off it; the derived-failure machinery owns them.
             const completedTaskId = completedTaskForLedger?.id;
-            if (completedTaskId && hasPendingDependents(args.meshId, completedTaskId)) {
+            if (completedTaskId && !forcedTimeoutNoResponse && hasPendingDependents(args.meshId, completedTaskId)) {
                 setImmediate(() => {
                     triggerMeshQueue(components, args.meshId).catch((e: any) => {
                         LOG.warn('MeshQueue', `Dependent wake after task ${completedTaskId} failed: ${e?.message || e}`);
@@ -2130,7 +2160,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         });
     }
 
-    const ledgerKind = EVENT_TO_LEDGER_KIND[args.event];
+    // FINALIZATION-TIMEOUT-FORCE: the forced-termination flip above recorded the row as
+    // 'failed' — the ledger entry must say the same (task_failed), not task_completed.
+    const ledgerKind = forcedTimeoutNoResponse ? 'task_failed' as const : EVENT_TO_LEDGER_KIND[args.event];
     if (ledgerKind) {
         try {
             const ledgerNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined;

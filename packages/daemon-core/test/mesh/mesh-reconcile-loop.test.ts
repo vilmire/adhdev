@@ -3991,8 +3991,20 @@ describe('runMeshReconcileTick', () => {
         await runMeshReconcileTick(components)
         expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
 
-        // Advance past the 8s grace, then tick 2 polls the transcript and completes early.
-        vi.setSystemTime(Date.now() + 9_000)
+        // Post-2026-08-18 (P1-4 + INSTANT-ACK): a WEAK message-shape admit is a CANDIDATE
+        // that must re-confirm on 3 consecutive ticks, and a bubble still within 30s of
+        // dispatch is refused outright. The bubble sits at dispatch+0.5s, so the first
+        // qualifying poll happens once it has aged past the 30s window.
+        vi.setSystemTime(dispatchAt + 40_000)
+        await runMeshReconcileTick(components) // poll admits (weak) → candidate 1/3, HELD
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+
+        vi.setSystemTime(dispatchAt + 49_000)
+        await runMeshReconcileTick(components) // candidate 2/3
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+
+        // Advance again: candidate 3/3 → promoted, completing early without the 15-min deadline.
+        vi.setSystemTime(dispatchAt + 58_000)
         await runMeshReconcileTick(components)
 
         const row = getQueue(meshId).find(t => t.id === claimed.id)!
@@ -4057,13 +4069,22 @@ describe('runMeshReconcileTick', () => {
         meshConfigMocks.getMesh.mockReturnValue(mesh)
 
         await runMeshReconcileTick(components)          // arm the streak
-        vi.setSystemTime(Date.now() + 9_000)
-        await runMeshReconcileTick(components)          // grace elapsed → poll + complete
+        // 3-tick weak-candidate streak + INSTANT-ACK guard (bubble at dispatch+0.5s must
+        // age past 30s before it is a candidate): candidate 1/3 → 2/3 → 3/3 → promote.
+        vi.setSystemTime(dispatchAt + 40_000)
+        await runMeshReconcileTick(components)          // candidate 1/3 (notification queued here)
+        vi.setSystemTime(dispatchAt + 49_000)
+        await runMeshReconcileTick(components)          // candidate 2/3
+        vi.setSystemTime(dispatchAt + 58_000)
+        await runMeshReconcileTick(components)          // candidate 3/3 → poll + complete
 
         // Row completed.
         expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('completed')
 
         // A coordinator completion was queued (NOT dropped) carrying the [System] message + summary.
+        // (The single queued event is the weak-candidate notification; the promoted completion
+        // dedups into the same taskId-anchored weak fingerprint slot — mesh-events-pending
+        // DUPNOTIF — and the candidate wording surfaces the same summary.)
         const completionEvents = getPendingMeshCoordinatorEvents(meshId)
           .filter(e => e.event === 'agent:generating_completed' && !!e.coordinatorMessage)
         expect(completionEvents.length).toBe(1)
@@ -4214,9 +4235,15 @@ describe('runMeshReconcileTick', () => {
         await runMeshReconcileTick(components)
         expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
 
-        // Advance past the 8s grace, then tick 2 polls the transcript and completes early.
-        vi.setSystemTime(Date.now() + 9_000)
-        await runMeshReconcileTick(components)
+        // 3-tick weak-candidate streak + INSTANT-ACK guard (bubble at dispatch+0.5s must
+        // age past 30s): candidate 1/3 → 2/3 → 3/3 → promote.
+        vi.setSystemTime(dispatchAt + 40_000)
+        await runMeshReconcileTick(components) // candidate 1/3, held
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+        vi.setSystemTime(dispatchAt + 49_000)
+        await runMeshReconcileTick(components) // candidate 2/3
+        vi.setSystemTime(dispatchAt + 58_000)
+        await runMeshReconcileTick(components) // candidate 3/3 → promoted → completed
 
         const row = getQueue(meshId).find(t => t.id === claimed.id)!
         expect(row.status).toBe('completed')
@@ -4469,8 +4496,15 @@ describe('runMeshReconcileTick', () => {
         meshConfigMocks.getMesh.mockReturnValue(mesh)
 
         await runMeshReconcileTick(components)
-        vi.setSystemTime(Date.now() + 9_000)
-        await runMeshReconcileTick(components)
+        // 3-tick weak-candidate streak + INSTANT-ACK guard (bubble at dispatch+0.5s must
+        // age past 30s): candidate 1/3 → 2/3 → 3/3 → promote.
+        vi.setSystemTime(dispatchAt + 40_000)
+        await runMeshReconcileTick(components) // candidate 1/3, held
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+        vi.setSystemTime(dispatchAt + 49_000)
+        await runMeshReconcileTick(components) // candidate 2/3
+        vi.setSystemTime(dispatchAt + 58_000)
+        await runMeshReconcileTick(components) // candidate 3/3 → promoted → completed
 
         const row = getQueue(meshId).find(t => t.id === claimed.id)!
         expect(row.status).toBe('completed')
@@ -4599,10 +4633,26 @@ describe('runMeshReconcileTick', () => {
         await runMeshReconcileTick(components)
         expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
 
-        // Tick 4 (+9s): the bubble is now ~22s old (settled) and the re-armed streak
-        // has elapsed → the SAME evidence completes, one window late, never lost.
+        // Tick 4 (+9s): the bubble is now ~23s old (settle window passed) but landed at
+        // dispatch+4s — the INSTANT-ACK guard (P3) still refuses a bubble this young after
+        // dispatch, so the poll declines and the streak resets again. Still no completion.
         vi.setSystemTime(Date.now() + 9_000)
         await runMeshReconcileTick(components)
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+
+        // Tick 5 (+9s): re-arm only. Tick 6 (+9s): the bubble is now ~41s old — past the
+        // INSTANT-ACK window — the SAME evidence finally admits (weak) → candidate 1/3.
+        // Ticks 7/8 complete the 3-tick re-confirmation streak (P1-4) and promote.
+        // A genuinely finished worker is NOT lost — it completes a few windows late.
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components) // re-arm
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components) // candidate 1/3
+        expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components) // candidate 2/3
+        vi.setSystemTime(Date.now() + 9_000)
+        await runMeshReconcileTick(components) // candidate 3/3 → promote
         const row = getQueue(meshId).find(t => t.id === claimed.id)!
         expect(row.status).toBe('completed')
         const completed = readLedgerEntries(meshId).find(e => e.kind === 'task_completed')

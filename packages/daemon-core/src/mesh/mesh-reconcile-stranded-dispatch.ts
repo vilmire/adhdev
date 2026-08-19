@@ -803,12 +803,73 @@ export async function recoverStrandedAssignedDispatches(
                     producer: 'early_idle_transcript_evidence',
                 });
                 if (terminalEvidence) {
-                    // P1-4 NOTE: no weak-candidate machinery on this path — its own
-                    // continuous-idle streak (ASSIGNED_IDLE_TRANSCRIPT_COMPLETE_MS of
-                    // unbroken idle-with-final-assistant) plus the settle window the
-                    // poll just enforced ARE the re-confirmation, so a weak admit here
-                    // flips exactly as before; only the admission snapshot + evidence
-                    // level are threaded through for ledger diagnostics (P1-5).
+                    // P1-4 (2026-08-18 fix — exemption REMOVED): the 8s continuous-idle
+                    // streak is a SETTLE WINDOW, not a re-confirmation — a single weak
+                    // (message-shape) admit here used to flip the row terminal outright,
+                    // which is exactly the incident shape the redrive path's candidate
+                    // machinery was built against. Apply the SAME 3-tick weak-candidate
+                    // streak (weakCompletionCandidateStreak / WEAK_COMPLETION_CANDIDATE_
+                    // CONFIRM_TICKS): a weak admit is recorded, notified once as a
+                    // candidate, and promoted only after the SAME final-assistant evidence
+                    // re-admits on consecutive ticks. A STRONG admit (native turn-terminal
+                    // marker) skips the streak — the provider's own record is the
+                    // confirmation. Only the admission snapshot + evidence level threading
+                    // (P1-5) survives from the old exemption.
+                    const weakCandidateKey = `${meshId}::${row.id}`;
+                    if (terminalEvidence.evidenceLevel === 'weak') {
+                        const candidate = weakCompletionCandidateStreak.get(weakCandidateKey) ?? { count: 0 };
+                        // Evidence changed (a NEWER final assistant bubble) → the previous
+                        // confirmations covered different evidence; re-confirm from scratch.
+                        if (candidate.finalAssistantAt !== undefined
+                            && candidate.finalAssistantAt !== terminalEvidence.transcriptMessageAt) {
+                            candidate.count = 0;
+                        }
+                        candidate.finalAssistantAt = terminalEvidence.transcriptMessageAt;
+                        candidate.count += 1;
+                        weakCompletionCandidateStreak.set(weakCandidateKey, candidate);
+                        if (candidate.count === 1) {
+                            // FIRST observation: surface the CANDIDATE to the coordinator (same
+                            // wording as the redrive path — "possible completion — awaiting
+                            // confirmation"), WITHOUT declaring the task done.
+                            const nodeLabel = row.assignedNodeId ? `Node '${row.assignedNodeId}'` : 'Remote agent';
+                            const metadataEvent = {
+                                evidenceLevel: 'weak' as const,
+                                finalSummary: terminalEvidence.finalSummary,
+                                taskId: row.id,
+                                providerType: readNonEmptyString(row.assignedProviderType) || terminalEvidence.providerType,
+                                providerSessionId: terminalEvidence.providerSessionId,
+                                source: 'early_idle_transcript_evidence',
+                                targetSessionId: terminalEvidence.sessionId,
+                            };
+                            try {
+                                queuePendingMeshCoordinatorEvent({
+                                    event: 'agent:generating_completed',
+                                    meshId,
+                                    nodeLabel,
+                                    nodeId: row.assignedNodeId,
+                                    metadataEvent,
+                                    coordinatorMessage: buildMeshSystemMessage({ event: 'agent:generating_completed', nodeLabel, metadataEvent }),
+                                    queuedAt: nowMs,
+                                });
+                            } catch { /* best-effort candidate notification — the hold below still applies */ }
+                        }
+                        if (candidate.count < WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS) {
+                            traceMeshEventDrop('weak_completion_candidate_held', {
+                                taskId: row.id,
+                                sessionId: row.assignedSessionId,
+                                nodeId: row.assignedNodeId,
+                                meshId,
+                                event: 'agent:generating_completed',
+                            }, `weak message-shape completion candidate ${candidate.count}/${WEAK_COMPLETION_CANDIDATE_CONFIRM_TICKS} (early-idle) — awaiting re-confirmation`);
+                            continue;
+                        }
+                        // PROMOTION: enough consecutive identical quiet-poll re-confirmations.
+                        // Fall through to the terminal flow with the streak cleared.
+                        weakCompletionCandidateStreak.delete(weakCandidateKey);
+                    } else {
+                        // STRONG admit (native marker): skip the candidate machinery entirely.
+                        weakCompletionCandidateStreak.delete(weakCandidateKey);
+                    }
                     // MID-TURN-CAUSAL-ADMISSION (rc.16): propagate FIRST. When the unified guard
                     // defers (the LOCAL live adapter still reports the turn pending — transcript
                     // idle-with-final-assistant can straddle a genuinely mid-turn worker), HOLD

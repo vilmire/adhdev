@@ -403,3 +403,58 @@ describe('selectFinalAssistantTurnEndMessage — chrome-only tail fallback (KIMI
     ] as any)).toBeNull();
   });
 });
+
+describe('selectFinalAssistantTurnEndMessage — INSTANT-ACK structural guard (turnStartedAtMs)', () => {
+  it('refuses a bubble that landed seconds after dispatch and is still that fresh (the "on it" acknowledgment shape)', () => {
+    // The a3dc0a3e incident wire: a single assistant bubble at dispatch+13s, observed
+    // immediately — then the worker kept going for 39 minutes. No content inspection —
+    // pure timestamp deltas.
+    const dispatchAt = Date.now() - 13_500;
+    const messages = [
+      { role: 'user', content: 'implement the fix', timestamp: dispatchAt + 500 },
+      { role: 'assistant', content: '핸들러 위치부터 찾겠습니다.', timestamp: dispatchAt + 13_000 },
+    ] as any;
+    expect(selectFinalAssistantTurnEndMessage(messages, { turnStartedAtMs: dispatchAt })).toBeNull();
+    // The evidence extractor rides the same guard → no finalSummary either.
+    expect(extractFinalAssistantSummaryEvidence(messages, undefined, { turnStartedAtMs: dispatchAt }).finalSummary).toBe('');
+  });
+
+  it('self-heals: a fast-but-genuine answer qualifies once it has AGED past the window', () => {
+    // The 84594b15 shape: the entire answer landed at dispatch+4s, but the worker is
+    // genuinely done and the bubble is now minutes old — candidacy is only delayed,
+    // never lost.
+    const dispatchAt = Date.now() - 120_000;
+    const messages = [
+      { role: 'user', content: 'quick question', timestamp: dispatchAt + 500 },
+      { role: 'assistant', content: 'Done — the answer.', timestamp: dispatchAt + 4_000 },
+    ] as any;
+    expect(selectFinalAssistantTurnEndMessage(messages, { turnStartedAtMs: dispatchAt })?.content).toBe('Done — the answer.');
+  });
+
+  it('admits a bubble that landed past the window even while fresh (ordinary settle windows own freshness)', () => {
+    const dispatchAt = Date.now() - 40_000;
+    const messages = [
+      { role: 'user', content: 'task', timestamp: dispatchAt + 500 },
+      { role: 'assistant', content: 'Done after real work.', timestamp: dispatchAt + 35_000 }, // 35s after dispatch, 5s old
+    ] as any;
+    expect(selectFinalAssistantTurnEndMessage(messages, { turnStartedAtMs: dispatchAt })?.content).toBe('Done after real work.');
+  });
+
+  it('does not fire without a boundary, on an undated bubble, or on a pre-dispatch bubble', () => {
+    const undated = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'undated answer' },
+    ] as any;
+    // No boundary → legacy behaviour.
+    expect(selectFinalAssistantTurnEndMessage(undated)?.content).toBe('undated answer');
+    // Boundary but undated bubble → the guard cannot prove freshness → legacy behaviour.
+    expect(selectFinalAssistantTurnEndMessage(undated, { turnStartedAtMs: Date.now() })?.content).toBe('undated answer');
+    // A bubble PROVABLY older than dispatch is the prior turn's tail — the stale-summary
+    // guards own that refusal downstream; this guard only covers the fresh-ack window.
+    const boundary = Date.now();
+    const preDispatch = [
+      { role: 'assistant', content: 'prior answer', timestamp: boundary - 60_000 },
+    ] as any;
+    expect(selectFinalAssistantTurnEndMessage(preDispatch, { turnStartedAtMs: boundary })?.content).toBe('prior answer');
+  });
+});

@@ -310,6 +310,17 @@ export function buildMeshSystemMessage(args: {
             return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The no-progress monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
         const reviewRecommended = args.metadataEvent.reviewRecommended === true;
+        // FINALIZATION-TIMEOUT-FORCE (2026-08-18 false-completion fix): the worker's
+        // completion was emitted only because the finalization wait expired with no
+        // confirmed final assistant (the 92d11091 shape: "completed" with an empty
+        // summary and zero work). The terminal was recorded as a FORCED TERMINATION
+        // (failed), so the message must say exactly that — never "completed".
+        const timedOutNoResponse = args.metadataEvent.completionDiagnostic
+            && typeof args.metadataEvent.completionDiagnostic === 'object'
+            && (args.metadataEvent.completionDiagnostic as Record<string, unknown>).timedOutWithoutFinalAssistant === true;
+        if (timedOutNoResponse) {
+            return `[System] ${args.nodeLabel} was forcibly terminated WITHOUT a response${metadata}: the finalization wait expired with no final assistant answer, so the task was recorded as a forced termination (failed), NOT as a completion. Verify the actual state with mesh_read_chat / git status and re-dispatch the task if the work is still needed.`;
+        }
         // FALSEIDLE-b: a weak completion (missing final assistant / finalAssistantPresent=false /
         // insufficient evidence) is not trustworthy terminal evidence even when reviewRecommended
         // is not set. P1-4: it must not ASSERT completion — the message leads with candidate

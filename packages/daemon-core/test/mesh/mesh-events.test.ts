@@ -1557,22 +1557,32 @@ describe('setupMeshEventForwarding', () => {
       })
 
       const completedEntries = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')
-      expect(completedEntries).toHaveLength(2)
-      expect(completedEntries.map(entry => entry.payload.taskId)).toEqual([firstQueued.id, secondQueued.id])
-      expect(completedEntries[1].payload.completionDiagnostic).toMatchObject({
+      const failedEntries = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_failed')
+      // FINALIZATION-TIMEOUT-FORCE: the second (timed-out, no confirmed final assistant)
+      // completion is a forced termination — task_failed, never task_completed.
+      expect(completedEntries).toHaveLength(1)
+      expect(completedEntries.map(entry => entry.payload.taskId)).toEqual([firstQueued.id])
+      expect(failedEntries).toHaveLength(1)
+      expect(failedEntries[0].payload.taskId).toBe(secondQueued.id)
+      expect(failedEntries[0].payload.completionDiagnostic).toMatchObject({
         sessionId: 'runtime-session-1',
         providerSessionId: 'provider-history-1',
         blockReason: 'missing_final_assistant',
         parsedStatus: 'idle',
         finalAssistantPresent: false,
+        timedOutWithoutFinalAssistant: true,
       })
+      expect((failedEntries[0].payload as any).reviewRecommended).toBe(true)
       // The reconcile tick drains both queued completions and injects them in order.
       await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(2)
       const secondCoordinatorMessage = coordinator.onEvent.mock.calls[1][1].input.textFallback
       expect(secondCoordinatorMessage).toContain('completion_diagnostic=missing_final_assistant')
       expect(secondCoordinatorMessage).toContain('final_assistant=false')
-      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed', 'completed'])
+      // Forced-termination wording — never "has completed its task".
+      expect(secondCoordinatorMessage).toMatch(/forcibly terminated WITHOUT a response/i)
+      expect(secondCoordinatorMessage).not.toContain('has completed its task')
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed', 'failed'])
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1620,10 +1630,11 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
-  it('WEAK-QUEUE-TENTATIVE: a weak completion that already TIMED OUT (emittedAfterFinalizationTimeout) still completes its queue task', () => {
-    // The complement: a weak completion that exhausted the full 30s finalization wait is a
-    // GENUINE (if answerless) terminal — a tool-only turn with no assistant bubble must still
-    // close its task. This is the case the same-session continuation test relies on.
+  it('WEAK-QUEUE-TENTATIVE: a weak completion that already TIMED OUT (emittedAfterFinalizationTimeout) still TERMINATES its queue task — as failed (forced termination), never completed', () => {
+    // A timeout is never completion evidence (2026-08-18, opencode 92d11091: a
+    // force-emitted completion with an empty summary and zero work). The never-wedge
+    // liveness guarantee is preserved — the row still flips TERMINAL — but the
+    // recorded outcome is 'failed' (a visible forced termination), NOT 'completed'.
     const meshId = `mesh_weak_queue_timeout_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -1648,23 +1659,23 @@ describe('setupMeshEventForwarding', () => {
         completionDiagnostic: {
           blockReason: 'missing_final_assistant',
           finalAssistantPresent: false,
-          emittedAfterFinalizationTimeout: true, // waited out the full 30s → genuine terminal
+          emittedAfterFinalizationTimeout: true, // waited out the full 30s → forced termination (failed), not completed
         },
       })
 
-      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed'])
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['failed'])
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
-  // FALSE-COMPLETION-GIT-EVIDENCE gap 3: the previous test proves the timeout gate keeps the
-  // task terminal (never wedges) — this test proves it ALSO now carries a review signal, so a
-  // slow/dying worker whose 30s finalization window expired with no final-assistant evidence
-  // is not silently trusted the same as a genuine, confirmed completion. Reverting the
-  // emittedAfterFinalizationTimeout reviewRecommended stamp in markSessionTerminal must turn
-  // this test red while the sibling "still completes" test above stays green (liveness intact).
-  it('FALSE-COMPLETION-GIT-EVIDENCE gap 3: a timed-out weak completion still flags reviewRecommended even though it terminates', async () => {
+  // FALSE-COMPLETION-GIT-EVIDENCE gap 3: the previous test proves the timeout flip keeps the
+  // task terminal (never wedges) — this test proves it ALSO carries the review signal AND is
+  // recorded as a forced termination (task_failed), so a slow/dying worker whose 30s
+  // finalization window expired with no final-assistant evidence is never mistaken for a
+  // genuine, confirmed completion. Reverting the FINALIZATION-TIMEOUT-FORCE branch in
+  // markSessionTerminal must turn this test red while liveness (a terminal flip) stays intact.
+  it('FALSE-COMPLETION-GIT-EVIDENCE gap 3: a timed-out weak completion terminates as FAILED with reviewRecommended and forced-termination wording', async () => {
     const meshId = `mesh_weak_queue_timeout_reviewflag_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -1693,20 +1704,24 @@ describe('setupMeshEventForwarding', () => {
         },
       })
 
-      // Liveness preserved: still terminates completed, never wedged.
-      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed'])
-      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
-      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
-      expect((completedEntry?.payload as any).completionDiagnostic).toMatchObject({
+      // Liveness preserved: still TERMINAL (failed), never wedged — but NOT completed.
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['failed'])
+      const failedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_failed')
+      expect((failedEntry?.payload as any).reviewRecommended).toBe(true)
+      expect((failedEntry?.payload as any).completionDiagnostic).toMatchObject({
         timedOutWithoutFinalAssistant: true,
       })
+      // No task_completed entry for this forced termination.
+      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')).toHaveLength(0)
 
       // The flag reaches the coordinator notification too (same wired path the code_change
-      // git-evidence gate uses), not just the ledger.
+      // git-evidence gate uses), not just the ledger — with forced-termination wording,
+      // never a completion claim.
       await runMeshReconcileTick(components)
       expect(coordinator.onEvent).toHaveBeenCalledTimes(1)
       const coordinatorMessage = coordinator.onEvent.mock.calls[0][1].input.textFallback
-      expect(coordinatorMessage).toMatch(/verify|insufficient/i)
+      expect(coordinatorMessage).toMatch(/forcibly terminated WITHOUT a response/i)
+      expect(coordinatorMessage).not.toContain('has completed its task')
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1727,22 +1742,23 @@ describe('setupMeshEventForwarding', () => {
   // simulating the reviewRecommended stamp, flips its verdict.
   //
   // The second half is the integration-level guard: an emittedAfterFinalizationTimeout
-  // completion must still terminate ('completed', not left 'assigned' or silently dropped) and
-  // carry reviewRecommended, proving markSessionTerminal's actual multi-use of the frozen
-  // snapshot (weakCompleted, the reducer evidence, and genuineTerminal) produces the SAME
-  // observable outcome as before the ordering fix — the fix is a safety hardening for future
-  // code paths that read weakEvidenceAtEntry, not a behavior change to the paths already
-  // covered by the "gap 3" test above. A DIRECT F2-isolated integration test was attempted but
-  // is not currently constructible: for agent:generating_completed, EVENT_TO_LEDGER_KIND always
-  // maps to 'task_completed' and the ordinary ledger-append block (which runs unconditionally,
-  // keyed off directDispatchTaskIdForLedger derived from the SAME args.metadataEvent.taskId F2
-  // reads) always writes the terminal entry first, so findTerminalLedgerEvidenceForTask inside
-  // F2 always finds it and F2's OWN append is shadowed — this is existing, unrelated behavior,
-  // not something this fix changed. F2's only other side effect (endTaskDispatchInFlight) is
-  // itself a no-op unless the row's in-flight mark was set via beginTaskDispatchInFlight, which
-  // only the real dispatch path (mesh-queue-assignment.ts) sets — claimNextTask alone (as used
-  // in every other test in this file) never does. This gap is reported as a genuine test-surface
-  // limitation, not silently glossed over.
+  // completion must still terminate (as 'failed' — FINALIZATION-TIMEOUT-FORCE — not left
+  // 'assigned' or silently dropped) and carry reviewRecommended, proving markSessionTerminal's
+  // actual multi-use of the frozen snapshot (weakCompleted, the reducer evidence, and
+  // genuineTerminal) produces the SAME observable outcome as before the ordering fix — the fix
+  // is a safety hardening for future code paths that read weakEvidenceAtEntry, not a behavior
+  // change to the paths already covered by the "gap 3" test above. A DIRECT F2-isolated
+  // integration test was attempted but is not currently constructible: for
+  // agent:generating_completed the ledger kind (EVENT_TO_LEDGER_KIND, overridden to
+  // 'task_failed' only for the forced-timeout case) is written by the ordinary ledger-append
+  // block (which runs unconditionally, keyed off directDispatchTaskIdForLedger derived from the
+  // SAME args.metadataEvent.taskId F2 reads) before F2 runs, so findTerminalLedgerEvidenceForTask
+  // inside F2 always finds it and F2's OWN append is shadowed — this is existing, unrelated
+  // behavior, not something this fix changed. F2's only other side effect
+  // (endTaskDispatchInFlight) is itself a no-op unless the row's in-flight mark was set via
+  // beginTaskDispatchInFlight, which only the real dispatch path (mesh-queue-assignment.ts)
+  // sets — claimNextTask alone (as used in every other test in this file) never does. This gap
+  // is reported as a genuine test-surface limitation, not silently glossed over.
   it('WEAK-EVIDENCE-SNAPSHOT-REGRESSION: isWeakCompletionEvidence treats its own reviewRecommended stamp as weak evidence — proves the ordering hazard is real', () => {
     const baseEvent: Record<string, unknown> = {
       completionDiagnostic: {
@@ -1768,7 +1784,7 @@ describe('setupMeshEventForwarding', () => {
     expect(isWeakCompletionMetadata(afterStamp)).toBe(true)
   })
 
-  it('WEAK-EVIDENCE-SNAPSHOT-REGRESSION integration: the ordering fix does not change the emittedAfterFinalizationTimeout completion outcome (still terminates + flagged)', () => {
+  it('WEAK-EVIDENCE-SNAPSHOT-REGRESSION integration: the ordering fix does not change the emittedAfterFinalizationTimeout terminal handling (terminates as failed + flagged)', () => {
     const meshId = `mesh_weak_evidence_snapshot_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -1800,9 +1816,11 @@ describe('setupMeshEventForwarding', () => {
       // Terminal, never wedged (weakCompleted must resolve false — the frozen read feeding it
       // must not be perturbed by the reviewRecommended mutation that runs in the SAME function
       // call, since that mutation happens strictly after weakCompleted is already computed).
-      expect(getQueue(meshId).map(task => task.status)).toEqual(['completed'])
-      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
-      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
+      // FINALIZATION-TIMEOUT-FORCE: the terminal outcome is 'failed' (forced termination),
+      // and the ledger records task_failed — never task_completed.
+      expect(getQueue(meshId).map(task => task.status)).toEqual(['failed'])
+      const failedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_failed')
+      expect((failedEntry?.payload as any).reviewRecommended).toBe(true)
     } finally {
       cleanupMeshFiles(meshId)
     }

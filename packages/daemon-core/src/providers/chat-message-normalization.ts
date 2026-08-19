@@ -103,8 +103,9 @@ export function extractFinalSummaryFromMessagesAfter(
 export function extractFinalAssistantSummaryEvidence(
   messages: ChatMessage[] | null | undefined,
   maxChars: number = DEFAULT_FINAL_SUMMARY_MAX_CHARS,
+  opts?: SelectFinalAssistantTurnEndOptions,
 ): { finalSummary: string; transcriptMessageAt?: string } {
-  const turnEnd = selectFinalAssistantTurnEndMessage(messages);
+  const turnEnd = selectFinalAssistantTurnEndMessage(messages, opts);
   if (!turnEnd) return { finalSummary: '' };
   return {
     finalSummary: flattenContent(turnEnd.content).trim().slice(0, maxChars),
@@ -152,9 +153,29 @@ export function extractFinalAssistantSummaryEvidence(
  *     carry an identical timestamp). Skipping it moves WITHIN one flush, not across a turn.
  *   - The trigger is a whole-bubble pattern match, never a length/shortness heuristic, and the
  *     depth is capped, so an arbitrary non-empty tail still qualifies exactly as before.
+ *
+ * INSTANT-ACK STRUCTURAL GUARD (2026-08-18 false-completion fix, opts.turnStartedAtMs):
+ * when the caller supplies the dispatch/turn-start boundary, a selected bubble that BOTH
+ * (a) landed within FINAL_ANSWER_MIN_TURN_AGE_MS of the boundary AND (b) is still younger
+ * than that window NOW is REFUSED as a turn-end candidate. The incident shape is the
+ * "on it / let me look" acknowledgment — structurally a SINGLE fresh assistant bubble
+ * seconds after dispatch (observed: dispatch+13s, then 39 more minutes of real work).
+ * This is a purely STRUCTURAL check (timestamp deltas + position) — never a content/phrase
+ * match, so no language- or provider-specific wording is filtered. Condition (b) makes the
+ * guard self-healing: once the bubble has AGED past the window it re-qualifies (a genuinely
+ * finished fast turn — the 84594b15 shape, answer at dispatch+4s — completes one window
+ * late, never wedged); the guard can only DELAY a candidacy, never lose it.
  */
+export const FINAL_ANSWER_MIN_TURN_AGE_MS = 30_000;
+
+export interface SelectFinalAssistantTurnEndOptions {
+  /** Dispatch/turn-start boundary (epoch ms) — enables the INSTANT-ACK guard above. */
+  turnStartedAtMs?: number;
+}
+
 export function selectFinalAssistantTurnEndMessage(
   messages: ChatMessage[] | null | undefined,
+  opts?: SelectFinalAssistantTurnEndOptions,
 ): ChatMessage | null {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   let chromeFallbacks = 0;
@@ -173,6 +194,21 @@ export function selectFinalAssistantTurnEndMessage(
       if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text)) {
         chromeFallbacks++;
         continue;
+      }
+      // INSTANT-ACK guard: a bubble that BOTH landed within seconds of the dispatch
+      // boundary AND is still that young NOW is the acknowledgment, not the result.
+      // Only fires when the boundary AND the bubble timestamp are both provable — an
+      // undated bubble keeps the legacy behaviour (the downstream stale-summary /
+      // undated-tail guards own that case).
+      const boundaryMs = opts?.turnStartedAtMs;
+      if (typeof boundaryMs === 'number' && Number.isFinite(boundaryMs)) {
+        const msgAt = readChatMessageTimestampMs(msg);
+        if (typeof msgAt === 'number' && Number.isFinite(msgAt)
+          && msgAt >= boundaryMs
+          && msgAt - boundaryMs < FINAL_ANSWER_MIN_TURN_AGE_MS
+          && Date.now() - msgAt < FINAL_ANSWER_MIN_TURN_AGE_MS) {
+          return null;
+        }
       }
       return msg;
     }
