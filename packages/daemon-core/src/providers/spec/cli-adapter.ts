@@ -25,6 +25,11 @@ import { detectBackgroundTaskActive } from './background-task-detector.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { NativeHistoryConfig, Control, ControlAction } from './types.js';
+import {
+    resolveInterruptCapability,
+    type InterruptCapability,
+    type InterruptUnsupportedReason,
+} from './interrupt-capability.js';
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
@@ -405,6 +410,59 @@ export class SpecCliAdapter implements CliAdapter {
             returnedBytes: truncation.returnedBytes,
             hash,
         };
+    }
+
+    /**
+     * Report whether this provider can have its in-flight turn interrupted,
+     * resolved from the spec THIS session actually loaded (never a hardcoded
+     * per-provider table — the stop key varies by spec version; hermes-cli
+     * ships Ctrl-C in specs/0.14.json and an EMPTY key in specs/4.0.json).
+     */
+    getInterruptCapability(): InterruptCapability {
+        return resolveInterruptCapability(this.cliType, this.spec.control_bar);
+    }
+
+    /**
+     * Abort the turn currently in flight by writing the provider's own stop
+     * key to the PTY. Used by delivery mode 'interrupt': the caller then waits
+     * for the FSM to report idle and lets the ordinary queued-send drain
+     * deliver the new prompt as a genuine new turn.
+     *
+     * ★ Deliberately NOT routed through invokeScript('stop'). That path calls
+     * FsmDriver.handleClickControl, which silently returns when the control's
+     * `visible_when_state` does not include the current state, and calls
+     * send_keys("") for a provider whose stop key is empty — while
+     * invokeScript unconditionally returns `{ ok: true, effects:[sent_keys] }`
+     * either way. Reporting a successful interrupt that wrote nothing is
+     * exactly the failure this feature exists to remove, so capability is
+     * validated HERE, before any write, and the outcome is reported honestly.
+     */
+    async interruptTurn(): Promise<
+        | { ok: true; keyName: string; bytes: number; confidence: 'proven' | 'declared' }
+        | { ok: false; reason: InterruptUnsupportedReason | 'not_running' | 'not_busy'; message: string }
+    > {
+        if (!this.spawned || this.exited) {
+            return { ok: false, reason: 'not_running', message: `${this.cliName} is not running.` };
+        }
+        const cap = this.getInterruptCapability();
+        if (!cap.supported) {
+            LOG.warn('SpecAdapter', `[${this.cliType}] interrupt refused: ${cap.reason}`);
+            return { ok: false, reason: cap.reason, message: cap.message };
+        }
+        // Interrupting a session that is not generating would write a stray
+        // Ctrl-C/ESC at an idle prompt. Report it instead of writing blindly.
+        const status = this.latestState?.status;
+        if (status !== 'generating') {
+            return {
+                ok: false,
+                reason: 'not_busy',
+                message: `Session is '${status ?? 'unknown'}', not generating — nothing to interrupt.`,
+            };
+        }
+        this.driver.dispatch({ kind: 'pty_write', data: cap.keys });
+        const bytes = Buffer.byteLength(cap.keys, 'utf8');
+        LOG.info('SpecAdapter', `[${this.cliType}] turn interrupted via ${cap.keyName} (bytes=${bytes}, confidence=${cap.confidence})`);
+        return { ok: true, keyName: cap.keyName, bytes, confidence: cap.confidence };
     }
 
     /**

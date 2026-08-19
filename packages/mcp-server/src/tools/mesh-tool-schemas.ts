@@ -421,6 +421,16 @@ export const MESH_SEND_TASK_TOOL = {
             mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
             difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE — it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry.' },
+            delivery_mode: {
+                type: 'string',
+                enum: ['when_idle', 'interrupt'],
+                description: "How to deliver when the target session is BUSY. Default 'when_idle': never disturbs the running turn — the task is queued and auto-delivered the moment the session goes idle. "
+                    + "★'interrupt' ABORTS the turn currently in flight by pressing the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers this task once the session settles. "
+                    + 'THE WORK IN PROGRESS IS DISCARDED — whatever the agent had not yet finished is lost, and any partial edits it was mid-way through are left as they are. Use it only when the running turn is genuinely going the wrong way and finishing it is worse than losing it. '
+                    + "If the target provider cannot interrupt (no stop control declared, or an empty stop key), the dispatch is REJECTED rather than quietly falling back to when_idle — so a steering attempt never reports success while the session actually runs on to completion under the old instructions. Re-send with 'when_idle' if delivery-after-completion is acceptable. "
+                    + 'Has no effect on an idle session (delivered immediately either way).',
+            },
+            deliveryMode: { type: 'string', enum: ['when_idle', 'interrupt'], description: 'CamelCase alias for delivery_mode.' },
         },
         required: ['node_id', 'session_id', 'message', 'difficulty'],
     },

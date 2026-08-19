@@ -30,7 +30,46 @@ export type MeshSessionDeliveryKind =
 export type MeshDeliveryDecision =
     | 'immediate'     // Session is idle: deliver now, create an 'acked' delivery record
     | 'queued'        // Session is busy: hold delivery until session becomes idle
+    | 'interrupt'     // Session is busy and the caller asked to ABORT the running turn first
     | 'rejected';     // Session is terminal or unknown: cannot deliver
+
+/**
+ * How the caller wants a task delivered to a session that may be busy.
+ *
+ *   'when_idle'  — DEFAULT. Never disturbs a running turn. A busy session's task
+ *                  is queued and auto-delivered on its next idle transition.
+ *   'interrupt'  — Abort the turn currently in flight (press the provider's own
+ *                  stop control), then deliver the new task once the session
+ *                  settles to idle.
+ *
+ * ★ The name is deliberately blunt. This is NOT "inject alongside the current
+ * work" — the in-flight turn is CANCELLED and whatever it had not yet finished
+ * is LOST. `immediate` was rejected as a name precisely because it reads like a
+ * gentle overlay; a caller skimming the option list must be able to tell from
+ * the word alone that work gets thrown away.
+ */
+export type MeshTaskDeliveryMode = 'when_idle' | 'interrupt';
+
+/** The delivery mode used when a caller does not specify one. Interrupting is
+ *  always an explicit opt-in — never a default, never inferred. */
+export const DEFAULT_DELIVERY_MODE: MeshTaskDeliveryMode = 'when_idle';
+
+/**
+ * Normalize a caller-supplied delivery mode.
+ *
+ * Fail-closed on anything unrecognized: an unknown string falls back to
+ * `when_idle` (the safe mode) AND reports that it did so, so a typo like
+ * "immediate" can never be silently read as consent to destroy a running turn.
+ */
+export function normalizeDeliveryMode(
+    raw: unknown,
+): { mode: MeshTaskDeliveryMode; unrecognized?: string } {
+    if (raw === undefined || raw === null || raw === '') return { mode: DEFAULT_DELIVERY_MODE };
+    const v = String(raw).trim().toLowerCase();
+    if (v === 'when_idle' || v === 'whenidle') return { mode: 'when_idle' };
+    if (v === 'interrupt') return { mode: 'interrupt' };
+    return { mode: DEFAULT_DELIVERY_MODE, unrecognized: String(raw) };
+}
 
 export interface MeshDeliveryPolicyResult {
     decision: MeshDeliveryDecision;
@@ -90,6 +129,24 @@ export function resolveDeliveryDecision(
         kind?: MeshSessionDeliveryKind;
         /** When true, busy session immediate injection is allowed (provider-specific capability). */
         allowBusyInjection?: boolean;
+        /**
+         * Caller's requested delivery mode. Defaults to 'when_idle'.
+         * 'interrupt' asks to abort the in-flight turn before delivering.
+         */
+        deliveryMode?: MeshTaskDeliveryMode;
+        /**
+         * Whether the target provider can actually interrupt a turn, resolved
+         * from its live spec (resolveInterruptCapability). REQUIRED to get an
+         * 'interrupt' decision: when the caller asks to interrupt a provider
+         * that cannot, we return 'rejected' rather than quietly degrading to
+         * 'queued'. A silent downgrade would tell the caller its steering
+         * landed while the session actually ran to completion on the old
+         * instructions — the same "success signal != reality" failure this
+         * whole feature exists to avoid.
+         */
+        interruptSupported?: boolean;
+        /** Why interrupt is unavailable, surfaced verbatim to the operator. */
+        interruptUnsupportedMessage?: string;
     },
 ): MeshDeliveryPolicyResult {
     const status = (sessionStatus || '').trim().toLowerCase();
@@ -124,6 +181,33 @@ export function resolveDeliveryDecision(
                 decision: 'immediate',
                 reason: 'session_waiting_approval_approval_message',
                 message: 'Session is waiting for approval — approval message delivered immediately.',
+            };
+        }
+        // ── Explicit interrupt request ────────────────────────────────────────
+        // Only reached when the caller opted in via deliveryMode:'interrupt'.
+        // The default path below is untouched.
+        if (opts?.deliveryMode === 'interrupt') {
+            if (!opts.interruptSupported) {
+                // ★ REJECT, never silently fall back to 'queued'. The caller asked to
+                // change a running session's trajectory; queueing would instead let the
+                // current turn finish on the OLD instructions and deliver afterwards —
+                // a materially different outcome. Reporting that as success is the
+                // defect class this feature exists to eliminate, so we fail loudly and
+                // let the caller choose when_idle deliberately.
+                return {
+                    decision: 'rejected',
+                    reason: 'interrupt_unsupported_for_provider',
+                    message: opts.interruptUnsupportedMessage
+                        ?? `Session is ${status} and delivery mode 'interrupt' was requested, but this provider cannot interrupt a running turn. `
+                            + 'Refusing rather than silently queueing: queueing would let the current turn finish on the old instructions. '
+                            + "Re-dispatch with delivery mode 'when_idle' if delivery-after-completion is acceptable.",
+                };
+            }
+            return {
+                decision: 'interrupt',
+                reason: `session_${status}_interrupt_requested`,
+                message: `Session is ${status}. Aborting the in-flight turn via the provider's stop control, then delivering the task once it settles to idle. `
+                    + 'The work the session had not yet finished is discarded.',
             };
         }
         return {

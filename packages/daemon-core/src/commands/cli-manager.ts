@@ -2071,6 +2071,59 @@ export class DaemonCliManager {
                 } else if (action === 'stop') {
                     await this.stopSession(key);
                     return { success: true, stopped: true };
+                } else if (action === 'interrupt_capability') {
+                    // Read-only probe: can this session's turn be interrupted? Resolved
+                    // from the provider's OWN loaded spec, so the answer tracks whichever
+                    // spec version this session actually booted with. Writes nothing.
+                    const probe = adapter as unknown as {
+                        getInterruptCapability?: () => { supported: boolean; keyName?: string; confidence?: string; message?: string; reason?: string };
+                    };
+                    if (typeof probe.getInterruptCapability !== 'function') {
+                        return {
+                            success: true,
+                            supported: false,
+                            reason: 'interrupt_not_implemented',
+                            message: `Provider '${agentType}' runs on an adapter with no interrupt support.`,
+                        };
+                    }
+                    const cap = probe.getInterruptCapability();
+                    return { success: true, ...cap };
+                } else if (action === 'interrupt_turn') {
+                    // Abort the TURN in flight — deliberately distinct from action 'stop'
+                    // above, which terminates the whole session. Delivery mode 'interrupt'
+                    // uses this to clear the way for a re-dispatch: the running turn is
+                    // cancelled and lost, the session survives and returns to idle, and the
+                    // ordinary queued-send drain then delivers the new prompt as a real turn.
+                    //
+                    // Capability is validated inside interruptTurn() against the provider's
+                    // OWN resolved spec before any byte is written, so a provider with no
+                    // stop key (or an empty one, e.g. hermes-cli specs/4.0.json) returns
+                    // ok:false instead of writing nothing and reporting success.
+                    const interruptible = adapter as unknown as {
+                        interruptTurn?: () => Promise<
+                            | { ok: true; keyName: string; bytes: number; confidence: string }
+                            | { ok: false; reason: string; message: string }
+                        >;
+                    };
+                    if (typeof interruptible.interruptTurn !== 'function') {
+                        return {
+                            success: false,
+                            interrupted: false,
+                            reason: 'interrupt_not_implemented',
+                            error: `Provider '${agentType}' runs on an adapter that cannot interrupt a turn.`,
+                        };
+                    }
+                    const outcome = await interruptible.interruptTurn();
+                    if (!outcome.ok) {
+                        return { success: false, interrupted: false, reason: outcome.reason, error: outcome.message };
+                    }
+                    return {
+                        success: true,
+                        interrupted: true,
+                        keyName: outcome.keyName,
+                        bytes: outcome.bytes,
+                        confidence: outcome.confidence,
+                    };
                 }
                 throw new Error(`Unknown action: ${action}`);
             }

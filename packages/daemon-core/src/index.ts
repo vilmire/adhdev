@@ -481,7 +481,10 @@ export type { CoordinatorIdentity } from './mesh/contracts.js';
 export { resolveMeshSurfacedSessionPreview, readMeshCompletionSummary, isWeakCompletionEvidence } from './mesh/mesh-events-utils.js';
 
 // ── Mesh Delivery Policy ──
-export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal } from './mesh/mesh-delivery-policy.js';
+export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal, normalizeDeliveryMode, DEFAULT_DELIVERY_MODE } from './mesh/mesh-delivery-policy.js';
+export type { MeshTaskDeliveryMode } from './mesh/mesh-delivery-policy.js';
+export { resolveInterruptCapability, CTRL_C, ESC, STOP_CONTROL_ID } from './providers/spec/interrupt-capability.js';
+export type { InterruptCapability, InterruptUnsupportedReason } from './providers/spec/interrupt-capability.js';
 export type { MeshSessionDeliveryStatus, MeshSessionDeliveryKind, MeshDeliveryDecision, MeshDeliveryPolicyResult, SessionDeliveryRecord } from './mesh/mesh-delivery-policy.js';
 
 // ── Mesh P2P Relay Failure Classification ──

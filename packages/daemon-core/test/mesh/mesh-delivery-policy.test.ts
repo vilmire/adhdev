@@ -23,6 +23,8 @@ import {
     consumeSessionDelivery,
     markSessionDeliveriesTerminal,
     __clearSessionDeliveriesForTests,
+    normalizeDeliveryMode,
+    DEFAULT_DELIVERY_MODE,
 } from '../../src/mesh/mesh-delivery-policy.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
@@ -136,6 +138,88 @@ describe('mesh-delivery-policy', () => {
                 expect(typeof result.message).toBe('string');
                 expect(result.message.length).toBeGreaterThan(0);
             }
+        });
+    });
+
+    // ── delivery mode: interrupt (M-INPUT-DELIVERY-MODE-AND-QUEUE axis A) ──
+    describe('delivery mode', () => {
+        // (a) the default must not regress
+        it('★ defaults to when_idle', () => {
+            expect(DEFAULT_DELIVERY_MODE).toBe('when_idle');
+            expect(normalizeDeliveryMode(undefined).mode).toBe('when_idle');
+            expect(normalizeDeliveryMode(null).mode).toBe('when_idle');
+            expect(normalizeDeliveryMode('').mode).toBe('when_idle');
+        });
+
+        it('★ a busy session with NO delivery mode still queues (default path unchanged)', () => {
+            const result = resolveDeliveryDecision('generating');
+            expect(result.decision).toBe('queued');
+            expect(result.reason).toBe('session_generating_busy');
+        });
+
+        it('★ an unrecognized mode falls back to when_idle AND reports it', () => {
+            // "immediate" is the tempting wrong name — it must never be read as
+            // consent to destroy a running turn.
+            const r = normalizeDeliveryMode('immediate');
+            expect(r.mode).toBe('when_idle');
+            expect(r.unrecognized).toBe('immediate');
+        });
+
+        it('accepts interrupt and its camelCase spelling of when_idle', () => {
+            expect(normalizeDeliveryMode('interrupt').mode).toBe('interrupt');
+            expect(normalizeDeliveryMode('INTERRUPT').mode).toBe('interrupt');
+            expect(normalizeDeliveryMode('whenIdle').mode).toBe('when_idle');
+            expect(normalizeDeliveryMode('interrupt').unrecognized).toBeUndefined();
+        });
+
+        it('returns interrupt for a busy session when the provider supports it', () => {
+            const result = resolveDeliveryDecision('generating', {
+                deliveryMode: 'interrupt',
+                interruptSupported: true,
+            });
+            expect(result.decision).toBe('interrupt');
+            expect(result.reason).toContain('interrupt_requested');
+            // the message must state that work is discarded
+            expect(result.message).toMatch(/discard/i);
+        });
+
+        // (b) no silent fallback for an unsupported provider
+        it('★ REJECTS (never silently queues) when the provider cannot interrupt', () => {
+            const result = resolveDeliveryDecision('generating', {
+                deliveryMode: 'interrupt',
+                interruptSupported: false,
+                interruptUnsupportedMessage: 'hermes-cli declares an EMPTY stop key.',
+            });
+            expect(result.decision).toBe('rejected');
+            expect(result.decision).not.toBe('queued');
+            expect(result.reason).toBe('interrupt_unsupported_for_provider');
+            expect(result.message).toContain('EMPTY stop key');
+        });
+
+        it('★ rejection message is present even without a provider-supplied reason', () => {
+            const result = resolveDeliveryDecision('generating', {
+                deliveryMode: 'interrupt',
+                interruptSupported: false,
+            });
+            expect(result.decision).toBe('rejected');
+            expect(result.message).toMatch(/when_idle/);
+        });
+
+        it('does not interrupt an idle session — it delivers immediately', () => {
+            const result = resolveDeliveryDecision('idle', {
+                deliveryMode: 'interrupt',
+                interruptSupported: true,
+            });
+            expect(result.decision).toBe('immediate');
+        });
+
+        it('does not interrupt a terminal session — it stays rejected as terminal', () => {
+            const result = resolveDeliveryDecision('stopped', {
+                deliveryMode: 'interrupt',
+                interruptSupported: true,
+            });
+            expect(result.decision).toBe('rejected');
+            expect(result.reason).toBe('session_stopped_terminal');
         });
     });
 
