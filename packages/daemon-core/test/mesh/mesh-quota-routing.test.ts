@@ -23,11 +23,13 @@ import {
     rankProvidersByQuotaGate,
     describeRecoveryRelaunchDecision,
     resolveRecoveryRelaunchProvider,
+    liveLocalProviderEnablementForRouting,
     ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON,
     PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
     PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
     PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
 } from '../../src/mesh/mesh-quota-routing.js';
+import { LOG } from '../../src/logging/logger.js';
 import {
     DEFAULT_QUOTA_ROUTING_POLICY,
     mergeAndNormalizePolicy,
@@ -250,6 +252,119 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
         );
         expect(ranked.clear).toEqual(['codex-cli']);
         expect(ranked.gated.map(entry => entry.providerType)).toEqual(['kimi']);
+    });
+});
+
+describe('evaluateProviderQuotaGate — absent-entry fail-open observability', () => {
+    function loaderContext(over: {
+        providerEnabled?: boolean;
+        quotaEnabled?: boolean;
+        isLocal?: boolean;
+    } = {}) {
+        const { providerEnabled = true, quotaEnabled = true, isLocal = true } = over;
+        const loader = {
+            isMachineProviderEnabled: vi.fn(() => providerEnabled),
+            isMachineQuotaEnabled: vi.fn(() => quotaEnabled),
+        };
+        return {
+            providerEnablement: liveLocalProviderEnablementForRouting(loader, () => isLocal),
+        };
+    }
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('logs on an absent entry (no snapshot, no context) — the branch used to be silent', () => {
+        const spy = vi.spyOn(LOG, 'info');
+        const node = { id: `n-${randomUUID()}` };
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
+        expect(spy).toHaveBeenCalledTimes(1);
+        const [component, message] = spy.mock.calls[0];
+        expect(component).toBe('MeshQuota');
+        expect(message).toContain("provider 'claude-cli'");
+        expect(message).toContain(node.id);
+        expect(message).toContain('unclassified_remote');
+    });
+
+    it('throttles repeat lines for the same (node, provider) within the freshness window', () => {
+        const spy = vi.spyOn(LOG, 'info');
+        const node = { id: `n-${randomUUID()}` };
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + MIN)).toBeNull();
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + 29 * MIN)).toBeNull();
+        expect(spy).toHaveBeenCalledTimes(1); // still within the default 30-min staleAfterMs window
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + 31 * MIN)).toBeNull();
+        expect(spy).toHaveBeenCalledTimes(2); // window elapsed — logs again
+    });
+
+    it('does not throttle across DIFFERENT (node, provider) keys', () => {
+        const spy = vi.spyOn(LOG, 'info');
+        const nodeA = { id: `n-${randomUUID()}` };
+        const nodeB = { id: `n-${randomUUID()}` };
+        expect(evaluateProviderQuotaGate(nodeA, 'claude-cli', null, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(nodeB, 'claude-cli', null, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(nodeA, 'codex-cli', null, NOW)).toBeNull();
+        expect(spy).toHaveBeenCalledTimes(3);
+    });
+
+    it('classifies not_measured only for a CONFIRMED-local node with both axes enabled and no snapshot', () => {
+        const spy = vi.spyOn(LOG, 'info');
+        const node = { id: `n-${randomUUID()}` };
+        const context = loaderContext({ providerEnabled: true, quotaEnabled: true, isLocal: true });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW, context)).toBeNull();
+        const message = spy.mock.calls[0][1] as string;
+        expect(message).toContain('not_measured');
+        expect(message).not.toContain('unclassified_remote');
+    });
+
+    it('classifies probe_disabled distinctly and words it as an intended opt-out, not a fault', () => {
+        const spy = vi.spyOn(LOG, 'info');
+        const node = { id: `n-${randomUUID()}` };
+        const context = loaderContext({ providerEnabled: true, quotaEnabled: false, isLocal: true });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW, context)).toBeNull();
+        const message = spy.mock.calls[0][1] as string;
+        expect(message).toContain('probe_disabled');
+        expect(message.toLowerCase()).not.toMatch(/\berror\b|\bproblem\b|\bdefect\b/);
+        expect(message).toContain('opt-out');
+        expect(message).toContain('not a fault'); // words the opt-out as explicitly non-defect
+    });
+
+    it('classifies provider_disabled distinctly from probe_disabled', () => {
+        const spy = vi.spyOn(LOG, 'info');
+        const node = { id: `n-${randomUUID()}` };
+        const context = loaderContext({ providerEnabled: false, quotaEnabled: true, isLocal: true });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW, context)).toBeNull();
+        const message = spy.mock.calls[0][1] as string;
+        expect(message).toContain('provider_disabled');
+        expect(message).not.toContain('probe_disabled');
+    });
+
+    it('never reports not_measured/probe_disabled/provider_disabled for a node this daemon cannot confirm as local', () => {
+        const spy = vi.spyOn(LOG, 'info');
+        const node = { id: `n-${randomUUID()}`, daemonId: 'daemon_someone_else' };
+        // A loader IS injected, but isLocalNode says false — must not guess a
+        // local-only classification from config this daemon cannot actually
+        // attribute to that remote node.
+        const context = loaderContext({ providerEnabled: true, quotaEnabled: true, isLocal: false });
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW, context)).toBeNull();
+        const message = spy.mock.calls[0][1] as string;
+        expect(message).toContain('unclassified_remote');
+        expect(message).not.toContain('not_measured');
+        expect(message).not.toContain('probe_disabled');
+        expect(message).not.toContain('provider_disabled');
+    });
+
+    it('does not gate or otherwise change routing behaviour — logging is observation-only', () => {
+        // Same absent-entry scenarios as the pre-existing fail-open assertions,
+        // now with a loader context attached: the return value must be
+        // unchanged (still null) regardless of classification.
+        const local = loaderContext({ providerEnabled: true, quotaEnabled: true, isLocal: true });
+        const disabled = loaderContext({ providerEnabled: false, quotaEnabled: true, isLocal: true });
+        const probeOff = loaderContext({ providerEnabled: true, quotaEnabled: false, isLocal: true });
+        expect(evaluateProviderQuotaGate({ id: 'a' }, 'claude-cli', null, NOW, local)).toBeNull();
+        expect(evaluateProviderQuotaGate({ id: 'b' }, 'claude-cli', null, NOW, disabled)).toBeNull();
+        expect(evaluateProviderQuotaGate({ id: 'c' }, 'claude-cli', null, NOW, probeOff)).toBeNull();
     });
 });
 

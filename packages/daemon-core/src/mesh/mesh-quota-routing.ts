@@ -130,12 +130,33 @@ export interface LiveLocalQuotaSource {
     isLocalNode(node: any): boolean;
 }
 
+/** Caller-supplied local-machine provider-enablement oracle, injected the same
+ *  way as LiveLocalQuotaSource (optional, local-node-only, additive): the two
+ *  INDEPENDENT axes quota/refresh.ts already distinguishes —
+ *  isMachineProviderEnabled ("this machine uses provider X") and
+ *  isMachineQuotaEnabled ("...and its quota is probed") — read straight off
+ *  the caller's ProviderLoader. Absent (no loader injected, or the node is not
+ *  this daemon's) means the absent-entry log cannot classify further and must
+ *  say so rather than guess — see logAbsentQuotaFailOpen's remote branch. */
+export interface LiveLocalProviderEnablementSource {
+    isMachineProviderEnabled(providerType: string): boolean;
+    isMachineQuotaEnabled(providerType: string): boolean;
+    /** Same locality contract as LiveLocalQuotaSource.isLocalNode — true only
+     *  for a node that resolves to THIS daemon (or its worktree-clone source).
+     *  A remote node's enablement lives on a config this daemon never reads. */
+    isLocalNode(node: any): boolean;
+}
+
 export interface QuotaFactsContext {
     nodes?: any[];
     /** Present only when the caller runs on the quota-OWNING daemon and had a
      *  live cache to inject. Absent → the nodeFacts copies are read exactly as
      *  before (remote nodes, tests, pre-measurement boot). */
     liveLocalQuota?: LiveLocalQuotaSource | null;
+    /** Present only when the caller injected a local ProviderLoader — see
+     *  LiveLocalProviderEnablementSource. Absent → the absent-entry log falls
+     *  back to the unclassified-remote reason. */
+    providerEnablement?: LiveLocalProviderEnablementSource | null;
 }
 
 /**
@@ -165,15 +186,62 @@ export function liveLocalQuotaForRouting(
     };
 }
 
+/** Minimal shape this module needs from a ProviderLoader — the same two
+ *  methods quota/refresh.ts's quotaProviderEnabledFromLoader consults, kept
+ *  structural (not an import of the loader type) so this module's dependency
+ *  graph stays leaf-shaped. isMachineQuotaEnabled is optional because older
+ *  structural callers/test doubles predate that axis (quota/refresh.ts
+ *  documents the same absent-means-enabled default). */
+export interface QuotaEnablementLoader {
+    isMachineProviderEnabled(providerType: string): boolean;
+    isMachineQuotaEnabled?(providerType: string): boolean;
+}
+
+/**
+ * Build the live-local-provider-enablement injection for one routing pass,
+ * mirroring liveLocalQuotaForRouting exactly: returns null when the caller has
+ * no loader to inject (remote-only mesh view, tests, pre-loader boot), and
+ * memoizes the locality verdict per node object.
+ */
+export function liveLocalProviderEnablementForRouting(
+    loader: QuotaEnablementLoader | null | undefined,
+    isLocalNode: (node: any) => boolean,
+): LiveLocalProviderEnablementSource | null {
+    if (!loader) return null;
+    const verdicts = new Map<any, boolean>();
+    return {
+        isMachineProviderEnabled: (providerType: string) => loader.isMachineProviderEnabled(providerType),
+        isMachineQuotaEnabled: (providerType: string) =>
+            loader.isMachineQuotaEnabled ? loader.isMachineQuotaEnabled(providerType) : true,
+        isLocalNode(node: any): boolean {
+            let verdict = verdicts.get(node);
+            if (verdict === undefined) {
+                verdict = !!node && isLocalNode(node) === true;
+                verdicts.set(node, verdict);
+            }
+            return verdict;
+        },
+    };
+}
+
 /** The context the quota-routing callers pass for one routing pass over
  *  `mesh`: the node list plus the live local cache when this daemon has one.
  *  `isLocalNode` is the caller's locality oracle (isLocalAutoLaunchNode) —
- *  see liveLocalQuotaForRouting. */
+ *  see liveLocalQuotaForRouting. `providerLoader` is optional (additive): pass
+ *  the caller's ProviderLoader to let the absent-entry log classify a local
+ *  node's reason (not_measured / probe_disabled / provider_disabled); omit it
+ *  and that classification falls back to unclassified-remote, exactly as
+ *  before this parameter existed. */
 export function quotaFactsContextForLiveRouting(
     mesh: any,
     isLocalNode: (node: any) => boolean,
+    providerLoader?: QuotaEnablementLoader | null,
 ): QuotaFactsContext {
-    return { nodes: mesh?.nodes, liveLocalQuota: liveLocalQuotaForRouting(isLocalNode) };
+    return {
+        nodes: mesh?.nodes,
+        liveLocalQuota: liveLocalQuotaForRouting(isLocalNode),
+        providerEnablement: liveLocalProviderEnablementForRouting(providerLoader, isLocalNode),
+    };
 }
 
 /** Read one provider entry directly from a node's facts bundle. */
@@ -296,6 +364,81 @@ function logStaleQuotaFailOpen(
     LOG.info('MeshQuota', `QUOTA GATE: provider '${providerType}' on node ${nodeId} fails open — snapshot age ${ageText} exceeds the ${Math.round(staleAfterMs / 60_000)}m freshness threshold`);
 }
 
+/** Reasons the absent-entry fail-open log can attribute to a missing
+ *  snapshot. 'probe_disabled' is a DELIBERATE user opt-out (quotaEnabled ===
+ *  false — "do not read my usage", see the module header) and must never be
+ *  worded or treated as a defect. 'unclassified_remote' covers every case this
+ *  daemon cannot classify: a remote node (its machineProviders config lives on
+ *  a different daemon), or a caller that has not injected a provider-loader
+ *  context yet — both read identically from here, so both get the same
+ *  explicitly-not-a-guess label rather than a wrong classification. */
+export type AbsentQuotaReason = 'not_measured' | 'probe_disabled' | 'provider_disabled' | 'unclassified_remote';
+
+/** Classify why a provider has no quota entry, using the optional local
+ *  provider-enablement oracle (see QuotaFactsContext.providerEnablement). Only
+ *  resolves a real reason for a node this daemon can read the config of
+ *  (local, or a worktree clone of a local node); everything else — remote
+ *  nodes and callers that never injected a loader — reports
+ *  'unclassified_remote' rather than guessing from config this daemon does
+ *  not have. */
+function classifyAbsentQuotaReason(
+    node: any,
+    providerType: string,
+    context?: QuotaFactsContext | null,
+): AbsentQuotaReason {
+    const enablement = context?.providerEnablement;
+    if (!enablement) return 'unclassified_remote';
+    const sourceNode = cloneSourceNodeFor(node, context);
+    if (!enablement.isLocalNode(node) && !(sourceNode !== undefined && enablement.isLocalNode(sourceNode))) {
+        return 'unclassified_remote';
+    }
+    if (!enablement.isMachineProviderEnabled(providerType)) return 'provider_disabled';
+    if (!enablement.isMachineQuotaEnabled(providerType)) return 'probe_disabled';
+    return 'not_measured';
+}
+
+/** Rate limiter for the absent-entry fail-open log below, same shape and
+ *  reasoning as staleFailOpenLoggedAt: at most one line per (node, provider)
+ *  per freshness window. A separate map from the stale one — the two branches
+ *  are mutually exclusive per call, but keeping them independent avoids one
+ *  branch's throttle window suppressing the other's first line. */
+const absentFailOpenLoggedAt = new Map<string, number>();
+
+/** OBSERVABILITY: the absent-entry fail-open branch was, until this change,
+ *  the ONE consumer of quotaEntryFor with zero logging — see the module
+ *  header's 2026-08-18 note and CLAUDE.md's M-QUOTA-STALE-FAILOPEN-ROUTING ②.
+ *  A missing entry gates nobody (same fail-open contract as the stale branch
+ *  above), so without this line the only evidence was the absence of
+ *  quota-ranking output — indistinguishable from "never asked". One concise
+ *  line per freshness window: provider, reason, and — for probe_disabled —
+ *  an explicit note that this is an intended opt-out, not a fault. Uses the
+ *  policy's staleAfterMs as the throttle window, the same cadence the stale
+ *  branch throttles on, so neither branch floods a reconcile-tick loop. */
+function logAbsentQuotaFailOpen(
+    node: any,
+    providerType: string,
+    policy: RepoMeshQuotaRoutingPolicy | null | undefined,
+    now: number,
+    context?: QuotaFactsContext | null,
+): void {
+    const staleAfterMs = resolveQuotaRoutingPolicy(policy).staleAfterMs;
+    const nodeId = typeof node?.nodeId === 'string' && node.nodeId ? node.nodeId
+        : typeof node?.id === 'string' && node.id ? node.id : 'unknown';
+    const key = `${nodeId} ${providerType}`;
+    const last = absentFailOpenLoggedAt.get(key);
+    if (last !== undefined && now - last < staleAfterMs) return;
+    absentFailOpenLoggedAt.set(key, now);
+    const reason = classifyAbsentQuotaReason(node, providerType, context);
+    const reasonText = reason === 'probe_disabled'
+        ? 'quota probing is disabled for this provider on this machine (quotaEnabled: false — an intended opt-out, not a fault)'
+        : reason === 'provider_disabled'
+            ? 'this provider is not enabled on this machine'
+            : reason === 'not_measured'
+                ? 'no snapshot has been measured yet'
+                : 'this daemon cannot read that node\'s machineProviders config (remote node, or its own daemon has not injected one) — cannot tell not-yet-measured from an opt-out; check the owning node\'s config directly';
+    LOG.info('MeshQuota', `QUOTA GATE: provider '${providerType}' on node ${nodeId} fails open — no quota entry (${reason}: ${reasonText})`);
+}
+
 export interface ProviderQuotaGateBlock {
     reason: string;
     /** 'unknown' when the block comes from an explicit exhaustion signal that
@@ -397,7 +540,10 @@ export function evaluateProviderQuotaGate(
     context?: QuotaFactsContext | null,
 ): ProviderQuotaGateBlock | null {
     const entry = quotaEntryFor(node, providerType, context, now);
-    if (!entry) return null; // never reported → unknown, not blocked
+    if (!entry) {
+        logAbsentQuotaFailOpen(node, providerType, policy, now, context);
+        return null; // never reported → unknown, not blocked
+    }
     const { facts, quota } = entry;
     let sessionTrustworthy = true;
     let weeklyTrustworthy = true;

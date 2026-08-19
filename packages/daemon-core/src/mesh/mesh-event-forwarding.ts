@@ -2316,7 +2316,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                 // daemon's live quota cache, not the git_status-stamped
                                 // nodeFacts copy (mesh-quota-routing). Remote nodes keep
                                 // reading their reported nodeFacts.
-                                quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode),
+                                quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
                             )
                             : { action: 'block' as const };
                         const relaunchProviderType = relaunch.action === 'block' ? null : relaunch.providerType;
