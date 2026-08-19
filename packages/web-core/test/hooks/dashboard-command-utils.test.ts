@@ -25,8 +25,13 @@ describe('dashboard command utils send-state helpers', () => {
       .toBeNull()
   })
 
-  it('normalizes PTY busy errors into friendly inline copy', () => {
-    expect(getInlineSendFailureMessage('pty send failed: Hermes Agent is still processing the previous prompt'))
-      .toBe('Message queued and will send after the current reply finishes.')
+  it('normalizes PTY not-ready errors into friendly inline copy', () => {
+    expect(getInlineSendFailureMessage('pty send failed: runtime is not ready'))
+      .toBe('Wait for the runtime to finish starting up before sending a message.')
+  })
+
+  it('falls back to the raw message for unrecognized errors', () => {
+    expect(getInlineSendFailureMessage('pty send failed: something unexpected'))
+      .toBe('pty send failed: something unexpected')
   })
 })

@@ -56,9 +56,6 @@ export function getConversationSendBlockMessage(
 export function getInlineSendFailureMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error || '')
     const normalized = message.toLowerCase()
-    if (normalized.includes('still processing the previous prompt')) {
-        return 'Message queued and will send after the current reply finishes.'
-    }
     if (normalized.includes('awaiting confirmation')) {
         return 'Approve or reject the pending request above.'
     }
