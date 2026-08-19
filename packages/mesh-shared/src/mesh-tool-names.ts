@@ -21,8 +21,9 @@
 export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_status',
     'mesh_list_nodes',
-    'mesh_enqueue_task',
+    // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
     'mesh_enqueue_batch',
+    'mesh_enqueue_task',
     'mesh_view_queue',
     // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
     'mesh_graph_view',
