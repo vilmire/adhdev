@@ -2695,6 +2695,15 @@ function annotateRapidReadChatAdvisory(payload, options) {
 // src/tools/mesh-tools-internal.ts
 var import_daemon_core6 = require("@adhdev/daemon-core");
 var import_node_crypto = require("crypto");
+function recordMeshCoordinatorToolCall(ctx, tool) {
+  const sessionId = ctx.coordinatorSessionId ?? null;
+  return (0, import_daemon_core5.recordMeshToolCall)({
+    meshId: ctx.mesh.id,
+    tool,
+    sessionId,
+    callerRole: sessionId ? "coordinator" : "unknown"
+  });
+}
 var SESSION_PROVIDER_METADATA_TTL_MS = 30 * 6e4;
 var meshSessionProviderMetadata = /* @__PURE__ */ new Map();
 function getSessionMetadata(key) {
@@ -4255,7 +4264,7 @@ function summarizePendingEventProtocolMetrics(pendingEvents) {
   };
 }
 async function meshStatus(ctx, args = {}) {
-  const rateResult = (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_status" });
+  const rateResult = recordMeshCoordinatorToolCall(ctx, "mesh_status");
   const compact = args.verbose === true ? false : args.compact ?? true;
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
@@ -4889,7 +4898,7 @@ function resolveGateSession(ctx, explicit) {
   return readString(explicit) || ctx.coordinatorSessionId || void 0;
 }
 async function meshGraphGateClaim(ctx, args) {
-  (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_graph_gate_claim" });
+  recordMeshCoordinatorToolCall(ctx, "mesh_graph_gate_claim");
   const gateId = readString(args.gate_id) || readString(args.gateId);
   if (!gateId) {
     return JSON.stringify({
@@ -4984,7 +4993,7 @@ function describeClaimRefusal(reason, state) {
   }
 }
 async function meshGraphGateRelease(ctx, args) {
-  (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_graph_gate_release" });
+  recordMeshCoordinatorToolCall(ctx, "mesh_graph_gate_release");
   const gateId = readString(args.gate_id) || readString(args.gateId);
   const fencingToken = readString(args.fencing_token) || readString(args.fencingToken);
   const leaseGeneration = readNumber(args.lease_generation ?? args.leaseGeneration);
@@ -5066,7 +5075,7 @@ async function meshGraphGateRelease(ctx, args) {
   }
 }
 async function meshGraphView(ctx, args) {
-  (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_graph_view" });
+  recordMeshCoordinatorToolCall(ctx, "mesh_graph_view");
   try {
     await refreshMeshFromDaemon(ctx);
     const graphId = readString(args.graph_id) || readString(args.graphId);
@@ -5663,7 +5672,7 @@ async function meshEnqueueBatch(ctx, args) {
   });
 }
 async function meshViewQueue(ctx, args) {
-  const rateResult = (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_view_queue" });
+  const rateResult = recordMeshCoordinatorToolCall(ctx, "mesh_view_queue");
   const compact = args.verbose === true ? false : args.compact ?? true;
   try {
     await refreshMeshFromDaemon(ctx);
@@ -8970,7 +8979,7 @@ async function meshAnswerQuestion(ctx, args) {
   return JSON.stringify(result, null, 2);
 }
 async function meshListPendingApprovals(ctx, _args = {}) {
-  (0, import_daemon_core6.recordMeshToolCall)({ meshId: ctx.mesh.id, tool: "mesh_list_pending_approvals" });
+  recordMeshCoordinatorToolCall(ctx, "mesh_list_pending_approvals");
   await refreshMeshFromDaemon(ctx);
   const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
   let ledgerEntries = (0, import_daemon_core6.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
