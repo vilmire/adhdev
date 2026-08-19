@@ -40,7 +40,7 @@ import {
     recordGraphGateClaimed,
     recordGraphGateReleased,
     readString,
-    recordMeshToolCall,
+    recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
     triggerMeshQueueAndReport,
 } from './mesh-tools-internal.js';
@@ -221,7 +221,7 @@ export async function meshGraphGateClaim(
         coordinator_session_id?: string; coordinatorSessionId?: string;
     },
 ): Promise<string> {
-    recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_graph_gate_claim' });
+    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_claim');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     if (!gateId) {
         return JSON.stringify({
@@ -352,7 +352,7 @@ export async function meshGraphGateRelease(
         patches?: Array<{ node?: string; base_spec_patch?: Record<string, unknown>; baseSpecPatch?: Record<string, unknown> }>;
     },
 ): Promise<string> {
-    recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_graph_gate_release' });
+    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_release');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     const fencingToken = readString(args.fencing_token) || readString(args.fencingToken);
     const leaseGeneration = readNumber(args.lease_generation ?? args.leaseGeneration);
@@ -472,7 +472,7 @@ export async function meshGraphView(
         limit?: number;
     },
 ): Promise<string> {
-    recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_graph_view' });
+    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_view');
     try {
         await refreshMeshFromDaemon(ctx);
         const graphId = readString(args.graph_id) || readString(args.graphId);

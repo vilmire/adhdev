@@ -56,7 +56,7 @@ import {
     readLedgerEntries,
     readString,
     reconcileDirectDispatchesFromTranscriptEvidence,
-    recordMeshToolCall,
+    recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
     requeueTask,
     resolveCoordinatorDaemonId,
@@ -951,7 +951,7 @@ export async function meshViewQueue(
     ctx: MeshContext,
     args: { status?: string[]; view?: QueueViewMode; compact?: boolean; verbose?: boolean },
 ): Promise<string> {
-    const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_view_queue' });
+    const rateResult = recordMeshCoordinatorToolCall(ctx, 'mesh_view_queue');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
     try {

@@ -52,7 +52,7 @@ import {
     readNodeMachineId,
     readRelatedRepos,
     reconcileDirectDispatchesFromTranscriptEvidence,
-    recordMeshToolCall,
+    recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
     summarizeBranchConvergence,
     summarizeMeshAsyncRefineJobs,
@@ -105,7 +105,7 @@ export function summarizePendingEventProtocolMetrics(
 // ─── Tool Implementations ───────────────────────
 
 export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
-    const rateResult = recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_status' });
+    const rateResult = recordMeshCoordinatorToolCall(ctx, 'mesh_status');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
 

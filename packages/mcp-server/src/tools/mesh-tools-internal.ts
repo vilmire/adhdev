@@ -21,7 +21,7 @@ import type { CommandTransport } from '../transports/mode.js';
 import { compactChatPayload, isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import { withStatusProbeMarker, normalizeNodeCapabilitySlots, deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared';
-import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
+import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, MeshToolCallRateResult, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     daemonIdsEquivalent,
     meshNodeIdMatches,
@@ -369,7 +369,6 @@ export {
     readLedgerSliceFromStore,
     reconcileDirectDispatchCompletionFromTranscript,
     recordDirectDispatchTask,
-    recordMeshToolCall,
     requeueTask,
     requeueHeldMeshCoordinatorEvents,
     resolveDelegatedWorkerAutoApprove,
@@ -456,6 +455,29 @@ export interface MeshContext {
      * mesh_requeue_held_events. Absent on version-skewed daemons that don't ride it.
      */
     lastPendingRetentionCounters?: MeshPendingRetentionCountersSnapshot;
+}
+
+/**
+ * MESH-TOOL-CALL-CALLER-INSTRUMENTATION (1단계): wraps recordMeshToolCall with the
+ * only caller-identity signal this stdio MCP process has — whether it was launched
+ * with ADHDEV_COORDINATOR_SESSION_ID (carried on ctx.coordinatorSessionId). Absent
+ * does NOT mean "this is a worker": a legacy or non-coordinator launch also has no
+ * env var, so absence is recorded as 'unknown', never asserted as a worker identity.
+ *
+ * ★This is a diagnostic signal, not an auth boundary. Env vars are process-settable
+ * by the process itself, so callerRole must never be used to block or allow a tool
+ * call — only to observe, post hoc, which calls came from a coordinator-launched
+ * process. See CLAUDE.md M-WORKER-SCOPED-MCP-SURFACE for the investigation this
+ * instrumentation feeds (whether worker MCP surfaces should be scoped down).
+ */
+export function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: string): MeshToolCallRateResult {
+    const sessionId = ctx.coordinatorSessionId ?? null;
+    return recordMeshToolCall({
+        meshId: ctx.mesh.id,
+        tool,
+        sessionId,
+        callerRole: sessionId ? 'coordinator' : 'unknown',
+    });
 }
 
 /** T6 (B3c) live v2 enforce/observability counters snapshot (mirrors the daemon-core

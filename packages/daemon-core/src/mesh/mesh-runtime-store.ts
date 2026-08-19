@@ -320,6 +320,7 @@ export class MeshRuntimeStore {
                 mesh_id TEXT NOT NULL,
                 tool TEXT NOT NULL,
                 session_id TEXT,
+                caller_role TEXT,
                 called_at INTEGER NOT NULL
             );
 
@@ -714,6 +715,17 @@ export class MeshRuntimeStore {
                     ON mesh_event_ledger(mesh_id, task_id, timestamp)
                     WHERE task_id IS NOT NULL
             `);
+
+            // 8. MESH-TOOL-CALL-CALLER-INSTRUMENTATION (1단계): mesh_tool_call_log.caller_role.
+            //    Nullable provenance tag ('coordinator' | 'unknown') recording whether the
+            //    process that made this tool call carried ADHDEV_COORDINATOR_SESSION_ID at
+            //    launch. Pre-existing rows read back NULL — they predate this instrumentation
+            //    and are simply unclassified, not "unknown" in the observed sense. See
+            //    recordMeshToolCall for why this is a diagnostic signal, not an auth boundary.
+            const toolCallCols = this.tableColumns('mesh_tool_call_log');
+            if (!toolCallCols.has('caller_role')) {
+                this.db.exec(`ALTER TABLE mesh_tool_call_log ADD COLUMN caller_role TEXT`);
+            }
         } catch (err: any) {
             // Best-effort: a failed isolation migration must not brick the store. The
             // CREATE-TABLE definitions above already carry the new schema for fresh DBs;
@@ -2019,23 +2031,31 @@ export class MeshRuntimeStore {
      * Returns a rate-limit advisory string when the call rate is too high, null otherwise.
      * windowMs: sliding window size in ms (default 10s)
      * maxCalls: max allowed calls within the window (default 5)
+     *
+     * `callerRole` is a diagnostic, not an auth boundary: it reflects whether
+     * ADHDEV_COORDINATOR_SESSION_ID was present in this process's env at call
+     * time, and a process can set that env var on itself. It exists to answer
+     * "was this call made by a coordinator-launched process or not" for the
+     * mesh-tool-call-caller-instrumentation investigation, not to gate access —
+     * do not wire it into any block/allow decision.
      */
     recordMeshToolCall(opts: {
         meshId: string;
         tool: string;
         sessionId?: string | null;
+        callerRole?: 'coordinator' | 'unknown' | null;
         windowMs?: number;
         maxCalls?: number;
     }): { rateLimitExceeded: boolean; callsInWindow: number; advisory: string | null } {
-        const { meshId, tool, sessionId = null } = opts;
+        const { meshId, tool, sessionId = null, callerRole = null } = opts;
         const windowMs = opts.windowMs ?? 10_000;
         const maxCalls = opts.maxCalls ?? 5;
         const now = Date.now();
         const windowStart = now - windowMs;
 
         this.db.prepare(
-            'INSERT INTO mesh_tool_call_log (mesh_id, tool, session_id, called_at) VALUES (?, ?, ?, ?)'
-        ).run(meshId, tool, sessionId, now);
+            'INSERT INTO mesh_tool_call_log (mesh_id, tool, session_id, caller_role, called_at) VALUES (?, ?, ?, ?, ?)'
+        ).run(meshId, tool, sessionId, callerRole, now);
 
         const row = this.db.prepare(
             'SELECT COUNT(*) as cnt FROM mesh_tool_call_log WHERE mesh_id = ? AND tool = ? AND called_at >= ?'
@@ -2066,6 +2086,19 @@ export class MeshRuntimeStore {
      */
     pruneToolCallLog(olderThanMs: number): number {
         return this.db.prepare('DELETE FROM mesh_tool_call_log WHERE called_at < ?').run(Date.now() - olderThanMs).changes;
+    }
+
+    /**
+     * Read back recent mesh_tool_call_log rows for one mesh, most recent first.
+     * Diagnostic reader for the MESH-TOOL-CALL-CALLER-INSTRUMENTATION 1단계
+     * investigation (was session_id/caller_role actually getting recorded, and
+     * does the coordinator/unknown split hold up) — not on any hot path.
+     */
+    getRecentToolCalls(meshId: string, limit = 100): Array<{ tool: string; sessionId: string | null; callerRole: string | null; calledAt: number }> {
+        const rows = this.db.prepare(
+            'SELECT tool, session_id, caller_role, called_at FROM mesh_tool_call_log WHERE mesh_id = ? ORDER BY called_at DESC LIMIT ?'
+        ).all(meshId, limit) as Array<{ tool: string; session_id: string | null; caller_role: string | null; called_at: number }>;
+        return rows.map(r => ({ tool: r.tool, sessionId: r.session_id, callerRole: r.caller_role, calledAt: r.called_at }));
     }
 
     /**

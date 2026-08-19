@@ -39,7 +39,7 @@ import {
     ipcDispatchToRemoteAgent,
     markStaleDirectDispatches,
     reconcileDirectDispatchesFromTranscriptEvidence,
-    recordMeshToolCall,
+    recordMeshCoordinatorToolCall,
     isIdleSessionRecord,
     isLocalControlPlaneNode,
     isMeshCoordinatorSessionRecord,
@@ -1478,7 +1478,7 @@ export async function meshListPendingApprovals(
     ctx: MeshContext,
     _args: Record<string, unknown> = {},
 ): Promise<string> {
-    recordMeshToolCall({ meshId: ctx.mesh.id, tool: 'mesh_list_pending_approvals' });
+    recordMeshCoordinatorToolCall(ctx, 'mesh_list_pending_approvals');
     await refreshMeshFromDaemon(ctx);
 
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);

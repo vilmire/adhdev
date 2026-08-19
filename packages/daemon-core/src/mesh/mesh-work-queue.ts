@@ -1976,11 +1976,16 @@ export type MeshToolCallRateResult = { rateLimitExceeded: boolean; callsInWindow
  *
  * Defaults: 10-second sliding window, max 5 calls before advisory is raised.
  * Returns { rateLimitExceeded: false } on any store error so callers are not blocked.
+ *
+ * `callerRole` is diagnostic only (see MeshRuntimeStore.recordMeshToolCall) —
+ * a process can set ADHDEV_COORDINATOR_SESSION_ID on itself, so this must
+ * never become an authorization gate.
  */
 export function recordMeshToolCall(opts: {
     meshId: string;
     tool: string;
     sessionId?: string | null;
+    callerRole?: 'coordinator' | 'unknown' | null;
     windowMs?: number;
     maxCalls?: number;
 }): MeshToolCallRateResult {

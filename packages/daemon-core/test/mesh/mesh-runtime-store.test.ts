@@ -1853,6 +1853,122 @@ describe('mesh-runtime-store', () => {
         });
     });
 
+    // ── MESH-TOOL-CALL-CALLER-INSTRUMENTATION (1단계) ──────────────────────────────
+    // recordMeshToolCall previously received only {meshId, tool} at every real call
+    // site, so mesh_tool_call_log.session_id was NULL on all 48 observed rows — "who
+    // called this" was unknowable, not merely absent. This wires sessionId/callerRole
+    // through and proves the two classes land distinguishably in the row itself.
+    describe('MESH-TOOL-CALL-CALLER-INSTRUMENTATION: caller_role / session_id recording', () => {
+        it('records callerRole "coordinator" with the session id when both are supplied', () => {
+            const db = MeshRuntimeStore.getInstance();
+            const meshId = `mesh-caller-${randomUUID()}`;
+            const sessionId = `sess-${randomUUID()}`;
+
+            db.recordMeshToolCall({ meshId, tool: 'mesh_status', sessionId, callerRole: 'coordinator' });
+
+            const [row] = db.getRecentToolCalls(meshId, 1);
+            expect(row.sessionId).toBe(sessionId);
+            expect(row.callerRole).toBe('coordinator');
+        });
+
+        it('records callerRole "unknown" with a null session id when the coordinator session id is absent', () => {
+            const db = MeshRuntimeStore.getInstance();
+            const meshId = `mesh-caller-${randomUUID()}`;
+
+            db.recordMeshToolCall({ meshId, tool: 'mesh_view_queue', sessionId: null, callerRole: 'unknown' });
+
+            const [row] = db.getRecentToolCalls(meshId, 1);
+            expect(row.sessionId).toBeNull();
+            expect(row.callerRole).toBe('unknown');
+        });
+
+        it('distinguishes coordinator and unknown calls to the same tool within one mesh', () => {
+            const db = MeshRuntimeStore.getInstance();
+            const meshId = `mesh-caller-${randomUUID()}`;
+            const sessionId = `sess-${randomUUID()}`;
+
+            db.recordMeshToolCall({ meshId, tool: 'mesh_graph_view', sessionId, callerRole: 'coordinator' });
+            db.recordMeshToolCall({ meshId, tool: 'mesh_graph_view', sessionId: null, callerRole: 'unknown' });
+            db.recordMeshToolCall({ meshId, tool: 'mesh_graph_view', sessionId, callerRole: 'coordinator' });
+
+            const rows = db.getRecentToolCalls(meshId, 10);
+            expect(rows).toHaveLength(3);
+            const coordinatorRows = rows.filter(r => r.callerRole === 'coordinator');
+            const unknownRows = rows.filter(r => r.callerRole === 'unknown');
+            expect(coordinatorRows).toHaveLength(2);
+            expect(coordinatorRows.every(r => r.sessionId === sessionId)).toBe(true);
+            expect(unknownRows).toHaveLength(1);
+            expect(unknownRows[0].sessionId).toBeNull();
+        });
+
+        it('defaults callerRole/sessionId to null when omitted (back-compat with pre-instrumentation callers)', () => {
+            const db = MeshRuntimeStore.getInstance();
+            const meshId = `mesh-caller-${randomUUID()}`;
+
+            db.recordMeshToolCall({ meshId, tool: 'mesh_status' });
+
+            const [row] = db.getRecentToolCalls(meshId, 1);
+            expect(row.sessionId).toBeNull();
+            expect(row.callerRole).toBeNull();
+        });
+
+        it('does not regress the sliding-window rate-limit guard now that extra columns are written', () => {
+            const db = MeshRuntimeStore.getInstance();
+            const meshId = `mesh-caller-${randomUUID()}`;
+
+            let last;
+            for (let i = 0; i < 6; i++) {
+                last = db.recordMeshToolCall({
+                    meshId,
+                    tool: 'mesh_status',
+                    sessionId: `sess-${i}`,
+                    callerRole: 'coordinator',
+                    windowMs: 10_000,
+                    maxCalls: 5,
+                });
+            }
+            expect(last!.rateLimitExceeded).toBe(true);
+            expect(last!.callsInWindow).toBe(6);
+            expect(last!.advisory).toContain('Rate limit');
+        });
+
+        it('ALTER TABLE migration adds caller_role to a pre-existing mesh_tool_call_log without one', () => {
+            const meshId = `mesh-caller-legacy-${randomUUID()}`;
+            {
+                // Simulate a pre-instrumentation DB: CREATE the legacy 4-column table
+                // directly so the migration path (not the fresh-CREATE path) is exercised.
+                const Database = runtimeRequire('better-sqlite3') as any;
+                const ledgerDir = join(testConfigDir, 'mesh-ledger');
+                mkdirSync(ledgerDir, { recursive: true });
+                const dbPath = join(ledgerDir, 'mesh-runtime.db');
+                const legacyDb = new Database(dbPath);
+                legacyDb.exec(`
+                    CREATE TABLE mesh_tool_call_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        mesh_id TEXT NOT NULL,
+                        tool TEXT NOT NULL,
+                        session_id TEXT,
+                        called_at INTEGER NOT NULL
+                    );
+                `);
+                legacyDb.prepare('INSERT INTO mesh_tool_call_log (mesh_id, tool, session_id, called_at) VALUES (?, ?, ?, ?)')
+                    .run(meshId, 'mesh_status', null, Date.now());
+                legacyDb.close();
+            }
+
+            const db = MeshRuntimeStore.getInstance(); // init runs the migration
+            const rows = db.getRecentToolCalls(meshId, 10);
+            expect(rows).toHaveLength(1);
+            // Pre-existing row predates the migration — unclassified, not "observed unknown".
+            expect(rows[0].callerRole).toBeNull();
+
+            db.recordMeshToolCall({ meshId, tool: 'mesh_status', sessionId: null, callerRole: 'unknown' });
+            const rowsAfter = db.getRecentToolCalls(meshId, 10);
+            expect(rowsAfter).toHaveLength(2);
+            expect(rowsAfter[0].callerRole).toBe('unknown'); // most recent first
+        });
+    });
+
     // ── MESH-COMPLEXITY-AUDIT Part 8-1: stray root mesh-runtime.db hygiene ────────
     // A 0-byte mesh-runtime.db under the config root (NOT the canonical mesh-ledger
     // path) is a dead file an older build left behind. Store init removes it, but only
