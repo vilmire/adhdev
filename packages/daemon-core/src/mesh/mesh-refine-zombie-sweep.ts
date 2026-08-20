@@ -30,6 +30,12 @@
 export type RefineDispatchDisposition =
     /** Young enough that the original executor may still be alive — reconsider later. */
     | 'defer_grace'
+    /**
+     * ★REFINE-RESUME-LIVENESS: the process that dispatched this job is STILL RUNNING
+     * (verified against the OS, not inferred from age). Resuming would start a second
+     * execution of one jobId — the 2026-08-20 ghost. Reconsider next pass.
+     */
+    | 'defer_executor_alive'
     /** Genuinely interrupted mid-flight — safe to re-run, preserving the jobId. */
     | 'resume'
     /** Past the zombie cutoff with no terminal row — close out, do not re-run. */
@@ -42,6 +48,13 @@ export interface RefineDispatchRecord {
     jobId: string;
     /** ISO-8601 dispatch timestamp from the ledger entry. */
     timestamp: string;
+    /**
+     * ★The dispatching process's identity stamp, when the row carries one.
+     * Absent on every row written before REFINE-RESUME-LIVENESS shipped and on rows
+     * from other daemons — which is why an absent stamp must classify as 'unknown'
+     * and resume exactly as before, never as 'alive'.
+     */
+    executor?: unknown;
 }
 
 export interface RefineDispatchDecision {
@@ -60,6 +73,20 @@ export interface ClassifyRefineDispatchOptions {
     nodeExists: (nodeId: string) => boolean;
     /** True when a job for this node is already executing in THIS process. */
     isRunning: (nodeId: string) => boolean;
+    /**
+     * ★REFINE-RESUME-LIVENESS: does the process that DISPATCHED this row still exist?
+     *
+     * `isRunning` above answers a strictly narrower question — "is it running in THIS
+     * process?" — and a daemon restart empties the map it reads, so it structurally
+     * returns false for the exact case that matters (the old process still running the
+     * job). This probe crosses that boundary.
+     *
+     * Optional: when omitted, every dispatch classifies as before. Returning 'unknown'
+     * (no stamp, remote host, probe failure) is likewise the pre-existing behavior — an
+     * absent answer must never masquerade as 'alive', or one unstamped row would wedge
+     * its node forever.
+     */
+    executorLiveness?: (record: RefineDispatchRecord) => 'alive' | 'dead' | 'unknown';
 }
 
 /**
@@ -87,6 +114,37 @@ export function classifyRefineDispatch(
     // failure notification for a node the coordinator can no longer act on.
     if (!opts.nodeExists(record.nodeId)) {
         return { ...base, disposition: 'close_removed_node' };
+    }
+
+    // ★REFINE-RESUME-LIVENESS: the OS-verified answer, which supersedes both
+    // age-based heuristics below.
+    //
+    // Placement is deliberate. It runs BEFORE the grace window and BEFORE the zombie
+    // cutoff because both of those are proxies for the question "is the original
+    // executor still alive?", and this is the question itself. Specifically:
+    //
+    //   - vs. defer_grace: grace defers for 60s and then assumes death. The two
+    //     observed ghost dispatches were 6m30s and 3m51s old — long past grace, and
+    //     both original processes were still running. Age cannot answer this; a
+    //     refine pipeline's length is whatever `.adhdev/refine.json` configures.
+    //   - vs. close_stale: closing out a job whose executor is DEMONSTRABLY ALIVE
+    //     would write a terminal row for a running job, which is a worse version of
+    //     the same bug (the ghost would then be the close-out itself).
+    //
+    // Only 'alive' — a positive, verified answer — defers. 'dead' and 'unknown' fall
+    // through to the unchanged age-based logic, so a crashed executor still resumes
+    // and an unstamped row behaves exactly as it did before this existed.
+    if (opts.executorLiveness) {
+        let liveness: 'alive' | 'dead' | 'unknown';
+        try {
+            liveness = opts.executorLiveness(record);
+        } catch {
+            // A probe that throws is not evidence; fall through to age-based logic.
+            liveness = 'unknown';
+        }
+        if (liveness === 'alive') {
+            return { ...base, disposition: 'defer_executor_alive' };
+        }
     }
 
     // RESUME-DISPATCH-GRACE: too young to assume the original process is dead
@@ -145,7 +203,12 @@ export function selectOpenRefineDispatches(
         // what the cross-module key-format test pins.
         if (archivedTerminalKeys?.has(refineArchivePairKey(e.nodeId, jobId))) continue;
         seen.add(key);
-        open.push({ nodeId: e.nodeId, jobId, timestamp: e.timestamp });
+        // ★REFINE-RESUME-LIVENESS: carry the dispatching process's stamp forward so the
+        // classifier can ask the OS whether that process still exists. Absent on
+        // pre-fix rows — which classifyRefineDispatch treats as 'unknown', i.e. the
+        // previous behavior.
+        const executor = payload?.refineJob?.executor;
+        open.push({ nodeId: e.nodeId, jobId, timestamp: e.timestamp, ...(executor ? { executor } : {}) });
     }
     return open;
 }

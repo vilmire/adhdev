@@ -24,9 +24,14 @@ import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.
 // file under its frozen file-size baseline. Re-exported below for existing importers.
 import { findOpenLedgerRefineDispatch, refineWorktreeVanishedOutcome } from '../mesh/mesh-refine-inflight.js';
 export { findOpenLedgerRefineDispatch, refineWorktreeVanishedOutcome } from '../mesh/mesh-refine-inflight.js';
+import { classifyRefineRebaseFailure, buildRefineRebaseFailureError } from '../mesh/mesh-refine-rebase-failure.js';
+import { decideRefineTerminalWriteFromLedger } from '../mesh/mesh-refine-terminal-guard.js';
+export { decideRefineTerminalWrite, findExistingRefineTerminal } from '../mesh/mesh-refine-terminal-guard.js';
+export { classifyRefineRebaseFailure, buildRefineRebaseFailureError } from '../mesh/mesh-refine-rebase-failure.js';
 // GHOST-FAILURE: pure move to keep this file under its frozen file-size baseline.
 // Re-exported below so existing import sites (and tests) are unaffected.
-import { buildRefineWorktreeMissingResult, classifyRefineTerminal, refineTerminalNextStep } from '../mesh/mesh-refine-landing.js';
+import { buildRefineWorktreeMissingResult, classifyRefineTerminal, refineTerminalNextStep, buildRefineBlockerContext } from '../mesh/mesh-refine-landing.js';
+export { buildRefineBlockerContext } from '../mesh/mesh-refine-landing.js';
 export { extractRefineMergeLanding, classifyRefineTerminal } from '../mesh/mesh-refine-landing.js';
 export type { RefineMergeLanding, RefineTerminalKind } from '../mesh/mesh-refine-landing.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
@@ -175,6 +180,12 @@ export function slimRefineEventResult(result: Record<string, unknown>): Record<s
             // result; without these it cannot tell a pre-merge failure (nothing landed)
             // from a post-merge one (the change IS on origin) without a manual git check.
             'merged', 'mergedLocal', 'pushed', 'mergedSha', 'postMergeWarning', 'refineLanding',
+            // ★REBASE-FAILURE-CLASSIFY: the coordinator sees ONLY this slim result. Without
+            // these it cannot tell "the rebase hit conflicts" from "the rebase refused to
+            // start on a dirty worktree" — the exact confusion that nearly produced a
+            // manual re-push of an already-merged branch on 2026-08-20. `rebaseStderr` is
+            // git's own words, bounded by buildRefineRebaseFailureError's excerpt limit.
+            'rebaseFailureDetail', 'rebaseConflict', 'rebaseStderr',
         ] as const) {
             if (result[key] !== undefined) slim[key] = result[key];
         }
@@ -314,6 +325,15 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
             const originatingStamp = kind === 'task_dispatched'
                 ? buildLedgerOriginatingCoordinatorStamp({ coordinatorDaemonId: handle.targetCoordinatorDaemonId })
                 : undefined;
+            // ★REFINE-RESUME-LIVENESS: stamp WHICH PROCESS owns this execution. The boot
+            // resume scan's `isRunning` reads an in-memory map that a restart empties, so
+            // it structurally cannot see an execution still running in the OLD process —
+            // which is how a restart mid-refine produced a ghost second execution of the
+            // same jobId on 2026-08-20. The stamp gives the next boot something real to
+            // check instead of a timeout proxy (see mesh-refine-executor-liveness.ts).
+            const executorStamp = kind === 'task_dispatched'
+                ? (await import('../mesh/mesh-refine-executor-liveness.js')).buildRefineExecutorStamp()
+                : undefined;
             appendLedgerEntry(handle.meshId, {
                 kind,
                 nodeId: handle.targetNodeId,
@@ -331,6 +351,7 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
                         startedAt: handle.startedAt,
                         completedAt: handle.completedAt,
                         retryOfJobId: handle.retryOfJobId,
+                        ...(executorStamp ? { executor: executorStamp } : {}),
                     },
                     async: true,
                     retryOfJobId: handle.retryOfJobId,
@@ -786,6 +807,13 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                 if (!rebaseErr?.alreadyAborted) {
                     try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
                 }
+                // ★REBASE-FAILURE-CLASSIFY: read what git ACTUALLY said before naming the
+                // failure. This branch used to hardcode `needs_rebase_with_conflicts` for
+                // every rebase failure without inspecting the error, so a rebase that
+                // REFUSED TO START ("cannot rebase: You have unstaged changes.") was
+                // reported as a content conflict on a branch with no conflict anywhere.
+                // See mesh-refine-rebase-failure.ts.
+                const rebaseFailure = classifyRefineRebaseFailure(rebaseErr);
                 // A rebase conflict on a submodule/gitlink divergence is a SPECIAL case the
                 // patch-equivalence gate describes with a rich actionable hint (which
                 // submodule, base vs branch commit, how to resolve). Run that gate against
@@ -802,6 +830,14 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                     behind: divergence.behind,
                     diverged: divergence.diverged,
                     error: rebaseErr?.message || String(rebaseErr),
+                    // ★The raw git output, UNTRUNCATED. This stage record is the only
+                    // reason the 2026-08-20 false-conflict was diagnosable at all; the
+                    // classification below is derived from it, so keeping both means a
+                    // future reader can check the derivation rather than trust it.
+                    rebaseStderr: rebaseFailure.originalStderr,
+                    rebaseFailureCode: rebaseFailure.code,
+                    rebaseFailureDetail: rebaseFailure.detail,
+                    rebaseConflict: rebaseFailure.conflict,
                     ...(submoduleConflict ? { submoduleConflict: true } : {}),
                 });
                 if (submoduleConflict && submoduleHintPatchEquivalence) {
@@ -838,19 +874,41 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                         },
                     } };
                 }
-                // Generic content conflict → record patch_equivalence_after_auto_rebase failed
-                // so the failing-stage classification and the ancestry regression see the
-                // rebase attempt.
+                // Record patch_equivalence_after_auto_rebase failed so the failing-stage
+                // classification and the ancestry regression see that a rebase was
+                // ATTEMPTED — true even when it refused to start, which is itself the
+                // thing a reader needs to know.
                 recordMeshRefineStage(refineStages, 'patch_equivalence_after_auto_rebase', 'failed', rebaseStarted, {
                     error: rebaseErr?.message || String(rebaseErr),
+                    rebaseStderr: rebaseFailure.originalStderr,
+                    rebaseFailureCode: rebaseFailure.code,
+                    rebaseFailureDetail: rebaseFailure.detail,
+                    rebaseConflict: rebaseFailure.conflict,
                 });
                 return { kind: 'terminal', result: {
                     success: false,
-                    code: 'needs_rebase_with_conflicts',
+                    // ★Only a classification that actually SAW conflict markers may say
+                    // "conflicts". Everything else gets a code that describes what
+                    // happened (worktree_dirty / rebase_precondition_failed) or admits it
+                    // does not know (rebase_failed) — never a confident lie.
+                    code: rebaseFailure.code,
+                    rebaseFailureDetail: rebaseFailure.detail,
+                    rebaseConflict: rebaseFailure.conflict,
+                    // ★The original git output on the RESULT, not just the stage record:
+                    // the coordinator sees the slim event, and "read the ledger" is not a
+                    // reasonable prerequisite for telling a dirty worktree from a conflict.
+                    rebaseStderr: rebaseFailure.originalStderr,
+                    // A dirty worktree may be transient (stray build output); let the
+                    // single automatic retry in finishMeshRefineJob take one more pass at
+                    // it. A real conflict stays non-retryable, exactly as before.
+                    ...(rebaseFailure.retryable ? { retryable: true } : {}),
                     convergenceStatus: 'blocked_review',
-                    error: divergence.diverged
-                        ? `Branch has diverged from ${baseBranch} (ahead ${divergence.ahead}, behind ${divergence.behind}) and auto-rebase onto the fetched base hit conflicts; resolve conflicts manually and retry.`
-                        : `Branch is behind ${baseBranch} and auto-rebase failed due to conflicts; resolve conflicts manually and retry.`,
+                    error: buildRefineRebaseFailureError(rebaseFailure, {
+                        baseBranch,
+                        diverged: divergence.diverged,
+                        ahead: divergence.ahead,
+                        behind: divergence.behind,
+                    }),
                     branch,
                     into: baseBranch,
                     refineStages,
@@ -2608,78 +2666,15 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
         const { kind: refineTerminalKind, landing, isPostMergeWarning, converged: isTerminalConverged, clean: isTerminalClean } =
             classifyRefineTerminal(result);
 
-        // Build structured blocker context for task_failed ledger entries so coordinators
-        // can inspect the failure cause without parsing free-form error strings. A
-        // post-merge warning keeps its context: the merge landed, but the trailing step
-        // still needs a human, and swallowing that would be the opposite failure mode.
-        const blockerContext: Record<string, unknown> | undefined = isTerminalClean ? undefined : (() => {
-            const code = typeof result.code === 'string' ? result.code : refineTerminalKind;
-            const stage = refineTerminalKind === 'validation_failed' ? 'validation'
-                : refineTerminalKind === 'submodule_reachability_failed' ? 'submodule_reachability'
-                : refineCode === 'patch_equivalence_failed' ? 'patch_equivalence'
-                : refineCode === 'needs_rebase' || refineCode === 'needs_rebase_with_conflicts' ? 'patch_equivalence'
-                : refineTerminalKind === 'merge_failed' ? 'merge'
-                : refineTerminalKind === 'cleanup_failed' ? 'cleanup'
-                // GHOST-FAILURE: a post-merge warning's failing stage is whatever ran
-                // AFTER the merge (cleanup / submodule alignment); name it from the code
-                // rather than falling through to 'unknown'.
-                : refineTerminalKind === 'completed_with_warnings'
-                    ? (refineCode === 'post_merge_submodule_alignment_failed' ? 'submodule_alignment' : 'cleanup')
-                : 'unknown';
-            const ctx: Record<string, unknown> = {
-                stage,
-                reason: code,
-                terminalKind: refineTerminalKind,
-            };
-            if (typeof result.error === 'string') ctx.error = result.error;
-            if (typeof result.blockedReason === 'string') ctx.blockedReason = result.blockedReason;
-            // Detailed patch-equivalence sub-cause classification (base_divergence,
-            // submodule_unreachable, actual_patch_diff, trivial_ff_misjudgment,
-            // already_converged, unclassified) + recommended action + evidence.
-            // Promoted onto blockerContext so coordinators reading task_failed ledger
-            // entries see the cause without parsing the free-form error string.
-            if (typeof result.detailedReason === 'string') ctx.detailedReason = result.detailedReason;
-            if (typeof result.detailedReasonDescription === 'string') ctx.detailedReasonDescription = result.detailedReasonDescription;
-            if (typeof result.recommendedAction === 'string') ctx.recommendedAction = result.recommendedAction;
-            if (result.evidence && typeof result.evidence === 'object') ctx.evidence = result.evidence;
-            // Patch equivalence details
-            if (stage === 'patch_equivalence' && result.patchEquivalence) {
-                const pe = result.patchEquivalence as Record<string, unknown>;
-                ctx.details = {
-                    expectedPatchId: pe.expectedPatchId,
-                    actualPatchId: pe.actualPatchId,
-                    status: pe.status,
-                    actionableHint: pe.actionableHint,
-                    error: pe.error,
-                    ...(typeof result.detailedReason === 'string' ? { detailedReason: result.detailedReason } : {}),
-                    ...(typeof result.recommendedAction === 'string' ? { recommendedAction: result.recommendedAction } : {}),
-                    ...(result.evidence && typeof result.evidence === 'object' ? { evidence: result.evidence } : {}),
-                };
-            }
-            // Submodule reachability details
-            if (stage === 'submodule_reachability' && Array.isArray(result.unreachableSubmoduleCommits)) {
-                ctx.details = {
-                    unreachableCount: (result.unreachableSubmoduleCommits as unknown[]).length,
-                    paths: (result.unreachableSubmoduleCommits as Array<Record<string, unknown>>).map(e => e.path),
-                    autoPublishAllowed: (result.unreachableSubmoduleCommits as Array<Record<string, unknown>>)[0]?.autoPublishAllowed,
-                };
-            }
-            // Validation details
-            if (stage === 'validation' && result.validationSummary) {
-                const vs = result.validationSummary as Record<string, unknown>;
-                // QW2: same compact failure diagnostics the slim event carries, so the
-                // ledger blockerContext is self-describing (first failing command + exit
-                // code + failureKind + output tail) without a second commandsRun lookup.
-                const diagnostics = extractValidationFailureDiagnostics(vs);
-                ctx.details = {
-                    failureCode: vs.failureCode,
-                    failureKind: vs.failureKind,
-                    commandsRun: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : undefined,
-                    ...(diagnostics ? { failure: diagnostics } : {}),
-                };
-            }
-            return ctx;
-        })();
+        // Structured blocker context for task_failed ledger entries so coordinators can
+        // inspect the failure cause without parsing free-form error strings. The body is
+        // a pure move to mesh-refine-landing.ts (file-size gate) — same inputs, same
+        // shape; it lives next to classifyRefineTerminal, whose terminalKind it branches on.
+        const blockerContext = buildRefineBlockerContext(result, {
+            terminalKind: refineTerminalKind,
+            isTerminalClean,
+            extractValidationDiagnostics: extractValidationFailureDiagnostics,
+        });
 
         const normalizedResult = {
             ...result,
@@ -2718,14 +2713,45 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
             coordinatorSessionId: handle.targetCoordinatorSessionId,
         });
         const terminal: MeshRefineTerminalJob = { ...terminalHandle, result: normalizedResult };
+        const terminalKind: 'task_completed' | 'task_failed' = isTerminalConverged ? 'task_completed' : 'task_failed';
+
+        // ★REFINE-TERMINAL-ONCE: refuse a SECOND terminal row for this jobId. A restart
+        // mid-refine re-dispatches the same jobId into a fresh process while the original
+        // still runs it — two executions, two terminal writes (2/2 on 2026-08-20). The
+        // precedence rule is NOT "first write wins" (the ghost wrote first); see
+        // mesh-refine-terminal-guard.ts.
+        const terminalDecision = await decideRefineTerminalWriteFromLedger({
+            meshId: handle.meshId,
+            nodeId: handle.targetNodeId,
+            jobId: handle.jobId,
+            kind: terminalKind,
+            interactionId: handle.interactionId,
+            completedAt,
+            onReadError: (m) => LOG.warn('Mesh', `[Refinery] ${m}`),
+        });
+
+        if (!terminalDecision.allow) {
+            // ★NEVER SILENT: the refusal names both execution identities and which won —
+            // the most diagnostic evidence this failure mode produces. Local bookkeeping
+            // still settles (leaving the job in runningRefineJobs would make the node look
+            // permanently busy); terminalRefineJobs is NOT overwritten, so the winner stays.
+            LOG.warn('Mesh', `[Refinery] ${terminalDecision.note}`);
+            self.runningRefineJobs.delete(key);
+            self.invalidateAggregateMeshStatus(handle.meshId);
+            return;
+        }
+
         self.terminalRefineJobs.set(key, terminal);
         self.runningRefineJobs.delete(key);
         self.invalidateAggregateMeshStatus(handle.meshId);
+        if (terminalDecision.supersedes) {
+            LOG.warn('Mesh', `[Refinery] ${terminalDecision.note}`);
+        }
         // GHOST-FAILURE: ledger kind and coordinator event key off CONVERGENCE, not
         // cleanliness — a merge that reached origin is task_completed even when a
         // trailing local step failed. The unclean detail still rides on normalizedResult
         // (terminalKind / blockerContext / postMergeWarning / nextStep), so nothing is lost.
-        await appendRefineJobLedger(self, isTerminalConverged ? 'task_completed' : 'task_failed', terminalHandle, normalizedResult);
+        await appendRefineJobLedger(self, terminalKind, terminalHandle, normalizedResult);
         queueRefineJobEvent(self, isTerminalConverged ? 'refine:completed' : 'refine:failed', terminalHandle, normalizedResult);
     }
 

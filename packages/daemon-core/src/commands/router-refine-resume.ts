@@ -13,6 +13,7 @@ import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
+import { evaluateRefineExecutorLiveness } from '../mesh/mesh-refine-executor-liveness.js';
 import {
     appendRefineJobLedger,
     buildRefineJobHandle,
@@ -117,6 +118,11 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                         zombieCutoffMs,
                         nodeExists,
                         isRunning: (nodeId: string) => self.runningRefineJobs.has(buildRefineJobKey(self, meshId, nodeId)),
+                        // ★REFINE-RESUME-LIVENESS: the cross-process half of `isRunning`.
+                        // The map `isRunning` reads is empty on every boot by construction,
+                        // so it can never see the execution this scan actually races — the
+                        // one still running in the process we just restarted away from.
+                        executorLiveness: (r) => evaluateRefineExecutorLiveness(r.executor).liveness,
                     });
                     if (!decision) continue;
 
@@ -129,6 +135,22 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                     const coordinatorDaemonId = node?.targetCoordinatorDaemonId;
                     const coordinatorSessionId = node?.targetCoordinatorSessionId;
                     const dispatchedAt = sourceEntry?.timestamp ?? record.timestamp;
+
+                    if (decision.disposition === 'defer_executor_alive') {
+                        // ★REFINE-RESUME-LIVENESS: not a heuristic — the dispatching process
+                        // still exists on this host. Resuming would put a SECOND execution of
+                        // this jobId alongside the live one, which is exactly the 2026-08-20
+                        // ghost (two interactionIds, two terminal rows, the spurious failure
+                        // reaching the coordinator 4s before the real success).
+                        //
+                        // Nothing to release and nothing to time out: the next scan re-probes
+                        // the OS, so this flips to resumable the moment that process exits.
+                        const detail = evaluateRefineExecutorLiveness(record.executor);
+                        LOG.info('Mesh', `[Refinery] Deferring resume of refine job for node ${nodeId} (jobId=${jobId}) — `
+                            + `the dispatching process is still alive (${detail.reason}); dispatched ${ageMs}ms ago. `
+                            + `Not resuming: a second execution of one jobId is a ghost dispatch.`);
+                        continue;
+                    }
 
                     if (decision.disposition === 'defer_grace') {
                         // RESUME-DISPATCH-GRACE: too young to safely assume the original

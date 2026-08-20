@@ -97,7 +97,14 @@ export function classifyRefineTerminal(result: Record<string, unknown>): RefineT
         // GHOST-FAILURE: `worktree_missing` is a blocked-review state, NOT a merge
         // failure — nothing was merged and nothing conflicted. Left to the fallback it
         // would have been reported as merge_failed, the misleading label this removes.
+        // ★REBASE-FAILURE-CLASSIFY: the non-conflict rebase failures split out of the old
+        // blanket `needs_rebase_with_conflicts` belong here for exactly the reason
+        // `worktree_missing` does — the rebase REFUSED TO START, so nothing was merged and
+        // nothing conflicted. Left to the fallback below they would read as `merge_failed`,
+        // which is the same class of invented-cause label this whole fix removes.
         : refineCode === 'blocked_review' || refineCode === 'worktree_missing'
+            || refineCode === 'worktree_dirty' || refineCode === 'rebase_precondition_failed'
+            || refineCode === 'rebase_failed'
             ? 'blocked_review'
             // QW3: the validation stage returns `code: validationSummary.failureCode`,
             // so a dependency/spawn failure surfaces as one of these codes — NOT the
@@ -207,4 +214,110 @@ export function extractRefineMergeLanding(result: Record<string, unknown>): Refi
     const pushed = result.pushed === true || fbcs?.pushed === true;
     // `pushed` without `merged` is not a coherent shape; never report it as landed.
     return { merged: !!merged, pushed: !!pushed && !!merged };
+}
+
+/**
+ * Structured blocker context for a non-clean terminal, so coordinators can inspect
+ * the failure cause without parsing free-form error strings.
+ *
+ * Pure move out of finishMeshRefineJob (router-refine.ts) under the repo file-size
+ * gate — same inputs, same output shape, no behavior change. It belongs here anyway:
+ * it is the natural companion of `classifyRefineTerminal`, which produces the
+ * `terminalKind` it branches on.
+ *
+ * `extractValidationDiagnostics` is injected rather than imported so this module
+ * stays dependency-free (it currently imports nothing, and the extractor lives in
+ * router-refine.ts alongside the slim-event builder that shares it).
+ */
+export function buildRefineBlockerContext(
+    result: Record<string, unknown>,
+    opts: {
+        terminalKind: string;
+        isTerminalClean: boolean;
+        extractValidationDiagnostics?: (vs: Record<string, unknown>) => unknown;
+    },
+): Record<string, unknown> | undefined {
+    // A post-merge warning KEEPS its context: the merge landed, but the trailing step
+    // still needs a human, and swallowing that would be the opposite failure mode.
+    if (opts.isTerminalClean) return undefined;
+
+    const refineTerminalKind = opts.terminalKind;
+    const refineCode = typeof result.code === 'string' ? result.code : '';
+    const code = typeof result.code === 'string' ? result.code : refineTerminalKind;
+
+    const stage = refineTerminalKind === 'validation_failed' ? 'validation'
+        : refineTerminalKind === 'submodule_reachability_failed' ? 'submodule_reachability'
+        : refineCode === 'patch_equivalence_failed' ? 'patch_equivalence'
+        : refineCode === 'needs_rebase' || refineCode === 'needs_rebase_with_conflicts' ? 'patch_equivalence'
+        // ★REBASE-FAILURE-CLASSIFY: the non-conflict rebase failures split out of the
+        // old blanket needs_rebase_with_conflicts. They fail in the SAME place (the
+        // auto-rebase inside sync_base), so they keep the same stage — only the reason
+        // differs, and blockerContext.reason carries that.
+        : refineCode === 'worktree_dirty' || refineCode === 'rebase_precondition_failed' || refineCode === 'rebase_failed'
+            ? 'patch_equivalence'
+        : refineTerminalKind === 'merge_failed' ? 'merge'
+        : refineTerminalKind === 'cleanup_failed' ? 'cleanup'
+        // GHOST-FAILURE: a post-merge warning's failing stage is whatever ran AFTER the
+        // merge (cleanup / submodule alignment); name it from the code rather than
+        // falling through to 'unknown'.
+        : refineTerminalKind === 'completed_with_warnings'
+            ? (refineCode === 'post_merge_submodule_alignment_failed' ? 'submodule_alignment' : 'cleanup')
+        : 'unknown';
+
+    const ctx: Record<string, unknown> = { stage, reason: code, terminalKind: refineTerminalKind };
+    if (typeof result.error === 'string') ctx.error = result.error;
+    if (typeof result.blockedReason === 'string') ctx.blockedReason = result.blockedReason;
+    // Detailed patch-equivalence sub-cause classification (base_divergence,
+    // submodule_unreachable, actual_patch_diff, trivial_ff_misjudgment,
+    // already_converged, unclassified) + recommended action + evidence. Promoted onto
+    // blockerContext so coordinators reading task_failed ledger entries see the cause
+    // without parsing the free-form error string.
+    if (typeof result.detailedReason === 'string') ctx.detailedReason = result.detailedReason;
+    if (typeof result.detailedReasonDescription === 'string') ctx.detailedReasonDescription = result.detailedReasonDescription;
+    if (typeof result.recommendedAction === 'string') ctx.recommendedAction = result.recommendedAction;
+    if (result.evidence && typeof result.evidence === 'object') ctx.evidence = result.evidence;
+
+    // ★REBASE-FAILURE-CLASSIFY: git's own words + the sub-cause, so a reader can tell
+    // a dirty worktree from a real conflict straight off the ledger entry.
+    if (typeof result.rebaseStderr === 'string') ctx.rebaseStderr = result.rebaseStderr;
+    if (typeof result.rebaseFailureDetail === 'string') ctx.rebaseFailureDetail = result.rebaseFailureDetail;
+    if (typeof result.rebaseConflict === 'boolean') ctx.rebaseConflict = result.rebaseConflict;
+
+    // Patch equivalence details
+    if (stage === 'patch_equivalence' && result.patchEquivalence) {
+        const pe = result.patchEquivalence as Record<string, unknown>;
+        ctx.details = {
+            expectedPatchId: pe.expectedPatchId,
+            actualPatchId: pe.actualPatchId,
+            status: pe.status,
+            actionableHint: pe.actionableHint,
+            error: pe.error,
+            ...(typeof result.detailedReason === 'string' ? { detailedReason: result.detailedReason } : {}),
+            ...(typeof result.recommendedAction === 'string' ? { recommendedAction: result.recommendedAction } : {}),
+            ...(result.evidence && typeof result.evidence === 'object' ? { evidence: result.evidence } : {}),
+        };
+    }
+    // Submodule reachability details
+    if (stage === 'submodule_reachability' && Array.isArray(result.unreachableSubmoduleCommits)) {
+        ctx.details = {
+            unreachableCount: (result.unreachableSubmoduleCommits as unknown[]).length,
+            paths: (result.unreachableSubmoduleCommits as Array<Record<string, unknown>>).map(e => e.path),
+            autoPublishAllowed: (result.unreachableSubmoduleCommits as Array<Record<string, unknown>>)[0]?.autoPublishAllowed,
+        };
+    }
+    // Validation details
+    if (stage === 'validation' && result.validationSummary) {
+        const vs = result.validationSummary as Record<string, unknown>;
+        // QW2: same compact failure diagnostics the slim event carries, so the ledger
+        // blockerContext is self-describing (first failing command + exit code +
+        // failureKind + output tail) without a second commandsRun lookup.
+        const diagnostics = opts.extractValidationDiagnostics?.(vs);
+        ctx.details = {
+            failureCode: vs.failureCode,
+            failureKind: vs.failureKind,
+            commandsRun: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : undefined,
+            ...(diagnostics ? { failure: diagnostics } : {}),
+        };
+    }
+    return ctx;
 }
