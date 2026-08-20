@@ -304,14 +304,109 @@ describe('fetchGrokQuota', () => {
         expect(quota.weekly).toBeNull();
     });
 
-    it('reports a parse failure when the payload carries no percentage', async () => {
-        const home = makeGrokHome(authFile());
-        const stub = stubFetch(jsonResponse({ config: { currentPeriod: { end: '2026-08-22T03:35:16Z' } } }));
+    /**
+     * ★Zero usage arrives as an OMITTED field, not as 0 — the billing backend is
+     * proto-JSON and drops doubles at their default. Measured over 271 live
+     * responses: values 1.0…100.0 appeared, a literal 0 never did. Before this
+     * was handled, every freshly reset billing week reported a spurious
+     * `parse` failure until the first request landed.
+     */
+    describe('zero usage', () => {
+        it('reads an omitted percentage as 0% when the billing period is intact', async () => {
+            const home = makeGrokHome(authFile());
+            const body = liveBillingBody();
+            delete (body.config as Record<string, unknown>).creditUsagePercent;
+            const stub = stubFetch(jsonResponse(body));
 
-        const quota = await fetchGrokQuota(deps(home, stub.fetch));
+            const quota = await fetchGrokQuota(deps(home, stub.fetch));
 
-        expect(quota.status).toBe('error');
-        expect(quota.metadata?.failureKind).toBe('parse');
+            expect(quota.status).toBe('ok');
+            expect(quota.error).toBeNull();
+            expect(quota.weekly).toEqual({
+                usedPercent: 0,
+                windowMinutes: WEEKLY_WINDOW_MINUTES,
+                resetsAt: Date.parse('2026-08-22T03:35:16.039394+00:00'),
+            });
+        });
+
+        it('reads a numeric 0 as 0%', async () => {
+            const home = makeGrokHome(authFile());
+            const stub = stubFetch(jsonResponse({
+                config: { ...liveBillingBody().config, creditUsagePercent: 0 },
+            }));
+
+            const quota = await fetchGrokQuota(deps(home, stub.fetch));
+
+            expect(quota.status).toBe('ok');
+            expect(quota.weekly?.usedPercent).toBe(0);
+        });
+
+        it('reads a string "0" as 0%', async () => {
+            const home = makeGrokHome(authFile());
+            const stub = stubFetch(jsonResponse({
+                config: { ...liveBillingBody().config, creditUsagePercent: '0' },
+            }));
+
+            const quota = await fetchGrokQuota(deps(home, stub.fetch));
+
+            expect(quota.status).toBe('ok');
+            expect(quota.weekly?.usedPercent).toBe(0);
+        });
+    });
+
+    /**
+     * Injection guards: reading an omission as 0% must not swallow a real
+     * schema change or an unparseable value.
+     */
+    describe('genuine parse failures still fail', () => {
+        it('fails when the config object itself is absent', async () => {
+            const home = makeGrokHome(authFile());
+            const stub = stubFetch(jsonResponse({ subscription_tier: 'SuperGrok Lite' }));
+
+            const quota = await fetchGrokQuota(deps(home, stub.fetch));
+
+            expect(quota.status).toBe('error');
+            expect(quota.metadata?.failureKind).toBe('parse');
+            expect(quota.weekly).toBeNull();
+            expect(quota.error).toContain('recognizable billing period');
+        });
+
+        it('fails when the percentage is absent AND the billing period is gone', async () => {
+            const home = makeGrokHome(authFile());
+            const stub = stubFetch(jsonResponse({ config: { onDemandCap: { val: 0 }, historyLen: 0 } }));
+
+            const quota = await fetchGrokQuota(deps(home, stub.fetch));
+
+            expect(quota.status).toBe('error');
+            expect(quota.metadata?.failureKind).toBe('parse');
+            expect(quota.weekly).toBeNull();
+        });
+
+        it('fails distinguishably when the percentage is present but unparseable', async () => {
+            const home = makeGrokHome(authFile());
+            const stub = stubFetch(jsonResponse({
+                config: { ...liveBillingBody().config, creditUsagePercent: 'not-a-number' },
+            }));
+
+            const quota = await fetchGrokQuota(deps(home, stub.fetch));
+
+            expect(quota.status).toBe('error');
+            expect(quota.metadata?.failureKind).toBe('parse');
+            // The reason must be legible: this is NOT the reset-week case.
+            expect(quota.error).toContain('unparseable usage percentage');
+        });
+
+        it('treats an explicit null percentage as unmeasured, not 0%', async () => {
+            const home = makeGrokHome(authFile());
+            const stub = stubFetch(jsonResponse({
+                config: { ...liveBillingBody().config, creditUsagePercent: null },
+            }));
+
+            const quota = await fetchGrokQuota(deps(home, stub.fetch));
+
+            expect(quota.status).toBe('error');
+            expect(quota.metadata?.failureKind).toBe('parse');
+        });
     });
 
     it('reports a parse failure on a malformed auth file', async () => {

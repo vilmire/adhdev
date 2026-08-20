@@ -201,22 +201,68 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
 }
 
-function mapBillingResponse(data: unknown): ProviderQuota {
-    const root = asRecord(data) ?? {};
-    const config = asRecord(root.config) ?? {};
-    const period = asRecord(config.currentPeriod);
+/**
+ * ★Zero usage is reported by OMITTING `creditUsagePercent`, not by sending 0.
+ *
+ * The billing backend is protobuf-backed (`USAGE_PERIOD_TYPE_WEEKLY` and the
+ * `{val: n}` wrappers are proto-JSON tells), and proto3 JSON drops scalar
+ * fields at their default value. For a `double`, that default is `0` — so the
+ * instant a weekly period resets, the field vanishes from the payload.
+ *
+ * Measured against 271 real billing responses in `~/.grok/logs/unified.jsonl`:
+ * 212 carried the field with values 1.0…100.0 — `0` NEVER appeared once — and
+ * 59 omitted it. The omitting responses were otherwise byte-identical to the
+ * carrying ones (same period, same sibling keys, no extra "unknown" marker).
+ * That is why the omission must be read as 0% rather than as missing data,
+ * and it is why this used to surface as a spurious `parse` failure for the
+ * whole first stretch of every billing week.
+ *
+ * We deliberately do NOT treat a bare `{}` as 0%: that would bury a real
+ * schema change or an error body under a confident "0% used". The signal that
+ * separates "measured 0" from "unmeasured" is the presence of the surrounding
+ * billing structure — the period/billing-window fields the server always
+ * sends alongside the percentage. Note `historyLen` is NOT usable as that
+ * signal: it reads 0 in both the omitting and the carrying responses.
+ */
+function hasBillingStructure(config: Record<string, unknown>): boolean {
+    return asRecord(config.currentPeriod) !== null
+        || typeof config.billingPeriodEnd === 'string'
+        || typeof config.billingPeriodStart === 'string';
+}
 
-    const usedPercent = toNumber(config.creditUsagePercent);
+function mapBillingResponse(data: unknown): ProviderQuota {
+    const root = asRecord(data);
+    const config = root ? asRecord(root.config) : null;
+    const period = config ? asRecord(config.currentPeriod) : null;
+
+    const reportedPercent = config ? toNumber(config.creditUsagePercent) : null;
     // `currentPeriod.end` is the authoritative reset; `billingPeriodEnd` is the
     // same instant on a unified-billing account and serves as the fallback.
-    const resetsAt = toResetMs(period?.end) ?? toResetMs(config.billingPeriodEnd);
+    const resetsAt = config
+        ? toResetMs(period?.end) ?? toResetMs(config.billingPeriodEnd)
+        : null;
+
+    // Absent percentage + intact billing structure = a freshly reset week at 0%.
+    const usedPercent = reportedPercent === null
+        && config !== null
+        && config.creditUsagePercent === undefined
+        && hasBillingStructure(config)
+        ? 0
+        : reportedPercent;
 
     const weekly = windowFromPercent(usedPercent, WEEKLY_WINDOW_MINUTES, resetsAt);
     if (!weekly) {
-        return quotaFailure('grok-cli', 'error', 'Grok billing response contained no usage percentage', {
-            source: 'oauth',
-            failureKind: 'parse',
-        });
+        // Distinguish the two genuine failures so the cause is legible in the
+        // session-info line instead of collapsing into one ambiguous message.
+        const malformed = config !== null && config.creditUsagePercent !== undefined;
+        return quotaFailure(
+            'grok-cli',
+            'error',
+            malformed
+                ? 'Grok billing response carried an unparseable usage percentage'
+                : 'Grok billing response did not contain a recognizable billing period',
+            { source: 'oauth', failureKind: 'parse' },
+        );
     }
 
     // ★The plan name is NOT part of the /billing payload. The TUI shows
@@ -226,9 +272,8 @@ function mapBillingResponse(data: unknown): ProviderQuota {
     // display name. So planType is populated only when the field is actually
     // present — today that means it stays absent rather than being guessed
     // from the tier number, which has no documented mapping.
-    const tier = typeof root.subscription_tier === 'string' && root.subscription_tier.trim() !== ''
-        ? root.subscription_tier
-        : null;
+    const tierRaw = root?.subscription_tier;
+    const tier = typeof tierRaw === 'string' && tierRaw.trim() !== '' ? tierRaw : null;
 
     return {
         provider: 'grok-cli',
