@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { fetchAntigravityQuota } from '../../src/quota/fetchers/antigravity';
 import type {
@@ -14,6 +17,31 @@ const FRESH_EXPIRY = new Date(NOW + 60 * 60 * 1000).toISOString();
 const STALE_EXPIRY = new Date(NOW - 60 * 60 * 1000).toISOString();
 
 const GO_KEYRING_PREFIX = 'go-keyring-base64:';
+
+/**
+ * Fake OAuth client patterns for the runtime binary scan. Deliberately SHORT
+ * and obviously fake: real-shaped values must never appear in this repo
+ * (GitHub push protection blocks Google OAuth client credentials — that is
+ * exactly why the fetcher discovers them from the local binary instead of
+ * hardcoding). Only the regex SHAPE matters to the code under test.
+ */
+const FAKE_ID_1 = '1-aaa.apps.googleusercontent.com';
+const FAKE_ID_2 = '2-bbb.apps.googleusercontent.com';
+const FAKE_SECRET_1 = 'GOCSPX-s1';
+const FAKE_SECRET_2 = 'GOCSPX-s2';
+
+/**
+ * Write a fake `agy` binary and return its path. Unique file per call so the
+ * fetcher's stat-keyed discovery cache never leaks between tests.
+ */
+function fakeAgyBinary(
+    contents = `fake-binary-padding ${FAKE_ID_1} more-padding ${FAKE_SECRET_1} end`,
+): string {
+    const dir = mkdtempSync(join(tmpdir(), 'adhdev-fake-agy-'));
+    const file = join(dir, 'agy');
+    writeFileSync(file, contents, 'latin1');
+    return file;
+}
 
 /**
  * ★VERBATIM live response captured from
@@ -108,10 +136,14 @@ interface SpawnStub {
 }
 
 /**
- * Fake `/usr/bin/security`. `stdout === null` simulates the item being absent
- * (non-zero exit), which is how "not signed in" reaches the fetcher.
+ * Fake credential-store command (`/usr/bin/security` on darwin, powershell.exe
+ * on win32). `stdout === null` simulates the item being absent (exit 44 —
+ * both real implementations use that code for "not signed in").
  */
-function stubSpawn(stdout: string | null, options: { neverExits?: boolean } = {}): SpawnStub {
+function stubSpawn(
+    stdout: string | null,
+    options: { neverExits?: boolean; exitCode?: number; stderr?: string } = {},
+): SpawnStub {
     const calls: SpawnStub['calls'] = [];
     const spawn: QuotaSpawn = (command, args) => {
         calls.push({ command, args });
@@ -123,11 +155,16 @@ function stubSpawn(stdout: string | null, options: { neverExits?: boolean } = {}
                     if (stdout !== null) queueMicrotask(() => listener(stdout));
                 },
             },
-            stderr: { on: () => {} },
+            stderr: {
+                on: (_event, listener) => {
+                    if (options.stderr) queueMicrotask(() => listener(options.stderr as never));
+                },
+            },
             on: (event: string, listener: (arg: never) => void) => {
                 (listeners[event] ??= []).push(listener);
                 if (event === 'exit' && !options.neverExits) {
-                    queueMicrotask(() => queueMicrotask(() => listener((stdout === null ? 44 : 0) as never)));
+                    const code = options.exitCode ?? (stdout === null ? 44 : 0);
+                    queueMicrotask(() => queueMicrotask(() => listener(code as never)));
                 }
             },
             kill: () => {},
@@ -163,6 +200,26 @@ function stubFetch(response: QuotaFetchResponse | Error): FetchStub {
             headers: init?.headers as Record<string, string> | undefined,
             body: init?.body,
         });
+        if (response instanceof Error) throw response;
+        return response;
+    };
+    return { fetch: fetchImpl, calls, inits };
+}
+
+/** Same shape as stubFetch, but answers successive calls from a list. */
+function stubFetchSequence(responses: Array<QuotaFetchResponse | Error>): FetchStub {
+    const calls: string[] = [];
+    const inits: FetchStub['inits'] = [];
+    let index = 0;
+    const fetchImpl: QuotaFetch = async (url, init) => {
+        calls.push(url);
+        inits.push({
+            method: init?.method,
+            headers: init?.headers as Record<string, string> | undefined,
+            body: init?.body,
+        });
+        const response = responses[Math.min(index, responses.length - 1)];
+        index += 1;
         if (response instanceof Error) throw response;
         return response;
     };
@@ -381,8 +438,8 @@ describe('fetchAntigravityQuota', () => {
         expect(fetch.calls).toEqual([]);
     });
 
-    it('reports unsupported on non-darwin WITHOUT touching the keychain', async () => {
-        for (const platform of ['linux', 'win32']) {
+    it('reports unsupported on linux WITHOUT touching any credential store', async () => {
+        for (const platform of ['linux', 'freebsd']) {
             const spawn = stubSpawn(keyringBlob(credentialPayload()));
             const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
@@ -397,29 +454,78 @@ describe('fetchAntigravityQuota', () => {
         }
     });
 
-    it('explains WHY per platform, since the two reasons differ', async () => {
-        // win32: backend merely UNIDENTIFIED (a positive finding could enable
-        // support later). linux: Secret Service structurally unavailable on a
-        // headless host, so no implementation would help. Collapsing both into
-        // one message would hide that from whoever picks this up.
-        const win = await fetchAntigravityQuota(
-            deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'win32' }),
-        );
-        expect(win.error).toMatch(/Windows/);
-        expect(win.error).toMatch(/PasswordVault/);
-
+    it('explains WHY per platform, since the reasons differ', async () => {
+        // linux: Secret Service structurally unavailable on a headless host,
+        // so no implementation would help. An unknown platform still gets an
+        // honest, non-misleading answer. (win32 used to sit in this test as
+        // "backend unidentified" — the 2026-08-20 survey resolved it and
+        // win32 is now SUPPORTED; see the wincred tests below.)
         const linux = await fetchAntigravityQuota(
             deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'linux' }),
         );
         expect(linux.error).toMatch(/Linux/);
         expect(linux.error).toMatch(/headless/);
 
-        // An unknown platform still gets an honest, non-misleading answer.
         const other = await fetchAntigravityQuota(
             deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'freebsd' }),
         );
         expect(other.error).toMatch(/only supported on macOS/);
         expect(other.error).toMatch(/freebsd/);
+    });
+
+    it('reads the credential from the Windows Credential Manager on win32', async () => {
+        // Recon (2026-08-20): `cmdkey /list` shows
+        // `LegacyGeneric:target=gemini:antigravity` — the same go-keyring
+        // service/account pair as macOS, read via a CredRead P/Invoke.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_PLATFORM: 'win32' }),
+        );
+
+        expect(quota.status).toBe('ok');
+        expect(spawn.calls).toHaveLength(1);
+        expect(spawn.calls[0].command).toBe('powershell.exe');
+        expect(spawn.calls[0].args).toContain('-EncodedCommand');
+        // The encoded script targets the surveyed wincred item.
+        const script = Buffer.from(
+            spawn.calls[0].args[spawn.calls[0].args.indexOf('-EncodedCommand') + 1],
+            'base64',
+        ).toString('utf16le');
+        expect(script).toContain('gemini:antigravity');
+        expect(script).toContain('CredRead');
+    });
+
+    it('reports missing-credentials on win32 when the wincred item is absent', async () => {
+        // CredRead's ERROR_NOT_FOUND surfaces as exit 44 from the script.
+        const spawn = stubSpawn(null);
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_PLATFORM: 'win32' }),
+        );
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('missing-credentials');
+        expect(quota.metadata?.source).toBe('wincred');
+        expect(fetch.calls).toEqual([]);
+    });
+
+    it('surfaces a wincred read failure instead of degrading to "not signed in"', async () => {
+        // A CredRead error OTHER than not-found (e.g. access denied) must
+        // reach the user with its reason — silently mapping it to
+        // missing-credentials would send them re-logging in pointlessly.
+        const spawn = stubSpawn('ignored', { exitCode: 1, stderr: 'CredRead failed: win32 error 5' });
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_PLATFORM: 'win32' }),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.error).toMatch(/win32 error 5/);
+        expect(fetch.calls).toEqual([]);
     });
 
     it('reports unsupported for a non-consumer (business) account', async () => {
@@ -435,8 +541,8 @@ describe('fetchAntigravityQuota', () => {
         expect(fetch.calls).toEqual([]);
     });
 
-    it('reports expired-token without sending a request', async () => {
-        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+    it('reports expired-token without sending a request when there is no refresh token', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY, refresh_token: undefined })));
         const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
         const quota = await fetchAntigravityQuota(deps(spawn, fetch));
@@ -447,12 +553,273 @@ describe('fetchAntigravityQuota', () => {
     });
 
     it('parses the RFC3339 offset expiry the CLI actually writes', async () => {
-        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: '2026-07-28T21:30:05.171451+09:00' })));
+        const spawn = stubSpawn(keyringBlob(credentialPayload({
+            expiry: '2026-07-28T21:30:05.171451+09:00',
+            refresh_token: undefined,
+        })));
         const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
         const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(quota.metadata?.failureKind).toBe('expired-token');
+    });
+
+    it('refreshes an expired access token via the stored refresh token', async () => {
+        // ★The field case: a daemon host where the CLI is rarely launched
+        // would otherwise report expired-token forever. Verified live
+        // 2026-08-20 that this refresh exchange succeeds and does NOT rotate
+        // the refresh token. The OAuth client pair is discovered from the
+        // local agy binary at runtime — never hardcoded (push protection).
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([
+            jsonResponse({ access_token: 'fresh-access-token', expires_in: 3599, token_type: 'Bearer' }),
+            jsonResponse(LIVE_RESPONSE),
+        ]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary() }),
+        );
+
+        expect(quota.status).toBe('ok');
+        expect(fetch.calls).toEqual([
+            'https://oauth2.googleapis.com/token',
+            'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+        ]);
+        expect(fetch.inits[1].headers?.Authorization).toBe('Bearer fresh-access-token');
+        // The refresh redeem carries the stored refresh token and the client
+        // pair discovered from the binary — never the access token.
+        expect(fetch.inits[0].body).toContain('grant_type=refresh_token');
+        expect(fetch.inits[0].body).toContain('refresh_token=refresh-value');
+        expect(fetch.inits[0].body).toContain(`client_id=${FAKE_ID_1}`);
+        expect(fetch.inits[0].body).toContain(`client_secret=${FAKE_SECRET_1}`);
+        // No rotation => no write-back to the store.
+        expect(spawn.calls).toHaveLength(1);
+    });
+
+    it('finds the agy binary via the known install path when PATH is stale', async () => {
+        // ★Measured 2026-08-20 on the Windows host: the daemon's inherited
+        // PATH lacked %LOCALAPPDATA%\agy\bin and a PATH-only lookup missed the
+        // binary entirely. The fallback install paths exist for that case.
+        const localAppData = mkdtempSync(join(tmpdir(), 'adhdev-fake-lad-'));
+        const binDir = join(localAppData, 'agy', 'bin');
+        mkdirSync(binDir, { recursive: true });
+        writeFileSync(join(binDir, 'agy.exe'), `pad ${FAKE_ID_1} pad ${FAKE_SECRET_1}`, 'latin1');
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([
+            jsonResponse({ access_token: 'fresh-access-token', expires_in: 3599 }),
+            jsonResponse(LIVE_RESPONSE),
+        ]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'win32',
+                PATH: '',
+                LOCALAPPDATA: localAppData,
+            }),
+        );
+
+        expect(quota.status).toBe('ok');
+        expect(fetch.inits[0].body).toContain(`client_id=${FAKE_ID_1}`);
+    });
+
+    it('pairs binary candidates by trial and caches the working pair', async () => {
+        // The binary carries more than one id/secret with no usable pairing
+        // anchor, so the pair is found by trial; the winner is cached per
+        // binary version and the SECOND refresh must not re-pair.
+        const binary = fakeAgyBinary(
+            `pad ${FAKE_ID_1} pad ${FAKE_ID_2} pad ${FAKE_SECRET_1} pad ${FAKE_SECRET_2}`,
+        );
+        const env = { ADHDEV_ANTIGRAVITY_AGY_PATH: binary };
+
+        const first = await fetchAntigravityQuota(deps(
+            stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY }))),
+            stubFetchSequence([
+                jsonResponse({ error: 'invalid_client' }, 401),
+                jsonResponse({ access_token: 'fresh-access-token', expires_in: 3599 }),
+                jsonResponse(LIVE_RESPONSE),
+            ]),
+            env,
+        ));
+        expect(first.status).toBe('ok');
+
+        const secondFetch = stubFetchSequence([
+            jsonResponse({ access_token: 'fresh-access-token-2', expires_in: 3599 }),
+            jsonResponse(LIVE_RESPONSE),
+        ]);
+        const second = await fetchAntigravityQuota(deps(
+            stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY }))),
+            secondFetch,
+            env,
+        ));
+
+        expect(second.status).toBe('ok');
+        // One token call, straight to the cached winning pair — no re-pairing.
+        expect(secondFetch.calls).toEqual([
+            'https://oauth2.googleapis.com/token',
+            'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+        ]);
+        expect(secondFetch.inits[0].body).toContain(`client_id=${FAKE_ID_1}`);
+        expect(secondFetch.inits[0].body).toContain(`client_secret=${FAKE_SECRET_2}`);
+    });
+
+    it('does not report signed-out when one pair answers invalid_grant but another works', async () => {
+        // A valid pair that did NOT issue this refresh token also answers
+        // invalid_grant — treating the first one as "signed out" would be a
+        // false signed-out report on a healthy session. Pairing must try the
+        // remaining candidates first.
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([
+            jsonResponse({ error: 'invalid_grant' }, 400),
+            jsonResponse({ access_token: 'fresh-access-token', expires_in: 3599 }),
+            jsonResponse(LIVE_RESPONSE),
+        ]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary(
+                    `pad ${FAKE_ID_1} pad ${FAKE_ID_2} pad ${FAKE_SECRET_1}`,
+                ),
+            }),
+        );
+
+        expect(quota.status).toBe('ok');
+    });
+
+    it('splits back-to-back secrets concatenated in the binary string blob', async () => {
+        // ★Verified in the wild (agy 1.1.13): two secrets sit ADJACENT in the
+        // string table, so a greedy pattern swallows them as one unusable
+        // candidate. They must be split on the prefix boundary before pairing.
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([
+            jsonResponse({ error: 'invalid_client' }, 401),
+            jsonResponse({ access_token: 'fresh-access-token', expires_in: 3599 }),
+            jsonResponse(LIVE_RESPONSE),
+        ]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary(
+                    `pad ${FAKE_ID_1} pad ${FAKE_SECRET_1}${FAKE_SECRET_2} tail`,
+                ),
+            }),
+        );
+
+        expect(quota.status).toBe('ok');
+        // inits[0] is the failed first combination; the second attempt wins.
+        expect(fetch.inits[1].body).toContain(`client_secret=${FAKE_SECRET_2}`);
+    });
+
+    it('reports expired-token with the locate failure when no agy binary exists', async () => {
+        // Explicit, not silent: the read path still works, only the automatic
+        // refresh is disabled, and the error says why.
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_AGY_PATH: join(tmpdir(), 'adhdev-definitely-not-here', 'agy'),
+                PATH: '',
+                HOME: mkdtempSync(join(tmpdir(), 'adhdev-empty-home-')),
+            }),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('expired-token');
+        expect(quota.error).toMatch(/could not be located/);
+        expect(fetch.calls).toEqual([]);
+    });
+
+    it('reports expired-token with the reason when the binary has no OAuth client pattern', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary('no credentials in here at all') }),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('expired-token');
+        expect(quota.error).toMatch(/no Google OAuth client pattern/);
+        expect(fetch.calls).toEqual([]);
+    });
+
+    it('reports a parse failure when no extracted pair can redeem the token', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([jsonResponse({ error: 'invalid_client' }, 401)]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary() }),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('parse');
+        expect(quota.error).toMatch(/no OAuth client pair/);
+    });
+
+    it('persists a rotated refresh token back to the store item', async () => {
+        // If Google ever answers a refresh WITH a new refresh_token, not
+        // persisting it would log the CLI's session out — so the full updated
+        // payload is written back, re-encoded like the CLI's own write.
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([
+            jsonResponse({
+                access_token: 'fresh-access-token',
+                refresh_token: 'rotated-refresh-value',
+                expires_in: 3599,
+            }),
+            jsonResponse(LIVE_RESPONSE),
+        ]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary() }),
+        );
+
+        expect(quota.status).toBe('ok');
+        expect(spawn.calls).toHaveLength(2);
+        const write = spawn.calls[1];
+        expect(write.command).toBe('/usr/bin/security');
+        expect(write.args.slice(0, 6)).toEqual([
+            'add-generic-password', '-U', '-s', 'gemini', '-a', 'antigravity',
+        ]);
+        const blobArg = write.args[write.args.indexOf('-w') + 1];
+        expect(blobArg.startsWith(GO_KEYRING_PREFIX)).toBe(true);
+        const written = JSON.parse(
+            Buffer.from(blobArg.slice(GO_KEYRING_PREFIX.length), 'base64').toString('utf-8'),
+        );
+        expect(written.token.refresh_token).toBe('rotated-refresh-value');
+        expect(written.token.access_token).toBe('fresh-access-token');
+        expect(written.auth_method).toBe('consumer');
+    });
+
+    it('reports signed-out when the refresh token is rejected (invalid_grant)', async () => {
+        // Persistent, not transient: retrying re-hears the same answer until
+        // the user signs in again, hence missing-credentials/unavailable.
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([
+            jsonResponse({ error: 'invalid_grant', error_description: 'Token has been revoked.' }, 400),
+        ]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary() }),
+        );
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('missing-credentials');
+        expect(quota.error).toMatch(/signed out/);
+        // The quota endpoint is never hit with a dead session.
+        expect(fetch.calls).toEqual(['https://oauth2.googleapis.com/token']);
+    });
+
+    it('treats a refresh transport error as a transient network failure', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetchSequence([new Error('socket hang up')]);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_AGY_PATH: fakeAgyBinary() }),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('network');
     });
 
     it('classifies 401 as unauthorized', async () => {

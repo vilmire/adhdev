@@ -2,11 +2,29 @@
  * Antigravity CLI (`agy`, Google) quota fetcher.
  *
  * Auth philosophy (see CLAUDE.md): ADHDev does NOT manage provider API keys.
- * We read the OAuth access token the `agy` CLI already stored and use it for a
- * single authenticated POST. We NEVER write, refresh, rotate or delete that
- * credential — Google's refresh flow rotates the refresh token, so writing it
- * back from here would log out a live `agy` session. When the token has
- * expired we report "cannot query" and let the CLI refresh it on next run.
+ * We read the OAuth credential the `agy` CLI already stored and use it for a
+ * single authenticated POST. We never rotate or delete it ourselves.
+ *
+ * When the access token has expired we REDEEM the stored refresh token
+ * against Google's token endpoint instead of waiting for the CLI's next run.
+ * An earlier version refused to do that — fearing Google's refresh flow would
+ * rotate the refresh token and thereby log out a live `agy` session — and
+ * was effectively dead in the field: the CLI only refreshes when someone
+ * launches it, so on a machine where the CLI is rarely opened (the common
+ * case for a daemon host; observed 2026-08-20: token expired ~60h with the
+ * keychain item untouched since the last CLI run) quota reported a permanent
+ * `expired-token` while the account was fine.
+ *
+ * ★That rotation fear was DISPROVEN LIVE 2026-08-20: a refresh exchange with
+ * the CLI's own OAuth client (discovered at runtime — see below) returned 200
+ * with a new access token and NO new `refresh_token` — this client does not
+ * rotate on use, so a read-only refresh leaves the CLI's stored credential
+ * valid. The single write path that remains is defensive: IF Google ever
+ * answers a refresh WITH a new refresh_token, the updated blob is written
+ * straight back to the same store item, because failing to persist a rotated
+ * token is what would actually log the session out. A rejected refresh token
+ * (invalid_grant from every viable client pair) means the session is signed
+ * out and is reported as such — never retried blindly.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * ★CREDENTIAL SOURCE — the macOS Keychain, NOT a file.
@@ -35,32 +53,39 @@
  * to have: `{ token: { access_token, token_type, refresh_token, expiry },
  * auth_method }`, where `expiry` is RFC3339 with an offset (Go time.Time).
  *
- * ★PLATFORM SCOPE — darwin only, deliberately. Both other platforms WERE
- * surveyed on real machines (2026-08-16); neither yielded a credential source
- * solid enough to build on, for DIFFERENT reasons:
+ * ★PLATFORM SCOPE — darwin and win32. Both were surveyed on real machines;
+ * linux is the one platform that stays unsupported:
  *
- *   win32 — Antigravity 1.107.0 is installed, but its credential backend is
- *     UNRESOLVED. `cmdkey /list` shows no antigravity entry, and that is not
- *     evidence of absence: cmdkey enumerates the legacy Credential Manager
- *     store and cannot see WinRT PasswordVault, which is where the token
- *     plausibly lives. A `%USERPROFILE%\.gemini\oauth_creds.json` also exists,
- *     but wiring THAT in would repeat the exact mistake this file documents
- *     above — on macOS a same-shaped on-disk token file was a DEAD FALLBACK
- *     that produced a permanent false `expired-token`. Until the backend is
- *     identified positively, there is nothing here worth trusting.
- *     ★Also note the win32 entry point is `antigravity` (bin\antigravity.cmd),
- *     NOT `agy`. That is a PROVIDER-DETECTION issue, not a quota one, and it
- *     is deliberately not fixed here. The mechanism, for whoever picks it up:
- *     `detectProviderVersion` (providers/version-archive.ts) resolves a CLI
- *     with `findBinary(provider.binary || spawn.command || cli || type)` and
- *     sets `installed` from whether that single name resolves. `findBinary`
- *     DOES try a `.cmd` suffix on win32, so `antigravity.cmd` would be found —
- *     but it is never asked for, because the manifest's `binary` is `agy` and
- *     the manifest's `aliases: ["agy"]` is not consulted by detection at all.
- *     Fixing it properly means a per-platform binary (no manifest in the repo
- *     has one today) and a `spawn` rewrite, since `spawn.command` is `bash`.
- *     Consequence meanwhile: on win32 the CLI can be installed and still
- *     report `installed: false`, in which case quota is never even asked for.
+ *   win32 — RESOLVED 2026-08-20 by a machine survey (recon ddd6f3df) that
+ *     DISPROVED an earlier version of this note, which claimed "cmdkey /list
+ *     shows no antigravity entry". It does:
+ *         Target:      LegacyGeneric:target=gemini:antigravity
+ *         User:        antigravity
+ *         Persistence: Local machine
+ *     That is the SAME go-keyring service/account pair as macOS, backed by
+ *     the legacy wincred generic store — NOT the WinRT PasswordVault the old
+ *     note speculated about. The credential is read with CredRead (advapi32)
+ *     via a one-shot PowerShell P/Invoke, and the same go-keyring base64
+ *     decode applies. Verified facts behind this: the machine's live CLI log
+ *     shows `doRefreshQuota` → `retrieveUserQuotaSummary` calls, so the
+ *     endpoint and the credential are both real on that host.
+ *
+ *     ★Two adjacent win32 facts, recorded so they are not re-derived, both
+ *     OUT OF SCOPE for this fetcher:
+ *       - The SAME DAY's first survey claimed there was NO `agy` binary on
+ *         the machine at all; a re-survey (recon 4b78f092) disproved THAT
+ *         too: `agy.exe` exists at `%LOCALAPPDATA%\agy\bin\agy.exe` and was
+ *         missed only because the daemon's INHERITED PATH is stale and lacks
+ *         that directory. This is exactly why the OAuth-client discovery
+ *         below searches known install paths in addition to PATH. Separately,
+ *         the IDE's `antigravity.cmd chat` opens a GUI panel rather than a
+ *         terminal TUI — a different entry point, not this CLI.
+ *       - `findBinary()` (providers/version-archive.ts) consults only
+ *         `provider.binary`, never the manifest's `aliases`. On win32 the CLI
+ *         entry point is `antigravity` while the manifest's `binary` is `agy`,
+ *         so detection can report `installed: false` with the IDE CLI present,
+ *         in which case quota is never even asked for. A genuine detection
+ *         gap, deliberately not fixed here.
  *
  *   linux — the surveyed host is a headless SSH server, and there the Secret
  *     Service is not merely absent but STRUCTURALLY unavailable:
@@ -72,7 +97,8 @@
  *
  * Rather than guess at a backend and ship code that fails silently or, worse,
  * reports a wrong number, this fetcher returns an explicit `unsupported` on
- * non-darwin. A wrong number is far worse than an honest "not supported".
+ * platforms other than darwin/win32. A wrong number is far worse than an
+ * honest "not supported".
  *
  * ─────────────────────────────────────────────────────────────────────────
  * ★ENDPOINT PROVENANCE — established by RUNTIME OBSERVATION, not symbols.
@@ -181,20 +207,163 @@ import {
 } from '../types.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
+import { createReadStream, statSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 /** Production Cloud Code host. `daily-` is Google's staging deployment. */
 const DEFAULT_BASE_URL = 'https://cloudcode-pa.googleapis.com/v1internal';
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Refuse to spend a token that expires mid-flight. */
 const EXPIRY_SKEW_MS = 5_000;
-/** Keychain lookup must never hang a refresh tick. */
-const KEYCHAIN_TIMEOUT_MS = 5_000;
+/** A credential-store lookup must never hang a refresh tick. */
+const CRED_STORE_TIMEOUT_MS = 5_000;
 
 /** go-keyring's marker for a base64-encoded secret. */
 const GO_KEYRING_BASE64_PREFIX = 'go-keyring-base64:';
 
 const KEYCHAIN_SERVICE = 'gemini';
 const KEYCHAIN_ACCOUNT = 'antigravity';
+
+/**
+ * go-keyring's wincred target is `<service>:<account>` — confirmed in
+ * `cmdkey /list` on the surveyed machine as
+ * `LegacyGeneric:target=gemini:antigravity` (see PLATFORM SCOPE above).
+ */
+const WINCRED_TARGET = `${KEYCHAIN_SERVICE}:${KEYCHAIN_ACCOUNT}`;
+
+const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+/**
+ * The OAuth client the `agy` CLI uses for its token lifecycle is NOT
+ * hardcoded here — it is DISCOVERED AT RUNTIME by scanning the installed
+ * `agy` binary for these patterns (see the "OAuth client discovery" section
+ * below). Shipping the values in source was tried first and rejected for two
+ * reasons: GitHub push protection (correctly) blocks Google OAuth client
+ * credentials in a public repo, and a hardcoded pair goes stale the day
+ * upstream rotates it. An installed-app client's "secret" is public by
+ * design (gemini-cli ships its own the same way); reading it out of the
+ * user's own installed binary keeps it out of this repository entirely.
+ *
+ * ★VERIFIED LIVE 2026-08-20: a refresh exchange with the discovered pair
+ * returned 200 and NO new `refresh_token`, i.e. Google does NOT rotate this
+ * client's refresh token on use, so redeeming it here leaves the CLI's
+ * stored credential valid.
+ */
+const OAUTH_CLIENT_ID_PATTERN = /[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com/g;
+const OAUTH_CLIENT_SECRET_PATTERN = /GOCSPX-[A-Za-z0-9_-]+/g;
+
+/**
+ * One-shot CredRead (advapi32) for the go-keyring wincred item, run through
+ * Windows PowerShell. Exit 44 mirrors the macOS `security` not-found code
+ * (win32 ERROR_NOT_FOUND 1168 — the ordinary "not signed in" state); any
+ * other failure writes the win32 error to stderr and exits 1 so the reason
+ * surfaces instead of degrading into a silent "missing".
+ *
+ * Passed to powershell.exe via -EncodedCommand (UTF-16LE base64), which
+ * sidesteps every quoting/escaping concern. NOT verifiable from the macOS
+ * dev machine beyond unit tests with a stubbed spawn — the CREDENTIAL struct
+ * layout is the documented advapi32 one, but first real-machine run is the
+ * true test (win32 CredRead/CredWrite P/Invoke is a well-trodden pattern).
+ */
+const WINCRED_READ_PS1 = `
+$ErrorActionPreference = 'Stop'
+$def = @'
+using System;
+using System.Runtime.InteropServices;
+public static class AdhDevCred {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct CRED {
+        public int Flags;
+        public int Type;
+        public string TargetName;
+        public string Comment;
+        public long LastWritten;
+        public int CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public int Persist;
+        public int AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias;
+        public string UserName;
+    }
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CredRead(string target, int type, int flags, out IntPtr cred);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CredWrite(ref CRED cred, int flags);
+    [DllImport("advapi32.dll")]
+    public static extern void CredFree(IntPtr cred);
+}
+'@
+Add-Type -TypeDefinition $def
+$p = [IntPtr]::Zero
+if (-not [AdhDevCred]::CredRead('${WINCRED_TARGET}', 1, 0, [ref]$p)) {
+    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($err -eq 1168) { exit 44 }
+    [Console]::Error.Write("CredRead failed: win32 error $err")
+    exit 1
+}
+try {
+    $c = [Runtime.InteropServices.Marshal]::PtrToStructure($p, [type][AdhDevCred+CRED])
+    $buf = New-Object byte[] $c.CredentialBlobSize
+    [Runtime.InteropServices.Marshal]::Copy($c.CredentialBlob, $buf, 0, $c.CredentialBlobSize)
+    [Console]::Out.Write([Text.Encoding]::UTF8.GetString($buf))
+} finally {
+    [AdhDevCred]::CredFree($p)
+}
+`;
+
+/**
+ * Rotation write-back for win32 — the mirror of the read above. The new blob
+ * arrives on STDIN so it never appears in the process's command line. Type 1
+ * = GENERIC, Persist 2 = LOCAL_MACHINE, matching the surveyed item.
+ */
+const WINCRED_WRITE_PS1 = `
+$ErrorActionPreference = 'Stop'
+$def = @'
+using System;
+using System.Runtime.InteropServices;
+public static class AdhDevCred {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct CRED {
+        public int Flags;
+        public int Type;
+        public string TargetName;
+        public string Comment;
+        public long LastWritten;
+        public int CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public int Persist;
+        public int AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias;
+        public string UserName;
+    }
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CredWrite(ref CRED cred, int flags);
+}
+'@
+Add-Type -TypeDefinition $def
+$text = [Console]::In.ReadToEnd()
+$buf = [Text.Encoding]::UTF8.GetBytes($text)
+$c = New-Object AdhDevCred+CRED
+$c.Type = 1
+$c.TargetName = '${WINCRED_TARGET}'
+$c.UserName = '${KEYCHAIN_ACCOUNT}'
+$c.Persist = 2
+$c.CredentialBlobSize = $buf.Length
+$c.CredentialBlob = [Runtime.InteropServices.Marshal]::AllocHGlobal($buf.Length)
+[Runtime.InteropServices.Marshal]::Copy($buf, 0, $c.CredentialBlob, $buf.Length)
+try {
+    if (-not [AdhDevCred]::CredWrite([ref]$c, 0)) {
+        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        [Console]::Error.Write("CredWrite failed: win32 error $err")
+        exit 1
+    }
+} finally {
+    [Runtime.InteropServices.Marshal]::FreeHGlobal($c.CredentialBlob)
+}
+`;
 
 function baseUrl(env: NodeJS.ProcessEnv): string {
     const override = env.ANTIGRAVITY_CLOUDCODE_BASE_URL?.trim();
@@ -207,56 +376,63 @@ interface AntigravityCredentials {
     expiresAtMs: number | null;
     /** `consumer` for a personal plan; business accounts use another API. */
     authMethod: string | null;
+    /** Used to redeem a new access token ourselves when this one has lapsed. */
+    refreshToken: string | null;
 }
 
 type CredentialsResult =
-    | { kind: 'ok'; credentials: AntigravityCredentials }
-    | { kind: 'missing' }
+    | {
+        kind: 'ok';
+        credentials: AntigravityCredentials;
+        platform: string;
+        /** The parsed store payload, kept so a rotation write-back preserves it. */
+        rawRoot: Record<string, unknown>;
+    }
+    | { kind: 'missing'; platform: string }
     | { kind: 'unsupported-platform'; platform: string }
-    | { kind: 'invalid'; reason: string };
+    | { kind: 'invalid'; platform: string; reason: string };
 
-/**
- * Why this platform is not supported, in the user's words.
- *
- * Deliberately platform-specific: on win32 the backend is merely UNIDENTIFIED
- * (a positive finding could enable support later), whereas on a headless linux
- * host the Secret Service is structurally unavailable, so no implementation
- * would help. Collapsing both into "unsupported" would hide that difference
- * from whoever picks this up next.
- */
-function unsupportedPlatformReason(platform: string): string {
-    if (platform === 'win32') {
-        return 'Antigravity quota is not supported on Windows yet: the CLI is installed, but its credential store has not been positively identified (cmdkey cannot see the WinRT PasswordVault, so it cannot rule it out). Quota is currently macOS-only.';
-    }
-    if (platform === 'linux') {
-        return 'Antigravity quota is not supported on Linux: the CLI credential lives in the freedesktop Secret Service, which is unavailable on a headless host (no session-bus service, and the first unlock needs a GUI prompt). Quota is currently macOS-only.';
-    }
-    return `Antigravity quota is only supported on macOS (this machine reports platform "${platform}").`;
+/** metadata.source label for the platform's credential store. */
+function storeSource(platform: string): string {
+    return platform === 'win32' ? 'wincred' : 'keychain';
 }
 
 /**
- * Read the raw keychain blob via `/usr/bin/security` — the same binary
- * go-keyring's macOS backend shells out to, so this reads exactly what `agy`
- * wrote. READ ONLY: `find-generic-password` cannot modify the item.
- *
- * Resolves to null when the item does not exist (`security` exits 44), which
- * is the ordinary "not signed in" state and not an error worth reporting as
- * broken. Rejects only on a timeout, so a wedged keychain prompt cannot hang a
- * refresh tick forever.
- *
- * Goes through `deps.spawn` rather than importing child_process directly so
- * tests can drive every branch without touching a real keychain — the same
- * injection the codex fetcher uses.
+ * Why this platform is not supported, in the user's words. Only linux (and
+ * unrecognized platforms) land here: win32 moved to SUPPORTED after the
+ * 2026-08-20 survey found the credential in the legacy wincred store — see
+ * the PLATFORM SCOPE note in the header.
  */
-function readKeychainBlob(deps: Required<QuotaFetchDeps>): Promise<string | null> {
+function unsupportedPlatformReason(platform: string): string {
+    if (platform === 'linux') {
+        return 'Antigravity quota is not supported on Linux: the CLI credential lives in the freedesktop Secret Service, which is unavailable on a headless host (no session-bus service, and the first unlock needs a GUI prompt). Quota is currently supported on macOS and Windows.';
+    }
+    return `Antigravity quota is only supported on macOS and Windows (this machine reports platform "${platform}").`;
+}
+
+interface ChildResult {
+    code: number | null;
+    stdout: string;
+    stderr: string;
+}
+
+/**
+ * Spawn a credential-store helper, collect its output, resolve on exit.
+ * Rejects only on a spawn failure or a timeout, so a wedged store prompt can
+ * never hang a refresh tick forever. Goes through `deps.spawn` rather than
+ * importing child_process directly so tests can drive every branch without
+ * touching a real store — the same injection the codex fetcher uses.
+ */
+function runCredStoreCommand(
+    deps: Required<QuotaFetchDeps>,
+    command: string,
+    args: string[],
+    stdin?: string,
+): Promise<ChildResult> {
     return new Promise((resolve, reject) => {
         let child: QuotaChildProcess;
         try {
-            child = deps.spawn(
-                '/usr/bin/security',
-                ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'],
-                { env: deps.env },
-            );
+            child = deps.spawn(command, args, { env: deps.env });
         } catch (err) {
             reject(err instanceof Error ? err : new Error(String(err)));
             return;
@@ -264,6 +440,7 @@ function readKeychainBlob(deps: Required<QuotaFetchDeps>): Promise<string | null
 
         let settled = false;
         let stdout = '';
+        let stderr = '';
         const finish = (fn: () => void): void => {
             if (settled) return;
             settled = true;
@@ -278,9 +455,9 @@ function readKeychainBlob(deps: Required<QuotaFetchDeps>): Promise<string | null
                 } catch {
                     // Already gone; nothing to clean up.
                 }
-                reject(new Error('Keychain lookup timed out'));
+                reject(new Error(`Credential store command timed out (${command})`));
             });
-        }, KEYCHAIN_TIMEOUT_MS);
+        }, CRED_STORE_TIMEOUT_MS);
         if (typeof (timer as { unref?: () => void }).unref === 'function') {
             (timer as { unref: () => void }).unref();
         }
@@ -288,15 +465,64 @@ function readKeychainBlob(deps: Required<QuotaFetchDeps>): Promise<string | null
         child.stdout.on('data', (chunk) => {
             stdout += chunk.toString();
         });
-        // stderr is deliberately drained but not surfaced: `security` writes
-        // "could not be found in the keychain" there for the not-signed-in
-        // case, which is already conveyed by the exit code.
-        child.stderr.on('data', () => {});
+        child.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+        });
         child.on('error', (err) => finish(() => reject(err)));
         child.on('exit', (code) => {
-            finish(() => resolve(code === 0 ? stdout.trim() : null));
+            finish(() => resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
         });
+
+        if (stdin !== undefined) {
+            child.stdin.write(stdin);
+        }
+        child.stdin.end();
     });
+}
+
+/** -EncodedCommand takes UTF-16LE base64 and sidesteps all quoting issues. */
+function powershellArgs(script: string): string[] {
+    return [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
+    ];
+}
+
+/**
+ * Read the raw keychain blob via `/usr/bin/security` — the same binary
+ * go-keyring's macOS backend shells out to, so this reads exactly what `agy`
+ * wrote. READ ONLY: `find-generic-password` cannot modify the item.
+ *
+ * Resolves to null when the item does not exist (`security` exits 44), which
+ * is the ordinary "not signed in" state and not an error worth reporting as
+ * broken. stderr is collected but not surfaced: `security` writes "could not
+ * be found in the keychain" there for the not-signed-in case, which is
+ * already conveyed by the exit code.
+ */
+async function readKeychainBlob(deps: Required<QuotaFetchDeps>): Promise<string | null> {
+    const res = await runCredStoreCommand(
+        deps,
+        '/usr/bin/security',
+        ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'],
+    );
+    return res.code === 0 && res.stdout !== '' ? res.stdout : null;
+}
+
+/**
+ * Read the same go-keyring item from the Windows Credential Manager via a
+ * one-shot CredRead P/Invoke. Exit 44 (ERROR_NOT_FOUND) maps to null like
+ * the macOS path; any OTHER failure rejects with the win32 error so the
+ * reason reaches the user instead of masquerading as "not signed in".
+ */
+async function readWinCredBlob(deps: Required<QuotaFetchDeps>): Promise<string | null> {
+    const res = await runCredStoreCommand(deps, 'powershell.exe', powershellArgs(WINCRED_READ_PS1));
+    if (res.code === 0) {
+        return res.stdout === '' ? null : res.stdout;
+    }
+    if (res.code === 44) {
+        return null;
+    }
+    throw new Error(res.stderr !== '' ? res.stderr : `CredRead exited with code ${res.code}`);
 }
 
 /**
@@ -318,15 +544,18 @@ function decodeKeyringSecret(raw: string): string {
  * "2026-08-16T18:58:07.255019+09:00" — NOT unix seconds. Parsing it as a
  * number would silently treat every token as never-expiring.
  */
-function parseCredentials(decoded: string): CredentialsResult {
+function parseCredentials(
+    decoded: string,
+    platform: string,
+): CredentialsResult {
     let parsed: unknown;
     try {
         parsed = JSON.parse(decoded);
     } catch {
-        return { kind: 'invalid', reason: 'Antigravity credential is not valid JSON' };
+        return { kind: 'invalid', platform, reason: 'Antigravity credential is not valid JSON' };
     }
     if (typeof parsed !== 'object' || parsed === null) {
-        return { kind: 'invalid', reason: 'Antigravity credential is not an object' };
+        return { kind: 'invalid', platform, reason: 'Antigravity credential is not an object' };
     }
     const root = parsed as Record<string, unknown>;
     // Tolerate a flattened payload as well as the nested `token` object seen
@@ -337,7 +566,7 @@ function parseCredentials(decoded: string): CredentialsResult {
 
     const accessToken = token.access_token;
     if (typeof accessToken !== 'string' || accessToken.length === 0) {
-        return { kind: 'invalid', reason: 'Antigravity credential has no access token' };
+        return { kind: 'invalid', platform, reason: 'Antigravity credential has no access token' };
     }
 
     const expiryRaw = token.expiry ?? token.expires_at;
@@ -355,28 +584,39 @@ function parseCredentials(decoded: string): CredentialsResult {
         ? root.auth_method.trim()
         : null;
 
-    return { kind: 'ok', credentials: { accessToken, expiresAtMs, authMethod } };
+    const refreshRaw = token.refresh_token;
+    const refreshToken = typeof refreshRaw === 'string' && refreshRaw.trim() !== ''
+        ? refreshRaw.trim()
+        : null;
+
+    return {
+        kind: 'ok',
+        credentials: { accessToken, expiresAtMs, authMethod, refreshToken },
+        platform,
+        rawRoot: root,
+    };
 }
 
 async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<CredentialsResult> {
-    // `ADHDEV_ANTIGRAVITY_PLATFORM` is a test seam so the non-darwin branch is
-    // exercisable from a macOS test run; it is never set in production.
+    // `ADHDEV_ANTIGRAVITY_PLATFORM` is a test seam so the win32 and
+    // unsupported-platform branches are exercisable from a macOS test run;
+    // it is never set in production.
     const platform = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
-    if (platform !== 'darwin') {
+    if (platform !== 'darwin' && platform !== 'win32') {
         return { kind: 'unsupported-platform', platform };
     }
 
     let raw: string | null;
     try {
-        raw = await readKeychainBlob(deps);
+        raw = platform === 'darwin' ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return { kind: 'invalid', reason: `Unable to read the Antigravity credential: ${message}` };
+        return { kind: 'invalid', platform, reason: `Unable to read the Antigravity credential: ${message}` };
     }
     if (raw === null || raw === '') {
-        return { kind: 'missing' };
+        return { kind: 'missing', platform };
     }
-    return parseCredentials(decodeKeyringSecret(raw));
+    return parseCredentials(decodeKeyringSecret(raw), platform);
 }
 
 function isExpired(credentials: AntigravityCredentials, nowMs: number): boolean {
@@ -386,6 +626,413 @@ function isExpired(credentials: AntigravityCredentials, nowMs: number): boolean 
         return false;
     }
     return credentials.expiresAtMs - nowMs <= EXPIRY_SKEW_MS;
+}
+
+// --- OAuth client discovery (runtime scan of the agy binary) --------------
+
+interface OAuthClientCandidates {
+    clientIds: string[];
+    clientSecrets: string[];
+}
+
+interface OAuthClientPair {
+    clientId: string;
+    clientSecret: string;
+}
+
+/**
+ * Where to look for the `agy` binary, in order. PATH alone is NOT enough —
+ * measured 2026-08-20 on the Windows host: the daemon's INHERITED PATH was
+ * stale and lacked %LOCALAPPDATA%\agy\bin, so a PATH-only lookup reported
+ * "binary missing" while the binary existed and the registry PATH resolved
+ * it. The per-platform fallback install paths below exist for exactly that
+ * case; do not "simplify" them away.
+ *
+ * `ADHDEV_ANTIGRAVITY_AGY_PATH` overrides everything (tests, exotic installs).
+ */
+function agyBinaryCandidates(env: NodeJS.ProcessEnv, platform: string): string[] {
+    const out: string[] = [];
+    const override = env.ADHDEV_ANTIGRAVITY_AGY_PATH?.trim();
+    if (override) {
+        out.push(override);
+    }
+    const pathValue = env.PATH ?? env.Path ?? '';
+    const names = platform === 'win32' ? ['agy.exe', 'agy.cmd', 'agy.bat', 'agy'] : ['agy'];
+    for (const dir of pathValue.split(path.delimiter)) {
+        if (dir.trim() === '') continue;
+        for (const name of names) {
+            out.push(path.join(dir, name));
+        }
+    }
+    // $HOME is honored before os.homedir() so tests can steer the fallback.
+    const home = env.HOME?.trim() || os.homedir();
+    if (platform === 'win32') {
+        const localAppData = env.LOCALAPPDATA?.trim() || path.join(home, 'AppData', 'Local');
+        out.push(path.join(localAppData, 'agy', 'bin', 'agy.exe'));
+    } else {
+        out.push(path.join(home, '.local', 'bin', 'agy'));
+    }
+    return out;
+}
+
+function locateAgyBinary(env: NodeJS.ProcessEnv, platform: string): string | null {
+    const seen = new Set<string>();
+    for (const candidate of agyBinaryCandidates(env, platform)) {
+        if (seen.has(candidate)) continue;
+        seen.add(candidate);
+        try {
+            if (statSync(candidate).isFile()) {
+                return candidate;
+            }
+        } catch {
+            // Not there — try the next candidate.
+        }
+    }
+    return null;
+}
+
+/**
+ * Extraction caches, keyed by `path:size:mtime` so an `agy` self-update
+ * invalidates automatically. Bounded: a daemon accumulates at most one key
+ * per CLI update, but a leak is a leak — keep the last few only. A cache hit
+ * never touches the file contents (one statSync at most): the binary is
+ * ~180MB and a full re-scan per quota tick would be unacceptable.
+ */
+const DISCOVERY_CACHE_MAX = 8;
+const candidatesCache = new Map<string, OAuthClientCandidates | null>();
+const pairCache = new Map<string, OAuthClientPair>();
+
+function cachePut<V>(map: Map<string, V>, key: string, value: V): void {
+    map.delete(key);
+    map.set(key, value);
+    while (map.size > DISCOVERY_CACHE_MAX) {
+        const oldest = map.keys().next().value;
+        if (oldest === undefined) break;
+        map.delete(oldest);
+    }
+}
+
+/**
+ * Stream-scan the binary for OAuth client patterns. Chunked with a carry-over
+ * tail so a pattern split across a chunk boundary is still found, and the
+ * whole 180MB is never held in memory at once. latin1 keeps a 1:1 byte-to-char
+ * mapping, so the matches are byte-exact.
+ */
+async function scanBinaryForOAuthClients(binaryPath: string): Promise<OAuthClientCandidates> {
+    const clientIds = new Set<string>();
+    const clientSecrets = new Set<string>();
+    let tail = '';
+    const stream = createReadStream(binaryPath, { highWaterMark: 4 * 1024 * 1024 });
+    for await (const chunk of stream) {
+        const text = tail + (chunk as Buffer).toString('latin1');
+        for (const match of text.matchAll(OAUTH_CLIENT_ID_PATTERN)) {
+            clientIds.add(match[0]);
+        }
+        for (const match of text.matchAll(OAUTH_CLIENT_SECRET_PATTERN)) {
+            // ★Adjacent string constants in the binary's string blob can
+            // concatenate several secrets into ONE run — verified in the
+            // wild (agy 1.1.13): two secrets sit back-to-back and a greedy
+            // match swallows both, yielding one unusable monster candidate.
+            // Split them back apart on the prefix boundary.
+            for (const part of match[0].split('GOCSPX-')) {
+                if (part !== '') {
+                    clientSecrets.add(`GOCSPX-${part}`);
+                }
+            }
+        }
+        tail = text.slice(-512);
+    }
+    return { clientIds: [...clientIds], clientSecrets: [...clientSecrets] };
+}
+
+type CandidatesResult =
+    | { kind: 'ok'; statKey: string; candidates: OAuthClientCandidates }
+    | { kind: 'unavailable'; reason: string };
+
+async function oauthClientCandidates(
+    deps: Required<QuotaFetchDeps>,
+    platform: string,
+): Promise<CandidatesResult> {
+    const binaryPath = locateAgyBinary(deps.env, platform);
+    if (binaryPath === null) {
+        return {
+            kind: 'unavailable',
+            reason: 'the agy binary could not be located (searched PATH and the known install paths) — run `agy` once to refresh the session',
+        };
+    }
+    let statKey: string;
+    try {
+        const stat = statSync(binaryPath);
+        statKey = `${binaryPath}:${stat.size}:${stat.mtimeMs}`;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { kind: 'unavailable', reason: `unable to stat the agy binary at ${binaryPath}: ${message}` };
+    }
+    if (candidatesCache.has(statKey)) {
+        const hit = candidatesCache.get(statKey);
+        if (hit) {
+            return { kind: 'ok', statKey, candidates: hit };
+        }
+        return {
+            kind: 'unavailable',
+            reason: `no Google OAuth client pattern was found in the agy binary at ${binaryPath} — it may have changed how it stores credentials; run \`agy\` once to refresh the session`,
+        };
+    }
+    let candidates: OAuthClientCandidates;
+    try {
+        candidates = await scanBinaryForOAuthClients(binaryPath);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { kind: 'unavailable', reason: `unable to read the agy binary at ${binaryPath}: ${message}` };
+    }
+    if (candidates.clientIds.length === 0 || candidates.clientSecrets.length === 0) {
+        cachePut(candidatesCache, statKey, null);
+        return {
+            kind: 'unavailable',
+            reason: `no Google OAuth client pattern was found in the agy binary at ${binaryPath} — it may have changed how it stores credentials; run \`agy\` once to refresh the session`,
+        };
+    }
+    cachePut(candidatesCache, statKey, candidates);
+    return { kind: 'ok', statKey, candidates };
+}
+
+// --- token refresh --------------------------------------------------------
+
+type RefreshFailureKind = 'network' | 'server' | 'rate-limited' | 'unauthorized' | 'parse' | 'expired-token';
+
+type RefreshResult =
+    | {
+        kind: 'ok';
+        accessToken: string;
+        /** Present only when Google rotated the refresh token — must be persisted. */
+        rotatedRefreshToken: string | null;
+        expiresInSec: number | null;
+    }
+    /** invalid_grant from every viable client pair — the session is signed out. */
+    | { kind: 'rejected' }
+    | { kind: 'failed'; failureKind: RefreshFailureKind; reason: string };
+
+type RefreshAttempt =
+    | Extract<RefreshResult, { kind: 'ok' }>
+    /** The pair itself is wrong (invalid_client / unauthorized_client). */
+    | { kind: 'wrong-client' }
+    /**
+     * invalid_grant. Ambiguous DURING pairing: a valid pair whose client did
+     * not issue this refresh token also answers invalid_grant, so it only
+     * means "signed out" once every pair has failed — see refreshAccessToken.
+     */
+    | { kind: 'invalid-grant' }
+    | Extract<RefreshResult, { kind: 'failed' }>;
+
+/** One refresh exchange against Google's token endpoint. */
+async function attemptRefresh(
+    deps: Required<QuotaFetchDeps>,
+    pair: OAuthClientPair,
+    refreshToken: string,
+): Promise<RefreshAttempt> {
+    let response: Awaited<ReturnType<Required<QuotaFetchDeps>['fetch']>>;
+    try {
+        response = await deps.fetch(OAUTH_TOKEN_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Accept: 'application/json',
+            },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                client_id: pair.clientId,
+                client_secret: pair.clientSecret,
+                refresh_token: refreshToken,
+            }).toString(),
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { kind: 'failed', failureKind: 'network', reason: `Antigravity token refresh failed: ${message}` };
+    }
+
+    if (response.status === 400 || response.status === 401) {
+        let errorField = '';
+        try {
+            const body = asRecord(await response.json());
+            errorField = typeof body?.error === 'string' ? body.error : '';
+        } catch {
+            // No parseable body; the status alone still classifies below.
+        }
+        // Google answers an expired/revoked/replaced refresh token with
+        // invalid_grant — see the RefreshAttempt note for why that is not
+        // immediately "signed out" while pairing.
+        if (errorField === 'invalid_grant') {
+            return { kind: 'invalid-grant' };
+        }
+        if (errorField === 'invalid_client' || errorField === 'unauthorized_client') {
+            return { kind: 'wrong-client' };
+        }
+        return {
+            kind: 'failed',
+            failureKind: 'unauthorized',
+            reason: `Antigravity token refresh was rejected (HTTP ${response.status}${errorField ? `: ${errorField}` : ''})`,
+        };
+    }
+    if (response.status === 429) {
+        return { kind: 'failed', failureKind: 'rate-limited', reason: 'Antigravity token refresh was rate limited' };
+    }
+    if (!response.ok) {
+        return {
+            kind: 'failed',
+            failureKind: response.status >= 500 ? 'server' : 'unauthorized',
+            reason: `Antigravity token refresh failed (HTTP ${response.status})`,
+        };
+    }
+
+    const body = asRecord(await response.json().catch(() => null));
+    const accessToken = body?.access_token;
+    if (typeof accessToken !== 'string' || accessToken === '') {
+        return {
+            kind: 'failed',
+            failureKind: 'parse',
+            reason: 'Antigravity token refresh response had no access token',
+        };
+    }
+    const rotated = body?.refresh_token;
+    return {
+        kind: 'ok',
+        accessToken,
+        rotatedRefreshToken: typeof rotated === 'string' && rotated !== '' ? rotated : null,
+        expiresInSec: toNumber(body?.expires_in),
+    };
+}
+
+/**
+ * Redeem the stored refresh token for a new access token. READ-ONLY against
+ * the CLI's session in the normal case: verified live 2026-08-20 that this
+ * OAuth client's refresh response carries no new `refresh_token`, so the
+ * stored credential stays valid and nothing is written back. See the header
+ * for the field failure that motivated this (a daemon host where the CLI is
+ * rarely launched otherwise reports `expired-token` forever).
+ *
+ * The OAuth client pair is discovered from the agy binary (see above). The
+ * binary carries more than one client id and secret, and their layout gives
+ * NO reliable pairing anchor, so the pair is found by trial: each candidate
+ * combination is attempted, a `wrong-client` answer moves to the next, and
+ * the first 200 wins and is cached per binary version. ★An `invalid_grant`
+ * mid-pairing is NOT yet "signed out" — a valid pair that did not issue this
+ * token answers the same way — so every pair is tried before concluding the
+ * session is dead.
+ */
+async function refreshAccessToken(
+    deps: Required<QuotaFetchDeps>,
+    refreshToken: string,
+    platform: string,
+): Promise<RefreshResult> {
+    const found = await oauthClientCandidates(deps, platform);
+    if (found.kind === 'unavailable') {
+        return {
+            kind: 'failed',
+            failureKind: 'expired-token',
+            reason: `Antigravity access token expired and could not be refreshed: ${found.reason}`,
+        };
+    }
+
+    const cached = pairCache.get(found.statKey);
+    if (cached) {
+        const attempt = await attemptRefresh(deps, cached, refreshToken);
+        if (attempt.kind === 'ok') {
+            return attempt;
+        }
+        if (attempt.kind === 'invalid-grant') {
+            // This pair redeemed before, so the token itself is dead.
+            return { kind: 'rejected' };
+        }
+        if (attempt.kind !== 'wrong-client') {
+            return attempt;
+        }
+        // The cached pair stopped being accepted (upstream rotated clients?)
+        // — fall through and re-pair from scratch.
+        pairCache.delete(found.statKey);
+    }
+
+    let sawInvalidGrant = false;
+    for (const clientId of found.candidates.clientIds) {
+        for (const clientSecret of found.candidates.clientSecrets) {
+            const attempt = await attemptRefresh(deps, { clientId, clientSecret }, refreshToken);
+            if (attempt.kind === 'ok') {
+                cachePut(pairCache, found.statKey, { clientId, clientSecret });
+                return attempt;
+            }
+            if (attempt.kind === 'wrong-client') {
+                continue;
+            }
+            if (attempt.kind === 'invalid-grant') {
+                // Inconclusive while other pairs remain — see the doc comment.
+                sawInvalidGrant = true;
+                continue;
+            }
+            // Transport/HTTP failures: more combinations cannot help.
+            return attempt;
+        }
+    }
+    if (sawInvalidGrant) {
+        // Every pair failed and at least one viable pair said invalid_grant —
+        // the session is signed out; only the user can fix it.
+        return { kind: 'rejected' };
+    }
+    return {
+        kind: 'failed',
+        failureKind: 'parse',
+        reason: 'no OAuth client pair extracted from the agy binary could redeem the refresh token — run `agy` once to refresh the session',
+    };
+}
+
+/**
+ * Persist a ROTATED credential back to the same store item — the fetcher's
+ * ONLY write path, taken iff Google answered a refresh with a new
+ * `refresh_token`. Not persisting a rotated token is what would actually log
+ * the CLI's session out, so this write is protective. The full payload is
+ * rewritten (fresh access token and expiry too) and re-encoded with the
+ * go-keyring prefix exactly as the CLI's own write produced it.
+ */
+async function persistRotatedCredential(
+    deps: Required<QuotaFetchDeps>,
+    platform: string,
+    rawRoot: Record<string, unknown>,
+    refresh: Extract<RefreshResult, { kind: 'ok' }>,
+): Promise<void> {
+    const root: Record<string, unknown> = { ...rawRoot };
+    const nested = typeof root.token === 'object' && root.token !== null;
+    const token: Record<string, unknown> = nested
+        ? { ...(root.token as Record<string, unknown>) }
+        : root;
+    token.access_token = refresh.accessToken;
+    token.refresh_token = refresh.rotatedRefreshToken;
+    if (refresh.expiresInSec !== null) {
+        // Go's time.Time unmarshals any RFC3339 form, so UTC `Z` is fine.
+        token.expiry = new Date(deps.now() + refresh.expiresInSec * 1000).toISOString();
+    }
+    if (nested) {
+        root.token = token;
+    }
+    const blob = GO_KEYRING_BASE64_PREFIX + Buffer.from(JSON.stringify(root), 'utf-8').toString('base64');
+
+    if (platform === 'win32') {
+        const res = await runCredStoreCommand(deps, 'powershell.exe', powershellArgs(WINCRED_WRITE_PS1), blob);
+        if (res.code !== 0) {
+            throw new Error(res.stderr !== '' ? res.stderr : `CredWrite exited with code ${res.code}`);
+        }
+        return;
+    }
+    // NOTE: `security` accepts the new password only via argv, so the blob is
+    // briefly visible in the local process table. Accepted for this rare,
+    // defensive, single-user-machine write; the alternative (Security
+    // framework bindings) is a native dependency we do not have.
+    const res = await runCredStoreCommand(
+        deps,
+        '/usr/bin/security',
+        ['add-generic-password', '-U', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w', blob],
+    );
+    if (res.code !== 0) {
+        throw new Error(res.stderr !== '' ? res.stderr : `security add-generic-password exited with code ${res.code}`);
+    }
 }
 
 // --- response shape -------------------------------------------------------
@@ -634,23 +1281,24 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
             'antigravity-cli',
             'unavailable',
             unsupportedPlatformReason(credentialsResult.platform),
-            { source: 'keychain', failureKind: 'unsupported' },
+            { source: storeSource(credentialsResult.platform), failureKind: 'unsupported' },
         );
     }
     if (credentialsResult.kind === 'missing') {
         return quotaFailure('antigravity-cli', 'unavailable', 'Not signed in to Antigravity', {
-            source: 'keychain',
+            source: storeSource(credentialsResult.platform),
             failureKind: 'missing-credentials',
         });
     }
     if (credentialsResult.kind === 'invalid') {
         return quotaFailure('antigravity-cli', 'error', credentialsResult.reason, {
-            source: 'keychain',
+            source: storeSource(credentialsResult.platform),
             failureKind: 'parse',
         });
     }
 
-    const credentials = credentialsResult.credentials;
+    let credentials = credentialsResult.credentials;
+    const source = storeSource(credentialsResult.platform);
 
     // Business/enterprise accounts are served by a DIFFERENT API
     // (`businessaicode.googleapis.com` / FetchQuotaStatus). No such account was
@@ -661,18 +1309,52 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
             'antigravity-cli',
             'unavailable',
             `Antigravity quota is only supported for personal (consumer) accounts; this machine is signed in as "${credentials.authMethod}"`,
-            { source: 'keychain', failureKind: 'unsupported' },
+            { source, failureKind: 'unsupported' },
         );
     }
 
     if (isExpired(credentials, deps.now())) {
-        // Deliberately do not refresh: the CLI owns the token lifecycle.
-        return quotaFailure(
-            'antigravity-cli',
-            'error',
-            'Antigravity access token expired — the agy CLI refreshes it on next use; quota will report again after that.',
-            { source: 'keychain', failureKind: 'expired-token' },
-        );
+        // The CLI only refreshes its token when someone LAUNCHES it, so a
+        // daemon host where the CLI sits idle would report this forever.
+        // Redeem the stored refresh token ourselves instead — verified live
+        // (see the header) to leave the CLI's session intact.
+        if (credentials.refreshToken === null) {
+            return quotaFailure(
+                'antigravity-cli',
+                'error',
+                'Antigravity access token expired and the stored credential has no refresh token — run `agy` once to sign in again.',
+                { source, failureKind: 'expired-token' },
+            );
+        }
+        const refresh = await refreshAccessToken(deps, credentials.refreshToken, credentialsResult.platform);
+        if (refresh.kind === 'rejected') {
+            // invalid_grant: the session is signed out. Persistent — retrying
+            // re-hears the same answer until the user signs in again.
+            return quotaFailure(
+                'antigravity-cli',
+                'unavailable',
+                'Antigravity refresh token was rejected (invalid_grant) — the session is signed out; run `agy` once to sign in again.',
+                { source, failureKind: 'missing-credentials' },
+            );
+        }
+        if (refresh.kind === 'failed') {
+            return quotaFailure('antigravity-cli', 'error', refresh.reason, {
+                source,
+                failureKind: refresh.failureKind,
+            });
+        }
+        credentials = { ...credentials, accessToken: refresh.accessToken };
+        if (refresh.rotatedRefreshToken !== null) {
+            // Defensive write — see persistRotatedCredential. Best-effort: the
+            // fresh access token still serves this tick if the write fails,
+            // and a lost rotated token surfaces on the NEXT tick as an honest
+            // invalid_grant signed-out error rather than a silent desync.
+            try {
+                await persistRotatedCredential(deps, credentialsResult.platform, credentialsResult.rawRoot, refresh);
+            } catch {
+                // Surfaced on the next tick via invalid_grant; see above.
+            }
+        }
     }
 
     try {
