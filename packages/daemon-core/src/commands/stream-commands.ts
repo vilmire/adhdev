@@ -193,7 +193,7 @@ interface KeyInjectableInstance extends ProviderInstance {
         opts?: { allowModalOverride?: boolean },
     ): Promise<
         | { ok: true; keys: string[]; hasDestructive: boolean; submits: boolean; bytes: number }
-        | { ok: false; refused: string; keys: string[]; hasDestructive: boolean }
+        | { ok: false; refused: string; keys: string[]; hasDestructive: boolean; message?: string }
     >;
 }
 
@@ -249,7 +249,7 @@ export async function handleSendKeys(h: CommandHelpers, args: any): Promise<Comm
         });
         if (!result.ok) {
             LOG.info('Command', `[sendKeys] session=${sessionId.split('_')[0]} refused=${result.refused} keys=${result.keys.join(',')} destructive=${result.hasDestructive}`);
-            return { success: false, error: `send_keys refused: ${result.refused}`, refused: result.refused, keys: result.keys, hasDestructive: result.hasDestructive };
+            return { success: false, error: result.message ?? `send_keys refused: ${result.refused}`, refused: result.refused, keys: result.keys, hasDestructive: result.hasDestructive };
         }
         LOG.info('Command', `[sendKeys] session=${sessionId.split('_')[0]} injected keys=${result.keys.join(',') || '(text-only)'} bytes=${result.bytes} destructive=${result.hasDestructive} submits=${result.submits}`);
         return { success: true, keys: result.keys, hasDestructive: result.hasDestructive, submits: result.submits, bytes: result.bytes };

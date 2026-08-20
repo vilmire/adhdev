@@ -118,6 +118,17 @@ describe('SpecCliAdapter — injectKeys (MESH-SEND-KEYS)', () => {
         expect(pty(dispatches)[0]).toBe('\x1b[B\r');
     });
 
+    it('is refused while generating so an active turn cannot consume buffered input', async () => {
+        const { adapter, dispatches } = makeAdapter({ screen: '✳ Tinkering…', state: 'generating' });
+
+        const res = await adapter.injectKeys([{ text: 'please stop' }, { key: 'ENTER' }]);
+
+        expect(res.ok).toBe(false);
+        expect(res.refused).toBe('generating');
+        expect(res.message).toContain("mesh_send_task with delivery_mode: 'interrupt'");
+        expect(pty(dispatches)).toEqual([]);
+    });
+
     it('is refused (fail-closed) for a non-destructive injection while an approval modal is open', async () => {
         const { adapter, dispatches } = makeAdapter({ screen: '❯ 1. Yes', state: 'approval' });
 

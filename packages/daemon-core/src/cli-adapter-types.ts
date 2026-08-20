@@ -169,7 +169,7 @@ export interface CliAdapter {
         opts?: { allowModalOverride?: boolean },
     ): Promise<
         | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
-        | { ok: false; refused: 'submit_race' | 'actionable_modal'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'generating'; keys: MeshSendKeyName[]; hasDestructive: boolean; message?: string }
     >;
     setOnStatusChange(callback: () => void): void;
     updateRuntimeSettings?(settings: Record<string, unknown>): void;

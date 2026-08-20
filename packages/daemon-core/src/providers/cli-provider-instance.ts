@@ -2164,7 +2164,7 @@ export class CliProviderInstance implements ProviderInstance {
         opts: { allowModalOverride?: boolean } = {},
     ): Promise<
         | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
-        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'not_mesh_worker' | 'unsupported'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'generating' | 'not_mesh_worker' | 'unsupported'; keys: MeshSendKeyName[]; hasDestructive: boolean; message?: string }
     > {
         if (!this.isMeshWorkerSession()) {
             return { ok: false, refused: 'not_mesh_worker', keys: [], hasDestructive: false };

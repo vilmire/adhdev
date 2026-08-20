@@ -475,9 +475,13 @@ export class SpecCliAdapter implements CliAdapter {
      *
      * The spec path drives the child through the FsmDriver, not a directly-held
      * ptyProcess — there is no adapter-level echo-gate/submit-retry FIFO to race
-     * against here (the driver serializes its own writes), so the only guard is
-     * the modal fail-closed: a NON-destructive injection into an actionable
-     * approval modal is refused (use mesh_approve) unless explicitly overridden.
+     * against here (the driver serializes its own writes). A send_keys call is
+     * refused while the session is generating: input can otherwise sit in the
+     * PTY buffer while the active turn continues, and CTRL_C/ESC would bypass the
+     * interrupt capability gate. Use mesh_send_task with delivery_mode:'interrupt'
+     * to steer an active turn. The modal fail-closed guard remains: a
+     * NON-destructive injection into an actionable approval modal is refused (use
+     * mesh_approve) unless explicitly overridden.
      * A destructive ESC/CTRL_C dismisses rather than confirms, so it is allowed
      * past this gate (the tool layer owns the destructive double-gate + audit).
      * This method NEVER logs the literal text — only key enums / byte length.
@@ -487,7 +491,7 @@ export class SpecCliAdapter implements CliAdapter {
         opts: { allowModalOverride?: boolean } = {},
     ): Promise<
         | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
-        | { ok: false; refused: 'submit_race' | 'actionable_modal'; keys: MeshSendKeyName[]; hasDestructive: boolean }
+        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'generating'; keys: MeshSendKeyName[]; hasDestructive: boolean; message?: string }
     > {
         if (!this.spawned || this.exited) throw new Error(`${this.cliName} is not running`);
         const encoded = encodeMeshSendKeys(items);
@@ -499,6 +503,15 @@ export class SpecCliAdapter implements CliAdapter {
         if (modalActive && !encoded.hasDestructive && !opts.allowModalOverride) {
             LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(',')} — use mesh_approve`);
             return { ok: false, refused: 'actionable_modal', keys: encoded.keys, hasDestructive: encoded.hasDestructive };
+        }
+
+        // Fail closed while an active turn owns the PTY. Blindly writing here can
+        // leave bytes buffered until after the turn, and destructive keys would
+        // bypass mesh_send_task's interrupt capability validation.
+        if (this.latestState?.status === 'generating') {
+            const message = "session is generating; mesh_send_keys cannot write during an active turn. Use mesh_send_task with delivery_mode: 'interrupt' to interrupt it.";
+            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (generating): keys=${encoded.keys.join(',')} — use mesh_send_task delivery_mode=interrupt`);
+            return { ok: false, refused: 'generating', keys: encoded.keys, hasDestructive: encoded.hasDestructive, message };
         }
 
         // Atomic write: the full encoded sequence goes out in ONE pty_write.
