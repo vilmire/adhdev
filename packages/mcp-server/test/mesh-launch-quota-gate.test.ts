@@ -214,6 +214,18 @@ test('fail-open: an opted-out provider alone on the node still launches', async 
 test('fail-open: STALE exhausted snapshot → not blocked', async () => {
   // Routing on an old reading would exclude a node on data that no longer
   // describes it. Default staleAfterMs is 30 min; this snapshot is ~3h old.
+  //
+  // ★The assertion changed 2026-08-20 (was: launched 'kimi'). The CONTRACT
+  // under test — a stale exhausted reading must not BLOCK — is unchanged and
+  // still asserted below. What changed is which provider wins the RANKING,
+  // and the old expectation was an artifact of the unconditional unknown-last
+  // partition rather than a property anyone wanted: kimi ranked first only
+  // because staleness made it unrankable, not because it was the better
+  // choice. It holds 1% weekly remaining (weeklyExhausted) against a healthy,
+  // currently-measured claude-cli, so preferring claude-cli is the correct
+  // answer on the expiry-risk axis — and kimi remains gate-CLEAR, which is
+  // what "fails open" actually means. See the RETAINED READINGS section of
+  // rankProvidersByQuotaGate.
   const now = Date.now();
   const stale = weeklyExhausted('kimi', now - 3 * HOUR);
   const { ctx, launchCalls } = makeCtx(
@@ -221,8 +233,23 @@ test('fail-open: STALE exhausted snapshot → not blocked', async () => {
     quotaFacts({ kimi: stale, 'claude-cli': healthy('claude-cli') }, { reportedAt: now - 3 * HOUR }),
   );
   const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-a' }));
-  assert.equal(result.success !== false, true);
-  assert.equal(launchedType(launchCalls), 'kimi', 'stale exhaustion fails open');
+  assert.equal(result.success !== false, true, 'stale exhaustion must never block the launch');
+  assert.equal(launchedType(launchCalls), 'claude-cli', 'a healthy current reading out-ranks a near-exhausted stale one');
+});
+
+test('fail-open: a STALE exhausted provider ALONE on the node still launches', async () => {
+  // The stranding half of the contract above, isolated: with no healthy peer
+  // to out-rank it, the stale near-exhausted provider must still be selected.
+  // This is what makes the reordering above safe — kimi lost a comparison,
+  // it was not excluded.
+  const now = Date.now();
+  const { ctx, launchCalls } = makeCtx(
+    { slots: [{ provider: 'kimi' }] },
+    quotaFacts({ kimi: weeklyExhausted('kimi', now - 3 * HOUR) }, { reportedAt: now - 3 * HOUR }),
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-a' }));
+  assert.equal(result.success !== false, true, `stale sole provider must launch: ${JSON.stringify(result)}`);
+  assert.equal(launchedType(launchCalls), 'kimi');
 });
 
 test("fail-open: 'expired-token' → NOT blocked (self-healing deadlock guard)", async () => {

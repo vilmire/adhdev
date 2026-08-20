@@ -181,6 +181,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         // Present in both compact and verbose: it is one small object, already
         // bounded to the mesh's node count, not a per-call cost like the
         // scheduling projection above.
+        //
+        // ★Since 2026-08-20 this also carries `taskId` and `rationale` — the
+        // winner's fitness score plus each beaten candidate and why it lost.
+        // Before that, the quota ORDER was visible here but the fitness scores
+        // behind it were not, and they existed only in the task_dispatched
+        // ledger payload that just one tool (mesh_task_history) reads. Asked
+        // "what were the scores and why?", a coordinator had nothing to read
+        // and answered from a back-derived estimate — twice, wrongly. The
+        // rationale is a bounded summary (<=4 losers), not a copy of the
+        // ledger's full selectionTrajectory, so the per-node cost stays small.
         const lastQuotaRanking = getLastQuotaRanking(node.id);
         if (lastQuotaRanking) {
             entry.scheduling = { ...(entry.scheduling ?? {}), lastQuotaRanking };
