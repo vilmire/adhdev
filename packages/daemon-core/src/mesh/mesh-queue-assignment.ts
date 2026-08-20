@@ -30,7 +30,7 @@ import { isWorktreeBootstrapStaleRunning, shouldDeferDispatchForBootstrap } from
 import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
-import { decideSlotForModel, isModelAllowedBySlot, SLOT_MODEL_ABSENT_SKIP_REASON, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
+import { decideSlotForModel, finalizeSlotSelection, isModelAllowedBySlot, SLOT_MODEL_ABSENT_SKIP_REASON, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
 import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, noteTargetPinCleared, rebindAttemptToLiveHolder } from './mesh-turn-ledger.js';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
@@ -2394,49 +2394,44 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, (task as any).thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
 
                     // SLOT MODEL GUARD: the requested model must be one this node's slots
-                    // declare. The difficulty→brain presets stamp a model at enqueue time
-                    // (difficult → 'opus'), so without this a task launched with
-                    // `--model opus` on a node whose only slot is claude-cli/sonnet — a
-                    // model the operator never configured there.
+                    // declare, so a difficulty→brain preset (difficult → 'opus') cannot launch
+                    // a model the operator never configured. Three outcomes — run / wait
+                    // (declared but at cap; stays queued, no page) / notify (never declared;
+                    // pages the coordinator) — specified in slot-model-enforcement.ts.
                     //
-                    // Three outcomes, and 'busy' must stay distinct from 'absent':
-                    //   run    → a declaring slot has capacity; launch with ITS model
-                    //   wait   → a declaring slot exists but is at maxParallel. Skip with a
-                    //            NON-actionable reason so the task stays queued and claims
-                    //            the slot when it frees. This is the queue working, not a
-                    //            failure, so the coordinator is not paged.
-                    //   notify → no slot declares the model. Waiting can never help, so skip
-                    //            with an ACTIONABLE reason, which pages the coordinator to
-                    //            re-drive the task another way.
-                    // Substituting a different model is deliberately not an option: silently
-                    // running a model the user did not choose breaks the same invariant.
+                    // ★ PROVIDER PAIRING: scoped to resolved.providerType — the provider
+                    // actually spawned below (launch_cli cliType). The guard supplies the MODEL
+                    // half of the launch while `resolved` supplies the PROVIDER half, so an
+                    // unscoped call let a foreign provider's slot answer for the model and broke
+                    // the pair. See slot-model-enforcement.ts "PROVIDER PAIRING" for the full
+                    // mechanism and the downstream damage (ledger resolvedModel → claim
+                    // assignedModel → empty difficulty allowance → dropped per-slot cap).
                     const slotDecision = decideSlotForModel({
                         requestedModel,
+                        providerType: resolved.providerType,
                         slots: resolveNodeCapabilitySlots(node, meshId).map(slot => ({
                             slot,
                             available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
                         })),
                     });
                     if (slotDecision.outcome === 'wait') {
-                        LOG.info('MeshQueue', `SLOT MODEL GUARD: model '${requestedModel}' is declared on node ${nodeId} but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
+                        LOG.info('MeshQueue', `SLOT MODEL GUARD: model '${requestedModel}' is declared on node ${nodeId} for provider '${resolved.providerType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
                         markSkip(nodeId, slotDecision.reason, { providerType: resolved.providerType });
                         continue;
                     }
                     if (slotDecision.outcome === 'notify') {
-                        LOG.warn('MeshQueue', `SLOT MODEL GUARD: no slot on node ${nodeId} declares model '${requestedModel}' (declared: ${slotDecision.declaredModels.join(', ') || 'none'}) for task ${task.id}; not launching — surfacing to the coordinator to re-drive`);
+                        LOG.warn('MeshQueue', `SLOT MODEL GUARD: no '${resolved.providerType}' slot on node ${nodeId} declares model '${requestedModel}' (declared: ${slotDecision.declaredModels.join(', ') || 'none'}) for task ${task.id}; not launching — surfacing to the coordinator to re-drive`);
                         markSkip(nodeId, slotDecision.reason, { providerType: resolved.providerType });
                         continue;
                     }
-                    const rawEffectiveModel = slotDecision.model;
-                    const winningModel = resolved.slot?.model?.trim() || undefined;
-                    const finalizedModel = slotDecision.slot.model?.trim() || undefined;
-                    const slotWasDemoted = resolved.slot?.provider !== slotDecision.slot.provider
-                        || winningModel !== finalizedModel;
-                    const demotionReason = slotWasDemoted
-                        ? (slotHasCapacity(meshId, nodeId, node, resolved.slot!, mesh?.nodes, isReadonly)
-                            ? 'slot_reselected_during_launch'
-                            : 'winning_slot_capacity_exhausted')
-                        : undefined;
+                    const finalization = finalizeSlotSelection({
+                        winningSlot: resolved.slot,
+                        decidedSlot: slotDecision.slot,
+                        decidedModel: slotDecision.model,
+                        winningSlotHasCapacity: slotHasCapacity(meshId, nodeId, node, resolved.slot!, mesh?.nodes, isReadonly),
+                    });
+                    const rawEffectiveModel = finalization.model;
+                    const demotionReason = finalization.demotionReason;
 
                     // CODEX-400 GUARD: the difficulty→brain presets (and MAGI slots) carry
                     // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that

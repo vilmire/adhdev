@@ -647,8 +647,13 @@ export function __decideSlotForModelForTests(
         best?.slot?.model,
         slotCoversTaskDifficulty(best?.slot, task.difficulty),
     );
+    // Mirror the production PROVIDER PAIRING scope: only the winning provider's
+    // slots may supply the launch model, so this hook cannot report a run/wait
+    // outcome the assignment path would not actually reach.
+    const winningProvider = best?.slot?.provider?.trim();
     return decideSlotForModel({
         requestedModel,
+        ...(winningProvider ? { providerType: winningProvider } : {}),
         slots: resolveNodeCapabilitySlots(node, meshId).map(slot => ({
             slot,
             available: slotHasCapacity(meshId, nodeId, node, slot),

@@ -27,6 +27,18 @@
  * a model the user never selected violates the same principle as running an
  * undeclared one.
  *
+ * PROVIDER PAIRING (`providerType`): the decision returns a `(slot, model)` PAIR,
+ * and the caller must spawn both halves of it. When the caller has already picked
+ * the provider it will spawn, it MUST pass `providerType` so only that provider's
+ * slots compete. The original signature had no such parameter, and the assignment
+ * path — which resolves the provider first, then called this with EVERY slot on
+ * the node — harvested only the model. A node holding claude-cli/opus therefore
+ * returned `opus` for a grok-cli launch: a pair no operator declared, and the very
+ * substitution the paragraph above forbids, arrived at by splitting the pair
+ * rather than by choosing a different model. This is not a race; the two
+ * resolutions are consecutive synchronous reads of the same node object, so a
+ * `difficult` task on a node with a claude slot reproduced it every time.
+ *
  * Relationship to model-provider-compat.ts (CODEX-400 GUARD): that guard answers
  * "can this provider physically accept this model string?" and drops Anthropic
  * models sent to non-Anthropic providers. This module answers the different
@@ -175,6 +187,22 @@ export interface SlotModelDecisionInput {
      * Capacity is computed by the caller, which owns the live assignment counts.
      */
     slots: SlotAvailability[];
+    /**
+     * PROVIDER PAIRING: when the caller has already selected the provider that
+     * will actually be spawned, pass it here so only that provider's slots
+     * compete. Omitting it considers every slot on the node, which is only
+     * correct when the provider is not yet decided.
+     *
+     * WHY THIS IS NOT OPTIONAL AT THE ASSIGNMENT CALL SITE: this function
+     * returns a `(slot, model)` pair, but the assignment path harvested only
+     * `.model` from it and spawned with the SEPARATELY-resolved provider. With
+     * no provider filter, a node holding a claude-cli/opus slot handed `opus`
+     * back for a grok-cli launch — a provider/model pair the operator never
+     * declared, and precisely the "substitute a different model" this module's
+     * header says it rejects. The mismatch then poisoned the ledger's
+     * resolvedModel and, downstream, silently voided the per-slot cap.
+     */
+    providerType?: string;
 }
 
 export type SlotModelDecision =
@@ -213,10 +241,22 @@ export type SlotModelDecision =
  */
 export function decideSlotForModel(input: SlotModelDecisionInput): SlotModelDecision {
     const { requestedModel, slots } = input;
-    const declaring = slots.filter(s => isModelAllowedBySlot(requestedModel, s.slot));
+    // PROVIDER PAIRING: narrow to the provider that will actually be spawned
+    // before anything else, so the model can only ever come from a slot that
+    // provider declares. Without this the three branches below answered the
+    // wrong question — "does ANY slot on the node declare this model?" — and a
+    // foreign provider's slot could satisfy it, breaking the (provider, model)
+    // pair. Narrowing also makes 'notify'/'wait' fire honestly: a model no slot
+    // of THIS provider declares is a real absence, not something to be papered
+    // over by borrowing a sibling provider's model.
+    const wanted = typeof input.providerType === 'string' ? input.providerType.trim() : '';
+    const candidates = wanted
+        ? slots.filter(s => (s.slot.provider?.trim() ?? '') === wanted)
+        : slots;
+    const declaring = candidates.filter(s => isModelAllowedBySlot(requestedModel, s.slot));
 
     if (!declaring.length) {
-        const declaredModels = slots
+        const declaredModels = candidates
             .map(s => (typeof s.slot.model === 'string' && s.slot.model.trim()) ? s.slot.model.trim() : '(provider default)')
             .filter((v, i, a) => a.indexOf(v) === i);
         return { outcome: 'notify', reason: SLOT_MODEL_ABSENT_SKIP_REASON, declaredModels };
@@ -236,5 +276,61 @@ export function decideSlotForModel(input: SlotModelDecisionInput): SlotModelDeci
         outcome: 'wait',
         reason: SLOT_MODEL_BUSY_SKIP_REASON,
         busySlots: declaring.map(s => s.slot),
+    };
+}
+
+/**
+ * The launch-time slot finalization the assignment path needs, derived in one
+ * place so the demotion bookkeeping cannot drift from the decision it describes.
+ *
+ * Extracted from the assignment loop rather than inlined there: it is pure
+ * (slots + capacity in, verdict out), it is the natural home for the PROVIDER
+ * PAIRING invariant documented above, and mesh-queue-assignment.ts is a frozen
+ * file-size baseline that must be decomposed rather than grown.
+ *
+ * `demoted` compares the WINNING slot (what provider selection chose) against
+ * the FINALIZED slot (what the guard settled on). Both halves — provider and
+ * model — are compared, because either can move independently.
+ */
+export interface SlotFinalization {
+    /** Slot the guard settled on; both provider and model are launched from it. */
+    slot: NodeCapabilitySlot;
+    /** The finalized slot's own model, or undefined for a model-less slot. */
+    model: string | undefined;
+    /** True when the finalized slot differs from the winning slot in either half. */
+    demoted: boolean;
+    /**
+     * Why the finalized slot differs. `slot_reselected_during_launch` when the
+     * winning slot still had capacity (so the move was not forced by load);
+     * `winning_slot_capacity_exhausted` when it did not.
+     */
+    demotionReason?: 'slot_reselected_during_launch' | 'winning_slot_capacity_exhausted';
+}
+
+export function finalizeSlotSelection(args: {
+    /** The slot provider selection won on. */
+    winningSlot: NodeCapabilitySlot | undefined;
+    /** The slot the SLOT MODEL GUARD returned for a 'run' outcome. */
+    decidedSlot: NodeCapabilitySlot;
+    /** Model the guard returned alongside decidedSlot. */
+    decidedModel: string | undefined;
+    /** Whether the winning slot still has capacity — separates the two reasons. */
+    winningSlotHasCapacity: boolean;
+}): SlotFinalization {
+    const winningModel = args.winningSlot?.model?.trim() || undefined;
+    const finalizedModel = args.decidedSlot.model?.trim() || undefined;
+    const demoted = args.winningSlot?.provider !== args.decidedSlot.provider
+        || winningModel !== finalizedModel;
+    return {
+        slot: args.decidedSlot,
+        model: args.decidedModel,
+        demoted,
+        ...(demoted
+            ? {
+                demotionReason: args.winningSlotHasCapacity
+                    ? 'slot_reselected_during_launch' as const
+                    : 'winning_slot_capacity_exhausted' as const,
+            }
+            : {}),
     };
 }

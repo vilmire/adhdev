@@ -288,8 +288,17 @@ export function buildAutoLaunchRoutingDecision(args: {
     const winningSlot = args.resolved.slot;
     const executedSlot = args.executedSlot ?? winningSlot;
     const winningProvider = args.resolved.providerType;
+    // executedSlot is the SOLE source of what actually ran. The previous form —
+    // `winningSlot.provider === executedSlot.provider ? winningProvider : executedSlot.provider`
+    // — reported the WINNING provider whenever the two slots merely agreed on the
+    // provider field, which is exactly the model-only demote case: `demoted` went
+    // true while executedSlot.providerType still named the winner, so a reader
+    // could not tell which half of the pair had moved. It also assumed provider
+    // and model always move together, and it is the model-only branch that
+    // disproves that. Derive both halves from the same slot so the record cannot
+    // contradict itself.
+    const executedProvider = executedSlot.provider;
     const sameDeclaredProvider = winningSlot.provider === executedSlot.provider;
-    const executedProvider = sameDeclaredProvider ? winningProvider : executedSlot.provider;
     const winningModel = winningSlot.model?.trim() || undefined;
     const executedModel = executedSlot.model?.trim() || undefined;
     const demoted = !sameDeclaredProvider || winningModel !== executedModel;
