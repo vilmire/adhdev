@@ -104,6 +104,65 @@ describe('interactive prompt utilities', () => {
     expect(response.answers.q1.selectedLabels).toHaveLength(2)
   })
 
+  // ── Hidden coordinator-spawned worker must not surface its prompt to the owner ──
+  // Live incident (2026-08-20): a mesh worker spawned with
+  // spawnedSessionVisibility='hidden' (surfaceHidden+muted true) raised a choice
+  // dialog on the owner's dashboard. The flags were set correctly; this selector
+  // simply never read them.
+  describe('surfaceHidden suppression', () => {
+    const hiddenWorker = {
+      id: 'daemon-1:cli:worker-1',
+      daemonId: 'daemon-1',
+      sessionId: 'worker-1',
+      type: 'claude-cli',
+      status: 'waiting_approval',
+      surfaceHidden: true,
+      muted: true,
+      activeInteractivePrompt: prompt,
+    } as DaemonData
+
+    const visibleSession = {
+      id: 'daemon-1:cli:session-2',
+      daemonId: 'daemon-1',
+      sessionId: 'session-2',
+      type: 'claude-cli',
+      status: 'waiting_approval',
+      surfaceHidden: false,
+      activeInteractivePrompt: prompt,
+    } as DaemonData
+
+    it('skips a surfaceHidden session on the unscoped (dashboard) scan', () => {
+      expect(findInteractivePromptSession([hiddenWorker])).toBeNull()
+    })
+
+    it('does not let a hidden worker preempt a visible session ordered after it', () => {
+      // Only the FIRST match is returned, so an unfiltered hidden entry earlier in
+      // the list would both leak itself AND hide the owner's real prompt.
+      expect(findInteractivePromptSession([hiddenWorker, visibleSession]))
+        .toMatchObject({ sessionId: 'session-2' })
+    })
+
+    it('still resolves a hidden session when asked for it explicitly by id', () => {
+      // The coordinator answers its worker's prompt through this path — suppressing
+      // it here would strand the worker waiting forever.
+      expect(findInteractivePromptSession([hiddenWorker], 'worker-1'))
+        .toMatchObject({ sessionId: 'worker-1' })
+    })
+
+    it('surfaces a muted-but-visible session — mute silences alerts, not the dialog', () => {
+      const mutedVisible = { ...visibleSession, muted: true, surfaceHidden: false } as DaemonData
+      expect(findInteractivePromptSession([mutedVisible]))
+        .toMatchObject({ sessionId: 'session-2' })
+    })
+
+    it('surfaces a session with no visibility flags at all (regression: no accidental hiding)', () => {
+      const plain = { ...visibleSession } as Record<string, unknown>
+      delete plain.surfaceHidden
+      expect(findInteractivePromptSession([plain as DaemonData]))
+        .toMatchObject({ sessionId: 'session-2' })
+    })
+  })
+
   it('builds daemon-compatible responses from selected labels and freeform text', () => {
     expect(buildInteractivePromptResponse(prompt, {
       q1: { selectedLabels: ['Approve'] },

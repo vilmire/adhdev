@@ -15,6 +15,7 @@ import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
 import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
+import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import type {
     ProviderState,
     IdeProviderState,
@@ -141,7 +142,18 @@ export interface StatusReporterDeps {
     detectedIdes: any[];
     instanceId: string;
     daemonVersion?: string;
-    instanceManager: { collectAllStates(): ProviderState[]; collectStatesByCategory(cat: string): ProviderState[] };
+    instanceManager: {
+        collectAllStates(): ProviderState[];
+        collectStatesByCategory(cat: string): ProviderState[];
+        /**
+         * Optional: live instance lookup used to stamp `surfaceHidden`/`muted` onto
+         * outgoing status events (see buildServerStatusEvent). Optional so existing
+         * test doubles and any alternate manager still satisfy the interface — when
+         * absent the event simply omits the flags and the server falls back to its
+         * snapshot join, i.e. exactly the pre-existing behavior.
+         */
+        getInstance?(sessionId: string): { getState?(): ProviderState | undefined } | undefined;
+    };
     getScreenshotUsage?: () => { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
 }
 
@@ -254,6 +266,42 @@ export class DaemonStatusReporter {
         }
     }
 
+    /**
+     * Resolve the target session's dashboard visibility at event time, straight
+     * from the live provider instance's `settings` — the same source of truth
+     * `buildSessionEntries` uses for the snapshot path (builders.ts), so an event
+     * and a snapshot emitted for the same session always agree.
+     *
+     * Reading the LIVE instance (rather than a cached projection) is what closes
+     * the race: a hide/mute toggle or a coordinator-spawned worker's default is
+     * visible here immediately, whereas the derived caches only refresh on the
+     * 5s/30s heartbeat.
+     *
+     * Returns undefined when the session has no local instance (a genuinely remote
+     * mesh worker hosted by a different daemon, or an event with no targetSessionId).
+     * The event then omits the flags and the server falls back to its snapshot join.
+     */
+    private resolveEventHideMute(sessionId: string): { surfaceHidden: boolean; muted: boolean } | undefined {
+        if (!sessionId) return undefined;
+        const getInstance = this.deps.instanceManager?.getInstance;
+        if (typeof getInstance !== 'function') return undefined;
+        let state: ProviderState | undefined;
+        try {
+            state = getInstance.call(this.deps.instanceManager, sessionId)?.getState?.();
+        } catch {
+            return undefined;
+        }
+        const settings = (state as { settings?: Record<string, any> } | undefined)?.settings;
+        if (!settings) return undefined;
+        return {
+            surfaceHidden: resolveSurfaceHidden(settings),
+            // Status-gated exactly as builders.ts does: pass the session's live status so a
+            // one-shot silent-idle arm mutes only the idle/completion frame and never an
+            // approval/choice frame in the same turn.
+            muted: resolveMuted(settings, (state as { status?: string } | undefined)?.status),
+        };
+    }
+
     private buildServerStatusEvent(event: Record<string, unknown>): DaemonStatusEventPayload | null {
         const eventName = this.toDaemonStatusEventName(event.event);
         if (!eventName) return null;
@@ -300,6 +348,17 @@ export class DaemonStatusReporter {
                 .filter((button): button is string => typeof button === 'string' && button.trim().length > 0);
             if (modalButtons.length > 0) {
                 payload.modalButtons = modalButtons;
+            }
+        }
+
+        // Stamp the target session's visibility so the server's push-suppression
+        // gate does not have to join against a snapshot that may not have arrived
+        // yet. Booleans only — no content. See DaemonStatusEventPayload.
+        if (payload.targetSessionId) {
+            const hideMute = this.resolveEventHideMute(payload.targetSessionId);
+            if (hideMute) {
+                payload.surfaceHidden = hideMute.surfaceHidden;
+                payload.muted = hideMute.muted;
             }
         }
 

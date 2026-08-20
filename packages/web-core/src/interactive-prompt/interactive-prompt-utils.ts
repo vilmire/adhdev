@@ -33,6 +33,28 @@ function getEntrySessionId(entry: DaemonData): string {
   return entry.sessionId || entry.instanceId || entry.id
 }
 
+/**
+ * Select the session whose interactive prompt the dashboard should surface.
+ *
+ * ── Hidden-session suppression ────────────────────────────────────────────
+ * Without an explicit `sessionId` this is a GLOBAL scan: it returns the first
+ * entry anywhere in `ides` that carries a prompt, and Dashboard.tsx calls it
+ * exactly that way. A coordinator-spawned worker (mesh policy
+ * `spawnedSessionVisibility: 'hidden'` → `surfaceHidden: true, muted: true`)
+ * has no tab, no pane and no ApprovalBanner mount point — yet its choice
+ * prompt still rendered as a full-screen modal over the owner's dashboard, and
+ * could even preempt a visible session's prompt since only the first match is
+ * returned. That is the leak this skip closes.
+ *
+ * Suppression is deliberately scoped to `surfaceHidden`, not `muted`: mute
+ * silences attention side-effects (toast/audio/push) while keeping the session
+ * on screen, so a muted-but-visible session must still be answerable here.
+ *
+ * An EXPLICIT `sessionId` overrides the skip — asking for a specific session's
+ * prompt is a direct request, and the coordinator's own answer path depends on
+ * being able to resolve a hidden worker's prompt by id. Only the unscoped
+ * "surface whatever is pending" scan is filtered.
+ */
 export function findInteractivePromptSession(
   entries: DaemonData[],
   sessionId?: string | null,
@@ -43,6 +65,9 @@ export function findInteractivePromptSession(
     if (!prompt) continue
     const entrySessionId = getEntrySessionId(entry)
     if (normalizedSessionId && normalizedSessionId !== entrySessionId && normalizedSessionId !== entry.id) {
+      continue
+    }
+    if (!normalizedSessionId && entry.surfaceHidden === true) {
       continue
     }
     const daemonId = entry.daemonId || entry.id.split(':')[0] || entry.id

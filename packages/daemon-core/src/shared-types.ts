@@ -822,6 +822,23 @@ export interface DaemonStatusEventPayload {
     elapsedSec?: number;
     modalMessage?: string;
     modalButtons?: string[];
+    /**
+     * The target session's dashboard visibility at the moment the event fired.
+     *
+     * These make the event SELF-DESCRIBING for the server's push-suppression gate.
+     * The gate used to join this event against the last `status_report` snapshot,
+     * but the two travel on different channels: the event fires synchronously on
+     * the PTY output tick, while the snapshot is throttled (5s), deduped (up to
+     * ~5min) and periodic (30s). A coordinator-spawned worker that reaches an
+     * approval/choice modal before its first snapshot lands is simply absent from
+     * the server's map — and the gate fails OPEN, so the push leaked to the owner.
+     *
+     * Both are plain booleans (non-content), so forwarding them does not widen the
+     * server content boundary — see buildCloudStatusReportPayload, which already
+     * forwards the same two fields on the snapshot path.
+     */
+    surfaceHidden?: boolean;
+    muted?: boolean;
 }
 
 export type DashboardStatusEventName =
