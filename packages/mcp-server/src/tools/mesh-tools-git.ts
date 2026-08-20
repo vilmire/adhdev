@@ -17,11 +17,13 @@ import {
     extractSubmodules,
     findNodeWithRefresh,
     isP2pTransportUnavailableError,
+    meshNodeIdMatches,
     refreshMeshFromDaemon,
     syncCoordinatorDaemonMeshCache,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
 import type {
+    LocalMeshNodeEntry,
     MeshContext,
 } from './mesh-tools-internal.js';
 
@@ -296,6 +298,122 @@ export async function meshCheckpoint(
     return JSON.stringify(result, null, 2);
 }
 
+type SharedBaseWorktree = {
+    nodeId: string;
+    branch?: string;
+    sourceRepoRoot: string;
+    baseBranch: string;
+};
+
+/**
+ * SHARED-BASE-WORKTREE-ADVISORY: this is deliberately a predicate, not a
+ * scheduler. A shared refine base is useful context at clone time, but the
+ * refine lease and batch sequencing remain the mechanisms that serialize it.
+ *
+ * The key mirrors Refinery: `(source repoRoot, source checkout branch)`. In
+ * particular, `base_branch` from mesh_clone_node is only a clone input and is
+ * not proof of the branch Refinery will later converge against.
+ */
+export function buildSharedBaseWorktreeAdvisory(input: {
+    sourceRepoRoot: string;
+    baseBranch: string;
+    worktrees: SharedBaseWorktree[];
+}): { sharedBaseWorktreeAdvisory: {
+    baseBranch: string;
+    siblingWorktrees: Array<{ nodeId: string; branch: string | null }>;
+    submoduleGitlinkWarning: string;
+    convergenceGuidance: string;
+} } | null {
+    const siblings = input.worktrees.filter(worktree => (
+        worktree.sourceRepoRoot === input.sourceRepoRoot
+        && worktree.baseBranch === input.baseBranch
+    ));
+    if (siblings.length < 2) return null;
+
+    return {
+        sharedBaseWorktreeAdvisory: {
+            baseBranch: input.baseBranch,
+            siblingWorktrees: siblings.map(worktree => ({
+                nodeId: worktree.nodeId,
+                branch: worktree.branch || null,
+            })),
+            submoduleGitlinkWarning: 'If two or more siblings change a submodule gitlink, conflicts are likely.',
+            convergenceGuidance: 'When converging these siblings, use mesh_refine_batch; do not repeatedly call mesh_refine_node one at a time.',
+        },
+    };
+}
+
+function readNodeString(node: LocalMeshNodeEntry, ...keys: string[]): string | undefined {
+    for (const key of keys) {
+        const value = (node as any)[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return undefined;
+}
+
+async function buildSharedBaseWorktreeAdvisoryForClone(
+    ctx: MeshContext,
+    clonedNode: LocalMeshNodeEntry,
+): Promise<ReturnType<typeof buildSharedBaseWorktreeAdvisory>> {
+    const worktrees = (ctx.mesh.nodes as LocalMeshNodeEntry[])
+        .filter(node => readNodeString(node, 'clonedFromNodeId', 'cloned_from_node_id'));
+    // A single worktree cannot share a base. This also keeps the first clone
+    // entirely unchanged: no advisory status probe is sent.
+    if (worktrees.length < 2) return null;
+
+    const clonedNodeId = readNodeString(clonedNode, 'id', 'nodeId', 'node_id');
+    if (!clonedNodeId || !worktrees.some(node => meshNodeIdMatches(node as any, clonedNodeId))) return null;
+
+    const sources = new Map<string, LocalMeshNodeEntry>();
+    for (const worktree of worktrees) {
+        const sourceId = readNodeString(worktree, 'clonedFromNodeId', 'cloned_from_node_id');
+        if (!sourceId) continue;
+        const source = (ctx.mesh.nodes as LocalMeshNodeEntry[])
+            .find(node => meshNodeIdMatches(node as any, sourceId));
+        const sourceRepoRoot = source && readNodeString(source, 'repoRoot', 'repo_root', 'workspace');
+        if (source && sourceRepoRoot) sources.set(sourceId, source);
+    }
+
+    const sourceBranches = new Map<string, string>();
+    for (const [sourceId, source] of sources) {
+        try {
+            const status = extractGitStatus(await commandForNode(ctx, source, 'git_status', {
+                workspace: source.workspace,
+            }));
+            if (typeof status?.branch === 'string' && status.branch.trim()) {
+                sourceBranches.set(sourceId, status.branch.trim());
+            }
+        } catch {
+            // Advisory-only: inability to inspect a source checkout must never
+            // turn a successful clone into a failed one.
+        }
+    }
+
+    const clonedSourceId = readNodeString(clonedNode, 'clonedFromNodeId', 'cloned_from_node_id');
+    const clonedSource = clonedSourceId ? sources.get(clonedSourceId) : undefined;
+    const sourceRepoRoot = clonedSource && readNodeString(clonedSource, 'repoRoot', 'repo_root', 'workspace');
+    const baseBranch = clonedSourceId ? sourceBranches.get(clonedSourceId) : undefined;
+    if (!sourceRepoRoot || !baseBranch) return null;
+
+    const resolvedWorktrees: SharedBaseWorktree[] = [];
+    for (const worktree of worktrees) {
+        const sourceId = readNodeString(worktree, 'clonedFromNodeId', 'cloned_from_node_id');
+        const source = sourceId ? sources.get(sourceId) : undefined;
+        const repoRoot = source && readNodeString(source, 'repoRoot', 'repo_root', 'workspace');
+        const sourceBaseBranch = sourceId ? sourceBranches.get(sourceId) : undefined;
+        const nodeId = readNodeString(worktree, 'id', 'nodeId', 'node_id');
+        if (!nodeId || !repoRoot || !sourceBaseBranch) continue;
+        resolvedWorktrees.push({
+            nodeId,
+            branch: readNodeString(worktree, 'worktreeBranch', 'worktree_branch', 'branch'),
+            sourceRepoRoot: repoRoot,
+            baseBranch: sourceBaseBranch,
+        });
+    }
+
+    return buildSharedBaseWorktreeAdvisory({ sourceRepoRoot, baseBranch, worktrees: resolvedWorktrees });
+}
+
 export async function meshCloneNode(
     ctx: MeshContext,
     args: { source_node_id: string; branch: string; base_branch?: string },
@@ -328,20 +446,31 @@ export async function meshCloneNode(
         inlineMesh: ctx.mesh,
     });
     const clonePayload = extractCloneNodePayload(result);
+    let sharedBaseWorktreeAdvisory: ReturnType<typeof buildSharedBaseWorktreeAdvisory> | null = null;
     if (clonePayload?.success && clonePayload.node?.id) {
         const existingIndex = ctx.mesh.nodes.findIndex(n => n.id === clonePayload.node.id);
         if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
         else ctx.mesh.nodes.push(clonePayload.node);
         ctx.mesh.updatedAt = new Date().toISOString();
         await syncCoordinatorDaemonMeshCache(ctx);
+        try {
+            sharedBaseWorktreeAdvisory = await buildSharedBaseWorktreeAdvisoryForClone(ctx, clonePayload.node);
+        } catch {
+            // The clone has already succeeded and its membership/cache update is
+            // durable. An advisory can only add information, never change that.
+        }
     }
     // Carry the preflight's advisories onto the clone result. The dirty-source case is
     // the important one: the clone SUCCEEDS but is created from HEAD, so uncommitted
     // work in the source is not in it. Dropping the warning here would silently hide
     // the one thing the operator needs to know about an otherwise-successful clone.
     const planWarnings = Array.isArray(planned?.warnings) ? planned.warnings : [];
-    if (planWarnings.length && result && typeof result === 'object') {
-        return JSON.stringify({ ...result, warnings: planWarnings }, null, 2);
+    if (result && typeof result === 'object') {
+        return JSON.stringify({
+            ...result,
+            ...(planWarnings.length ? { warnings: planWarnings } : {}),
+            ...(sharedBaseWorktreeAdvisory || {}),
+        }, null, 2);
     }
     return JSON.stringify(result, null, 2);
 }
