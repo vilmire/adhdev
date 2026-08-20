@@ -118,6 +118,48 @@ export function printQuota(name: string, quota: ProviderQuota): void {
 }
 
 /**
+ * Render the outcome of a force refresh (`adhdev quota --refresh`).
+ *
+ * ★The 'cooldown' line is the point of this renderer. A force refresh that hits
+ * a provider's 429 cooldown does NOT probe (see forceRefreshQuota for why
+ * overriding on user request is wrong), and the two ways to get that wrong are
+ * to hit the endpoint anyway or to print nothing and let the user believe a
+ * refresh happened. So the refusal is stated, with the time it lifts and the
+ * fact that the numbers on screen are the last good reading.
+ */
+export function printQuotaRefreshOutcome(entries: ReadonlyArray<{
+    provider: string;
+    outcome: 'refreshed' | 'cooldown' | 'disabled' | 'unsupported';
+    retryAtMs?: number;
+    reason?: string;
+}>): void {
+    console.log();
+    if (entries.length === 0) {
+        console.log(chalk.gray('  Nothing to refresh.'));
+        console.log();
+        return;
+    }
+    const refreshed = entries.filter((e) => e.outcome === 'refreshed');
+    if (refreshed.length > 0) {
+        console.log(chalk.green(`✓ Refreshed ${refreshed.map((e) => e.provider).join(', ')}`));
+    }
+    for (const entry of entries) {
+        if (entry.outcome === 'refreshed') continue;
+        if (entry.outcome === 'cooldown') {
+            console.log(chalk.yellow(`• ${entry.provider}: rate-limited — not re-probed`));
+            if (typeof entry.retryAtMs === 'number' && Number.isFinite(entry.retryAtMs)) {
+                console.log(chalk.gray(`  Retrying no earlier than ${formatRelative(entry.retryAtMs)}.`));
+            }
+            console.log(chalk.gray('  The numbers shown are the last good reading.'));
+            console.log(chalk.gray("  Re-probing now would extend the provider's own throttle."));
+            continue;
+        }
+        console.log(chalk.gray(`• ${entry.provider}: ${entry.reason || entry.outcome}`));
+    }
+    console.log();
+}
+
+/**
  * Render the outcome of `installClaudeStatusline()`.
  *
  * Every line here is a claim about the user's config, so each one is tied to a

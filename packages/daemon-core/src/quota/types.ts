@@ -164,6 +164,23 @@ export interface QuotaMetadata {
     failureKind?: QuotaFailureKind;
     /** Unix ms before which a refetch should not be attempted (HTTP Retry-After). */
     retryAtMs?: number;
+    /**
+     * ★Unix ms when the daemon last ATTEMPTED to refresh this provider — a
+     * different clock from the snapshot's `updatedAt`, which is when the DATA
+     * was captured.
+     *
+     * For an OAuth fetcher the two coincide. For a FILE-SOURCE fetcher they do
+     * not: claude-cli reports the statusline snapshot's own `capturedAt` and
+     * codex-cli the rollout entry's timestamp, so `updatedAt` stays put across
+     * any number of successful re-reads of an unchanged file. Scheduling
+     * therefore reads THIS field (quota/refresh.ts `lastAttemptAt`) and
+     * freshness — what the user sees, what the routing gate trusts — reads
+     * `updatedAt`. Conflating them makes a file-source provider look
+     * permanently overdue and re-probe on every read.
+     *
+     * Stamped only by `refreshQuotaCacheOnce`; a fetcher never sets it.
+     */
+    fetchedAt?: number;
     /** Subscription tier when the provider reports one (e.g. "plus"). */
     planType?: string | null;
     /**

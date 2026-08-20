@@ -78,6 +78,21 @@ export interface MeshNodeFactsProviderQuota {
          * rather than presenting them as a freshly measured value.
          */
         lastGoodWindows?: boolean
+        /**
+         * Unix ms when the reporting node last ATTEMPTED a refresh of this
+         * provider — deliberately distinct from `updatedAt`, which dates the
+         * DATA. They differ for file-source providers (claude-cli reports its
+         * statusline snapshot's capture time, codex-cli the rollout entry's),
+         * whose `updatedAt` does not move while the source file is unchanged
+         * however often it is successfully re-read.
+         *
+         * A reader judging FRESHNESS wants `updatedAt`. This field answers the
+         * different question "is that node still looking?", which is what makes
+         * "3h old but re-checked a minute ago" distinguishable from "3h old and
+         * nobody has looked since". Absent on entries written by daemons
+         * predating the field.
+         */
+        fetchedAt?: number
         [extra: string]: unknown
     }
     [extra: string]: unknown

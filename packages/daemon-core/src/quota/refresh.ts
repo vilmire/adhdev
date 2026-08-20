@@ -12,10 +12,25 @@
  * or await. `readQuotaCache()` deliberately exposes no way to trigger a fetch —
  * the absence of that affordance is the contract.
  *
+ * ★That contract is UNCHANGED by the 2026-08-21 SWR work. Read-triggered
+ * revalidation is a separate function, `readQuotaCacheWithRevalidate()`, and
+ * only the low-rate human-facing surfaces call it. The hot readers — the mesh
+ * reconcile tick and `buildLocalNodeFacts` — still call `readQuotaCache()` and
+ * still cannot cause a fetch. Do not merge the two.
+ *
  * Freshness is NOT asserted here: entries carry their own `updatedAt` and ride
  * a bundle stamped with `reportedAt`, and a reader judges age from those. This
- * module publishes no TTL because neither the refresh cadence nor the delivery
- * cadence is in its control (delivery is driven by whoever calls git_status).
+ * module publishes no TTL for DELIVERY because the delivery cadence is not in
+ * its control (it is driven by whoever calls git_status); the per-provider
+ * REFRESH TTLs it does publish (QUOTA_AXIS_TTL_MS) govern only when this module
+ * re-probes, which is its own business.
+ *
+ * ★Two clocks ride each entry and mean different things — `updatedAt` is when
+ * the DATA was captured (for file-source providers, the source file's own
+ * stamp, which does not move when the file does not change) and
+ * `metadata.fetchedAt` is when this process last ATTEMPTED a refresh. Scheduling
+ * reads the latter, users and the routing gate read the former. See
+ * `stampFetchedAt` before touching either.
  */
 'use strict';
 
@@ -33,7 +48,13 @@ import { loadQuotaCache, saveQuotaCache } from './persist.js';
 
 /**
  * How often a node re-reads its own quota. Deliberately coarse: quota moves on
- * the scale of a work session, and every tick costs a codex child-process spawn.
+ * the scale of a work session, and a tick used to cost a codex child-process
+ * spawn for every provider.
+ *
+ * As of the 2026-08-21 axis split this is the tick RATE, not the refresh policy:
+ * what each tick actually probes is decided per provider by its axis TTL (see
+ * QUOTA_AXIS and isDueByAxisTtl). The NETWORK axis is excluded from cadenced
+ * ticking entirely — see QUOTA_AXIS.
  */
 export const QUOTA_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -43,6 +64,113 @@ export const QUOTA_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
  * being worked on continuously never flickers into the idle-skip between ticks.
  */
 export const QUOTA_ACTIVITY_WINDOW_MS = 20 * 60 * 1000;
+
+/**
+ * ★AXIS SPLIT (owner decision 2026-08-21, design
+ * docs/design/2026-08-21-quota-refresh-lazy-transition.md).
+ *
+ * Before this, ALL SIX providers shared one 15-minute schedule — three file
+ * reads (network cost 0) locked to the same cadence as three OAuth calls to
+ * someone else's server. That single schedule is the whole waste: it made the
+ * cheap providers needlessly stale to protect the expensive ones, and it kept
+ * hitting third-party quota endpoints on a timer even when nothing had asked.
+ *
+ * Two axes now:
+ *
+ *  - `file`    — the reading is already on this machine. claude-cli reads the
+ *                statusline snapshot file, codex-cli reads the newest rollout
+ *                file, opencode spawns `opencode stats`. Network cost is ZERO,
+ *                so a short TTL is nearly free and simply makes the numbers
+ *                better. opencode gets a longer TTL than the two pure file
+ *                reads because a child process is not free (see the TTL table).
+ *  - `network` — the reading only exists on a third party's server (kimi,
+ *                grok-cli, antigravity-cli OAuth calls). ★These are REMOVED
+ *                from cadenced ticking. They refresh on exactly four triggers:
+ *                  1. a turn ending (setupQuotaEventRefresh, 60s debounce) —
+ *                     the moment the number actually moved;
+ *                  2. the routing-staleness backfill (isSnapshotStaleForRouting)
+ *                     — ★the safety net, the only guarantee a snapshot never
+ *                     ages out of the routing gate's trust window forever;
+ *                  3. a read-triggered SWR revalidate (readQuotaCacheWithRevalidate);
+ *                  4. boot, and an explicit force refresh.
+ *
+ * Axis membership is a property of where the number LIVES, not of the provider
+ * — if a fetcher's source ever changes (codex already moved from an app-server
+ * spawn to a local rollout read), move it here and the schedule follows.
+ */
+export type QuotaAxis = 'file' | 'network';
+
+export const QUOTA_AXIS: Readonly<Record<QuotaProvider, QuotaAxis>> = {
+    'antigravity-cli': 'network',
+    'claude-cli': 'file',
+    'codex-cli': 'file',
+    'grok-cli': 'network',
+    'kimi': 'network',
+    'opencode': 'file',
+};
+
+/**
+ * Per-provider TTL: how old this machine's last refresh ATTEMPT may be before a
+ * cadenced tick (or an SWR read) re-probes it.
+ *
+ * ★These are refresh floors, NOT the routing gate's trust window — that is
+ * QUOTA_ROUTABLE_MAX_AGE_MS, which every axis is still backstopped by. A TTL
+ * here can only make a provider FRESHER than the safety net, never staler.
+ *
+ * Chosen values and why:
+ *  - claude-cli / codex-cli — 60s. Both are a single local file read (statusline
+ *    snapshot / newest rollout). The cost is a `readFileSync` in a timer that
+ *    already fired; anything longer would leave the cheapest numbers we have
+ *    needlessly old. Not lower than 60s because the underlying files are
+ *    themselves written at human pace — re-reading faster re-reads the same
+ *    bytes.
+ *  - opencode — 5 min. Still local, but each read SPAWNS `opencode stats`. A
+ *    child process on a timer is a real cost (and one the 15-minute cadence was
+ *    originally sized around), so it sits between the file reads and the
+ *    network axis.
+ *  - kimi / grok-cli / antigravity-cli — ★Infinity, meaning "never due on
+ *    cadence". This is the axis split's entire point: a timer must not hit a
+ *    third party's endpoint. They still refresh on the four triggers listed in
+ *    QUOTA_AXIS, and the staleness backfill still guarantees a floor.
+ */
+export const QUOTA_AXIS_TTL_MS: Readonly<Record<QuotaProvider, number>> = {
+    'antigravity-cli': Number.POSITIVE_INFINITY,
+    'claude-cli': 60_000,
+    'codex-cli': 60_000,
+    'grok-cli': Number.POSITIVE_INFINITY,
+    'kimi': Number.POSITIVE_INFINITY,
+    'opencode': 5 * 60 * 1000,
+};
+
+/**
+ * ★TTL for a READ-TRIGGERED (SWR) refresh, which is a different question from
+ * the cadenced TTL above and must not reuse it.
+ *
+ * The cadenced TTL answers "should a TIMER spend a fetch on this?", and for the
+ * network axis the answer is a flat no — that is the axis split. This one
+ * answers "someone is LOOKING at this number right now; is it worth a fetch?",
+ * and there the answer is different, because demand is exactly the evidence the
+ * timer lacks. Reusing the Infinity would make SWR a no-op on the three
+ * providers whose freshness a user is most likely to be checking, which quietly
+ * deletes trigger #3 from the design.
+ *
+ * The network axis gets 10 min: long enough that a dashboard left open, or a
+ * page reloaded a few times, does not turn into a stream of third-party calls;
+ * short enough that "I opened the page to see my quota" gets a current number
+ * well inside the 60-minute routing window. The file axis keeps its own cheap
+ * TTL, since there is nothing to economise on.
+ *
+ * ★This is still bounded by the 429 cooldown on the way through — see
+ * scheduleStaleRevalidate and refreshQuotaCacheOnce.
+ */
+export const QUOTA_SWR_TTL_MS: Readonly<Record<QuotaProvider, number>> = {
+    'antigravity-cli': 10 * 60 * 1000,
+    'claude-cli': QUOTA_AXIS_TTL_MS['claude-cli'],
+    'codex-cli': QUOTA_AXIS_TTL_MS['codex-cli'],
+    'grok-cli': 10 * 60 * 1000,
+    'kimi': 10 * 60 * 1000,
+    'opencode': QUOTA_AXIS_TTL_MS['opencode'],
+};
 
 /** The providers a node reports. One entry per shipped fetcher. */
 const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<ProviderQuota> }> = [
@@ -173,14 +301,122 @@ export function carryForwardLastGoodWindows(
 }
 
 /**
+ * ★TWO DIFFERENT CLOCKS — do not conflate them (owner finding 2026-08-21).
+ *
+ * `updatedAt` is the age of the DATA. For an OAuth fetcher it happens to equal
+ * the fetch time, but for a FILE-SOURCE fetcher it is the source file's own
+ * capture stamp: claude.ts returns `snapshot.capturedAt` (fetchers/claude.ts,
+ * both the fresh and the aged-out branch), and codex-rollout does the same with
+ * the rollout entry's timestamp. So a provider whose file has not changed
+ * reports the SAME `updatedAt` no matter how many times we successfully re-read
+ * it.
+ *
+ * That is correct for the data — a reader must know the number is 3 hours old —
+ * but it is WRONG as a refresh clock. Driving TTL/SWR off `updatedAt` would ask
+ * "has the file changed?" and, on every "no", re-read the file again
+ * immediately: a hot loop on the cheap axis, and on the network axis a
+ * permanently-due provider hammered by every SWR read. This is exactly why the
+ * owner's claude reading looked 22 hours untouched while the backfill was in
+ * fact fetching every 15 minutes on schedule: the fetches happened, the
+ * capturedAt simply never moved.
+ *
+ * `metadata.fetchedAt` is therefore stamped here — the wall-clock time THIS
+ * process last completed a refresh attempt for the provider, success or
+ * failure. Every scheduling decision (axis TTL, SWR, force-refresh reporting)
+ * reads it via `lastAttemptAt()`; every freshness decision the USER or the
+ * ROUTING GATE sees still reads `updatedAt`. ★Do not "simplify" one into the
+ * other.
+ */
+function stampFetchedAt(
+    quota: MeshNodeFactsProviderQuota,
+    now: number,
+): MeshNodeFactsProviderQuota {
+    return { ...quota, metadata: { ...quota.metadata, fetchedAt: now } };
+}
+
+/**
+ * When this process last ATTEMPTED a refresh for the provider, per the contract
+ * above. Falls back to `updatedAt` for an entry written before `fetchedAt`
+ * existed (a hydrated on-disk cache from an older build) — that is the old
+ * behaviour, so an upgrade degrades to what it did yesterday rather than
+ * treating every legacy entry as never-attempted and re-probing all six
+ * providers at once on the first tick after upgrade.
+ */
+function lastAttemptAt(entry: MeshNodeFactsProviderQuota | undefined): number | undefined {
+    if (!entry) return undefined;
+    const fetchedAt = Number(entry.metadata?.fetchedAt);
+    if (Number.isFinite(fetchedAt) && fetchedAt > 0) return fetchedAt;
+    const updatedAt = Number(entry.updatedAt);
+    return Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : undefined;
+}
+
+/**
+ * True when the provider's own axis TTL has elapsed since the last refresh
+ * ATTEMPT — the cadenced-tick gate. A network-axis provider's TTL is Infinity,
+ * so this is always false for it and the timer never probes it; its refreshes
+ * come from events, the staleness backfill, SWR reads and force refresh (see
+ * QUOTA_AXIS).
+ */
+export function isDueByAxisTtl(
+    provider: QuotaProvider,
+    now: number = Date.now(),
+    ttlTable: Readonly<Record<QuotaProvider, number>> = QUOTA_AXIS_TTL_MS,
+): boolean {
+    const ttl = ttlTable[provider];
+    if (!Number.isFinite(ttl)) return false;
+    const attemptedAt = lastAttemptAt(cache.get(provider));
+    if (attemptedAt === undefined) return true; // never attempted in a form we can date
+    return now - attemptedAt >= ttl;
+}
+
+/**
+ * Read-triggered counterpart of isDueByAxisTtl — same clock, different table.
+ * Named separately so a caller has to state which question it is asking; the
+ * two tables deliberately disagree on the network axis (see QUOTA_SWR_TTL_MS).
+ */
+export function isDueBySwrTtl(provider: QuotaProvider, now: number = Date.now()): boolean {
+    return isDueByAxisTtl(provider, now, QUOTA_SWR_TTL_MS);
+}
+
+/**
  * Read the cached quota snapshots. Synchronous, side-effect free, and never
  * triggers a fetch — see the module header. Returns undefined (not an empty
  * object) when nothing has been cached, so the bundle omits the field entirely
  * rather than shipping a misleading empty map.
+ *
+ * ★This signature is load-bearing and must not grow a fetch affordance: the
+ * callers are the 4-second mesh reconcile tick (mesh-quota-routing.ts) and
+ * EVERY `git_status` (mesh/node-facts.ts). Read-triggered revalidation lives in
+ * the separate `readQuotaCacheWithRevalidate()` below, which only the low-rate
+ * human-facing surfaces call.
  */
 export function readQuotaCache(): Record<string, MeshNodeFactsProviderQuota> | undefined {
     if (cache.size === 0) return undefined;
     return Object.fromEntries(cache);
+}
+
+/**
+ * The enable gate captured at daemon boot, so refresh paths that are triggered
+ * from OUTSIDE the loop — a read-driven SWR revalidate, an explicit force
+ * refresh — probe exactly the providers the periodic loop would.
+ *
+ * Without this they would have to either take a ProviderLoader parameter
+ * (which every caller, including a `git_status`-adjacent read surface, would
+ * then have to thread) or run ungated, which would re-probe a provider the user
+ * disabled — the phantom-failure noise the enable gate exists to remove. The
+ * loop is the natural owner because it already receives the loader, and the
+ * predicate is a live closure over it, so enabling a provider later still takes
+ * effect without re-registering.
+ *
+ * Undefined until setupQuotaRefreshLoop runs (or in tests that never start a
+ * loop): callers treat that as "no gate", which is the pre-existing behaviour of
+ * refreshQuotaCacheOnce with no isEnabled argument.
+ */
+let ambientIsEnabled: QuotaProviderEnabled | undefined;
+
+/** Test seam: drop the ambient enable gate registered by the loop. */
+export function __resetQuotaAmbientEnableGateForTests(): void {
+    ambientIsEnabled = undefined;
 }
 
 /**
@@ -207,6 +443,7 @@ export function clearQuotaCache(): void {
         if (state.timer) clearTimeout(state.timer);
     }
     failureRetries.clear();
+    revalidateInFlight.clear();
 }
 
 /**
@@ -281,8 +518,31 @@ export function __resetQuotaHydrationForTests(): void {
     hydrated = false;
 }
 
+export interface RefreshQuotaCacheOptions {
+    /**
+     * Restrict which of `fetchers` are actually PROBED, without narrowing which
+     * are considered for the disabled-provider prune below.
+     *
+     * The two lists have to be separable because they answer different
+     * questions. The periodic loop passes every shipped fetcher (so a provider
+     * disabled since the last tick still gets its stale entry dropped) but
+     * probes only the ones whose axis TTL is due or which the safety net
+     * selected. Passing a pre-filtered list instead would silently skip the
+     * prune, leaving a disabled provider's "unavailable" reading on screen
+     * forever. Omit to probe everything passed in — the original behaviour.
+     */
+    probeOnly?: ReadonlySet<QuotaProvider>;
+}
+
 /**
  * Refresh every provider once and store the results.
+ *
+ * ★THE SINGLE WRITE PATH. Every refresh — periodic tick, boot, event-driven,
+ * scheduled retry, SWR revalidate, explicit force refresh — funnels through
+ * here, and that is load-bearing rather than tidy: the 429 cooldown filter, the
+ * last-good carry-forward, the enable-gate prune, the retry bookkeeping and the
+ * disk persist all live in this function. A refresh path added AROUND it
+ * silently opts out of all five. Do not add one.
  *
  * Fetchers never throw by contract (each failure path resolves to a snapshot
  * whose `status` is 'error'/'unavailable'), but this still guards each one: a
@@ -292,13 +552,17 @@ export function __resetQuotaHydrationForTests(): void {
 export async function refreshQuotaCacheOnce(
     fetchers: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<ProviderQuota> }> = REFRESHERS,
     isEnabled?: QuotaProviderEnabled,
+    options: RefreshQuotaCacheOptions = {},
 ): Promise<void> {
     // A disabled provider is not probed at all — no spawn, no request — and any
     // snapshot it left behind (live or hydrated) is dropped, so a stale
     // "unavailable" reading cannot outlive the disable and keep masquerading as
     // a current problem. The prune runs even when the active list ends up
     // empty: the persist below then rewrites the file without those entries.
-    const enabled = isEnabled ? fetchers.filter(({ provider }) => isEnabled(provider)) : fetchers;
+    const selected = options.probeOnly
+        ? fetchers.filter(({ provider }) => options.probeOnly!.has(provider))
+        : fetchers;
+    const enabled = isEnabled ? selected.filter(({ provider }) => isEnabled(provider)) : selected;
     if (isEnabled) {
         for (const { provider } of fetchers) {
             if (!isEnabled(provider)) {
@@ -318,20 +582,30 @@ export async function refreshQuotaCacheOnce(
         active.map(async ({ provider, fetch }) => {
             try {
                 const fresh = toWireQuota(await fetch());
-                cache.set(provider, carryForwardLastGoodWindows(cache.get(provider), fresh));
+                // stampFetchedAt runs AFTER the carry-forward so the attempt
+                // clock always describes THIS attempt: carry-forward
+                // deliberately keeps the previous entry's `updatedAt` (the data
+                // is genuinely the older reading), and inheriting its
+                // `fetchedAt` too would make a provider that keeps failing
+                // transiently look permanently un-probed and re-probe forever.
+                cache.set(
+                    provider,
+                    stampFetchedAt(carryForwardLastGoodWindows(cache.get(provider), fresh), Date.now()),
+                );
                 hydratedOnly.delete(provider); // measured in this process now
             } catch (e: any) {
                 // Contract violation, not an ordinary quota failure — record it
                 // as one so the provider still reports a definite "could not
                 // read" instead of silently vanishing from the bundle.
+                const now = Date.now();
                 cache.set(provider, {
                     provider,
                     status: 'error',
                     session: null,
                     weekly: null,
-                    updatedAt: Date.now(),
+                    updatedAt: now,
                     error: `Quota fetch threw: ${e?.message || e}`,
-                    metadata: { failureKind: 'unknown' },
+                    metadata: { failureKind: 'unknown', fetchedAt: now },
                 });
                 hydratedOnly.delete(provider);
             }
@@ -410,15 +684,26 @@ export function isFailureRetryDue(provider: QuotaProvider, now: number = Date.no
  * Age past which a cached snapshot is refreshed even on an IDLE machine.
  *
  * Deliberately equal to the routing gate's own staleness horizon
- * (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs, 30 min) rather than to the
+ * (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs, 60 min) rather than to the
  * refresh interval: this constant exists to keep a snapshot INSIDE the window
  * where the quota gate will still act on it, so the number it protects is the
  * gate's, not the loop's. Duplicated as a literal rather than imported from
  * repo-mesh-types to keep this module free of mesh imports (quota/ is consumed
  * by daemons that never build a mesh); quota-routing-staleness-agreement.test.ts
  * asserts the two stay equal, so a change to either is caught.
+ *
+ * ★30 min → 60 min (owner decision 2026-08-21). Widening the routing trust
+ * window halves the backfill floor — the single biggest remaining source of
+ * unsolicited third-party calls on an idle machine, since the backfill is by
+ * design the one refresh that fires with no demand behind it. The cost of a
+ * wider window (routing may act on a reading up to an hour old) is bounded by
+ * the two things landed alongside it: the confidence-discount ranking already
+ * de-weights an AGED snapshot rather than trusting it flatly, and force refresh
+ * gives anyone who needs the number NOW a way to get it without shortening the
+ * window for everyone. ★Widening this WITHOUT force refresh would be the bad
+ * trade; do not undo one and keep the other.
  */
-export const QUOTA_ROUTABLE_MAX_AGE_MS = 30 * 60 * 1000;
+export const QUOTA_ROUTABLE_MAX_AGE_MS = 60 * 60 * 1000;
 
 /**
  * True when an enabled provider's snapshot has aged past the point where
@@ -586,6 +871,9 @@ export interface QuotaRefreshLoopOptions {
 export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRefreshLoopHandle {
     const intervalMs = options.intervalMs ?? QUOTA_REFRESH_INTERVAL_MS;
     const fetchers = options.fetchers ?? REFRESHERS;
+    // Publish this loop's enable gate for the out-of-band refresh paths (SWR
+    // revalidate, force refresh) — see ambientIsEnabled.
+    if (options.isEnabled) ambientIsEnabled = options.isEnabled;
     let running = false;
     const timer = setInterval(() => {
         if (running) return; // never overlap ticks
@@ -620,19 +908,59 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
         //     provider that just ran, the ALTERNATIVE providers the gate exists
         //     to divert work to were the ones going stale — see
         //     isSnapshotStaleForRouting for the full failure loop.
-        const needsBackfill = options.isEnabled
-            ? fetchers.some(({ provider }) =>
-                options.isEnabled!(provider)
-                && (!cache.has(provider) || isFailureRetryDue(provider) || isSnapshotStaleForRouting(provider)))
-            : false;
-        if (!active && !needsBackfill) return;
+        //
+        // ★SAFETY NET (do not remove — the 2026-08-15 defect). needsBackfill is
+        // evaluated per provider and is AXIS-BLIND on purpose: the network axis
+        // is excluded from cadenced TTL refresh, but it is emphatically NOT
+        // excluded from this. It is the only rule that guarantees a snapshot
+        // never ages out of the routing gate's trust window forever, and it
+        // fires with zero events, zero readers and zero user attention.
+        //
+        // Backfill requires an enable gate, exactly as before this change. The
+        // gate is what makes "no snapshot yet" mean "we have not read a number
+        // this machine can actually use": without it, EVERY provider looks
+        // un-backfilled on an empty cache and an idle machine would probe all
+        // six — including the ones it does not run. A daemon always supplies the
+        // gate (setupQuotaRefreshLoop derives it from the ProviderLoader); the
+        // ungated form is a test/embedding shape, and for it the idle machine
+        // stays silent.
+        const backfillDue = (provider: QuotaProvider): boolean =>
+            !!options.isEnabled
+            && (!cache.has(provider) || isFailureRetryDue(provider) || isSnapshotStaleForRouting(provider));
+        // ★AXIS SPLIT: a tick no longer refreshes all six providers. Each is
+        // selected on its own terms —
+        //   - backfillDue          → always, on either axis (the safety net);
+        //   - active && TTL due    → the cadenced path, which for the network
+        //                            axis is never (TTL Infinity) and for the
+        //                            file axis is cheap and short.
+        // The idle gate still applies to the cadenced half only: an idle
+        // machine's number cannot have moved, so re-reading it buys nothing the
+        // safety net does not already cover.
+        const due = fetchers.filter(({ provider }) => {
+            if (options.isEnabled && !options.isEnabled(provider)) return false;
+            if (backfillDue(provider)) return true;
+            return active && isDueByAxisTtl(provider);
+        });
+        // A provider that was disabled since the last tick still has to be
+        // PRUNED from the cache, and only refreshQuotaCacheOnce does that (it
+        // drops the entry and rewrites the persisted file). Selecting nothing to
+        // fetch must therefore not mean "skip the call" whenever a disabled
+        // provider is still holding a stale entry — otherwise its "unavailable"
+        // reading outlives the disable forever, which is the phantom-failure
+        // state the enable gate exists to prevent. The FULL fetcher list is
+        // handed down for exactly that reason; `probeOnly` is what narrows the
+        // actual probing to what this tick selected.
+        const needsPrune = !!options.isEnabled
+            && fetchers.some(({ provider }) => !options.isEnabled!(provider) && cache.has(provider));
+        if (due.length === 0 && !needsPrune) return;
         running = true;
-        void refreshQuotaCacheOnce(fetchers, options.isEnabled)
+        const probeOnly = new Set(due.map(({ provider }) => provider));
+        void refreshQuotaCacheOnce(fetchers, options.isEnabled, { probeOnly })
             .catch((e: any) => LOG.warn('Quota', `Quota refresh tick error: ${e?.message || e}`))
             .finally(() => { running = false; });
     }, intervalMs);
     if (typeof timer.unref === 'function') timer.unref();
-    LOG.info('Quota', `Quota refresh loop started (interval ${intervalMs}ms, idle machines skipped)`);
+    LOG.info('Quota', `Quota refresh loop started (interval ${intervalMs}ms, per-axis TTL, idle machines skipped)`);
     return {
         stop() {
             clearInterval(timer);
@@ -821,4 +1149,212 @@ export function setupQuotaEventRefresh(
             LOG.info('Quota', 'Event-driven quota refresh stopped');
         },
     };
+}
+
+// ─── Read-triggered revalidation (SWR) ───
+
+/**
+ * Providers with a revalidate already in flight. Single-flight, because the
+ * surfaces that trigger one are bursty by nature: opening the machine page
+ * fires get_machine_runtime_stats, and a dashboard that re-renders or a user
+ * who clicks twice would otherwise stack N identical fetches against the same
+ * third-party endpoint — precisely the burst the 429 cooldown exists to
+ * survive, arriving from our own side.
+ */
+const revalidateInFlight = new Set<string>();
+
+/**
+ * Read the cache and, when an entry has aged past its axis TTL, schedule a
+ * background refresh — stale-while-revalidate.
+ *
+ * ★The return value is ALWAYS the current cached value, never the revalidated
+ * one: this must not become an await point. Callers are user-facing read
+ * surfaces (the machine page, the session-info popup, the force-refresh
+ * reporter), and the value they render is the one already in hand; the fetch
+ * this schedules improves the NEXT read.
+ *
+ * ★WHY THIS IS A SEPARATE FUNCTION FROM readQuotaCache(). readQuotaCache() is
+ * called from the 4-second mesh reconcile tick and from every `git_status`.
+ * Giving THAT function a fetch affordance — even a deferred one — would put a
+ * third-party HTTP call behind the mesh's hottest read path, multiplied by node
+ * count and provider count. The absence of the affordance there is the contract
+ * (see the module header); this wrapper is how a low-rate caller opts in, and
+ * the split is the whole reason it is safe to opt in at all.
+ *
+ * Everything the revalidate does goes through `refreshQuotaCacheOnce`, so the
+ * 429 cooldown, the carry-forward, the enable gate and the persist all apply
+ * unchanged — see the note on that function.
+ */
+export function readQuotaCacheWithRevalidate(
+    now: number = Date.now(),
+): Record<string, MeshNodeFactsProviderQuota> | undefined {
+    const snapshot = readQuotaCache();
+    try {
+        scheduleStaleRevalidate(now);
+    } catch (e: any) {
+        // A read surface must never fail because a background refresh could not
+        // be scheduled — the cached value it already holds is still correct.
+        LOG.warn('Quota', `Quota revalidate scheduling failed: ${e?.message || e}`);
+    }
+    return snapshot;
+}
+
+/**
+ * Kick off a background refresh for every provider whose axis TTL has elapsed.
+ *
+ * The TTL is measured off the last refresh ATTEMPT (`fetchedAt`), not off
+ * `updatedAt` — see the two-clocks note. Driving this off `updatedAt` would
+ * make a file-source provider whose file has not changed permanently "due", so
+ * every read would fire a fetch: a hot loop on the cheap axis and, on the
+ * network axis, an endpoint hit per dashboard render.
+ */
+function scheduleStaleRevalidate(now: number): void {
+    const due = REFRESHERS.filter(({ provider }) => {
+        if (ambientIsEnabled && !ambientIsEnabled(provider)) return false;
+        if (revalidateInFlight.has(provider)) return false;
+        // ★The 429 cooldown is checked HERE as well as inside
+        // refreshQuotaCacheOnce. The inner filter is the real enforcement and
+        // must never be removed; this outer check exists so a cooling-down
+        // provider is not marked in-flight for a call that will fetch nothing.
+        if (isRateLimitedCooldownActive(cache.get(provider), now)) return false;
+        // ★The SWR table, not the cadence table — a read is demand, and demand
+        // is what justifies a network-axis fetch that a timer does not.
+        return isDueBySwrTtl(provider, now);
+    });
+    if (due.length === 0) return;
+    for (const { provider } of due) revalidateInFlight.add(provider);
+    const probeOnly = new Set(due.map(({ provider }) => provider));
+    void refreshQuotaCacheOnce(REFRESHERS, ambientIsEnabled, { probeOnly })
+        .catch((e: any) => LOG.warn('Quota', `Quota revalidate failed: ${e?.message || e}`))
+        .finally(() => {
+            for (const { provider } of due) revalidateInFlight.delete(provider);
+        });
+}
+
+/** True while a read-triggered revalidate is in flight for the provider. */
+export function isQuotaRevalidateInFlight(provider: QuotaProvider): boolean {
+    return revalidateInFlight.has(provider);
+}
+
+// ─── Explicit force refresh ───
+
+/** What a force refresh did to one provider. */
+export interface QuotaForceRefreshEntry {
+    provider: QuotaProvider;
+    /**
+     * `refreshed`  — probed, and the cache now holds this attempt's result.
+     * `cooldown`   — ★skipped because the provider is in a 429 cooldown. The
+     *                caller MUST surface this and `retryAtMs`; silently doing
+     *                nothing is the failure mode this field exists to prevent.
+     * `disabled`   — not probed: the machine has the provider (or its quota
+     *                probe) turned off.
+     * `unsupported`— the name is not a provider that reports quota here.
+     */
+    outcome: 'refreshed' | 'cooldown' | 'disabled' | 'unsupported';
+    /** Unix ms the cooldown lifts. Only set when outcome is 'cooldown'. */
+    retryAtMs?: number;
+    /** Human-readable reason, always set for a non-'refreshed' outcome. */
+    reason?: string;
+}
+
+export interface QuotaForceRefreshResult {
+    entries: QuotaForceRefreshEntry[];
+    /** The cache as it stands after the refresh — what the caller renders. */
+    quota: Record<string, MeshNodeFactsProviderQuota> | undefined;
+}
+
+/**
+ * ★EXPLICIT FORCE REFRESH — "read the numbers again, now."
+ *
+ * This is the affordance that makes the wider staleness window (60 min) an
+ * acceptable trade: the one real cost of a long TTL is "I want the current
+ * value and I have to wait for it", and this removes that cost without making
+ * every other machine on the mesh poll harder.
+ *
+ * ★IT DOES NOT BYPASS THE 429 COOLDOWN, and that is deliberate rather than an
+ * oversight. The tempting reading — "the user asked explicitly, so just hit the
+ * endpoint" — is exactly how the 2026-08-20 antigravity incident happened: the
+ * provider's own CLI throttles itself to ~7 minutes after a burst, and a
+ * user-triggered override would let a few impatient clicks put the quota method
+ * back into RESOURCE_EXHAUSTED, which then breaks quota reporting for everyone
+ * including the person who clicked. So a cooling-down provider is REPORTED, not
+ * probed and not silently ignored: the caller gets outcome 'cooldown' plus the
+ * time the cooldown lifts, and tells the user. ★A refusal the user can see is
+ * the correct behaviour here; the two wrong behaviours are hitting anyway and
+ * saying nothing.
+ *
+ * ★The FILE axis has no cooldown to respect (network cost zero), so a force
+ * refresh there is always an immediate re-read — which is what makes the
+ * command feel instant for claude/codex/opencode even while a network-axis
+ * provider is cooling down.
+ *
+ * Runs in the DAEMON, through refreshQuotaCacheOnce, so it warms the same cache
+ * that routing and every dashboard read — unlike `adhdev quota <provider>`,
+ * which calls a fetcher in a separate CLI process and leaves the daemon's cache
+ * untouched.
+ */
+export async function forceRefreshQuota(
+    providers?: ReadonlyArray<string>,
+    now: number = Date.now(),
+): Promise<QuotaForceRefreshResult> {
+    const requested = providers && providers.length > 0
+        ? providers.map((p) => String(p).trim()).filter(Boolean)
+        : REFRESHERS.map(({ provider }) => provider);
+
+    const entries: QuotaForceRefreshEntry[] = [];
+    const probe: QuotaProvider[] = [];
+
+    for (const name of requested) {
+        const refresher = REFRESHERS.find(({ provider }) => provider === name);
+        if (!refresher) {
+            entries.push({
+                provider: name as QuotaProvider,
+                outcome: 'unsupported',
+                reason: `'${name}' does not report quota on this machine`,
+            });
+            continue;
+        }
+        const provider = refresher.provider;
+        if (ambientIsEnabled && !ambientIsEnabled(provider)) {
+            entries.push({
+                provider,
+                outcome: 'disabled',
+                reason: `${provider} is disabled on this machine (or its quota probe is turned off)`,
+            });
+            continue;
+        }
+        const entry = cache.get(provider);
+        if (isRateLimitedCooldownActive(entry, now)) {
+            const retryAtMs = Number(entry?.metadata?.retryAtMs);
+            const seconds = Math.max(0, Math.ceil((retryAtMs - now) / 1000));
+            entries.push({
+                provider,
+                outcome: 'cooldown',
+                retryAtMs,
+                reason: `${provider} hit its provider's rate limit — not re-probed for another ${formatDuration(seconds)}. The numbers shown are the last good reading.`,
+            });
+            continue;
+        }
+        probe.push(provider);
+    }
+
+    if (probe.length > 0) {
+        // The full list is passed so the enable-gate prune still runs, exactly
+        // as on a periodic tick; probeOnly narrows what is fetched.
+        await refreshQuotaCacheOnce(REFRESHERS, ambientIsEnabled, { probeOnly: new Set(probe) })
+            .catch((e: any) => LOG.warn('Quota', `Force quota refresh failed: ${e?.message || e}`));
+        for (const provider of probe) entries.push({ provider, outcome: 'refreshed' });
+    }
+
+    // Stable, predictable ordering for a user-facing report.
+    entries.sort((a, b) => a.provider.localeCompare(b.provider));
+    return { entries, quota: readQuotaCache() };
+}
+
+/** "6m 12s" / "45s" — a cooldown remainder a person can act on. */
+function formatDuration(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }

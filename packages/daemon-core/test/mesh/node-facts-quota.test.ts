@@ -26,6 +26,8 @@ const {
     refreshQuotaCacheOnce,
     startQuotaRefreshLoop,
     QUOTA_REFRESH_INTERVAL_MS,
+    QUOTA_AXIS,
+    QUOTA_AXIS_TTL_MS,
 } = await import('../../src/quota/refresh.js')
 
 const okQuota = (provider: string) => ({
@@ -213,10 +215,56 @@ describe('startQuotaRefreshLoop', () => {
         fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         const handle = startQuotaRefreshLoop({ hasRecentCliActivity: () => true, intervalMs: 1000 })
+        // ★A TICK IS NO LONGER A FETCH (2026-08-21 axis split). The timer rate
+        // and the refresh policy are separate now: a tick only probes providers
+        // whose own axis TTL has elapsed. Three 1s ticks against codex-cli's 60s
+        // file-axis TTL is therefore ONE fetch, not three — the two later ticks
+        // correctly find the snapshot still inside its TTL. Asserting 3 here
+        // would be asserting the coupling this change removed.
         await vi.advanceTimersByTimeAsync(3000)
         handle.stop()
 
-        expect(fetchCodexQuota).toHaveBeenCalledTimes(3)
+        expect(fetchCodexQuota).toHaveBeenCalledTimes(1)
+    })
+
+    it('ticks again once the provider\'s axis TTL has elapsed', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(1_800_000_000_000)
+        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
+        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        const handle = startQuotaRefreshLoop({ hasRecentCliActivity: () => true, intervalMs: 1000 })
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(fetchCodexQuota).toHaveBeenCalledTimes(1)
+        // Past codex-cli's 60s file-axis TTL, the next tick probes it again.
+        await vi.advanceTimersByTimeAsync(QUOTA_AXIS_TTL_MS['codex-cli'] + 1000)
+        handle.stop()
+        expect(fetchCodexQuota.mock.calls.length).toBeGreaterThan(1)
+    })
+
+    it('★AXIS SPLIT: a cadenced tick never probes the NETWORK axis', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(1_800_000_000_000)
+        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
+        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        const handle = startQuotaRefreshLoop({ hasRecentCliActivity: () => true, intervalMs: 1000 })
+        // Long enough that every FILE-axis TTL has elapsed several times over.
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000)
+        handle.stop()
+
+        // The file axis ticked...
+        expect(fetchCodexQuota.mock.calls.length).toBeGreaterThan(1)
+        expect(fetchClaudeQuota.mock.calls.length).toBeGreaterThan(1)
+        // ...and the network axis was never touched by the timer. Its refreshes
+        // come from turn events, the staleness backfill, SWR reads and force
+        // refresh — never from a cadenced tick hitting a third party's endpoint.
+        expect(fetchKimiQuota).not.toHaveBeenCalled()
+        expect(fetchGrokQuota).not.toHaveBeenCalled()
+        expect(QUOTA_AXIS['kimi']).toBe('network')
+        expect(QUOTA_AXIS['grok-cli']).toBe('network')
     })
 
     it('stops fetching after stop()', async () => {

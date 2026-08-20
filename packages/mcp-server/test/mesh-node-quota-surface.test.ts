@@ -3,6 +3,16 @@ import test from 'node:test';
 
 import { compactMeshStatusNode, minimalCompactNode, summarizeNodeQuota, annotateQuotaSnapshotFreshness } from '../src/tools/mesh-compact.js';
 import { extractReporterNodeFactsQuota } from '../src/tools/mesh-tools-internal.js';
+import { DEFAULT_QUOTA_ROUTING_POLICY } from '@adhdev/daemon-core';
+
+/**
+ * An age past the routing staleness threshold, derived from the threshold
+ * itself. These cases assert "a stale reading is LABELLED stale", not "31
+ * minutes is stale" — and writing the literal is what made them silently
+ * assert the opposite when the default widened from 30 to 60 min (2026-08-21).
+ */
+const STALE_AGE_MS = DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs + 60_000;
+const STALE_AGE_MINUTES = Math.round(STALE_AGE_MS / 60_000);
 
 // Provider quota now feeds ROUTING as well as observation (daemon-core
 // mesh-quota-routing.ts consumes the same bundle these surfaces project).
@@ -42,10 +52,10 @@ test('summarizeNodeQuota folds ok windows to a labeled weekly-first pair with ag
 });
 
 test('summarizeNodeQuota flags a reading past the routing staleness threshold', () => {
-  // Same threshold as the routing gate (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs,
-  // 30 min): past it the gate fails open, so the surface must say "stale".
-  const summary = summarizeNodeQuota(okQuota, 1_700_000 + 31 * 60_000)!;
-  assert.equal(summary['claude-cli'], '7d 12% · 5h 38% · 31m stale');
+  // Same threshold as the routing gate (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs):
+  // past it the gate fails open, so the surface must say "stale".
+  const summary = summarizeNodeQuota(okQuota, 1_700_000 + STALE_AGE_MS)!;
+  assert.equal(summary['claude-cli'], `7d 12% · 5h 38% · ${STALE_AGE_MINUTES}m stale`);
 });
 
 test('summarizeNodeQuota renders an unmeasured axis as —', () => {
@@ -93,14 +103,14 @@ test('summarizeNodeQuota keeps failures visible with their failureKind', () => {
 });
 
 test('annotateQuotaSnapshotFreshness adds ageMs/stale without dropping fields', () => {
-  const now = 1_700_000 + 31 * 60_000;
+  const now = 1_700_000 + STALE_AGE_MS;
   const annotated = annotateQuotaSnapshotFreshness(okQuota, now);
   // Pure-additive: updatedAt (and every original field) survives.
   assert.equal(annotated['claude-cli'].updatedAt, 1_700_000);
   assert.equal(annotated['claude-cli'].session.usedPercent, 38.4);
   // Computed for the reader — no epoch-ms subtraction left to the coordinator.
-  assert.equal(annotated['claude-cli'].ageMs, 31 * 60_000);
-  assert.equal(annotated['claude-cli'].stale, true); // past the 30-min routing threshold
+  assert.equal(annotated['claude-cli'].ageMs, STALE_AGE_MS);
+  assert.equal(annotated['claude-cli'].stale, true); // past the routing threshold
   const fresh = annotateQuotaSnapshotFreshness(okQuota, 1_700_000 + 60_000);
   assert.equal(fresh['claude-cli'].ageMs, 60_000);
   assert.equal(fresh['claude-cli'].stale, false);

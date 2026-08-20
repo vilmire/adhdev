@@ -430,9 +430,19 @@ export interface RepoMeshPolicy {
 export interface RepoMeshQuotaRoutingPolicy {
     /**
      * Age past which a reported quota snapshot is judged STALE and ignored
-     * (fail-open). Defaults to 30 min — two quota refresh cycles
-     * (QUOTA_REFRESH_INTERVAL_MS = 15 min), generous enough to absorb reporter↔
-     * coordinator clock skew.
+     * (fail-open). Defaults to 60 min.
+     *
+     * ★Widened from 30 min on 2026-08-21 (owner decision). The number this
+     * threshold really sets is how often an IDLE machine must call a third
+     * party: quota/refresh.ts pins QUOTA_ROUTABLE_MAX_AGE_MS to this value and
+     * backfills any snapshot that ages past it, so the threshold IS the
+     * unsolicited-fetch floor. Doubling it halves that floor. What keeps the
+     * looser window honest is not this constant but its two companions —
+     * mesh-quota-routing.ts already de-weights an AGED snapshot via the
+     * confidence discount instead of trusting it flatly, and an explicit force
+     * refresh (`adhdev quota --refresh`) exists for anyone who needs the
+     * current number now. Generous enough to absorb reporter↔coordinator clock
+     * skew, as before.
      */
     staleAfterMs?: number;
     /**
@@ -640,7 +650,9 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
  * DEFAULT_MESH_POLICY so all policy defaults share one home.
  */
 export const DEFAULT_QUOTA_ROUTING_POLICY: Required<RepoMeshQuotaRoutingPolicy> = {
-    staleAfterMs: 30 * 60 * 1000,
+    // ★Must stay equal to quota/refresh.ts QUOTA_ROUTABLE_MAX_AGE_MS —
+    // quota-routing-staleness-agreement.test.ts fails on drift.
+    staleAfterMs: 60 * 60 * 1000,
     sessionMinRemainingPercent: 10,
     sessionResetImminentMs: 5 * 60 * 1000,
     weeklyMinRemainingPercent: 15,

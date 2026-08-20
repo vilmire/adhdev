@@ -52,23 +52,41 @@ export {
 
 export {
     QUOTA_ACTIVITY_WINDOW_MS,
+    QUOTA_AXIS,
+    QUOTA_AXIS_TTL_MS,
     QUOTA_EVENT_REFRESH_DEBOUNCE_MS,
+    QUOTA_SWR_TTL_MS,
     QUOTA_FAILURE_MAX_RETRIES,
     QUOTA_REFRESH_INTERVAL_MS,
+    QUOTA_ROUTABLE_MAX_AGE_MS,
     clearQuotaCache,
+    forceRefreshQuota,
     hasRecentCliActivity,
+    isDueByAxisTtl,
+    isDueBySwrTtl,
     isFailureRetryDue,
+    isQuotaRevalidateInFlight,
+    isSnapshotStaleForRouting,
     quotaProviderEnabledFromLoader,
     readQuotaCache,
+    // ★readQuotaCacheWithRevalidate is NOT a drop-in for readQuotaCache: it can
+    // schedule a background fetch. Only low-rate, human-facing read surfaces may
+    // call it — never the mesh reconcile tick or buildLocalNodeFacts. See the
+    // function's own note.
+    readQuotaCacheWithRevalidate,
     refreshQuotaCacheOnBoot,
     refreshQuotaCacheOnce,
     setupQuotaEventRefresh,
     setupQuotaRefreshLoop,
     startQuotaRefreshLoop,
+    type QuotaAxis,
     type QuotaEventRefreshOptions,
+    type QuotaForceRefreshEntry,
+    type QuotaForceRefreshResult,
     type QuotaProviderEnabled,
     type QuotaRefreshLoopHandle,
     type QuotaRefreshLoopOptions,
+    type RefreshQuotaCacheOptions,
 } from './refresh.js';
 
 export { fetchAntigravityQuota } from './fetchers/antigravity.js';

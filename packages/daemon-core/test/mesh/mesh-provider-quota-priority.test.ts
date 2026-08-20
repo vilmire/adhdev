@@ -60,6 +60,7 @@ import { buildAutoLaunchRoutingDecision } from '../../src/mesh/mesh-routing-deci
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js';
 import { getLogLevel, LOG } from '../../src/logging/logger.js';
+import { DEFAULT_QUOTA_ROUTING_POLICY } from '../../src/repo-mesh-types.js';
 
 const NODE_ID = 'node_quota_priority';
 const MESH_ID = 'mesh_quota_priority';
@@ -616,7 +617,12 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         const node = nodeWith([
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
         ], {
-            'claude-cli': exhaustedQuota('claude-cli', { updatedAt: Date.now() - 45 * MIN }),
+            // Derived from the routing threshold rather than a literal — this
+            // case is about "a STALE reading fails open", and 45 minutes stopped
+            // meaning stale when the default widened to 60 min (2026-08-21).
+            'claude-cli': exhaustedQuota('claude-cli', {
+                updatedAt: Date.now() - (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs + 15 * MIN),
+            }),
         });
         const resolved = await resolve(node);
         expect(resolved.providerType).toBe('claude-cli');

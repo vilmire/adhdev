@@ -890,6 +890,15 @@ export {
   uninstallClaudeStatusline,
   readStatuslineStatus,
   StatuslineInstallError,
+  // ★Force refresh runs IN the daemon (it warms the shared cache); the CLI
+  // reaches it over local IPC via the `refresh_provider_quota` command rather
+  // than calling this in-process, where it would refresh a cache nothing reads.
+  forceRefreshQuota,
+  QUOTA_AXIS,
+  QUOTA_AXIS_TTL_MS,
+  type QuotaAxis,
+  type QuotaForceRefreshEntry,
+  type QuotaForceRefreshResult,
   type ProviderQuota,
   type QuotaProvider,
   type QuotaStatus,
@@ -905,6 +914,7 @@ export {
 // terminal output stays identical without duplicating it per CLI host.
 export {
   printQuota,
+  printQuotaRefreshOutcome,
   printClaudeInstallResult,
   printClaudeUninstallResult,
   printClaudeStatuslineStatus,

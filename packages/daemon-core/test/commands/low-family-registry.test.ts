@@ -40,7 +40,7 @@ const REFINE_CMDS = [
 ]
 // Stage 2: LOW-family remainder extracted into the same registry.
 const DIAGNOSTICS_CMDS = ['get_logs', 'get_debug_trace']
-const STATUS_META_CMDS = ['set_user_name', 'get_status_metadata', 'get_machine_runtime_stats', 'get_session_info']
+const STATUS_META_CMDS = ['set_user_name', 'get_status_metadata', 'refresh_provider_quota', 'get_machine_runtime_stats', 'get_session_info']
 const COORDINATOR_PROMPT_CMDS = ['coordinator_prompt_preview', 'list_coordinator_prompts', 'write_coordinator_prompt']
 const NOTIFICATION_CMDS = ['mark_session_seen', 'delete_notification', 'mark_notification_unread']
 // Order matters: the assertions below compare against Object.keys(handlers),
@@ -56,7 +56,7 @@ const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh
 const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
 
 describe('low-family registry', () => {
-  it('registers all 46 LOW family commands once, no overlap', () => {
+  it('registers all 47 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,

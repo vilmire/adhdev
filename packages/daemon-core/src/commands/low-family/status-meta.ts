@@ -13,12 +13,17 @@ import { buildMachineInfo, buildStatusSnapshot } from '../../status/snapshot.js'
 import { getDaemonBuildInfo } from '../../build-info.js';
 import { TRACK } from '../../track-identity.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
-// Cache-only read (no fetcher call) — see quota/refresh.ts header. Both
-// get_machine_runtime_stats and get_session_info are on-demand commands (dialog
-// open / machine page load), not the periodic mesh_status probe, but the
-// cheapness of readQuotaCache() means there is no reason to treat them
-// differently: it is a synchronous map lookup, never a fetch.
-import { readQuotaCache } from '../../quota/index.js';
+// ★These two commands are the SWR read surfaces — the ONLY read path allowed to
+// schedule a background refresh (quota/refresh.ts readQuotaCacheWithRevalidate).
+// They qualify because they are on-demand and human-paced: a machine page load
+// and a session-info dialog open. They are emphatically NOT the periodic
+// mesh_status probe or buildLocalNodeFacts, which run per git_status and per
+// 4-second reconcile tick and must keep calling the fetch-free readQuotaCache().
+//
+// The return value is still the CACHED snapshot, returned synchronously — the
+// revalidate improves the next read, it is never awaited here.
+import { readQuotaCacheWithRevalidate } from '../../quota/index.js';
+import { forceRefreshQuota } from '../../quota/index.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 
 export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
@@ -67,8 +72,45 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         };
     },
 
+    /**
+     * ★FORCE REFRESH — the single entry point for "read my quota again, now".
+     *
+     * Every surface funnels here: `adhdev quota --refresh` (over local IPC), a
+     * dashboard refresh button, an MCP caller. One entry point rather than
+     * several is what keeps the 429 cooldown, the enable gate and the
+     * carry-forward from being re-implemented (and quietly weakened) per
+     * surface.
+     *
+     * ★It runs INSIDE the daemon, so it warms the cache that routing and every
+     * dashboard read consume. This is the difference from `adhdev quota codex`,
+     * which calls a fetcher in a separate CLI process: that prints a number and
+     * leaves the daemon exactly as stale as it was.
+     *
+     * ★It does not bypass the 429 cooldown. A cooling-down provider comes back
+     * with outcome 'cooldown' + retryAtMs, and the caller is expected to SAY so
+     * — see forceRefreshQuota for why overriding on user request is the wrong
+     * behaviour here.
+     */
+    refresh_provider_quota: async (_ctx: LowFamilyContext, args: any) => {
+        const raw = args?.providers ?? args?.provider;
+        const providers = Array.isArray(raw)
+            ? raw.filter((p: unknown): p is string => typeof p === 'string')
+            : typeof raw === 'string' && raw.trim()
+                ? [raw.trim()]
+                : undefined;
+        const { entries, quota } = await forceRefreshQuota(providers);
+        return {
+            success: true,
+            refreshed: entries,
+            // Same "omit rather than send undefined" contract as the reads above.
+            ...(quota ? { quota } : {}),
+            machineNickname: loadConfig().machineNickname,
+            timestamp: Date.now(),
+        };
+    },
+
     get_machine_runtime_stats: async (_ctx: LowFamilyContext, _args: any) => {
-        const quota = readQuotaCache();
+        const quota = readQuotaCacheWithRevalidate();
         return {
             success: true,
             machine: {
@@ -121,7 +163,7 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         const providerMetaForSession = providerType
             ? ctx.deps.providerLoader.resolve?.(providerType) || ctx.deps.providerLoader.getMeta(providerType)
             : undefined;
-        const quota = readQuotaCache();
+        const quota = readQuotaCacheWithRevalidate();
         return {
             success: true,
             session: {

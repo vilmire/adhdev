@@ -42,6 +42,17 @@ import { __scoreSlotForTaskForTests } from '../../src/mesh/mesh-events-coordinat
 
 const NOW = 1_800_000_000_000;
 const MIN = 60 * 1000;
+/**
+ * An age that is definitively PAST the default staleness threshold, derived
+ * from the threshold instead of written as a literal.
+ *
+ * These cases assert "a stale reading fails open", never "a 45-minute reading
+ * fails open" — but they used to say 45 minutes, so raising the default from
+ * 30 to 60 min silently turned a dozen of them into their own opposite (they
+ * kept passing a FRESH snapshot to a test named "stale"). Deriving the age is
+ * what makes the next threshold change a one-line edit instead of an audit.
+ */
+const STALE_AGE = DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs + 15 * MIN;
 
 function nodeWithQuota(quota: Record<string, any> | undefined, reportedAt: number = NOW) {
     return {
@@ -69,7 +80,10 @@ afterEach(() => {
 describe('quota routing policy — resolution & persistence economy', () => {
     it('resolves the owner-confirmed defaults when unset', () => {
         expect(resolveQuotaRoutingPolicy(undefined)).toEqual({
-            staleAfterMs: 30 * MIN,
+            // 60 min since 2026-08-21 (owner decision) — the widened window is
+            // paid for by the confidence discount + explicit force refresh, and
+            // quota/refresh.ts pins QUOTA_ROUTABLE_MAX_AGE_MS to the same value.
+            staleAfterMs: 60 * MIN,
             sessionMinRemainingPercent: 10,
             sessionResetImminentMs: 5 * MIN,
             weeklyMinRemainingPercent: 15,
@@ -98,7 +112,7 @@ describe('quota routing policy — resolution & persistence economy', () => {
         expect(mergeAndNormalizePolicy(undefined, {
             quotaRouting: { sessionMinRemainingPercent: 10, weeklyMinRemainingPercent: 15 },
         } as any).quotaRouting).toBeUndefined();
-        expect(normalizeQuotaRoutingPolicy({ staleAfterMs: 30 * MIN })).toBeUndefined();
+        expect(normalizeQuotaRoutingPolicy({ staleAfterMs: 60 * MIN })).toBeUndefined();
         expect(normalizeQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: 40 })).toBeUndefined();
         expect(normalizeQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: 55 }))
             .toEqual({ sessionAxisWeeklyHeadroomPercent: 55 });
@@ -133,8 +147,13 @@ describe('quotaSnapshotAgeMs — clock-skew-safe staleness', () => {
 
     it('is stale past the (configurable) threshold', () => {
         const facts = { reportedAt: NOW };
-        expect(isQuotaSnapshotFresh(facts, { updatedAt: NOW - 31 * MIN }, null, NOW)).toBe(false);
-        expect(isQuotaSnapshotFresh(facts, { updatedAt: NOW - 31 * MIN }, { staleAfterMs: 60 * MIN }, NOW)).toBe(true);
+        // Derived from the default rather than written as a literal: this case
+        // is about "past the threshold", not about any particular number of
+        // minutes, and hard-coding one is what made a threshold change ripple
+        // through a dozen unrelated assertions.
+        const pastDefault = DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs + MIN;
+        expect(isQuotaSnapshotFresh(facts, { updatedAt: NOW - pastDefault }, null, NOW)).toBe(false);
+        expect(isQuotaSnapshotFresh(facts, { updatedAt: NOW - pastDefault }, { staleAfterMs: pastDefault + MIN }, NOW)).toBe(true);
     });
 });
 
@@ -172,7 +191,7 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
         const exhausted = okQuota({
             session: { usedPercent: 99, windowMinutes: 300, resetsAt: null },
             weekly: { usedPercent: 99, windowMinutes: 10080, resetsAt: null },
-            updatedAt: NOW - 45 * MIN, // 45 min old snapshot, fresh bundle stamp
+            updatedAt: NOW - STALE_AGE, // stale snapshot, fresh bundle stamp
         });
         const node = nodeWithQuota({ 'claude-cli': exhausted }, NOW);
         expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
@@ -183,7 +202,7 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
             session: { usedPercent: 99, windowMinutes: 300, resetsAt: null },
             weekly: { usedPercent: 99, windowMinutes: 10080, resetsAt: null },
         });
-        const node = nodeWithQuota({ 'claude-cli': exhausted }, NOW - 31 * MIN);
+        const node = nodeWithQuota({ 'claude-cli': exhausted }, NOW - STALE_AGE);
         expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
     });
 
@@ -294,9 +313,12 @@ describe('evaluateProviderQuotaGate — absent-entry fail-open observability', (
         const node = { id: `n-${randomUUID()}` };
         expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
         expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + MIN)).toBeNull();
-        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + 29 * MIN)).toBeNull();
-        expect(spy).toHaveBeenCalledTimes(1); // still within the default 30-min staleAfterMs window
-        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + 31 * MIN)).toBeNull();
+        // The throttle window IS staleAfterMs (mesh-quota-routing.ts reuses the
+        // policy value), so both bounds are derived from it rather than pinned
+        // to whatever it happened to be when this case was written.
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs - MIN)).toBeNull();
+        expect(spy).toHaveBeenCalledTimes(1); // still inside the staleAfterMs window
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW + DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs + MIN)).toBeNull();
         expect(spy).toHaveBeenCalledTimes(2); // window elapsed — logs again
     });
 
@@ -535,12 +557,12 @@ describe('evaluateProviderQuotaGate — quota-exhausted hard block', () => {
     });
 
     it('fails OPEN on a STALE quota-exhausted snapshot — old data must not exclude a node', () => {
-        const node = nodeWithQuota({ kimi: exhaustedQuota({ updatedAt: NOW - 45 * MIN }) }, NOW);
+        const node = nodeWithQuota({ kimi: exhaustedQuota({ updatedAt: NOW - STALE_AGE }) }, NOW);
         expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
     });
 
     it('fails OPEN on quota-exhausted when the bundle itself is old', () => {
-        const node = nodeWithQuota({ kimi: exhaustedQuota() }, NOW - 31 * MIN);
+        const node = nodeWithQuota({ kimi: exhaustedQuota() }, NOW - STALE_AGE);
         expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
     });
 
@@ -574,7 +596,7 @@ describe('evaluateProviderQuotaGate — retained last-good windows', () => {
     });
 
     it('fails OPEN once the retained reading is older than staleAfterMs', () => {
-        const node = nodeWithQuota({ kimi: retainedQuota({ updatedAt: NOW - 31 * MIN }) });
+        const node = nodeWithQuota({ kimi: retainedQuota({ updatedAt: NOW - STALE_AGE }) });
         expect(evaluateProviderQuotaGate(node, 'kimi', null, NOW)).toBeNull();
     });
 
@@ -816,7 +838,7 @@ describe('rankProvidersByQuotaGate — selection-loop gate + weekly expiry-risk 
     it('FAIL-OPEN regression guard: expired-token / stale / missing readings are never blocked', () => {
         const node = nodeWithQuota({
             kimi: exhausted({ metadata: { source: 'oauth', failureKind: 'expired-token' } }),
-            'claude-cli': exhausted({ updatedAt: NOW - 45 * MIN }), // stale exhaustion fails open
+            'claude-cli': exhausted({ updatedAt: NOW - STALE_AGE }), // stale exhaustion fails open
             // codex: no entry at all
         });
         const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli', 'codex'], null, NOW);
@@ -920,7 +942,7 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
         const agedSession = okQuota({
             session: sessionWindow(30, NOW + 20 * MIN),            // 70% left, resets in 20m
             weekly: weeklyWindow(40, NOW + 5 * DAY),
-            updatedAt: NOW - 45 * MIN,                             // past staleAfterMs → RETAINED, not current
+            updatedAt: NOW - STALE_AGE,                             // past staleAfterMs → RETAINED, not current
         });
         const node = nodeWithQuota({
             kimi: agedSession,
@@ -942,7 +964,7 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
                 provider: 'kimi',
                 session: null,
                 weekly: weeklyWindow(40, NOW + 5 * DAY),
-                updatedAt: NOW - 45 * MIN,                         // RETAINED (aged)
+                updatedAt: NOW - STALE_AGE,                         // RETAINED (aged)
             }),
             'claude-cli': okQuota({
                 session: null,
@@ -1336,7 +1358,7 @@ describe('quotaSpreadBonusByProvider — bounded headroom preference', () => {
     });
 
     it('yields 0 for stale, failed, or absent readings — identical to pre-feature scoring', () => {
-        const stale = nodeWithQuota({ 'claude-cli': okQuota({ updatedAt: NOW - 45 * MIN }) }, NOW);
+        const stale = nodeWithQuota({ 'claude-cli': okQuota({ updatedAt: NOW - STALE_AGE }) }, NOW);
         expect(quotaSpreadBonusByProvider(stale, null, NOW)['claude-cli']).toBe(0);
         const errored = nodeWithQuota({ 'claude-cli': okQuota({ status: 'unavailable', session: null, weekly: null }) });
         expect(quotaSpreadBonusByProvider(errored, null, NOW)['claude-cli']).toBe(0);

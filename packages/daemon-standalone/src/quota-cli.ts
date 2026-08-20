@@ -15,11 +15,13 @@ import {
     fetchCodexQuota,
     fetchGrokQuota,
     fetchKimiQuota,
+    forceRefreshQuota,
     installClaudeStatusline,
     readStatuslineStatus,
     uninstallClaudeStatusline,
     StatuslineInstallError,
     printQuota,
+    printQuotaRefreshOutcome,
     printClaudeInstallResult,
     printClaudeUninstallResult,
     printClaudeStatuslineStatus,
@@ -28,6 +30,7 @@ import {
 
 export const QUOTA_HELP_TEXT = `
 Usage: adhdev quota <provider>
+       adhdev quota refresh [providers...]
        adhdev quota claude:install | claude:uninstall | claude:status
 
 Providers:
@@ -36,6 +39,12 @@ Providers:
   codex     Show Codex CLI plan usage (queries codex app-server live)
   grok      Show Grok CLI plan usage (queries the xAI billing API live)
   kimi      Show Kimi Code plan usage (queries the Kimi API live)
+
+Refresh:
+  refresh   Re-read quota now. Providers that recently returned HTTP 429 are
+            NOT re-probed — the cooldown is reported with the time it lifts,
+            because re-hitting the endpoint extends the provider's own throttle.
+            Local-file providers (claude, codex) have no cooldown.
 
 Claude Code setup (antigravity/codex/grok/kimi need no setup — they query live):
   claude:install     Set up Claude Code quota reporting by wrapping your statusline
@@ -63,6 +72,23 @@ export async function runQuotaCommand(args: readonly string[]): Promise<number> 
         case 'kimi':
             printQuota('Kimi Code', await fetchKimiQuota());
             return 0;
+        case 'refresh': {
+            // Same shared entry point the daemon command uses
+            // (daemon-core forceRefreshQuota), so the 429 cooldown, the
+            // enable gate and the last-good carry-forward behave identically
+            // on both CLI hosts instead of being re-implemented per surface.
+            //
+            // Standalone runs this in the CLI process. Unlike the cloud CLI —
+            // which sends `refresh_provider_quota` to the running daemon over
+            // local IPC — standalone has no always-on command channel (its IPC
+            // server is opt-in), so what this warms is this process's cache. A
+            // standalone daemon in the same process (`adhdev` with no
+            // subcommand) picks up its own refreshes through the normal axis
+            // TTL / SWR / backfill paths.
+            const { entries } = await forceRefreshQuota(args.slice(1));
+            printQuotaRefreshOutcome(entries);
+            return entries.some((e) => e.outcome === 'unsupported') ? 1 : 0;
+        }
         case 'claude:install':
         case 'claude-install': {
             try {
