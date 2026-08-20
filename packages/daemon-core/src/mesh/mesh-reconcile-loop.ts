@@ -107,6 +107,7 @@ import {
     clearUnresolvedForwardNudge,
 } from './mesh-reconcile-unresolved-forward.js';
 import { recoverExpiredWorkspaceSagas } from './mesh-graph-workspace-saga.js';
+import { createDefaultWorkspaceSagaPorts } from './mesh-graph-workspace-ports.js';
 import { sweepMeshGraphGateTimeouts } from './mesh-graph-gates.js';
 import { recordGraphGateExpired } from './mesh-graph-provenance.js';
 
@@ -433,11 +434,26 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // higher fencing generation (design :506-507). Git/FS work stays outside the
     // queue transaction. Isolated per mesh so a saga fault cannot kill the tick.
     if (store) {
+        // Registry seam: a prepared worktree is published into live mesh
+        // membership (meshes.json + the router's inline cache) so it is an
+        // ordinary dispatch target. get_mesh reads the inline cache alone when
+        // one is warm, so the router half is not optional on a coordinator.
+        const router = components.router;
+        const workspacePorts = createDefaultWorkspaceSagaPorts(router
+            ? {
+                registry: {
+                    getCachedInlineMesh: meshId => router.getCachedInlineMesh(meshId),
+                    updateInlineMeshNode: (meshId, m, node) => router.updateInlineMeshNode(meshId, m, node),
+                    removeInlineMeshNode: (meshId, m, nodeId) => router.removeInlineMeshNode(meshId, m, nodeId),
+                    invalidateAggregateMeshStatus: meshId => router.invalidateAggregateMeshStatus(meshId),
+                },
+            }
+            : {});
         for (const mesh of listMeshes()) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
-                await recoverExpiredWorkspaceSagas(mesh.id);
+                await recoverExpiredWorkspaceSagas(mesh.id, workspacePorts);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Workspace saga recover failed for mesh ${mesh.id}: ${e?.message || e}`);
             }

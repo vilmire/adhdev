@@ -417,9 +417,26 @@ async function prepareClaimedIntent(
     });
     faults?.afterPersistCreatedIdentity?.(created);
 
+    // Publish membership as soon as the created identity is durable, NOT at
+    // 'ready'. Two reasons this is the correct point:
+    //   1. It is the first moment the node id + path are recoverable. A crash
+    //      between here and finalize resumes through this same function, so the
+    //      registration is retried (it is idempotent) — whereas registering only
+    //      at finalize would strand a real, on-disk worktree with no membership
+    //      after a crash, which is precisely the invisible-worktree class of bug
+    //      this fix exists to close.
+    //   2. Visibility and dispatchability are separated by the bootstrap stamp
+    //      below, so early publication is not early dispatch.
+    // The node is stamped bootstrap 'running' here, which the pre-existing
+    // worktree-bootstrap gate already reads as "do not dispatch into a half-built
+    // worktree"; finalizeWorkspaceReady re-stamps 'complete'. Failure to publish
+    // never fails the saga — the worktree itself is correct either way.
+    await registerWorkspaceNodeBestEffort(intent, created, ports, 'running');
+
     try {
         faults?.beforeFinalizeReady?.();
         const bound = finalizeWorkspaceReady(intent.graphId, intent.workspaceRef, created, generation, ports.nowMs());
+        await registerWorkspaceNodeBestEffort(intent, created, ports, 'complete');
         return {
             graphId: intent.graphId,
             workspaceRef: intent.workspaceRef,
@@ -451,6 +468,32 @@ async function prepareClaimedIntent(
             }, new Date(ports.nowMs()).toISOString(), { leaseGeneration: generation });
         });
         throw e;
+    }
+}
+
+/**
+ * Membership publication is best-effort by contract: the git worktree is the
+ * real resource and it is already correct, so a registry write that fails (no
+ * config twin, no router/inline cache, a mocked mesh-config in tests) must not
+ * fail or retry-loop the saga. It is logged, never thrown.
+ */
+async function registerWorkspaceNodeBestEffort(
+    intent: MeshGraphWorkspaceIntentRow,
+    created: WorkspaceCloneResult,
+    ports: WorkspaceSagaPorts,
+    bootstrapStatus: 'running' | 'complete',
+): Promise<void> {
+    try {
+        await ports.registerNode({
+            meshId: intent.meshId,
+            nodeId: created.nodeId,
+            worktreePath: created.worktreePath,
+            branchIdentity: intent.branchIdentity || deriveWorkspaceBranchIdentity(intent.graphId, intent.workspaceRef),
+            sourceNodeId: intent.sourceNodeId,
+            bootstrapStatus,
+        });
+    } catch (e: any) {
+        LOG.warn('MeshGraphWorkspace', `node registration (${bootstrapStatus}) failed for ${intent.graphId}/${intent.workspaceRef}: ${e?.message || e}`);
     }
 }
 
@@ -588,6 +631,20 @@ async function compensateClaimedIntent(
                 refusals: failed.refusals,
                 error: removed.error,
             };
+        }
+    }
+
+    // Drop membership only on the SUCCESS path — the worktree is gone (or was
+    // already gone), so leaving the node registered would strand a ghost that
+    // mesh_list_nodes advertises and tasks can be pinned to. The quarantine
+    // paths above deliberately do NOT unregister: compensation_required means
+    // the tree is still on disk and possibly holding work, so its node must stay
+    // addressable for the operator resolving it.
+    if (intent.createdNodeId) {
+        try {
+            await ports.unregisterNode({ meshId: intent.meshId, nodeId: intent.createdNodeId });
+        } catch (e: any) {
+            LOG.warn('MeshGraphWorkspace', `node unregistration failed for ${intent.graphId}/${intent.workspaceRef}: ${e?.message || e}`);
         }
     }
 

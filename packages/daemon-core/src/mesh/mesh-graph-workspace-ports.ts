@@ -83,6 +83,21 @@ export interface WorkspaceBaseRevisionRequest {
     sourceNodeId?: string;
 }
 
+export interface WorkspaceNodeRegistrationRequest {
+    meshId: string;
+    nodeId: string;
+    worktreePath: string;
+    branchIdentity: string;
+    sourceNodeId?: string;
+    /** Bootstrap status to stamp on the registered node. See registerWorkspaceNode. */
+    bootstrapStatus: 'running' | 'complete';
+}
+
+export interface WorkspaceNodeUnregistrationRequest {
+    meshId: string;
+    nodeId: string;
+}
+
 export interface WorkspaceSagaPorts {
     nowMs(): number;
     /**
@@ -97,20 +112,54 @@ export interface WorkspaceSagaPorts {
     removeWorktree(req: WorkspaceRemoveRequest): Promise<WorkspaceRemoveResult>;
     listLiveSessionsOnNode(nodeId: string): Promise<{ sessionIds: string[]; unknown?: boolean; error?: string }>;
     listAssignedTasksOnNode(meshId: string, nodeId: string): Promise<string[]>;
+    /**
+     * Publish the prepared worktree into live mesh membership so it is a normal
+     * dispatch target (mesh_list_nodes / target_node_id). Idempotent: re-running
+     * a saga step re-stamps rather than duplicating. See registerWorkspaceNode.
+     */
+    registerNode(req: WorkspaceNodeRegistrationRequest): Promise<boolean>;
+    /** Compensation mirror of registerNode — drops the membership entry so a
+     *  removed worktree leaves no ghost node behind. */
+    unregisterNode(req: WorkspaceNodeUnregistrationRequest): Promise<boolean>;
+}
+
+/**
+ * Mutation seam onto live mesh membership. Production wires the router (which
+ * owns the inline cache); `meshes.json` is written directly. Both halves are
+ * needed: `get_mesh` (preferInline, the default) returns the INLINE CACHE ALONE
+ * when one is warm, so a durable-only write is invisible to mesh_list_nodes;
+ * while a cache-only write has no durable twin and is lost on daemon restart.
+ * This mirrors clone_mesh_node, which writes both for exactly these reasons.
+ */
+export interface WorkspaceNodeRegistryDeps {
+    getCachedInlineMesh?(meshId: string): any | undefined;
+    updateInlineMeshNode?(meshId: string, mesh: any, node: any): void;
+    removeInlineMeshNode?(meshId: string, mesh: any, nodeId: string): boolean;
+    invalidateAggregateMeshStatus?(meshId: string): void;
 }
 
 export interface DefaultWorkspaceSagaPortOptions {
     /**
-     * When true (default), createWorktree only creates the git worktree + owner
-     * stamp. Node registration in meshes.json is the clone_mesh_node command's
-     * job; D records the intended node id and binds it. Tests never flip this
-     * unless they also mock mesh-config.
+     * Default true: a prepared worktree is registered as a real mesh node, so a
+     * graph-owned worktree is an ordinary dispatch target. It used to be false —
+     * and, worse, unimplemented: the value was read and discarded, and the
+     * "clone_mesh_node registers it" handoff named in this comment was never
+     * built. The saga therefore produced worktrees that no read tool listed and
+     * no task could target. Isolation was never a design requirement (the design
+     * doc's workspace-saga section never mentions membership at all), and
+     * concurrency is already handled by per-node locks + branch isolation.
+     *
+     * Set false only for a test that wants the pre-fix create-without-publish
+     * behaviour.
      */
     registerNode?: boolean;
+    /** Live membership mutation seam; omitted in tests → durable-only. */
+    registry?: WorkspaceNodeRegistryDeps;
 }
 
 export function createDefaultWorkspaceSagaPorts(opts: DefaultWorkspaceSagaPortOptions = {}): WorkspaceSagaPorts {
-    void opts.registerNode;
+    const registrationEnabled = opts.registerNode !== false;
+    const registry = opts.registry;
     return {
         nowMs: () => Date.now(),
         resolveBaseRevision: req => defaultResolveBaseRevision(req),
@@ -120,6 +169,8 @@ export function createDefaultWorkspaceSagaPorts(opts: DefaultWorkspaceSagaPortOp
         removeWorktree: req => defaultRemoveWorktree(req),
         listLiveSessionsOnNode: async () => ({ sessionIds: [], unknown: true, error: 'session_host_not_wired_to_workspace_saga' }),
         listAssignedTasksOnNode: async (meshId, nodeId) => defaultListAssignedTasks(meshId, nodeId),
+        registerNode: async req => (registrationEnabled ? registerWorkspaceNode(req, registry) : false),
+        unregisterNode: async req => (registrationEnabled ? unregisterWorkspaceNode(req, registry) : false),
     };
 }
 
@@ -351,6 +402,156 @@ async function defaultRemoveWorktree(req: WorkspaceRemoveRequest): Promise<Works
     } catch (e: any) {
         return { removed: false, error: e?.message || String(e) };
     }
+}
+
+/**
+ * Publish a saga-prepared worktree into live mesh membership.
+ *
+ * Node shape mirrors clone_mesh_node's worktree clone exactly, because every
+ * downstream consumer already keys off those fields:
+ *   - `isLocalWorktree: true` + `worktreeBranch` are what
+ *     resolveNodeCapabilityTags reads to SYNTHESIZE the `worktree=<branch>` and
+ *     `converge=refine` tags (mesh-work-queue.ts). They are derived, never
+ *     stored, so writing tags by hand here would duplicate/diverge.
+ *   - `clonedFromNodeId` keeps the provenance link the dashboard renders.
+ *   - daemonId / machineId / userOverrides / policy are inherited from the
+ *     source node: the worktree lives on the source node's machine, so its
+ *     scheduling identity must be the source's, exactly as for an operator clone.
+ *
+ * `bootstrapStatus` is the dispatch gate. Registration happens at CREATE time so
+ * the node is visible immediately, but a saga that has not finalized is stamped
+ * 'running', which the pre-existing worktree-bootstrap gate
+ * (shouldDeferDispatchForBootstrap / launchBlockedReason='worktree_bootstrap_running')
+ * already treats as "do not dispatch into a half-built worktree". Finalize
+ * re-stamps 'complete'. This reuses the established guard rather than inventing
+ * a second half-ready predicate.
+ *
+ * Best-effort by contract: a mesh with no config twin (pure inline/cloud mesh)
+ * makes addNode a no-op, and a daemon with no router has no inline cache. The
+ * saga must not fail because membership publication failed — the worktree
+ * itself is already correct — so every failure is swallowed and reported false.
+ */
+async function registerWorkspaceNode(
+    req: WorkspaceNodeRegistrationRequest,
+    registry?: WorkspaceNodeRegistryDeps,
+): Promise<boolean> {
+    const mesh = getMesh(req.meshId);
+    const cachedInline = (() => {
+        try { return registry?.getCachedInlineMesh?.(req.meshId); } catch { return undefined; }
+    })();
+    const membershipSource = mesh ?? cachedInline;
+    const sourceNode = (() => {
+        const nodes = Array.isArray(membershipSource?.nodes) ? membershipSource.nodes : [];
+        if (req.sourceNodeId) {
+            const explicit = nodes.find((n: any) => n?.id === req.sourceNodeId);
+            if (explicit) return explicit;
+        }
+        return nodes.find((n: any) => n?.isLocalWorktree !== true);
+    })();
+
+    const worktreeBootstrap = {
+        status: req.bootstrapStatus,
+        // The saga never runs the repo's worktree_bootstrap script (clone_mesh_node
+        // owns that path), so nothing is REQUIRED to finish here. required:false
+        // keeps a 'running' stamp from hard-blocking launch readiness while it
+        // still defers queue claims, which is precisely the intended window.
+        required: false,
+        ...(req.bootstrapStatus === 'running'
+            ? { startedAt: new Date().toISOString() }
+            : { completedAt: new Date().toISOString() }),
+    };
+
+    const node: Record<string, unknown> = {
+        id: req.nodeId,
+        workspace: req.worktreePath,
+        repoRoot: req.worktreePath,
+        daemonId: sourceNode?.daemonId,
+        machineId: sourceNode?.machineId ?? sourceNode?.machine_id,
+        userOverrides: { ...(sourceNode?.userOverrides || {}) },
+        policy: { ...(sourceNode?.policy || {}) },
+        isLocalWorktree: true,
+        worktreeBranch: req.branchIdentity,
+        clonedFromNodeId: sourceNode?.id,
+        worktreeBootstrap,
+    };
+    // Defensive parity with clone_mesh_node: a source policy still carrying the
+    // removed legacy providerRoles has its cap folded into slots so the clone
+    // never re-seeds providerRoles.
+    try {
+        const { migrateProviderRolesToSlots } = await import('../config/mesh-config.js');
+        migrateProviderRolesToSlots(node.policy as Record<string, unknown>);
+    } catch { /* migration helper unavailable (mocked mesh-config in tests) */ }
+
+    let published = false;
+
+    // Durable half (meshes.json). addNode refuses a duplicate workspace, which is
+    // exactly what a re-registration looks like, so an existing entry is patched
+    // through updateNode instead of being added twice.
+    try {
+        const { addNode, updateNode } = await import('../config/mesh-config.js');
+        const already = Array.isArray(mesh?.nodes)
+            ? mesh.nodes.find((n: any) => n?.id === req.nodeId || n?.workspace === req.worktreePath)
+            : undefined;
+        if (already) {
+            updateNode(req.meshId, already.id, { worktreeBootstrap: worktreeBootstrap as any });
+            published = true;
+        } else if (mesh) {
+            const added = addNode(req.meshId, {
+                id: req.nodeId,
+                workspace: req.worktreePath,
+                repoRoot: req.worktreePath,
+                daemonId: sourceNode?.daemonId,
+                machineId: sourceNode?.machineId ?? sourceNode?.machine_id,
+                userOverrides: { ...(sourceNode?.userOverrides || {}) },
+                policy: node.policy as any,
+                isLocalWorktree: true,
+                worktreeBranch: req.branchIdentity,
+                clonedFromNodeId: sourceNode?.id,
+                worktreeBootstrap: worktreeBootstrap as any,
+            });
+            if (added) published = true;
+        }
+    } catch { /* no config twin / mocked mesh-config — inline half still applies */ }
+
+    // Inline-cache half. get_mesh (preferInline) reads ONLY this when it is warm,
+    // so without it the node stays invisible to mesh_list_nodes on a coordinator
+    // that has a warmed cache — the exact failure this fix exists to close.
+    try {
+        if (cachedInline && registry?.updateInlineMeshNode) {
+            registry.updateInlineMeshNode(req.meshId, cachedInline, node);
+            published = true;
+        }
+    } catch { /* best-effort mirror */ }
+
+    try { registry?.invalidateAggregateMeshStatus?.(req.meshId); } catch { /* best-effort */ }
+    return published;
+}
+
+/**
+ * Compensation mirror: drop the membership entry for a removed worktree.
+ * Runs only after the safety classifier already allowed the delete, so there is
+ * no session/assigned-task/dirty work to strand. Both halves are cleared for the
+ * same reason both are written — a surviving inline-cache entry would resurrect
+ * the node on the next read, and a surviving config entry would restore it on
+ * daemon restart.
+ */
+async function unregisterWorkspaceNode(
+    req: WorkspaceNodeUnregistrationRequest,
+    registry?: WorkspaceNodeRegistryDeps,
+): Promise<boolean> {
+    let removed = false;
+    try {
+        const { removeNode } = await import('../config/mesh-config.js');
+        if (removeNode(req.meshId, req.nodeId) === true) removed = true;
+    } catch { /* no config twin / mocked mesh-config */ }
+    try {
+        const cached = registry?.getCachedInlineMesh?.(req.meshId);
+        if (cached && registry?.removeInlineMeshNode) {
+            if (registry.removeInlineMeshNode(req.meshId, cached, req.nodeId)) removed = true;
+        }
+    } catch { /* best-effort mirror */ }
+    try { registry?.invalidateAggregateMeshStatus?.(req.meshId); } catch { /* best-effort */ }
+    return removed;
 }
 
 function defaultListAssignedTasks(meshId: string, nodeId: string): string[] {

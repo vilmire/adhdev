@@ -583,7 +583,10 @@ export class DaemonCommandRouter {
         return null;
     }
 
-    private updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
+    // Public alongside removeInlineMeshNode: the graph workspace saga registers
+    // its prepared worktree through the same inline-cache seam the retention
+    // sweep already uses for removal (mesh-graph-workspace-ports.ts).
+    updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
         const incomingId = normalizeMeshNodeId(node);
         if (!mesh || !Array.isArray(mesh.nodes) || !incomingId) return;
         const idx = mesh.nodes.findIndex((entry: any) => meshNodeIdMatches(entry, incomingId));

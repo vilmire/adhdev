@@ -106,6 +106,18 @@ interface FakeTree {
     removed: boolean;
 }
 
+interface FakeRegisteredNode {
+    nodeId: string;
+    worktreePath: string;
+    branchIdentity: string;
+    bootstrapStatus: 'running' | 'complete';
+}
+
+interface FakeRegistration extends FakeRegisteredNode {
+    meshId: string;
+    sourceNodeId?: string;
+}
+
 function createFakePorts(opts?: {
     inspectOverride?: (tree: FakeTree | undefined) => Partial<WorkspaceInspectReport>;
     sessions?: { sessionIds: string[]; unknown?: boolean };
@@ -114,8 +126,21 @@ function createFakePorts(opts?: {
     failFinalize?: Error;
     /** Base revision the source node resolves to; undefined = underivable (default). */
     derivedBaseRevision?: string;
-}): { ports: WorkspaceSagaPorts; clones: number; removes: number; trees: Map<string, FakeTree> } {
+}): {
+    ports: WorkspaceSagaPorts;
+    clones: number;
+    removes: number;
+    trees: Map<string, FakeTree>;
+    registered: Map<string, FakeRegisteredNode>;
+    registrations: FakeRegistration[];
+    unregistrations: string[];
+} {
     const trees = new Map<string, FakeTree>();
+    // Stand-in for live mesh membership (meshes.json + inline cache): what
+    // mesh_list_nodes would list and what target_node_id could resolve.
+    const registered = new Map<string, FakeRegisteredNode>();
+    const registrations: FakeRegistration[] = [];
+    const unregistrations: string[] = [];
     let clones = 0;
     let removes = 0;
     const ports: WorkspaceSagaPorts = {
@@ -164,12 +189,29 @@ function createFakePorts(opts?: {
         },
         listLiveSessionsOnNode: async () => opts?.sessions ?? { sessionIds: [], unknown: false },
         listAssignedTasksOnNode: async () => opts?.assigned ?? [],
+        registerNode: async req => {
+            registrations.push({ ...req });
+            registered.set(req.nodeId, {
+                nodeId: req.nodeId,
+                worktreePath: req.worktreePath,
+                branchIdentity: req.branchIdentity,
+                bootstrapStatus: req.bootstrapStatus,
+            });
+            return true;
+        },
+        unregisterNode: async req => {
+            unregistrations.push(req.nodeId);
+            return registered.delete(req.nodeId);
+        },
     };
     return {
         ports,
         get clones() { return clones; },
         get removes() { return removes; },
         trees,
+        registrations,
+        unregistrations,
+        registered,
     } as any;
 }
 
@@ -777,6 +819,209 @@ describe('injection guard — dirty refusal is load-bearing', () => {
             inspect: { pathExists: true, observedOwnerTag: 't', dirty: false, ahead: false, stashed: false, sessionBound: false },
         });
         expect(clean.deletable).toBe(true);
+    });
+});
+
+// ── 7. Saga-prepared worktrees are real mesh nodes ───────────────────────────
+//
+// Regression pin for the "graph worktree is invisible" defect. Both reported
+// symptoms — absent from mesh_list_nodes, and rejected as target_node_id — were
+// ONE root cause: defaultCreateWorktree created the git worktree but never
+// registered a node, so `mesh.nodes` (which both surfaces read) never contained
+// it. The `registerNode` option that was supposed to do this was dead: its value
+// was read and discarded (`void opts.registerNode`).
+
+describe('saga-prepared worktree joins live mesh membership', () => {
+    it('registers the created worktree as a node — the array mesh_list_nodes and target_node_id both read', async () => {
+        const id = meshId('register');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id);
+            const fake = createFakePorts();
+            const tick = await runWorkspaceSagaTick(id, fake.ports);
+            expect(tick.steps[0]?.sagaState).toBe('ready');
+
+            const intent = MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!;
+            const node = fake.registered.get(intent.createdNodeId!);
+            // Symptom 1 — mesh_list_nodes enumerates mesh.nodes: the node is there.
+            expect(node).toBeDefined();
+            expect(node!.worktreePath).toBe(intent.createdWorktreePath);
+            // Symptom 2 — target_node_id validation is `mesh.nodes.find(...)`
+            // against that same membership, so a hit here is a resolvable pin.
+            expect([...fake.registered.keys()]).toContain(intent.createdNodeId);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('carries the worktree branch identity so the derived worktree=/converge= tags match the bound task', async () => {
+        const id = meshId('register_tags');
+        try {
+            const { graphId, task, workspaceRef } = seedGraphWithWorkspace(id);
+            const fake = createFakePorts();
+            await runWorkspaceSagaTick(id, fake.ports);
+
+            const intent = MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!;
+            const node = fake.registered.get(intent.createdNodeId!)!;
+            // resolveNodeCapabilityTags SYNTHESIZES `worktree=<worktreeBranch>` from
+            // the registered node, while bindWorkspaceTargetsInTransaction stamps
+            // `worktree=<branchIdentity>` on the task. Registering the wrong branch
+            // would make the pin unsatisfiable, so pin that they agree.
+            expect(node.branchIdentity).toBe(intent.branchIdentity);
+            const entry = getQueue(id).find(t => t.id === task.id)!;
+            expect(entry.requiredTags).toContain(`worktree=${node.branchIdentity}`);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('publishes as bootstrap-running first, then completes — a half-built worktree is visible but not dispatchable', async () => {
+        const id = meshId('register_gate');
+        try {
+            seedGraphWithWorkspace(id);
+            const fake = createFakePorts();
+            await runWorkspaceSagaTick(id, fake.ports);
+
+            // Registration happens at create (running) and again at finalize
+            // (complete). The 'running' stamp is what the pre-existing worktree
+            // bootstrap gate reads to defer a claim, so ordering is load-bearing:
+            // reversing it would expose a half-built worktree to dispatch.
+            expect(fake.registrations.map((r: FakeRegistration) => r.bootstrapStatus))
+                .toEqual(['running', 'complete']);
+            expect(fake.registrations[0].nodeId).toBe(fake.registrations[1].nodeId);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('unregisters the node when compensation actually removes the worktree', async () => {
+        const id = meshId('unregister');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id);
+            const fake = createFakePorts();
+            await runWorkspaceSagaTick(id, fake.ports);
+            const intent = MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!;
+            expect(fake.registered.has(intent.createdNodeId!)).toBe(true);
+
+            const step = await compensateWorkspaceIntent(graphId, workspaceRef, fake.ports, 'graph_failed');
+            expect(step.action).toBe('compensated');
+            // A surviving entry would be a ghost node: advertised by
+            // mesh_list_nodes and pinnable, but with no worktree behind it.
+            expect(fake.registered.has(intent.createdNodeId!)).toBe(false);
+            expect(fake.unregistrations).toContain(intent.createdNodeId);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('keeps the node registered when compensation REFUSES to delete (dirty tree still needs an addressable node)', async () => {
+        const id = meshId('unregister_refused');
+        try {
+            const { graphId, workspaceRef } = seedGraphWithWorkspace(id);
+            const fake = createFakePorts({ inspectOverride: () => ({ dirty: true }) });
+            await runWorkspaceSagaTick(id, fake.ports);
+            const intent = MeshRuntimeStore.getInstance().graphStore().getWorkspaceIntent(graphId, workspaceRef)!;
+
+            const step = await compensateWorkspaceIntent(graphId, workspaceRef, fake.ports, 'graph_failed');
+            expect(step.action).toBe('compensation_required');
+            expect(step.refusals).toContain('dirty');
+            // The worktree survived on disk, so its node must survive too —
+            // unregistering here would hide the very tree an operator must resolve.
+            expect(fake.registered.has(intent.createdNodeId!)).toBe(true);
+            expect(fake.unregistrations).toHaveLength(0);
+        } finally {
+            cleanup(id);
+        }
+    });
+
+    it('a registration failure does not fail the saga — the worktree is the real resource', async () => {
+        const id = meshId('register_failure');
+        try {
+            const fake = createFakePorts();
+            seedGraphWithWorkspace(id);
+            const ports: WorkspaceSagaPorts = {
+                ...fake.ports,
+                registerNode: async () => { throw new Error('meshes.json unavailable'); },
+            };
+            const tick = await runWorkspaceSagaTick(id, ports);
+            expect(tick.steps[0]?.sagaState).toBe('ready');
+            expect(tick.steps[0]?.action).toBe('cloned');
+        } finally {
+            cleanup(id);
+        }
+    });
+});
+
+// ── 8. Injection guard — registration is load-bearing, not decorative ────────
+//
+// Pins the ACTUAL defect shape: ports built with registration disabled reproduce
+// the pre-fix behaviour (worktree created, no node published). If a future edit
+// re-breaks the wiring back to `void opts.registerNode`, the enabled case below
+// stops publishing and goes red.
+
+describe('injection guard — registerNode option is wired, not discarded', () => {
+    it('default ports publish a node; registerNode:false reproduces the old invisible-worktree behaviour', async () => {
+        const { createDefaultWorkspaceSagaPorts } = await import('../../src/mesh/mesh-graph-workspace-ports.js');
+        const seen: Array<{ nodeId: string; bootstrapStatus: string }> = [];
+        const registry = {
+            getCachedInlineMesh: () => ({ id: 'mesh_x', nodes: [] as any[] }),
+            updateInlineMeshNode: (_m: string, mesh: any, node: any) => {
+                mesh.nodes.push(node);
+                seen.push({ nodeId: node.id, bootstrapStatus: node.worktreeBootstrap?.status });
+            },
+            removeInlineMeshNode: () => true,
+            invalidateAggregateMeshStatus: () => { /* noop */ },
+        };
+        meshConfigMocks.getMesh.mockReturnValue(undefined);
+
+        const enabled = createDefaultWorkspaceSagaPorts({ registry });
+        await enabled.registerNode({
+            meshId: 'mesh_x', nodeId: 'node_ws_x', worktreePath: '/tmp/ws-x',
+            branchIdentity: 'graph-x-ws', bootstrapStatus: 'running',
+        });
+        expect(seen).toEqual([{ nodeId: 'node_ws_x', bootstrapStatus: 'running' }]);
+
+        const disabled = createDefaultWorkspaceSagaPorts({ registerNode: false, registry });
+        const published = await disabled.registerNode({
+            meshId: 'mesh_x', nodeId: 'node_ws_y', worktreePath: '/tmp/ws-y',
+            branchIdentity: 'graph-y-ws', bootstrapStatus: 'running',
+        });
+        expect(published).toBe(false);
+        expect(seen).toHaveLength(1);
+    });
+
+    it('registered node carries the worktree fields the capability tags are derived from', async () => {
+        const { createDefaultWorkspaceSagaPorts } = await import('../../src/mesh/mesh-graph-workspace-ports.js');
+        const { buildMeshNodeCapabilityTags } = await import('../../src/mesh/mesh-work-queue.js');
+        let captured: any;
+        const registry = {
+            getCachedInlineMesh: () => ({
+                id: 'mesh_y',
+                nodes: [{ id: 'base', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon_1', machineId: 'm1' }],
+            }),
+            updateInlineMeshNode: (_m: string, _mesh: any, node: any) => { captured = node; },
+            removeInlineMeshNode: () => true,
+            invalidateAggregateMeshStatus: () => { /* noop */ },
+        };
+        meshConfigMocks.getMesh.mockReturnValue(undefined);
+
+        const ports = createDefaultWorkspaceSagaPorts({ registry });
+        await ports.registerNode({
+            meshId: 'mesh_y', nodeId: 'node_ws_z', worktreePath: '/tmp/ws-z',
+            branchIdentity: 'graph-z-ws', sourceNodeId: 'base', bootstrapStatus: 'complete',
+        });
+
+        expect(captured.isLocalWorktree).toBe(true);
+        expect(captured.worktreeBranch).toBe('graph-z-ws');
+        // Provenance + scheduling identity inherited from the source node, exactly
+        // as clone_mesh_node does for an operator-driven worktree clone.
+        expect(captured.clonedFromNodeId).toBe('base');
+        expect(captured.daemonId).toBe('daemon_1');
+        expect(captured.machineId).toBe('m1');
+        // The routing tags are DERIVED from those fields, never stored — so this
+        // is what actually makes the node reachable by a worktree-pinned task.
+        const tags = buildMeshNodeCapabilityTags(captured);
+        expect(tags).toContain('worktree=graph-z-ws');
+        expect(tags).toContain('converge=refine');
     });
 });
 

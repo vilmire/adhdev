@@ -120,6 +120,8 @@ function fakeWorkspacePorts() {
         removeWorktree: async () => { state.removes += 1; return { removed: true }; },
         listLiveSessionsOnNode: async () => ({ sessionIds: [], unknown: false }),
         listAssignedTasksOnNode: async () => [],
+        registerNode: async () => true,
+        unregisterNode: async () => true,
     } as any;
     return { ports, state };
 }

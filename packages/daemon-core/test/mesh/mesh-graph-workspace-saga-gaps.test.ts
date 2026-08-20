@@ -102,6 +102,8 @@ function createFakePorts(opts?: {
     derivedBaseRevision?: string;
 }): { ports: WorkspaceSagaPorts; clones: number; removes: number; trees: Map<string, FakeTree> } {
     const trees = new Map<string, FakeTree>();
+    /** Stand-in for live mesh membership (nodeId → bootstrap stamp). */
+    const registered = new Map<string, 'running' | 'complete'>();
     let clones = 0;
     let removes = 0;
     const ports: WorkspaceSagaPorts = {
@@ -149,12 +151,15 @@ function createFakePorts(opts?: {
         },
         listLiveSessionsOnNode: async () => opts?.sessions ?? { sessionIds: [], unknown: false },
         listAssignedTasksOnNode: async () => opts?.assigned ?? [],
+        registerNode: async req => { registered.set(req.nodeId, req.bootstrapStatus); return true; },
+        unregisterNode: async req => registered.delete(req.nodeId),
     };
     return {
         ports,
         get clones() { return clones; },
         get removes() { return removes; },
         trees,
+        registered,
     } as any;
 }
 
