@@ -1174,7 +1174,7 @@
             "backToModelList": "← 모델 목록으로",
             "thinking": "사고",
             "thinkingDefault": "(기본값)",
-            "difficulty": "난이도 (비우면 = 전체)",
+            "difficulty": "난이도 (비우면 = freeform 태스크만 배정)",
             "capabilityTags": "역량 태그 (쉼표 구분)",
             "maxParallel": "최대 병렬 (슬롯당)",
             "maxParallelPlaceholder": "무제한",

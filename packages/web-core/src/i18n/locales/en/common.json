@@ -1174,7 +1174,7 @@
             "backToModelList": "← Back to model list",
             "thinking": "Thinking",
             "thinkingDefault": "(default)",
-            "difficulty": "Difficulty (blank = all)",
+            "difficulty": "Difficulty (blank = freeform tasks only)",
             "capabilityTags": "Capability tags (comma-separated)",
             "maxParallel": "Max parallel (per slot)",
             "maxParallelPlaceholder": "unlimited",
