@@ -294,22 +294,36 @@ import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 
 /**
- * Antigravity CLI's Cloud Code host. The unprefixed `cloudcode-pa` host is
- * the Gemini-CLI default and 429s Google AI Pro Antigravity accounts — see
- * the ENDPOINT PROVENANCE note in the header.
+ * Default Cloud Code host — the one `agy` itself uses.
+ *
+ * Do not "simplify" this back to unprefixed `cloudcode-pa.googleapis.com`.
+ * That host is gemini-cli's default and 429s Google AI Pro Antigravity
+ * accounts (sub2api #5611). Two hosts exist on purpose; see `baseUrl`.
  */
 const DEFAULT_BASE_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal';
 
 /**
- * Client identity Cloud Code expects. Version is the `agy --version` observed
- * on this machine (1.1.16); we do not spawn the binary to read it. OS/arch
- * follow the Go convention the official clients send (`darwin/arm64`,
- * `windows/amd64`), not Node's `win32`/`x64`.
+ * Pinned from `agy --version` on the development machine (2026-08-20).
+ *
+ * HARDCODED, deliberately. Reading it from the binary at runtime would mean
+ * locating and spawning `agy`, which this fetcher must not do (PATH on win32
+ * is stale; the credential-stuffing incident banned binary scans). The live
+ * 403→200 split was `antigravity/` vs Node's default UA, not the patch
+ * number, so a CLI upgrade that leaves this pin behind is a drift to watch,
+ * not a silent 429. Update the pin when someone next confirms a new `agy
+ * --version` still 200s — do not invent a version probe to "fix" it.
+ */
+const ANTIGRAVITY_USER_AGENT_VERSION = '1.1.16';
+
+/**
+ * Client identity Cloud Code expects. OS/arch follow the Go convention the
+ * official clients send (`darwin/arm64`, `windows/amd64`), not Node's
+ * `win32`/`x64`.
  */
 function antigravityUserAgent(): string {
     const os = process.platform === 'win32' ? 'windows' : process.platform;
     const arch = process.arch === 'x64' ? 'amd64' : process.arch;
-    return `antigravity/1.1.16 ${os}/${arch}`;
+    return `antigravity/${ANTIGRAVITY_USER_AGENT_VERSION} ${os}/${arch}`;
 }
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Refuse to spend a token that expires mid-flight. */
@@ -392,6 +406,13 @@ try {
 }
 `;
 
+/**
+ * Host selection: unset → daily (the CLI-shaped default). The env override
+ * exists for the minority of accounts that 401 on `daily-` and need the
+ * unprefixed gemini-cli host (sub2api #3611). It is an escape hatch, not a
+ * second default — deleting it would strand those accounts with no way to
+ * opt back into prod without a code change.
+ */
 function baseUrl(env: NodeJS.ProcessEnv): string {
     const override = env.ANTIGRAVITY_CLOUDCODE_BASE_URL?.trim();
     return (override ? override : DEFAULT_BASE_URL).replace(/\/+$/, '');
