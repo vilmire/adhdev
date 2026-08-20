@@ -704,6 +704,28 @@ function readNumeric(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+function readTaskInput(value) {
+  if (value === void 0 || value === null) return void 0;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("`input` must be an object of the form {parts: [...]}.");
+  }
+  const parts = value.parts;
+  if (!Array.isArray(parts)) {
+    throw new Error("`input.parts` must be an array of content parts.");
+  }
+  if (parts.length === 0) {
+    throw new Error("`input.parts` is empty \u2014 omit `input` entirely for a text-only task.");
+  }
+  for (const [index, part] of parts.entries()) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) {
+      throw new Error(`\`input.parts[${index}]\` must be an object.`);
+    }
+    if (!readString(part.type)) {
+      throw new Error(`\`input.parts[${index}].type\` is required (e.g. "text" or "image").`);
+    }
+  }
+  return { parts };
+}
 var LARGE_LEDGER_FIELD_KEYS = /* @__PURE__ */ new Set(["plan", "validationPlan", "suggestedConfig", "payload"]);
 var LARGE_LEDGER_OBJECT_THRESHOLD = 800;
 var LARGE_LEDGER_NESTED_BYTES_THRESHOLD = 2e3;
@@ -1007,6 +1029,17 @@ function isLocalControlPlaneNode(ctx, node) {
 }
 
 // src/tools/mesh-tool-schemas.ts
+var MESH_TASK_INPUT_SCHEMA = {
+  type: "object",
+  description: 'Optional structured multipart input delivered alongside `message` \u2014 use to attach an image (e.g. a screenshot) to the task. Shape: {parts: [{type: "text", text}, {type: "image", mimeType, data (base64) | uri}]}. The target provider must declare image support (most CLI providers do; opencode and all ACP providers are text-only) \u2014 an unsupported target is refused with an explicit error, never silently stripped. Large attachments are chunked automatically across the mesh transport. Omit entirely for ordinary text tasks.',
+  properties: {
+    parts: {
+      type: "array",
+      description: 'Ordered content parts. A text part carries {type:"text", text}; an image part carries {type:"image", mimeType, and either base64 `data` or a `uri`}.',
+      items: { type: "object" }
+    }
+  }
+};
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
   description: `Get the current status of all nodes in the repo mesh \u2014 health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers \u2014 it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning \u2014 meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId \u2192 {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning \u2014 meaning that daemon's LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.`,
@@ -1060,6 +1093,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
     type: "object",
     properties: {
       message: { type: "string", description: "The task instruction for the agent." },
+      input: MESH_TASK_INPUT_SCHEMA,
       task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch \u2014 and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one." },
       taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
       readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one node), is counted under the read-only safety cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Equivalent to task_mode=live_debug_readonly but composable with any task_mode." },
@@ -1116,6 +1150,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
           properties: {
             ref: { type: "string", description: `Batch-local label other entries' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted \u2014 resolved to the generated task id at insert.` },
             message: { type: "string", description: "The task instruction for the agent." },
+            input: MESH_TASK_INPUT_SCHEMA,
             task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract (same semantics as mesh_enqueue_task)." },
             taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
             readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task." },
@@ -1365,6 +1400,7 @@ var MESH_SEND_TASK_TOOL = {
       node_id: { type: "string", description: "Target node ID (from mesh_list_nodes)." },
       session_id: { type: "string", description: "Agent session ID on the target node." },
       message: { type: "string", description: "Natural-language task to send to the agent." },
+      input: MESH_TASK_INPUT_SCHEMA,
       task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch." },
       taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
       readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
@@ -3548,6 +3584,10 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
       cliType: resolvedProviderType,
       action: "send_chat",
       message: args.message,
+      // MESH-IMAGE-DISPATCH: forward the attachment over P2P. Oversized payloads are
+      // split by the mesh transport's frame chunking (daemon-mesh-manager
+      // writeEnvelope) and reassembled on the worker before the command is handled.
+      ...args.input ? { input: args.input } : {},
       // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
       dispatchSource: "mesh-tools-internal:ipcDispatchToRemoteAgent",
       // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
@@ -8292,6 +8332,16 @@ async function meshSendTask(ctx, args) {
       error: "mesh_send_task requires a non-empty string `message`."
     });
   }
+  let taskInput;
+  try {
+    taskInput = readTaskInput(args.input);
+  } catch (e) {
+    return JSON.stringify({
+      success: false,
+      code: "invalid_input",
+      error: `mesh_send_task received an unusable \`input\`: ${e?.message || e}`
+    });
+  }
   const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
@@ -8409,6 +8459,9 @@ async function meshSendTask(ctx, args) {
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
         message,
+        // MESH-IMAGE-DISPATCH: the remote P2P path carries the attachment too —
+        // this is the leg that needs the transport chunking.
+        ...taskInput ? { input: taskInput } : {},
         providerType: cached?.providerType,
         verifiedSession: explicitTargetSession,
         meshContext: {
@@ -8740,6 +8793,11 @@ async function meshSendTask(ctx, args) {
         providerType: resolvedProviderType,
         action: "send_chat",
         message,
+        // MESH-IMAGE-DISPATCH: forward the multipart envelope so the worker's
+        // provider instance receives structured parts instead of text-only. Spread
+        // conditionally so a text-only dispatch sends the byte-identical payload it
+        // sent before this change.
+        ...taskInput ? { input: taskInput } : {},
         // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
         dispatchSource: "mesh-tools-session:mesh_send_task:direct",
         meshContext: {
