@@ -621,7 +621,14 @@ export class SpecCliAdapter implements CliAdapter {
             this.statusCallback?.();
             return;
         }
-        if (scheme !== 'claude_tui') return;
+        // SILENT-SUCCESS DEFECT (2026-08-20): this used to `return` for any
+        // other scheme — no keys pressed, prompt left held, and the caller
+        // still reported success. A provider whose spec declares no answerable
+        // interactive-prompt scheme must FAIL LOUDLY so the coordinator knows
+        // the question is still parked.
+        if (scheme !== 'claude_tui') {
+            throw new Error(`Provider "${this.spec.id}" declares no answerable interactive-prompt scheme${scheme ? ` (scheme: ${scheme})` : ''} — the question was NOT answered.`);
+        }
         if (this.interactivePromptTransport === 'tui') {
             const steps = buildClaudeInteractiveTuiAnswerSteps(prompt, response);
             for (const step of steps) {

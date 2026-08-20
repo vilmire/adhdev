@@ -147,7 +147,62 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
                 stalePromptId: incomingPromptId,
             };
         }
-        ctx.deps.instanceManager.sendEvent(sessionId, 'interactive_prompt_response', payload);
-        return { success: true };
+        // SILENT-SUCCESS DEFECT (2026-08-20 live): this used to be
+        // `sendEvent(...); return { success: true }`. sendEvent is
+        // fire-and-forget (returns void), so success was reported BEFORE the
+        // answer was resolved against the held prompt and before a single key
+        // reached the PTY. Every downstream failure — an unknown option label
+        // (resolveInteractivePromptResponse throws), an adapter with no answer
+        // support, a provider scheme with no answer path, a rejected key
+        // injection — was caught and logged only. The coordinator, trusting
+        // `success: true`, moved on while the picker stayed parked
+        // (`awaiting_choice` for ~5 minutes, until the owner noticed).
+        //
+        // Prefer the awaitable path when the instance exposes it: it resolves
+        // labels/indexes against the AUTHORITATIVE held prompt and awaits the
+        // key injection, so a failure is a real error with the live option list
+        // attached. Instances that predate it fall back to the legacy
+        // fire-and-forget event, which is reported honestly as un-verified.
+        const applyAnswer = (instance as unknown as {
+            applyInteractivePromptResponse?: (data: unknown) => Promise<{ promptId: string; answers: Record<string, unknown> }>;
+        }).applyInteractivePromptResponse;
+        if (typeof applyAnswer !== 'function') {
+            ctx.deps.instanceManager.sendEvent(sessionId, 'interactive_prompt_response', payload);
+            return {
+                success: true,
+                delivered: true,
+                submitted: false,
+                note: 'Answer was FORWARDED to the session but delivery could not be verified on this provider instance (legacy path). Confirm the session left awaiting_choice before treating the question as answered.',
+            };
+        }
+        try {
+            const applied = await applyAnswer.call(instance, payload);
+            // Honest contract: the keystrokes were dispatched to the PTY and
+            // the held prompt was cleared. We do NOT claim the TUI redrew and
+            // committed — that is only observable on a later status tick.
+            return {
+                success: true,
+                delivered: true,
+                submitted: true,
+                promptId: applied.promptId,
+                answers: applied.answers,
+                note: 'Answer resolved against the active prompt and the submit keystrokes were dispatched to the TUI. Verify the session left awaiting_choice on the next status read.',
+            };
+        } catch (e: any) {
+            const describeActive = (instance as unknown as {
+                describeActiveInteractivePrompt?: () => unknown;
+            }).describeActiveInteractivePrompt;
+            const active = typeof describeActive === 'function' ? describeActive.call(instance) : null;
+            return {
+                success: false,
+                delivered: false,
+                submitted: false,
+                error: e?.message || String(e),
+                ...(active ? { activePrompt: active, waitingChoice: true } : {}),
+                nextStep: active
+                    ? 'The question is STILL open. Re-answer with mesh_answer_question using a label or 1-based index from activePrompt.questions[].options.'
+                    : 'The question was not answered. Re-read the session status to see whether a prompt is still open.',
+            };
+        }
     },
 };

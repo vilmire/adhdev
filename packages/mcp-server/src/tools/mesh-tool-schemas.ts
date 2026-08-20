@@ -765,7 +765,9 @@ export const MESH_ANSWER_QUESTION_TOOL = {
         + 'it offers labelled options (optionally multi-select, optionally a freeform "Type something") and must be answered here, never with mesh_approve. '
         + 'Supply the promptId from the waiting_choice event and one answer per question. Each answer selects option(s) by their exact label OR 1-based index; '
         + 'for a multi-select question pass an array of selections; a freeform answer passes text instead. '
-        + 'The daemon drives the correct keystrokes into the provider TUI to submit the selection.',
+        + 'The daemon drives the correct keystrokes into the provider TUI to submit the selection. '
+        + 'RETURN CONTRACT: success:true means the answer RESOLVED against the session\'s active prompt and the submit keystrokes were DISPATCHED (submitted:true) — it does not prove the TUI finished redrawing, so confirm the session left awaiting_choice on a later status read. '
+        + 'An unmatched option label, a stale promptId, or a provider that cannot answer questions returns success:false with the live option list in activePrompt — re-answer using one of those labels or its 1-based index.',
     inputSchema: {
         type: 'object' as const,
         properties: {

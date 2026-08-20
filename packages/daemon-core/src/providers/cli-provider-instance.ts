@@ -13,6 +13,13 @@ import { normalizeInputEnvelope, type ProviderModule, flattenContent, type Input
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, resolveInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
+import {
+    applyInteractivePromptAnswer,
+    applyInteractivePromptAnswerFireAndForget,
+    describeInteractivePrompt,
+    type AppliedInteractivePromptAnswer,
+    type ActiveInteractivePromptDescription,
+} from './interactive-prompt-apply.js';
 import { SpecCliAdapter } from './spec/cli-adapter.js';
 
 /** The one concrete CLI adapter (legacy ProviderCliAdapter deleted 2026-08-17)
@@ -1333,6 +1340,35 @@ export class CliProviderInstance implements ProviderInstance {
         return 'other';
     }
 
+    /**
+     * Apply an interactive-prompt answer and REPORT what actually happened —
+     * the awaitable counterpart to the fire-and-forget `onEvent` branch below.
+     * Throws on every failure so the caller can return a real error instead of
+     * the silent `success: true` that left a picker parked for ~5 minutes.
+     * See providers/interactive-prompt-apply.ts for the full rationale.
+     */
+    async applyInteractivePromptResponse(data: unknown): Promise<AppliedInteractivePromptAnswer> {
+        const applied = await applyInteractivePromptAnswer({
+            held: this.activeInteractivePrompt,
+            data,
+            adapter: this.adapter,
+            providerType: this.type,
+        });
+        if (this.activeInteractivePrompt?.promptId === applied.promptId) {
+            this.activeInteractivePrompt = null;
+        }
+        return applied;
+    }
+
+    /**
+     * The option list the session is CURRENTLY holding, for error reporting.
+     * When an answer fails to resolve, the caller returns this so the
+     * coordinator can retry against the real labels instead of guessing.
+     */
+    describeActiveInteractivePrompt(): ActiveInteractivePromptDescription | null {
+        return describeInteractivePrompt(this.activeInteractivePrompt);
+    }
+
     onEvent(event: string, data?: any): void {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data);
@@ -1380,50 +1416,18 @@ export class CliProviderInstance implements ProviderInstance {
                 });
             }
         } else if (event === 'interactive_prompt_response' && data) {
-            try {
-                // STALE-PROMPT-ANSWER guard (rc.20 rebind option fidelity): an answer
-                // naming a promptId OTHER than the currently held prompt is rejected
-                // outright — it is NEVER resolved against (or defaulted into) the
-                // active prompt's options and NEVER forwarded to the TUI/transport.
-                // Post-restart the coordinator can still hold the pre-restart
-                // promptId; silently dropping it (the old log-only path) left the
-                // session parked, and resolving it anyway could bind an index to the
-                // wrong option row. Rejection here is fail-closed: the picker stays
-                // parked and the caller is told to re-answer against the active id.
-                const heldPromptId = typeof this.activeInteractivePrompt?.promptId === 'string'
-                    && this.activeInteractivePrompt.promptId
-                    ? this.activeInteractivePrompt.promptId
-                    : '';
-                const incomingPromptId = typeof (data as { promptId?: unknown })?.promptId === 'string'
-                    ? ((data as { promptId: string }).promptId).trim()
-                    : '';
-                if (heldPromptId && incomingPromptId && incomingPromptId !== heldPromptId) {
-                    LOG.warn('CLI', `[${this.type}] interactive_prompt_response REJECTED: stale promptId "${incomingPromptId}" does not match active prompt "${heldPromptId}" — answer not applied (no index/default fallback); re-answer against the active promptId`);
-                    return;
-                }
-                // mesh_answer_question (mission f1d25e11) sends a coordinator-friendly answer
-                // form (per-question select by label/index) that must be resolved against the
-                // AUTHORITATIVE active prompt held here. When the active prompt is present and
-                // the promptId matches, resolve it; otherwise fall back to the strict keyed
-                // form (dashboard local answers already send that shape).
-                const response = (this.activeInteractivePrompt
-                    && this.activeInteractivePrompt.promptId === (data as { promptId?: unknown })?.promptId
-                    && Array.isArray((data as { answers?: unknown })?.answers))
-                    ? resolveInteractivePromptResponse(this.activeInteractivePrompt, data)
-                    : normalizeInteractivePromptResponse(data);
-                if (this.activeInteractivePrompt?.promptId === response.promptId) {
-                    this.activeInteractivePrompt = null;
-                }
-                if (typeof this.adapter.setInteractivePromptResponse !== 'function') {
-                    LOG.warn('CLI', `[${this.type}] interactive_prompt_response ignored: adapter does not support interactive prompts`);
-                    return;
-                }
-                void this.adapter.setInteractivePromptResponse(response).catch((e: any) => {
-                    LOG.warn('CLI', `[${this.type}] interactive_prompt_response failed: ${e?.message || e}`);
-                });
-            } catch (e: any) {
-                LOG.warn('CLI', `[${this.type}] invalid interactive_prompt_response: ${e?.message || e}`);
-            }
+            // LEGACY fire-and-forget answer path (dashboard-local answers and
+            // pre-verified callers). Every failure here is log-only by design —
+            // there is no caller to return an error to. Callers that need to
+            // know whether the answer actually landed must use the awaitable
+            // applyInteractivePromptResponse above instead; see
+            // providers/interactive-prompt-apply.ts.
+            this.activeInteractivePrompt = applyInteractivePromptAnswerFireAndForget({
+                held: this.activeInteractivePrompt,
+                data,
+                adapter: this.adapter,
+                providerType: this.type,
+            });
         } else if (event === 'provider_state_patch' && data && typeof data === 'object') {
             this.applyProviderResponse(data, { phase: 'immediate' });
         }

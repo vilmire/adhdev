@@ -543,7 +543,20 @@ class StandaloneServer {
         const instanceKey = resolveInstanceKey(sessionId);
         if (!instanceKey) throw new Error(`Unknown session: ${sessionId}`);
         const normalized = normalizeInteractivePromptResponse(response);
-        this.components?.instanceManager.sendEvent(instanceKey, 'interactive_prompt_response', normalized);
+        // SILENT-SUCCESS DEFECT (2026-08-20): this used the fire-and-forget
+        // sendEvent, so the HTTP handler answered 200 {success:true} before the
+        // answer had been resolved against the held prompt or a single key had
+        // reached the PTY — an unknown option label was dropped to a daemon log
+        // line while the caller was told the question was answered. Prefer the
+        // awaitable path so a failure surfaces as a real HTTP error.
+        const instance = this.components?.instanceManager.getInstance(instanceKey) as unknown as {
+          applyInteractivePromptResponse?: (data: unknown) => Promise<unknown>;
+        } | undefined;
+        if (typeof instance?.applyInteractivePromptResponse === 'function') {
+          await instance.applyInteractivePromptResponse(normalized);
+        } else {
+          this.components?.instanceManager.sendEvent(instanceKey, 'interactive_prompt_response', normalized);
+        }
         this.scheduleBroadcastStatus();
       },
     };
