@@ -36,6 +36,9 @@ import type { SessionRegistry } from '../sessions/registry.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
+// MESH-IMAGE-DISPATCH: shared with the dashboard send path so a multipart dispatch is
+// deduplicated by the SAME signature on both routes rather than by two divergent rules.
+import { buildSendInputSignature } from './chat-commands-shared.js';
 import { findProviderAutoApproveMode, resolveProviderAutoApproveMode } from '../providers/auto-approve-modes.js';
 
 // ─── external dependency interface ──────────────────────────
@@ -1995,13 +1998,35 @@ export class DaemonCliManager {
                     }
                     const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
                     const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);
-                    if (provider?.category === 'acp') {
+                    // MESH-IMAGE-DISPATCH: a mesh dispatch carrying non-text parts (an image
+                    // from the coordinator or dashboard) must reach the provider instance as
+                    // STRUCTURED input, exactly as the dashboard path already does — see
+                    // chat-commands-write.ts, whose PTY branch routes structured parts through
+                    // `instance.onEvent('send_message', { input })` so provider-specific
+                    // attachment strategies apply.
+                    //
+                    // Before this change every non-ACP send took `assertTextOnlyInput` (a hard
+                    // throw on any image part) and then collapsed to `input.textFallback`, so a
+                    // mesh image was rejected outright while the SAME provider on the SAME
+                    // daemon accepted it from the dashboard. That asymmetry — not a missing
+                    // capability — was the whole defect. Capability is still enforced, but by
+                    // the provider's own declaration rather than a blanket text-only rule.
+                    const hasStructuredParts = input.parts.some((part) => part.type !== 'text');
+                    if (hasStructuredParts) {
+                        // Refuses with a clear provider-named error when the provider does not
+                        // declare the media type (opencode and every ACP provider are text-only),
+                        // so an unsupported dispatch fails loudly instead of silently dropping
+                        // the image and sending a prompt that references a picture nobody got.
+                        assertProviderSupportsDeclaredInput(provider, input);
+                    } else if (provider?.category === 'acp') {
                         assertProviderSupportsDeclaredInput(provider, input);
                     } else {
                         assertTextOnlyInput(provider, input);
                     }
                     const message = input.textFallback;
-                    if (!message) throw new Error('message required for send_chat');
+                    // A multipart send is legitimately allowed to carry no text (an image on its
+                    // own); only the text-only path still requires a non-empty message.
+                    if (!message && !hasStructuredParts) throw new Error('message required for send_chat');
                     // ARCH-REFACTOR R1: thread the dispatched task's id into the turn so the
                     // worker's completion event is bound to THIS task (per-turn identity),
                     // not the last-write-wins session scalar. Carried for both local and
@@ -2024,7 +2049,14 @@ export class DaemonCliManager {
                     // explicit operator/coordinator override and bypasses the guard.
                     let submissionGuardKey: string | null = null;
                     if (meshTaskId && !forceSend) {
-                        submissionGuardKey = this.beginMeshDispatchSubmission(key, meshTaskId, message);
+                        // MESH-IMAGE-DISPATCH: hash the FULL input envelope for a multipart
+                        // send. `message` is the text fallback, which is empty for an
+                        // image-only dispatch — hashing it alone would make two different
+                        // images within one task collide and silently suppress the second as
+                        // a duplicate. buildSendInputSignature covers text + every part, and
+                        // is the same signature the dashboard dedup path uses.
+                        const guardContent = hasStructuredParts ? buildSendInputSignature(input) : message;
+                        submissionGuardKey = this.beginMeshDispatchSubmission(key, meshTaskId, guardContent);
                         if (submissionGuardKey === null) {
                             LOG.warn('MeshDispatch', `Suppressed duplicate PTY submission on session ${key}: task ${meshTaskId} with identical content was already submitted within the last ${Math.round(MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS / 1000)}s — the prompt is already sent/buffered on this session, not re-injecting`);
                             return {
@@ -2038,7 +2070,24 @@ export class DaemonCliManager {
                     // ad-hoc chat / non-mesh dispatch); only thread the per-turn taskId when
                     // present, so existing non-mesh callers and their contracts are unchanged.
                     try {
-                        if (forceSend && typeof (adapter as any).forceSendMessage === 'function') {
+                        if (hasStructuredParts) {
+                            // MESH-IMAGE-DISPATCH: multipart input goes to the provider INSTANCE
+                            // rather than the adapter, so provider-specific attachment strategies
+                            // (e.g. Hermes' file-path image prompt) run instead of the envelope
+                            // being flattened to text. Same call the dashboard PTY path makes.
+                            //
+                            // Deliberately placed HERE, after DISPATCH-SOURCE-TRACE and the
+                            // PTY-SUBMIT-IDEMPOTENCY guard: an image dispatch must be
+                            // duplicate-suppressed on redelivery exactly like a text one, and
+                            // returning earlier would have bypassed both.
+                            const structuredTarget = this.deps.getInstanceManager()?.getInstance(key) as
+                                | { onEvent?: (event: string, payload: unknown) => void }
+                                | undefined;
+                            if (!structuredTarget || typeof structuredTarget.onEvent !== 'function') {
+                                throw new Error(`No provider instance for session '${key}' — cannot deliver multipart input for agent '${agentType}'`);
+                            }
+                            structuredTarget.onEvent('send_message', { input });
+                        } else if (forceSend && typeof (adapter as any).forceSendMessage === 'function') {
                             if (meshTaskId) await (adapter as any).forceSendMessage(message, meshTaskId);
                             else await (adapter as any).forceSendMessage(message);
                         } else if (forceSend) {

@@ -18,6 +18,49 @@ export function readNumeric(value: unknown, fallback = 0): number {
     return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** A structured multipart input envelope as accepted by the mesh task tools. */
+export interface MeshTaskInput {
+    parts: Array<Record<string, unknown>>;
+}
+
+/**
+ * MESH-IMAGE-DISPATCH: validate the optional `input` envelope on a task tool call.
+ *
+ * The MCP tool dispatcher forwards raw args with NO runtime schema validation (the same
+ * gap DELIVERY-MSG-GUARD closed for `message`), so a malformed `input` would otherwise
+ * travel all the way to the worker daemon before failing — or, worse, be silently
+ * ignored, leaving a prompt that references an attachment nobody received.
+ *
+ * Returns undefined when `input` is absent (the ordinary text-only case) and throws a
+ * caller-facing Error when it is present but unusable. Deliberately shallow: part
+ * SHAPE is the provider's contract (normalizeInputEnvelope on the daemon side), so this
+ * only rejects what is structurally unusable rather than duplicating that schema.
+ */
+export function readTaskInput(value: unknown): MeshTaskInput | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('`input` must be an object of the form {parts: [...]}.');
+    }
+    const parts = (value as { parts?: unknown }).parts;
+    if (!Array.isArray(parts)) {
+        throw new Error('`input.parts` must be an array of content parts.');
+    }
+    if (parts.length === 0) {
+        // An empty envelope is a caller bug: it reads as "I attached something" while
+        // carrying nothing. Refuse rather than dispatch a silently text-only task.
+        throw new Error('`input.parts` is empty — omit `input` entirely for a text-only task.');
+    }
+    for (const [index, part] of parts.entries()) {
+        if (!part || typeof part !== 'object' || Array.isArray(part)) {
+            throw new Error(`\`input.parts[${index}]\` must be an object.`);
+        }
+        if (!readString((part as { type?: unknown }).type)) {
+            throw new Error(`\`input.parts[${index}].type\` is required (e.g. "text" or "image").`);
+        }
+    }
+    return { parts: parts as Array<Record<string, unknown>> };
+}
+
 // ─── Large-value / ledger-field compaction (shared by queue + compact + ledger) ───
 
 export const LARGE_LEDGER_FIELD_KEYS = new Set(['plan', 'validationPlan', 'suggestedConfig', 'payload']);

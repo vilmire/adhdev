@@ -7,6 +7,38 @@
  * below so existing `./tools/mesh-tools.js` import paths stay intact.
  */
 
+/**
+ * MESH-IMAGE-DISPATCH: optional structured input accompanying a task instruction.
+ *
+ * `message` stays the required, unchanged text channel — every existing caller and
+ * every text-only task behaves exactly as before. `input` is strictly ADDITIVE: when
+ * present it carries a multipart envelope (e.g. a screenshot) that is delivered to the
+ * worker's provider instance instead of being flattened to text.
+ *
+ * Support is per-provider and enforced at dispatch, not here: 7 of 8 CLI providers
+ * declare image input (opencode does not), and every ACP provider is text-only. An
+ * unsupported target is REFUSED with a provider-named error rather than silently
+ * dropping the attachment — a prompt that says "look at this screenshot" must never
+ * arrive with no screenshot.
+ *
+ * Shared by mesh_send_task / mesh_enqueue_task / mesh_enqueue_batch so the three
+ * entry points cannot drift in what they accept.
+ */
+const MESH_TASK_INPUT_SCHEMA = {
+    type: 'object' as const,
+    description: 'Optional structured multipart input delivered alongside `message` — use to attach an image (e.g. a screenshot) to the task. '
+        + 'Shape: {parts: [{type: "text", text}, {type: "image", mimeType, data (base64) | uri}]}. '
+        + 'The target provider must declare image support (most CLI providers do; opencode and all ACP providers are text-only) — an unsupported target is refused with an explicit error, never silently stripped. '
+        + 'Large attachments are chunked automatically across the mesh transport. Omit entirely for ordinary text tasks.',
+    properties: {
+        parts: {
+            type: 'array' as const,
+            description: 'Ordered content parts. A text part carries {type:"text", text}; an image part carries {type:"image", mimeType, and either base64 `data` or a `uri`}.',
+            items: { type: 'object' as const },
+        },
+    },
+};
+
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
     description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers — it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning — meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId → {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning — meaning that daemon\'s LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
@@ -93,6 +125,7 @@ export const MESH_ENQUEUE_TASK_TOOL = {
         type: 'object' as const,
         properties: {
             message: { type: 'string', description: 'The task instruction for the agent.' },
+            input: MESH_TASK_INPUT_SCHEMA,
             task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch — and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one.' },
             taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
             readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true the task runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one node), is counted under the read-only safety cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Equivalent to task_mode=live_debug_readonly but composable with any task_mode.' },
@@ -158,6 +191,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                     properties: {
                         ref: { type: 'string', description: 'Batch-local label other entries\' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted — resolved to the generated task id at insert.' },
                         message: { type: 'string', description: 'The task instruction for the agent.' },
+                        input: MESH_TASK_INPUT_SCHEMA,
                         task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract (same semantics as mesh_enqueue_task).' },
                         taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
                         readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task.' },
@@ -439,6 +473,7 @@ export const MESH_SEND_TASK_TOOL = {
             node_id: { type: 'string', description: 'Target node ID (from mesh_list_nodes).' },
             session_id: { type: 'string', description: 'Agent session ID on the target node.' },
             message: { type: 'string', description: 'Natural-language task to send to the agent.' },
+            input: MESH_TASK_INPUT_SCHEMA,
             task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch.' },
             taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
             readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode.' },

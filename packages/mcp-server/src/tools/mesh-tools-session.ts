@@ -58,6 +58,8 @@ import {
     readSessionRecordId,
     readSpawnedSessionVisibility,
     readString,
+    readTaskInput,
+    type MeshTaskInput,
     recordDirectDispatchTask,
     recordRecoverableLaunchFailure,
     refreshMeshFromDaemon,
@@ -198,6 +200,8 @@ export async function meshSendTask(
     ctx: MeshContext,
     args: {
         node_id: string; session_id?: string; message: string;
+        /** MESH-IMAGE-DISPATCH: optional multipart attachment delivered with `message`. */
+        input?: unknown;
         task_mode?: string; taskMode?: string;
         readonly?: boolean; read_only?: boolean;
         mission_id?: string; missionId?: string;
@@ -216,6 +220,20 @@ export async function meshSendTask(
             success: false,
             code: 'invalid_message',
             error: 'mesh_send_task requires a non-empty string `message`.',
+        });
+    }
+    // MESH-IMAGE-DISPATCH: optional structured attachment (e.g. a screenshot). Validated
+    // at the tool boundary for the same reason `message` is — the dispatcher performs no
+    // runtime schema validation, so a malformed envelope would otherwise surface deep in
+    // the worker daemon or be dropped without a word.
+    let taskInput: MeshTaskInput | undefined;
+    try {
+        taskInput = readTaskInput((args as { input?: unknown }).input);
+    } catch (e: any) {
+        return JSON.stringify({
+            success: false,
+            code: 'invalid_input',
+            error: `mesh_send_task received an unusable \`input\`: ${e?.message || e}`,
         });
     }
     const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
@@ -383,6 +401,9 @@ export async function meshSendTask(
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
                 message: message,
+                // MESH-IMAGE-DISPATCH: the remote P2P path carries the attachment too —
+                // this is the leg that needs the transport chunking.
+                ...(taskInput ? { input: taskInput } : {}),
                 providerType: cached?.providerType,
                 verifiedSession: explicitTargetSession,
                 meshContext: {
@@ -831,6 +852,11 @@ export async function meshSendTask(
                 providerType: resolvedProviderType,
                 action: 'send_chat',
                 message: message,
+                // MESH-IMAGE-DISPATCH: forward the multipart envelope so the worker's
+                // provider instance receives structured parts instead of text-only. Spread
+                // conditionally so a text-only dispatch sends the byte-identical payload it
+                // sent before this change.
+                ...(taskInput ? { input: taskInput } : {}),
                 // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
                 dispatchSource: 'mesh-tools-session:mesh_send_task:direct',
                 meshContext: {

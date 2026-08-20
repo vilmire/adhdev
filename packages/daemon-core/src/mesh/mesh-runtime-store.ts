@@ -266,6 +266,10 @@ export class MeshRuntimeStore {
                 session_id TEXT,
                 provider_type TEXT,
                 message TEXT NOT NULL,
+                -- MESH-IMAGE-DISPATCH: serialized multipart input envelope (JSON) that
+                -- accompanied the message, or NULL for an ordinary text-only dispatch.
+                -- Nullable and additive so pre-existing rows read back exactly as before.
+                input TEXT,
                 task_mode TEXT,
                 via TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'dispatched',
@@ -301,6 +305,10 @@ export class MeshRuntimeStore {
                 kind TEXT NOT NULL,
                 priority INTEGER NOT NULL DEFAULT 0,
                 message TEXT NOT NULL,
+                -- MESH-IMAGE-DISPATCH: see mesh_direct_dispatches.input — same nullable
+                -- serialized multipart envelope, so a queued delivery can carry an
+                -- attachment through to the moment the session goes idle.
+                input TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
                 deliver_after TEXT,
                 expires_at TEXT,
@@ -677,6 +685,22 @@ export class MeshRuntimeStore {
                     this.db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
                 }
             }
+            // 4b. MESH-IMAGE-DISPATCH: `input` on the two dispatch/delivery tables. An
+            //     existing DB already has both tables, so the CREATE TABLE IF NOT EXISTS
+            //     above is a no-op there and the new column must be ALTERed in — otherwise
+            //     every insert carrying an attachment fails with "no such column: input" on
+            //     precisely the installs that have been running longest. Nullable and
+            //     additive: legacy rows read back NULL, which means "text-only dispatch",
+            //     exactly what they were.
+            const directDispatchCols = this.tableColumns('mesh_direct_dispatches');
+            if (!directDispatchCols.has('input')) {
+                this.db.exec(`ALTER TABLE mesh_direct_dispatches ADD COLUMN input TEXT`);
+            }
+            const sessionDeliveryCols = this.tableColumns('mesh_session_delivery');
+            if (!sessionDeliveryCols.has('input')) {
+                this.db.exec(`ALTER TABLE mesh_session_delivery ADD COLUMN input TEXT`);
+            }
+
             // Idempotency index on event_id (partial: only stamped v2 rows). Created
             // unconditionally — IF NOT EXISTS makes it a no-op once present, and the
             // event_id column is guaranteed to exist by the loop above.

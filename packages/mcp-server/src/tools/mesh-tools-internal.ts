@@ -290,8 +290,10 @@ export {
     elideLargeNestedValue,
     readNumeric,
     readString,
+    readTaskInput,
     summarizeLargeLedgerField,
 } from './mesh-tool-shared.js';
+export type { MeshTaskInput } from './mesh-tool-shared.js';
 export {
     annotateRapidReadChatAdvisory,
 } from './read-chat-polling-advisory.js';
@@ -1667,7 +1669,15 @@ export function buildCoordinatorP2pRelayFailure(
 export async function ipcDispatchToRemoteAgent(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-    args: { session_id?: string; message: string; providerType?: string; verifiedSession?: any; meshContext?: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string } },
+    args: {
+        session_id?: string;
+        message: string;
+        /** MESH-IMAGE-DISPATCH: optional multipart envelope forwarded to the remote agent. */
+        input?: { parts: Array<Record<string, unknown>> };
+        providerType?: string;
+        verifiedSession?: any;
+        meshContext?: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string };
+    },
 ): Promise<RemoteAgentDispatchResult> {
     const transport = ctx.transport as IpcTransport;
     const daemonId = node.daemonId!;
@@ -1798,6 +1808,10 @@ export async function ipcDispatchToRemoteAgent(
             cliType: resolvedProviderType,
             action: 'send_chat',
             message: args.message,
+            // MESH-IMAGE-DISPATCH: forward the attachment over P2P. Oversized payloads are
+            // split by the mesh transport's frame chunking (daemon-mesh-manager
+            // writeEnvelope) and reassembled on the worker before the command is handled.
+            ...(args.input ? { input: args.input } : {}),
             // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
             dispatchSource: 'mesh-tools-internal:ipcDispatchToRemoteAgent',
             // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
