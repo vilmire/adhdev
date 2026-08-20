@@ -14,7 +14,7 @@
 import type { MeshNodeFacts } from '@adhdev/mesh-shared';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { readQuotaCache } from '../quota/refresh.js';
-import { getProviderSpecPins } from '../detection/cli-detector.js';
+import { getProviderSpecPins, getProviderEnablementFacts } from '../detection/cli-detector.js';
 
 /**
  * ★PERFORMANCE CONTRACT: this function must stay CHEAP and SYNCHRONOUS.
@@ -86,6 +86,22 @@ export function buildLocalNodeFacts(deps?: {
             return undefined; // facts stamp is best-effort observability
         }
     })();
+    // Per-provider enablement switches, the companion to `quota` above. The
+    // quota cache PRUNES a provider disabled on either axis, so without this
+    // an absent snapshot is ambiguous to every reader except the daemon that
+    // owns the config: a deliberate opt-out and a not-yet-measured provider
+    // look identical. Shipping the switches is what makes a REMOTE node's
+    // missing entry classifiable at all (mesh-quota-routing.ts
+    // classifyAbsentQuotaReason). Booleans only, and a config read — no spawn,
+    // no network, so the performance contract above holds.
+    const providerEnablement = (() => {
+        try {
+            const enablement = getProviderEnablementFacts();
+            return Object.keys(enablement).length > 0 ? enablement : undefined;
+        } catch {
+            return undefined; // facts stamp is best-effort observability
+        }
+    })();
     return {
         schemaVersion: 1,
         reportedAt: Date.now(),
@@ -96,5 +112,6 @@ export function buildLocalNodeFacts(deps?: {
         arch: process.arch,
         ...(machineNickname ? { machineNickname } : {}),
         ...(quota ? { quota } : {}),
+        ...(providerEnablement ? { providerEnablement } : {}),
     };
 }

@@ -83,6 +83,24 @@ export interface MeshNodeFactsProviderQuota {
     [extra: string]: unknown
 }
 
+/**
+ * One provider's enablement state on the reporting machine — see
+ * `MeshNodeFacts.providerEnablement`.
+ *
+ * Both fields are REQUIRED booleans on the wire even though the underlying
+ * config defaults are asymmetric (`enabled` defaults false, `quotaEnabled`
+ * defaults true). The producer resolves those defaults before stamping, so a
+ * reader never re-derives them — a second copy of the default rules is exactly
+ * the drift this shape avoids. Absence is expressed by omitting the whole
+ * provider entry (or the whole bundle field), never by a missing sub-field.
+ */
+export interface MeshNodeFactsProviderEnablement {
+    /** "This machine uses provider X" — gates launching and mesh claims. */
+    enabled: boolean
+    /** "...and its quota is probed here" — an independent user opt-out. */
+    quotaEnabled: boolean
+}
+
 export interface MeshNodeFacts {
     schemaVersion: number
     reportedAt: number
@@ -122,6 +140,31 @@ export interface MeshNodeFacts {
      * rule: quotaSnapshotAgeMs in daemon-core mesh-quota-routing.ts).
      */
     quota?: Record<string, MeshNodeFactsProviderQuota>
+    /**
+     * Per-provider ENABLEMENT state on the reporting machine, keyed the same
+     * way as `quota`. Exists because `quota` alone cannot answer "why is there
+     * no snapshot": a provider that is disabled — on either axis — is pruned
+     * from the quota cache entirely (daemon-core quota/refresh.ts drops it and
+     * refuses to restore it from disk), so a deliberate opt-out and a
+     * never-yet-measured provider both arrive as the SAME absent entry. On the
+     * node that owns the config that ambiguity is resolvable by reading the
+     * config; for every OTHER node in the mesh it was not resolvable at all,
+     * which is what this field fixes.
+     *
+     * The two axes mirror ProviderLoader exactly and are INDEPENDENT:
+     * `enabled` is "this machine uses provider X" (gates launching and mesh
+     * claims), `quotaEnabled` gates ONLY the quota probe — a machine can use a
+     * provider and still opt out of having its usage read.
+     *
+     * ★An ABSENT bundle field means "this node did not tell us" — a daemon too
+     * old to send it — and must NEVER be read as "disabled". The consumer
+     * (daemon-core mesh-quota-routing.ts classifyAbsentQuotaReason) keeps its
+     * unclassified fallback for exactly that case; treating absence as
+     * disabled would invent a fail-closed verdict out of a missing field.
+     *
+     * Booleans keyed by provider type only — no free text, no credentials.
+     */
+    providerEnablement?: Record<string, MeshNodeFactsProviderEnablement>
     /** Future fields ride through opaquely — do not enumerate them in relays. */
     [extra: string]: unknown
 }

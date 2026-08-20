@@ -367,34 +367,73 @@ function logStaleQuotaFailOpen(
 /** Reasons the absent-entry fail-open log can attribute to a missing
  *  snapshot. 'probe_disabled' is a DELIBERATE user opt-out (quotaEnabled ===
  *  false — "do not read my usage", see the module header) and must never be
- *  worded or treated as a defect. 'unclassified_remote' covers every case this
- *  daemon cannot classify: a remote node (its machineProviders config lives on
- *  a different daemon), or a caller that has not injected a provider-loader
- *  context yet — both read identically from here, so both get the same
- *  explicitly-not-a-guess label rather than a wrong classification. */
+ *  worded or treated as a defect. 'unclassified_remote' is now the residual
+ *  case only: a node that reported no enablement facts (a daemon too old to
+ *  send them) and that this daemon cannot read the config of either. A remote
+ *  node that DOES ship MeshNodeFacts.providerEnablement gets a real
+ *  classification from its own report. */
 export type AbsentQuotaReason = 'not_measured' | 'probe_disabled' | 'provider_disabled' | 'unclassified_remote';
 
-/** Classify why a provider has no quota entry, using the optional local
- *  provider-enablement oracle (see QuotaFactsContext.providerEnablement). Only
- *  resolves a real reason for a node this daemon can read the config of
- *  (local, or a worktree clone of a local node); everything else — remote
- *  nodes and callers that never injected a loader — reports
- *  'unclassified_remote' rather than guessing from config this daemon does
- *  not have. */
+/** Classify why a provider has no quota entry, from two sources in priority
+ *  order:
+ *
+ *   1. the LOCAL provider-enablement oracle (QuotaFactsContext.providerEnablement)
+ *      for a node this daemon owns the config of — live config beats any copy;
+ *   2. the node's OWN reported facts (MeshNodeFacts.providerEnablement), which
+ *      is what makes a remote node classifiable at all.
+ *
+ *  Anything else stays 'unclassified_remote' — an explicit not-a-guess, never
+ *  a config value this daemon does not have. This function is observation-only:
+ *  no caller routes on its verdict. */
 function classifyAbsentQuotaReason(
     node: any,
     providerType: string,
     context?: QuotaFactsContext | null,
 ): AbsentQuotaReason {
     const enablement = context?.providerEnablement;
-    if (!enablement) return 'unclassified_remote';
     const sourceNode = cloneSourceNodeFor(node, context);
-    if (!enablement.isLocalNode(node) && !(sourceNode !== undefined && enablement.isLocalNode(sourceNode))) {
-        return 'unclassified_remote';
+    if (enablement) {
+        // LOCAL path (authoritative): this daemon reads the live config, so it
+        // beats any reported copy — the copy is a stamp from the last
+        // git_status, the config is what is true right now.
+        if (enablement.isLocalNode(node) || (sourceNode !== undefined && enablement.isLocalNode(sourceNode))) {
+            if (!enablement.isMachineProviderEnabled(providerType)) return 'provider_disabled';
+            if (!enablement.isMachineQuotaEnabled(providerType)) return 'probe_disabled';
+            return 'not_measured';
+        }
     }
-    if (!enablement.isMachineProviderEnabled(providerType)) return 'provider_disabled';
-    if (!enablement.isMachineQuotaEnabled(providerType)) return 'probe_disabled';
+    // REMOTE path: the owning node ships its own switches on the facts bundle
+    // (MeshNodeFacts.providerEnablement), which is the only way this daemon can
+    // tell an opt-out from a not-yet-measured provider for a config it never
+    // reads. Worktree clones fall back to their source node's bundle, the same
+    // way the snapshot lookup does.
+    const reported = reportedEnablementFor(node, providerType)
+        ?? (sourceNode !== undefined ? reportedEnablementFor(sourceNode, providerType) : undefined);
+    // ★Absence is NOT "disabled". A daemon too old to send the field, a
+    // provider missing from the map, or a malformed entry all mean "this node
+    // did not tell us" — inventing a disabled verdict there would be a
+    // fail-closed guess derived from a missing field.
+    if (!reported) return 'unclassified_remote';
+    if (reported.enabled === false) return 'provider_disabled';
+    if (reported.quotaEnabled === false) return 'probe_disabled';
     return 'not_measured';
+}
+
+/** Read one provider's reported enablement off a node's facts bundle. Returns
+ *  undefined for anything that is not a well-formed entry with BOTH booleans
+ *  present — a partial entry is treated as no report at all, so a half-written
+ *  bundle can never be read as an opt-out. */
+function reportedEnablementFor(
+    node: any,
+    providerType: string,
+): { enabled: boolean; quotaEnabled: boolean } | undefined {
+    const map = node?.nodeFacts?.providerEnablement;
+    if (!map || typeof map !== 'object') return undefined;
+    const entry = (map as Record<string, unknown>)[providerType];
+    if (!entry || typeof entry !== 'object') return undefined;
+    const { enabled, quotaEnabled } = entry as { enabled?: unknown; quotaEnabled?: unknown };
+    if (typeof enabled !== 'boolean' || typeof quotaEnabled !== 'boolean') return undefined;
+    return { enabled, quotaEnabled };
 }
 
 /** Rate limiter for the absent-entry fail-open log below, same shape and
@@ -430,12 +469,12 @@ function logAbsentQuotaFailOpen(
     absentFailOpenLoggedAt.set(key, now);
     const reason = classifyAbsentQuotaReason(node, providerType, context);
     const reasonText = reason === 'probe_disabled'
-        ? 'quota probing is disabled for this provider on this machine (quotaEnabled: false — an intended opt-out, not a fault)'
+        ? 'quota probing is disabled for this provider on that node (quotaEnabled: false — an intended opt-out, not a fault)'
         : reason === 'provider_disabled'
-            ? 'this provider is not enabled on this machine'
+            ? 'this provider is not enabled on that node'
             : reason === 'not_measured'
                 ? 'no snapshot has been measured yet'
-                : 'this daemon cannot read that node\'s machineProviders config (remote node, or its own daemon has not injected one) — cannot tell not-yet-measured from an opt-out; check the owning node\'s config directly';
+                : 'that node reported no provider-enablement facts (a daemon predating them, or no loader injected here) — cannot tell not-yet-measured from an opt-out; check the owning node\'s config directly';
     LOG.info('MeshQuota', `QUOTA GATE: provider '${providerType}' on node ${nodeId} fails open — no quota entry (${reason}: ${reasonText})`);
 }
 

@@ -368,6 +368,143 @@ describe('evaluateProviderQuotaGate — absent-entry fail-open observability', (
     });
 });
 
+describe('evaluateProviderQuotaGate — REMOTE enablement facts classification', () => {
+    // The coverage gap this block closes: before nodes reported their own
+    // enablement switches, every node but this daemon's own (and its worktree
+    // clones) fell to 'unclassified_remote', so in an N-node mesh the
+    // coordinator could not tell an opt-out from a never-measured provider on
+    // any node but one. These nodes carry NO local loader context at all —
+    // classification comes purely from what the node itself reported.
+    function remoteNode(
+        enablement: Record<string, unknown> | undefined,
+        extra: Record<string, unknown> = {},
+    ) {
+        return {
+            id: `n-${randomUUID()}`,
+            daemonId: 'daemon_someone_else',
+            nodeFacts: {
+                schemaVersion: 1,
+                reportedAt: NOW,
+                ...(enablement ? { providerEnablement: enablement } : {}),
+            },
+            ...extra,
+        };
+    }
+
+    function classifyRemote(node: any, context?: any): string {
+        const spy = vi.spyOn(LOG, 'info');
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW, context)).toBeNull();
+        return spy.mock.calls[0][1] as string;
+    }
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('classifies provider_disabled on a REMOTE node from its reported facts', () => {
+        const message = classifyRemote(remoteNode({
+            'claude-cli': { enabled: false, quotaEnabled: true },
+        }));
+        expect(message).toContain('provider_disabled');
+        expect(message).not.toContain('unclassified_remote');
+    });
+
+    it('classifies probe_disabled on a REMOTE node and still words it as an intended opt-out', () => {
+        const message = classifyRemote(remoteNode({
+            'claude-cli': { enabled: true, quotaEnabled: false },
+        }));
+        expect(message).toContain('probe_disabled');
+        expect(message).toContain('opt-out');
+        expect(message).toContain('not a fault');
+        expect(message.toLowerCase()).not.toMatch(/\berror\b|\bproblem\b|\bdefect\b/);
+    });
+
+    it('classifies not_measured on a REMOTE node whose switches are both on', () => {
+        const message = classifyRemote(remoteNode({
+            'claude-cli': { enabled: true, quotaEnabled: true },
+        }));
+        expect(message).toContain('not_measured');
+        expect(message).not.toContain('unclassified_remote');
+    });
+
+    it('reads a worktree clone\'s reason from its SOURCE node\'s reported facts', () => {
+        const source = remoteNode({ 'claude-cli': { enabled: true, quotaEnabled: false } });
+        const clone = { id: `n-${randomUUID()}`, clonedFromNodeId: source.id, nodeFacts: { schemaVersion: 1, reportedAt: NOW } };
+        const message = classifyRemote(clone, { nodes: [source, clone] });
+        expect(message).toContain('probe_disabled');
+    });
+
+    // ★THE back-compat contract. A daemon predating this field sends nothing;
+    // reading that absence as "disabled" would fabricate a fail-closed verdict
+    // from a missing field — the exact misread this test pins shut.
+    it('falls back to unclassified_remote for an OLD daemon that sends no enablement facts — absence is never "disabled"', () => {
+        const message = classifyRemote(remoteNode(undefined));
+        expect(message).toContain('unclassified_remote');
+        expect(message).not.toContain('probe_disabled');
+        expect(message).not.toContain('provider_disabled');
+        expect(message).not.toContain('not_measured');
+    });
+
+    it('falls back to unclassified_remote when the bundle omits THIS provider', () => {
+        const message = classifyRemote(remoteNode({ 'codex-cli': { enabled: true, quotaEnabled: true } }));
+        expect(message).toContain('unclassified_remote');
+    });
+
+    it('treats a MALFORMED or partial entry as no report, never as an opt-out', () => {
+        for (const bad of [
+            { 'claude-cli': { enabled: false } },                       // missing quotaEnabled
+            { 'claude-cli': { quotaEnabled: false } },                  // missing enabled
+            { 'claude-cli': { enabled: 'false', quotaEnabled: 'false' } }, // strings, not booleans
+            { 'claude-cli': null },
+            { 'claude-cli': 'disabled' },
+        ] as Record<string, unknown>[]) {
+            vi.restoreAllMocks();
+            const message = classifyRemote(remoteNode(bad));
+            expect(message, JSON.stringify(bad)).toContain('unclassified_remote');
+            expect(message, JSON.stringify(bad)).not.toContain('provider_disabled');
+        }
+    });
+
+    it('prefers the LIVE local config over a reported copy for a node this daemon owns', () => {
+        // The node's stamped facts say "both on" but the live loader says the
+        // probe is off. The config is current; the stamp is from the last
+        // git_status, so the live read must win.
+        const node = {
+            id: `n-${randomUUID()}`,
+            nodeFacts: {
+                schemaVersion: 1,
+                reportedAt: NOW,
+                providerEnablement: { 'claude-cli': { enabled: true, quotaEnabled: true } },
+            },
+        };
+        const context = {
+            providerEnablement: liveLocalProviderEnablementForRouting(
+                { isMachineProviderEnabled: () => true, isMachineQuotaEnabled: () => false },
+                () => true,
+            ),
+        };
+        const message = classifyRemote(node, context);
+        expect(message).toContain('probe_disabled');
+        expect(message).not.toContain('not_measured');
+    });
+
+    // ★Routing must be untouched: this whole axis is observation-only.
+    it('does not change routing behaviour for ANY remote classification — still fail-open', () => {
+        for (const enablement of [
+            { 'claude-cli': { enabled: false, quotaEnabled: false } },
+            { 'claude-cli': { enabled: true, quotaEnabled: false } },
+            { 'claude-cli': { enabled: true, quotaEnabled: true } },
+            undefined,
+        ]) {
+            const node = remoteNode(enablement);
+            expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
+            const ranked = rankProvidersByQuotaGate(node, ['claude-cli'], null, NOW);
+            expect(ranked.clear).toEqual(['claude-cli']);
+            expect(ranked.gated).toEqual([]);
+        }
+    });
+});
+
 describe('evaluateProviderQuotaGate — quota-exhausted hard block', () => {
     const exhaustedQuota = (over: Record<string, any> = {}) => okQuota({
         status: 'error',

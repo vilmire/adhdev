@@ -13,6 +13,7 @@ import * as path from 'path';
 import { existsSync } from 'fs';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { findBinary } from '../cli-adapters/provider-cli-shared.js';
+import { QUOTA_SUPPORTED_PROVIDERS, type MeshNodeFactsProviderEnablement } from '@adhdev/mesh-shared';
 
 export interface CLIInfo {
     id: string;
@@ -321,6 +322,53 @@ export function getProviderSpecPins(providerLoader?: ProviderLoader): Record<str
     } catch {
         // Best-effort: a corrupt/absent store reports no pins rather than
         // failing the envelope that carries it.
+    }
+    return out;
+}
+
+/**
+ * Per-provider enablement state for the node-facts bundle — the two axes
+ * ProviderLoader already owns (`isMachineProviderEnabled` /
+ * `isMachineQuotaEnabled`), resolved to plain booleans so a remote reader never
+ * re-derives this machine's config defaults.
+ *
+ * Why it exists: a provider disabled on EITHER axis is pruned from the quota
+ * cache outright (quota/refresh.ts), so its absence from `nodeFacts.quota` is
+ * indistinguishable from "never measured yet" to anyone but the owning daemon.
+ * Shipping the state alongside the snapshots is what lets a COORDINATOR
+ * classify a remote node's missing entry instead of guessing — see
+ * mesh-quota-routing.ts classifyAbsentQuotaReason.
+ *
+ * Scoped to QUOTA_SUPPORTED_PROVIDERS, not every provider this machine knows:
+ * the sole consumer is the absent-quota-entry classifier, and a provider with
+ * no fetcher can never have a snapshot for any reason other than "no fetcher
+ * exists" — reporting its switches would answer a question nobody asks and
+ * grow the bundle on every git_status for nothing.
+ *
+ * Pure in-memory/config read — no spawn, no network. Same best-effort contract
+ * as getProviderSpecPins: a loader that throws reports nothing rather than
+ * failing the envelope that carries it.
+ */
+export function getProviderEnablementFacts(
+    providerLoader?: ProviderLoader,
+): Record<string, MeshNodeFactsProviderEnablement> {
+    const loader = providerLoader ?? defaultProviderLoader;
+    const out: Record<string, MeshNodeFactsProviderEnablement> = {};
+    if (!loader) return out;
+    for (const type of QUOTA_SUPPORTED_PROVIDERS) {
+        try {
+            // Resolve BOTH defaults here (enabled defaults false, quotaEnabled
+            // defaults true) so the wire carries a decided verdict, never a
+            // rule a reader has to reapply.
+            out[type] = {
+                enabled: loader.isMachineProviderEnabled(type) === true,
+                quotaEnabled: loader.isMachineQuotaEnabled
+                    ? loader.isMachineQuotaEnabled(type) !== false
+                    : true,
+            };
+        } catch {
+            // One unreadable provider must not cost the others their entry.
+        }
     }
     return out;
 }

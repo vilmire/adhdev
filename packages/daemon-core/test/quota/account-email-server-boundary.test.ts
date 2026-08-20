@@ -92,6 +92,53 @@ describe('accountEmail never crosses the server boundary', () => {
         expect(serialized).not.toContain('quota');
     });
 
+    it('providerEnablement rides the P2P bundle only — never the status projection', () => {
+        // The enablement switches were added to MeshNodeFacts beside `quota`
+        // (the field that makes a REMOTE node's missing snapshot classifiable).
+        // Same bundle, therefore same boundary: P2P/local only. This scan is
+        // the tripwire if a later change teaches the server-bound projection
+        // about it — do not "fix" a failure here by allow-listing the field.
+        for (const { label, path } of SERVER_BOUND_SOURCES) {
+            expect(readSource(path), `${label} (${path}) must not mention providerEnablement`)
+                .not.toContain('providerEnablement');
+        }
+
+        // Behavioural counterpart: smuggle it into a session and assert the
+        // projection drops it, exactly as it drops quota above.
+        const payload = buildCloudStatusReportPayload(
+            [{
+                id: 'sess_1',
+                parentId: null,
+                providerType: 'codex-cli',
+                providerName: 'Codex CLI',
+                kind: 'cli',
+                transport: 'pty',
+                status: 'idle',
+                workspace: '/repo',
+                providerEnablement: { 'codex-cli': { enabled: true, quotaEnabled: false } },
+            } as any],
+            undefined,
+            Date.now(),
+        );
+        expect(JSON.stringify(payload)).not.toContain('providerEnablement');
+    });
+
+    it('the enablement field is NON-CONTENT — booleans keyed by provider type, no free text', () => {
+        // The bundle rule for anything added beside quota: identifiers, enums,
+        // booleans, counters — never text authored by a user or an agent. Pin
+        // the shape at the producer so a later "just add the reason string"
+        // has to break this test first.
+        const source = readSource('src/detection/cli-detector.ts');
+        const start = source.indexOf('export function getProviderEnablementFacts');
+        expect(start).toBeGreaterThan(-1);
+        const body = source.slice(start, source.indexOf('\n}', start));
+        // Exactly two emitted keys, both coerced to booleans.
+        expect(body).toContain('enabled:');
+        expect(body).toContain('quotaEnabled:');
+        expect(body).not.toContain('accountEmail');
+        expect(body).not.toContain('email');
+    });
+
     // NOTE: two scans that used to live here now run on the cloud side, in
     // packages/server/test/account-email-server-boundary.test.ts:
     //   - the three server allow-lists must not mention `accountEmail`
