@@ -26,6 +26,7 @@ const {
     hydrateQuotaCacheFromDisk,
     isFailureRetryDue,
     readQuotaCache,
+    refreshQuotaCacheOnBoot,
     refreshQuotaCacheOnce,
     setupQuotaEventRefresh,
     startQuotaRefreshLoop,
@@ -33,6 +34,7 @@ const {
     __resetQuotaHydrationForTests,
 } = await import('../../src/quota/refresh.js')
 const {
+    QUOTA_RATE_LIMIT_RETRY_DELAY_MS,
     QUOTA_TRANSIENT_RETRY_DELAY_MS,
     quotaFailure,
 } = await import('../../src/quota/types.js')
@@ -108,14 +110,53 @@ describe('refreshQuotaCacheOnce — last-good carry-forward (wiring)', () => {
 
         expect(readQuotaCache()?.kimi?.session).toBeNull();
     });
+
+    it('a rate-limited 429 after a good reading keeps the numbers (transient, same as expired-token)', async () => {
+        const agyFetch = { provider: 'antigravity-cli' as const, fetch: fetchAntigravityQuota };
+
+        fetchAntigravityQuota.mockResolvedValueOnce(okQuota('antigravity-cli'));
+        await refreshQuotaCacheOnce([agyFetch], allEnabled);
+        expect(readQuotaCache()?.['antigravity-cli']?.session?.usedPercent).toBe(10);
+
+        fetchAntigravityQuota.mockResolvedValueOnce(
+            quotaFailure('antigravity-cli', 'error', 'Antigravity quota request was rate limited', {
+                failureKind: 'rate-limited',
+            }),
+        );
+        await refreshQuotaCacheOnce([agyFetch], allEnabled);
+
+        const after = readQuotaCache()?.['antigravity-cli'];
+        expect(after?.session?.usedPercent).toBe(10);
+        expect(after?.status).toBe('error');
+        expect(after?.metadata?.failureKind).toBe('rate-limited');
+        expect(after?.metadata?.lastGoodWindows).toBe(true);
+    });
+
+    it('quota-exhausted after a good reading DROPS the numbers (hard block, not mixed with 429)', async () => {
+        const kimiFetch = { provider: 'kimi' as const, fetch: fetchKimiQuota };
+        fetchKimiQuota.mockResolvedValueOnce(okQuota('kimi'));
+        await refreshQuotaCacheOnce([kimiFetch], allEnabled);
+
+        fetchKimiQuota.mockResolvedValueOnce(
+            quotaFailure('kimi', 'error', 'usage limit reached', { failureKind: 'quota-exhausted' }),
+        );
+        await refreshQuotaCacheOnce([kimiFetch], allEnabled);
+
+        const after = readQuotaCache()?.kimi;
+        expect(after?.session).toBeNull();
+        expect(after?.weekly).toBeNull();
+        expect(after?.metadata?.lastGoodWindows).toBeUndefined();
+        expect(after?.metadata?.failureKind).toBe('quota-exhausted');
+    });
 });
 
 describe('quotaFailure retry classification', () => {
-    it('stamps transient kinds with a short retryAtMs and leaves persistent kinds unstamped', () => {
+    it('stamps token-race transient kinds with the short retryAtMs and leaves persistent kinds unstamped', () => {
         const before = Date.now()
-        for (const failureKind of ['expired-token', 'unauthorized', 'network', 'server', 'rate-limited'] as const) {
+        for (const failureKind of ['expired-token', 'unauthorized', 'network', 'server'] as const) {
             const failure = quotaFailure('kimi', 'error', 'x', { failureKind })
             expect(failure.metadata?.retryAtMs).toBeGreaterThanOrEqual(before + QUOTA_TRANSIENT_RETRY_DELAY_MS)
+            expect(failure.metadata?.retryAtMs).toBeLessThan(before + QUOTA_RATE_LIMIT_RETRY_DELAY_MS)
         }
         for (const failureKind of ['missing-credentials', 'parse', 'cli-unavailable', 'unsupported', 'quota-exhausted', 'unknown'] as const) {
             const failure = quotaFailure('kimi', 'error', 'x', { failureKind })
@@ -123,9 +164,103 @@ describe('quotaFailure retry classification', () => {
         }
     })
 
+    it('stamps rate-limited without Retry-After at the CLI-level 7-minute floor, not the 2-minute token-race fuse', () => {
+        const before = Date.now()
+        const failure = quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' })
+        expect(failure.metadata?.retryAtMs).toBeGreaterThanOrEqual(before + QUOTA_RATE_LIMIT_RETRY_DELAY_MS)
+        expect(QUOTA_RATE_LIMIT_RETRY_DELAY_MS).toBe(7 * 60 * 1000)
+        expect(QUOTA_RATE_LIMIT_RETRY_DELAY_MS).toBeGreaterThan(QUOTA_TRANSIENT_RETRY_DELAY_MS)
+    })
+
     it('never overrides a server-dictated retryAtMs (HTTP Retry-After)', () => {
         const failure = quotaFailure('kimi', 'error', 'x', { failureKind: 'rate-limited', retryAtMs: 123_456 })
         expect(failure.metadata?.retryAtMs).toBe(123_456)
+    })
+})
+
+describe('rate-limited cooldown — do not re-hit a 429 whose retryAtMs is in the future', () => {
+    it('skips a second probe while the 429 cooldown is active and keeps last-good windows', async () => {
+        const agyFetch = { provider: 'antigravity-cli' as const, fetch: fetchAntigravityQuota }
+
+        fetchAntigravityQuota.mockResolvedValueOnce(okQuota('antigravity-cli'))
+        await refreshQuotaCacheOnce([agyFetch], allEnabled)
+
+        fetchAntigravityQuota.mockResolvedValueOnce(
+            quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' }),
+        )
+        await refreshQuotaCacheOnce([agyFetch], allEnabled)
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(2)
+        expect(readQuotaCache()?.['antigravity-cli']?.metadata?.lastGoodWindows).toBe(true)
+
+        // Cooldown is 7 minutes; a stacked refresh must not spend another call.
+        await refreshQuotaCacheOnce([agyFetch], allEnabled)
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(2)
+        expect(readQuotaCache()?.['antigravity-cli']?.session?.usedPercent).toBe(10)
+    })
+
+    it('event-driven refresh does not re-probe a cached rate-limited provider', async () => {
+        const agyFetch = { provider: 'antigravity-cli' as const, fetch: fetchAntigravityQuota }
+        fetchAntigravityQuota.mockResolvedValueOnce(
+            quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' }),
+        )
+        await refreshQuotaCacheOnce([agyFetch], allEnabled)
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
+
+        const listeners: Array<(event: any) => void> = []
+        const handle = setupQuotaEventRefresh({
+            instanceManager: { onEvent: (listener: (event: any) => void) => { listeners.push(listener) } },
+        })
+        for (const listener of listeners) {
+            listener({ event: 'agent:generating_completed', providerType: 'antigravity-cli' })
+        }
+        await new Promise(r => setTimeout(r, 20))
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
+        handle.stop()
+    })
+
+    it('first scheduled retry after a 429 waits the 7-minute floor, not 2 minutes', async () => {
+        vi.useFakeTimers()
+        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
+        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
+        fetchOpencodeUsage.mockResolvedValue(okQuota('opencode'))
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        fetchAntigravityQuota.mockImplementation(() =>
+            Promise.resolve(quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' })),
+        )
+
+        await refreshQuotaCacheOnce()
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
+
+        await vi.advanceTimersByTimeAsync(2 * 60_000)
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
+
+        await vi.advanceTimersByTimeAsync(5 * 60_000) // 7 minutes total
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(2)
+    })
+
+    it('boot refresh skips a hydrated rate-limited snapshot (restart cannot lift a 429)', async () => {
+        saveQuotaCache({
+            'antigravity-cli': quotaFailure('antigravity-cli', 'error', 'rate limited', {
+                failureKind: 'rate-limited',
+            }) as any,
+        }, { ADHDEV_CONFIG_DIR: home })
+        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled)
+        expect(readQuotaCache()?.['antigravity-cli']?.metadata?.failureKind).toBe('rate-limited')
+
+        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
+        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
+        fetchOpencodeUsage.mockResolvedValue(okQuota('opencode'))
+        fetchAntigravityQuota.mockResolvedValue(okQuota('antigravity-cli'))
+
+        refreshQuotaCacheOnBoot(allEnabled)
+        await vi.waitFor(() => expect(readQuotaCache()?.['claude-cli']?.status).toBe('ok'))
+
+        expect(fetchAntigravityQuota).not.toHaveBeenCalled()
+        expect(readQuotaCache()?.['antigravity-cli']?.status).toBe('error')
+        expect(readQuotaCache()?.['antigravity-cli']?.metadata?.failureKind).toBe('rate-limited')
     })
 })
 
@@ -361,7 +496,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
 
         source.emit({ event: 'agent:ready', providerType: 'kimi' })
         source.emit({ event: 'agent:generating_started', providerType: 'kimi' })
-        source.emit({ event: 'agent:generating_completed', providerType: 'antigravity-cli' }) // no fetcher shipped
+        source.emit({ event: 'agent:generating_completed', providerType: 'cursor' }) // no quota fetcher shipped
         source.emit({ event: 'agent:generating_completed' }) // no providerType at all
         await new Promise(r => setTimeout(r, 20))
 

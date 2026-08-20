@@ -200,13 +200,29 @@
  *     retrieveUserQuota         -> 429 RESOURCE_EXHAUSTED
  *
  * So the budget is per-METHOD, and both quota methods share the exhaustion.
- * No Retry-After header is sent, so the retry delay is ours to choose.
+ * No Retry-After header is sent (verified: `retryAfterMs` reads the header
+ * and returns undefined when it is absent), so the retry delay is ours to
+ * choose. When a header IS present it is honoured unchanged.
+ *
+ * ★CLI-LOCAL CACHE — surveyed 2026-08-20, none on disk. `~/.gemini/antigravity-cli/cache/`
+ * holds conversations/projects/onboarding only. `log/cli-*.log` records
+ * `doRefreshQuota` start/skip/fail lines but NEVER the response body
+ * (`remainingFraction` / groups / buckets). The CLI's own `/usage` view is
+ * an in-memory singleflight cache (`Cache(retrieveUserQuotaSummary)`);
+ * after a 429 it logs `doRefreshQuota: skipped (throttled)` and only
+ * resumes ~7 minutes later. There is therefore no grok-style "read the
+ * CLI's log/cache, 0 network calls" path for this provider. Last-good
+ * carry-forward plus a CLI-level 429 floor is the substitute, not a
+ * second network client.
  *
  * Consequences for anyone touching the refresh cadence:
  *   - 429 is classified `rate-limited`, which is TRANSIENT, so refresh.ts
- *     schedules a bounded exponential backoff (2m → 4m → 8m → 15m, then it
- *     stops) and carries the last good windows forward. That is the correct
- *     behaviour and should not be "fixed" into an aggressive retry.
+ *     carries the last good windows forward (marked "refreshing") and
+ *     schedules a bounded retry. With no Retry-After the first wait is
+ *     QUOTA_RATE_LIMIT_RETRY_DELAY_MS (7m, matching the CLI throttle),
+ *     then 7m → 8m → 15m (exponential, capped at the normal interval).
+ *     Boot and event-driven refresh skip a cached 429 entirely — a turn
+ *     ending is when the CLI itself just hit the same method.
  *   - Do NOT add a short-interval poll or a retry-until-success loop for this
  *     provider. Doing so spends the same budget the CLI's own quota view needs
  *     and can lock the user out of their own usage display.

@@ -255,6 +255,27 @@ export function hydrateQuotaCacheFromDisk(
     return count;
 }
 
+/**
+ * A cached 429. Distinct from other transient kinds: restarting or a turn
+ * completing cannot lift the provider's method budget, so boot and
+ * event-driven refresh must not re-probe it. Recovery is the scheduled
+ * retry / the periodic tick, which still honour retryAtMs via
+ * isRateLimitedCooldownActive.
+ */
+function isRateLimitedSnapshot(entry: MeshNodeFactsProviderQuota | undefined): boolean {
+    return !!entry && entry.status !== 'ok' && entry.metadata?.failureKind === 'rate-limited';
+}
+
+/** True while a rate-limited snapshot's Retry-After / default delay has not elapsed. */
+function isRateLimitedCooldownActive(
+    entry: MeshNodeFactsProviderQuota | undefined,
+    now: number = Date.now(),
+): boolean {
+    if (!isRateLimitedSnapshot(entry)) return false;
+    const retryAtMs = entry!.metadata?.retryAtMs;
+    return typeof retryAtMs === 'number' && retryAtMs > now;
+}
+
 /** Test seam: allow a fresh hydration in the same process. */
 export function __resetQuotaHydrationForTests(): void {
     hydrated = false;
@@ -277,7 +298,7 @@ export async function refreshQuotaCacheOnce(
     // "unavailable" reading cannot outlive the disable and keep masquerading as
     // a current problem. The prune runs even when the active list ends up
     // empty: the persist below then rewrites the file without those entries.
-    const active = isEnabled ? fetchers.filter(({ provider }) => isEnabled(provider)) : fetchers;
+    const enabled = isEnabled ? fetchers.filter(({ provider }) => isEnabled(provider)) : fetchers;
     if (isEnabled) {
         for (const { provider } of fetchers) {
             if (!isEnabled(provider)) {
@@ -287,6 +308,12 @@ export async function refreshQuotaCacheOnce(
             }
         }
     }
+    // A 429 whose retry time has not elapsed is not probed again — not by the
+    // periodic tick, not by an event-driven refresh, not by a stacked retry.
+    // The cached snapshot (last-good windows included) stays on screen, marked
+    // refreshing. Re-hitting the same method is what kept Antigravity's quota
+    // endpoint in RESOURCE_EXHAUSTED while the CLI itself throttled to ~7 min.
+    const active = enabled.filter(({ provider }) => !isRateLimitedCooldownActive(cache.get(provider)));
     await Promise.all(
         active.map(async ({ provider, fetch }) => {
             try {
@@ -676,7 +703,12 @@ export function refreshQuotaCacheOnBoot(isEnabled?: QuotaProviderEnabled): void 
     // this boot refresh was added to close.
     if (bootRefreshInFlight || hasFreshlyMeasuredQuota()) return;
     bootRefreshInFlight = true;
-    void refreshQuotaCacheOnce(REFRESHERS, isEnabled)
+    // Restarting cannot lift a provider 429. Re-probing a cached rate-limited
+    // snapshot on every boot is how a daemon that restarts during an outage
+    // keeps the method budget exhausted. Last-good windows already sit on the
+    // snapshot; recovery is the scheduled retry / the periodic tick.
+    const fetchers = REFRESHERS.filter(({ provider }) => !isRateLimitedSnapshot(cache.get(provider)));
+    void refreshQuotaCacheOnce(fetchers, isEnabled)
         .catch((e: any) => LOG.warn('Quota', `Boot quota refresh failed: ${e?.message || e}`))
         .finally(() => { bootRefreshInFlight = false; });
 }
@@ -772,6 +804,10 @@ export function setupQuotaEventRefresh(
             : undefined;
         if (!refresher) return; // not a quota-reporting provider
         if (isEnabled && !isEnabled(refresher.provider)) return;
+        // A turn ending is the worst moment to re-hit a rate-limited quota
+        // method: the owning CLI just ran its own doRefreshQuota. Leave
+        // recovery to the scheduled retry / the periodic tick.
+        if (isRateLimitedSnapshot(cache.get(refresher.provider))) return;
         const at = now();
         if (at - (lastRefreshAt.get(refresher.provider) ?? -Infinity) < debounceMs) return;
         lastRefreshAt.set(refresher.provider, at);

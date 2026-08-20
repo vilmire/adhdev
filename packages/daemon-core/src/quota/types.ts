@@ -78,9 +78,13 @@ export type QuotaFailureKind =
  *                       between the daemon's local expiry check and the request)
  *  - `network`        — connectivity blips
  *  - `server`         — 5xx from the provider
- *  - `rate-limited`   — 429; the server may additionally dictate the retry time
- *                       via Retry-After (callers pass that as retryAtMs, which
- *                       quotaFailure then leaves untouched)
+ *  - `rate-limited`   — 429; the same character as `expired-token` (temporary,
+ *                       resolves by waiting / retrying, not by the user acting).
+ *                       A server-sent Retry-After wins when present (callers
+ *                       pass that as retryAtMs, which quotaFailure leaves
+ *                       untouched); otherwise the delay is
+ *                       QUOTA_RATE_LIMIT_RETRY_DELAY_MS, sized to the owning
+ *                       CLI's own throttle, not the 2-minute token-race fuse.
  *
  * Everything else is treated as PERSISTENT and gets NO short retry: retrying
  * `missing-credentials`, `cli-unavailable` or `unsupported` re-learns the same
@@ -88,7 +92,9 @@ export type QuotaFailureKind =
  * a fetcher that broke its never-throw contract — broken code, not a transient
  * condition — and fast-retrying it would just spin. `quota-exhausted` is
  * persistent for a different reason: the quota is gone until the window
- * resets, so a 2-minute retry only re-hears "exhausted".
+ * resets, so a retry only re-hears "exhausted". It must NEVER share the
+ * last-good carry-forward with `rate-limited` — a hard block mixed into the
+ * transient set would keep showing leftover headroom after the plan is gone.
  */
 export const TRANSIENT_QUOTA_FAILURE_KINDS: ReadonlySet<QuotaFailureKind> = new Set([
     'expired-token',
@@ -106,6 +112,26 @@ export const TRANSIENT_QUOTA_FAILURE_KINDS: ReadonlySet<QuotaFailureKind> = new 
  * get nothing here and wait for the normal refresh cadence instead.
  */
 export const QUOTA_TRANSIENT_RETRY_DELAY_MS = 2 * 60 * 1000;
+
+/**
+ * How soon a `rate-limited` (HTTP 429) failure is worth retrying when the
+ * server sent no Retry-After.
+ *
+ * Distinct from QUOTA_TRANSIENT_RETRY_DELAY_MS on purpose: that 2-minute fuse
+ * is sized to Kimi's token-refresh race, and using it for 429 re-hits the
+ * same method budget the owning CLI needs for its own `/usage` view.
+ * Measured 2026-08-20 against antigravity-cli: after a burst the CLI itself
+ * logs `doRefreshQuota: skipped (throttled)` and only resumes ~7 minutes
+ * later (`force=false`). Matching that floor is what stops us being 3× more
+ * aggressive than the tool we are reading on behalf of. A Retry-After header
+ * still wins when present (quotaFailure never overrides a caller-supplied
+ * retryAtMs).
+ */
+export const QUOTA_RATE_LIMIT_RETRY_DELAY_MS = 7 * 60 * 1000;
+
+function defaultRetryDelayMs(kind: QuotaFailureKind): number {
+    return kind === 'rate-limited' ? QUOTA_RATE_LIMIT_RETRY_DELAY_MS : QUOTA_TRANSIENT_RETRY_DELAY_MS;
+}
 
 /** One rolling usage window. */
 export interface QuotaWindow {
@@ -249,7 +275,9 @@ export function windowFromPercent(
  * before the normal cadence would — the failure cache is what turns a
  * seconds-long token-refresh race into a 15-minute stale error otherwise. A
  * caller-supplied `retryAtMs` (e.g. an HTTP Retry-After) always wins over the
- * default delay.
+ * default delay. `rate-limited` without a header uses the longer CLI-level
+ * delay (QUOTA_RATE_LIMIT_RETRY_DELAY_MS); other transient kinds keep the
+ * short token-race fuse.
  */
 export function quotaFailure(
     provider: QuotaProvider,
@@ -262,7 +290,7 @@ export function quotaFailure(
         && metadata.failureKind
         && TRANSIENT_QUOTA_FAILURE_KINDS.has(metadata.failureKind)
         && metadata.retryAtMs === undefined
-        ? { ...metadata, retryAtMs: now + QUOTA_TRANSIENT_RETRY_DELAY_MS }
+        ? { ...metadata, retryAtMs: now + defaultRetryDelayMs(metadata.failureKind) }
         : metadata;
     return {
         provider,

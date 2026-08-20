@@ -11,6 +11,7 @@ import type {
     QuotaSpawn,
 } from '../../src/quota/fetchers/deps';
 import {
+    QUOTA_RATE_LIMIT_RETRY_DELAY_MS,
     SESSION_WINDOW_MINUTES,
     TRANSIENT_QUOTA_FAILURE_KINDS,
     WEEKLY_WINDOW_MINUTES,
@@ -686,6 +687,22 @@ describe('fetchAntigravityQuota', () => {
 
         expect(quota.metadata?.failureKind).toBe('rate-limited');
         expect(quota.metadata?.retryAtMs).toBe(NOW + 120_000);
+        expect(TRANSIENT_QUOTA_FAILURE_KINDS.has('rate-limited')).toBe(true);
+    });
+
+    it('classifies 429 without Retry-After at the 7-minute CLI-level floor', async () => {
+        // Live cloudcode-pa 429s send no Retry-After (pinned in the fetcher
+        // header). The default must not be the 2-minute token-race fuse —
+        // that is what made us 3× more aggressive than the CLI's own throttle.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse({}, 429));
+
+        const before = Date.now();
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.metadata?.failureKind).toBe('rate-limited');
+        expect(quota.metadata?.retryAtMs).toBeGreaterThanOrEqual(before + QUOTA_RATE_LIMIT_RETRY_DELAY_MS);
+        expect(TRANSIENT_QUOTA_FAILURE_KINDS.has(quota.metadata?.failureKind as never)).toBe(true);
     });
 
     it('classifies 5xx as a server failure', async () => {

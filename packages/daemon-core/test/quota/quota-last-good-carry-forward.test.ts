@@ -66,12 +66,29 @@ describe('carryForwardLastGoodWindows', () => {
     });
 
     it('a NON-transient failure replaces wholesale — old numbers must not mask a real problem', () => {
-        for (const kind of ['missing-credentials', 'parse', 'unsupported', 'no-data', 'unknown']) {
+        for (const kind of ['missing-credentials', 'parse', 'unsupported', 'no-data', 'unknown', 'quota-exhausted', 'cli-unavailable']) {
             const fresh = failure(kind);
             const merged = carryForwardLastGoodWindows(okReading(), fresh);
             expect(merged).toBe(fresh);
             expect(merged.session).toBeNull();
         }
+    });
+
+    it('quota-exhausted (hard block) is NOT carried — must not mix with rate-limited', () => {
+        const merged = carryForwardLastGoodWindows(okReading(), failure('quota-exhausted'));
+        expect(merged.session).toBeNull();
+        expect(merged.weekly).toBeNull();
+        expect(merged.metadata?.lastGoodWindows).toBeUndefined();
+        expect(merged.metadata?.failureKind).toBe('quota-exhausted');
+    });
+
+    it('rate-limited (transient 429) keeps the last numbers, distinct from quota-exhausted', () => {
+        const merged = carryForwardLastGoodWindows(okReading(), failure('rate-limited'));
+        expect(merged.session?.usedPercent).toBe(28);
+        expect(merged.weekly?.usedPercent).toBe(71);
+        expect(merged.status).toBe('error');
+        expect(merged.metadata?.failureKind).toBe('rate-limited');
+        expect(merged.metadata?.lastGoodWindows).toBe(true);
     });
 
     it('no prior reading → the failure stands alone (nothing to carry)', () => {
