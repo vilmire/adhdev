@@ -139,15 +139,42 @@
  *
  * The backend is SHARED with Gemini Code Assist — `LoadCodeAssist`,
  * `FetchAvailableModels` and `QuotaSummaryBucket` all live in the same
- * `google.internal.cloud.code.v1internal` proto package, and gemini-cli
- * (open source) points at the same `cloudcode-pa` host + `v1internal` scheme.
- * So this is a Code Assist API, not an Antigravity-private one.
+ * `google.internal.cloud.code.v1internal` proto package. gemini-cli (open
+ * source) talks to the same proto package, but it is a DIFFERENT product
+ * path: it defaults `CODE_ASSIST_ENDPOINT` to the unprefixed host and calls
+ * `retrieveUserQuota` (the flat sibling), not `retrieveUserQuotaSummary`.
  *
- * ★Host: production `cloudcode-pa.googleapis.com`. The `daily-` prefixed host
- * is Google's STAGING deployment; the dev machine happened to run a build
- * pinned to it (a known Antigravity bug), and defaulting to staging here would
- * have inherited that mistake. Both hosts serve the method; the CLI itself
- * falls back between them.
+ * ★Host: `daily-cloudcode-pa.googleapis.com`. An earlier version of this
+ * fetcher defaulted to the unprefixed `cloudcode-pa.googleapis.com` after
+ * labelling `daily-` as Google's staging deployment. That label is wrong
+ * for Antigravity, and it is why this fetcher sat on HTTP 429 for ~10 hours
+ * while `agy` chat and `/usage` succeeded with a fresh token:
+ *
+ *   - `agy` 1.1.16 (current production CLI on the development machine) sends
+ *     EVERY Cloud Code call — loadCodeAssist, fetchAvailableModels,
+ *     retrieveUserQuotaSummary, streamGenerateContent — to
+ *     `daily-cloudcode-pa.googleapis.com`. Zero hits on the unprefixed host
+ *     across all 2026-08-20 session logs, including after the 1.1.13→1.1.16
+ *     upgrade that was supposed to have "unpinned" staging.
+ *   - Public recon (sub2api #5611, 2026-08-13): Google AI Pro (`g1-pro-tier`)
+ *     accounts get 429 RESOURCE_EXHAUSTED on the unprefixed host and 200 on
+ *     `daily-`, same token, same body, same User-Agent. The unprefixed host
+ *     rejects at account-tier, before model validation. Official IDE/CLI
+ *     inference runs on `daily-`. UA / IP / `project` were all ruled out.
+ *
+ * The unprefixed host remains reachable via `ANTIGRAVITY_CLOUDCODE_BASE_URL`
+ * for the minority of accounts that 401 on `daily-` (reported for some
+ * non-Pro setups). Defaulting there is the Antigravity-CLI-shaped request;
+ * the override is the escape hatch, not the other way around.
+ *
+ * ★User-Agent is part of the request shape, not decoration. A live POST to
+ * the daily host with this fetcher's original headers (Bearer + JSON, no UA)
+ * returned HTTP 403; the same token on the same host is what `agy` uses
+ * successfully. Cloud Code gates client identity: CLIProxyAPI #3114 showed
+ * `User-Agent: antigravity/<ver> <os>/<arch>` is what the backend treats as
+ * an Antigravity client (a nodejs-client UA silently dropped paid-tier
+ * fields). We send that form. Node's fetch default (`node` / undici) is
+ * exactly the identity that got 403.
  *
  * ★Request body MUST be `{}`. Verified live: adding `project` or `metadata`
  * makes the server answer 429/400. The `project` and `forceRefresh` fields
@@ -204,16 +231,16 @@
  * and returns undefined when it is absent), so the retry delay is ours to
  * choose. When a header IS present it is honoured unchanged.
  *
- * ★CLI-LOCAL CACHE — surveyed 2026-08-20, none on disk. `~/.gemini/antigravity-cli/cache/`
- * holds conversations/projects/onboarding only. `log/cli-*.log` records
- * `doRefreshQuota` start/skip/fail lines but NEVER the response body
- * (`remainingFraction` / groups / buckets). The CLI's own `/usage` view is
- * an in-memory singleflight cache (`Cache(retrieveUserQuotaSummary)`);
- * after a 429 it logs `doRefreshQuota: skipped (throttled)` and only
- * resumes ~7 minutes later. There is therefore no grok-style "read the
- * CLI's log/cache, 0 network calls" path for this provider. Last-good
- * carry-forward plus a CLI-level 429 floor is the substitute, not a
- * second network client.
+ * ★CLI-LOCAL CACHE — resurveyed 2026-08-20 on `agy` 1.1.16, still none on
+ * disk. `~/.gemini/antigravity-cli/cache/` holds conversations/projects/
+ * onboarding only (no `remainingFraction`). Docs mention `/usage` refreshing
+ * "quotas on disk", but no quota/usage-limits/statusline snapshot file exists;
+ * `settings.json` has `statusLine.enabled: false` with empty type/command,
+ * and there is no `agy --debug` (only `--log-file`). The CLI's `/usage` view
+ * is an in-memory singleflight cache (`Cache(retrieveUserQuotaSummary)`).
+ * There is therefore no claude-style "read a statusline file, 0 network
+ * calls" path for this provider. Matching the CLI's host is the fix, not a
+ * disk fallback.
  *
  * Consequences for anyone touching the refresh cadence:
  *   - 429 is classified `rate-limited`, which is TRANSIENT, so refresh.ts
@@ -266,8 +293,24 @@ import {
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 
-/** Production Cloud Code host. `daily-` is Google's staging deployment. */
-const DEFAULT_BASE_URL = 'https://cloudcode-pa.googleapis.com/v1internal';
+/**
+ * Antigravity CLI's Cloud Code host. The unprefixed `cloudcode-pa` host is
+ * the Gemini-CLI default and 429s Google AI Pro Antigravity accounts — see
+ * the ENDPOINT PROVENANCE note in the header.
+ */
+const DEFAULT_BASE_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal';
+
+/**
+ * Client identity Cloud Code expects. Version is the `agy --version` observed
+ * on this machine (1.1.16); we do not spawn the binary to read it. OS/arch
+ * follow the Go convention the official clients send (`darwin/arm64`,
+ * `windows/amd64`), not Node's `win32`/`x64`.
+ */
+function antigravityUserAgent(): string {
+    const os = process.platform === 'win32' ? 'windows' : process.platform;
+    const arch = process.arch === 'x64' ? 'amd64' : process.arch;
+    return `antigravity/1.1.16 ${os}/${arch}`;
+}
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Refuse to spend a token that expires mid-flight. */
 const EXPIRY_SKEW_MS = 5_000;
@@ -910,6 +953,7 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
                 Authorization: `Bearer ${credentials.accessToken}`,
                 'Content-Type': 'application/json',
                 Accept: 'application/json',
+                'User-Agent': antigravityUserAgent(),
             },
             // ★MUST stay `{}` — verified live that sending `project` or
             // `metadata` makes the server answer 429/400.

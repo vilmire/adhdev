@@ -216,11 +216,13 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
  * ★antigravity-cli was likewise twice judged impossible, from reading
  * `agy --help` where the usage view does not appear because it is a TUI view.
  * Its quota comes from the SHARED Gemini Code Assist backend
- * (`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`), and its
- * credential lives in the OS keyring, not the stale on-disk token file — see
- * the provenance note in daemon-core `quota/fetchers/antigravity.ts`. It is
- * macOS-only by design; other platforms report `unsupported` rather than guess
- * at a keyring backend nobody has verified.
+ * (`daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` —
+ * the host `agy` itself uses; the unprefixed `cloudcode-pa` host 429s Google
+ * AI Pro Antigravity accounts), and its credential lives in the OS keyring,
+ * not the stale on-disk token file — see the provenance note in daemon-core
+ * `quota/fetchers/antigravity.ts`. Supported on macOS and Windows; other
+ * platforms report `unsupported` rather than guess at a keyring backend
+ * nobody has verified.
  *
  * ★Adding a provider here without adding its fetcher to REFRESHERS re-creates
  * exactly the "switch that does nothing" this constant prevents.

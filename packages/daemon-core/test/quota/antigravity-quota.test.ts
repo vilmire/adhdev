@@ -43,7 +43,7 @@ function fakeAgyBinary(
 
 /**
  * ★VERBATIM live response captured from
- * POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
+ * POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
  * with body `{}` and the CLI's own keychain bearer token (2026-08-16).
  * Trimmed only of prose; field names/types/values are exactly as returned.
  *
@@ -251,6 +251,7 @@ describe('fetchAntigravityQuota', () => {
 
         expect(quota.status).toBe('ok');
         expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
+        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(/^antigravity\/\S+ \S+\/\S+$/);
     });
 
     it('also accepts an unprefixed plain-JSON secret', async () => {
@@ -262,16 +263,18 @@ describe('fetchAntigravityQuota', () => {
         expect(quota.status).toBe('ok');
     });
 
-    it('POSTs to the PRODUCTION host with an empty body', async () => {
-        // Body must stay `{}`: sending `project`/`metadata` makes the server
-        // answer 429/400 (verified live).
+    it('POSTs to the daily host with an empty body', async () => {
+        // Host must match `agy` (daily-cloudcode-pa). The unprefixed
+        // cloudcode-pa host 429s Google AI Pro Antigravity accounts (sub2api
+        // #5611); body must stay `{}`: sending `project`/`metadata` makes the
+        // server answer 429/400 (verified live).
         const spawn = stubSpawn(keyringBlob(credentialPayload()));
         const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
         await fetchAntigravityQuota(deps(spawn, fetch));
 
         expect(fetch.calls).toEqual([
-            'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+            'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
         ]);
         expect(fetch.inits[0].method).toBe('POST');
         expect(fetch.inits[0].body).toBe('{}');
@@ -563,7 +566,7 @@ describe('fetchAntigravityQuota', () => {
      * someone reintroduces an exchange against a different host or a mirror.
      * The only URL this fetcher may ever contact is the quota endpoint.
      */
-    const QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary';
+    const QUOTA_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary';
 
     it('NEVER performs an OAuth token exchange — expired token included', async () => {
         // The exact field state that motivated the reverted refresh: an
@@ -594,6 +597,8 @@ describe('fetchAntigravityQuota', () => {
         // The bearer is the CLI's OWN stored token, verbatim — not one this
         // fetcher obtained.
         expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
+        // Cloud Code 403s a Node/undici default UA on the daily host.
+        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(/^antigravity\/1\.1\.16 /);
     });
 
     it('sends no grant/client credentials in any request body it makes', async () => {
@@ -735,15 +740,17 @@ describe('fetchAntigravityQuota', () => {
     });
 
     it('honours the base-URL override', async () => {
+        // Default is daily-; the override is the escape hatch for accounts
+        // that 401 on daily- and need the unprefixed Gemini-CLI host.
         const spawn = stubSpawn(keyringBlob(credentialPayload()));
         const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
         await fetchAntigravityQuota(deps(spawn, fetch, {
-            ANTIGRAVITY_CLOUDCODE_BASE_URL: 'https://daily-cloudcode-pa.googleapis.com/v1internal',
+            ANTIGRAVITY_CLOUDCODE_BASE_URL: 'https://cloudcode-pa.googleapis.com/v1internal',
         }));
 
         expect(fetch.calls[0]).toBe(
-            'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+            'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
         );
     });
 });
