@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyCodexAppServerError, fetchCodexQuota } from '../../src/quota/fetchers/codex';
+/**
+ * This suite covers the app-server TRANSPORT, so it drives
+ * `fetchCodexQuotaFromAppServer` directly rather than the `fetchCodexQuota`
+ * entry point. Since 2026-08-20 that entry point reads the local rollout logs
+ * first and only falls back to this transport, so calling it here would (a)
+ * short-circuit before any of these spawn cases ran and (b) make the result
+ * depend on whatever is in the developer's real `~/.codex`. The local-first
+ * ordering itself is covered by `codex-quota-local-first.test.ts`.
+ */
+import {
+    classifyCodexAppServerError,
+    fetchCodexQuotaFromAppServer as fetchCodexQuota,
+} from '../../src/quota/fetchers/codex';
 import type { QuotaChildProcess, QuotaSpawn } from '../../src/quota/fetchers/deps';
 import { TRANSIENT_QUOTA_FAILURE_KINDS } from '../../src/quota/types';
 
@@ -461,6 +473,15 @@ describe('fetchCodexQuota — rate-limit error classification', () => {
         expect(quota.error).toContain('401 Unauthorized');
         expect(quota.error).not.toMatch(/not signed in/i);
         expect(quota.error).not.toMatch(/run codex/i);
+        // ★Any re-authentication advice at all, not just the two phrasings
+        // above: measured 2026-08-20 this 401 arrives for a token that is
+        // valid for another ten days and was completing chat turns minutes
+        // earlier, so every variant of "sign in again" sends the user to fix
+        // something that is not broken. An earlier version of this test forbade
+        // only the exact strings and let "please try signing in again" through.
+        expect(quota.error).not.toMatch(/sign(ing)?[\s-]?in again|re-?authenticate|log ?in again/i);
+        // ...and it must say where the numbers actually come from instead.
+        expect(quota.error).toMatch(/local Codex logs/i);
     });
 
     it('classifies a token-refresh network error as network, not missing-credentials', async () => {

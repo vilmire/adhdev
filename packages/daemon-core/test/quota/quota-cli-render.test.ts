@@ -3,10 +3,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { printQuota, printClaudeStatuslineStatus } from '../../src/quota/cli.js';
+import { printQuota, printClaudeStatuslineStatus, printClaudeInstallResult } from '../../src/quota/cli.js';
 import { formatQuotaAccount } from '@adhdev/mesh-shared';
 import type { ProviderQuota } from '../../src/quota/types.js';
-import type { StatuslineStatus, StatuslineInstallPaths } from '../../src/quota/statusline/install.js';
+import type { InstallResult, StatuslineStatus, StatuslineInstallPaths } from '../../src/quota/statusline/install.js';
 
 // A coordinator misread the pre-existing "Claude quota reporting is not set
 // up — run `adhdev quota claude:install`" line on 2026-08-05 as "install
@@ -193,8 +193,11 @@ describe('printClaudeStatuslineStatus — diagnostic output', () => {
         const paths = fakePaths({ snapshotFile });
         const status: StatuslineStatus = {
             installed: true,
+            failureKind: null,
+            danglingWrapperPath: null,
             wrappedCommand: 'my-old-statusline.sh',
             foreignStatusLine: false,
+            volatileWrapperReason: null,
             paths,
         };
 
@@ -211,8 +214,11 @@ describe('printClaudeStatuslineStatus — diagnostic output', () => {
         const paths = fakePaths({ snapshotFile: path.join(tempDir, 'never-written.json') });
         const status: StatuslineStatus = {
             installed: true,
+            failureKind: null,
+            danglingWrapperPath: null,
             wrappedCommand: null,
             foreignStatusLine: false,
+            volatileWrapperReason: null,
             paths,
         };
 
@@ -224,8 +230,11 @@ describe('printClaudeStatuslineStatus — diagnostic output', () => {
     it('not installed: shows the install command and the why/what-changes summary', () => {
         const status: StatuslineStatus = {
             installed: false,
+            failureKind: null,
+            danglingWrapperPath: null,
             wrappedCommand: null,
             foreignStatusLine: false,
+            volatileWrapperReason: null,
             paths: fakePaths(),
         };
 
@@ -234,6 +243,87 @@ describe('printClaudeStatuslineStatus — diagnostic output', () => {
         expect(joined).toContain('• Not installed');
         expect(joined).toMatch(/no quota API/i);
         expect(joined).toMatch(/wraps.*not replace/i);
+        expect(joined).toContain('claude:install');
+    });
+
+    it('wrapper-missing: renders as its own state, borrowing neither of the other two', () => {
+        // The 2026-08-20 failure was a two-state render for a three-state
+        // world. "✓ Installed" would send the user to open a session that
+        // cannot capture anything; "• Not installed" would hide that their
+        // statusline is erroring on every prompt. Both are asserted absent.
+        const status: StatuslineStatus = {
+            installed: false,
+            failureKind: 'wrapper-missing',
+            danglingWrapperPath: '/private/tmp/gone/scratchpad/adhdev-statusline.mjs',
+            wrappedCommand: 'my-old-statusline.sh',
+            foreignStatusLine: false,
+            volatileWrapperReason: 'a system temp directory, whose contents are reaped by the OS',
+            paths: fakePaths(),
+        };
+
+        const joined = captureLogs(() => printClaudeStatuslineStatus(status)).join('\n');
+
+        expect(joined).toContain('✗ Broken');
+        expect(joined).toContain('/private/tmp/gone/scratchpad/adhdev-statusline.mjs');
+        expect(joined).toContain('claude:install');
+        expect(joined).not.toContain('✓ Installed');
+        expect(joined).not.toContain('• Not installed');
+        expect(joined).not.toMatch(/open a Claude Code session to record one/);
+    });
+});
+
+describe('printClaudeInstallResult — each message states only what was observed', () => {
+    function result(overrides: Partial<InstallResult>): InstallResult {
+        return {
+            outcome: 'installed',
+            originalCommand: null,
+            repairedFrom: null,
+            volatileWrapperReason: null,
+            paths: fakePaths(),
+            ...overrides,
+        };
+    }
+
+    it('claims "you had no statusline" ONLY when that is what install saw', () => {
+        const joined = captureLogs(() => printClaudeInstallResult(result({ outcome: 'installed' }))).join('\n');
+
+        expect(joined).toContain('You had no statusline configured');
+    });
+
+    it('never claims "you had no statusline" when one was wrapped', () => {
+        // The owner was shown this exact false line on 2026-08-20.
+        const joined = captureLogs(() =>
+            printClaudeInstallResult(result({ outcome: 'wrapped', originalCommand: 'echo mine' })),
+        ).join('\n');
+
+        expect(joined).not.toContain('You had no statusline configured');
+        expect(joined).toContain('echo mine');
+        expect(joined).toMatch(/preserved/i);
+    });
+
+    it('never claims "you had no statusline" when repairing a dangling entry', () => {
+        // The dangling case has no wrapped command either, so a message keyed
+        // on `originalCommand` alone lands back on the same false claim.
+        const joined = captureLogs(() =>
+            printClaudeInstallResult(
+                result({ outcome: 'repaired', repairedFrom: '/gone/adhdev-statusline.mjs' }),
+            ),
+        ).join('\n');
+
+        expect(joined).not.toContain('You had no statusline configured');
+        expect(joined).toContain('repaired');
+        expect(joined).toContain('/gone/adhdev-statusline.mjs');
+    });
+
+    it('warns about a volatile install location without claiming failure', () => {
+        const joined = captureLogs(() =>
+            printClaudeInstallResult(
+                result({ volatileWrapperReason: 'a worktree scratchpad, which is deleted when that worktree goes away' }),
+            ),
+        ).join('\n');
+
+        expect(joined).toContain('✓');
+        expect(joined).toMatch(/worktree scratchpad/);
         expect(joined).toContain('claude:install');
     });
 });

@@ -58,7 +58,10 @@ describe('installClaudeStatusline', () => {
 
         const result = installClaudeStatusline(env);
 
-        expect(result.outcome).toBe('installed');
+        // `wrapped`, not `installed`: the two were one outcome until 2026-08-20,
+        // which is how install came to print "You had no statusline configured"
+        // at a user who plainly had one. See claude-statusline-dangling.test.ts.
+        expect(result.outcome).toBe('wrapped');
         expect(result.originalCommand).toBe(REAL_WORLD_COMMAND);
 
         const statusLine = readSettings().statusLine as Record<string, unknown>;

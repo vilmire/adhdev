@@ -216,6 +216,13 @@ export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 export { loadConfig, saveConfig, resetConfig, clearAuthCredentials, isSetupComplete, markSetupComplete, updateConfig, setQuotaShowAccountEmail, getConfigDir, getDaemonDataDir } from './config/config.js';
 export { isCrossTrackConfigDirOverride, otherTrackConfigDir } from './config/config-dir.js';
 export {
+  classifyVolatilePath,
+  extractScriptPathFromCommand,
+  inspectEmbeddedPath,
+  type EmbeddedPathHealth,
+  type EmbeddedPathState,
+} from './config/embedded-path-health.js';
+export {
   getProcessInstanceContext,
   InstanceContextConflictError,
   resetProcessInstanceContextForTests,
@@ -869,6 +876,13 @@ export {
 export {
   fetchKimiQuota,
   fetchCodexQuota,
+  // The two Codex sources are exported individually as well: `fetchCodexQuota`
+  // is local-first and only falls back to the app-server, so a caller that
+  // needs one specific transport (diagnostics, tests) must be able to name it.
+  fetchCodexQuotaFromRollout,
+  fetchCodexQuotaFromAppServer,
+  readLatestCodexRateLimits,
+  codexSessionsDir,
   fetchClaudeQuota,
   fetchGrokQuota,
   fetchAntigravityQuota,

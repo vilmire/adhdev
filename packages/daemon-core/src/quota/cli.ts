@@ -117,22 +117,50 @@ export function printQuota(name: string, quota: ProviderQuota): void {
     console.log();
 }
 
-/** Render the outcome of `installClaudeStatusline()`. */
+/**
+ * Render the outcome of `installClaudeStatusline()`.
+ *
+ * Every line here is a claim about the user's config, so each one is tied to a
+ * state install actually observed rather than inferred from a single boolean.
+ * The previous version printed "You had no statusline configured" whenever
+ * there was no *wrapped* command — which was also true when the existing
+ * statusLine pointed at a deleted script, so it told the user the opposite of
+ * what their settings.json said. Facts we did not verify are not asserted.
+ */
 export function printClaudeInstallResult(result: InstallResult): void {
     console.log();
     console.log(
         chalk.green(
-            result.outcome === 'reinstalled'
-                ? '✓ Claude Code quota reporting re-installed'
-                : '✓ Claude Code quota reporting installed',
+            result.outcome === 'repaired'
+                ? '✓ Claude Code quota reporting repaired'
+                : result.outcome === 'reinstalled'
+                    ? '✓ Claude Code quota reporting re-installed'
+                    : result.outcome === 'wrapped'
+                        ? '✓ Claude Code quota reporting installed around your statusline'
+                        : '✓ Claude Code quota reporting installed',
         ),
     );
+    if (result.outcome === 'repaired') {
+        console.log(chalk.gray('  Your statusLine pointed at a script that no longer exists:'));
+        console.log(chalk.gray(`    ${truncate(result.repairedFrom ?? 'unknown path', 100)}`));
+        console.log(chalk.gray('  It now points at the current wrapper.'));
+    }
     if (result.originalCommand) {
         console.log(chalk.gray('  Your existing statusline is preserved and still runs:'));
         console.log(chalk.gray(`    ${truncate(result.originalCommand, 100)}`));
         console.log(chalk.gray(`  Backup: ${result.paths.backupFile}`));
-    } else {
+    } else if (result.outcome === 'installed') {
+        // Only asserted for the state that actually means it: there was no
+        // command in `statusLine` at all.
         console.log(chalk.gray('  You had no statusline configured; one was not added.'));
+    }
+    if (result.volatileWrapperReason) {
+        console.log(
+            chalk.yellow(`  ! The wrapper was written under ${result.volatileWrapperReason}.`),
+        );
+        console.log(chalk.gray(`    ${result.paths.wrapperFile}`));
+        console.log(chalk.gray('    Claude Code will fail to load it once that path is gone;'));
+        console.log(chalk.gray('    re-run `adhdev quota claude:install` from a normal install to fix.'));
     }
     console.log();
     console.log(chalk.gray('  Open a Claude Code session, then run `adhdev quota claude`.'));
@@ -181,6 +209,20 @@ export function printClaudeStatuslineStatus(status: StatuslineStatus): void {
                 : `  Last snapshot: ${formatAgo(snapshotMtimeMs)} (${status.paths.snapshotFile})`,
         ));
         console.log(chalk.gray('  Undo with `adhdev quota claude:uninstall`.'));
+    } else if (status.failureKind === 'wrapper-missing') {
+        // The third state. Neither of the other two branches is honest here:
+        // "Installed" would send the user off to open a Claude Code session
+        // that cannot possibly record anything, and "Not installed" would hide
+        // that their statusline is currently erroring on every prompt.
+        console.log(chalk.red('✗ Broken — the configured wrapper no longer exists'));
+        console.log(chalk.gray(`  statusLine points at: ${truncate(status.danglingWrapperPath ?? 'unknown path', 100)}`));
+        console.log(chalk.gray('  Claude Code runs that command every prompt and it fails, so'));
+        console.log(chalk.gray('  no quota is being captured and your statusline is blank.'));
+        if (status.wrappedCommand) {
+            console.log(chalk.gray(`  Your own statusline is still recorded: ${truncate(status.wrappedCommand, 80)}`));
+        }
+        console.log(chalk.gray('  Repair with `adhdev quota claude:install`.'));
+        console.log(chalk.gray('  Or clear it with `adhdev quota claude:uninstall`.'));
     } else {
         console.log(chalk.yellow('• Not installed'));
         if (status.foreignStatusLine) {

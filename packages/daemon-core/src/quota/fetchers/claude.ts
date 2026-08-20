@@ -146,10 +146,26 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
  */
 function missingSnapshotFailure(env: NodeJS.ProcessEnv): ProviderQuota {
     let installed = false;
+    let danglingPath: string | null = null;
     try {
-        installed = readStatuslineStatus(env).installed;
+        const status = readStatuslineStatus(env);
+        installed = status.installed;
+        danglingPath = status.failureKind === 'wrapper-missing' ? status.danglingWrapperPath : null;
     } catch {
         // Unreadable settings — treat as not installed and say so below.
+    }
+    if (danglingPath !== null) {
+        // The third state must not be folded into either of the other two.
+        // "Open a session to record one" was actively misleading here: sessions
+        // WERE open, each one running a wrapper command that exits
+        // MODULE_NOT_FOUND, so no amount of opening sessions would ever produce
+        // a snapshot. A live audit believed that line on 2026-08-20.
+        return quotaFailure(
+            'claude-cli',
+            'unavailable',
+            `Claude statusline wrapper is missing (${danglingPath}) — re-run \`adhdev quota claude:install\` to repair`,
+            { source: SOURCE, failureKind: 'no-data' },
+        );
     }
     return quotaFailure(
         'claude-cli',

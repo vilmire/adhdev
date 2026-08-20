@@ -1,5 +1,10 @@
 /**
- * Codex CLI quota fetcher.
+ * Codex CLI quota — app-server transport, plus the local-first entry point.
+ *
+ * ★Read `./codex-rollout.ts` first: since 2026-08-20 the DEFAULT source is the
+ * rollout logs Codex already writes, and this app-server query runs only when
+ * that local reading is missing or stale. `fetchCodexQuota` at the bottom of
+ * this file is what orders the two.
  *
  * Auth philosophy (see CLAUDE.md): ADHDev does NOT manage provider API keys.
  * This fetcher is the strictest possible expression of that rule — it never
@@ -38,6 +43,8 @@ import {
     type QuotaMetadata,
     type QuotaWindow,
 } from '../types.js';
+import { assignWindows } from './codex-windows.js';
+import { codexRolloutMissingFailure, fetchCodexQuotaFromRollout } from './codex-rollout.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 
@@ -157,7 +164,16 @@ function describeCodexRateLimitFailure(kind: QuotaFailureKind, text: string): st
         case 'missing-credentials':
             return `Not signed in to Codex (${text}) — run codex on this machine to sign in, then retry`;
         case 'unauthorized':
-            return `Codex rate-limit lookup was rejected: ${text}`;
+            // NOT "sign in again". Measured 2026-08-20: this 401 arrives for an
+            // account whose token is valid — the same credential was completing
+            // chat turns minutes before and does not expire for another ten
+            // days, and the rollout log written by those very turns carries the
+            // rate limits this call was refused. So the rejection is about
+            // access to the usage endpoint, not about who the user is, and
+            // telling them to re-authenticate sends them to fix something that
+            // is not broken. Phrased to leave the entitlement question open
+            // rather than assert a cause we have not established.
+            return `Codex declined the rate-limit lookup for this account (${text}) — the sign-in itself is fine; usage numbers are read from local Codex logs instead`;
         case 'rate-limited':
             return `Codex rate-limit lookup was rate limited: ${text}`;
         case 'network':
@@ -211,34 +227,6 @@ function mapWindow(raw: unknown, fallbackMinutes: number): QuotaWindow | null {
     const record = raw as Record<string, unknown>;
     const minutes = toNumber(record.windowDurationMins) ?? fallbackMinutes;
     return windowFromPercent(toNumber(record.usedPercent), minutes, toResetMs(record.resetsAt));
-}
-
-/**
- * Sort reported windows into session/weekly by their *duration*, not by their
- * `primary`/`secondary` position.
- *
- * This matters: on a Plus account `primary` is the 7-day window and
- * `secondary` is absent entirely, so treating `primary` as the session window
- * would report weekly consumption as if it were the 5h window. Each window is
- * assigned to whichever slot it is closer to, and a slot already filled by a
- * better-matching window is not overwritten.
- */
-function assignWindows(windows: QuotaWindow[]): { session: QuotaWindow | null; weekly: QuotaWindow | null } {
-    let session: QuotaWindow | null = null;
-    let weekly: QuotaWindow | null = null;
-
-    for (const window of windows) {
-        const toSession = Math.abs(window.windowMinutes - SESSION_WINDOW_MINUTES);
-        const toWeekly = Math.abs(window.windowMinutes - WEEKLY_WINDOW_MINUTES);
-        if (toSession <= toWeekly) {
-            if (session === null || toSession < Math.abs(session.windowMinutes - SESSION_WINDOW_MINUTES)) {
-                session = window;
-            }
-        } else if (weekly === null || toWeekly < Math.abs(weekly.windowMinutes - WEEKLY_WINDOW_MINUTES)) {
-            weekly = window;
-        }
-    }
-    return { session, weekly };
 }
 
 /**
@@ -320,8 +308,13 @@ function createLineReader(onLine: (line: string) => void): (chunk: Buffer | stri
  * Query the Codex app-server for the account's rate limits. Never throws —
  * every failure path resolves to a snapshot whose `status` is 'error' or
  * 'unavailable', and never leaves the child process running.
+ *
+ * This is the FALLBACK path; `fetchCodexQuota` below reads the local rollout
+ * logs first. It is retained because it is the only source that can answer for
+ * an account whose entitlement does allow the lookup, and the only one that
+ * carries the account email.
  */
-export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
     const deps = resolveDeps(overrides);
 
     return new Promise<ProviderQuota>((resolve) => {
@@ -550,4 +543,50 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
             );
         }
     });
+}
+
+/**
+ * Codex quota, local-first.
+ *
+ * Order of preference, and why:
+ *  1. The rollout logs the CLI already wrote (`./codex-rollout.ts`). Zero
+ *     network, zero processes, cannot be refused by an entitlement check, and
+ *     carries the same `primary`/`secondary` windows the app-server would
+ *     return. When it holds a CURRENT reading, nothing else needs to run — this
+ *     is the change that stops us spawning a CLI and hitting an endpoint on
+ *     every refresh tick.
+ *  2. The app-server (above), when the local reading is missing or stale. It
+ *     can still succeed for an entitled account, and it is the only source of
+ *     the optional account email.
+ *  3. If the app-server also fails, a stale local reading beats a bare error:
+ *     it is a real measurement with an honest age attached, which is more
+ *     useful than "lookup failed" and is exactly how the Claude fetcher treats
+ *     an aged-out statusline snapshot.
+ *
+ * Never throws.
+ */
+export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    const local = fetchCodexQuotaFromRollout(overrides);
+    if (local?.status === 'ok') {
+        return local;
+    }
+
+    const remote = await fetchCodexQuotaFromAppServer(overrides);
+    if (remote.status === 'ok') {
+        return remote;
+    }
+
+    // Neither is current. Prefer the stale-but-real local reading, and say so
+    // in its own words — `local` already carries the honest "(Nh old)" text and
+    // its true `updatedAt`, so nothing here restates it as fresh.
+    if (local !== null) {
+        return local;
+    }
+    // No local reading at all AND the app-server failed. Report whichever
+    // failure tells the user more: a CLI that is not installed, or an account
+    // that was refused, is more actionable than "no logs found" — but if the
+    // app-server merely could not be reached, the absence of any local usage is
+    // the plainer statement of what is going on.
+    const deps = resolveDeps(overrides);
+    return remote.metadata?.failureKind === 'network' ? codexRolloutMissingFailure(deps.env) : remote;
 }

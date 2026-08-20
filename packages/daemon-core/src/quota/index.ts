@@ -74,15 +74,25 @@ export {
 export { fetchAntigravityQuota } from './fetchers/antigravity.js';
 export { fetchGrokQuota } from './fetchers/grok.js';
 export { fetchKimiQuota } from './fetchers/kimi.js';
-export { fetchCodexQuota } from './fetchers/codex.js';
+export { fetchCodexQuota, fetchCodexQuotaFromAppServer } from './fetchers/codex.js';
+export {
+    fetchCodexQuotaFromRollout,
+    readLatestCodexRateLimits,
+    codexHome,
+    codexSessionsDir,
+    CODEX_ROLLOUT_STALE_AFTER_MS,
+} from './fetchers/codex-rollout.js';
 export { fetchClaudeQuota, STALE_AFTER_MS } from './fetchers/claude.js';
 
 export {
+    classifyStatuslineCommand,
     installClaudeStatusline,
     readStatuslineStatus,
     resolveInstallPaths,
     uninstallClaudeStatusline,
     StatuslineInstallError,
+    type StatuslineCommandKind,
+    type StatuslineCommandVerdict,
     type InstallResult,
     type StatuslineInstallPaths,
     type StatuslineStatus,
