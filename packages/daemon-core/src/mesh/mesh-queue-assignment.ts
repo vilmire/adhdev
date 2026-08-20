@@ -38,7 +38,7 @@ import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadT
 import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
-import { buildAutoLaunchRoutingDecision, buildProviderSelectionDiagnostics, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
+import { buildAutoLaunchRoutingDecision, buildProviderSelectionDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import {
     sweepAutoLaunchOrphanSessions,
     autoLaunchWriteWouldClobberWinner,
@@ -1871,31 +1871,33 @@ async function resolveUsableProvider(
     }
 
     // QUOTA GATE, inside the loop: split the usable candidates by the gate and
-    // order the survivors by weekly EXPIRY RISK, descending (remaining ×
-    // elapsed window fraction — an unused remainder evaporates at the window
-    // reset, so the least-consumable-in-time remainder is spent first; the
-    // owner-confirmed dynamic priority). Fail-open is inherited from
+    // order the survivors by EXPIRY RISK, descending (remaining × elapsed window
+    // fraction × reading confidence — an unused remainder evaporates at the
+    // window reset, so the least-consumable-in-time remainder is spent first;
+    // the owner-confirmed dynamic priority). Fail-open is inherited from
     // evaluateProviderQuotaGate unchanged: missing / stale / unmarked transient
-    // readings are never BLOCKED, they only sort into the
-    // unknown-weekly group (see rankProvidersByQuotaGate). ALL-gated is
-    // reported under its own reason so a quota WAIT (self-resolving,
-    // non-actionable) is never conflated with 'provider_priority_unusable'
-    // (a slot configuration error, actionable).
+    // readings are never BLOCKED, and a no-longer-current reading that still
+    // carries real windows RANKS at a confidence discount instead of sorting
+    // unconditionally last (rankProvidersByQuotaGate, RETAINED READINGS — the
+    // fleet-wide stranding that fixed). ALL-gated is reported under its own
+    // reason so a quota WAIT is never conflated with a slot config error.
     const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting, Date.now(), quotaFactsContext);
     const winner = ranked.clear.length
         ? candidates.find(candidate => candidate.providerType === ranked.clear[0]) ?? candidates[0]
         : undefined;
-    const { riskSnapshot, ...routingDiagnostics } = buildProviderSelectionDiagnostics({
+    // `allLosers` is destructured OUT: the rationale's input, not durable.
+    const { riskSnapshot, allLosers, ...routingDiagnostics } = buildProviderSelectionDiagnostics({
         node, nodeId, meshId, task, taskId, quotaRouting, quotaFactsContext,
         quotaBonusByProvider, difficultyFloorRequired, usableSlots, candidateSlots, ranked, winner,
     });
+    const rationale = selectionRationaleFrom(routingDiagnostics.selectionTrajectory, allLosers);
     if (!ranked.clear.length) {
         const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
         LOG.info('MeshQueue', `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
         recordLastQuotaRanking(nodeId, {
             decidedAt: Date.now(),
             clear: riskSnapshot,
-            gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })),
+            gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })), ...(taskId ? { taskId } : {}),
         });
         return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}` };
     }
@@ -1906,6 +1908,7 @@ async function resolveUsableProvider(
         winner: selectedWinner.providerType,
         clear: riskSnapshot,
         gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })),
+        ...(taskId ? { taskId } : {}), ...(rationale ? { rationale } : {}),
     });
     return {
         providerType: selectedWinner.providerType,

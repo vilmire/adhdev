@@ -1,7 +1,7 @@
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
-import { quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, type ProviderQuotaRiskSnapshot, type QuotaFactsContext } from './mesh-quota-routing.js';
+import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, type ProviderQuotaRiskSnapshot, type QuotaFactsContext, type QuotaRankingRationale } from './mesh-quota-routing.js';
 import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
 
 export interface MeshIntraNodeLoser {
@@ -75,6 +75,11 @@ export interface ProviderSelectionDiagnostics {
     intraNodeLosers?: MeshIntraNodeLoser[];
     intraNodeLosersOmitted?: number;
     selectionTrajectory?: MeshSelectionTrajectory;
+    /** The UNBOUNDED loser list, before `intraNodeLosers`' 2-entry durable-payload
+     *  cap. Not part of any persisted payload — it exists so an in-memory reader
+     *  (the mesh_status selection rationale) can apply its own, looser bound
+     *  instead of inheriting a cap chosen for the ledger's byte budget. */
+    allLosers?: MeshIntraNodeLoser[];
 }
 
 // Compact, durable routing rationale written into task_dispatched. Candidate arrays
@@ -167,6 +172,7 @@ export function buildProviderSelectionDiagnostics(args: {
     const winnerRisk = riskByProvider.get(winner.providerType)?.risk;
     return {
         riskSnapshot,
+        ...(losers.length ? { allLosers: losers } : {}),
         ...(riskSnapshot.length ? { quotaRiskSnapshot: riskSnapshot.slice(0, ROUTING_ARRAY_MAX) } : {}),
         ...(riskSnapshot.length > ROUTING_ARRAY_MAX ? { quotaRisksOmitted: riskSnapshot.length - ROUTING_ARRAY_MAX } : {}),
         ...(losers.length ? { intraNodeLosers: losers.slice(0, INTRA_NODE_LOSERS_MAX) } : {}),
@@ -184,6 +190,37 @@ export function buildProviderSelectionDiagnostics(args: {
             },
         },
     };
+}
+
+/**
+ * Reduce a completed selection to the compact "why this provider won" summary
+ * mesh_status surfaces (LastQuotaRankingRecord.rationale).
+ *
+ * Derived from the trajectory that was ALREADY computed rather than recomputed
+ * from the slots, so the per-node rationale a coordinator reads can never
+ * disagree with the per-dispatch trajectory the ledger stores. Returns
+ * undefined when no provider competition happened (no winner, no task) — an
+ * absent rationale is honest about that; a synthesized one would not be.
+ */
+export function selectionRationaleFrom(
+    trajectory: MeshSelectionTrajectory | undefined,
+    allLosers: MeshIntraNodeLoser[] | undefined,
+): QuotaRankingRationale | undefined {
+    const winner = trajectory?.providerWinner;
+    if (!winner) return undefined;
+    return buildQuotaRankingRationale(
+        {
+            providerType: winner.providerType,
+            ...(winner.model ? { model: winner.model } : {}),
+            fitnessScore: winner.fitnessScore,
+        },
+        (allLosers ?? []).map(loser => ({
+            providerType: loser.providerType,
+            ...(loser.model ? { model: loser.model } : {}),
+            ...(loser.fitnessScore !== undefined ? { fitnessScore: loser.fitnessScore } : {}),
+            reason: loser.reason,
+        })),
+    );
 }
 
 function serializedBytes(value: unknown): number {
