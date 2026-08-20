@@ -86,22 +86,52 @@ export function formatQuotaReset(resetsAt: number | null | undefined, now: numbe
     return `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
 }
 
+export type QuotaWindowCue = 'refreshing' | 'stale'
+
+function hasUsableQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined): boolean {
+    return !!window && typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
+}
+
+/**
+ * Which freshness cue a snapshot's windows should carry.
+ *
+ * `refreshing` — last-good carry-forward after a TRANSIENT failure; another
+ * fetch is expected to replace the numbers.
+ * `stale` — windows are present but the capture channel has no current
+ * reading (`failureKind: 'no-data'`). Claude's statusline is the canonical
+ * case: the numbers are a historical capture, and there is no refresh
+ * in-flight. Distinct from `refreshing` on purpose — mixing them would
+ * tell a coordinator a 20-hour-old reading is about to update itself.
+ */
+export function quotaWindowCue(quota: MeshNodeFactsProviderQuota): QuotaWindowCue | undefined {
+    if (quota.metadata?.lastGoodWindows === true) return 'refreshing'
+    if (quota.metadata?.failureKind === 'no-data' && (hasUsableQuotaWindow(quota.session) || hasUsableQuotaWindow(quota.weekly))) {
+        return 'stale'
+    }
+    return undefined
+}
+
 /**
  * "23.5% used" / "23.5% used · resets in 2h 14m" for one rolling window.
  *
- * `isLastGood` marks a window carried forward from a prior successful read
- * after a TRANSIENT fetch failure (daemon-core's `carryForwardLastGoodWindows`,
- * signalled via `metadata.lastGoodWindows` — see mesh-shared node-facts.ts).
- * It appends "· refreshing" so a reader can tell "this number is real but not
- * from this tick" from a freshly measured value, instead of the two looking
- * identical — the whole point of retaining the number instead of blanking it.
+ * `cue` marks a window that is visible but not a fresh measurement:
+ *  - `true` / `'refreshing'` — last-good carry-forward after a TRANSIENT
+ *    fetch failure (`metadata.lastGoodWindows`). Appends "· refreshing".
+ *  - `'stale'` — numbers present with `failureKind: 'no-data'` (Claude
+ *    statusline aged out). Appends "· stale". Not the same state as
+ *    refreshing: nothing is retrying this reading.
  */
-export function formatQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined, now: number = Date.now(), isLastGood: boolean = false): string | null {
+export function formatQuotaWindow(
+    window: MeshNodeFactsQuotaWindow | null | undefined,
+    now: number = Date.now(),
+    cue: boolean | QuotaWindowCue | undefined = false,
+): string | null {
     if (!window || typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) return null
     const used = `${window.usedPercent.toFixed(1)}% used`
     const resets = formatQuotaReset(window.resetsAt, now)
     const base = resets ? `${used} · ${resets}` : used
-    return isLastGood ? `${base} · refreshing` : base
+    const marker = cue === true || cue === 'refreshing' ? 'refreshing' : cue === 'stale' ? 'stale' : null
+    return marker ? `${base} · ${marker}` : base
 }
 
 /**

@@ -26,6 +26,7 @@ import {
     formatQuotaFreshness,
     formatQuotaAccount,
     shouldShowClaudeSetupHint,
+    quotaWindowCue,
 } from '../../../utils/quota-format'
 export {
     quotaProviderLabel,
@@ -36,6 +37,7 @@ export {
     formatQuotaWindow,
     describeQuotaFailure,
     formatQuotaFreshness,
+    quotaWindowCue,
 }
 
 export type SessionListEntry = {

@@ -15,7 +15,7 @@ import Card from '../../components/Card'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
-import { formatQuotaUsage, formatQuotaWindow, quotaUsageTone } from '../../utils/quota-format'
+import { formatQuotaUsage, formatQuotaWindow, quotaUsageTone, quotaWindowCue } from '../../utils/quota-format'
 import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
 import { ProviderLogo } from '../../components/ProviderLogo'
 
@@ -215,13 +215,13 @@ export default function InstalledProviderRow({
     // every other quota surface.
     const quotaChip = (() => {
         if (!quota) return null
-        const isLastGood = quota.metadata?.lastGoodWindows === true
-        const session = formatQuotaWindow(quota.session, undefined, isLastGood)
+        const cue = quotaWindowCue(quota)
+        const session = formatQuotaWindow(quota.session, undefined, cue)
         if (session) {
             const tone = quotaUsageTone(quota.session?.usedPercent ?? NaN)
             return { label: `5h ${session}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.sessionHint') }
         }
-        const weekly = formatQuotaWindow(quota.weekly, undefined, isLastGood)
+        const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
         if (weekly) {
             const tone = quotaUsageTone(quota.weekly?.usedPercent ?? NaN)
             return { label: `7d ${weekly}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.weeklyHint') }

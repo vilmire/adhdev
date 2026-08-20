@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { fetchCodexQuota } from '../../src/quota/fetchers/codex';
+import { classifyCodexAppServerError, fetchCodexQuota } from '../../src/quota/fetchers/codex';
 import type { QuotaChildProcess, QuotaSpawn } from '../../src/quota/fetchers/deps';
+import { TRANSIENT_QUOTA_FAILURE_KINDS } from '../../src/quota/types';
 
 const NOW = Date.UTC(2026, 7, 3, 12, 0, 0);
 
@@ -388,5 +389,113 @@ describe('fetchCodexQuota', () => {
             expect(quota.weekly).not.toBeNull();
             expect(quota.metadata?.accountEmail).toBeUndefined();
         })();
+    });
+});
+
+/**
+ * Live-observed app-server JSON-RPC error (2026-08-20). The `message` field
+ * is what `classifyCodexAppServerError` sees after JSON.parse; injecting the
+ * string as a constant is the whole point — this suite must not hit the
+ * quota endpoint.
+ */
+const LIVE_401_RATE_LIMIT_MESSAGE =
+    'failed to fetch codex rate limits:\n' +
+    '  GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized;\n' +
+    '  body={"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}';
+
+describe('classifyCodexAppServerError', () => {
+    it('classifies the live 401 / token_revoked wrapper as unauthorized, not missing-credentials', () => {
+        expect(classifyCodexAppServerError(LIVE_401_RATE_LIMIT_MESSAGE)).toBe('unauthorized');
+    });
+
+    it('classifies the four-row matrix without matching bare auth/token', () => {
+        expect(classifyCodexAppServerError(LIVE_401_RATE_LIMIT_MESSAGE)).toBe('unauthorized');
+        expect(classifyCodexAppServerError('failed to refresh token: network error')).toBe('network');
+        expect(classifyCodexAppServerError('No account session found')).toBe('missing-credentials');
+        expect(classifyCodexAppServerError('rate limit exceeded')).toBe('rate-limited');
+    });
+
+    it('does not treat Unauthorized or token_revoked as a missing login', () => {
+        // These are the two substring hits that made the old /auth|token/ regex
+        // mislabel a transient 401 as missing-credentials.
+        expect(classifyCodexAppServerError('401 Unauthorized')).toBe('unauthorized');
+        expect(classifyCodexAppServerError('{"code":"token_revoked","status":401}')).toBe('unauthorized');
+    });
+
+    it('maps the live-observed no-session reply to missing-credentials', () => {
+        expect(
+            classifyCodexAppServerError('codex account authentication required to read rate limits'),
+        ).toBe('missing-credentials');
+    });
+
+    it('maps 5xx to server and does not park a well-formed remote failure as unknown', () => {
+        expect(classifyCodexAppServerError('GET https://chatgpt.com/backend-api/wham/usage failed: 503')).toBe(
+            'server',
+        );
+        expect(classifyCodexAppServerError('internal app-server failure')).toBe('server');
+    });
+});
+
+function respondRateLimitError(message: string, code = -32603) {
+    return (child: FakeChild, request: { id: number; method: string }) => {
+        if (request.method === 'initialize') {
+            child.emitStdout(`${JSON.stringify({ id: request.id, result: {} })}\n`);
+        } else {
+            child.emitStdout(
+                `${JSON.stringify({ id: request.id, error: { code, message } })}\n`,
+            );
+        }
+    };
+}
+
+describe('fetchCodexQuota — rate-limit error classification', () => {
+    it('reports the live 401 as unauthorized, keeps the original text, and does not tell the user to sign in', async () => {
+        const { promise } = runFetch({ respond: respondRateLimitError(LIVE_401_RATE_LIMIT_MESSAGE) });
+        const quota = await promise;
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('unauthorized');
+        expect(TRANSIENT_QUOTA_FAILURE_KINDS.has(quota.metadata?.failureKind as never)).toBe(true);
+        expect(quota.metadata?.retryAtMs).toEqual(expect.any(Number));
+        expect(quota.error).toContain('token_revoked');
+        expect(quota.error).toContain('401 Unauthorized');
+        expect(quota.error).not.toMatch(/not signed in/i);
+        expect(quota.error).not.toMatch(/run codex/i);
+    });
+
+    it('classifies a token-refresh network error as network, not missing-credentials', async () => {
+        const { promise } = runFetch({
+            respond: respondRateLimitError('failed to refresh token: network error'),
+        });
+        const quota = await promise;
+
+        expect(quota.metadata?.failureKind).toBe('network');
+        expect(quota.error).toContain('failed to refresh token: network error');
+        expect(quota.error).not.toMatch(/not signed in/i);
+    });
+
+    it('classifies "No account session found" as missing-credentials and keeps the sign-in instruction', async () => {
+        const { promise } = runFetch({
+            respond: respondRateLimitError('No account session found'),
+        });
+        const quota = await promise;
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('missing-credentials');
+        expect(quota.error).toContain('No account session found');
+        expect(quota.error).toContain('Not signed in to Codex');
+        expect(quota.error).toMatch(/run codex/i);
+    });
+
+    it('classifies "rate limit exceeded" as rate-limited, not unknown', async () => {
+        const { promise } = runFetch({
+            respond: respondRateLimitError('rate limit exceeded'),
+        });
+        const quota = await promise;
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('rate-limited');
+        expect(quota.error).toContain('rate limit exceeded');
+        expect(quota.metadata?.failureKind).not.toBe('unknown');
     });
 });

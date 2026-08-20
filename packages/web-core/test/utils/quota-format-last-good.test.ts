@@ -1,5 +1,7 @@
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { formatQuotaWindow } from '../../src/utils/quota-format'
+import { formatQuotaWindow, quotaWindowCue } from '../../src/utils/quota-format'
 
 // Companion to daemon-core's carryForwardLastGoodWindows (oss/packages/daemon-core/src/quota/refresh.ts):
 // once a snapshot carries metadata.lastGoodWindows, the reader must be able to
@@ -28,5 +30,65 @@ describe('formatQuotaWindow — last-good carry-forward marker', () => {
   it('a null window stays null regardless of the flag', () => {
     expect(formatQuotaWindow(null, undefined, true)).toBeNull()
     expect(formatQuotaWindow(undefined, undefined, true)).toBeNull()
+  })
+})
+
+describe('formatQuotaWindow — no-data stale marker', () => {
+  const claudeStale = {
+    provider: 'claude-cli',
+    status: 'error',
+    session: { usedPercent: 23.5, windowMinutes: 300, resetsAt: null },
+    weekly: { usedPercent: 11, windowMinutes: 10080, resetsAt: null },
+    updatedAt: 1,
+    error: 'Claude quota reading is stale (1201 min old) — open a Claude Code session to refresh',
+    metadata: { source: 'statusline', failureKind: 'no-data' },
+  } as const
+
+  it('no-data with retained windows is stale, not refreshing', () => {
+    expect(quotaWindowCue(claudeStale as never)).toBe('stale')
+    expect(formatQuotaWindow(claudeStale.weekly, undefined, quotaWindowCue(claudeStale as never)))
+      .toBe('11.0% used · stale')
+    expect(formatQuotaWindow(claudeStale.session, undefined, quotaWindowCue(claudeStale as never)))
+      .toBe('23.5% used · stale')
+  })
+
+  it('stale and refreshing are distinct suffixes', () => {
+    expect(formatQuotaWindow(win(11), undefined, 'stale')).toBe('11.0% used · stale')
+    expect(formatQuotaWindow(win(11), undefined, 'refreshing')).toBe('11.0% used · refreshing')
+    expect(formatQuotaWindow(win(11), undefined, true)).toBe('11.0% used · refreshing')
+  })
+
+  it('lastGoodWindows wins over no-data when both are present', () => {
+    const both = {
+      ...claudeStale,
+      metadata: { source: 'statusline', failureKind: 'no-data', lastGoodWindows: true },
+    }
+    expect(quotaWindowCue(both as never)).toBe('refreshing')
+  })
+
+  it('no-data without windows has no cue', () => {
+    expect(quotaWindowCue({
+      provider: 'claude-cli',
+      status: 'error',
+      session: null,
+      weekly: null,
+      updatedAt: 1,
+      error: 'no snapshot yet',
+      metadata: { failureKind: 'no-data' },
+    } as never)).toBeUndefined()
+  })
+
+  it('every dashboard surface that formats a window passes quotaWindowCue', () => {
+    const files = [
+      '../../src/pages/machine/OverviewTab.tsx',
+      '../../src/pages/machine/InstalledProviderRow.tsx',
+      '../../src/components/dashboard/SessionInfoDialog.tsx',
+      '../../src/components/MeshGraph/MeshObservabilitySurface/MeshStatusTab.tsx',
+    ]
+    for (const rel of files) {
+      const source = fs.readFileSync(path.join(import.meta.dirname, rel), 'utf8')
+      expect(source, rel).toContain('quotaWindowCue(quota)')
+      expect(source, rel).not.toContain('lastGoodWindows === true')
+    }
   })
 })

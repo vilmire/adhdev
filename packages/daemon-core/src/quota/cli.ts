@@ -23,23 +23,27 @@ const CLAUDE_NO_API_LINE = 'Claude has no quota API — adhdev borrows your stat
 const CLAUDE_WRAP_NOT_REPLACE_LINE = 'Install wraps (not replaces) your statusline, so nothing is lost.';
 
 /**
- * `isLastGood` mirrors web-core's `formatQuotaWindow` — true when this window
- * is a retained last-good reading carried forward after a TRANSIENT fetch
- * failure (daemon-core's `carryForwardLastGoodWindows`, signalled via
- * `metadata.lastGoodWindows`), not this tick's own measurement. Appends the
- * same "(refreshing)" cue so the CLI does not drift from the dashboards — see
- * the account-label comment on printQuota for why this shares a convention
- * instead of drifting per surface.
+ * Mirrors web-core's `quotaWindowCue` / `formatQuotaWindow`. daemon-core cannot
+ * import web-core, so the cue decision is duplicated here on purpose:
+ *  - `refreshing` — last-good carry-forward after a TRANSIENT failure
+ *  - `stale` — `failureKind: 'no-data'` with retained windows (Claude
+ *    statusline aged out). Distinct from refreshing: nothing is retrying.
  */
-function formatWindow(label: string, window: QuotaWindow | null, isLastGood: boolean = false): string {
+function windowCue(quota: ProviderQuota): 'refreshing' | 'stale' | undefined {
+    if (quota.metadata?.lastGoodWindows === true) return 'refreshing';
+    if (quota.metadata?.failureKind === 'no-data' && (quota.session || quota.weekly)) return 'stale';
+    return undefined;
+}
+
+function formatWindow(label: string, window: QuotaWindow | null, cue: 'refreshing' | 'stale' | undefined = undefined): string {
     if (!window) {
         return `  ${label.padEnd(8)} ${chalk.gray('not reported')}`;
     }
     const percent = `${window.usedPercent.toFixed(1)}%`;
     const bar = renderBar(window.usedPercent);
     const reset = window.resetsAt === null ? '' : chalk.gray(`  resets ${formatRelative(window.resetsAt)}`);
-    const stale = isLastGood ? chalk.gray('  (refreshing)') : '';
-    return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}${stale}`;
+    const marker = cue === 'refreshing' ? chalk.gray('  (refreshing)') : cue === 'stale' ? chalk.gray('  (stale)') : '';
+    return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}${marker}`;
 }
 
 function renderBar(usedPercent: number): string {
@@ -91,9 +95,9 @@ export function printQuota(name: string, quota: ProviderQuota): void {
     const account = formatQuotaAccount(quota as unknown as MeshNodeFactsProviderQuota);
     console.log(account ? `${chalk.bold(name)}  ${chalk.gray(account)}` : chalk.bold(name));
     if (quota.status === 'ok' || quota.session || quota.weekly) {
-        const isLastGood = quota.metadata?.lastGoodWindows === true;
-        console.log(formatWindow('5 hour', quota.session, isLastGood));
-        console.log(formatWindow('7 day', quota.weekly, isLastGood));
+        const cue = windowCue(quota);
+        console.log(formatWindow('5 hour', quota.session, cue));
+        console.log(formatWindow('7 day', quota.weekly, cue));
     }
     if (quota.error) {
         const tone = quota.status === 'unavailable' ? chalk.gray : chalk.yellow;

@@ -152,6 +152,26 @@ describe('printQuota — last-good carry-forward marker', () => {
         };
         const joined = captureLogs(() => printQuota('Kimi Code', fresh)).join('\n');
         expect(joined).not.toContain('(refreshing)');
+        expect(joined).not.toContain('(stale)');
+    });
+});
+
+describe('printQuota — no-data stale marker', () => {
+    const claudeStale: ProviderQuota = {
+        provider: 'claude-cli',
+        session: { usedPercent: 23.5, windowMinutes: 300, resetsAt: null },
+        weekly: { usedPercent: 11, windowMinutes: 10080, resetsAt: null },
+        updatedAt: 1,
+        error: 'Claude quota reading is stale (1201 min old) — open a Claude Code session to refresh',
+        status: 'error',
+        metadata: { source: 'statusline', failureKind: 'no-data' },
+    };
+
+    it('appends "(stale)" to no-data windows, not "(refreshing)"', () => {
+        const joined = captureLogs(() => printQuota('Claude Code', claudeStale)).join('\n');
+        expect(joined).toMatch(/23\.5%.*\(stale\)/);
+        expect(joined).toMatch(/11\.0%.*\(stale\)/);
+        expect(joined).not.toContain('(refreshing)');
     });
 });
 

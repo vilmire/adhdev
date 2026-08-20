@@ -18,6 +18,7 @@ import {
     formatQuotaWindow,
     quotaProviderLabel,
     quotaUsageTone,
+    quotaWindowCue,
 } from '../../utils/quota-format'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 
@@ -59,9 +60,9 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
             </div>
             <div className="flex flex-col gap-2">
                 {entries.map(({ provider, quota }) => {
-                    const isLastGood = quota.metadata?.lastGoodWindows === true
-                    const session = formatQuotaWindow(quota.session, undefined, isLastGood)
-                    const weekly = formatQuotaWindow(quota.weekly, undefined, isLastGood)
+                    const cue = quotaWindowCue(quota)
+                    const session = formatQuotaWindow(quota.session, undefined, cue)
+                    const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
                     const usage = formatQuotaUsage(quota)
                     return (
                         <div key={provider} className="flex flex-wrap items-center gap-2">

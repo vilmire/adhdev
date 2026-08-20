@@ -34,6 +34,7 @@ import {
     quotaFailure,
     windowFromPercent,
     type ProviderQuota,
+    type QuotaFailureKind,
     type QuotaMetadata,
     type QuotaWindow,
 } from '../types.js';
@@ -59,8 +60,112 @@ const ACCOUNT_ID = 3;
 const CLIENT_NAME = 'adhdev';
 const CLIENT_VERSION = '1.0.0';
 
-/** JSON-RPC error code the CLI returns when no account session is present. */
-const AUTH_REQUIRED_PATTERN = /auth|sign[- ]?in|log[- ]?in|credential|token/i;
+/**
+ * Sign-in phrases only. Bare `auth` / `token` are forbidden here: they match
+ * `Unauthorized` (the `auth` in the middle) and `token_revoked`, which are
+ * HTTP 401 / revoked-credential transients, not "never signed in".
+ *
+ * Live-observed no-session reply from a CODEX_HOME with no auth.json:
+ * `codex account authentication required to read rate limits`.
+ */
+const MISSING_CREDENTIALS_PATTERN =
+    /not\s+signed[\s-]?in|\bsign[\s-]?in\b|\blog[\s-]?in\b|\bno account\b|authentication required/i;
+
+const NETWORK_PATTERN =
+    /\bnetwork error\b|\bENOTFOUND\b|\bECONNREFUSED\b|\bECONNRESET\b|\bETIMEDOUT\b|\bEAI_AGAIN\b|socket hang up|\bfetch failed\b|failed to fetch/i;
+
+const RATE_LIMIT_TEXT_PATTERN = /\brate limit(?:ed|s)? exceeded\b|\btoo many requests\b/i;
+
+/** Nested JSON `code` values that mean the credential was rejected, not absent. */
+const UNAUTHORIZED_ERROR_CODES = new Set(['token_revoked', 'invalid_token', 'access_denied']);
+
+function toHttpStatus(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) {
+        return Number(value.trim());
+    }
+    return null;
+}
+
+function kindFromHttpStatus(status: number): QuotaFailureKind | null {
+    if (status === 401 || status === 403) return 'unauthorized';
+    if (status === 429) return 'rate-limited';
+    if (status >= 500 && status <= 599) return 'server';
+    return null;
+}
+
+/**
+ * Pull an embedded HTTP status out of an app-server error string. The live
+ * `account/rateLimits/read` failure wraps the upstream response as text:
+ * `failed: 401 Unauthorized; body={"error":{...},"status":401}`.
+ */
+function extractEmbeddedHttpStatus(text: string): number | null {
+    const bodyEq = text.match(/\bbody\s*=\s*(\{[\s\S]*\})\s*;?/);
+    if (bodyEq?.[1]) {
+        try {
+            const parsed = JSON.parse(bodyEq[1]) as { status?: unknown; error?: { status?: unknown } };
+            const nested = toHttpStatus(parsed.status) ?? toHttpStatus(parsed.error?.status);
+            const fromNested = nested !== null ? kindFromHttpStatus(nested) : null;
+            if (fromNested && nested !== null) return nested;
+        } catch {
+            // Fall through to regex on the same string.
+        }
+    }
+    const jsonStatus = text.match(/"status"\s*:\s*(\d{3})/);
+    if (jsonStatus) {
+        const n = Number(jsonStatus[1]);
+        if (kindFromHttpStatus(n)) return n;
+    }
+    const labelled = text.match(/\b(?:HTTP\s+|failed:\s*)(401|403|429|5\d{2})\b/i);
+    if (labelled) return Number(labelled[1]);
+    const phrase = text.match(/\b(401|403)\s+Unauthorized\b/i) ?? text.match(/\b(429)\s+Too Many Requests\b/i);
+    if (phrase) return Number(phrase[1]);
+    return null;
+}
+
+function extractEmbeddedErrorCode(text: string): string | null {
+    const match = text.match(/"code"\s*:\s*"([^"]+)"/);
+    return match?.[1] ?? null;
+}
+
+/**
+ * Classify an `account/rateLimits/read` JSON-RPC error from its message (and
+ * any HTTP status / error code embedded in that message). HTTP status wins;
+ * `unknown` is reserved for a fetcher that broke its never-throw contract and
+ * must not be used for a well-formed remote failure.
+ */
+export function classifyCodexAppServerError(message: string): QuotaFailureKind {
+    const text = message.trim();
+    const http = extractEmbeddedHttpStatus(text);
+    if (http !== null) {
+        const kind = kindFromHttpStatus(http);
+        if (kind) return kind;
+    }
+    const code = extractEmbeddedErrorCode(text);
+    if (code && UNAUTHORIZED_ERROR_CODES.has(code)) return 'unauthorized';
+    if (/\bunauthorized\b/i.test(text)) return 'unauthorized';
+    if (NETWORK_PATTERN.test(text)) return 'network';
+    if (RATE_LIMIT_TEXT_PATTERN.test(text)) return 'rate-limited';
+    if (MISSING_CREDENTIALS_PATTERN.test(text)) return 'missing-credentials';
+    return 'server';
+}
+
+function describeCodexRateLimitFailure(kind: QuotaFailureKind, text: string): string {
+    switch (kind) {
+        case 'missing-credentials':
+            return `Not signed in to Codex (${text}) — run codex on this machine to sign in, then retry`;
+        case 'unauthorized':
+            return `Codex rate-limit lookup was rejected: ${text}`;
+        case 'rate-limited':
+            return `Codex rate-limit lookup was rate limited: ${text}`;
+        case 'network':
+            return `Codex rate-limit lookup failed: ${text}`;
+        default:
+            return `Codex rate-limit request failed: ${text}`;
+    }
+}
 
 function codexCommand(env: NodeJS.ProcessEnv): string {
     const override = env.ADHDEV_CODEX_BIN?.trim();
@@ -321,7 +426,7 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
                     finish(
                         quotaFailure('codex-cli', 'error', `Codex rate-limit request failed: ${detail}`, {
                             source: 'app-server',
-                            failureKind: 'unknown',
+                            failureKind: 'cli-unavailable',
                         }),
                     );
                 }
@@ -331,19 +436,13 @@ export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<P
             if (message.id === RATE_LIMITS_ID) {
                 if (message.error) {
                     const text = message.error.message ?? 'unknown error';
-                    // Not signed in is a "log in" state, not a malfunction.
-                    const unauthenticated = AUTH_REQUIRED_PATTERN.test(text);
+                    const failureKind = classifyCodexAppServerError(text);
                     finish(
                         quotaFailure(
                             'codex-cli',
-                            unauthenticated ? 'unavailable' : 'error',
-                            unauthenticated
-                                ? 'Not signed in to Codex — run codex on this machine to sign in, then retry'
-                                : `Codex rate-limit request failed: ${text}`,
-                            {
-                                source: 'app-server',
-                                failureKind: unauthenticated ? 'missing-credentials' : 'unknown',
-                            },
+                            failureKind === 'missing-credentials' ? 'unavailable' : 'error',
+                            describeCodexRateLimitFailure(failureKind, text),
+                            { source: 'app-server', failureKind },
                         ),
                     );
                     return;
