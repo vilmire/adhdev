@@ -3411,7 +3411,9 @@
         "selectAllThatApply": "해당하는 항목을 모두 선택하세요",
         "multipleChoice": "다중 선택",
         "singleChoice": "단일 선택",
-        "other": "기타"
+        "other": "기타",
+        "answersRequired_one": "답변이 필요한 질문이 {{count}}개 있습니다",
+        "answersRequired_other": "답변이 필요한 질문이 {{count}}개 있습니다"
     },
     "git": {
         "changeList": {

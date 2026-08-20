@@ -122,6 +122,11 @@ export default function InteractivePromptModal({
     return promptSession.prompt.questions.every(question => hasAnswer(question, selection[question.questionId]))
   }, [promptSession, selection])
 
+  const unansweredQuestionCount = useMemo(
+    () => questions.filter(question => !hasAnswer(question, selection[question.questionId])).length,
+    [questions, selection],
+  )
+
   if (!promptSession) return null
 
   const toggleOption = (question: InteractiveQuestion, label: string) => {
@@ -189,7 +194,7 @@ export default function InteractivePromptModal({
 
         {/* Body — every question is listed here on one screen and scrolls independently
             so the header and footer stay pinned. */}
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+        <div className="interactive-prompt-question-list min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {questions.map((question, index) => {
             const selectedLabels = answerPreview.answers[question.questionId]?.selectedLabels || []
             const typeLabel = question.multiSelect
@@ -262,6 +267,11 @@ export default function InteractivePromptModal({
 
         {/* Footer */}
         <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border-default px-5 pt-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
+          {!canSubmit && unansweredQuestionCount > 0 && (
+            <span className="mr-auto text-xs text-text-muted">
+              {t('interactivePrompt.answersRequired', { count: unansweredQuestionCount })}
+            </span>
+          )}
           <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={isSubmitting}>
             Cancel
           </button>

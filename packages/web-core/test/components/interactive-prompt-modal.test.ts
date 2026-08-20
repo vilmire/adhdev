@@ -44,6 +44,7 @@ describe('InteractivePromptModal', () => {
     expect(html).toContain('Other')
     expect(html).toContain('Submit')
     expect(html).toContain('Cancel')
+    expect(html).toContain('1 question still needs an answer')
     // Single question: no step-counter numbering prefix.
     expect(html).not.toContain('1. Choose a path')
   })
@@ -85,6 +86,10 @@ describe('InteractivePromptModal', () => {
     expect(html).toContain('Single choice')
     // The multi-select hint appears for the multi question.
     expect(html).toContain('Select all that apply')
+    // The footer reports how many questions still need answers and the list has
+    // CSS scroll affordances when all questions do not fit.
+    expect(html).toContain('2 questions still need answers')
+    expect(html).toContain('interactive-prompt-question-list')
     // No step wizard controls.
     expect(html).not.toContain('>Next<')
     expect(html).not.toContain('>Back<')

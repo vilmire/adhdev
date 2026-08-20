@@ -3411,7 +3411,9 @@
         "selectAllThatApply": "Select all that apply",
         "multipleChoice": "Multiple choice",
         "singleChoice": "Single choice",
-        "other": "Other"
+        "other": "Other",
+        "answersRequired_one": "{{count}} question still needs an answer",
+        "answersRequired_other": "{{count}} questions still need answers"
     },
     "git": {
         "changeList": {

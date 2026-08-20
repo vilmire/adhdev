@@ -2811,6 +2811,15 @@
         letter-spacing: -0.01em;
     }
 
+    .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .btn:disabled:hover {
+        opacity: 0.5;
+    }
+
     .btn-primary {
         background: var(--accent-primary);
         color: var(--accent-on-primary);
@@ -2868,6 +2877,19 @@
     .btn-ghost:hover {
         background: var(--bg-glass-hover);
         color: var(--text-primary);
+    }
+
+    /* The local background layers cover the scroll shadows at either edge when
+       there is no content remaining in that direction. */
+    .interactive-prompt-question-list {
+        background:
+            linear-gradient(var(--surface-primary) 30%, transparent) center top,
+            linear-gradient(transparent, var(--surface-primary) 70%) center bottom,
+            radial-gradient(farthest-side at 50% 0, rgb(0 0 0 / 0.18), transparent) center top,
+            radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / 0.18), transparent) center bottom;
+        background-repeat: no-repeat;
+        background-size: 100% 20px, 100% 20px, 100% 9px, 100% 9px;
+        background-attachment: local, local, scroll, scroll;
     }
 
     /* ── Empty State ───────────────────────────────── */
