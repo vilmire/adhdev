@@ -9553,6 +9553,75 @@ async function meshCheckpoint(ctx, args) {
   }
   return JSON.stringify(result, null, 2);
 }
+function buildSharedBaseWorktreeAdvisory(input) {
+  const siblings = input.worktrees.filter((worktree) => worktree.sourceRepoRoot === input.sourceRepoRoot && worktree.baseBranch === input.baseBranch);
+  if (siblings.length < 2) return null;
+  return {
+    sharedBaseWorktreeAdvisory: {
+      baseBranch: input.baseBranch,
+      siblingWorktrees: siblings.map((worktree) => ({
+        nodeId: worktree.nodeId,
+        branch: worktree.branch || null
+      })),
+      submoduleGitlinkWarning: "If two or more siblings change a submodule gitlink, conflicts are likely.",
+      convergenceGuidance: "When converging these siblings, use mesh_refine_batch; do not repeatedly call mesh_refine_node one at a time."
+    }
+  };
+}
+function readNodeString(node, ...keys) {
+  for (const key of keys) {
+    const value = node[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return void 0;
+}
+async function buildSharedBaseWorktreeAdvisoryForClone(ctx, clonedNode) {
+  const worktrees = ctx.mesh.nodes.filter((node) => readNodeString(node, "clonedFromNodeId", "cloned_from_node_id"));
+  if (worktrees.length < 2) return null;
+  const clonedNodeId = readNodeString(clonedNode, "id", "nodeId", "node_id");
+  if (!clonedNodeId || !worktrees.some((node) => (0, import_daemon_core6.meshNodeIdMatches)(node, clonedNodeId))) return null;
+  const sources = /* @__PURE__ */ new Map();
+  for (const worktree of worktrees) {
+    const sourceId = readNodeString(worktree, "clonedFromNodeId", "cloned_from_node_id");
+    if (!sourceId) continue;
+    const source = ctx.mesh.nodes.find((node) => (0, import_daemon_core6.meshNodeIdMatches)(node, sourceId));
+    const sourceRepoRoot2 = source && readNodeString(source, "repoRoot", "repo_root", "workspace");
+    if (source && sourceRepoRoot2) sources.set(sourceId, source);
+  }
+  const sourceBranches = /* @__PURE__ */ new Map();
+  for (const [sourceId, source] of sources) {
+    try {
+      const status = extractGitStatus(await commandForNode(ctx, source, "git_status", {
+        workspace: source.workspace
+      }));
+      if (typeof status?.branch === "string" && status.branch.trim()) {
+        sourceBranches.set(sourceId, status.branch.trim());
+      }
+    } catch {
+    }
+  }
+  const clonedSourceId = readNodeString(clonedNode, "clonedFromNodeId", "cloned_from_node_id");
+  const clonedSource = clonedSourceId ? sources.get(clonedSourceId) : void 0;
+  const sourceRepoRoot = clonedSource && readNodeString(clonedSource, "repoRoot", "repo_root", "workspace");
+  const baseBranch = clonedSourceId ? sourceBranches.get(clonedSourceId) : void 0;
+  if (!sourceRepoRoot || !baseBranch) return null;
+  const resolvedWorktrees = [];
+  for (const worktree of worktrees) {
+    const sourceId = readNodeString(worktree, "clonedFromNodeId", "cloned_from_node_id");
+    const source = sourceId ? sources.get(sourceId) : void 0;
+    const repoRoot = source && readNodeString(source, "repoRoot", "repo_root", "workspace");
+    const sourceBaseBranch = sourceId ? sourceBranches.get(sourceId) : void 0;
+    const nodeId = readNodeString(worktree, "id", "nodeId", "node_id");
+    if (!nodeId || !repoRoot || !sourceBaseBranch) continue;
+    resolvedWorktrees.push({
+      nodeId,
+      branch: readNodeString(worktree, "worktreeBranch", "worktree_branch", "branch"),
+      sourceRepoRoot: repoRoot,
+      baseBranch: sourceBaseBranch
+    });
+  }
+  return buildSharedBaseWorktreeAdvisory({ sourceRepoRoot, baseBranch, worktrees: resolvedWorktrees });
+}
 async function meshCloneNode(ctx, args) {
   const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
   const planned = unwrapCommandPayload(await commandForNode(ctx, sourceNode, "plan_mesh_onboarding", {
@@ -9580,16 +9649,25 @@ async function meshCloneNode(ctx, args) {
     inlineMesh: ctx.mesh
   });
   const clonePayload = extractCloneNodePayload(result);
+  let sharedBaseWorktreeAdvisory = null;
   if (clonePayload?.success && clonePayload.node?.id) {
     const existingIndex = ctx.mesh.nodes.findIndex((n) => n.id === clonePayload.node.id);
     if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
     else ctx.mesh.nodes.push(clonePayload.node);
     ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     await syncCoordinatorDaemonMeshCache(ctx);
+    try {
+      sharedBaseWorktreeAdvisory = await buildSharedBaseWorktreeAdvisoryForClone(ctx, clonePayload.node);
+    } catch {
+    }
   }
   const planWarnings = Array.isArray(planned?.warnings) ? planned.warnings : [];
-  if (planWarnings.length && result && typeof result === "object") {
-    return JSON.stringify({ ...result, warnings: planWarnings }, null, 2);
+  if (result && typeof result === "object") {
+    return JSON.stringify({
+      ...result,
+      ...planWarnings.length ? { warnings: planWarnings } : {},
+      ...sharedBaseWorktreeAdvisory || {}
+    }, null, 2);
   }
   return JSON.stringify(result, null, 2);
 }
