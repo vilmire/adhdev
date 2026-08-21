@@ -1372,6 +1372,12 @@ export function cancelTask(
         delete entry.attemptId;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         endTaskDispatchInFlight(meshId, taskId);
+        // SIBLING-DISPATCH-ORPHAN: a direct-dispatched task carries a second row in
+        // mesh_direct_dispatches. Clearing the assignment above drops this task from every
+        // queue-side counter, but that row would survive with status 'acked' — which
+        // buildMeshActiveWork renders as `generating`, so the cancelled task would keep
+        // showing up as live work with no sweeper to ever collect it.
+        terminalizeSiblingDispatch(meshId, taskId, 'queue_task_cancelled');
         // TURN-LEDGER (Stage 5): cancellation is a terminal CompletionProposal like any
         // other — routed through the reducer so a cancel that races a late worker
         // completion commits exactly one terminal outcome (no resurrection either way).
@@ -1545,6 +1551,16 @@ export function requeueTask(
         // Proceeding to requeue (or force-override): the prior dispatch is being abandoned,
         // so end the single-flight window for this task id.
         endTaskDispatchInFlight(meshId, taskId);
+        // SIBLING-DISPATCH-ORPHAN: same abandonment as cancelTask, and strictly worse here
+        // — the task is going back to `pending` to be dispatched AGAIN, so leaving the old
+        // direct-dispatch row live would let the stale row and the new dispatch both render
+        // as active work for one task. Reason is refined to 'queue_task_dispatch_failed' in
+        // the dispatch-failure branch below, which is the same abandonment on its own axis.
+        terminalizeSiblingDispatch(
+            meshId,
+            taskId,
+            opts?.dispatchFailure && !opts?.force ? 'queue_task_dispatch_failed' : 'queue_task_requeued',
+        );
 
         // DISPATCH-BOOT-RACE: a dispatch failure spends its OWN budget
         // (dispatchFailureCount/MAX_DISPATCH_FAILURES), never requeueCount — see the
@@ -1830,6 +1846,10 @@ export function reclaimStrandedAssignedTask(
         // The stranded assignment is being torn down (→ pending or failed); end its
         // single-flight window so a re-claim/requeue is not blocked.
         endTaskDispatchInFlight(meshId, taskId);
+        // SIBLING-DISPATCH-ORPHAN: third instance of the same class as cancelTask/requeueTask
+        // — this path also abandons an already-dispatched row (nonce bumped, assignment
+        // cleared) while its mesh_direct_dispatches sibling stays live and unsweepable.
+        terminalizeSiblingDispatch(meshId, taskId, 'queue_task_stranded_reclaimed');
         let cascaded: MeshWorkQueueEntry[] = [];
         if (reclaims > MAX_STRANDED_RECLAIMS) {
             // Repeatedly undeliverable — stop cycling and fail it so dependents unblock.
@@ -2090,6 +2110,89 @@ export function updateDirectDispatchStatus(
         }
         MeshRuntimeStore.getInstance().updateDirectDispatchStatus(meshId, sessionId, status, taskId);
     } catch { /* best-effort */ }
+}
+
+/**
+ * SIBLING-DISPATCH-ORPHAN: the reason a task's queue row was abandoned while a sibling
+ * direct-dispatch row was still live. Recorded verbatim in the audit ledger entry.
+ */
+export type SiblingDispatchTerminalizeReason =
+    | 'queue_task_cancelled'
+    | 'queue_task_requeued'
+    | 'queue_task_dispatch_failed'
+    | 'queue_task_stranded_reclaimed';
+
+/**
+ * SIBLING-DISPATCH-ORPHAN: terminalize the `mesh_direct_dispatches` row that shares this
+ * task id, whenever the QUEUE row is abandoned out from under it.
+ *
+ * WHY THIS EXISTS. `recordDirectDispatchTask` materialises TWO rows per direct dispatch —
+ * a queue entry and a `mesh_direct_dispatches` entry — but every abandonment path
+ * (cancelTask, requeueTask incl. its dispatch-failure branch, reclaimStrandedAssignedTask)
+ * only ever touched the queue row and `endTaskDispatchInFlight`. The dispatch row was left
+ * behind, and nothing else would ever collect it:
+ *
+ *   - `markStaleDirectDispatches` sweeps ONLY `status='dispatched'`, so a row that reached
+ *     `acked` (the worker confirmed it started) has NO timeout sweeper whatsoever;
+ *   - the orphan-prune path is age-gated and node/session-liveness-gated, so a row whose
+ *     session is still alive is never pruned.
+ *
+ * The consequence is not cosmetic. `buildMeshActiveWork` skips CANCELLED queue rows when
+ * building its dedupe set, so the orphan is NOT deduped against its queue sibling, and the
+ * `dbStatus === 'acked' ? 'generating' : 'assigned'` fallback then renders a cancelled task
+ * as actively generating — feeding generatingCount, sessionHasActiveAssignment, routing
+ * fitness, idle reminders and the completion-synthesis loop. Measured live: one such row
+ * survived 12 days. (Both halves are load-bearing: cancelling BEFORE dispatch leaves no
+ * dispatch row at all, which is why this only ever bit already-dispatched tasks.)
+ *
+ * 'stale' — never 'completed'/'failed' — for the same reason `terminalizeAckedHold` chose
+ * it: the abandonment says nothing about whether the worker finished, and a cancel is not
+ * completion evidence (mesh-terminal-admission.ts). 'stale' is exactly "this dispatch will
+ * never resolve itself": it leaves the active set without asserting an outcome.
+ *
+ * Deliberately NOT `terminalizeAckedHold` (mesh-completion-synthesis.ts) even though the
+ * two do a similar flip: that helper is bound to synth-hold state and its own ledger kind,
+ * and this module is upstream of it — importing it here would invert the dependency
+ * (mesh-completion-synthesis already imports mesh-work-queue). The acked-hold state itself
+ * needs no explicit cleanup on this path: reconcileUnterminatedDirectDispatches prunes hold
+ * rows whose task has left the active dispatch set, which this flip is what causes.
+ *
+ * Best-effort and self-contained: a store/ledger failure must never fail the cancel/requeue
+ * that already committed.
+ */
+export function terminalizeSiblingDispatch(
+    meshId: string,
+    taskId: string,
+    reason: SiblingDispatchTerminalizeReason,
+): void {
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        // Only act on a row that is actually still live; a dispatch that already reached a
+        // terminal status by its own path needs neither the flip nor an audit entry (this
+        // keeps the ledger free of a no-op record on the common well-behaved case).
+        const sibling = store.getActiveDirectDispatches(meshId).find(d => d.taskId === taskId);
+        if (!sibling) return;
+        // Keyed by the exact task id — never the session_id fallback, which would flip a
+        // sibling task's row (CANON-B, see updateDirectDispatchStatus).
+        store.updateDirectDispatchStatus(meshId, sibling.sessionId ?? '', 'stale', taskId);
+        LOG.info('MeshQueue', `SIBLING-DISPATCH-ORPHAN: task ${taskId} (mesh ${meshId}) was abandoned (${reason}) while its direct-dispatch row was still '${sibling.status}'; marked that row stale so it stops rendering as active work.`);
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'sibling_dispatch_terminalized',
+                taskId,
+                ...(sibling.nodeId ? { nodeId: sibling.nodeId } : {}),
+                ...(sibling.sessionId ? { sessionId: sibling.sessionId } : {}),
+                ...(sibling.providerType ? { providerType: sibling.providerType } : {}),
+                payload: {
+                    taskId,
+                    reason,
+                    dispatchStatus: sibling.status,
+                    ...(sibling.sessionId ? { sessionId: sibling.sessionId } : {}),
+                    ...(sibling.nodeId ? { nodeId: sibling.nodeId } : {}),
+                },
+            });
+        } catch { /* best-effort audit — the terminalization above still stands */ }
+    } catch { /* best-effort — never fail the queue mutation that already committed */ }
 }
 
 export function cleanupTerminalDirectDispatches(olderThanMs = 7 * 24 * 60 * 60_000): void {

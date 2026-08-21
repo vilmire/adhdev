@@ -151,6 +151,24 @@ export type MeshLedgerKind =
     // payload: { taskId, reason: 'acked_read_failure_death' | 'acked_hold_time_ceiling',
     //            consecutiveReadFailures?, heldMs?, ceilingMs? }
     | 'acked_hold_terminalized'
+    // SIBLING-DISPATCH-ORPHAN: a task's QUEUE row was abandoned (operator cancel, requeue,
+    // dispatch-failure auto-fail, stranded-reclaim) while its sibling mesh_direct_dispatches
+    // row was still non-terminal, so that row was force-flipped to 'stale' in the same
+    // mutation. Without this the dispatch row outlived its task forever: markStaleDirectDispatches
+    // only sweeps status='dispatched', so an 'acked' row had NO timeout sweeper at all, and
+    // buildMeshActiveWork maps a surviving 'acked' row to `generating` — rendering a CANCELLED
+    // task as live work (measured: one row orphaned 12 days).
+    //
+    // Its own kind, and STALE rather than completed/failed, for the same reason
+    // acked_hold_terminalized is: no outcome is being asserted — the worker's fate is
+    // unknown and a cancel is not completion evidence (mesh-terminal-admission.ts). Folding
+    // it into task_failed would inflate failure counts with non-failures. It exists at all
+    // because flipping the row silently would erase the only trace that the orphan ever
+    // existed — which is precisely why the original leak needed a live-DB forensic to find.
+    // payload: { taskId, reason: 'queue_task_cancelled' | 'queue_task_requeued'
+    //            | 'queue_task_dispatch_failed' | 'queue_task_stranded_reclaimed',
+    //            dispatchStatus, sessionId?, nodeId? }
+    | 'sibling_dispatch_terminalized'
     // COMPLETION-SIDE-EFFECT-EVIDENCE: async, best-effort follow-up to a `code_change`
     // task's `task_completed` entry, checking whether the completing node's workspace
     // actually has a git diff. A local-only git status read (no P2P — see cost guard on

@@ -3840,8 +3840,27 @@ describe('runMeshReconcileTick', () => {
           { role: 'assistant', content: '', kind: 'tool', timestamp: Date.now() - 10_000 },
         ])
 
+        // SIBLING-DISPATCH-ORPHAN: give the task the direct-dispatch sibling row a real
+        // dispatch carries, so the cancel below is exercised against the two-row shape that
+        // actually leaked (the RC.20 fixture is queue-only by construction).
+        insertDirectDispatch(meshId, {
+          taskId: claimed.id,
+          nodeId,
+          sessionId,
+          providerType: 'kimi',
+          message: 'orchestrate the canary probes',
+          via: 'mesh_send_task',
+          dispatchedAt: new Date().toISOString(),
+        })
+        updateDirectDispatchStatus(meshId, sessionId, 'acked', claimed.id)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === claimed.id)).toBe(true)
+
         const cancelled = cancelTask(meshId, claimed.id, { reason: 'operator_cancel' })
         expect(cancelled?.status).toBe('cancelled')
+        // The cancel must terminalize the sibling in the SAME mutation — not eventually, and
+        // not via a sweeper: markStaleDirectDispatches never touches an 'acked' row, so a row
+        // still active here is one that would survive indefinitely.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === claimed.id)).toBe(false)
 
         await runMeshReconcileTick(components)
         await runMeshReconcileTick(components)
@@ -3849,6 +3868,8 @@ describe('runMeshReconcileTick', () => {
 
         const row = getQueue(meshId).find(t => t.id === claimed.id)!
         expect(row.status).toBe('cancelled')
+        // And no reconcile tick resurrects it.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === claimed.id)).toBe(false)
         expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
         // The cancel committed the task terminal; no gate fired, no consumed ACK
         // promoted. (An attempt row is only created on real turn evidence — if one
