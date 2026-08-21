@@ -944,7 +944,14 @@
             "actionViewNode": "View node",
             "actionFailed": "Queue action failed",
             "showGoal": "Show mission goal",
-            "hideGoal": "Hide mission goal"
+            "hideGoal": "Hide mission goal",
+            "routingRan": "ran on",
+            "routingFrom": "from",
+            "routingWhy": "Why this route",
+            "routingFitness": "Fitness",
+            "routingReason": "Reason",
+            "routingLosers": "{{count}} slot candidate(s) lost the race",
+            "routingSkipped": "{{count}} node(s) skipped"
         }
     },
     "repoMesh": {

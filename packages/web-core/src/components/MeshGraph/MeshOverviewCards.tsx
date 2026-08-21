@@ -423,7 +423,10 @@ function StatusBadge({ meshTheme, label, tone }: { meshTheme: MeshGraphTheme; la
         : tone === 'amber' ? (dk ? 'border-amber-400/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700')
         : tone === 'emerald' ? (dk ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
         : (dk ? 'border-white/10 bg-white/[0.04] text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600')
-    return <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${cls}`}>{label}</span>
+    // leading-none + align-middle + tracking-compensated right padding — same rationale as
+    // Badge in meshSurfacePrimitives.tsx (arbitrary text-[10px] carries no line-height, so
+    // the chip inherited the row's and its border drifted against neighbouring text).
+    return <span className={`shrink-0 rounded-full border pl-2 pr-[calc(0.5rem-0.14em)] py-0.5 text-[10px] leading-none align-middle font-semibold uppercase tracking-[0.14em] ${cls}`}>{label}</span>
 }
 
 function StatTile({ meshTheme, label, value, tone }: { meshTheme: MeshGraphTheme; label: string; value: number | string; tone?: Tone }) {
@@ -733,6 +736,10 @@ interface RoutingDecisionView {
     fitnessScore?: number
     reason?: string
     skippedCandidates?: Array<{ nodeId?: string; reason?: string }>
+    /** Daemon writes `skippedCandidatesOmitted` (mesh-queue-assignment.ts). The old
+     *  `skippedCandidatesDropped` name never matched the wire, so the "+N more" line
+     *  below was unreachable; both are read now so pre-fix daemons still render. */
+    skippedCandidatesOmitted?: number
     skippedCandidatesDropped?: number
     requiredTagsResult?: { required?: string[]; satisfied?: boolean; missing?: string[] }
 }
@@ -781,9 +788,12 @@ function RoutingDecisionDetail({ meshTheme, routing, resolveNodeLabel }: { meshT
                                 {c.reason && <span className={meshTheme.textMuted}> — {c.reason}</span>}
                             </div>
                         ))}
-                        {typeof routing.skippedCandidatesDropped === 'number' && routing.skippedCandidatesDropped > 0 && (
-                            <div className={meshTheme.textMuted}>{t('mesh.overview.routingSkippedMore', { count: routing.skippedCandidatesDropped })}</div>
-                        )}
+                        {(() => {
+                            const more = routing.skippedCandidatesOmitted ?? routing.skippedCandidatesDropped
+                            return typeof more === 'number' && more > 0
+                                ? <div className={meshTheme.textMuted}>{t('mesh.overview.routingSkippedMore', { count: more })}</div>
+                                : null
+                        })()}
                     </div>
                 </div>
             )}

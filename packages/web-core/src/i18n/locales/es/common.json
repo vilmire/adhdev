@@ -949,7 +949,14 @@
             "actionViewNode": "Ver nodo",
             "actionFailed": "La acción de cola falló",
             "showGoal": "Ver objetivo de la misión",
-            "hideGoal": "Ocultar objetivo de la misión"
+            "hideGoal": "Ocultar objetivo de la misión",
+            "routingRan": "ejecutado en",
+            "routingFrom": "desde",
+            "routingWhy": "Por qué esta ruta",
+            "routingFitness": "Idoneidad",
+            "routingReason": "Motivo",
+            "routingLosers": "{{count}} candidato(s) de slot descartado(s)",
+            "routingSkipped": "{{count}} nodo(s) omitido(s)"
         }
     },
     "repoMesh": {

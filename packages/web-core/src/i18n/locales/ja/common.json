@@ -944,7 +944,14 @@
             "actionViewNode": "ノードを表示",
             "actionFailed": "キュー操作に失敗しました",
             "showGoal": "ミッション目標を表示",
-            "hideGoal": "ミッション目標を閉じる"
+            "hideGoal": "ミッション目標を閉じる",
+            "routingRan": "実行",
+            "routingFrom": "由来",
+            "routingWhy": "ルーティング理由",
+            "routingFitness": "適合度",
+            "routingReason": "理由",
+            "routingLosers": "スロット競合で外れた候補 {{count}} 件",
+            "routingSkipped": "スキップしたノード {{count}} 件"
         }
     },
     "repoMesh": {

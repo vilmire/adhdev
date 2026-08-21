@@ -555,7 +555,14 @@ export default function MeshObservabilitySurface({
                     column pushes the canvas down instead of floating over it (and
                     intercepting the top band of graph touches on mobile). */}
                 <div className={`relative z-30 max-h-[42dvh] overflow-y-auto sm:max-h-none sm:mb-3 sm:overflow-visible shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                    <div className={`flex min-w-0 flex-1 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible gap-2 text-xs ${meshTheme.textSecondary}`}>
+                    {/* Mobile: take a full row (basis-full) and WRAP. Previously this was
+                        `flex-1 flex-nowrap overflow-x-auto`, which shared the row with the
+                        shrink-0 controls block on the right — the controls claimed ~380px of
+                        a 500px row, leaving the badges ~112px to hold ~712px of content, i.e.
+                        a 6.4x horizontal scroller clipping the headline badge mid-word. The
+                        badges wrap onto their own line(s) below sm and share the row again
+                        from sm up, where there is width for both. */}
+                    <div className={`flex w-full min-w-0 basis-full flex-wrap gap-2 text-xs sm:w-auto sm:flex-1 sm:basis-auto ${meshTheme.textSecondary}`}>
                         <Badge label={headlineLabel} tone={headlineTone} className="shrink-0" />
                         {canonicalGraph.stats.blockedReviewNodes > 0 && (
                             <Badge label={t('meshGraph.obs.badgeBlocked', { count: canonicalGraph.stats.blockedReviewNodes })} title={t('meshGraph.obs.badgeBlockedTitle', { count: canonicalGraph.stats.blockedReviewNodes })} tone="danger" className="shrink-0" />
@@ -592,7 +599,7 @@ export default function MeshObservabilitySurface({
                             <Badge label={t('meshGraph.obs.badgeAttachedChats', { count: canonicalGraph.stats.totalActiveSessions })} tone="info" className="shrink-0 hidden sm:inline-flex" />
                         )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
                         {/* Direction toggle */}
                         <div
                             className={meshTheme.isDark

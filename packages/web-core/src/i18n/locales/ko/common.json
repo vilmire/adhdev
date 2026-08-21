@@ -944,7 +944,14 @@
             "actionViewNode": "노드 보기",
             "actionFailed": "큐 작업이 실패했습니다",
             "showGoal": "미션 목표 보기",
-            "hideGoal": "미션 목표 접기"
+            "hideGoal": "미션 목표 접기",
+            "routingRan": "실행",
+            "routingFrom": "출처",
+            "routingWhy": "라우팅 이유",
+            "routingFitness": "적합도",
+            "routingReason": "사유",
+            "routingLosers": "슬롯 경쟁 탈락 {{count}}건",
+            "routingSkipped": "건너뛴 노드 {{count}}개"
         }
     },
     "repoMesh": {

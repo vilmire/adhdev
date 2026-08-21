@@ -15,6 +15,7 @@ import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildMeshTasksView, type MissionTaskGroup } from './meshTasksViewModel'
+import { buildTaskRoutingIndex, formatExecutionProfile, type TaskRoutingSummary } from './taskRoutingIndex'
 import { TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT } from './taskDagViewModel'
 import MeshTaskDagView from './MeshTaskDagView'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
@@ -94,7 +95,11 @@ function Chip({ theme, children, tone = 'default', title }: {
                 : tone === 'good'
                     ? (theme.isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
                     : (theme.isDark ? 'border-white/10 bg-white/[0.05] text-slate-300' : 'border-slate-200 bg-white/85 text-slate-600')
-    return <span title={title} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${toneClass}`}>{children}</span>
+    // leading-none: text-[10px] sets font-size only (arbitrary value), so without this the
+    // chip inherits the row's line-height (leading-5 here) and renders taller than the same
+    // chip elsewhere, pushing its border off-center against sibling text. See Badge in
+    // meshSurfacePrimitives.tsx for the full rationale.
+    return <span title={title} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] leading-none ${toneClass}`}>{children}</span>
 }
 
 function MissionProgressBar({ theme, group }: { theme: MeshGraphTheme; group: MissionTaskGroup }) {
@@ -121,10 +126,12 @@ export interface TaskRowActions {
     error: string | null
 }
 
-function TaskRow({ task, theme, nodeLabels, expanded, onToggle, actions, onFocusNode }: {
+function TaskRow({ task, theme, nodeLabels, routing, expanded, onToggle, actions, onFocusNode }: {
     task: RepoMeshQueueTask
     theme: MeshGraphTheme
     nodeLabels: Map<string, string>
+    /** Dispatch-time routing (model/origin) joined from the ledger; absent for older tasks. */
+    routing?: TaskRoutingSummary
     expanded: boolean
     onToggle: () => void
     actions?: TaskRowActions | null
@@ -154,6 +161,16 @@ function TaskRow({ task, theme, nodeLabels, expanded, onToggle, actions, onFocus
                 </span>
                 {task.status === 'failed' && <Chip theme={theme} tone="danger">{t(statusKey(task.status))}</Chip>}
                 {blocked && <Chip theme={theme} tone="warn">{t('meshGraph.tasksView.status.blocked')}</Chip>}
+                {/* Which model ran this — the single most-asked question about a finished
+                    task, and previously only reachable via Overview → Ledger → entry modal.
+                    Model alone on the collapsed row (provider/thinking would crowd it); the
+                    full profile is in the expanded body. Hidden below sm so the mobile row
+                    keeps its text column instead of collapsing it to nothing. */}
+                {routing?.model && (
+                    <span className="hidden sm:contents">
+                        <Chip theme={theme} title={formatExecutionProfile(routing)}>{routing.model}</Chip>
+                    </span>
+                )}
                 {task.status === 'assigned' && nodeLabel && <Chip theme={theme} tone="info" title={task.assignedNodeId ?? undefined}>{nodeLabel}</Chip>}
                 <span className={`shrink-0 text-[10px] tabular-nums ${theme.textSecondary}`}>
                     {formatRelativeTime(taskTimestampMs(task))}
@@ -170,6 +187,46 @@ function TaskRow({ task, theme, nodeLabels, expanded, onToggle, actions, onFocus
                         {nodeLabel && <Chip theme={theme} title={task.assignedNodeId ?? undefined}>@ {nodeLabel}</Chip>}
                         <span className={`font-mono text-[9px] ${theme.textSecondary} opacity-70`} title={task.id}>{task.id.slice(0, 8)}</span>
                     </div>
+                    {/* Execution + origin, from the dispatch ledger entry. Only the two things
+                        the owner asked for are inline (what ran it / where it came from);
+                        selection internals stay folded below so the row does not get noisy. */}
+                    {routing && (
+                        <div className={`mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] ${theme.textSecondary}`}>
+                            {formatExecutionProfile(routing) && (
+                                <span>
+                                    <span className={theme.textMuted}>{t('meshGraph.tasksView.routingRan')} </span>
+                                    {formatExecutionProfile(routing)}
+                                </span>
+                            )}
+                            {(routing.source || routing.transport) && (
+                                <span>
+                                    <span className={theme.textMuted}>{t('meshGraph.tasksView.routingFrom')} </span>
+                                    {[routing.source, routing.transport].filter(Boolean).join(' · ')}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                    {routing && (typeof routing.fitnessScore === 'number' || routing.reason || routing.intraNodeLoserCount || routing.skippedCount) && (
+                        <details className="mt-1.5">
+                            <summary className={`cursor-pointer list-none text-[10px] ${theme.textMuted} [&::-webkit-details-marker]:hidden`}>
+                                {t('meshGraph.tasksView.routingWhy')}
+                            </summary>
+                            <div className={`mt-1 flex flex-col gap-0.5 text-[10px] leading-4 ${theme.textSecondary}`}>
+                                {typeof routing.fitnessScore === 'number' && (
+                                    <div><span className={theme.textMuted}>{t('meshGraph.tasksView.routingFitness')} </span>{routing.fitnessScore}</div>
+                                )}
+                                {routing.reason && (
+                                    <div><span className={theme.textMuted}>{t('meshGraph.tasksView.routingReason')} </span>{routing.reason}</div>
+                                )}
+                                {!!routing.intraNodeLoserCount && (
+                                    <div>{t('meshGraph.tasksView.routingLosers', { count: routing.intraNodeLoserCount })}</div>
+                                )}
+                                {!!routing.skippedCount && (
+                                    <div>{t('meshGraph.tasksView.routingSkipped', { count: routing.skippedCount })}</div>
+                                )}
+                            </div>
+                        </details>
+                    )}
                     {blocked && (
                         <div className={`mt-2 rounded-lg border px-2 py-1.5 text-[10px] ${theme.isDark ? 'border-amber-400/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
                             {task.blockedReason}
@@ -249,10 +306,11 @@ function ActionButton({ theme, tone, label, confirmLabel, armed, busy, onClick }
     )
 }
 
-function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTask, actions, onFocusNode }: {
+function MissionGroupCard({ group, theme, nodeLabels, routingIndex, expandedTaskId, onToggleTask, actions, onFocusNode }: {
     group: MissionTaskGroup
     theme: MeshGraphTheme
     nodeLabels: Map<string, string>
+    routingIndex: Map<string, TaskRoutingSummary>
     expandedTaskId: string | null
     onToggleTask: (id: string) => void
     actions?: TaskRowActions | null
@@ -281,7 +339,7 @@ function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTa
                     {group.missionId && <IconFlag size={11} className={`shrink-0 ${theme.isDark ? 'text-slate-400' : 'text-slate-400'}`} />}
                     <span className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${theme.textPrimary}`} title={group.missionId ?? undefined}>{title}</span>
                     {group.missionStatus && missionTone && (
-                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${theme.isDark ? missionTone.dark : missionTone.light}`}>
+                        <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[9px] leading-none font-medium uppercase tracking-wide ${theme.isDark ? missionTone.dark : missionTone.light}`}>
                             {t(`meshGraph.tasksView.missionStatus.${group.missionStatus}`, { defaultValue: group.missionStatus })}
                         </span>
                     )}
@@ -338,6 +396,7 @@ function MissionGroupCard({ group, theme, nodeLabels, expandedTaskId, onToggleTa
                                 task={task}
                                 theme={theme}
                                 nodeLabels={nodeLabels}
+                                routing={routingIndex.get(task.id)}
                                 expanded={expandedTaskId === task.id}
                                 onToggle={() => onToggleTask(task.id)}
                                 actions={actions}
@@ -361,6 +420,10 @@ export default function MeshTasksView({ tasks, status, emptyMessage, daemonId, s
     const [actionError, setActionError] = useState<string | null>(null)
     const view = useMemo(() => buildMeshTasksView(tasks, status, terminalLimit), [tasks, status, terminalLimit])
     const nodeLabels = useMemo(() => buildNodeLabels(status), [status])
+    // taskId -> dispatch-time routing (model / origin), joined from the ledger tail that
+    // mesh_status already returns. Best-effort: the tail is capped daemon-side, so older
+    // tasks simply render without a model chip.
+    const routingIndex = useMemo(() => buildTaskRoutingIndex(status), [status])
     const toggleTask = (id: string) => setExpandedTaskId(current => (current === id ? null : id))
 
     const canMutate = !!(sendDaemonCommand && daemonId && status.meshId)
@@ -441,6 +504,7 @@ export default function MeshTasksView({ tasks, status, emptyMessage, daemonId, s
                                 task={task}
                                 theme={meshTheme}
                                 nodeLabels={nodeLabels}
+                                routing={routingIndex.get(task.id)}
                                 expanded={expandedTaskId === task.id}
                                 onToggle={() => toggleTask(task.id)}
                                 actions={actions}
@@ -464,6 +528,7 @@ export default function MeshTasksView({ tasks, status, emptyMessage, daemonId, s
                                 task={task}
                                 theme={meshTheme}
                                 nodeLabels={nodeLabels}
+                                routing={routingIndex.get(task.id)}
                                 expanded={expandedTaskId === task.id}
                                 onToggle={() => toggleTask(task.id)}
                                 actions={actions}
@@ -488,6 +553,7 @@ export default function MeshTasksView({ tasks, status, emptyMessage, daemonId, s
                     group={group}
                     theme={meshTheme}
                     nodeLabels={nodeLabels}
+                    routingIndex={routingIndex}
                     expandedTaskId={expandedTaskId}
                     onToggleTask={toggleTask}
                     actions={actions}

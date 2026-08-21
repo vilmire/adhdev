@@ -944,7 +944,14 @@
             "actionViewNode": "查看节点",
             "actionFailed": "队列操作失败",
             "showGoal": "查看任务组目标",
-            "hideGoal": "收起任务组目标"
+            "hideGoal": "收起任务组目标",
+            "routingRan": "运行于",
+            "routingFrom": "来源",
+            "routingWhy": "路由原因",
+            "routingFitness": "适配度",
+            "routingReason": "原因",
+            "routingLosers": "{{count}} 个槽位候选未被选中",
+            "routingSkipped": "跳过 {{count}} 个节点"
         }
     },
     "repoMesh": {
