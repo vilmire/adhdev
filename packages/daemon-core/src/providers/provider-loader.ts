@@ -45,6 +45,7 @@ import {
 } from '../config/registry-resolver.js';
 import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
+import { trimInProgressTurnToolTail } from './chat-message-normalization.js';
 import {
   createNativeHistoryDispatcher,
   createNativeHistoryListDispatcher,
@@ -2026,7 +2027,29 @@ export class ProviderLoader {
 
           if (reader) {
             resolved.scripts = { ...(resolved.scripts || {}) };
-            (resolved.scripts as any).readNativeHistory = reader;
+            // (excludeInProgressTurn restore) Apply the in-flight tool-tail trim
+            // HERE — the one choke point every native-history route funnels
+            // through (declarative source / override_path / built-in reader) —
+            // rather than inside a single route's executor.
+            //
+            // The flag was honoured only by `_shared/native_history.js`'s
+            // `trimIncompleteLastTurn`. When providers moved to spec-driven
+            // reading, `codex-cli`'s declaration became the sole surviving record
+            // of the intent while no live route consumed it, so during
+            // `waiting_approval` every provider rendered the very tool call
+            // awaiting approval as an already-executed `⏺ Tool` bubble.
+            // Wrapping the dispatch restores it for all of them at once and
+            // keeps future routes covered by construction.
+            //
+            // The trim is idempotent (see trimInProgressTurnToolTail), so an
+            // out-of-tree script that still trims its own result is unaffected.
+            (resolved.scripts as any).readNativeHistory = (input: any) => {
+              const result = reader!(input);
+              const wantsTrim = input?.excludeInProgressTurn === true || input?.args?.excludeInProgressTurn === true;
+              if (!wantsTrim || !result || !Array.isArray(result.messages)) return result;
+              const trimmed = trimInProgressTurnToolTail(result.messages);
+              return trimmed === result.messages ? result : { ...result, messages: trimmed };
+            };
             // Wire the enumerator alongside the reader. Without both the
             // `scripts.listSessions` marker AND the `listNativeHistory` fn,
             // `getProviderNativeHistoryScript(...,'listSessions')` resolves to

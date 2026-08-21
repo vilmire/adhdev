@@ -466,8 +466,15 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         // turn's half-written tail is hidden from the user. The completion gate needs the
         // exact opposite — it exists to judge the turn that JUST finished, so excluding the
         // in-progress turn would hide the very evidence it is looking for and would make
-        // missing_final_assistant strictly more common. Codex's manifest sets
-        // excludeInProgressTurn:true for its own read path; that must not leak here.
+        // missing_final_assistant strictly more common.
+        //
+        // Codex's provider.v1.json carries `nativeHistory.excludeInProgressTurn: true`,
+        // but that declaration is NOT what drives the read path and never reaches this
+        // call: the manifest field has no reader anywhere in daemon-core. The live
+        // behaviour comes from the per-call flag read_chat computes, which the loader's
+        // readNativeHistory wrapper applies (provider-loader.ts). The distinction matters
+        // — omitting the flag here is what keeps the in-progress turn visible to the gate,
+        // and no manifest declaration can override that.
     });
     // (NATIVE-TURN-SIGNAL) Capture the provider's own turn-terminal records from THIS read,
     // before the source check below can early-return. Refreshed on every probe so a stale

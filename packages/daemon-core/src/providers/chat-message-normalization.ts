@@ -379,6 +379,59 @@ export function countTrailingToolActivityAfterFinalAssistant(
   return 0;
 }
 
+/**
+ * (excludeInProgressTurn) Drop the trailing run of assistant tool bubbles that
+ * belongs to a turn still in flight.
+ *
+ * Read-path callers set `excludeInProgressTurn` while the session sits in
+ * `waiting_approval`: the tool call the user is being asked to approve has
+ * already been written to the provider's on-disk transcript, so a plain native
+ * read renders it as a `⏺ Tool` bubble — showing a *pending* action as if it had
+ * already run. Trimming the tail keeps the transcript at the last settled state
+ * until the user decides.
+ *
+ * Semantics deliberately differ from the completion-gate siblings above
+ * (`hasTrailingToolActivityAfterFinalAssistant` /
+ * `countTrailingToolActivityAfterFinalAssistant`), which answer "does trailing
+ * activity veto promoting the final assistant bubble to a turn end?" and so
+ * return 0 when a USER bubble — not an assistant one — precedes the tail. That
+ * is correct for completion gating and wrong for trimming: the single most
+ * common approval shape is `user: "delete build/"` → `assistant/tool: rm -rf
+ * build/`, with no assistant prose in between. This function trims that case;
+ * the gate functions keep their meaning and their callers are untouched.
+ *
+ * Only a trailing run of `assistant` + tool/terminal-kind bubbles is removed:
+ *   - Guard: if the LAST bubble is not an assistant tool/terminal bubble the
+ *     array is returned unchanged (the turn already settled on prose, a user
+ *     bubble, or a thought — nothing is in flight to hide).
+ *   - Thought bubbles do NOT extend the run, matching the original
+ *     `trimIncompleteLastTurn` (`_shared/native_history.js`) this restores: a
+ *     finished turn can legitimately end on an internal thought.
+ *   - The user prompt that opened the in-flight turn is preserved. An earlier
+ *     revision of the original sliced from the last user message onward and
+ *     wiped the whole turn, so the dashboard showed "0 messages" while the
+ *     terminal plainly showed the conversation. Do not reintroduce that.
+ *
+ * Idempotent: after a trim the last bubble is no longer an assistant
+ * tool/terminal bubble, so re-applying hits the guard and is a no-op. That makes
+ * it safe to apply at a dispatch boundary even when an out-of-tree provider
+ * script already trimmed its own result.
+ */
+export function trimInProgressTurnToolTail<T extends ChatMessage>(messages: T[] | null | undefined): T[] {
+  if (!Array.isArray(messages) || messages.length === 0) return Array.isArray(messages) ? messages : [];
+  const isTrailingToolBubble = (msg: T | undefined): boolean => {
+    if (!msg) return false;
+    const classification = classifyChatMessageVisibility(msg);
+    if (classification.role !== 'assistant' && classification.role !== 'model') return false;
+    return classification.kind === 'tool' || classification.kind === 'terminal';
+  };
+  // Guard — nothing in flight unless the transcript ENDS on a tool bubble.
+  if (!isTrailingToolBubble(messages[messages.length - 1])) return messages;
+  let cut = messages.length - 1;
+  while (cut >= 0 && isTrailingToolBubble(messages[cut])) cut -= 1;
+  return messages.slice(0, cut + 1);
+}
+
 export const BUILTIN_CHAT_MESSAGE_KINDS = ['standard', 'thought', 'tool', 'terminal', 'system'] as const;
 
 export type BuiltinChatMessageKind = typeof BUILTIN_CHAT_MESSAGE_KINDS[number];
