@@ -12,6 +12,12 @@ import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evide
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import {
+    clearClaimDeferralForNode,
+    noteClaimDeferredForNode,
+    shouldRedriveDeferredClaim,
+    type MeshClaimRefusal,
+} from './mesh-claim-refusal.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
@@ -21,7 +27,7 @@ import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, recordLastQuotaRanking, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, recordLastQuotaRanking, recordLastQuotaRankingOutcome, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -37,11 +43,12 @@ import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDir
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
-import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
+import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, buildProviderSelectionDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import {
     sweepAutoLaunchOrphanSessions,
     autoLaunchWriteWouldClobberWinner,
+    driveExpiredAwaitClaim,
     autoLaunchAwaitClaimBackoff,
     awaitClaimWindowMs,
     remoteSessionAppearsLive,
@@ -816,8 +823,14 @@ export function tryAssignQueueTask(
     // re-fires on the next drain tick, by which time the short ff has released the lease.
     // Keyed by canonical workspace so a node sharing a workspace with the one being ff'd
     // is also gated. No-op unless an auto ff is actually in flight (default: never).
+    // AUTOLAUNCH-DEFERRED-CLAIM (rationale + live evidence: mesh-claim-refusal.ts). The
+    // "re-fires next tick" promise below was NOT kept on the auto-launch path, whose single
+    // inline claim attempt this gate could swallow while the launch still stamped
+    // autoLaunch='completed'. Mark the deferral so the await-claim guard re-drives instead of
+    // waiting out a window that assumes a claim is already in flight.
     if (isWorkspaceAutoFastForwardInFlight(readNonEmptyString(node?.workspace))) {
         LOG.info('MeshQueue', `Deferring queue claim for node ${nodeId} (${sessionId}): an auto fast-forward is mutating its workspace — task left pending, claim re-fires next tick`);
+        noteClaimDeferredForNode(meshId, nodeId);
         return false;
     }
 
@@ -1006,6 +1019,9 @@ export function tryAssignQueueTask(
     // each carried their own `opus: 1` and ran three opus processes against a cap of
     // one. Remote machines declare their own daemonId and so keep separate budgets.
     const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes);
+    // A6-SILENT-REFUSAL: collect WHICH gate refused so the `!task` exit below stops being
+    // the silent funnel that made a permanently-stuck task look like an idle queue.
+    const claimRefusal: MeshClaimRefusal = {};
     const task = claimNextTask(meshId, nodeId, sessionId, capabilityTags, {
         providerType,
         ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
@@ -1015,10 +1031,30 @@ export function tryAssignQueueTask(
         nodeIsWorktree,
         ...(allowedTaskDifficulties ? { allowedTaskDifficulties } : {}),
         ...(assignedTranscriptProfile ? { assignedTranscriptProfile } : {}),
+        outRefusal: claimRefusal,
     });
     if (!task) {
+        const refusalReason = claimRefusal.reason || 'no_pending_candidates';
+        recordClaimRefusal(meshId, {
+            nodeId,
+            sessionId,
+            ...(providerType ? { providerType } : {}),
+            reason: refusalReason,
+            ...(claimRefusal.detail ? { detail: claimRefusal.detail } : {}),
+        });
+        // Qualify the ranking written at the top of this function so it can no longer be
+        // misread as evidence that a task was dispatched to this node.
+        recordLastQuotaRankingOutcome(nodeId, 'refused', refusalReason);
         return false;
     }
+    // A claim succeeded — drop any refusal fingerprint so a later genuine re-entry into
+    // the same gate is reported again rather than suppressed as an unchanged verdict, and
+    // retire the ff-deferred-claim marker (AUTOLAUNCH-DEFERRED-CLAIM) now that this node
+    // has demonstrably claimed. Both are keyed so a stale entry cannot outlive the
+    // condition it describes.
+    clearClaimRefusalState(meshId, nodeId, sessionId);
+    clearClaimDeferralForNode(meshId, nodeId);
+    recordLastQuotaRankingOutcome(nodeId, 'claimed');
 
     if (quotaClaimTrace?.blocked.length) {
         logQuotaClaimFallbackSuccess(quotaClaimTrace.blocked, task.id, { nodeId, sessionId, providerType });
@@ -1316,6 +1352,7 @@ const autoLaunchInProgress = new Set<string>();
 const autoLaunchTaskInProgress = new Set<string>();
 const autoLaunchCooldownUntil = new Map<string, number>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
+
 // A remote auto-launch (launch_cli forward) is fire-and-async: the worker session
 // spawns, reaches idle, emits agent:ready, that ready is queued on the worker, pulled
 // by this coordinator (reconcile PHASE 1), and only THEN claims the task. That round
@@ -1329,6 +1366,9 @@ const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 // Defined in mesh-autolaunch-integrity (alongside the backoff state that consumes them) and
 // re-exported here, which is the path existing callers/tests import from.
 export { AUTO_LAUNCH_AWAIT_CLAIM_MS };
+// AUTOLAUNCH-DEFERRED-CLAIM state lives in mesh-claim-refusal (this file is a frozen
+// file-size baseline entry). Re-exported here, which is the path tests import from.
+export { __resetClaimDeferralForTests } from './mesh-claim-refusal.js';
 export { __seedAutoLaunchAwaitClaimBackoffForTests } from './mesh-autolaunch-integrity.js';
 
 // AUTOLAUNCH-CLAIM-CHURN. For a REMOTE node the launch→claim handshake is purely
@@ -1944,69 +1984,6 @@ function readMeshNodeId(node: any): string {
     return normalizeMeshNodeId(node) ?? '';
 }
 
-// AUTOLAUNCH-CLAIM-CHURN. The await-claim window for a launched (remote) session has expired
-// without a claim. Instead of a blind respawn, re-drive the claim for the EXISTING session,
-// backing off when its liveness is unknown, and only respawning when it is provably unclaimable.
-// Returns a directive for the caller:
-//   - 'claimed'  — the re-drive claimed/dispatched the task into the existing session (progress).
-//   - 'fallback' — the post-cap direct dispatch delivered the task into the existing session.
-//   - 'backoff'  — liveness unknown; the window was extended (or is still cooling down). No launch.
-//   - 'respawn'  — the session is provably gone/unclaimable; the caller may launch a fresh one.
-function driveExpiredAwaitClaim(
-    components: DaemonComponents,
-    meshId: string,
-    task: MeshWorkQueueEntry,
-    ctx: { sessionId: string; nodeId: string; providerType: string },
-): 'claimed' | 'fallback' | 'backoff' | 'respawn' {
-    const { sessionId, nodeId, providerType } = ctx;
-    const backoffKey = `${meshId}::${task.id}`;
-    const nowMs = Date.now();
-    const state = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
-    // Rate-limit re-drive attempts to the backoff cadence so the 4s reconcile tick does not hammer
-    // a still-cooling-down window. The initial (no-state) expiry proceeds immediately.
-    if (state.nextAttemptAtMs && nowMs < state.nextAttemptAtMs) return 'backoff';
-
-    const atCap = state.cycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
-    const live = remoteSessionAppearsLive(meshId, sessionId);
-
-    // (B) Re-drive when the remote view shows the session live; (C) after the backoff cap, force the
-    // same direct dispatch unconditionally. Both funnel through tryAssignQueueTask, which
-    // idempotently (re)registers the session, delivers the task message (send_chat), and marks the
-    // row assigned — the exact operation a coordinator performs manually via mesh_send_task. (D)
-    // The setRemoteIdleSession re-register makes this robust to a dropped agent:ready.
-    if ((live || atCap) && nodeId && providerType) {
-        try {
-            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, nodeId, sessionId, providerType, nowMs + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
-        } catch { /* best-effort re-register */ }
-        const assigned = tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType);
-        if (assigned) {
-            autoLaunchAwaitClaimBackoff.delete(backoffKey);
-            const isFallback = atCap && !live;
-            recordAutoLaunchEvent(meshId, {
-                phase: 'completed',
-                taskId: task.id,
-                reason: isFallback ? 'await_claim_direct_dispatch_fallback' : 'await_claim_redriven',
-                nodeId,
-                sessionId,
-            });
-            // Content-free progress line (ids only).
-            LOG.info('MeshQueue', `Auto-launch await-claim ${isFallback ? 'direct-dispatch fallback' : 're-drive'} claimed task ${task.id} into existing session ${sessionId} on node ${nodeId} (mesh ${meshId})`);
-            return isFallback ? 'fallback' : 'claimed';
-        }
-        if (atCap) {
-            // The forced dispatch could not claim — the session is genuinely gone/unclaimable.
-            // Authorize a fresh respawn (ghosts were already prevented through the backoff window).
-            autoLaunchAwaitClaimBackoff.delete(backoffKey);
-            return 'respawn';
-        }
-    }
-    // Liveness unknown (or live-but-not-claimable) and not at cap → extend the window with backoff.
-    const cycles = Math.min(state.cycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
-    autoLaunchAwaitClaimBackoff.set(backoffKey, { cycles, nextAttemptAtMs: nowMs + awaitClaimWindowMs(cycles) });
-    recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim_backoff', nodeId, sessionId });
-    return 'backoff';
-}
-
 async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     const queue = getQueue(meshId);
     // DEPENDSON-GATE-SYMMETRY: status index over the FULL queue (incl. completed)
@@ -2156,6 +2133,24 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 const alNodeId = readNonEmptyString(task.autoLaunch.nodeId);
                 const alProvider = readNonEmptyString(task.autoLaunch.providerType);
                 if (Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS) {
+                    // AUTOLAUNCH-DEFERRED-CLAIM: this guard's premise — "a claim is already in
+                    // flight, just wait" — is FALSE when the launch's single inline claim was
+                    // refused by the ff lease. Re-drive it instead of waiting out the window
+                    // (rationale + bounding: mesh-claim-refusal.ts).
+                    if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readNonEmptyString(
+                        (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, alNodeId)) : undefined)?.workspace,
+                    )))) {
+                        if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider)) {
+                            clearClaimDeferralForNode(meshId, alNodeId);
+                            recordAutoLaunchEvent(meshId, { phase: 'completed', taskId: task.id, reason: 'fast_forward_deferred_claim_redriven', nodeId: alNodeId, sessionId: alSessionId });
+                            LOG.info('MeshQueue', `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
+                            return true;
+                        }
+                        // Still refused — the ledger now names the gate (recordClaimRefusal).
+                        // Spend one unit of the budget; once exhausted this falls through to
+                        // the ordinary await-claim window.
+                        noteClaimDeferredForNode(meshId, alNodeId);
+                    }
                     // Record the skip in the ledger ONLY (dedup'd). Do NOT call markAutoLaunch
                     // here: recordTaskAutoLaunch overwrites task.autoLaunch wholesale, which would
                     // erase the very `completed` record (status + sessionId + updatedAt) this guard
@@ -2169,7 +2164,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                 // backing off on unknown liveness and direct-dispatching after the cap. Only a
                 // 'respawn' directive falls through to a fresh launch below.
                 if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
-                    const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider });
+                    const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider }, tryAssignQueueTask);
                     if (outcome === 'claimed' || outcome === 'fallback') return true; // progress; suppress a duplicate launch
                     if (outcome === 'backoff') continue;                              // window extended; no respawn
                     // outcome === 'respawn' → session provably gone; proceed to a fresh launch below.

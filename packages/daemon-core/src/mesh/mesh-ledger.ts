@@ -44,6 +44,13 @@ export type MeshLedgerKind =
     // answers a question with mesh_answer_question, never mesh_approve (mission f1d25e11).
     // payload carries the full InteractivePrompt (promptId + questions + options).
     | 'task_question_pending'
+    // A6-SILENT-REFUSAL: an atomic claim declined to hand a task to an idle session, and
+    // WHICH of the nine store-level gates refused. Previously every one of them collapsed
+    // into a bare `return null` → `if (!task) return false`, so a permanently-unclaimable
+    // task looked identical to an empty queue. Transition-deduped (see recordClaimRefusal),
+    // so a steady-state refusal records once rather than every ~4s reconcile tick.
+    // payload: { reason: MeshClaimRefusalReason, detail? }
+    | 'claim_refused'
     | 'p2p_dispatch_failed'
     // DUP-CLAIM-REBIND: a dispatch was refused because the node is ALREADY working this
     // exact task on another live session, so the turn attempt was re-pointed at that

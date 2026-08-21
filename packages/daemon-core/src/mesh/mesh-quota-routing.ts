@@ -1216,6 +1216,25 @@ export interface LastQuotaRankingRecord {
      *  bounded by RATIONALE_LOSERS_MAX. Enough to answer the question without
      *  turning a per-node status field into a per-dispatch record. */
     rationale?: QuotaRankingRationale;
+    /** ★CLAIM OUTCOME — whether the claim this record was written for actually
+     *  went on to SUCCEED.
+     *
+     *  Why: this record is written at the TOP of tryAssignQueueTask, before a
+     *  single gate has run (the adopt-path write is deliberately unconditional so
+     *  a claim path that never ranks is still distinguishable from "never
+     *  dispatched here"). That means a node whose claim was refused microseconds
+     *  later — by the ff lease, a difficulty floor, a parallel cap — still shows a
+     *  ranking here, and it reads as evidence the dispatch happened. On
+     *  2026-08-20 a coordinator relied on exactly that and misjudged a node that
+     *  had claimed nothing.
+     *
+     *  Left undefined by writers that do not know the outcome yet; set to
+     *  'claimed' or 'refused' by tryAssignQueueTask once it does. A reader
+     *  MUST NOT treat a ranking as proof of dispatch — check this field. */
+    claimOutcome?: 'claimed' | 'refused';
+    /** When claimOutcome === 'refused', the gate that refused (see
+     *  MeshClaimRefusalReason). Ids/enums only — never task content. */
+    claimRefusalReason?: string;
 }
 
 /** Compact "why this provider won" summary — see LastQuotaRankingRecord.rationale. */
@@ -1253,6 +1272,30 @@ export function recordLastQuotaRanking(nodeId: string, record: LastQuotaRankingR
 
 export function getLastQuotaRanking(nodeId: string): LastQuotaRankingRecord | undefined {
     return lastQuotaRankingByNode.get(nodeId);
+}
+
+/**
+ * Stamp the CLAIM OUTCOME onto the ranking already recorded for this node.
+ *
+ * The ranking is written before any gate runs, so on its own it says only "a claim
+ * was attempted here", never "a task was dispatched here". This closes that gap in
+ * place — a merge, not an overwrite, so the winner/rationale a reader wants are
+ * preserved while the outcome stops being an assumption. No-op when no ranking has
+ * been recorded for the node (nothing to qualify).
+ */
+export function recordLastQuotaRankingOutcome(
+    nodeId: string,
+    outcome: 'claimed' | 'refused',
+    refusalReason?: string,
+): void {
+    if (!nodeId) return;
+    const existing = lastQuotaRankingByNode.get(nodeId);
+    if (!existing) return;
+    lastQuotaRankingByNode.set(nodeId, {
+        ...existing,
+        claimOutcome: outcome,
+        ...(outcome === 'refused' && refusalReason ? { claimRefusalReason: refusalReason } : {}),
+    });
 }
 
 /**

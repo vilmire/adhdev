@@ -3,6 +3,7 @@ import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
 import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import type { MeshClaimRefusal } from './mesh-runtime-store.js';
 import { getMesh, getDifficultyBrains } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
@@ -1118,6 +1119,9 @@ export function claimNextTask(
         assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
         /** Classified task grades this concrete/unknown-model session can safely run. */
         allowedTaskDifficulties?: readonly MeshTaskDifficulty[];
+        /** A6-SILENT-REFUSAL: optional sink naming WHICH gate refused when this returns
+         *  null. Diagnostic only — omitting it preserves the exact prior behavior. */
+        outRefusal?: MeshClaimRefusal;
     },
 ): MeshWorkQueueEntry | null {
     return MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, nodeId, sessionId, capabilityTags, opts);

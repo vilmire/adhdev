@@ -325,3 +325,72 @@ export function inWindowAutoLaunchSessionIdsForNode(meshId: string, nodeId: stri
 export function __clearAwaitClaimBackoffForTests(): void {
     autoLaunchAwaitClaimBackoff.clear();
 }
+
+// AUTOLAUNCH-CLAIM-CHURN. The await-claim window for a launched (remote) session has expired
+// without a claim. Instead of a blind respawn, re-drive the claim for the EXISTING session,
+// backing off when its liveness is unknown, and only respawning when it is provably unclaimable.
+// Returns a directive for the caller:
+//   - 'claimed'  — the re-drive claimed/dispatched the task into the existing session (progress).
+//   - 'fallback' — the post-cap direct dispatch delivered the task into the existing session.
+//   - 'backoff'  — liveness unknown; the window was extended (or is still cooling down). No launch.
+//   - 'respawn'  — the session is provably gone/unclaimable; the caller may launch a fresh one.
+// Moved here from mesh-queue-assignment (a frozen file-size baseline entry). It mutates the
+// await-claim backoff state that already lives in THIS module, so this is its natural home; the
+// only reason it lived there was its call to tryAssignQueueTask. That call is now INJECTED
+// (`assignQueueTask`), which keeps the dependency pointing one way — mesh-queue-assignment
+// imports this module, never the reverse — and leaves the behavior identical.
+export function driveExpiredAwaitClaim(
+    components: DaemonComponents,
+    meshId: string,
+    task: MeshWorkQueueEntry,
+    ctx: { sessionId: string; nodeId: string; providerType: string },
+    assignQueueTask: (components: DaemonComponents, meshId: string, nodeId: string, sessionId: string, providerType: string) => boolean,
+): 'claimed' | 'fallback' | 'backoff' | 'respawn' {
+    const { sessionId, nodeId, providerType } = ctx;
+    const backoffKey = `${meshId}::${task.id}`;
+    const nowMs = Date.now();
+    const state = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
+    // Rate-limit re-drive attempts to the backoff cadence so the 4s reconcile tick does not hammer
+    // a still-cooling-down window. The initial (no-state) expiry proceeds immediately.
+    if (state.nextAttemptAtMs && nowMs < state.nextAttemptAtMs) return 'backoff';
+
+    const atCap = state.cycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
+    const live = remoteSessionAppearsLive(meshId, sessionId);
+
+    // (B) Re-drive when the remote view shows the session live; (C) after the backoff cap, force the
+    // same direct dispatch unconditionally. Both funnel through tryAssignQueueTask, which
+    // idempotently (re)registers the session, delivers the task message (send_chat), and marks the
+    // row assigned — the exact operation a coordinator performs manually via mesh_send_task. (D)
+    // The setRemoteIdleSession re-register makes this robust to a dropped agent:ready.
+    if ((live || atCap) && nodeId && providerType) {
+        try {
+            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, nodeId, sessionId, providerType, nowMs + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
+        } catch { /* best-effort re-register */ }
+        const assigned = assignQueueTask(components, meshId, nodeId, sessionId, providerType);
+        if (assigned) {
+            autoLaunchAwaitClaimBackoff.delete(backoffKey);
+            const isFallback = atCap && !live;
+            recordAutoLaunchEvent(meshId, {
+                phase: 'completed',
+                taskId: task.id,
+                reason: isFallback ? 'await_claim_direct_dispatch_fallback' : 'await_claim_redriven',
+                nodeId,
+                sessionId,
+            });
+            // Content-free progress line (ids only).
+            LOG.info('MeshQueue', `Auto-launch await-claim ${isFallback ? 'direct-dispatch fallback' : 're-drive'} claimed task ${task.id} into existing session ${sessionId} on node ${nodeId} (mesh ${meshId})`);
+            return isFallback ? 'fallback' : 'claimed';
+        }
+        if (atCap) {
+            // The forced dispatch could not claim — the session is genuinely gone/unclaimable.
+            // Authorize a fresh respawn (ghosts were already prevented through the backoff window).
+            autoLaunchAwaitClaimBackoff.delete(backoffKey);
+            return 'respawn';
+        }
+    }
+    // Liveness unknown (or live-but-not-claimable) and not at cap → extend the window with backoff.
+    const cycles = Math.min(state.cycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
+    autoLaunchAwaitClaimBackoff.set(backoffKey, { cycles, nextAttemptAtMs: nowMs + awaitClaimWindowMs(cycles) });
+    recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim_backoff', nodeId, sessionId });
+    return 'backoff';
+}
