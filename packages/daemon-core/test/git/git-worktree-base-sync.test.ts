@@ -214,8 +214,18 @@ describe('worktree base directory follows the build track', () => {
 
   // ADHDEV_CONFIG_DIR outranks the track in resolveConfigDir, so it must be
   // cleared for these to measure the track rather than an ambient override.
+  //
+  // Clearing it is exactly what the un-pinned-config-dir gate in resolveConfigDir()
+  // fires on, so VITEST/NODE_ENV are stood down for the duration of the call. That is
+  // safe here and ONLY here because these cases compute a path string and assert on
+  // it -- getDefaultWorktreeBaseDir() does no mkdir/read/write, so no live
+  // ~/.adhdev(-preview) state is touched. Do not copy this stand-down into a test
+  // that actually touches the resolved dir; pin ADHDEV_CONFIG_DIR to a tmp dir there.
   const onTrack = (track: string) =>
-    withEnv({ ADHDEV_BUILD_CHANNEL: track, ADHDEV_CONFIG_DIR: undefined }, () => getDefaultWorktreeBaseDir())
+    withEnv(
+      { ADHDEV_BUILD_CHANNEL: track, ADHDEV_CONFIG_DIR: undefined, VITEST: undefined, NODE_ENV: undefined },
+      () => getDefaultWorktreeBaseDir(),
+    )
 
   it('uses the preview config dir on the preview track (the regression: it used the stable dir)', () => {
     expect(onTrack('preview')).toBe(path.join(os.homedir(), '.adhdev-preview', 'worktrees'))
@@ -232,8 +242,11 @@ describe('worktree base directory follows the build track', () => {
 
   it('agrees with resolveConfigDir on each track rather than restating dir names', () => {
     for (const track of ['preview', 'stable']) {
-      const expected = withEnv({ ADHDEV_BUILD_CHANNEL: track, ADHDEV_CONFIG_DIR: undefined }, () =>
-        path.join(resolveConfigDir(), 'worktrees'),
+      // Same stand-down rationale as onTrack() above: resolveConfigDir() is called
+      // for its return value only, so nothing under the resolved dir is touched.
+      const expected = withEnv(
+        { ADHDEV_BUILD_CHANNEL: track, ADHDEV_CONFIG_DIR: undefined, VITEST: undefined, NODE_ENV: undefined },
+        () => path.join(resolveConfigDir(), 'worktrees'),
       )
       expect(onTrack(track)).toBe(expected)
     }
