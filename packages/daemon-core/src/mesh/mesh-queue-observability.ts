@@ -79,6 +79,59 @@ export function clearAllQuotaClaimCandidatesBlockedState(meshId: string): void {
     lastAllQuotaClaimBlockedLog.delete(meshId);
 }
 
+// A6-SILENT-REFUSAL. `tryAssignQueueTask`'s `if (!task) return false` swallowed every
+// store-level claim gate — nine predicates plus two pre-checks — with no log, no ledger
+// entry and no reason. A task that could never claim was indistinguishable from one with
+// simply no work waiting, which is what turned a one-line auto-ff deferral into hours of
+// misdiagnosis. This surfaces the gate that actually said no.
+//
+// Same transition-dedup discipline as the quota gate above: the reconcile loop re-runs the
+// claim every ~4s, so an unchanged (task, gate) verdict must not repeat. A CHANGED reason
+// (or a later successful claim, via clearClaimRefusalState) logs again, so real transitions
+// stay observable. `no_pending_candidates` is the ordinary idle case and is never reported.
+const lastClaimRefusalLog = new Map<string, string>();
+
+function claimRefusalKey(meshId: string, nodeId: string, sessionId: string): string {
+    return `${meshId}:${nodeId}:${sessionId}`;
+}
+
+export function recordClaimRefusal(meshId: string, args: {
+    nodeId: string;
+    sessionId: string;
+    providerType?: string;
+    reason: string;
+    detail?: string;
+}): void {
+    // The empty-queue case is not a refusal — reporting it would fire on every idle tick.
+    if (!args.reason || args.reason === 'no_pending_candidates') {
+        clearClaimRefusalState(meshId, args.nodeId, args.sessionId);
+        return;
+    }
+    const key = claimRefusalKey(meshId, args.nodeId, args.sessionId);
+    const fingerprint = `${args.reason}|${args.detail || ''}`;
+    if (lastClaimRefusalLog.get(key) === fingerprint) return;
+    rememberBounded(lastClaimRefusalLog, key, fingerprint);
+    LOG.info('MeshQueue', `CLAIM REFUSED on node ${args.nodeId} (${args.sessionId}${args.providerType ? `, ${args.providerType}` : ''}) for mesh ${meshId}: ${args.reason}${args.detail ? ` — ${args.detail}` : ''}`);
+    try {
+        appendLedgerEntry(meshId, {
+            kind: 'claim_refused',
+            nodeId: args.nodeId,
+            sessionId: args.sessionId,
+            ...(args.providerType ? { providerType: args.providerType } : {}),
+            payload: {
+                reason: args.reason,
+                ...(args.detail ? { detail: args.detail } : {}),
+            },
+        });
+    } catch { /* best-effort: diagnostics must never break the claim path */ }
+}
+
+/** A successful claim clears the fingerprint so a later genuine re-entry into the same
+ *  gate is reported again instead of being suppressed by a stale verdict. */
+export function clearClaimRefusalState(meshId: string, nodeId: string, sessionId: string): void {
+    lastClaimRefusalLog.delete(claimRefusalKey(meshId, nodeId, sessionId));
+}
+
 export function logAutoLaunchQuotaFallbackSuccess(
     resolved: { providerType?: string; quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }> },
     taskId: string,

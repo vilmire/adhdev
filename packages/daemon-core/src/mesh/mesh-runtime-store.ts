@@ -13,6 +13,8 @@ import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { selectClaimCandidate } from './mesh-claim-refusal.js';
+import type { MeshClaimRefusal, MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 // Pure move (file-size gate): row shapes/mappers + the retention sweep now live in
@@ -1217,16 +1219,28 @@ export class MeshRuntimeStore {
             nodeIsWorktree?: boolean;
             assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
             allowedTaskDifficulties?: readonly import('@adhdev/mesh-shared').MeshTaskDifficulty[];
+            /** A6-SILENT-REFUSAL: optional sink the claim fills in when it returns null,
+             *  naming WHICH predicate refused. See MeshClaimRefusal. Purely diagnostic —
+             *  the return contract (`MeshWorkQueueEntry | null`) is unchanged, so every
+             *  existing caller that omits it behaves exactly as before. */
+            outRefusal?: MeshClaimRefusal;
         },
     ): MeshWorkQueueEntry | null {
         return this.transaction(() => {
             this.ensureLegacyQueueMigrated(meshId);
+            const refuse = (reason: MeshClaimRefusalReason, detail?: string): null => {
+                if (opts?.outRefusal) {
+                    opts.outRefusal.reason = reason;
+                    if (detail) opts.outRefusal.detail = detail;
+                }
+                return null;
+            };
             // A session executes one task at a time regardless of mode — block early.
             // The node-level conflict is evaluated per-candidate below so that
             // read-only (live_debug_readonly) tasks can claim concurrently on a node
             // that already has an active assignment, while write tasks keep the
             // one-active-per-node invariant (worktree isolation).
-            if (this.hasActiveSessionAssignment(meshId, sessionId)) return null;
+            if (this.hasActiveSessionAssignment(meshId, sessionId)) return refuse('session_already_assigned');
             const nodeBusy = this.hasActiveNodeAssignment(meshId, nodeId);
 
             // Per-(daemon, provider) maxParallel cap (summed slots[].maxParallel).
@@ -1425,17 +1439,27 @@ export class MeshRuntimeStore {
             // exclusively through requeueTask.
             const notParked = (candidate: MeshWorkQueueEntry): boolean => !taskIsParked(candidate);
 
-            const entry = candidates.find(candidate =>
-                nodeSatisfiesRequiredTags(candidate.requiredTags, capabilityTags)
-                && dependenciesSatisfied(candidate)
-                && notBeforeReady(candidate)
-                && notParked(candidate)
-                && convergenceAllows(candidate)
-                && targetMatches(candidate)
-                && difficultyAllows(candidate)
-                && parallelCapsAllow(candidate)
-                && nodeConflictAllows(candidate));
-            if (!entry) return null;
+            // A6-SILENT-REFUSAL (rationale: mesh-claim-refusal.ts). Was one boolean `.find(...)`
+            // whose failure collapsed into a bare `return null` — nine predicates, one silent
+            // exit. Order and short-circuit semantics are preserved exactly; this only records
+            // WHICH gate said no.
+            const selected = selectClaimCandidate<MeshWorkQueueEntry>(candidates, [
+                { reason: 'required_tags_unsatisfied', test: c => nodeSatisfiesRequiredTags(c.requiredTags, capabilityTags) },
+                { reason: 'dependencies_unsatisfied', test: dependenciesSatisfied },
+                { reason: 'not_before_delayed', test: notBeforeReady },
+                { reason: 'task_parked', test: notParked },
+                { reason: 'convergence_target_is_worktree', test: convergenceAllows },
+                { reason: 'target_pin_unmatched', test: targetMatches },
+                { reason: 'difficulty_floor_unmet', test: difficultyAllows },
+                { reason: 'parallel_cap_reached', test: parallelCapsAllow },
+                { reason: 'node_busy_with_active_assignment', test: nodeConflictAllows },
+            ]);
+            if (!selected.entry) {
+                if (!candidates.length) return refuse('no_pending_candidates');
+                return refuse(selected.reason, selected.deepest
+                    ? `closest candidate ${selected.deepest.id} of ${candidates.length}` : undefined);
+            }
+            const entry = selected.entry;
 
             const now = new Date().toISOString();
             entry.status = 'assigned';
@@ -3476,6 +3500,10 @@ export class MeshRuntimeStore {
 // mesh-runtime-store-turn-rows.ts (pure move, file-size gate) — every existing
 // `import { X } from './mesh-runtime-store.js'` keeps resolving unchanged.
 export type { MeshTurnAttemptRow, MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
+// A6-SILENT-REFUSAL: the claim-refusal vocabulary lives in its own dependency-free leaf
+// (mesh-claim-refusal) because this file is a frozen file-size baseline entry. Re-exported
+// here so callers can keep importing it alongside the claim API they already use.
+export type { MeshClaimRefusal, MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 export {
     MESH_EVENT_LEDGER_RETENTION_MS,
     MESH_TOOL_CALL_LOG_RETENTION_MS,
