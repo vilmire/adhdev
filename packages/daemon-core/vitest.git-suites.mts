@@ -12,6 +12,19 @@
  * only makes `test:fast` slower — it never loses coverage.
  * Classification probe: does the file import child_process (directly or via
  * fixtures) and pass 'git' to it?
+ *
+ * ★A STALE entry, unlike a missed one, DOES lose coverage — silently. vitest
+ * exits 1 when EVERY include misses, but a PARTIAL miss is green with no
+ * warning, so `test:git` just runs fewer files than the list claims. That
+ * happened: 'test/scripts/check-submodule-sync.test.ts' was moved out of this
+ * package by oss d7b6751e (2026-08-04) to packages/daemon-cloud/test/, and
+ * `test:git` ran 28/29 for 17 days without a signal. The entry is removed here
+ * rather than repointed because the file now lives in a different package with
+ * its own suite (`test:daemon-cloud`), outside this config's roots.
+ *
+ * Guard against a repeat: every path below must exist. If you remove or move a
+ * suite, update this list in the same commit — a stale entry is invisible at
+ * runtime.
  */
 export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/mesh-clone-node-registration.test.ts',
@@ -42,5 +55,4 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/mesh/preview-freshness.test.ts',
   'test/mesh/submodule-default-branch.test.ts',
   'test/mesh/worktree-bootstrap-stale-running.test.ts',
-  'test/scripts/check-submodule-sync.test.ts',
 ];
