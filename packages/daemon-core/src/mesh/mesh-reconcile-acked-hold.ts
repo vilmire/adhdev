@@ -75,6 +75,36 @@ export function resolveAckedTranscriptFastTrackGraceMs(): number {
     return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS', 40_000, 0, 5 * 60_000);
 }
 
+// ACKED-HOLD-TIME-CEILING (2026-08-21). The absolute wall-clock ceiling on how long an
+// acked dispatch's synth hold may persist, measured from when the hold row was FIRST
+// created (mesh_inflight_hold.held_at, preserved across every upsert and across daemon
+// restarts).
+//
+// Why this exists even though the read-failure death signal now terminalizes the row:
+// ACKED_DEATH_CONSECUTIVE_READ_FAILURES is a LOWER bound (>= 3), not an upper one, and it
+// only fires on the read-FAILURE path — a hold that never accrues failures (or that never
+// satisfies liveConfirmedSinceAck, or that wedges in any other gate that `continue`s while
+// re-arming the hold) has no elapsed-time bound at all. The live incident measured
+// read_failure_count = 20810 on a single hold row: 20,810 probes with no ceiling, because
+// the counter only resets on a SUCCESSFUL read and a vanished session can never succeed.
+// Fix 1 closes that one path; this closes the CLASS — every acked hold is finite.
+//
+// The value deliberately mirrors the queue-side sibling
+// (QUEUE_HOLD_HARD_DEADLINE_MS = 90min, mesh-reconcile-stranded-dispatch.ts), but is a
+// SEPARATE constant rather than a shared import, because the two bound different things:
+// the queue ceiling bounds a row held 'assigned' (which also blocks the node from claiming
+// anything else — a liveness problem for the whole node), while this bounds a synth hold on
+// an already-dispatched row (which only delays that one task's terminal). Coupling them
+// would mean a future tuning of one silently re-tunes the other across that boundary. 90min
+// is the right STARTING value for the same reason it is there: comfortably above the
+// longest realistic single worker turn and any genuine human approval wait, so it can never
+// pre-empt a legitimately slow-but-alive worker — it only guarantees finiteness.
+export function resolveAckedHoldHardCeilingMs(): number {
+    // Floor 0 so tests can force the ceiling; ceiling 24h so a mis-set env cannot disable
+    // the finiteness guarantee outright.
+    return resolveTunedReconcileMs('MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', 90 * 60_000, 0, 24 * 60 * 60_000);
+}
+
 // Per-task in-flight hold state for an acked dispatch:
 //   - liveConfirmedSinceAck: we have seen at least one conclusive read (idle OR generating) since
 //     the ack — proves the session is reachable, so a later read FAILURE is a genuine liveness loss
@@ -85,10 +115,17 @@ export function resolveAckedTranscriptFastTrackGraceMs(): number {
 //     whenever the signal breaks (non-idle read, read failure, or no final assistant message), so a
 //     mid-turn idle blip never accumulates grace. When `now - transcriptIdleSinceMs` exceeds the
 //     fast-track grace the synth is promoted ahead of the death backstop.
+//   - heldSinceMs: wall-clock ms when this hold row was FIRST created (store `held_at`,
+//     preserved across every upsert and across daemon restarts). The anchor for the
+//     ACKED-HOLD-TIME-CEILING above. Never written by callers — setHoldState carries the
+//     known value through so the store's insert-once semantics stay authoritative, and a
+//     hold whose row predates this field simply reads undefined (no ceiling until the next
+//     tick re-reads it, never a false ceiling breach).
 export interface AckedHoldState {
     liveConfirmedSinceAck: boolean;
     consecutiveReadFailures: number;
     transcriptIdleSinceMs?: number;
+    heldSinceMs?: number;
 }
 
 // T2 (B2b): acked-hold state persistence. The Map below is a process-local CACHE;
@@ -146,6 +183,7 @@ export function getHoldState(synthKey: string, meshId: string): AckedHoldState |
         ...(row.firstIdleSinceAck !== null && row.firstIdleSinceAck !== undefined
             ? { transcriptIdleSinceMs: row.firstIdleSinceAck }
             : {}),
+        ...(row.heldAt !== null && row.heldAt !== undefined ? { heldSinceMs: row.heldAt } : {}),
     };
     inFlightAckedHoldState.set(synthKey, state);
     return state;
@@ -154,14 +192,33 @@ export function getHoldState(synthKey: string, meshId: string): AckedHoldState |
 // Write-through: update the Map cache AND the store row. A store failure leaves the
 // Map authoritative for this process (degrade, never crash the tick).
 export function setHoldState(synthKey: string, meshId: string, state: AckedHoldState): void {
-    inFlightAckedHoldState.set(synthKey, state);
+    // ACKED-HOLD-TIME-CEILING: heldSinceMs is insert-once, not caller-owned. Callers build
+    // the state from the fields they manage and do NOT carry it, so re-derive it here —
+    // from the incoming state, else the cached entry, else (first write of this process for
+    // a row that already exists on disk) `now`, matching the store's own default. Without
+    // this the Map entry would drop the anchor on every tick and the ceiling could never
+    // accrue: the hold would look freshly created forever — the exact unbounded shape this
+    // whole change exists to remove.
     const store = holdStore();
+    let priorHeldSinceMs = state.heldSinceMs ?? inFlightAckedHoldState.get(synthKey)?.heldSinceMs;
+    if (priorHeldSinceMs === undefined && store) {
+        // Map is cold but a row may already exist on disk (first write of this process, or
+        // post-restart before rehydration). Take the persisted anchor so the ceiling keeps
+        // accruing across restarts instead of resetting to `now` on every boot — a hold that
+        // resets its own clock is unbounded again by another name.
+        try { priorHeldSinceMs = store.getInflightHold(taskIdFromSynthKey(meshId, synthKey))?.heldAt ?? undefined; } catch { /* degrade */ }
+    }
+    const heldSinceMs = priorHeldSinceMs ?? Date.now();
+    inFlightAckedHoldState.set(synthKey, { ...state, heldSinceMs });
     if (!store) return;
     try {
         store.upsertInflightHold({
             taskId: taskIdFromSynthKey(meshId, synthKey),
             meshId,
             holdReason: state.liveConfirmedSinceAck ? 'live' : 'unconfirmed',
+            // Only meaningful when the row is NEW — upsertInflightHold deliberately
+            // preserves held_at on conflict, so an existing row keeps its original anchor.
+            heldAt: heldSinceMs,
             firstIdleSinceAck: state.transcriptIdleSinceMs ?? null,
             readFailureCount: state.consecutiveReadFailures,
         });
@@ -196,6 +253,7 @@ export function rehydrateAckedHoldsForMesh(meshId: string): void {
             ...(row.firstIdleSinceAck !== null && row.firstIdleSinceAck !== undefined
                 ? { transcriptIdleSinceMs: row.firstIdleSinceAck }
                 : {}),
+            ...(row.heldAt !== null && row.heldAt !== undefined ? { heldSinceMs: row.heldAt } : {}),
         });
     }
     if (rows.length > 0) {

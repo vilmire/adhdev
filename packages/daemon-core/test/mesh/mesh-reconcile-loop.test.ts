@@ -1952,8 +1952,18 @@ describe('runMeshReconcileTick', () => {
         for (let i = 0; i < 5; i++) await runMeshReconcileTick(components)
         // No synthesized completion was fabricated off the dead session (no transcript to attribute).
         expect(readLedgerEntries(meshId).some(e => e.kind === 'task_completed' && (e.payload as any)?.source === 'daemon_reconcile_transcript_completion')).toBe(false)
-        // read_chat was actually issued each tick (the failure path is exercised, not short-circuited).
-        expect(readChat.mock.calls.filter(c => c[0] === 'read_chat').length).toBeGreaterThanOrEqual(5)
+        // The failure path was genuinely exercised — reads were issued until the death signal fired
+        // (tick 1 live + 3 failures = the ACKED_DEATH_CONSECUTIVE_READ_FAILURES threshold).
+        const reads = readChat.mock.calls.filter(c => c[0] === 'read_chat').length
+        expect(reads).toBeGreaterThanOrEqual(4)
+        // ACKED-HOLD-TERMINALIZE (mission 91af0cc5): past the threshold the death signal now
+        // TERMINALIZES the row instead of logging a release it never performed, so probing STOPS.
+        // The pre-fix assertion here was `>= 5` — "read_chat issued every tick" — which encoded the
+        // defect as an invariant: with no exit, the live incident reached read_failure_count=20810.
+        expect(reads).toBeLessThan(5)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'acked_hold_terminalized'
+          && (e.payload as any)?.reason === 'acked_read_failure_death')).toBe(true)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(false)
       } finally {
         cleanup(meshId)
       }

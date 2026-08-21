@@ -139,6 +139,18 @@ export type MeshLedgerKind =
     // at most once per (task, gate) per process — see queueHoldHardDeadlineExceeded.
     // payload: { taskId, reason: 'queue_hold_hard_deadline', gate, heldMs, ceilingMs, detail? }
     | 'queue_hold_hard_deadline'
+    // ACKED-HOLD-TERMINALIZED: an acked DIRECT-DISPATCH row's indefinite synth hold was
+    // force-terminalized (row → 'stale', hold row deleted) because the worker session is
+    // provably unreachable — either a consecutive-read-failure death streak after a
+    // live-confirmed ack, or the absolute acked-hold time ceiling. Sibling of
+    // queue_hold_hard_deadline on the DIRECT-dispatch axis (that one bounds a queue row
+    // held 'assigned'; this one bounds a dispatch row held 'acked'), and its own kind for
+    // the same reason: the breach is a diagnostic about WHICH bound fired, and folding it
+    // into task_failed would inflate failure counts with non-failures — no completion is
+    // being asserted here, only that the hold is over.
+    // payload: { taskId, reason: 'acked_read_failure_death' | 'acked_hold_time_ceiling',
+    //            consecutiveReadFailures?, heldMs?, ceilingMs? }
+    | 'acked_hold_terminalized'
     // COMPLETION-SIDE-EFFECT-EVIDENCE: async, best-effort follow-up to a `code_change`
     // task's `task_completed` entry, checking whether the completing node's workspace
     // actually has a git diff. A local-only git status read (no P2P — see cost guard on

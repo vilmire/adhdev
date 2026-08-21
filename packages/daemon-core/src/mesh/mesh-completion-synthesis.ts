@@ -22,8 +22,8 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 import { traceMeshEventDrop, traceMeshEventStage } from './mesh-event-trace.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
-import { getActiveDirectDispatches, getQueue } from './mesh-work-queue.js';
-import { readLedgerEntriesByKind } from './mesh-ledger.js';
+import { getActiveDirectDispatches, getQueue, updateDirectDispatchStatus } from './mesh-work-queue.js';
+import { readLedgerEntriesByKind, appendLedgerEntry } from './mesh-ledger.js';
 import { pruneStaleDirectDispatches } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, countTrailingToolActivityAfterFinalAssistant, selectFinalAssistantTurnEndMessage, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
@@ -40,6 +40,7 @@ import {
 import {
     ACKED_DEATH_CONSECUTIVE_READ_FAILURES,
     resolveAckedDeathDeadlineMs,
+    resolveAckedHoldHardCeilingMs,
     resolveAckedTranscriptFastTrackGraceMs,
     inFlightSynthKey,
     getHoldState,
@@ -135,6 +136,65 @@ function escapeTailFingerprint(messages: ChatMessage[]): string {
     return fp;
 }
 
+// ---------------------------------------------------------------------------
+// ACKED-HOLD-TERMINALIZE (2026-08-21)
+// ---------------------------------------------------------------------------
+// The single place an acked dispatch's synth hold is actually ENDED.
+//
+// The bug this exists to fix: the read-failure death signal LOGGED that it was
+// "releasing the indefinite synth hold to the stranded-reclaim / orphan-prune
+// nets" and then `continue`d — releasing nothing. No hold delete, no row flip, no
+// call into either named net. Measured live on a single row:
+// read_failure_count = 20810 and still climbing, because
+// ACKED_DEATH_CONSECUTIVE_READ_FAILURES is a LOWER bound (>= 3) that stays true
+// forever once crossed, and the counter only resets on a SUCCESSFUL read — which a
+// vanished session can never produce. Neither named net could pick the row up
+// either: stranded-reclaim is queue-only and deliberately skips a row whose queue
+// sibling is already terminal, and orphan-prune runs on its own schedule with a 24h
+// age gate, independent of this loop.
+//
+// So the hold has to end HERE, and the log has to describe what actually happens.
+// "Terminal" here means STALE, never COMPLETED: the worker is gone, we have no
+// evidence it finished, and a timeout is never completion evidence
+// (mesh-terminal-admission.ts). 'stale' is precisely the existing status for
+// "this dispatch will never resolve itself" — it removes the row from the active
+// set (so the loop stops re-probing it) without asserting an outcome the transcript
+// never showed. No terminal LEDGER entry is written for the task and no completion
+// is queued to the coordinator; only an `acked_hold_terminalized` audit record, so
+// the next occurrence is diagnosable from the ledger rather than re-derived from
+// symptoms.
+function terminalizeAckedHold(args: {
+    meshId: string;
+    taskId: string;
+    sessionId: string;
+    nodeId: string;
+    providerType?: string;
+    synthKey: string;
+    reason: 'acked_read_failure_death' | 'acked_hold_time_ceiling';
+    detail: Record<string, unknown>;
+}): void {
+    const { meshId, taskId, sessionId, nodeId, providerType, synthKey, reason, detail } = args;
+    // Flip the dispatch row out of the active set FIRST: this is the step whose absence
+    // made the loop infinite. Keyed by the exact taskId (never the session_id fallback).
+    updateDirectDispatchStatus(meshId, sessionId, 'stale', taskId);
+    // Then drop the hold state (Map cache + persisted mesh_inflight_hold row) so the
+    // read-failure counter cannot resurrect on a later tick or survive a restart.
+    deleteHoldState(synthKey, meshId);
+    try {
+        appendLedgerEntry(meshId, {
+            kind: 'acked_hold_terminalized',
+            nodeId,
+            sessionId,
+            ...(providerType ? { providerType } : {}),
+            taskId,
+            payload: { taskId, reason, ...detail },
+        });
+    } catch { /* best-effort audit — the terminalization above still stands */ }
+    traceMeshEventStage('acked_hold_terminalized', {
+        taskId, sessionId, nodeId, meshId, event: 'agent:generating_completed',
+    }, `${reason} — dispatch row marked stale, synth hold deleted`);
+}
+
 /** Test hook: clear the non-idle escape tracks between cases. */
 export function __resetNonIdleEscapeTracksForTests(): void {
     nonIdleEscapeTracks.clear();
@@ -205,12 +265,33 @@ export async function reconcileUnterminatedDirectDispatches(
 
         const node = nodeById.get(nodeId);
         const nodeDaemonId = readNonEmptyString(node?.daemonId);
-        // A node is local when it has no daemonId, names this daemon, or actually
-        // has a live instance here. Anything else is reached over P2P.
-        const isLocalNode = !nodeDaemonId
-            || daemonIdListIncludes(selfIds, nodeDaemonId)
-            || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
-            || !!components.instanceManager.getInstance(sessionId);
+        // GONE-NODE-MISCLASSIFIED-AS-LOCAL (2026-08-21). `!nodeDaemonId` was doing double
+        // duty: it is TRUE both for a genuinely local node (present in mesh.nodes, no
+        // daemonId — a single-daemon dispatch) and for a node that is NO LONGER IN THE MESH
+        // AT ALL (nodeById miss → node undefined → daemonId '' → `!nodeDaemonId`). The
+        // second case then routed a REMOVED REMOTE node's dispatch into THIS daemon's local
+        // commandHandler, which answered `CDP not connected` in ~0ms, forever — a read
+        // failure manufactured locally for a session that was never here, feeding the death
+        // signal on every tick.
+        //
+        // Split the cases on membership, which is the thing actually being asked: a node
+        // absent from mesh.nodes is GONE, not local. A gone node has no transport at all, so
+        // it takes the same `continue` the transport-less remote branch takes below and never
+        // manufactures a local read failure. Recovery of its rows belongs to the orphan
+        // prune, which classifies exactly this shape ("node no longer in live mesh").
+        //
+        // The ONE exception is positive evidence to the contrary: if the session is actually
+        // instantiated on THIS daemon right now, it is readable here regardless of what the
+        // node table says, and reading it is strictly better than skipping. That check stays
+        // ahead of the gone verdict so a mesh-membership blip cannot blind us to a live local
+        // session we can see with our own eyes.
+        const sessionLiveHere = !!components.instanceManager.getInstance(sessionId);
+        const nodeIsGone = !node && !sessionLiveHere;
+        const isLocalNode = !nodeIsGone
+            && (!nodeDaemonId
+                || daemonIdListIncludes(selfIds, nodeDaemonId)
+                || daemonIdsEquivalent(nodeDaemonId, localDaemonId)
+                || sessionLiveHere);
 
         const providerType = readNonEmptyString(dispatch.providerType);
         const readArgs: Record<string, unknown> = {
@@ -223,6 +304,44 @@ export async function reconcileUnterminatedDirectDispatches(
 
         const synthKey = inFlightSynthKey(mesh.id, taskId);
         const isAcked = dispatch.status === 'acked';
+
+        // ACKED-HOLD-TIME-CEILING (fix 2). Checked BEFORE the read, so it bounds the hold
+        // no matter which downstream gate is doing the holding.
+        //
+        // Why this is still needed with the read-failure terminalize (fix 1) in place: fix 1
+        // ends exactly ONE path — a live-confirmed ack followed by a read-failure streak. It
+        // does nothing for a hold that keeps reading successfully but never satisfies any
+        // release condition (never-final transcript, a permanently `generating` worker whose
+        // tail keeps twitching enough to re-arm the escape anchor, an ack we never
+        // live-confirmed so the death streak can't arm at all). Those still have no upper
+        // bound on elapsed time — the same structural shape, reached by a different route.
+        // This makes the bound a property of the HOLD rather than of any one exit path.
+        //
+        // Anchored on the hold row's creation (held_at, insert-once and restart-durable), not
+        // on the ack: it answers "how long have we been holding", which is the thing being
+        // bounded. A hold with no anchor yet (legacy row) simply isn't ceiling-checked this
+        // tick — the next setHoldState stamps one.
+        if (isAcked) {
+            const ceilingMs = resolveAckedHoldHardCeilingMs();
+            const heldSinceMs = getHoldState(synthKey, mesh.id)?.heldSinceMs;
+            if (heldSinceMs !== undefined) {
+                const heldMs = Date.now() - heldSinceMs;
+                if (Number.isFinite(heldMs) && heldMs >= ceilingMs) {
+                    LOG.warn('MeshReconcile', `Acked-hold HARD CEILING exceeded: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) has held its synth for ${Math.round(heldMs / 60_000)}min (> ${Math.round(ceilingMs / 60_000)}min ceiling) without ever reaching a release condition — marking the dispatch row STALE and deleting the synth hold (no completion is asserted). A hold this old is presumed wedged, not slow.`);
+                    terminalizeAckedHold({
+                        meshId: mesh.id,
+                        taskId,
+                        sessionId,
+                        nodeId,
+                        ...(providerType ? { providerType } : {}),
+                        synthKey,
+                        reason: 'acked_hold_time_ceiling',
+                        detail: { heldMs, ceilingMs },
+                    });
+                    continue;
+                }
+            }
+        }
         // T6: which last-resort backstop (if any) drove this synth. Set when the
         // acked-hold fast-track / death-deadline promotes the synth; the counter is
         // bumped only if the synth actually COMMITS (result.reconciled), so a
@@ -237,6 +356,16 @@ export async function reconcileUnterminatedDirectDispatches(
         let payload: Record<string, unknown> | null = null;
         let readFailed = false;
         try {
+            if (nodeIsGone) {
+                // GONE-NODE-MISCLASSIFIED-AS-LOCAL: the node left the mesh and the session is
+                // not live here — there is no transport to read through. Not a death signal
+                // (we never probed anything), so the failure streak must not advance; the
+                // orphan prune owns this row. Same posture as the transport-less remote case.
+                traceMeshEventDrop('reconcile_synth_node_gone_no_transport', {
+                    taskId, sessionId, nodeId, meshId: mesh.id, event: 'agent:generating_completed',
+                }, `nodeId not present in mesh.nodes and no live local session — orphan-prune owns this row`);
+                continue;
+            }
             if (isLocalNode) {
                 const result = await components.commandHandler.handle('read_chat', readArgs);
                 if (result && (result as { success?: boolean }).success === false) {
@@ -261,10 +390,12 @@ export async function reconcileUnterminatedDirectDispatches(
             // turn to protect, so a read failure is a transient probe blip → retry next tick (old
             // behavior). For an ACKED dispatch that we had previously confirmed live, a streak of
             // consecutive read failures means the worker session genuinely went away mid-turn and
-            // will never emit its real completion — count it. The actual terminal cleanup of a
-            // gone session is owned by PHASE 2.5 (stranded reclaim) / PHASE 5 (orphan prune); here
-            // we only record the death observation and STOP holding so those nets can take over,
-            // rather than pinning the row on an indefinite hold for a session that is already gone.
+            // will never emit its real completion.
+            //
+            // ACKED-HOLD-TERMINALIZE: past the streak threshold this now TERMINALIZES the row
+            // (status → 'stale', hold row deleted) instead of logging a release it never performed.
+            // See terminalizeAckedHold's header for why the previously-named nets could not, and
+            // did not, pick these rows up.
             if (isAcked) {
                 const prior = getHoldState(synthKey, mesh.id);
                 const failures = (prior?.consecutiveReadFailures ?? 0) + 1;
@@ -273,7 +404,17 @@ export async function reconcileUnterminatedDirectDispatches(
                 // (transcriptIdleSinceMs cleared by omission) so it must re-accumulate from scratch.
                 setHoldState(synthKey, mesh.id, { liveConfirmedSinceAck, consecutiveReadFailures: failures });
                 if (liveConfirmedSinceAck && failures >= ACKED_DEATH_CONSECUTIVE_READ_FAILURES) {
-                    LOG.warn('MeshReconcile', `Acked-hold death signal: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read_chat failed ${failures}x consecutively after a live-confirmed ack — worker session presumed gone mid-turn; releasing the indefinite synth hold to the stranded-reclaim / orphan-prune nets`);
+                    LOG.warn('MeshReconcile', `Acked-hold death signal: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) read_chat failed ${failures}x consecutively after a live-confirmed ack — worker session presumed gone mid-turn; marking the dispatch row STALE and deleting the synth hold (no completion is asserted — the transcript never showed one). Orphan-prune reaps the record on its own schedule.`);
+                    terminalizeAckedHold({
+                        meshId: mesh.id,
+                        taskId,
+                        sessionId,
+                        nodeId,
+                        ...(providerType ? { providerType } : {}),
+                        synthKey,
+                        reason: 'acked_read_failure_death',
+                        detail: { consecutiveReadFailures: failures, threshold: ACKED_DEATH_CONSECUTIVE_READ_FAILURES },
+                    });
                 }
             }
             continue; // no readable transcript this tick → cannot synth here; retry / let backstops act
