@@ -1503,6 +1503,17 @@ export class DaemonCliManager {
                                 : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
                         );
                     }
+                } else if (workspaceCoordinators.length === 0) {
+                    // CORDBADGE-DIAG: the by-id lookup missed AND the workspace fallback has
+                    // NOTHING to rebind to — the registry holds no coordinator for this
+                    // workspace at all (evicted registry, or the coordinator registered under
+                    // a different workspace). Both other branches log; this one was silent,
+                    // which sent the 2026-08-21 badge-loss investigation down the wrong path
+                    // (no 'Rebound' and no 'Skipping' line at all).
+                    LOG.debug(
+                        'CLI',
+                        `No registered coordinator for workspace ${record.workspace} — workspace rebind fallback empty for ${record.runtimeKey || record.runtimeId} (${record.cliType}); the session stays unmarked`
+                    );
                 }
             }
             if (coordinatorEntry?.meshId) {

@@ -43,7 +43,7 @@ import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDir
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
-import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearQuotaClaimBlockState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
+import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearQuotaClaimBlockState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, buildProviderSelectionDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import {
     sweepAutoLaunchOrphanSessions,
@@ -906,11 +906,19 @@ export function tryAssignQueueTask(
         // and allow the claim; otherwise defer (leave the task pending) so the claim re-fires once
         // bootstrap reaches a terminal state and never dispatches into a half-built worktree.
         if (!shouldDeferDispatchForBootstrap(bootstrapGateNode as any)) {
-            LOG.warn('MeshQueue', `Worktree node ${nodeId} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean — treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
+            // Transition-deduped (mesh-queue-observability): this bypass re-fires on every
+            // ~4s drain tick while the terminal stamp is missing — 1,130 duplicate warnings
+            // in a day for one node on 2026-08-21 — so only the first entry into the stuck
+            // state warns.
+            logWorktreeBootstrapStaleBypass(meshId, nodeId, sessionId);
         } else {
             LOG.info('MeshQueue', `Gating queue claim for worktree node ${nodeId} (${sessionId}): worktree bootstrap still running — task left pending; claim re-fires once bootstrap reaches a terminal state (guards against dispatching into a half-built worktree → empty session)`);
             return false;
         }
+    } else {
+        // Bootstrap is no longer 'running' (the terminal stamp landed, or never was
+        // running): clear the dedup fingerprint so a genuinely new stuck episode warns.
+        clearWorktreeBootstrapStaleBypassState(meshId, nodeId, sessionId);
     }
 
     // WTCLAIM (fix-B extended to the enqueue→claim path): a base-targeted task must never be

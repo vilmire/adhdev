@@ -13,7 +13,7 @@
  * standalone daemon process pointing at our test registry root with an
  * intercepted https.get — this keeps the tests hermetic.
  */
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import * as http from 'node:http'
 import * as fs from 'node:fs'
@@ -23,18 +23,39 @@ import * as crypto from 'node:crypto'
 
 // ─── Test marketplace root isolation ──────────────────────────
 //
-// The handlers use os.homedir() + '.adhdev/marketplace' as the install root.
-// We can't easily change os.homedir() per-test without monkey-patching, so
-// these tests use a unique provider type per test to avoid collisions, and a
-// final afterEach cleans up any test artifacts under
-// ~/.adhdev/marketplace/cli/test-* .
+// The handlers (and the mirrors below) use os.homedir() + '.adhdev/marketplace'
+// as the install root — a homedir-DIRECT path the global ADHDEV_CONFIG_DIR pin
+// cannot redirect, so these tests used to write real provider.json fixtures
+// into the live ~/.adhdev/marketplace tree on every run. Pin HOME/USERPROFILE
+// (win) to a per-file tmp dir for the whole suite: os.homedir() re-reads the
+// env on every call, so getMarketplaceRoot() resolves under the tmp home and
+// no write can reach the real one. cleanupTestProviders keeps running — now
+// against the tmp root.
+const savedHomeEnvs = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+}
+let tmpHome = ''
 
-const MARKETPLACE_ROOT = path.join(os.homedir(), '.adhdev', 'marketplace')
+beforeAll(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-marketplace-test-home-'))
+    process.env.HOME = tmpHome
+    process.env.USERPROFILE = tmpHome
+})
+
+afterAll(() => {
+    for (const [key, value] of Object.entries(savedHomeEnvs)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+    }
+    fs.rmSync(tmpHome, { recursive: true, force: true })
+})
 
 function cleanupTestProviders() {
-    if (!fs.existsSync(MARKETPLACE_ROOT)) return
+    const root = getMarketplaceRoot()
+    if (!fs.existsSync(root)) return
     for (const category of ['cli', 'ide', 'extension', 'acp']) {
-        const dir = path.join(MARKETPLACE_ROOT, category)
+        const dir = path.join(root, category)
         if (!fs.existsSync(dir)) continue
         for (const name of fs.readdirSync(dir)) {
             if (name.startsWith('test-')) {
@@ -221,7 +242,7 @@ describe('marketplace install / uninstall safety', () => {
 
         it('skips malformed manifest files without crashing', async () => {
             // Write a non-JSON file directly to the marketplace root
-            const dir = path.join(MARKETPLACE_ROOT, 'cli', 'test-broken')
+            const dir = path.join(getMarketplaceRoot(), 'cli', 'test-broken')
             fs.mkdirSync(dir, { recursive: true })
             fs.writeFileSync(path.join(dir, 'provider.json'), 'this is not json', 'utf-8')
 

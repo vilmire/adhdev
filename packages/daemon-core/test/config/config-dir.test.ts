@@ -56,10 +56,13 @@ describe('getConfigDir', () => {
   });
 
   it('falls back to HOME/.adhdev when ADHDEV_CONFIG_DIR is blank', () => {
-    process.env.ADHDEV_CONFIG_DIR = '   ';
+    // Inject the env explicitly: the test-runtime fail-fast gate in
+    // resolveConfigDir guards the default process-env call (a blank override
+    // there means an un-pinned test), so the suite covering the fallback rule
+    // itself must go through the injected-env path.
     const expected = join(fakeHome, '.adhdev');
 
-    expect(getConfigDir()).toBe(expected);
+    expect(getConfigDir({ ADHDEV_CONFIG_DIR: '   ' }, fakeHome)).toBe(expected);
     expect(existsSync(expected)).toBe(true);
   });
 });
@@ -93,7 +96,8 @@ describe('resolveConfigDir / resolveConfigLogsDir (shared pure helper)', () => {
   });
 
   it('matches the getConfigDir rule but performs NO mkdir', () => {
-    expect(resolveConfigDir()).toBe(join(fakeHome, '.adhdev'));
+    // Injected (env, homeDir) — see the getConfigDir blank-fallback case above.
+    expect(resolveConfigDir({}, fakeHome)).toBe(join(fakeHome, '.adhdev'));
     expect(existsSync(join(fakeHome, '.adhdev'))).toBe(false);
 
     process.env.ADHDEV_CONFIG_DIR = overrideDir;
@@ -102,9 +106,62 @@ describe('resolveConfigDir / resolveConfigLogsDir (shared pure helper)', () => {
   });
 
   it('resolves logs/ under the same base and re-reads the env on every call', () => {
-    expect(resolveConfigLogsDir()).toBe(join(fakeHome, '.adhdev', 'logs'));
+    expect(resolveConfigLogsDir({}, fakeHome)).toBe(join(fakeHome, '.adhdev', 'logs'));
     process.env.ADHDEV_CONFIG_DIR = overrideDir;
     expect(resolveConfigLogsDir()).toBe(join(overrideDir, 'logs'));
+  });
+});
+
+// ─── test-runtime fail-fast gate ────────────────────────────────────────────
+//
+// The gate guards ONLY the default process-env call: under a test runtime
+// (VITEST=true — always set by this runner — or NODE_ENV=test) a process-env
+// call that reaches the real-home fallback means a test forgot to pin
+// ADHDEV_CONFIG_DIR and is about to write the LIVE ~/.adhdev(-preview) state
+// dir. Revert-sensitive: deleting the gate from resolveConfigDir turns the
+// first two cases red.
+describe('resolveConfigDir test-runtime fail-fast gate', () => {
+  const ORIGINAL_GATE_ENV = {
+    ADHDEV_CONFIG_DIR: process.env.ADHDEV_CONFIG_DIR,
+    VITEST: process.env.VITEST,
+    NODE_ENV: process.env.NODE_ENV,
+  };
+
+  afterEach(() => {
+    for (const key of ['ADHDEV_CONFIG_DIR', 'VITEST', 'NODE_ENV'] as const) {
+      const original = ORIGINAL_GATE_ENV[key];
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+  });
+
+  it('throws when a process-env call reaches the real-home fallback under vitest with no pin', () => {
+    delete process.env.ADHDEV_CONFIG_DIR;
+    expect(process.env.VITEST).toBeTruthy(); // the runner really is a test runtime
+    expect(() => resolveConfigDir()).toThrow(/real-home fallback in a test runtime/);
+  });
+
+  it('throws for a blank override too (blank is treated as unset)', () => {
+    process.env.ADHDEV_CONFIG_DIR = '   ';
+    expect(() => resolveConfigDir()).toThrow(/real-home fallback in a test runtime/);
+  });
+
+  it('does NOT throw when ADHDEV_CONFIG_DIR is pinned (the ordinary isolated suite)', () => {
+    process.env.ADHDEV_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'adhdev-config-dir-gate-'));
+    expect(() => resolveConfigDir()).not.toThrow();
+    rmSync(process.env.ADHDEV_CONFIG_DIR!, { recursive: true, force: true });
+  });
+
+  it('does NOT throw for an injected env without a pin (fallback-rule unit tests stay pure)', () => {
+    delete process.env.ADHDEV_CONFIG_DIR;
+    expect(resolveConfigDir({}, '/nonexistent-home')).toBe(join('/nonexistent-home', '.adhdev'));
+  });
+
+  it('does NOT throw outside a test runtime (no VITEST, NODE_ENV != test)', () => {
+    delete process.env.ADHDEV_CONFIG_DIR;
+    delete process.env.VITEST;
+    process.env.NODE_ENV = 'production';
+    expect(() => resolveConfigDir()).not.toThrow();
   });
 });
 

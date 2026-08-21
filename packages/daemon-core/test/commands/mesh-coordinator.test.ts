@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DaemonCommandRouter } from '../../src/commands/router.js'
 import { buildMeshCoordinatorRegistrationPlan, resolveMeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js'
 import type { ProviderModule } from '../../src/providers/contracts.js'
@@ -14,6 +14,42 @@ const baseProvider: ProviderModule = {
   category: 'cli',
   spawn: { command: 'test' },
 }
+
+// File-level config-dir isolation. Many cases below drive
+// router.execute('launch_mesh_coordinator' / 'clone_mesh_node' / …), which
+// registers the coordinator via registerMeshCoordinator → saveRegistry() —
+// a WHOLE-MAP rewrite of <configDir>/daemon/mesh-coordinators.json. Any case
+// that forgets to pin ADHDEV_CONFIG_DIR itself therefore rewrites the LIVE
+// ~/.adhdev(-preview)/daemon/mesh-coordinators.json with fixtures and evicts
+// the real coordinator entries (2026-08-21 incident: daemon boot loaded 6
+// fixture entries, getCoordinatorForSession missed every real coordinator,
+// and the coordinator badge vanished). Pinning per-case leaks the NEXT added
+// case, so the pin lives at file level: the global setup-env.ts tmp pin is
+// replaced with this file's own tmp dir, and cases that pin their own dir
+// still win (they save/restore around themselves).
+let fileLevelConfigDir = ''
+let previousFileLevelConfigDir: string | undefined
+
+beforeAll(() => {
+  fileLevelConfigDir = mkdtempSync(join(tmpdir(), 'adhdev-mesh-coordinator-file-config-'))
+  previousFileLevelConfigDir = process.env.ADHDEV_CONFIG_DIR
+  process.env.ADHDEV_CONFIG_DIR = fileLevelConfigDir
+})
+
+afterAll(() => {
+  if (previousFileLevelConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+  else process.env.ADHDEV_CONFIG_DIR = previousFileLevelConfigDir
+  rmSync(fileLevelConfigDir, { recursive: true, force: true })
+})
+
+// Revert-sensitive guard for the file-level pin above: removing the beforeAll
+// turns this red (the env no longer points at THIS suite's own tmp dir), so the
+// isolation cannot be lost silently. resolveConfigDir() re-reads the env at call
+// time, so both assertions must agree.
+it('file-level guard: ADHDEV_CONFIG_DIR stays pinned to this suite\'s own tmp dir, never the real home', () => {
+  expect(fileLevelConfigDir).not.toBe('')
+  expect(process.env.ADHDEV_CONFIG_DIR).toBe(fileLevelConfigDir)
+})
 
 function resolveHermesCoordinatorHomeForTest(meshId: string, workspace: string): string {
   const key = `${meshId || 'mesh'}\n${resolve(workspace || tmpdir())}`

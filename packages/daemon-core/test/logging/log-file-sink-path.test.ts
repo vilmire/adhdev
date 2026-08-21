@@ -41,10 +41,31 @@ describe('daemon log file sink path', () => {
   })
 
   it('defaults to ~/.adhdev/logs when ADHDEV_CONFIG_DIR is unset (every platform)', async () => {
+    // Stepping out of the test-runtime fail-fast gate (resolveConfigDir throws
+    // on an un-pinned process-env fallback under vitest) to exercise the real
+    // production default; HOME/USERPROFILE are pinned to tmpHome first so the
+    // import-time dir preparation can never touch the real home.
+    const saved = {
+      HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
+      VITEST: process.env.VITEST,
+      NODE_ENV: process.env.NODE_ENV,
+    }
     delete process.env.ADHDEV_CONFIG_DIR
-    const logger = await import('../../src/logging/logger')
-    const expectedDir = path.join(os.homedir(), '.adhdev', 'logs')
-    expect(logger.getDaemonLogDir()).toBe(expectedDir)
+    process.env.HOME = tmpHome
+    process.env.USERPROFILE = tmpHome
+    delete process.env.VITEST
+    delete process.env.NODE_ENV
+    try {
+      const logger = await import('../../src/logging/logger')
+      const expectedDir = path.join(tmpHome, '.adhdev', 'logs')
+      expect(logger.getDaemonLogDir()).toBe(expectedDir)
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
   })
 
   it('actually writes INFO + ERROR lines to the dated log file', async () => {

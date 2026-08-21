@@ -124,7 +124,10 @@ describe('track identity', () => {
   });
 
   it('config dir: no env resolves the stable home dir (code default)', () => {
-    expect(getConfigDir()).toBe(join(fakeHome, '.adhdev'));
+    // Injected (env, homeDir): the test-runtime fail-fast gate in
+    // resolveConfigDir throws on an un-pinned PROCESS-env fallback, so the
+    // fallback-rule suites go through the injected path (same rule, no gate).
+    expect(getConfigDir({}, fakeHome)).toBe(join(fakeHome, '.adhdev'));
   });
 
   it('config dir: ADHDEV_CONFIG_DIR override wins on either track', () => {
@@ -136,8 +139,8 @@ describe('track identity', () => {
   });
 
   it('config dir: a preview build track defaults to ~/.adhdev-preview', () => {
-    process.env.ADHDEV_BUILD_CHANNEL = 'preview';
-    expect(getConfigDir()).toBe(join(fakeHome, '.adhdev-preview'));
+    // Injected env — see the stable-default case above.
+    expect(getConfigDir({ ADHDEV_BUILD_CHANNEL: 'preview' }, fakeHome)).toBe(join(fakeHome, '.adhdev-preview'));
   });
 
   it('derived paths assemble relative to the config dir', () => {

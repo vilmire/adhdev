@@ -1107,7 +1107,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 // coordinator never received the clone reply) can seed an addressable node.
                 const bootstrapWorkspace = readNonEmptyString(args.metadataEvent.worktreePath)
                     || readNonEmptyString(args.metadataEvent.workspace);
-                (components.router as any)?.markWorktreeBootstrapTerminalState?.(
+                // DIRECT typed call, not `(components.router as any)?.method?.()`: the
+                // optional-chain + cast form swallowed a missing router/method into a SILENT
+                // no-op — indistinguishable from "stamped but the view never updated", which
+                // is exactly the ambiguity that made the bootstrap-stuck log spam (see the
+                // stale-backstop bypass in mesh-queue-assignment) undiagnosable. router is a
+                // required DaemonComponents field and the method is public, so presence is
+                // type-enforced; if a partial harness ever violates that, the TypeError lands
+                // in this catch and is WARNED instead of vanishing.
+                components.router.markWorktreeBootstrapTerminalState(
                     args.meshId,
                     bootstrapNodeId,
                     args.event === 'worktree_bootstrap_failed' ? 'failed' : 'complete',

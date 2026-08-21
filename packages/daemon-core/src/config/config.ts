@@ -405,9 +405,14 @@ function ensureMachineId(config: ADHDevConfig): { config: ADHDevConfig; changed:
  * Get the config directory path. The resolution rule itself lives in
  * config-dir.ts (resolveConfigDir); this adds the mkdir side effect callers
  * historically relied on.
+ *
+ * The optional (env, homeDir) pair is passed straight through to
+ * resolveConfigDir: tests of the fallback rule inject an explicit env so the
+ * test-runtime fail-fast gate (which guards only the default process-env
+ * call) does not fire on the very suite that covers the fallback.
  */
-export function getConfigDir(): string {
-    const dir = resolveConfigDir();
+export function getConfigDir(env?: NodeJS.ProcessEnv, homeDir?: string): string {
+    const dir = resolveConfigDir(env, homeDir);
     if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
     }

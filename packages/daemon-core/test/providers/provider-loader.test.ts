@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { homedir, tmpdir } from 'os';
+import { tmpdir } from 'os';
 import * as path from 'path';
 import { join } from 'path';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
@@ -227,17 +227,38 @@ describe('ProviderLoader source dir instance isolation (ADHDEV_CONFIG_DIR)', () 
   });
 
   it('falls back to ~/.adhdev roots when ADHDEV_CONFIG_DIR is unset', () => {
+    // The production fallback goes through process.env, which the test-runtime
+    // fail-fast gate (resolveConfigDir) rejects when un-pinned — step out of
+    // the gate explicitly, with HOME/USERPROFILE pinned to tmpRoot first so
+    // ProviderLoader's dir resolution/creation lands in this suite's tmp dir,
+    // never the real home.
+    const saved = {
+      HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
+      VITEST: process.env.VITEST,
+      NODE_ENV: process.env.NODE_ENV,
+    };
     delete process.env.ADHDEV_CONFIG_DIR;
+    process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    try {
+      const loader = new ProviderLoader({ probeStarts: [projectDir] });
+      const snapshot = loader.getSourceConfig();
 
-    const loader = new ProviderLoader({ probeStarts: [projectDir] });
-    const snapshot = loader.getSourceConfig();
-
-    expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
-    expect(snapshot.providerRoots).toEqual([
-      path.join(homedir(), '.adhdev', 'providers'),
-      path.join(homedir(), '.adhdev', 'external'),
-      path.join(homedir(), '.adhdev', 'providers', '.upstream'),
-    ]);
+      expect(loader.getUserDir()).toBe(path.join(tmpRoot, '.adhdev', 'providers'));
+      expect(snapshot.providerRoots).toEqual([
+        path.join(tmpRoot, '.adhdev', 'providers'),
+        path.join(tmpRoot, '.adhdev', 'external'),
+        path.join(tmpRoot, '.adhdev', 'providers', '.upstream'),
+      ]);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 

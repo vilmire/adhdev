@@ -33,12 +33,23 @@ function writePidFile(appName: string, pid: number): string {
 // tests run on (e.g. a Windows dev machine).
 let platformDescriptor: PropertyDescriptor | undefined
 let originalConfigDir: string | undefined
+const originalHomeEnvs = {
+  HOME: process.env.HOME,
+  USERPROFILE: process.env.USERPROFILE,
+}
+let tmpHome = ''
 
 beforeEach(() => {
   mocks.execFileSync.mockReset()
   mocks.spawn.mockClear()
   // The stop path resolves the pid file through the instance config dir
   // (Stage 3); pin it to the legacy default this suite writes against.
+  // HOME/USERPROFILE go to a per-test tmp dir FIRST: this suite previously
+  // pinned ADHDEV_CONFIG_DIR to the REAL ~/.adhdev and created/deleted real
+  // pidfiles there on every run — a live-state write no test may make.
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-upgrade-stop-home-'))
+  process.env.HOME = tmpHome
+  process.env.USERPROFILE = tmpHome
   originalConfigDir = process.env.ADHDEV_CONFIG_DIR
   process.env.ADHDEV_CONFIG_DIR = path.join(os.homedir(), '.adhdev')
   // SIGTERM (kill request) succeeds; the signal-0 liveness probe in
@@ -64,6 +75,11 @@ afterEach(() => {
   for (const appName of createdAppNames.splice(0)) {
     fs.rmSync(pidFileFor(appName), { force: true })
   }
+  for (const [key, value] of Object.entries(originalHomeEnvs)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  fs.rmSync(tmpHome, { recursive: true, force: true })
 })
 
 describe('upgrade helper session-host stop', () => {

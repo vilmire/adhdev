@@ -50,6 +50,12 @@ async function waitForMarker(logPath: string, marker: string, timeoutMs = 10_000
 describe('daemon log dir lazy resolution', () => {
   let tmpHome: string
   const originalEnv = process.env.ADHDEV_CONFIG_DIR
+  const originalHomeEnvs = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    VITEST: process.env.VITEST,
+    NODE_ENV: process.env.NODE_ENV,
+  }
 
   beforeEach(() => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-lazylog-'))
@@ -58,8 +64,30 @@ describe('daemon log dir lazy resolution', () => {
   afterEach(() => {
     if (originalEnv === undefined) delete process.env.ADHDEV_CONFIG_DIR
     else process.env.ADHDEV_CONFIG_DIR = originalEnv
+    for (const [key, value] of Object.entries(originalHomeEnvs)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
     try { fs.rmSync(tmpHome, { recursive: true, force: true }) } catch { /* noop */ }
   })
+
+  /**
+   * Exercising the production no-override fallback through process.env requires
+   * stepping out of the test-runtime fail-fast gate: resolveConfigDir throws on
+   * an un-pinned PROCESS-env fallback under vitest, which is exactly the shape
+   * these production-default cases need. HOME/USERPROFILE (win) are pinned to
+   * tmpHome FIRST so the fallback — and prepareLogDirOnce's mkdir/cleanOldLogs/
+   * legacy-migration side effects — lands in this suite's tmp dir, never the
+   * real home. (Before the gate these cases resolved and prepared the REAL
+   * ~/.adhdev/logs, including its retention sweep.)
+   */
+  function exerciseProductionFallbackInTmpHome(): void {
+    delete process.env.ADHDEV_CONFIG_DIR
+    process.env.HOME = tmpHome
+    process.env.USERPROFILE = tmpHome
+    delete process.env.VITEST
+    delete process.env.NODE_ENV
+  }
 
   it('honors ADHDEV_CONFIG_DIR set AFTER the logger was imported', () => {
     // The logger module is already loaded (static import at the top of this
@@ -137,9 +165,9 @@ describe('daemon log dir lazy resolution', () => {
 
   // ★ Production invariant: the daemon's real log path must not change.
   it('defaults to ~/.adhdev/logs/daemon-YYYY-MM-DD.log with no env override', () => {
-    delete process.env.ADHDEV_CONFIG_DIR
+    exerciseProductionFallbackInTmpHome()
 
-    const expectedDir = path.join(os.homedir(), '.adhdev', 'logs')
+    const expectedDir = path.join(tmpHome, '.adhdev', 'logs')
     expect(getDaemonLogDir()).toBe(expectedDir)
     expect(getLogDirPath()).toBe(expectedDir)
 
@@ -148,14 +176,15 @@ describe('daemon log dir lazy resolution', () => {
   })
 
   it('ignores a blank/whitespace ADHDEV_CONFIG_DIR and keeps the production path', () => {
+    exerciseProductionFallbackInTmpHome()
     process.env.ADHDEV_CONFIG_DIR = '   '
-    const expectedDir = path.join(os.homedir(), '.adhdev', 'logs')
+    const expectedDir = path.join(tmpHome, '.adhdev', 'logs')
     expect(getDaemonLogDir()).toBe(expectedDir)
   })
 
   it('resolves the dated file per call so a rollover is not snapshotted', () => {
-    delete process.env.ADHDEV_CONFIG_DIR
-    const expectedDir = path.join(os.homedir(), '.adhdev', 'logs')
+    exerciseProductionFallbackInTmpHome()
+    const expectedDir = path.join(tmpHome, '.adhdev', 'logs')
     const someDay = new Date('2026-01-02T03:04:05.000Z')
     expect(getCurrentDaemonLogPath(someDay)).toBe(path.join(expectedDir, 'daemon-2026-01-02.log'))
   })

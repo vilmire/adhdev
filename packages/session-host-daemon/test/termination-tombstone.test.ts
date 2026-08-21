@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -6,6 +6,19 @@ import * as path from 'path';
 import { SessionHostServer } from '../src/server.js';
 import { SessionHostStorage } from '../src/storage.js';
 import type { SessionHostEvent, SessionHostLogEntry, SessionHostRecord, SessionTermination } from '@adhdev/session-host-core';
+
+// Storage isolation: SessionHostStorage's default root is
+// <instanceConfigDir>/session-host/<appName> — the REAL ~/.adhdev tree — and
+// these tests persist runtimes/tombstones on every run (the first four below
+// leak tombstone files permanently; they have no cleanup at all). Every
+// server/storage below is rooted in this per-test tmp dir instead.
+let testStorageRoot = '';
+beforeEach(() => {
+  testStorageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-term-tombstone-'));
+});
+afterEach(() => {
+  fs.rmSync(testStorageRoot, { recursive: true, force: true });
+});
 
 function buildRecord(overrides: Partial<SessionHostRecord>): SessionHostRecord {
   const now = Date.now();
@@ -42,7 +55,7 @@ function collectEvents(server: any): SessionHostEvent[] {
 }
 
 test('runtime exit records exactly one termination diagnostic and stamps the tombstone', () => {
-  const server = new SessionHostServer({ appName: 'adhdev-test-term-once' }) as any;
+  const server = new SessionHostServer({ appName: 'adhdev-test-term-once', storageRootDir: testStorageRoot }) as any;
   const record = buildRecord({ sessionId: 'term-once', osPid: 30573, lifecycle: 'running', lastActivityAt: 111 });
   server.registry.restoreSession(record);
   server.runtimes.set(record.sessionId, {});
@@ -93,7 +106,7 @@ test('runtime exit records exactly one termination diagnostic and stamps the tom
 });
 
 test('clean exit 0 records an info-level stopped termination', () => {
-  const server = new SessionHostServer({ appName: 'adhdev-test-term-clean' }) as any;
+  const server = new SessionHostServer({ appName: 'adhdev-test-term-clean', storageRootDir: testStorageRoot }) as any;
   const record = buildRecord({ sessionId: 'term-clean', lifecycle: 'running' });
   server.registry.restoreSession(record);
   server.runtimes.set(record.sessionId, {});
@@ -109,7 +122,7 @@ test('clean exit 0 records an info-level stopped termination', () => {
 });
 
 test('nonzero exit records a failed termination distinct from clean stop', () => {
-  const server = new SessionHostServer({ appName: 'adhdev-test-term-nonzero' }) as any;
+  const server = new SessionHostServer({ appName: 'adhdev-test-term-nonzero', storageRootDir: testStorageRoot }) as any;
   const record = buildRecord({ sessionId: 'term-nonzero', lifecycle: 'running' });
   server.registry.restoreSession(record);
   server.runtimes.set(record.sessionId, {});
@@ -121,7 +134,7 @@ test('nonzero exit records a failed termination distinct from clean stop', () =>
 });
 
 test('an explicit stop request is attributed in the termination diagnostic', () => {
-  const server = new SessionHostServer({ appName: 'adhdev-test-term-stopctx' }) as any;
+  const server = new SessionHostServer({ appName: 'adhdev-test-term-stopctx', storageRootDir: testStorageRoot }) as any;
   const record = buildRecord({ sessionId: 'term-stopctx', lifecycle: 'running' });
   server.registry.restoreSession(record);
   server.runtimes.set(record.sessionId, {});
@@ -135,8 +148,8 @@ test('an explicit stop request is attributed in the termination diagnostic', () 
 
 test('a late persist arriving after cleanup does not resurrect the removed live file', async () => {
   const appName = `adhdev-test-term-resurrect-${process.pid}`;
-  const server = new SessionHostServer({ appName }) as any;
-  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const server = new SessionHostServer({ appName, storageRootDir: testStorageRoot }) as any;
+  const rootDir = testStorageRoot;
   const realSetTimeout = global.setTimeout;
   let cleanup: (() => void) | null = null;
   // Capture the 5s cleanup callback so the test can fire it deterministically.
@@ -180,8 +193,8 @@ test('a late persist is refused while the terminated record is still registered'
   // late persist finds it and writes a stale live file. Guarding only on
   // "record removed" would miss this.
   const appName = `adhdev-test-term-postmortem-${process.pid}`;
-  const server = new SessionHostServer({ appName }) as any;
-  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const server = new SessionHostServer({ appName, storageRootDir: testStorageRoot }) as any;
+  const rootDir = testStorageRoot;
   try {
     const sessionId = 'postmortem-write';
     const record = buildRecord({ sessionId, osPid: 5150, lifecycle: 'running' });
@@ -205,8 +218,8 @@ test('a restart reusing the sessionId keeps persisting and survives the old clea
   // under the SAME sessionId. Neither the deferred cleanup nor any persist
   // guard may treat the restarted live session as the terminated one.
   const appName = `adhdev-test-term-restart-reuse-${process.pid}`;
-  const server = new SessionHostServer({ appName }) as any;
-  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const server = new SessionHostServer({ appName, storageRootDir: testStorageRoot }) as any;
+  const rootDir = testStorageRoot;
   const realSetTimeout = global.setTimeout;
   let cleanup: (() => void) | null = null;
   (global as any).setTimeout = (fn: () => void, ms?: number) => {
@@ -247,8 +260,8 @@ test('a restart reusing the sessionId keeps persisting and survives the old clea
 
 test('handleRuntimeExit clears a pending scheduled persist so it cannot fire after cleanup', () => {
   const appName = `adhdev-test-term-clear-timer-${process.pid}`;
-  const server = new SessionHostServer({ appName }) as any;
-  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const server = new SessionHostServer({ appName, storageRootDir: testStorageRoot }) as any;
+  const rootDir = testStorageRoot;
   try {
     const sessionId = 'clear-timer';
     const record = buildRecord({ sessionId, osPid: 99, lifecycle: 'running' });
@@ -270,8 +283,8 @@ test('handleRuntimeExit clears a pending scheduled persist so it cannot fire aft
 
 test('a live persist still succeeds for a session that was never removed', () => {
   const appName = `adhdev-test-term-live-persist-${process.pid}`;
-  const server = new SessionHostServer({ appName }) as any;
-  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const server = new SessionHostServer({ appName, storageRootDir: testStorageRoot }) as any;
+  const rootDir = testStorageRoot;
   try {
     const sessionId = 'still-live';
     const record = buildRecord({ sessionId, osPid: 7, lifecycle: 'running' });
@@ -287,8 +300,8 @@ test('a live persist still succeeds for a session that was never removed', () =>
 
 test('tombstone is retained on disk after the live runtime record is removed', () => {
   const appName = `adhdev-test-term-disk-${process.pid}`;
-  const storage = new SessionHostStorage({ appName });
-  const rootDir = path.join(os.homedir(), '.adhdev', 'session-host', appName);
+  const storage = new SessionHostStorage({ appName, rootDir: testStorageRoot });
+  const rootDir = testStorageRoot;
   try {
     const sessionId = 'disk-tombstone';
     const record = buildRecord({ sessionId, osPid: 42, lifecycle: 'running' });

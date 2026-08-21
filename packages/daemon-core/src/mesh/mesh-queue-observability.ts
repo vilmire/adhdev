@@ -132,6 +132,32 @@ export function clearClaimRefusalState(meshId: string, nodeId: string, sessionId
     lastClaimRefusalLog.delete(claimRefusalKey(meshId, nodeId, sessionId));
 }
 
+// WORKTREE-BOOTSTRAP-STALE-BYPASS spam guard. tryAssignQueueTask's stale-backstop
+// bypass lets the claim through while warning — but when the task is then refused
+// downstream, the next ~4s drain tick re-enters the same gate (the bootstrap status
+// still reads 'running' because the terminal-state stamp never reached this daemon's
+// view) and warns AGAIN: 1,130 duplicate two-line warnings in a single day for one
+// node (2026-08-21), three 5MB rotations deep, which pushed the coordinator boot
+// window out of the logs entirely. Same transition-dedup discipline as the quota
+// gate and claim-refusal above: warn once per (mesh, node, session); the caller
+// clears the fingerprint the moment the gate observes a non-'running' bootstrap
+// status, so a genuinely NEW stuck episode warns again.
+const lastWorktreeBootstrapBypassLog = new Map<string, string>();
+
+export function logWorktreeBootstrapStaleBypass(meshId: string, nodeId: string, sessionId: string): void {
+    const key = `${meshId}:${nodeId}:${sessionId}`;
+    if (lastWorktreeBootstrapBypassLog.has(key)) return;
+    rememberBounded(lastWorktreeBootstrapBypassLog, key, 'bypassed');
+    LOG.warn('MeshQueue', `Worktree node ${nodeId} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean — treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
+}
+
+/** Clears the dedup fingerprint when the node's bootstrap leaves 'running' (the
+ *  terminal-state stamp finally landed), so a later re-entry into the stuck state
+ *  is reported as the new episode it is. */
+export function clearWorktreeBootstrapStaleBypassState(meshId: string, nodeId: string, sessionId: string): void {
+    lastWorktreeBootstrapBypassLog.delete(`${meshId}:${nodeId}:${sessionId}`);
+}
+
 export function logAutoLaunchQuotaFallbackSuccess(
     resolved: { providerType?: string; quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }> },
     taskId: string,

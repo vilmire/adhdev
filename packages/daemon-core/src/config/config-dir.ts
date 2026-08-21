@@ -50,8 +50,39 @@ export function resolveConfigDir(
 ): string {
     const override = env.ADHDEV_CONFIG_DIR;
     if (override && override.trim()) return override.trim();
+    assertConfigDirPinnedInTestRuntime(env);
     // Fallback branch only (see above): track-aware default dir name.
     return join(homeDir ?? homedir(), getTrackIdentity(resolveBuildTrack(env)).configDirName);
+}
+
+/**
+ * Fail-fast gate against silent live-state pollution from tests.
+ *
+ * Reaching the real-home fallback on the PROCESS env inside a test runtime
+ * (vitest sets VITEST=true; vitest and most runners default NODE_ENV=test)
+ * means some test forgot to pin ADHDEV_CONFIG_DIR — and every state write
+ * below this resolution (daemon/mesh-coordinators.json, state.json,
+ * mesh-runtime.db, logs/) then lands in the developer's LIVE
+ * ~/.adhdev(-preview) dir. saveRegistry() rewrites the whole coordinator map,
+ * so one unisolated case evicts every real coordinator entry (2026-08-21
+ * incident: six fixture entries replaced the live registry; the badge loss
+ * was misdiagnosed for hours because the write was silent). A loud throw here
+ * converts that silent pollution into an immediate, attributable failure.
+ *
+ * Only the default process-env call is gated: unit tests of the fallback rule
+ * itself inject an explicit (env, homeDir) pair, which stays pure and
+ * gate-free. Fix the TEST when this fires — pin ADHDEV_CONFIG_DIR to a tmp dir
+ * in setup (see test/helpers/setup-env.ts), or inject an explicit env — never
+ * the gate.
+ */
+function assertConfigDirPinnedInTestRuntime(env: NodeJS.ProcessEnv): void {
+    if (env !== process.env) return;
+    if (!env.VITEST && env.NODE_ENV !== 'test') return;
+    throw new Error(
+        'resolveConfigDir() reached the real-home fallback in a test runtime with ADHDEV_CONFIG_DIR unset: '
+        + 'a test is about to touch the LIVE ~/.adhdev(-preview) state dir. '
+        + 'Pin ADHDEV_CONFIG_DIR to a tmp dir in test setup, or pass an explicit env/homeDir to resolveConfigDir.',
+    );
 }
 
 /** `<configDir>/logs` — daemon log, command history, service stdio capture. */
