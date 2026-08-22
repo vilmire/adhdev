@@ -746,6 +746,56 @@ export function isSnapshotStaleForRouting(provider: QuotaProvider, now: number =
 }
 
 /**
+ * Should the BACKFILL spend a fetch on this provider right now?
+ *
+ * ★WHY THIS IS NOT JUST isSnapshotStaleForRouting (the defect, observed on the
+ * owner's mesh 2026-08-22 and reproduced in
+ * quota-carry-forward-backfill-storm.test.ts).
+ *
+ * The two questions look identical and are not:
+ *
+ *   - isSnapshotStaleForRouting asks "is the DATA too old for the routing gate
+ *     to act on?" and must read `updatedAt`, the data clock. That is the whole
+ *     point of the 2026-08-15 fix and it stays exactly as it was.
+ *   - This asks "would a fetch IMPROVE anything?", and the honest input for
+ *     that is `fetchedAt`, the attempt clock — because a fetch we just made and
+ *     will make again in 15 minutes cannot make the data any newer than the
+ *     provider is willing to give us.
+ *
+ * Conflating them produced a permanent fetch storm on exactly the three
+ * providers the axis split exists to protect. `carryForwardLastGoodWindows`
+ * DELIBERATELY preserves the previous entry's `updatedAt` when a refresh fails
+ * transiently (see that function — the retained windows are genuinely the older
+ * reading and must not claim to be fresh). So a provider whose credential keeps
+ * expiring — kimi's ~15-minute OAuth tokens are the standing case — holds an
+ * `updatedAt` that is FROZEN for as long as the failure lasts. It is therefore
+ * stale-for-routing on every single tick, forever, and `backfillDue` fired every
+ * tick forever: 96 fetches/24h against a third party's endpoint on an IDLE
+ * machine, versus the 24 the design intends. The network axis had its cadenced
+ * TTL set to Infinity precisely so a timer would never do this, and the backfill
+ * walked straight around it — the more broken the provider, the harder we hit
+ * it.
+ *
+ * Reading the attempt clock fixes it without weakening the safety net at all: a
+ * provider genuinely going un-probed still has an ageing `fetchedAt` and still
+ * backfills on schedule (that is the 2026-08-15 guarantee, and the tests for it
+ * are unchanged). Only the case where we ARE probing and the probe keeps failing
+ * is throttled back to the intended one-per-horizon — which is the case where
+ * extra fetches were buying nothing anyway.
+ *
+ * A legacy entry with no `fetchedAt` falls back to `updatedAt` via
+ * lastAttemptAt(), i.e. to yesterday's behaviour, so an upgrade never silently
+ * stops backfilling.
+ */
+function isBackfillDueByAttemptClock(provider: QuotaProvider, now: number = Date.now()): boolean {
+    const entry = cache.get(provider);
+    if (!entry) return false; // no entry at all is handled by the caller's own check
+    const attemptedAt = lastAttemptAt(entry);
+    if (attemptedAt === undefined) return true; // never attempted in a form we can date
+    return now - attemptedAt >= QUOTA_ROUTABLE_MAX_AGE_MS;
+}
+
+/**
  * Reconcile the retry schedule with the entry this refresh just recorded.
  * Called once per refreshed provider from refreshQuotaCacheOnce so every
  * refresh path — boot, periodic tick, event-driven, retry itself — funnels
@@ -924,9 +974,21 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
         // gate (setupQuotaRefreshLoop derives it from the ProviderLoader); the
         // ungated form is a test/embedding shape, and for it the idle machine
         // stays silent.
+        //
+        // ★The staleness arm is BOTH clocks, and needs both (2026-08-22 defect).
+        // isSnapshotStaleForRouting is the routing-facing question — "is the data
+        // too old for the gate?" — and remains the reason a backfill is WANTED.
+        // isBackfillDueByAttemptClock is the scheduling question — "would a fetch
+        // help?" — and is what stops us re-asking a provider that is already
+        // being probed on schedule and simply keeps failing. Requiring both is
+        // what keeps the 2026-08-15 safety net intact while ending the storm a
+        // carry-forward entry's frozen `updatedAt` used to cause; see that
+        // function for the full account.
         const backfillDue = (provider: QuotaProvider): boolean =>
             !!options.isEnabled
-            && (!cache.has(provider) || isFailureRetryDue(provider) || isSnapshotStaleForRouting(provider));
+            && (!cache.has(provider)
+                || isFailureRetryDue(provider)
+                || (isSnapshotStaleForRouting(provider) && isBackfillDueByAttemptClock(provider)));
         // ★AXIS SPLIT: a tick no longer refreshes all six providers. Each is
         // selected on its own terms —
         //   - backfillDue          → always, on either axis (the safety net);
