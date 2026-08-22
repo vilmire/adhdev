@@ -614,8 +614,28 @@ export {
     setLogInstancePort,
     getLogInstanceTag,
     MAX_SIZE_ROTATION_GENERATIONS,
+    rotateCaptureLogIfNeeded,
+    MAX_CAPTURE_LOG_SIZE,
+    MAX_CAPTURE_LOG_GENERATIONS,
 } from './logging/logger.js';
 export type { ScopedLogger, LogLevel, LogEntry } from './logging/logger.js';
+
+// ── Disk space preflight ──
+export {
+    checkDiskSpace,
+    readDiskSpace,
+    classifyDiskSpace,
+    describeDiskSpace,
+    logDiskSpaceStatus,
+    preflightDiskSpace,
+    formatBytes,
+    LowDiskSpaceError,
+    DISK_CRITICAL_PERCENT_FREE,
+    DISK_CRITICAL_FREE_BYTES,
+    DISK_WARNING_PERCENT_FREE,
+    DISK_WARNING_FREE_BYTES,
+} from './diagnostics/disk-space-preflight.js';
+export type { DiskSpaceLevel, DiskSpaceStats, DiskSpaceStatus } from './diagnostics/disk-space-preflight.js';
 export {
     SYM,
     consoleSymbols,

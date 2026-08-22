@@ -206,7 +206,14 @@ function cleanOldLogs(logDir: string): void {
 }
 
 function sizeRotationPath(logFile: string, generation: number): string {
-    return logFile.replace(/\.log$/, `.${generation}.log`);
+    // Insert the generation before the extension: daemon-<date>.log →
+    // daemon-<date>.1.log. Written generically (not a hardcoded `.log` match) so
+    // the raw stdio-capture logs rotate too — `daemon-launchd.out` would keep its
+    // name under a `/\.log$/`-only replace, and every generation would collide on
+    // the same path. Extensionless files get the generation appended.
+    const match = logFile.match(/^(.*)(\.[^./\\]+)$/);
+    if (!match) return `${logFile}.${generation}`;
+    return `${match[1]}.${generation}${match[2]}`;
 }
 
 export function rotateSizeGenerations(
@@ -222,6 +229,48 @@ export function rotateSizeGenerations(
         try { fs.renameSync(source, destination); } catch { }
     }
     fs.renameSync(logFile, sizeRotationPath(logFile, 1));
+}
+
+/** Default cap for raw stdio-capture logs (see rotateCaptureLogIfNeeded). */
+export const MAX_CAPTURE_LOG_SIZE = 10 * 1024 * 1024; // 10 MB
+/** Bounded history kept for raw stdio-capture logs. */
+export const MAX_CAPTURE_LOG_GENERATIONS = 2;
+
+/**
+ * Rotate a RAW STDIO-CAPTURE log (`daemon-service.log`, `daemon-launchd.out`)
+ * if it has grown past `maxSize`.
+ *
+ * These files are not written through this logger — they are the child's stdout/
+ * stderr, wired up either as an append fd or a shell `>>` redirect — so nothing
+ * in the normal write path can ever bound them. Before this helper they had
+ * rotation on exactly one path (`service restart`) and retention on none:
+ * `cleanOldLogs` only matches `daemon-<date>`, which neither file has. In
+ * practice they simply grew forever (observed: a 44MB daemon-service.log and a
+ * 36MB daemon-launchd.out).
+ *
+ * Call this at the moment the file is about to be opened for appending — that is
+ * the one point every producer passes through, and rotating a file no writer
+ * holds open avoids the fd-still-pointing-at-the-renamed-inode problem.
+ *
+ * Returns true if a rotation happened. Best-effort: never throws.
+ */
+export function rotateCaptureLogIfNeeded(
+    logPath: string,
+    maxSize: number = MAX_CAPTURE_LOG_SIZE,
+    maxGenerations: number = MAX_CAPTURE_LOG_GENERATIONS,
+): boolean {
+    try {
+        const stat = fs.statSync(logPath);
+        if (stat.size <= maxSize) return false;
+    } catch {
+        return false; // no file yet — nothing to rotate
+    }
+    try {
+        rotateSizeGenerations(logPath, maxGenerations);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /** Roll through a bounded .1-.3 history when the size limit is reached. */

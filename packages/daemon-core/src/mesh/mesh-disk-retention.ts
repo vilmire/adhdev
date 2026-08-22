@@ -44,6 +44,7 @@ import type { SessionHostSurfaceRecordLike } from '../session-host/runtime-surfa
 import { listWorktrees } from '../git/git-worktree.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
+import { checkDiskSpace, logDiskSpaceStatus, type DiskSpaceLevel } from '../diagnostics/disk-space-preflight.js';
 
 // ─── Thresholds (all defensive) ────────────────────────────────────────────
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -297,6 +298,8 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
     sessionHostRuntimes: number;
     rotationEvicted: number;
     rotationEvictedBytes: number;
+    /** Volume health after reclaiming ('ok' when unmeasurable). */
+    diskLevel: DiskSpaceLevel;
 } {
     let ledgerJsonl = 0;
     let dbBackups = 0;
@@ -314,7 +317,19 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
             LOG.info('DiskRetention', `Ledger rotation cap evicted ${rotation.evicted} closed rotation file(s) across ${rotation.meshes} mesh(es), ${rotation.evictedBytes} byte(s) freed (rotation_cap_count=${rotation.byReason.rotation_cap_count}, rotation_cap_bytes=${rotation.byReason.rotation_cap_bytes})`);
         }
     } catch (e: any) { LOG.warn('DiskRetention', `Ledger rotation cap sweep failed: ${e?.message || e}`); }
-    return { ledgerJsonl, dbBackups, sessionHostRuntimes, rotationEvicted, rotationEvictedBytes };
+    // Report the volume AFTER reclaiming, so the logged figure reflects what the
+    // sweep actually left behind. Retention alone is not enough: this module was
+    // written after an earlier 98%-disk incident and still the volume climbed
+    // back to 97% and killed two sessions with ENOSPC, because nothing ever
+    // *reported* the level. This is that missing signal — report-only here
+    // (a periodic sweep must not throw), but never silent when unhealthy.
+    let diskLevel: DiskSpaceLevel = 'ok';
+    try {
+        const status = checkDiskSpace(getConfigDir());
+        logDiskSpaceStatus(status, 'disk retention sweep');
+        if (status) diskLevel = status.level;
+    } catch (e: any) { LOG.warn('DiskRetention', `Disk space check failed: ${e?.message || e}`); }
+    return { ledgerJsonl, dbBackups, sessionHostRuntimes, rotationEvicted, rotationEvictedBytes, diskLevel };
 }
 
 // ─── Orphan worktree detection (detection-only, emits cleanup_candidate) ──────

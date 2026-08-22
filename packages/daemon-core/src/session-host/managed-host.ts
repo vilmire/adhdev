@@ -15,6 +15,7 @@ import { findPortableNode22, resolveConptyPrebuildCandidates } from '../commands
 import { resolveInstanceDir } from '../commands/upgrade-helper.js';
 import { getProcessInstanceContext } from '../config/instance-context.js';
 import { LOG } from '../logging/logger.js';
+import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';
 import { ensureSessionHostReady as ensureSharedSessionHostReady } from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 
@@ -279,6 +280,12 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     function spawnHost(): void {
         const entry = resolveEntry();
         verifyConptyPrebuildBeforeSpawn(entry);
+        // Fail loudly on a full volume BEFORE spawning. A session host started
+        // onto a full disk dies on its first write with an uncaught ENOSPC that
+        // lands only in its own detached log — the failure then reappears
+        // downstream as sessions that never report completion. Throwing here
+        // puts the real cause in the daemon log and in the caller's error.
+        preflightDiskSpace(instance().configDir, 'spawn the session host');
         const nodeExecutable = resolveSessionHostNode();
         let stdio: StdioOptions = 'ignore';
         let logFd: number | null = null;
@@ -294,7 +301,39 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             windowsHide: true,
             env: buildEnv(process.env),
         });
-        child.unref();
+
+        // Observe the child's death before unref'ing it.
+        //
+        // `unref()` only releases the event loop's hold on the handle — it does
+        // NOT detach listeners, so these still fire for as long as this daemon
+        // process lives. Previously the `child` handle was dropped on the floor
+        // with zero listeners, which meant a session-host that died seconds after
+        // spawn (ENOSPC on its first log write, a native module fault, OOM) left
+        // *nothing* in the daemon log. The failure then surfaced only as its
+        // downstream symptom — sessions that never report completion — and reads
+        // as an application bug rather than "the host process is gone".
+        //
+        // Attached defensively: `spawn` is stubbed in several suites with a bare
+        // object, and observability must never be the thing that breaks a spawn.
+        if (typeof child?.on === 'function') {
+            child.on('error', (error) => {
+                LOG.error('SessionHost', `Failed to spawn session-host process: ${error?.message || error}`);
+            });
+            child.on('exit', (code, signal) => {
+                const how = signal ? `signal ${signal}` : `code ${code}`;
+                const detail = options.spawnStdio === 'logfile'
+                    ? ` — see ${path.join(instance().configDir, 'logs', 'session-host.log')} for its stderr`
+                    : '';
+                // Any exit is notable: this host is meant to outlive the spawn
+                // call. A zero exit is still an unexpected disappearance.
+                LOG.error(
+                    'SessionHost',
+                    `Session-host process (pid ${child.pid ?? 'unknown'}) exited with ${how}${detail}`,
+                );
+            });
+        }
+
+        if (typeof child?.unref === 'function') child.unref();
         if (logFd !== null) {
             try { fs.closeSync(logFd); } catch { /* noop */ }
         }

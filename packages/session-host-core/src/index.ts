@@ -76,7 +76,13 @@ export {
   getDefaultSessionHostEndpoint,
   writeEnvelope,
 } from './ipc.js';
-export type { SessionHostClientOptions, SessionHostEndpoint, SessionHostEndpointOptions } from './ipc.js';
+export type {
+  SessionHostClientOptions,
+  SessionHostEndpoint,
+  SessionHostEndpointOptions,
+  SessionHostDisconnectInfo,
+  SessionHostDisconnectReason,
+} from './ipc.js';
 export {
   DEFAULT_CONFIG_DIR_NAME,
   canonicalizeInstancePath,
