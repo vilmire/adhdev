@@ -29,6 +29,7 @@ import {
     listMagiKindPanels,
     setMagiKindPanel,
     normalizeMagiSlots,
+    collectIgnoredMagiSlotFields,
     MAGI_RAW_ANSWER_CAP,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
@@ -1439,6 +1440,16 @@ export async function meshMagiKindPanelSet(
         // The current binding for this kind, so the coordinator can diff current-vs-new
         // before an overwrite (the write drops any slot not in the new list).
         const current: MagiSlot[] = getMagiKindPanel(kind, meshId) ?? [];
+        // A MagiSlot is a deliberately reduced schema (provider + optional model/nodeId/
+        // capabilityTags/n) — the normalizer drops everything else silently, which is
+        // right for read-back but used to make a `thinkingLevel` on a write a no-op with
+        // no signal. Surface the drops on BOTH branches: a dry-run that hid them would
+        // let the operator approve a payload whose ignored keys only show up after the
+        // write. Never fatal — the slots still normalize and persist exactly as before.
+        const ignoredFields = collectIgnoredMagiSlotFields(args.slots);
+        const ignoredNote = ignoredFields.length
+            ? { ignoredFields, ignoredFieldsNote: 'These keys are not part of the MAGI slot schema and were DROPPED (the panel was still saved without them). A MAGI panel decides WHO answers independently; per-slot routing axes like thinkingLevel/difficulty/maxParallel belong on the node capability slots (mesh_node_slots_set).' }
+            : {};
         if (!write) {
             // Dry-run: normalize + validate WITHOUT persisting (same normalizer AND the
             // same mesh node list as the persisted write path, so a preview that passes
@@ -1452,6 +1463,7 @@ export async function meshMagiKindPanelSet(
                 replacement: true,
                 currentSlots: current,
                 slots: preview,
+                ...ignoredNote,
                 note: `Dry-run only — no file written. This is a WHOLESALE replacement of the kind's slot list for mesh '${meshId}' (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Other meshes on this machine are unaffected. Re-run with write=true after explicit user approval.`,
             }, null, 2);
         }
@@ -1464,6 +1476,7 @@ export async function meshMagiKindPanelSet(
             replacement: true,
             previousSlots: current,
             slots,
+            ...ignoredNote,
             nextAction: 'Verify with mesh_magi_kind_panel_list, then mesh_magi_review({ task_kind }) resolves this binding.',
         }, null, 2);
     } catch (e: any) {

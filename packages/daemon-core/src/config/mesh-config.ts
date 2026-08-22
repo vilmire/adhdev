@@ -1041,10 +1041,75 @@ function normalizeMagiTaskKindKey(raw: unknown): MagiTaskKind {
 }
 
 /**
+ * The keys a MagiSlot accepts. A kind-panel slot is DELIBERATELY a reduced schema —
+ * see the MagiSlot doc comment in mesh-shared for why the node-capability axes
+ * (thinkingLevel / difficulty / maxParallel) are absent rather than missing.
+ *
+ * Used only to REPORT what a write silently dropped (see collectIgnoredMagiSlotFields).
+ * normalizeMagiSlots itself keeps ignoring unknown keys: rejecting them would break
+ * read-back of slots already on disk, which is a far worse failure than a dropped hint.
+ */
+const MAGI_SLOT_KNOWN_KEYS: readonly string[] = ['provider', 'nodeId', 'model', 'capabilityTags', 'n'];
+
+/**
+ * Per-field explanation for a dropped key, so the caller can say WHY rather than only
+ * THAT something was ignored. A key with no entry gets a generic message.
+ */
+const MAGI_SLOT_IGNORED_FIELD_REASONS: Readonly<Record<string, string>> = Object.freeze({
+    thinkingLevel: "not part of a MAGI slot — a panel selects WHO answers independently, not how hard each replica thinks. Set thinkingLevel on the node's capability slots (mesh_node_slots_set), which is the routing axis.",
+    difficulty: "not part of a MAGI slot — MAGI always enqueues its replicas with the fixed 'freeform' difficulty sentinel because the panel has already chosen the (node, provider) target. Set difficulty on the node's capability slots instead.",
+    maxParallel: "not part of a MAGI slot — per-slot concurrency is a node capability-slot axis. Use the per-slot `n` replica count to control MAGI fan-out width.",
+    capability: 'not a MAGI slot key — did you mean `capabilityTags`?',
+});
+
+/**
+ * Report the keys a MagiSlot payload carries that {@link normalizeMagiSlots} will
+ * silently drop, WITHOUT changing what that normalizer does.
+ *
+ * ─── Why report instead of reject ────────────────────────────────────────────
+ *
+ * The normalizer is an allow-list: it rebuilds each slot from the five known keys and
+ * ignores the rest. That is correct for reads — a slot already persisted with an extra
+ * key must stay readable — but on a WRITE it meant an operator could set `thinkingLevel`
+ * on a panel slot and get no rejection, no warning, and no effect. Silent data loss is
+ * its own defect class, independent of whether the reduced schema is right (it is).
+ *
+ * So this is a pure, additive side channel: callers surface its result as
+ * `ignoredFields` on the response. It NEVER throws and is NEVER consulted by the
+ * normalizer, so no read path can regress on a payload that this function would flag.
+ *
+ * Returns [] for valid, fully-recognized input — a clean write stays silent.
+ */
+export function collectIgnoredMagiSlotFields(
+    slots: unknown,
+): Array<{ slot: number; field: string; reason: string }> {
+    if (!Array.isArray(slots)) return [];
+    const out: Array<{ slot: number; field: string; reason: string }> = [];
+    slots.forEach((entry, idx) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+        for (const key of Object.keys(entry as Record<string, unknown>)) {
+            if (MAGI_SLOT_KNOWN_KEYS.includes(key)) continue;
+            out.push({
+                slot: idx,
+                field: key,
+                reason: MAGI_SLOT_IGNORED_FIELD_REASONS[key]
+                    ?? `not a recognized MAGI slot key (accepted: ${MAGI_SLOT_KNOWN_KEYS.join(', ')}); it was dropped and has no effect.`,
+            });
+        }
+    });
+    return out;
+}
+
+/**
  * Validate + normalize a kind-panel's slots (the SOLE MAGI slot normalizer): provider
  * required per slot, trims strings, drops empties, clamps replica counts, and carries
  * an optional per-slot `model`. Throws on structurally invalid input (empty list / no
  * provider) so the write returns a clear error. Returns the normalized slot array.
+ *
+ * Unknown keys are IGNORED, not rejected — a slot persisted by an older or newer
+ * writer must remain readable. Write paths pair this with
+ * {@link collectIgnoredMagiSlotFields} to report what was dropped instead of losing it
+ * silently.
  *
  * `knownNodeIds`, when supplied, additionally rejects a slot pinned to a node that is
  * not a member of the owning mesh. Panels are mesh-scoped, so at write time there IS a
