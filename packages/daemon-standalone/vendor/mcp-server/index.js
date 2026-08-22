@@ -2854,6 +2854,13 @@ function findNode(mesh, nodeId) {
   return node;
 }
 var DUPLICATE_DISPATCH_WINDOW_MS = 6e4;
+function hasDefinitivelyRemoteIdentity(ctx, node) {
+  const nodeDaemonId = readNodeDaemonId(node);
+  const nodeMachineId = readNodeMachineId(node);
+  return Boolean(
+    nodeDaemonId && ctx.localDaemonId && !(0, import_daemon_core5.daemonIdsEquivalent)(nodeDaemonId, ctx.localDaemonId) || nodeMachineId && ctx.localMachineId && !(0, import_daemon_core5.daemonIdsEquivalent)(nodeMachineId, ctx.localMachineId)
+  );
+}
 async function refreshMeshFromDaemon(ctx) {
   const settledNodeIds = /* @__PURE__ */ new Set();
   try {
@@ -2865,6 +2872,10 @@ async function refreshMeshFromDaemon(ctx) {
       const existingId = existing?.id;
       if (!existingId) continue;
       if (merged.some((n) => (0, import_daemon_core5.meshNodeIdMatches)(n, existingId))) continue;
+      if (hasDefinitivelyRemoteIdentity(ctx, existing)) {
+        merged.push(existing);
+        continue;
+      }
       if (isLocalControlPlaneNode(ctx, existing)) {
         settledNodeIds.add(existingId);
         continue;
@@ -5455,6 +5466,7 @@ function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTa
   return dispatchPromises;
 }
 async function meshEnqueueTask(ctx, args) {
+  await refreshMeshFromDaemon(ctx);
   const normalized = normalizeEnqueueTaskArgs(ctx, args, "mesh_enqueue_task");
   if (!normalized.ok) {
     return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...normalized.extra ?? {} });
@@ -5650,6 +5662,7 @@ async function meshEnqueueBatch(ctx, args) {
   }
   const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
   const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
+  await refreshMeshFromDaemon(ctx);
   const specs = [];
   const rawGraphEntries = [];
   const normalizedEntries = [];
