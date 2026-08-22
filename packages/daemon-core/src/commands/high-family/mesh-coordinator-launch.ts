@@ -9,13 +9,13 @@
  * executeDaemonCommand — only `this.deps`/`this.inlineMeshCache` became
  * `ctx.deps`/`ctx.inlineMeshCache`.
  */
-import { join as pathJoin } from 'path';
+import { join as pathJoin, resolve as pathResolve, sep as pathSep } from 'path';
 import * as fs from 'fs';
 import { LOG } from '../../logging/logger.js';
 import { resolveMeshHostStatus, buildMeshHostRequiredFailure } from '../../mesh/mesh-host-ownership.js';
 import { registerMeshCoordinator } from '../../mesh/coordinator-registry.js';
 import { partitionSessionHostRecords } from '../../session-host/runtime-surface.js';
-import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
+import { createHermesManualMeshCoordinatorSetup, inspectMeshCoordinatorMcpServerPaths, resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
 import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { delegatedWorkerAutoApproveSettings } from '../../repo-mesh-types.js';
 import {
@@ -84,6 +84,18 @@ async function backfillMeshHostPinAfterLaunch(opts: {
     } catch (error: any) {
         LOG.warn('MeshCoordinator', `Host pin backfill skipped for mesh ${opts.meshId}: ${error?.message || String(error)}`);
     }
+}
+
+/**
+ * True when `configPath` resolves inside `workspace` — i.e. the MCP config we
+ * are about to write is a repo-local file (.mcp.json / .cursor/mcp.json /
+ * opencode.json) that the user may commit, propagating any machine-specific
+ * absolute path we embed to every teammate's machine.
+ */
+function isWorkspaceLocalPath(configPath: string, workspace: string): boolean {
+    const resolvedConfig = pathResolve(configPath);
+    const resolvedWorkspace = pathResolve(workspace);
+    return resolvedConfig === resolvedWorkspace || resolvedConfig.startsWith(resolvedWorkspace + pathSep);
 }
 
 export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = {
@@ -361,6 +373,29 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         };
                     }
 
+                    // EMBEDDED-PATH-HEALTH (mission 3e9b5d83): the setup below
+                    // embeds absolute paths (node execPath + vendor mcp-server
+                    // entry) into a config file the provider CLI owns. Absent
+                    // teardown is INTENTIONAL — the entry must survive reboots
+                    // for future coordinator sessions — so this is detection
+                    // only: warn when the embedded path already dangles or sits
+                    // in a volatile root (worktree scratchpad / temp dir) where
+                    // it is expected to dangle later, the exact statusline
+                    // failure class. A repo-local config file (.mcp.json,
+                    // opencode.json) may also be COMMITTED, which would carry
+                    // this machine's absolute path to teammates' machines.
+                    const mcpServerPathHealth = inspectMeshCoordinatorMcpServerPaths(coordinatorSetup.mcpServer, {
+                        serverName: coordinatorSetup.serverName,
+                        target: coordinatorSetup.kind === 'auto_import'
+                            ? `MCP config ${coordinatorSetup.configPath}`
+                            : `MCP registration for ${coordinatorSetup.serverName}`,
+                        repoLocal: coordinatorSetup.kind === 'auto_import'
+                            && isWorkspaceLocalPath(coordinatorSetup.configPath, workspace),
+                    });
+                    if (mcpServerPathHealth.warning) {
+                        LOG.warn('MeshCoordinator', mcpServerPathHealth.warning);
+                    }
+
                     // ─── CLI-command MCP registration (Codex, Gemini CLI) ───────────
                     if (coordinatorSetup.kind === 'cli_command') {
                         // Build coordinator prompt first — fail closed on errors.
@@ -618,6 +653,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             workspace,
                             sessionId: cliCmdSessionId,
                             mcpRegistered: mcpRegistrationOk,
+                            ...(mcpServerPathHealth.warning ? { mcpServerPathWarning: mcpServerPathHealth.warning } : {}),
                         };
                     }
 
@@ -890,6 +926,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         workspace,
                         sessionId: launchSessionId,
                         mcpConfigWritten: true,
+                        ...(mcpServerPathHealth.warning ? { mcpServerPathWarning: mcpServerPathHealth.warning } : {}),
                     };
                 } catch (e: any) {
                     LOG.error('MeshCoordinator', `Failed: ${e.message}`);

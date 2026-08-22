@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { LOG } from '../logging/logger.js'
 import { shortHash } from '../system/hash.js'
 import { IDENTITY } from '../track-identity.js'
+import { inspectEmbeddedPath, type EmbeddedPathHealth, type EmbeddedPathState } from '../config/embedded-path-health.js'
 import type {
   MeshCoordinatorMcpConfigFormat,
   MeshCoordinatorSystemPromptInjection,
@@ -294,6 +295,80 @@ function resolveAdhdevMcpServerLaunch(options: {
 
 function resolveAdhdevCommand(explicitCommand?: string): string {
   return explicitCommand?.trim() || process.env.ADHDEV_COORDINATOR_MCP_COMMAND?.trim() || DEFAULT_ADHDEV_MCP_COMMAND
+}
+
+export interface MeshCoordinatorMcpServerPathHealth {
+  /** Same three-state vocabulary as config/embedded-path-health. */
+  state: EmbeddedPathState
+  /** The embedded absolute path that drove `state`, else null. */
+  referencedPath: string | null
+  volatile: boolean
+  volatileReason: string | null
+  /** Actionable one-liner for logs and launch results; null when healthy. */
+  warning: string | null
+}
+
+/**
+ * Health of the absolute paths a coordinator MCP setup embeds into a config
+ * file the provider CLI owns (`.mcp.json` / `.cursor/mcp.json` /
+ * `opencode.json` / hermes `config.yaml` / — via `codex mcp add` —
+ * `~/.codex/config.toml`).
+ *
+ * Detection-only counterpart of the statusline fix
+ * (`config/embedded-path-health.ts`): the written config must OUTLIVE the
+ * launch — a coordinator restarted after a reboot still needs the entry — so
+ * teardown is intentionally absent and the failure class to catch is a
+ * reference that is ALREADY dangling (`missing`) or that lives somewhere the
+ * OS or worktree cleanup will reap (`volatile`): works today, dangles later,
+ * exactly the 2026-08-20 statusline accident. A bare PATH command
+ * (`adhdev mcp …`) embeds no absolute path and reports `absent`.
+ */
+export function inspectMeshCoordinatorMcpServerPaths(
+  mcpServer: MeshCoordinatorMcpServerLaunch,
+  options: {
+    env?: NodeJS.ProcessEnv
+    serverName?: string
+    /** What is being written, e.g. "MCP config /repo/.mcp.json". */
+    target?: string
+    /** True when the target file lives inside the repo and may be committed. */
+    repoLocal?: boolean
+  } = {},
+): MeshCoordinatorMcpServerPathHealth {
+  const embeddedPaths = [mcpServer.command, ...mcpServer.args].filter((value) => isAbsolute(value))
+  if (embeddedPaths.length === 0) {
+    return { state: 'absent', referencedPath: null, volatile: false, volatileReason: null, warning: null }
+  }
+  let firstMissing: EmbeddedPathHealth | null = null
+  let firstVolatile: EmbeddedPathHealth | null = null
+  for (const embeddedPath of embeddedPaths) {
+    const health = inspectEmbeddedPath(embeddedPath, options.env ?? process.env)
+    if (health.state === 'missing' && !firstMissing) firstMissing = health
+    if (health.volatile && !firstVolatile) firstVolatile = health
+  }
+  const serverName = options.serverName?.trim() || 'adhdev-mesh'
+  const target = options.target?.trim() || `MCP setup for ${serverName}`
+  const propagationNote = options.repoLocal
+    ? ' The config file lives inside the workspace and may be committed — this machine-specific absolute path would propagate to teammates\' machines, where it matches nothing.'
+    : ''
+  if (firstMissing) {
+    return {
+      state: 'missing',
+      referencedPath: firstMissing.referencedPath,
+      volatile: firstMissing.volatile || Boolean(firstVolatile),
+      volatileReason: firstMissing.volatileReason || firstVolatile?.volatileReason || null,
+      warning: `${target} embeds ${firstMissing.referencedPath}, which does not exist on this machine — the ${serverName} MCP server will fail to start (dangling reference, the statusline failure class).${propagationNote}`,
+    }
+  }
+  if (firstVolatile) {
+    return {
+      state: 'ok',
+      referencedPath: firstVolatile.referencedPath,
+      volatile: true,
+      volatileReason: firstVolatile.volatileReason,
+      warning: `${target} embeds ${firstVolatile.referencedPath}, which is ${firstVolatile.volatileReason}. It works today, but the ${serverName} entry will dangle once that location is cleaned up — the same failure class as the 2026-08-20 statusline incident.${propagationNote}`,
+    }
+  }
+  return { state: 'ok', referencedPath: embeddedPaths[0], volatile: false, volatileReason: null, warning: null }
 }
 
 function resolveAdhdevMcpEntryPath(explicitEntryPath?: string): string | null {
