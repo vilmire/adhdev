@@ -2044,7 +2044,7 @@ var MESH_MAGI_REVIEW_TOOL = {
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       include_stale: { type: "boolean", description: "Default false. By default, panel slots whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway \u2014 results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover." },
       wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect." },
-      wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default ~4 min.' },
+      wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default 8 min, max 20 min.' },
       auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don't accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection." }
     },
     required: ["question", "task_kind"]
@@ -2060,7 +2060,7 @@ var MESH_MAGI_COLLECT_TOOL = {
       task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Optional override of the task_kind used to parse replica answers. Normally recovered automatically from the original dispatch \u2014 only set this if the dispatched ledger entry was pruned and auto-recovery falls back to claim_audit incorrectly." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
       wait: { type: "boolean", description: "Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing." },
-      wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default ~4 min." },
+      wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default 8 min, max 20 min." },
       auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot." },
       verbose: { type: "boolean", description: "Default false. When true, each synthesis.replicas[] entry also carries rawAnswer \u2014 the replica's raw end-user answer text (capped). Omitted by default to keep the payload small; the structured clusters already carry the parsed claims." }
     },
@@ -6531,9 +6531,12 @@ var import_daemon_core7 = require("@adhdev/daemon-core");
 var MAGI_MAX_REPLICAS = 12;
 var MAGI_MIN_TARGETS = 2;
 var MAGI_CLUSTER_JACCARD = 0.4;
-var MAGI_DEFAULT_WAIT_MS = 18e4;
-var MAGI_MAX_WAIT_MS = 6e5;
+var MAGI_DEFAULT_WAIT_MS = 48e4;
+var MAGI_MAX_WAIT_MS = 12e5;
 var MAGI_POLL_INTERVAL_MS = 5e3;
+function resolveMagiWaitTimeoutMs(raw) {
+  return Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(raw) || MAGI_DEFAULT_WAIT_MS));
+}
 var VALID_TASK_KINDS = ["claim_audit", "rca", "design", "freeform"];
 var DEFAULT_TASK_KIND = "claim_audit";
 function normalizeMagiTaskKind(raw) {
@@ -6914,7 +6917,11 @@ function synthesizeMagiResponses(responses, opts = {}) {
     const replicasMissing = Math.max(0, replicasExpected - replicasAnswered);
     const lossDominated = replicasMissing > 0 && replicasMissing >= replicasAnswered;
     if (lossDominated) {
-      independenceBanner = `independence not achieved \u2014 only ${replicasAnswered} of ${replicasExpected} replica(s) answered (${replicasMissing} missing/dropped), collapsing the answering set to ${distinctProviders} provider(s) and ${distinctNodes} machine(s). This is a replica-loss/collection failure, not a low-diversity panel \u2014 inspect the dropped replicas (stale/unparseable/no-session) before re-reading the diversity spans. Agreements are routed to needs_verification.`;
+      const notAnswered = responses.filter((r) => !(r.source.ok && r.response));
+      const pendingCount = notAnswered.filter((r) => r.source.error === "replica_deadline_exceeded").length;
+      const failedCount = notAnswered.length - pendingCount;
+      const dropBreakdown = pendingCount > 0 && failedCount > 0 ? ` (${pendingCount} still pending past the deadline \u2014 re-collect may recover them; ${failedCount} genuinely failed/unparseable/stale \u2014 those need a panel swap)` : pendingCount > 0 ? ` (all ${pendingCount} still pending past the deadline \u2014 re-collect with mesh_magi_collect may recover them, this is NOT a failed panel)` : ` (all ${failedCount} genuinely failed/unparseable/stale \u2014 re-collecting will not recover them, consider a panel swap)`;
+      independenceBanner = `independence not achieved \u2014 only ${replicasAnswered} of ${replicasExpected} replica(s) answered (${replicasMissing} missing/dropped), collapsing the answering set to ${distinctProviders} provider(s) and ${distinctNodes} machine(s). This is a replica-loss/collection failure, not a low-diversity panel${dropBreakdown}. Agreements are routed to needs_verification.`;
     } else {
       independenceBanner = `independence not achieved \u2014 the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
     }
@@ -7447,7 +7454,7 @@ async function meshMagiReview(ctx, args) {
   const mode = readString(args.mode);
   const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
   const wait = args.wait !== false;
-  const waitTimeoutMs = Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS));
+  const waitTimeoutMs = resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs);
   const consensusGroupId = `magi_${(0, import_node_crypto.randomUUID)().replace(/-/g, "")}`;
   const titleQ = question.length > 80 ? `${question.slice(0, 77)}...` : question;
   const mission = (0, import_daemon_core6.upsertMeshMission)(ctx.mesh.id, {
@@ -7622,7 +7629,7 @@ async function meshMagiCollect(ctx, args) {
   }
   const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
   const wait = args.wait === true;
-  const timeoutMs = wait ? Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS)) : 0;
+  const timeoutMs = wait ? resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs) : 0;
   const replicaTaskIds = replicaTasks.map((t) => readString(t.id)).filter(Boolean);
   const collected = await collectMagiResponses(ctx, { replicaTaskIds, timeoutMs, taskKind });
   const synthesis = synthesizeMagiResponses(collected.responses, {
@@ -8066,7 +8073,7 @@ ${magiOutputContractFor(kind)}`;
         finalized.set(taskId, prov);
         return true;
       }
-      source.error = isSchemaFailure ? `schema_invalid: ${kindResult.failReason}` : "unparseable_output";
+      source.error = isSchemaFailure ? `schema_invalid: ${kindResult.failReason}` : "replica_deadline_exceeded";
       finalized.set(taskId, { source, response: emptyResponse() });
       return true;
     }
