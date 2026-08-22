@@ -634,7 +634,7 @@ export const MESH_FAST_FORWARD_NODE_TOOL = {
             mode: { type: 'string', enum: ['merge', 'push'], description: 'merge (default): git merge --ff-only to absorb upstream. push: strict ff-only push of local commits to origin/<branch>; refuses any non-fast-forward.' },
             branch: { type: 'string', description: 'Optional guard: require the node\'s current branch to match this branch before planning/executing.' },
             execute: { type: 'boolean', description: 'When true, apply the fast-forward/push if all safety gates pass. Defaults false/dry-run.' },
-            dry_run: { type: 'boolean', description: 'Preview only. Defaults true unless execute=true; dry_run=true overrides execute.' },
+            dry_run: { type: 'boolean', description: 'Preview only. Defaults true unless execute=true; dry_run=true overrides execute. dry_run=false is NOT an execute trigger — it only declines to veto, so passing it alone is rejected with dry_run_false_requires_execute rather than silently previewing. Use execute=true to apply.' },
             update_submodules: { type: 'boolean', description: 'mode="merge" only: when true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean.' },
             push_submodules: { type: 'boolean', description: 'mode="push" only: also ff-only push submodule HEADs to their origin main. Gated by mesh policy allowAutoPublishSubmoduleMainCommits — skipped unless that policy is enabled. Defaults false (root push only).' },
         },
@@ -1070,7 +1070,7 @@ export const MESH_PRUNE_STALE_DIRECT_TOOL = {
         type: 'object' as const,
         properties: {
             execute: { type: 'boolean', description: 'When true, actually delete the orphaned records. Defaults false (dry run). Ignored when dry_run=true.' },
-            dry_run: { type: 'boolean', description: 'Force a preview without mutation even if execute=true. Defaults to dry-run behavior when execute is not set.' },
+            dry_run: { type: 'boolean', description: 'Force a preview without mutation even if execute=true. Defaults to dry-run behavior when execute is not set. dry_run=false is NOT an execute trigger — passing it alone is rejected with dry_run_false_requires_execute rather than silently previewing. Use execute=true to prune.' },
             include_terminal: { type: 'boolean', description: 'Also prune terminal (completed/failed) direct dispatch store rows in addition to orphans. Defaults false.' },
         },
     },
