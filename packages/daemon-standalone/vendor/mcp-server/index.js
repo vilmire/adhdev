@@ -1413,7 +1413,23 @@ var MESH_SEND_TASK_TOOL = {
         enum: ["when_idle", "interrupt"],
         description: "How to deliver when the target session is BUSY. Default 'when_idle': never disturbs the running turn \u2014 the task is queued and auto-delivered the moment the session goes idle. \u2605'interrupt' ABORTS the turn currently in flight by pressing the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers this task once the session settles. THE WORK IN PROGRESS IS DISCARDED \u2014 whatever the agent had not yet finished is lost, and any partial edits it was mid-way through are left as they are. Use it only when the running turn is genuinely going the wrong way and finishing it is worse than losing it. If the target provider cannot interrupt (no stop control declared, or an empty stop key), the dispatch is REJECTED rather than quietly falling back to when_idle \u2014 so a steering attempt never reports success while the session actually runs on to completion under the old instructions. Re-send with 'when_idle' if delivery-after-completion is acceptable. Has no effect on an idle session (delivered immediately either way)."
       },
-      deliveryMode: { type: "string", enum: ["when_idle", "interrupt"], description: "CamelCase alias for delivery_mode." }
+      deliveryMode: { type: "string", enum: ["when_idle", "interrupt"], description: "CamelCase alias for delivery_mode." },
+      // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT surface.
+      //
+      // ★ WHY IT IS HERE AT ALL. This tool is the MAJORITY dispatch surface (~67%
+      // of dispatches in the graph-adoption investigation) and it carried no
+      // decision field, so two thirds of all routing judgements were structurally
+      // unmeasurable. `decision_missing` on mesh_enqueue_task described only the
+      // enqueue minority and was silent — not negative — about the rest.
+      //
+      // ★ OPTIONAL, exactly like mesh_enqueue_task's (see the note there): phase E
+      // measures and does not enforce, and a required field would reject every
+      // existing caller. Omission degrades to decision_missing, never an error.
+      orchestration_decision: {
+        type: "object",
+        description: "Record of your dispatch decision, for adoption measurement: {decision, direct_reason, ready_worker_tasks, known_graph_steps, capability_blockers}. On this DIRECT surface, direct_reason says why dispatching into an existing session beat queueing a task \u2014 one of same_subject_continuation, investigation_handoff, idle_session_reuse, queue_bypass_urgent, new_subject, legacy_client, operator_override. These are the cases the operating rules name: same-subject continuation, the investigate\u2192fix handoff, reusing an idle session for a follow-up/retry/cleanup delta, or a deliberate queue bypass. new_subject is the one the rules do NOT endorse \u2014 a genuinely new topic should get its own task even when a session sits idle \u2014 and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. Optional and never rejected: omitting it is recorded as decision_missing. Provenance only \u2014 it never changes execution."
+      },
+      orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." }
     },
     required: ["node_id", "session_id", "message", "difficulty"]
   }
@@ -8372,6 +8388,16 @@ async function meshSendTask(ctx, args) {
     });
   }
   const difficulty = difficultyRaw;
+  const rawDecision = args.orchestration_decision ?? args.orchestrationDecision;
+  const decisionMissing = rawDecision === void 0 || rawDecision === null;
+  const orchestration = (0, import_daemon_core6.normalizeOrchestrationDecision)(rawDecision, "direct");
+  const orchestrationWarning = {
+    ...orchestration.unsanctionedDirect ? {
+      unsanctionedDirect: orchestration.unsanctionedDirect,
+      unsanctionedDirectHint: import_daemon_core6.MESH_UNSANCTIONED_DIRECT_HINT
+    } : {},
+    ...decisionMissing ? { orchestrationDecisionMissing: true } : {}
+  };
   const modeValidation = (0, import_daemon_core6.validateMeshTaskModeRequest)(requestedTaskMode, message, readonly);
   if (!modeValidation.valid) {
     return JSON.stringify({
@@ -8528,6 +8554,17 @@ async function meshSendTask(ctx, args) {
             ...readonly ? { readonly: true } : {},
             dispatchedAt
           });
+          (0, import_daemon_core6.recordDirectDispatchDecision)(ctx.mesh.id, {
+            taskId,
+            via: "p2p_direct",
+            nodeId: args.node_id,
+            ...dispatchedSessionId ? { sessionId: dispatchedSessionId } : {},
+            ...missionId ? { missionId } : {},
+            ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
+            decision: orchestration.decision,
+            ...decisionMissing ? { decisionMissing: true } : {},
+            ...orchestration.unsanctionedDirect ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason } : {}
+          });
         } catch {
         }
       }
@@ -8540,7 +8577,10 @@ async function meshSendTask(ctx, args) {
         taskMode,
         ...result2.success && result2.providerType ? { providerType: result2.providerType } : {},
         dispatched: result2.success === true,
-        ...result2.success ? buildMissionInactiveWarning(ctx, missionId) ?? {} : {}
+        ...result2.success ? buildMissionInactiveWarning(ctx, missionId) ?? {} : {},
+        // GRAPH-MEASUREMENT-DIRECT: advisory only, and only on a dispatch that
+        // actually happened — a failed dispatch made no routing decision to report on.
+        ...result2.success ? orchestrationWarning : {}
       });
     }
     if (args.session_id) {
@@ -8845,6 +8885,17 @@ async function meshSendTask(ctx, args) {
           ...readonly ? { readonly: true } : {},
           dispatchedAt
         });
+        (0, import_daemon_core6.recordDirectDispatchDecision)(ctx.mesh.id, {
+          taskId,
+          via: "local_direct",
+          nodeId: args.node_id,
+          sessionId: args.session_id,
+          ...missionId ? { missionId } : {},
+          ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {},
+          decision: orchestration.decision,
+          ...decisionMissing ? { decisionMissing: true } : {},
+          ...orchestration.unsanctionedDirect ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason } : {}
+        });
       } catch {
       }
       let deliveryId;
@@ -8878,7 +8929,9 @@ async function meshSendTask(ctx, args) {
         // session whose dispatch row did NOT survive pre-record. A successfully
         // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
         ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
-        ...buildMissionInactiveWarning(ctx, missionId) ?? {}
+        ...buildMissionInactiveWarning(ctx, missionId) ?? {},
+        // GRAPH-MEASUREMENT-DIRECT: advisory only — never blocks, never re-routes.
+        ...orchestrationWarning
       });
     }
     const task = (0, import_daemon_core6.enqueueTask)(ctx.mesh.id, message, {
