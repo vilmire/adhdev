@@ -5,6 +5,7 @@ import { getLedgerDir, readLedgerEntries, readLedgerEntriesByKind, appendLedgerE
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { resolveTurnAttemptRow } from './mesh-turn-presentation.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
+import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import {
     assertPendingMeshCoordinatorEventV2,
@@ -865,6 +866,105 @@ function refineTerminalEventFromLedger(meshId: string, pending: readonly Pending
     return backfilled.reverse();
 }
 
+// ─── STALE-TASK-TERMINAL drain gate ─────────────────────────────────────────
+// Generalization of isApprovalNudgeResolved (mesh-reconcile-coordinator-drain.ts):
+// that function already drops an approval NUDGE whose task has since gone terminal,
+// on exactly this reasoning — a nudge whose subject is resolved would tell the
+// coordinator something false. The same hazard applies to every other non-terminal
+// progress/dispatch alert, and it was NOT covered: measured on 2026-08-22, task
+// 081317f3 committed terminal `cancelled` at 13:14:12.806 and a `mesh:dispatch_blocked`
+// event for that same task was surfaced to the coordinator 767ms later. The coordinator
+// had already cancelled and moved on; the alert was pure misinformation.
+//
+// WHY STATUS ALONE, WITH NO TIMESTAMP COMPARISON
+// The obvious framing is "drop events queued AFTER the terminal", which needs a
+// queuedAt-vs-terminal-time comparison and therefore inherits clock skew and ordering
+// hazards. That comparison is unnecessary here, because a terminal task row is STICKY:
+// updateTaskStatus (mesh-work-queue.ts:1263-1273, CANCEL-STICKY-TERMINAL) refuses every
+// terminal→non-terminal transition unless an explicit `force` override is passed, and no
+// caller in the tree passes it. A task that is `completed`/`failed`/`cancelled` can never
+// return to active work, so a non-terminal progress alert about it is stale REGARDLESS of
+// when it was queued — an event queued before the terminal is equally misleading by the
+// time it would surface. Gating on the row's current status is thus both stricter and
+// safer than a time window: no clock read, no skew, no reordering exposure.
+//
+// WHAT IS NEVER DROPPED (over-correction is the worse failure)
+// Blocking a genuine result is far more damaging than surfacing a stale alert, so this
+// gate is an explicit DENY-list of low-stakes alerts, never an allow-list. Everything not
+// named in STALE_TASK_DROPPABLE_EVENTS passes untouched, including:
+//   - every completion / stop / refine outcome (the coordinator's only copy of the
+//     worker's result — dropping one loses it permanently),
+//   - every approval / question nudge (a worker may be blocked on it right now; the
+//     already-resolved subset is handled upstream by isApprovalNudgeResolved, which
+//     applies its own terminal check with delivery-safe semantics),
+//   - every event carrying no resolvable taskId, and every event whose task row cannot
+//     be found or read. Unknown is treated as live: when in doubt, deliver.
+const STALE_TASK_DROPPABLE_EVENTS: ReadonlySet<string> = new Set([
+    // Actionable dispatch-skip page ("this task will NOT dispatch on its own"). Meaningless
+    // once the task is terminal — the measured 081317f3 case.
+    'mesh:dispatch_blocked',
+    // Stall watchdog ("no progress observed"). A terminal task cannot make progress; the
+    // alert only invites the coordinator to re-drive already-finished work.
+    'monitor:no_progress',
+]);
+
+/** Terminal task statuses, mirroring mesh-work-queue's TERMINAL_TASK_STATUSES. Local copy
+ *  so this module does not take a value import on the queue (import-boundary hygiene). */
+const STALE_TASK_TERMINAL_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
+
+/** Resolve the taskId an event is about, from either the metadata envelope or the row. */
+function readPendingEventTaskId(event: PendingMeshCoordinatorEvent): string {
+    const metadataEvent = readRecord(event.metadataEvent);
+    return readNonEmptyString(metadataEvent?.taskId);
+}
+
+/**
+ * Drop droppable non-terminal alerts whose task row has already gone terminal. Returns the
+ * surviving events. Best-effort throughout: any lookup failure keeps the event (deliver).
+ */
+function dropStaleTerminalTaskEvents(
+    meshId: string,
+    events: PendingMeshCoordinatorEvent[],
+): PendingMeshCoordinatorEvent[] {
+    // O(1) guard: the overwhelmingly common batch contains no droppable alert at all.
+    if (!events.some(event => STALE_TASK_DROPPABLE_EVENTS.has(event.event))) return events;
+    let store: MeshRuntimeStore;
+    try {
+        store = MeshRuntimeStore.getInstance();
+    } catch {
+        return events; // store unavailable → cannot judge staleness; deliver everything
+    }
+    const terminalByTaskId = new Map<string, boolean>();
+    const isTaskTerminal = (taskId: string): boolean => {
+        const cached = terminalByTaskId.get(taskId);
+        if (cached !== undefined) return cached;
+        let terminal = false;
+        try {
+            const entry = store.findQueueEntryById(meshId, taskId);
+            // No row (pruned / foreign mesh) → NOT provably terminal → deliver.
+            terminal = !!entry && STALE_TASK_TERMINAL_STATUSES.has(entry.status);
+        } catch {
+            terminal = false; // read failure → deliver
+        }
+        terminalByTaskId.set(taskId, terminal);
+        return terminal;
+    };
+    return events.filter(event => {
+        if (!STALE_TASK_DROPPABLE_EVENTS.has(event.event)) return true;
+        const taskId = readPendingEventTaskId(event);
+        if (!taskId) return true; // unattributable → deliver
+        if (!isTaskTerminal(taskId)) return true;
+        traceMeshEventDrop('stale_task_terminal', {
+            taskId,
+            sessionId: resolveEventSessionId(event.metadataEvent) ?? event.targetCoordinatorSessionId,
+            nodeId: event.nodeId,
+            meshId,
+            event: event.event,
+        }, 'task row is already terminal (completed/failed/cancelled) — non-terminal alert is stale');
+        return false;
+    });
+}
+
 function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMeshCoordinatorEvent[]): PendingMeshCoordinatorEvent[] {
     const backfilled = refineTerminalEventFromLedger(meshId, events);
     // A refine:accepted event is a provisional "job accepted, result to follow" signal.
@@ -880,7 +980,12 @@ function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMe
     const reconciled = terminalJobIds.size === 0
         ? events
         : events.filter(event => !(event.event === 'refine:accepted' && terminalJobIds.has(readRefineJobId(event))));
-    return backfilled.length === 0 ? reconciled : [...reconciled, ...backfilled];
+    // STALE-TASK-TERMINAL: applied to the drained events only. The ledger-backfilled
+    // terminals are appended AFTER it and are deliberately never subject to it — they
+    // exist precisely because a terminal outcome was missing, so they are the payload
+    // this gate must protect, not filter.
+    const fresh = dropStaleTerminalTaskEvents(meshId, reconciled);
+    return backfilled.length === 0 ? fresh : [...fresh, ...backfilled];
 }
 
 // ─── SQLite pending-event retention ─────────────────────────────────────────
