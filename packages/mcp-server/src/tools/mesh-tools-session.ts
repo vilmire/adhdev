@@ -9,6 +9,10 @@ import {
     appendLedgerEntry,
     buildCoordinatorP2pRelayFailure,
     buildDirectTaskPayload,
+    // GRAPH-MEASUREMENT-DIRECT — the direct dispatch decision record.
+    normalizeOrchestrationDecision,
+    recordDirectDispatchDecision,
+    MESH_UNSANCTIONED_DIRECT_HINT,
     buildMeshActiveWork,
     collectPendingApprovals,
     buildMeshReadChatCacheFallback,
@@ -219,6 +223,8 @@ export async function meshSendTask(
         mission_id?: string; missionId?: string;
         difficulty?: string;
         delivery_mode?: string; deliveryMode?: string;
+        /** GRAPH-MEASUREMENT-DIRECT — optional dispatch-decision record (provenance only). */
+        orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
     // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
@@ -284,6 +290,30 @@ export async function meshSendTask(
         });
     }
     const difficulty = difficultyRaw;
+    // ── GRAPH-MEASUREMENT-DIRECT — the direct surface's dispatch-decision record ──
+    //
+    // ★ WHY THIS IS COMPUTED HERE, ABOVE THE THREE EXIT PATHS. meshSendTask has three
+    // outcomes: a remote `p2p_direct` dispatch, a local `local_direct` dispatch, and an
+    // untargeted fall-through that ENQUEUES a queue task instead. Only the first two are
+    // direct dispatches, so the record is normalized once here and written by each of the
+    // two direct paths — never by the fall-through, which would otherwise count a queue
+    // entry as a direct dispatch and corrupt the exact ratio this measures.
+    //
+    // Optional and never fatal, exactly like the mesh_enqueue_task record: an omitted
+    // decision is the `decisionMissing` datapoint, not a rejection. Nothing below can
+    // fail or alter the dispatch — this is provenance only.
+    const rawDecision = args.orchestration_decision ?? args.orchestrationDecision;
+    const decisionMissing = rawDecision === undefined || rawDecision === null;
+    const orchestration = normalizeOrchestrationDecision(rawDecision, 'direct');
+    const orchestrationWarning = {
+        ...(orchestration.unsanctionedDirect
+            ? {
+                unsanctionedDirect: orchestration.unsanctionedDirect,
+                unsanctionedDirectHint: MESH_UNSANCTIONED_DIRECT_HINT,
+            }
+            : {}),
+        ...(decisionMissing ? { orchestrationDecisionMissing: true } : {}),
+    };
     const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, message, readonly);
     if (!modeValidation.valid) {
         return JSON.stringify({
@@ -490,6 +520,23 @@ export async function meshSendTask(
                         ...(readonly ? { readonly: true } : {}),
                         dispatchedAt,
                     });
+                    // GRAPH-MEASUREMENT-DIRECT: written AFTER the dispatch is known to have
+                    // succeeded, mirroring recordSingleEnqueueDecision being written after the
+                    // insert — a failed dispatch must leave no decision row, or the adoption
+                    // ratio counts dispatches that never happened.
+                    recordDirectDispatchDecision(ctx.mesh.id, {
+                        taskId,
+                        via: 'p2p_direct',
+                        nodeId: args.node_id,
+                        ...(dispatchedSessionId ? { sessionId: dispatchedSessionId } : {}),
+                        ...(missionId ? { missionId } : {}),
+                        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                        decision: orchestration.decision,
+                        ...(decisionMissing ? { decisionMissing: true } : {}),
+                        ...(orchestration.unsanctionedDirect
+                            ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
+                            : {}),
+                    });
                 } catch { /* best-effort */ }
             }
             const returnedSessionId = result.sessionId
@@ -506,6 +553,9 @@ export async function meshSendTask(
                 ...(result.success && result.providerType ? { providerType: result.providerType } : {}),
                 dispatched: result.success === true,
                 ...(result.success ? (buildMissionInactiveWarning(ctx, missionId) ?? {}) : {}),
+                // GRAPH-MEASUREMENT-DIRECT: advisory only, and only on a dispatch that
+                // actually happened — a failed dispatch made no routing decision to report on.
+                ...(result.success ? orchestrationWarning : {}),
             });
         }
 
@@ -911,6 +961,22 @@ export async function meshSendTask(
                     ...(readonly ? { readonly: true } : {}),
                     dispatchedAt,
                 });
+                // GRAPH-MEASUREMENT-DIRECT: after the inject was accepted — see the sibling
+                // call site on the p2p_direct path. The rejection branch above returns before
+                // reaching here, so a refused dispatch leaves no decision row.
+                recordDirectDispatchDecision(ctx.mesh.id, {
+                    taskId,
+                    via: 'local_direct',
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    ...(missionId ? { missionId } : {}),
+                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                    decision: orchestration.decision,
+                    ...(decisionMissing ? { decisionMissing: true } : {}),
+                    ...(orchestration.unsanctionedDirect
+                        ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
+                        : {}),
+                });
             } catch { /* best-effort */ }
             // Create a delivery record for session-level ACK tracking
             let deliveryId: string | undefined;
@@ -944,6 +1010,8 @@ export async function meshSendTask(
                 // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
                 ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
                 ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
+                // GRAPH-MEASUREMENT-DIRECT: advisory only — never blocks, never re-routes.
+                ...orchestrationWarning,
             });
         }
 

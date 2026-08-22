@@ -491,6 +491,26 @@ export const MESH_SEND_TASK_TOOL = {
                     + 'Has no effect on an idle session (delivered immediately either way).',
             },
             deliveryMode: { type: 'string', enum: ['when_idle', 'interrupt'], description: 'CamelCase alias for delivery_mode.' },
+            // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT surface.
+            //
+            // ★ WHY IT IS HERE AT ALL. This tool is the MAJORITY dispatch surface (~67%
+            // of dispatches in the graph-adoption investigation) and it carried no
+            // decision field, so two thirds of all routing judgements were structurally
+            // unmeasurable. `decision_missing` on mesh_enqueue_task described only the
+            // enqueue minority and was silent — not negative — about the rest.
+            //
+            // ★ OPTIONAL, exactly like mesh_enqueue_task's (see the note there): phase E
+            // measures and does not enforce, and a required field would reject every
+            // existing caller. Omission degrades to decision_missing, never an error.
+            orchestration_decision: {
+                type: 'object',
+                description: 'Record of your dispatch decision, for adoption measurement: {decision, direct_reason, ready_worker_tasks, known_graph_steps, capability_blockers}. '
+                    + 'On this DIRECT surface, direct_reason says why dispatching into an existing session beat queueing a task — one of same_subject_continuation, investigation_handoff, idle_session_reuse, queue_bypass_urgent, new_subject, legacy_client, operator_override. '
+                    + 'These are the cases the operating rules name: same-subject continuation, the investigate→fix handoff, reusing an idle session for a follow-up/retry/cleanup delta, or a deliberate queue bypass. '
+                    + 'new_subject is the one the rules do NOT endorse — a genuinely new topic should get its own task even when a session sits idle — and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. '
+                    + 'Optional and never rejected: omitting it is recorded as decision_missing. Provenance only — it never changes execution.',
+            },
+            orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
         },
         required: ['node_id', 'session_id', 'message', 'difficulty'],
     },

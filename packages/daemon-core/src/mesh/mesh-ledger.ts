@@ -217,6 +217,38 @@ export type MeshLedgerKind =
     //            orchestrationDecision, declaredEligibleSingle?, decisionMissing?,
     //            batchCapabilityAvailable? }
     | 'single_enqueue_decision'
+    // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT dispatch surface
+    // (`mesh_send_task`), the third and largest of the three dispatch surfaces.
+    //
+    // ★ WHY THIS KIND EXISTS. The graph-adoption investigation found 0 graphs across
+    // 206 dispatches and could not say whether that was a failure, because ~67% of
+    // those dispatches went out through `mesh_send_task` — a surface whose schema
+    // carried no decision field at all. `single_enqueue_decision` therefore measured
+    // only the enqueue minority, and its `decision_missing` count was silent about
+    // the direct majority rather than evidence concerning it.
+    //
+    // ★ Its own kind rather than a `single_enqueue_decision` with a different
+    // `enqueueSurface`, for the same reason that kind is separate from
+    // graph_enqueue_committed: a direct dispatch commits no graph AND enters no
+    // queue, so "declared eligible singles" (a metric over QUEUED singles) must not
+    // silently absorb direct rows. Readers that want the whole picture join the three
+    // kinds explicitly; readers that want one surface are not forced to filter.
+    //
+    // The `direct_reason` axis is distinct from `single_reason` on purpose. The
+    // question a single enqueue answers is "why one step and not a graph"; the
+    // question a direct dispatch answers is "why this session and not the queue" —
+    // and the coordinator prompt sanctions specific answers to the second
+    // (same-subject continuation, investigation→fix handoff, idle-session reuse,
+    // deliberate queue bypass). `new_subject` is a legal value that self-classifies
+    // as NOT sanctioned, which is what makes justified and lazy direct dispatches
+    // separable after the fact.
+    //
+    // Same content boundary as every kind above: identifiers, counts, enums. The task
+    // MESSAGE is never written here; taskId is the join key to the task rows.
+    // payload: { taskId, enqueueSurface: 'direct', via, nodeId?, sessionId?, missionId?,
+    //            coordinatorSessionId?, orchestrationDecision, decisionMissing?,
+    //            unsanctionedDirect?, batchCapabilityAvailable? }
+    | 'direct_dispatch_decision'
     // Coordinator gate lifecycle (design :740-750). payload:
     //   { graphId, gateId, ref?, action, outcome?, generation, ownerSessionId?,
     //     releaseDigest?, materializedNodeIds?, policy?, ambiguousExternalOutcome? }
