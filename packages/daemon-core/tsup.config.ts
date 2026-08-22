@@ -5,7 +5,11 @@ import { daemonBuildDefine } from './build-stamp.mjs';
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/status/normalize.ts', 'src/chat/chat-signatures.ts'],
+  // config-dir is a separate entry (not only re-exported from index) so
+  // daemon-standalone's bootstrap can import the LEAF without evaluating the
+  // barrel — the barrel pulls in the logger, which fixes its log dir at module
+  // load, and the bootstrap must run before that happens.
+  entry: ['src/index.ts', 'src/status/normalize.ts', 'src/chat/chat-signatures.ts', 'src/config/config-dir.ts'],
   format: ['cjs', 'esm'],
   dts: false,
   clean: true,

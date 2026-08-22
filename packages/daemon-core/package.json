@@ -22,6 +22,12 @@
       "import": "./dist/chat/chat-signatures.mjs",
       "require": "./dist/chat/chat-signatures.js",
       "default": "./dist/chat/chat-signatures.js"
+    },
+    "./config/config-dir": {
+      "types": "./dist/config/config-dir.d.ts",
+      "import": "./dist/config/config-dir.mjs",
+      "require": "./dist/config/config-dir.js",
+      "default": "./dist/config/config-dir.js"
     }
   },
   "scripts": {

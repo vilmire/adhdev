@@ -12,11 +12,30 @@
  * drains. Honors an explicit ADHDEV_CONFIG_DIR so power users can still point
  * both processes at a shared dir on purpose; defaults to a dedicated
  * `~/.adhdev-standalone` otherwise.
+ *
+ * That inheritance is DELIBERATE and stays — but it is silent, and silence is
+ * what made two incidents expensive. A dev shell exporting
+ * ADHDEV_CONFIG_DIR=~/.adhdev-preview (the coordinator setup) hands this
+ * process the LIVE preview daemon's state dir, where a whole-file rewrite of
+ * meshes.json / mesh-coordinators.json / config.json, or a ledger retention
+ * pass, hits state no dev process should own. So we keep honoring the value
+ * and instead WARN when the inherited dir is occupied by a live daemon — see
+ * warnIfInheritedConfigDirIsOccupied below.
  */
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+// Imported from the config-dir LEAF, never the package barrel: this module
+// must run before anything that reads the config dir at import time (the
+// barrel pulls in the logger, which fixes its log dir on evaluation), so
+// pulling the barrel here would defeat the "FIRST import" contract above.
+// config-dir.ts is builtins + track-identity only, so it is safe to evaluate
+// this early.
+import {
+  detectOccupiedConfigDir,
+  formatOccupiedConfigDirWarning,
+} from '@adhdev/daemon-core/config/config-dir';
 
 export function pinStandaloneConfigDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -27,6 +46,34 @@ export function pinStandaloneConfigDir(
   const isolated = path.join(homeDir, '.adhdev-standalone');
   env.ADHDEV_CONFIG_DIR = isolated;
   return isolated;
+}
+
+/**
+ * Warn (never refuse) when the config dir we just honored came from the
+ * environment AND a live daemon owns it.
+ *
+ * Scoped to the INHERITED case on purpose: the self-chosen
+ * `~/.adhdev-standalone` default is this process's own dir, and a second
+ * standalone in it is an ordinary port conflict that the server surfaces
+ * already. `write` is injectable so the test asserts the exact text without
+ * capturing global stderr.
+ */
+export function warnIfInheritedConfigDirIsOccupied(
+  configDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  write: (line: string) => void = (line) => { process.stderr.write(line + '\n'); },
+): boolean {
+  const inherited = typeof env.ADHDEV_CONFIG_DIR === 'string' && env.ADHDEV_CONFIG_DIR.trim() === configDir;
+  if (!inherited) return false;
+  let occupancy;
+  try {
+    occupancy = detectOccupiedConfigDir(configDir, env);
+  } catch {
+    return false; // detection must never block startup
+  }
+  if (!occupancy) return false;
+  write(formatOccupiedConfigDirWarning(occupancy));
+  return true;
 }
 
 /**
@@ -57,5 +104,6 @@ export function emitStandaloneMigrationHint(
   } catch { /* best-effort hint */ }
 }
 
-pinStandaloneConfigDir();
+const pinnedConfigDir = pinStandaloneConfigDir();
+warnIfInheritedConfigDirIsOccupied(pinnedConfigDir);
 emitStandaloneMigrationHint();

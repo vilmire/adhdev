@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join, win32, posix } from 'path';
 import { tmpdir } from 'os';
 import { getConfigDir } from '../../src/config/config.js';
@@ -8,6 +8,9 @@ import {
   resolveConfigLogsDir,
   isCrossTrackConfigDirOverride,
   configDirChannelMismatch,
+  detectOccupiedConfigDir,
+  formatOccupiedConfigDirWarning,
+  ALLOW_TRACK_MISMATCH_ENV_VAR,
 } from '../../src/config/config-dir.js';
 
 const ORIGINAL_ENV = {
@@ -289,5 +292,108 @@ describe('configDirChannelMismatch (config-dir/provider-channel axis warning)', 
     const isolation = posix.join('/tmp', 'adhdev-test-abc123');
     expect(configDirChannelMismatch(isolation, 'stable', false)).toBeNull();
     expect(configDirChannelMismatch(isolation, 'preview', false)).toBeNull();
+  });
+});
+
+// ─── detectOccupiedConfigDir ────────────────────────────────────────────────
+//
+// Guards the ADHDEV_CONFIG_DIR INHERITANCE hazard: a dev process handed a live
+// daemon's config dir writes that daemon's meshes.json / mesh-coordinators.json
+// / config.json / mesh-ledger. Inheritance itself is deliberate
+// (bootstrap-config-dir.ts honors it on purpose), so the contract under test is
+// detect-and-warn, never refuse.
+//
+// Every case uses a mkdtemp fixture dir and an INJECTED liveness probe — the
+// real process table and the live ~/.adhdev(-preview) dirs are never touched.
+describe('detectOccupiedConfigDir (inherited-config-dir occupancy)', () => {
+  let occupiedRoot = '';
+  const ALIVE = () => true;
+  const DEAD = () => false;
+
+  beforeEach(() => {
+    occupiedRoot = mkdtempSync(join(tmpdir(), 'adhdev-occupancy-'));
+  });
+
+  afterEach(() => {
+    rmSync(occupiedRoot, { recursive: true, force: true });
+  });
+
+  const writePid = (name: string, body: string): void => {
+    writeFileSync(join(occupiedRoot, name), body, 'utf-8');
+  };
+
+  it('detects a live PREVIEW daemon (daemon-19223.pid) owning the dir', () => {
+    writePid('daemon-19223.pid', '24845');
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 999_999, ALIVE)).toEqual({
+      configDir: occupiedRoot,
+      pid: 24845,
+      track: 'preview',
+    });
+  });
+
+  it('detects a live STABLE daemon (bare daemon.pid) owning the dir', () => {
+    writePid('daemon.pid', '4242');
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 999_999, ALIVE)).toEqual({
+      configDir: occupiedRoot,
+      pid: 4242,
+      track: 'stable',
+    });
+  });
+
+  // ── The over-correction guards. Each of these is a case where warning would
+  // ── nag a legitimate workflow, so they must stay silent.
+
+  it('stays silent for an unoccupied dir — the ordinary override case', () => {
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 999_999, ALIVE)).toBeNull();
+  });
+
+  it('stays silent when the PID file is stale (owner is dead) — leftovers are not occupancy', () => {
+    writePid('daemon-19223.pid', '24845');
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 999_999, DEAD)).toBeNull();
+  });
+
+  it('stays silent when the live PID is our OWN — a daemon re-resolving its own dir must not warn about itself', () => {
+    writePid('daemon-19223.pid', '777');
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 777, ALIVE)).toBeNull();
+  });
+
+  it('stays silent when ADHDEV_ALLOW_TRACK_MISMATCH=1 — the documented opt-in for a deliberate shared dir', () => {
+    writePid('daemon-19223.pid', '24845');
+    expect(detectOccupiedConfigDir(
+      occupiedRoot,
+      { [ALLOW_TRACK_MISMATCH_ENV_VAR]: '1' },
+      999_999,
+      ALIVE,
+    )).toBeNull();
+  });
+
+  it('stays silent on a garbage/empty PID file rather than guessing (fail-open)', () => {
+    writePid('daemon.pid', 'not-a-pid');
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 999_999, ALIVE)).toBeNull();
+    writePid('daemon.pid', '   ');
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 999_999, ALIVE)).toBeNull();
+    writePid('daemon.pid', '0');
+    expect(detectOccupiedConfigDir(occupiedRoot, {}, 999_999, ALIVE)).toBeNull();
+  });
+
+  it('stays silent for an empty/blank configDir argument', () => {
+    expect(detectOccupiedConfigDir('', {}, 999_999, ALIVE)).toBeNull();
+    expect(detectOccupiedConfigDir('   ', {}, 999_999, ALIVE)).toBeNull();
+  });
+
+  it('names the occupant, the dir, the risk and the escape hatch in the warning', () => {
+    const message = formatOccupiedConfigDirWarning({
+      configDir: '/home/vilmi/.adhdev-preview',
+      pid: 24845,
+      track: 'preview',
+    });
+    // The whole point of the fix: the 2026-08-21/22 incidents were misdiagnosed
+    // because the cross-track write was silent. An unattributable warning would
+    // repeat that failure, so pin the parts an operator needs.
+    expect(message).toContain('/home/vilmi/.adhdev-preview');
+    expect(message).toContain('24845');
+    expect(message).toContain('meshes.json');
+    expect(message).toContain(ALLOW_TRACK_MISMATCH_ENV_VAR);
+    expect(message).toContain('env -u ADHDEV_CONFIG_DIR');
   });
 });

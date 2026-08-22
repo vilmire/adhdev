@@ -21,6 +21,11 @@ export default defineConfig({
     options.alias = {
       ...(options.alias || {}),
       '@adhdev/daemon-core': path.resolve(__dirname, '../daemon-core/dist/index.js'),
+      // esbuild `alias` is exact-match, so the barrel entry above does NOT
+      // cover subpath imports. bootstrap-config-dir.ts deliberately imports
+      // the config-dir LEAF (it must not evaluate the barrel before the pin
+      // lands), so map that subpath explicitly or the bundle fails to resolve.
+      '@adhdev/daemon-core/config/config-dir': path.resolve(__dirname, '../daemon-core/dist/config/config-dir.js'),
     };
   },
 });

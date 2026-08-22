@@ -26,6 +26,7 @@
  *    session-host-core, so the reverse import would be a cycle)
  */
 
+import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { basename, join } from 'path';
 import { getTrackIdentity, resolveBuildTrack, type BuildTrack } from '../track-identity.js';
@@ -196,4 +197,113 @@ export function configDirChannelMismatch(
     if (!impliedTrack) return null;
 
     return impliedTrack === resolvedChannel ? null : { impliedTrack, channel: resolvedChannel };
+}
+
+/** Env var that silences the inherited-config-dir occupancy warning. Shared
+ *  with daemon-cloud's uninstall guard so one opt-in covers both surfaces. */
+export const ALLOW_TRACK_MISMATCH_ENV_VAR = 'ADHDEV_ALLOW_TRACK_MISMATCH';
+
+/**
+ * The daemon PID file a track's own daemon writes inside its config dir.
+ * Mirrors daemon-cloud/src/daemon-pid.ts getDaemonPidFile(): the stable
+ * default port keeps the historical bare `daemon.pid` name, every other
+ * instance is `daemon-<port>.pid`. Duplicated here rather than imported
+ * because daemon-pid.ts lives in the proprietary cloud package and this leaf
+ * must stay importable from OSS standalone.
+ */
+function trackDaemonPidFileName(track: BuildTrack): string {
+    const port = getTrackIdentity(track).defaultPort;
+    return port === getTrackIdentity('stable').defaultPort ? 'daemon.pid' : `daemon-${port}.pid`;
+}
+
+export interface ConfigDirOccupancy {
+    /** Absolute path of the config dir a live daemon is using. */
+    configDir: string;
+    /** PID of the live daemon that owns it. */
+    pid: number;
+    /** Which track's PID file matched (drives the remediation hint). */
+    track: BuildTrack;
+}
+
+/**
+ * Detects the dangerous half of ADHDEV_CONFIG_DIR inheritance: this process
+ * was handed a config dir that a DIFFERENT, CURRENTLY-RUNNING daemon owns.
+ *
+ * Why liveness and not a track-name match. `isCrossTrackConfigDirOverride`
+ * asks "does this path spell the sibling track's name?", which is the right
+ * question for an irreversible `uninstall` but the wrong one here: pointing a
+ * dev process at the sibling track's dir is explicitly a supported, routine
+ * setup (see that function's own doc and scripts/deploy-restart-verify.mjs),
+ * while the actual hazard — two processes writing the same state files —
+ * happens for ANY occupied dir, including a custom self-host path that spells
+ * neither track's name. Asking "is somebody else live in here?" flags exactly
+ * the cases that can corrupt state and stays quiet for the sanctioned ones
+ * (an unoccupied dir, a /tmp isolation dir, a stopped daemon's leftovers).
+ *
+ * PURE-ish and fail-open: any unreadable/absent PID file, an unparseable
+ * body, or a dead PID yields null. A false negative just restores today's
+ * behaviour; a false positive would nag on a legitimate workflow, so every
+ * ambiguous case resolves to "not occupied".
+ *
+ * `selfPid` defaults to process.pid so a daemon that legitimately re-resolves
+ * its OWN config dir never warns about itself.
+ */
+export function detectOccupiedConfigDir(
+    configDir: string,
+    env: NodeJS.ProcessEnv = process.env,
+    selfPid: number = process.pid,
+    isAlive: (pid: number) => boolean = defaultIsAlive,
+): ConfigDirOccupancy | null {
+    if (env[ALLOW_TRACK_MISMATCH_ENV_VAR] === '1') return null;
+    if (!configDir || !configDir.trim()) return null;
+
+    // Check both tracks' PID names: the occupant may be either track's daemon
+    // (or a custom-path install), and we only know the dir, not who owns it.
+    for (const track of ['preview', 'stable'] as const) {
+        const pidFile = join(configDir.trim(), trackDaemonPidFileName(track));
+        let pid: number;
+        try {
+            if (!existsSync(pidFile)) continue;
+            pid = Number.parseInt(readFileSync(pidFile, 'utf-8').trim(), 10);
+        } catch {
+            continue;
+        }
+        if (!Number.isFinite(pid) || pid <= 0) continue;
+        if (pid === selfPid) continue;
+        if (!isAlive(pid)) continue;
+        return { configDir: configDir.trim(), pid, track };
+    }
+    return null;
+}
+
+/** signal-0 liveness probe. Split out so tests inject determinism. */
+function defaultIsAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Operator-facing message for a detected occupancy. Separate from detection so
+ * the wording is pinned by a test and cannot drift into uselessness.
+ *
+ * Deliberately a WARNING, not a refusal: ADHDEV_CONFIG_DIR is the documented
+ * override, and standalone's bootstrap honors an inherited value on purpose
+ * (bootstrap-config-dir.ts) so power users can share one dir between the cloud
+ * daemon and standalone. Blocking that would break the sanctioned workflow.
+ * The 2026-08-21 and 2026-08-22 incidents were both misdiagnosed for hours
+ * because the cross-track write was SILENT — naming the occupant, the dir, and
+ * the escape hatch is the whole fix.
+ */
+export function formatOccupiedConfigDirWarning(occupancy: ConfigDirOccupancy): string {
+    return `⚠ ADHDEV_CONFIG_DIR was inherited from the environment and points at ${occupancy.configDir}, `
+        + `which a LIVE daemon (pid ${occupancy.pid}, ${occupancy.track} track) is currently using. `
+        + `This process will read and WRITE that daemon's state files — meshes.json (whole-file rewrite), `
+        + `mesh-ledger/ (append + retention deletes), mesh-coordinators.json, state.json — so its mesh registry, `
+        + `ledger history and provider activation can be clobbered by this process. `
+        + `If this is intentional (a deliberate shared dir), set ${ALLOW_TRACK_MISMATCH_ENV_VAR}=1 to silence this. `
+        + `Otherwise run \`env -u ADHDEV_CONFIG_DIR <cmd>\` to use this build's own dir.`;
 }
