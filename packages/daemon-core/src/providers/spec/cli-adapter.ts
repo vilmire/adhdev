@@ -46,6 +46,7 @@ import {
     detectClaudeAskUserQuestionPromptFromJson,
     detectClaudeAskUserQuestionPromptFromTuiPages,
     detectClaudeTuiMultiSelect,
+    isClaudeTuiReviewScreen,
     readFocusedClaudeTuiQuestion,
     stableClaudeTuiPromptId,
     type ClaudeInteractiveTuiPage,
@@ -107,6 +108,29 @@ export class SpecCliAdapter implements CliAdapter {
     private activeInteractivePrompt: InteractivePrompt | null = null;
     private interactivePromptTransport: 'stream-json' | 'tui' | null = null;
     private claudeTuiPromptCaptureInFlight = false;
+    /**
+     * OWNER-INPUT-WINS latch for the claude TUI capture pass. The multi-question
+     * capture injects Tab/Shift-Tab into the PTY to snapshot pages 2..N — the
+     * SAME input stream an owner answering in the attached terminal is typing
+     * into. A single-question prompt never injects (its page loop is empty),
+     * which is exactly the reported "1개일 때는 항상 동작, 2~3개일 때 꼬인다"
+     * split. Set by writeRaw() when a keystroke arrives while the picker footer
+     * is on screen; while set, no capture starts and any in-flight capture
+     * bails before its next injected key. Cleared once the picker footer leaves
+     * the screen (the next prompt may capture again).
+     */
+    private claudeTuiCaptureSuppressed = false;
+    /**
+     * Failed-capture bookkeeping, keyed by the nav-line identity of the prompt.
+     * A capture that ends without a prompt (page unparsable — e.g. options
+     * scrolled out) used to re-arm on EVERY pty_data frame, turning detection
+     * into a continuous Tab/Shift-Tab injection storm (the owner-visible
+     * "디텍트가 한번 더 되면서 꼬인다"). Attempts are now bounded per prompt;
+     * the count resets when the picker leaves the screen.
+     */
+    private claudeTuiCaptureFailures: { key: string; count: number } | null = null;
+    /** Max capture attempts per prompt identity before giving up (one retry). */
+    private static readonly CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS = 2;
     /**
      * Wall clock of the first frame on which a held interactive prompt was
      * observed to have left the screen. Mirrors the approval FSM's
@@ -539,6 +563,18 @@ export class SpecCliAdapter implements CliAdapter {
         // goes straight to the underlying terminal. send_message would
         // append submit_key after every chunk, which is why typing in
         // the dashboard terminal felt like "enter on every keystroke".
+        // OWNER-INPUT WINS: a keystroke while the AskUserQuestion picker is on
+        // screen means the owner is answering in the terminal, so suppress the
+        // dashboard capture pass (which injects Tab/Shift-Tab into this same
+        // stream) for the rest of this picker's lifetime. Best-effort only —
+        // a snapshot failure must never block or delay owner input.
+        try {
+            if (!this.claudeTuiCaptureSuppressed
+                && this.interactivePromptScheme() === 'claude_tui'
+                && this.driver.snapshot().includes('Enter to select')) {
+                this.claudeTuiCaptureSuppressed = true;
+            }
+        } catch { /* snapshot best-effort */ }
         this.driver.dispatch({ kind: 'pty_write', data });
     }
 
@@ -1225,9 +1261,17 @@ export class SpecCliAdapter implements CliAdapter {
             || this.activeInteractivePrompt
             || this.claudeTuiPromptCaptureInFlight) return;
         const screenText = this.driver.snapshot();
+        if (!screenText.includes('Enter to select')) {
+            // Picker gone — re-arm capture for the next prompt.
+            this.claudeTuiCaptureSuppressed = false;
+            this.claudeTuiCaptureFailures = null;
+            return;
+        }
         const headers = this.readClaudeTuiHeaders(screenText);
-        if (!screenText.includes('Enter to select')) return;
         if (headers.length === 0) {
+            // Headerless (single-question) capture parses the CURRENT screen
+            // only and injects no keys — always safe, even while the owner is
+            // driving the picker from the terminal.
             const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText }], {
                 // REBIND OPTION FIDELITY (rc.20): provisional id — replaced with the
                 // content-addressed stable id below, so the SAME picker re-captured
@@ -1244,6 +1288,22 @@ export class SpecCliAdapter implements CliAdapter {
             this.statusCallback?.();
             return;
         }
+        // Owner is driving this picker from the terminal — stay hands-off. The
+        // multi-question capture injects Tab/Shift-Tab into the same input
+        // stream the owner's keystrokes are in.
+        if (this.claudeTuiCaptureSuppressed) return;
+        // The review/submit page ("Ready to submit your answers?") still shows
+        // the nav line + footer, so it looks capturable — but it parses to null
+        // BY DESIGN, which used to leave activeInteractivePrompt null and
+        // re-arm this whole capture on the very next frame: a Tab/Shift-Tab
+        // injection loop running at the exact moment the owner presses Enter
+        // on the pre-selected Submit row. Never capture from the review page.
+        if (isClaudeTuiReviewScreen(screenText)) return;
+        // Bound retries per prompt identity so an unparsable picker cannot
+        // become a key-injection storm (see claudeTuiCaptureFailures).
+        const navKey = headers.join('\u0001');
+        if (this.claudeTuiCaptureFailures?.key === navKey
+            && this.claudeTuiCaptureFailures.count >= SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS) return;
         this.claudeTuiPromptCaptureInFlight = true;
         void this.captureClaudeTuiPrompt(screenText, headers).finally(() => {
             this.claudeTuiPromptCaptureInFlight = false;
@@ -1386,11 +1446,17 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     private async captureClaudeTuiPrompt(firstScreen: string, headers: string[]): Promise<void> {
+        // Owner typed between detection and capture start — bail before any
+        // key is injected (owner input wins over dashboard capture fidelity).
+        if (this.claudeTuiCaptureSuppressed) return;
         const pages: ClaudeInteractiveTuiPage[] = [{ screenText: firstScreen, header: headers[0] }];
         // Forward pass: Tab to each page 2..N and snapshot once its glyph column
         // has settled, so pages 2+ capture their checkbox markers (not a racy
         // pre-redraw frame).
         for (let index = 1; index < headers.length; index += 1) {
+            // Abort before injecting the NEXT key if the owner started typing
+            // mid-capture — the keys below land in the owner's input stream.
+            if (this.claudeTuiCaptureSuppressed) return;
             this.driver.dispatch({ kind: 'pty_write', data: '\t' });
             await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
             pages.push({ screenText: await this.snapshotSettledClaudeTuiPage(), header: headers[index] });
@@ -1399,6 +1465,7 @@ export class SpecCliAdapter implements CliAdapter {
         // again re-read it and OR-in any now-visible multi-select glyphs — a
         // second chance to repair a page whose forward-pass frame was still racy.
         for (let index = headers.length - 1; index > 0; index -= 1) {
+            if (this.claudeTuiCaptureSuppressed) return;
             this.driver.dispatch({ kind: 'pty_write', data: '\x1b[Z' });
             await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
             const reread = await this.snapshotSettledClaudeTuiPage();
@@ -1429,12 +1496,36 @@ export class SpecCliAdapter implements CliAdapter {
             promptId: 'ask-user-tui-pending',
             providerType: this.cliType,
         });
-        if (!prompt) return;
+        if (!prompt) {
+            // Parse failure: the picker stays un-held, so maybeCapture would
+            // re-run this whole injection pass on the next frame. Count the
+            // failure against this prompt's nav identity so retries are
+            // bounded (CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS).
+            this.noteClaudeTuiCaptureFailure(headers);
+            return;
+        }
+        this.claudeTuiCaptureFailures = null;
         prompt.promptId = stableClaudeTuiPromptId(prompt.questions);
         this.activeInteractivePrompt = prompt;
         this.interactivePromptTransport = 'tui';
         this.interactivePromptLostAt = null;
         this.statusCallback?.();
+    }
+
+    /** Record a failed multi-question capture against the prompt's nav-line
+     *  identity so maybeCaptureClaudeTuiPrompt can bound retries. */
+    private noteClaudeTuiCaptureFailure(headers: string[]): void {
+        const navKey = headers.join('\u0001');
+        if (this.claudeTuiCaptureFailures?.key === navKey) {
+            this.claudeTuiCaptureFailures.count += 1;
+        } else {
+            this.claudeTuiCaptureFailures = { key: navKey, count: 1 };
+        }
+        const { count } = this.claudeTuiCaptureFailures;
+        LOG.warn(
+            'SpecAdapter',
+            `[${this.cliType}] TUI prompt capture failed to parse (attempt ${count}/${SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS}) — ${count >= SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS ? 'giving up until the picker leaves the screen' : 'one retry remains'}`,
+        );
     }
 
     getDebugState(): Record<string, any> {
