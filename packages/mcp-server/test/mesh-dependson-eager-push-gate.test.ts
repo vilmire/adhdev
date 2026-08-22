@@ -91,8 +91,8 @@ test('Fix A: a task with an UNMET dependency is NOT eager-pushed (0 injections)'
   // remote session. The only transport traffic is the local queue trigger.
   assert.equal(transport.meshCommands.length, 0, 'no remote session may be injected for a dependency-blocked task');
   assert.ok(
-    transport.commands.every((c: any) => c.cmd === 'trigger_mesh_queue'),
-    'only the local queue trigger may run',
+    transport.commands.every((c: any) => c.cmd === 'trigger_mesh_queue' || c.cmd === 'get_mesh'),
+    'only the pre-validation snapshot refresh (get_mesh) and the local queue trigger may run',
   );
 });
 

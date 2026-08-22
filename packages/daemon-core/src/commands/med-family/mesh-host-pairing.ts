@@ -119,7 +119,16 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                     error: applied.reason,
                 };
             }
-            ctx.inlineMeshCache.set(meshId, applied.mesh);
+            // Union-warm instead of a raw set. applied.mesh is rebuilt from the
+            // config file, so a raw replace drops inline-cache-only nodes (e.g. a
+            // worktree clone whose durable addNode was skipped) — the exact
+            // NODE-MEMBERSHIP-SHRINK-ON-MERGE regression, re-introduced through
+            // a side door, on the one handler that just MUTATED membership.
+            // getCachedInlineMesh with a payload routes through
+            // warmInlineMeshCache → reconcileInlineMeshCache (union merge,
+            // tombstones still honored); with no warm cache it sets the same
+            // value the raw set would have.
+            ctx.getCachedInlineMesh(meshId, applied.mesh);
             ctx.invalidateAggregateMeshStatus(meshId);
             try {
                 const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');

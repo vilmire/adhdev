@@ -669,6 +669,26 @@ export const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
  * them: the explicit remove path splices the node out directly, and the
  * owner-daemon fallback below re-checks with the owner on a real cache miss.
  */
+/**
+ * Ownership guard for the settled-removal verdict in refreshMeshFromDaemon:
+ * true when the node carries explicit daemon/machine identity that is
+ * definitively NOT this coordinator's local daemon. Compared under canonical
+ * machine-core form (daemonIdsEquivalent), not raw `===`, for the same reason
+ * as isDirectLocalNode — stored id forms differ (bare / daemon_ / standalone_
+ * prefixes). A node with NO explicit identity returns false: with nothing to
+ * disprove local ownership, the local daemon's omission remains the best
+ * removal evidence available, so the settled verdict still fires and genuinely
+ * removed local worktrees keep dropping out.
+ */
+function hasDefinitivelyRemoteIdentity(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
+    const nodeDaemonId = readNodeDaemonId(node as any);
+    const nodeMachineId = readNodeMachineId(node as any);
+    return Boolean(
+        (nodeDaemonId && ctx.localDaemonId && !daemonIdsEquivalent(nodeDaemonId, ctx.localDaemonId))
+        || (nodeMachineId && ctx.localMachineId && !daemonIdsEquivalent(nodeMachineId, ctx.localMachineId)),
+    );
+}
+
 export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settledNodeIds: Set<string> }> {
     // Node ids the local daemon is authoritative about and did NOT report — their
     // removal is settled, so callers must not escalate to the owning daemon.
@@ -694,6 +714,22 @@ export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settled
             //      so omitting the worktree means it was genuinely removed.
             // Either way the node must drop out: that is the stale-worktree
             // revalidation callers depend on to fall back to removed-node recovery.
+            //
+            // Ownership guard (both clauses): a base node is effectively always
+            // reported, and isLocalWorktree is stamped relative to the OWNING
+            // daemon — so without this check EVERY omitted worktree with a live
+            // local source became a settled removal, including ones owned by
+            // another daemon that the local daemon never tracked. A node carrying
+            // explicit NON-LOCAL daemon/machine identity is remote-owned: the
+            // local daemon's silence about it is not evidence of removal, so it
+            // is preserved (the owner-daemon fallback in findNodeWithRefresh
+            // remains the path that confirms it). Genuine local removals are
+            // unaffected: a locally-owned worktree carries LOCAL identity, so the
+            // guard is false and the settled verdict still fires.
+            if (hasDefinitivelyRemoteIdentity(ctx, existing)) {
+                merged.push(existing);
+                continue;
+            }
             if (isLocalControlPlaneNode(ctx, existing)) { settledNodeIds.add(existingId); continue; }
             const clonedFromNodeId = readString((existing as any)?.clonedFromNodeId)
                 || readString((existing as any)?.cloned_from_node_id);

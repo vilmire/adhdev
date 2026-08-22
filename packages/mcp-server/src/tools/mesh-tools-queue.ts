@@ -410,6 +410,15 @@ export async function meshEnqueueTask(
         orchestration_decision?: unknown; orchestrationDecision?: unknown;
     },
 ): Promise<string> {
+    // STALE-SNAPSHOT-TARGET-REJECT: refresh before validation. Every other
+    // membership-reading tool refreshes first; enqueue alone validated
+    // target_node_id against the startup snapshot, so a node cloned after this
+    // MCP process started hard-failed with target_node_not_found even though
+    // the daemon's get_mesh already knew it (observed live: the daemon had
+    // completed the worktree bootstrap while the coordinator's snapshot still
+    // listed 7 nodes). Best-effort: a refresh failure leaves the previous
+    // behavior unchanged.
+    await refreshMeshFromDaemon(ctx);
     const normalized = normalizeEnqueueTaskArgs(ctx, args, 'mesh_enqueue_task');
     if (!normalized.ok) {
         return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...(normalized.extra ?? {}) });
@@ -696,6 +705,13 @@ export async function meshEnqueueBatch(
     // tool exists to prevent); allow silences detection for every entry.
     const allowDuplicate = args.allowDuplicate === true || args.allow_duplicate === true;
     const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
+
+    // STALE-SNAPSHOT-TARGET-REJECT (batch half): one refresh for the whole
+    // batch, before any entry is validated. The batch is atomic, so a stale
+    // snapshot rejecting one pinned target_node_id rolled back ALL entries —
+    // a strictly worse blast radius than the single-enqueue path. Best-effort:
+    // a refresh failure leaves the previous behavior unchanged.
+    await refreshMeshFromDaemon(ctx);
 
     // ── Normalize every entry BEFORE inserting anything (atomic by construction:
     //    a normalization failure returns without touching the queue). ──
