@@ -76,10 +76,44 @@ const MAGI_MIN_TARGETS = 2;
  * 0.4 because their non-mergeable claims share zero content tokens (jaccard 0).
  */
 const MAGI_CLUSTER_JACCARD = 0.4;
-/** Default wall-clock budget for wait=true replica collection. */
-const MAGI_DEFAULT_WAIT_MS = 180_000;
-const MAGI_MAX_WAIT_MS = 600_000;
+/**
+ * Default wall-clock budget for wait=true replica collection.
+ *
+ * MAGI-DEADLINE-MISLABEL: was 180_000 (3 min). A live 3-replica fan-out measured
+ * kimi taking 16m09s (claim → completed) to produce a fully-evidenced answer — the
+ * 180s deadline force-finalized it as `unparseable_output` 13 minutes before it
+ * actually answered, which the coordinator then read as "kimi failed to produce
+ * valid output" instead of "kimi hadn't answered yet". Raised to 480_000 (8 min) —
+ * comfortably past typical replica latency without making every `wait:true` review
+ * block the coordinator for a long time by default. Not differentiated per
+ * task_kind (rca/design/freeform): the one measured overrun was an `rca` replica,
+ * and a per-kind budget would need its own config surface for a single data point —
+ * not worth the complexity. A review that may run long should prefer `wait:false` +
+ * `mesh_magi_collect` (async collection, no coordinator block) over raising this
+ * further; `wait_timeout_ms` can still override up to MAGI_MAX_WAIT_MS per call.
+ */
+export const MAGI_DEFAULT_WAIT_MS = 480_000;
+/**
+ * Hard ceiling on wait_timeout_ms (both the default above and any caller override).
+ * Raised 600_000 (10 min) → 1_200_000 (20 min) alongside the default bump so a
+ * caller that explicitly wants to block past the new default (e.g. to cover the
+ * measured 16m09s kimi case synchronously) has headroom to do so; the async
+ * wait:false + mesh_magi_collect path remains the recommended way to avoid
+ * blocking the coordinator at all.
+ */
+export const MAGI_MAX_WAIT_MS = 1_200_000;
 const MAGI_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Pure clamp applied to a caller-supplied wait_timeout_ms (mesh_magi_review /
+ * mesh_magi_collect): falls back to MAGI_DEFAULT_WAIT_MS when absent/non-numeric/zero,
+ * then bounds the result to [MAGI_POLL_INTERVAL_MS, MAGI_MAX_WAIT_MS]. Extracted so the
+ * exact arithmetic both call sites share is independently unit-testable without waiting
+ * out real (or mocked) minutes-long timers.
+ */
+export function resolveMagiWaitTimeoutMs(raw: unknown): number {
+    return Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(raw) || MAGI_DEFAULT_WAIT_MS));
+}
 
 // ─── Task kinds (MAGI-REDESIGN) ─────────────────
 //
@@ -648,7 +682,22 @@ export function synthesizeMagiResponses(
         const replicasMissing = Math.max(0, replicasExpected - replicasAnswered);
         const lossDominated = replicasMissing > 0 && replicasMissing >= replicasAnswered;
         if (lossDominated) {
-            independenceBanner = `independence not achieved — only ${replicasAnswered} of ${replicasExpected} replica(s) answered (${replicasMissing} missing/dropped), collapsing the answering set to ${distinctProviders} provider(s) and ${distinctNodes} machine(s). This is a replica-loss/collection failure, not a low-diversity panel — inspect the dropped replicas (stale/unparseable/no-session) before re-reading the diversity spans. Agreements are routed to needs_verification.`;
+            // MAGI-DEADLINE-MISLABEL: a dropped replica whose error is `replica_deadline_exceeded`
+            // may still be generating its answer somewhere — a later mesh_magi_collect can
+            // recover it (the replica's session/task is not gone, collection just stopped
+            // waiting). A dropped replica with any OTHER error (unparseable content, stale,
+            // failed, cross-wired, no session) is not coming back on its own. These call for
+            // different coordinator actions — wait/re-collect vs swap the panel slot — so name
+            // the split instead of lumping every drop under one "collection failure" banner.
+            const notAnswered = responses.filter(r => !(r.source.ok && r.response));
+            const pendingCount = notAnswered.filter(r => r.source.error === 'replica_deadline_exceeded').length;
+            const failedCount = notAnswered.length - pendingCount;
+            const dropBreakdown = pendingCount > 0 && failedCount > 0
+                ? ` (${pendingCount} still pending past the deadline — re-collect may recover them; ${failedCount} genuinely failed/unparseable/stale — those need a panel swap)`
+                : pendingCount > 0
+                    ? ` (all ${pendingCount} still pending past the deadline — re-collect with mesh_magi_collect may recover them, this is NOT a failed panel)`
+                    : ` (all ${failedCount} genuinely failed/unparseable/stale — re-collecting will not recover them, consider a panel swap)`;
+            independenceBanner = `independence not achieved — only ${replicasAnswered} of ${replicasExpected} replica(s) answered (${replicasMissing} missing/dropped), collapsing the answering set to ${distinctProviders} provider(s) and ${distinctNodes} machine(s). This is a replica-loss/collection failure, not a low-diversity panel${dropBreakdown}. Agreements are routed to needs_verification.`;
         } else {
             independenceBanner = `independence not achieved — the answering replicas span ${distinctProviders} provider(s) and ${distinctNodes} machine(s); their agreements are source-coupled and routed to needs_verification.`;
         }
@@ -1624,7 +1673,7 @@ export async function meshMagiReview(
     const mode = readString(args.mode) as MagiMode | '';
     const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
     const wait = args.wait !== false;
-    const waitTimeoutMs = Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS));
+    const waitTimeoutMs = resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs);
 
     // 3. Mission container + shared consensus group id.
     const consensusGroupId = `magi_${randomUUID().replace(/-/g, '')}`;
@@ -1872,7 +1921,7 @@ export async function meshMagiCollect(
     // the remaining replicas up to wait_timeout_ms.
     const wait = args.wait === true;
     const timeoutMs = wait
-        ? Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(args.wait_timeout_ms ?? args.waitTimeoutMs) || MAGI_DEFAULT_WAIT_MS))
+        ? resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs)
         : 0;
 
     const replicaTaskIds = replicaTasks.map((t: any) => readString(t.id)).filter(Boolean) as string[];
@@ -2507,7 +2556,7 @@ async function collectMagiResponses(
             // conditional (it no-ops for an IDE provider whose auto-approve script is absent,
             // or a remote pre-existing session that never got the autoApprove backfill), so a
             // command-approval prompt (e.g. the git-read the replica runs to gather evidence)
-            // is never clicked and the replica is silently lost at the 180s deadline as
+            // is never clicked and the replica is silently lost at the collect deadline as
             // `replica_waiting_approval`. Because the MAGI task is readonly:true, approving is
             // exactly the intended semantics — so before re-waiting, detect a bound-session
             // approval wedge and drive resolve_action(approve) on it. Best-effort and idempotent
@@ -2605,14 +2654,28 @@ async function collectMagiResponses(
         }
 
         // Not parseable / still schema-invalid → the premature-collect guard: re-wait until
-        // the deadline, then finalize as unparseable (preferring any provisional answer).
+        // the deadline, then finalize (preferring any provisional answer).
         if (force) {
             const prov = provisional.get(taskId);
             if (prov) {
                 finalized.set(taskId, prov);
                 return true;
             }
-            source.error = isSchemaFailure ? `schema_invalid: ${kindResult.failReason}` : 'unparseable_output';
+            // MAGI-DEADLINE-MISLABEL: `no_parseable_output` at the force-finalize pass means
+            // "no valid JSON was EVER seen across every poll up to the deadline" — which is
+            // indistinguishable, from inside this function, from "the replica simply hadn't
+            // finished answering yet". A live 3-replica fan-out measured exactly this: kimi's
+            // task was `completed` well before the (then 180s) deadline, every poll up to the
+            // deadline read no parseable JSON in its transcript, and it was labeled
+            // `unparseable_output` — reading as "kimi produced invalid output". 13 minutes
+            // later kimi actually answered with a fully-evidenced rootCause JSON, proving the
+            // label was wrong: it wasn't a bad answer, it just hadn't arrived. The coordinator
+            // then misreported "0 valid replicas" instead of "no answer within the deadline".
+            //
+            // `schema_invalid:*` (isSchemaFailure) is left untouched — that case DID observe
+            // real content (a parsed JSON object) that fails the kind schema after one retry,
+            // which is a genuine content defect, not a timing artifact.
+            source.error = isSchemaFailure ? `schema_invalid: ${kindResult.failReason}` : 'replica_deadline_exceeded';
             finalized.set(taskId, { source, response: emptyResponse() });
             return true;
         }

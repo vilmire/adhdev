@@ -262,6 +262,28 @@ export type MeshLedgerKind =
     //   { graphId, gateId, ref?, action, priorState, reason, coordinatorSessionId?,
     //     force?, cancelledNodeIds?, graphStatus? }
     | 'graph_gate_abandoned'
+    // QUOTA-CLAIM-GATE-LEDGER: the quota claim gate in tryAssignQueueTask (evaluateProviderQuotaGate)
+    // previously only LOGGED a block (logQuotaClaimBlockTransition, LOG.info only) — no ledger
+    // trace at all. That is a silent-forever risk specifically for MAGI: a kind-panel slot is
+    // pinned to a single (node, provider) via requiredTags, so when that provider is
+    // quota-exhausted there is no fallback candidate to escape to (unlike the ordinary
+    // multi-provider claim path, which can fall through to another provider on the same node —
+    // see logQuotaClaimFallbackSuccess). The replica just parks pending indefinitely with
+    // nothing in the ledger to diagnose why.
+    //
+    // Same transition-dedup discipline as claim_refused / worktree_bootstrap_stale_bypass above,
+    // NOT one entry per ~4s reconcile tick: 'blocked' fires once when a (mesh, node, session,
+    // provider) gate verdict changes (first entry into the block, or the block reason/window/
+    // remaining% changes), and 'cleared' fires once when that same key's block resolves
+    // (evaluateProviderQuotaGate stops returning a block for it) — mirroring
+    // logQuotaClaimBlockTransition / clearQuotaClaimBlockState's existing log fingerprinting so
+    // the ledger records exactly the same state transitions the log line already dedupes on,
+    // never a steady-state repeat.
+    // payload: { nodeId, sessionId, providerType, phase: 'blocked' | 'cleared',
+    //            reason?, window?, remainingPercent?, thresholdPercent?, previouslyBlocked? }
+    //            (reason/window/remainingPercent/thresholdPercent/previouslyBlocked present
+    //            only on phase:'blocked'; 'cleared' carries just the identity fields.)
+    | 'quota_claim_gate'
     ;
 
 export interface MeshLedgerEntry {

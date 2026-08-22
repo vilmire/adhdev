@@ -118,6 +118,9 @@ export {
 
 export {
     MAGI_MAX_REPLICAS,
+    MAGI_DEFAULT_WAIT_MS,
+    MAGI_MAX_WAIT_MS,
+    resolveMagiWaitTimeoutMs,
     buildMagiFanoutPlan,
     buildMagiTaskPrompt,
     classifyStaleReplicas,
