@@ -43,6 +43,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/refine-patch-equivalence-classification.test.ts',
   'test/commands/refine-trivial-ff-gitlink-rebase.test.ts',
   'test/commands/router-direct-mesh-truth.test.ts',
+  'test/commands/worktree-cleanup-ghost-convergence.test.ts',
   'test/commands/worktree-cleanup-legacy-path-hint.test.ts',
   'test/commands/worktree-cleanup-patch-equivalence.test.ts',
   'test/git/git-checkpoint-integration.test.ts',

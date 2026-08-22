@@ -115,6 +115,27 @@ export async function meshFastForwardNode(
         }, null, 2);
     }
 
+    // DRY-RUN-SILENTLY-IGNORED: `dry_run` is a VETO in this contract, never a
+    // trigger — `execute:true` is the only thing that runs anything. A caller
+    // passing `dry_run:false` on its own is plainly asking to execute, but got
+    // a silent dry-run back; believing it had executed, a coordinator can then
+    // report a convergence that never happened. Refuse that shape loudly
+    // instead of quietly doing nothing.
+    if (args.dry_run === false && args.execute !== true) {
+        return JSON.stringify({
+            success: false,
+            code: 'dry_run_false_requires_execute',
+            nodeId: args.node_id,
+            workspace: node.workspace,
+            allowed: false,
+            willRun: false,
+            executed: false,
+            blockingReasons: ['dry_run_false_requires_execute'],
+            error: 'dry_run:false alone does not execute — it only declines to veto. Pass execute:true to actually apply the fast-forward.',
+            nextAction: `Re-run mesh_fast_forward_node(node_id: "${args.node_id}", execute: true) to apply, or omit dry_run to preview.`,
+        }, null, 2);
+    }
+
     try {
         const dryRun = args.dry_run === true || args.execute !== true;
         const result = await commandForNode(ctx, node, 'fast_forward_mesh_node', {

@@ -65,6 +65,11 @@ function acceptableManagedWorktreePaths(
     return out;
 }
 
+/** A source repo root usable for ref lookups (present on disk). */
+function repoRootUsable(repoRoot: string | undefined): boolean {
+    return typeof repoRoot === 'string' && repoRoot.trim().length > 0 && fs.existsSync(repoRoot.trim());
+}
+
 /** Read a mesh policy's worktreeBaseDir override, or undefined when unset/blank. */
 function meshWorktreeBaseDir(mesh: any): string | undefined {
     const v = mesh?.policy?.worktreeBaseDir;
@@ -751,13 +756,48 @@ export async function getWorktreeForceCleanupConvergence(self: DaemonCommandRout
             return String(stdout || '').trim();
         };
 
+        // GHOST-WORKTREE-CLEANUP-DEADLOCK: when the worktree DIRECTORY is gone,
+        // `git rev-parse HEAD` inside it fails with spawn ENOENT. Treating that
+        // as "unproven" inverted the causality — the absence of the directory is
+        // not evidence of risk, and it made a vanished worktree permanently
+        // un-cleanable (the plan skipped it forever with convergence_unproven).
+        //
+        // The convergence question does NOT actually need the worktree: the
+        // branch tip lives in the SOURCE repo's ref store. So when the workspace
+        // is missing, resolve the branch tip from `repoRoot` instead and let the
+        // ordinary containment/patch-equivalence checks below run unchanged.
+        // This is strictly a change of WHERE the head commit is read from — it
+        // never weakens the merged-ness verdict, so an unmerged branch still
+        // returns allow:false and its ref is still preserved by the caller.
+        const workspaceMissing = !args.workspace || !fs.existsSync(args.workspace);
         let head = '';
-        try {
-            head = await runGit(['rev-parse', 'HEAD'], args.workspace);
-        } catch (e: any) {
-            return { allow: false, error: `could not resolve worktree HEAD: ${e?.message || e}` };
+        const branch = typeof args.node?.worktreeBranch === 'string' ? args.node.worktreeBranch.trim() : '';
+        if (workspaceMissing) {
+            if (!repoRootUsable(args.repoRoot)) {
+                return { allow: false, error: 'worktree path is missing and the source repo root is unavailable, so the branch tip cannot be resolved' };
+            }
+            if (!branch) {
+                return { allow: false, error: 'worktree path is missing and worktreeBranch metadata is absent, so the branch tip cannot be resolved' };
+            }
+            try {
+                head = await runGit(['rev-parse', '--verify', `${branch}^{commit}`], args.repoRoot);
+            } catch {
+                // The branch ref no longer exists in the source repo either. There
+                // is no commit left that could carry unmerged work, so there is
+                // nothing this node can still be holding — converged by absence.
+                return { allow: true, status: 'worktree_and_branch_absent', source: 'git_branch_absent' };
+            }
+            if (!head) {
+                return { allow: false, error: `branch '${branch}' resolved to an empty commit id` };
+            }
+        } else {
+            try {
+                head = await runGit(['rev-parse', 'HEAD'], args.workspace);
+            } catch (e: any) {
+                return { allow: false, error: `could not resolve worktree HEAD: ${e?.message || e}` };
+            }
+            if (!head) return { allow: false, error: 'worktree HEAD is empty' };
         }
-        if (!head) return { allow: false, error: 'worktree HEAD is empty' };
 
         const candidateRefs: string[] = [];
         try {

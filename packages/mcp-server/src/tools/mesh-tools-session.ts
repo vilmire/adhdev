@@ -138,6 +138,18 @@ export async function meshPruneStaleDirect(
     args: { execute?: boolean; dry_run?: boolean; include_terminal?: boolean } = {},
 ): Promise<string> {
     await refreshMeshFromDaemon(ctx);
+    // DRY-RUN-SILENTLY-IGNORED (same class as mesh_fast_forward_node): dry_run
+    // is a veto, not a trigger, so `dry_run:false` alone silently previews when
+    // the caller meant to execute. Refuse that shape rather than no-op.
+    if (args.dry_run === false && args.execute !== true) {
+        return JSON.stringify({
+            success: false,
+            code: 'dry_run_false_requires_execute',
+            executed: false,
+            error: 'dry_run:false alone does not execute — it only declines to veto. Pass execute:true to actually prune.',
+            nextAction: 'Re-run mesh_prune_stale_direct(execute: true) to prune, or omit dry_run to preview.',
+        }, null, 2);
+    }
     // execute must be explicit; dry_run is the default unless execute===true.
     const execute = args.execute === true && args.dry_run !== true;
     const includeTerminal = args.include_terminal === true;
