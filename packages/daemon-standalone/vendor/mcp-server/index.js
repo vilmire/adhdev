@@ -1535,7 +1535,7 @@ var MESH_FAST_FORWARD_NODE_TOOL = {
       mode: { type: "string", enum: ["merge", "push"], description: "merge (default): git merge --ff-only to absorb upstream. push: strict ff-only push of local commits to origin/<branch>; refuses any non-fast-forward." },
       branch: { type: "string", description: "Optional guard: require the node's current branch to match this branch before planning/executing." },
       execute: { type: "boolean", description: "When true, apply the fast-forward/push if all safety gates pass. Defaults false/dry-run." },
-      dry_run: { type: "boolean", description: "Preview only. Defaults true unless execute=true; dry_run=true overrides execute." },
+      dry_run: { type: "boolean", description: "Preview only. Defaults true unless execute=true; dry_run=true overrides execute. dry_run=false is NOT an execute trigger \u2014 it only declines to veto, so passing it alone is rejected with dry_run_false_requires_execute rather than silently previewing. Use execute=true to apply." },
       update_submodules: { type: "boolean", description: 'mode="merge" only: when true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean.' },
       push_submodules: { type: "boolean", description: 'mode="push" only: also ff-only push submodule HEADs to their origin main. Gated by mesh policy allowAutoPublishSubmoduleMainCommits \u2014 skipped unless that policy is enabled. Defaults false (root push only).' }
     },
@@ -1898,7 +1898,7 @@ var MESH_PRUNE_STALE_DIRECT_TOOL = {
     type: "object",
     properties: {
       execute: { type: "boolean", description: "When true, actually delete the orphaned records. Defaults false (dry run). Ignored when dry_run=true." },
-      dry_run: { type: "boolean", description: "Force a preview without mutation even if execute=true. Defaults to dry-run behavior when execute is not set." },
+      dry_run: { type: "boolean", description: "Force a preview without mutation even if execute=true. Defaults to dry-run behavior when execute is not set. dry_run=false is NOT an execute trigger \u2014 passing it alone is rejected with dry_run_false_requires_execute rather than silently previewing. Use execute=true to prune." },
       include_terminal: { type: "boolean", description: "Also prune terminal (completed/failed) direct dispatch store rows in addition to orphans. Defaults false." }
     }
   }
@@ -8277,6 +8277,15 @@ function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, session
 }
 async function meshPruneStaleDirect(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
+  if (args.dry_run === false && args.execute !== true) {
+    return JSON.stringify({
+      success: false,
+      code: "dry_run_false_requires_execute",
+      executed: false,
+      error: "dry_run:false alone does not execute \u2014 it only declines to veto. Pass execute:true to actually prune.",
+      nextAction: "Re-run mesh_prune_stale_direct(execute: true) to prune, or omit dry_run to preview."
+    }, null, 2);
+  }
   const execute = args.execute === true && args.dry_run !== true;
   const includeTerminal = args.include_terminal === true;
   const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
@@ -9421,6 +9430,20 @@ async function meshFastForwardNode(ctx, args) {
       willRun: false,
       executed: false,
       blockingReasons: ["node_read_only"]
+    }, null, 2);
+  }
+  if (args.dry_run === false && args.execute !== true) {
+    return JSON.stringify({
+      success: false,
+      code: "dry_run_false_requires_execute",
+      nodeId: args.node_id,
+      workspace: node.workspace,
+      allowed: false,
+      willRun: false,
+      executed: false,
+      blockingReasons: ["dry_run_false_requires_execute"],
+      error: "dry_run:false alone does not execute \u2014 it only declines to veto. Pass execute:true to actually apply the fast-forward.",
+      nextAction: `Re-run mesh_fast_forward_node(node_id: "${args.node_id}", execute: true) to apply, or omit dry_run to preview.`
     }, null, 2);
   }
   try {
