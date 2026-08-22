@@ -451,8 +451,22 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
   };
 }
 
-function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
-  const lines = page.screenText.split(/\r?\n/);
+/**
+ * True when the claude TUI picker is showing its final review/submit page
+ * ("Review your answers" / "Ready to submit your answers?").
+ *
+ * That page still renders the question nav line (all ☒) and the "Enter to
+ * select" footer, so it LOOKS like a capturable picker page — but it can never
+ * parse into a question (parseClaudeInteractiveTuiQuestion rejects it by
+ * design), and Tab-cycling away from it yanks focus off the pre-selected
+ * Submit row at the exact moment the owner is about to press Enter. The
+ * capture pass must never start (or be re-armed) from this page.
+ */
+export function isClaudeTuiReviewScreen(screenText: string): boolean {
+  return /(?:^|\n)\s*(?:Review your answers|Ready to submit your answers\?)\s*(?:\r?\n|$)/.test(screenText);
+}
+
+function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {  const lines = page.screenText.split(/\r?\n/);
   let navIndex = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     if (lines[i].includes('✔ Submit') && /[☐☒]/.test(lines[i])) {
