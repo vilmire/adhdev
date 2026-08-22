@@ -22,15 +22,22 @@ import { findNodeWithRefresh, refreshMeshFromDaemon } from '../src/tools/mesh-to
 type Call = { verb: string; daemonId?: string; args: any };
 
 const LOCAL_BASE = { id: 'node-local-base', daemonId: 'daemon-local', workspace: '/local/repo', isLocalWorktree: false };
-// Remote-OWNED worktree cloned FROM the local base: the local daemon reports
-// the source (always) but never tracked the clone.
+// Realistic clone topology: a worktree always inherits its SOURCE's daemonId
+// (clone_mesh_node executes on the source's daemon, mesh-crud.ts:1555), so a
+// remote-owned worktree hangs off a REMOTE base. The local daemon still reports
+// that remote base (base nodes propagate through config membership) while the
+// remote WORKTREE lives only in the owning daemon's cache — so the lineage
+// check alone ("source is reported ⇒ omission means removal") settles a live
+// remote worktree. This is the 2026-08-08 incident shape, plus the
+// clonedFromNodeId every real clone carries.
+const REMOTE_BASE = { id: 'node-remote-base', daemonId: 'daemon-remote', workspace: '/remote/repo', isLocalWorktree: false };
 const REMOTE_WT = {
     id: 'node-remote-wt',
     daemonId: 'daemon-remote',
     workspace: '/remote/wt',
     isLocalWorktree: true,
     worktreeBranch: 'feat/remote',
-    clonedFromNodeId: 'node-local-base',
+    clonedFromNodeId: 'node-remote-base',
 };
 // Identity-less worktree with a live local source: nothing disproves local
 // ownership, so omission by the local daemon IS removal evidence.
@@ -64,6 +71,7 @@ function makeCtx(opts: { localGetMeshNodes: any[]; remoteGetMeshNodes?: any[]; c
             updatedAt: '2026-08-22T00:00:00.000Z',
             nodes: [
                 { ...LOCAL_BASE },
+                { ...REMOTE_BASE },
                 { ...REMOTE_WT },
                 { ...ANON_WT },
             ],
@@ -73,12 +81,14 @@ function makeCtx(opts: { localGetMeshNodes: any[]; remoteGetMeshNodes?: any[]; c
     } as any;
 }
 
-// The local daemon reports only its own base — both worktrees are omitted.
-const LOCAL_ONLY_PAYLOAD = [{ ...LOCAL_BASE }];
+// The local daemon reports both BASES (its own, and the remote base via config
+// membership) but neither worktree: the remote one lives only in the owning
+// daemon's cache; the anonymous one was genuinely removed locally.
+const BASES_ONLY_PAYLOAD = [{ ...LOCAL_BASE }, { ...REMOTE_BASE }];
 
 test('a REMOTE-owned worktree omitted by the local daemon is NOT a settled removal', async () => {
     const calls: Call[] = [];
-    const ctx = makeCtx({ localGetMeshNodes: LOCAL_ONLY_PAYLOAD, remoteGetMeshNodes: [{ ...REMOTE_WT }], calls });
+    const ctx = makeCtx({ localGetMeshNodes: BASES_ONLY_PAYLOAD, remoteGetMeshNodes: [{ ...REMOTE_WT }], calls });
 
     const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
 
@@ -89,7 +99,7 @@ test('a REMOTE-owned worktree omitted by the local daemon is NOT a settled remov
 
 test('findNodeWithRefresh still resolves the remote-owned worktree (no hard non-membership)', async () => {
     const calls: Call[] = [];
-    const ctx = makeCtx({ localGetMeshNodes: LOCAL_ONLY_PAYLOAD, remoteGetMeshNodes: [{ ...REMOTE_WT }], calls });
+    const ctx = makeCtx({ localGetMeshNodes: BASES_ONLY_PAYLOAD, remoteGetMeshNodes: [{ ...REMOTE_WT }], calls });
 
     const node = await findNodeWithRefresh(ctx, 'node-remote-wt');
 
@@ -98,7 +108,7 @@ test('findNodeWithRefresh still resolves the remote-owned worktree (no hard non-
 
 test('CONTROL (over-correction guard): an identity-less worktree omitted while its source lives IS settled', async () => {
     const calls: Call[] = [];
-    const ctx = makeCtx({ localGetMeshNodes: LOCAL_ONLY_PAYLOAD, calls });
+    const ctx = makeCtx({ localGetMeshNodes: BASES_ONLY_PAYLOAD, calls });
 
     const { settledNodeIds } = await refreshMeshFromDaemon(ctx);
 
