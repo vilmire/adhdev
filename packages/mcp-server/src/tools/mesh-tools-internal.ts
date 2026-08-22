@@ -63,6 +63,10 @@ import {
     recordGraphEnqueueRolledBack,
     recordSingleEnqueueDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
+    // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
+    recordDirectDispatchDecision,
+    MESH_UNSANCTIONED_DIRECT_HINT,
+    MESH_VALID_DIRECT_REASONS,
     recordGraphGateClaimed,
     recordGraphGateReleased,
     recordGraphGateAbandoned,
@@ -338,6 +342,10 @@ export {
     recordGraphEnqueueRolledBack,
     recordSingleEnqueueDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
+    // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
+    recordDirectDispatchDecision,
+    MESH_UNSANCTIONED_DIRECT_HINT,
+    MESH_VALID_DIRECT_REASONS,
     recordGraphGateClaimed,
     recordGraphGateReleased,
     recordGraphGateAbandoned,

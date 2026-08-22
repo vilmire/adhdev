@@ -421,12 +421,18 @@ export {
     recordGraphEnqueueRolledBack,
     recordSingleEnqueueDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
+    // GRAPH-MEASUREMENT-DIRECT — the direct dispatch surface's decision record.
+    recordDirectDispatchDecision,
+    MESH_UNSANCTIONED_DIRECT_HINT,
     recordGraphGateClaimed,
     recordGraphGateReleased,
     recordGraphGateAbandoned,
     recordGraphGateExpired,
     MESH_VALID_SINGLE_REASONS,
     MESH_SUPERSEDED_SINGLE_REASONS,
+    MESH_DIRECT_REASONS,
+    MESH_VALID_DIRECT_REASONS,
+    MESH_UNSANCTIONED_DIRECT_REASONS,
 } from './mesh/mesh-graph-provenance.js';
 export type {
     GraphEnqueueProvenance,
