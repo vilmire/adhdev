@@ -51,7 +51,14 @@ import {
   createNativeHistoryListDispatcher,
   type ReaderId,
 } from './native-history/dispatcher.js';
-import { resolveProviderChannel, type ProviderChannel } from './channel/contract.js';
+import {
+  resolveProviderChannel,
+  isPreviewReleaseChannel,
+  PROVIDER_CHANNEL_ENV_VAR,
+  type ProviderChannel,
+} from './channel/contract.js';
+import { resolveBuildTrack } from '../track-identity.js';
+import { configDirChannelMismatch } from '../config/config-dir.js';
 import { ProviderChannelStore, type ActivationPointer } from './channel/store.js';
 import {
   ProviderChannelRuntime,
@@ -270,6 +277,13 @@ export class ProviderLoader {
 
   /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
   readonly channel: ProviderChannel;
+  /**
+   * Whether `channel` came from an explicit signal (config.providerChannel /
+   * ADHDEV_PROVIDER_CHANNEL / build-track stamp / preview updateChannel) or
+   * merely fell through to the 'stable' default. Only used to gate the
+   * cross-track stamp write — never to change channel resolution itself.
+   */
+  private readonly channelIsExplicit: boolean;
   private readonly channelStore: ProviderChannelStore | null;
   private readonly channelSyncIO?: {
     fetchJson?: (url: string) => Promise<any>;
@@ -472,6 +486,17 @@ export class ProviderLoader {
     // channel config/env always wins; otherwise the provider channel derives
     // from the daemon release channel (preview daemon → preview providers).
     this.channel = resolveProviderChannel(options?.channel, process.env, options?.updateChannel);
+    // Provenance of the resolution above, captured because resolveProviderChannel
+    // collapses "explicitly stable" and "fell through to stable" into the same
+    // value. Mirrors the signal set daemon-lifecycle.ts uses for its axis
+    // warning, plus the build-track stamp (which that warning treats as the
+    // absent signal it is diagnosing). Read only by writeChannelActivationStamp.
+    this.channelIsExplicit = Boolean(
+      (options?.channel && options.channel.trim())
+      || (process.env[PROVIDER_CHANNEL_ENV_VAR] ?? '').trim()
+      || resolveBuildTrack(process.env) === 'preview'
+      || isPreviewReleaseChannel(options?.updateChannel),
+    );
     this.channelStore = options?.channelStore === null
       ? null
       : (options?.channelStore ?? new ProviderChannelStore(ProviderChannelStore.defaultRoot(), this.logFn));
@@ -952,11 +977,61 @@ export class ProviderLoader {
     }
   }
 
+  /**
+   * CROSS-TRACK CLOBBER GUARD (2026-08-22 incident).
+   *
+   * The stamp lives under `<configDir>/providers/`, and ADHDEV_CONFIG_DIR
+   * overrides that path while feeding NO signal into resolveProviderChannel.
+   * So a process pointed at a preview config dir whose channel merely fell
+   * through to the 'stable' default (a source run under tsx — no
+   * `__ADHDEV_BUILD_CHANNEL__` bundler define — inheriting a coordinator
+   * shell's ADHDEV_CONFIG_DIR=~/.adhdev-preview) would rewrite the LIVE
+   * preview daemon's stamp to channel:'stable'. The next real daemon boot then
+   * read a stamp whose channel no longer matched its own, and the observed
+   * result was 52 providers loading as 0.
+   *
+   * The guard is deliberately narrow — refusing the write outright would be an
+   * over-correction that breaks the stamp's whole purpose (skipping a full
+   * network sync on same-version reboots), making every boot re-sync. We
+   * suppress ONLY the write that would flip an existing stamp onto another
+   * track, and only when this process's channel is a fallback rather than an
+   * explicit signal. Concretely, a write is skipped iff ALL hold:
+   *   - the channel was NOT explicitly signalled (fallback 'stable'), and
+   *   - the config dir's basename implies the OTHER track
+   *     (configDirChannelMismatch — the same predicate daemon-lifecycle.ts
+   *     already warns on), and
+   *   - a stamp already exists whose channel differs from ours.
+   * A normal daemon — explicit channel, or a matching/absent stamp — always
+   * writes, so the network-free-boot contract is untouched.
+   */
   private writeChannelActivationStamp(): void {
     if (!this.daemonVersion) return;
+    const stampPath = this.channelActivationStampPath();
+    if (!this.channelIsExplicit) {
+      const mismatch = configDirChannelMismatch(getConfigDir(), this.channel, false);
+      if (mismatch) {
+        const existing = this.readChannelActivationStamp();
+        if (existing && existing.channel && existing.channel !== this.channel) {
+          // Loud and attributable: the 2026-08-21 misdiagnosis cost hours
+          // because the overwrite was silent. Name both sides and the cause.
+          this.log(
+            `⚠ Refusing to overwrite channel activation stamp ${stampPath}: `
+            + `existing stamp is ${existing.daemonVersion ?? 'unknown'}@${existing.channel}, `
+            + `this process resolved channel '${this.channel}' by FALLBACK (no explicit `
+            + `providerChannel/${PROVIDER_CHANNEL_ENV_VAR}/build-track stamp) while the config dir `
+            + `${getConfigDir()} implies the '${mismatch.impliedTrack}' track. `
+            + `This usually means a source/dev process (tsx — no build-track stamp) inherited a live `
+            + `daemon's ADHDEV_CONFIG_DIR. Leaving the live stamp intact; set `
+            + `${PROVIDER_CHANNEL_ENV_VAR}=${mismatch.impliedTrack} for this process if it is meant to `
+            + `manage the '${mismatch.impliedTrack}' channel.`,
+          );
+          return;
+        }
+      }
+    }
     try {
       fs.mkdirSync(this.defaultProvidersDir, { recursive: true });
-      fs.writeFileSync(this.channelActivationStampPath(), JSON.stringify({
+      fs.writeFileSync(stampPath, JSON.stringify({
         daemonVersion: this.daemonVersion,
         channel: this.channel,
         syncedAt: new Date().toISOString(),
