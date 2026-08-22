@@ -33,6 +33,38 @@
  * launch; `capabilityTags` route by tag when no nodeId is given; `n` is an optional
  * per-slot replica count. This is the SOLE panel-member shape — the fan-out planner
  * (buildMagiFanoutPlan) resolves a `MagiSlot[]` directly.
+ *
+ * ─── DELIBERATELY REDUCED SCHEMA — not a missing feature ─────────────────────
+ *
+ * A MagiSlot is a strict subset of a node's `NodeCapabilitySlot`. It accepts
+ * `provider` + optional `model` / `nodeId` / `capabilityTags` / `n`, and it
+ * deliberately does NOT accept the node-capability routing axes — `thinkingLevel`,
+ * `difficulty`, `maxParallel`. That asymmetry is the design, not an oversight:
+ *
+ *   - A node capability slot answers **"which work goes where"** — routing FITNESS.
+ *     Difficulty and thinking level exist there to match a task against the slot best
+ *     suited to run it.
+ *   - A MAGI panel slot answers **"who answers independently"** — cross-verification
+ *     DIVERSITY. Its whole value is that the replicas are NOT selected for fitness.
+ *
+ * Reviving the difficulty/thinking axes here would couple panel membership to routing
+ * optimization, and the best-fitting provider would win every slot. The panel would
+ * collapse toward one provider — which is precisely the failure MAGI exists to
+ * prevent, since agreement among coupled agents carries no information (see the
+ * `source_coupled` weighting in synthesis). A reduced schema is what keeps the two
+ * axes orthogonal.
+ *
+ * Consistent with that, `mesh_magi_review` enqueues every replica with a fixed
+ * `difficulty: 'freeform'` sentinel rather than a caller-chosen grade — the panel has
+ * already pinned the (node, provider) target, so any difficulty would be inert at best
+ * and would fight the panel's own slot selection at worst. To change how hard a
+ * replica thinks or how much parallelism a node grants, edit that NODE's capability
+ * slots (`mesh_node_slots_set`); it is a different axis, on purpose.
+ *
+ * Unknown keys are dropped rather than rejected, so slots written by another version
+ * stay readable. Write paths pair the normalizer with
+ * `collectIgnoredMagiSlotFields()` and report the drops as `ignoredFields`, so the
+ * reduction is visible instead of silent.
  */
 export interface MagiSlot {
     /** Optional — pin to a specific mesh node id. Absent → route by capabilityTags + provider. */

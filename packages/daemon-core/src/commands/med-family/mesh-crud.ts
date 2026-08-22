@@ -703,14 +703,27 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { setMagiKindPanel, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const { setMagiKindPanel, resolveScopedMeshId, collectIgnoredMagiSlotFields } = await import('../../config/mesh-config.js');
             // normalizeMagiTaskKindKey + normalizeMagiSlots (inside setMagiKindPanel)
             // validate the kind and each slot (provider required; model optional;
             // replica counts clamped; nodeId must belong to the target mesh).
             // Structured errors flow back as `error`.
+            //
+            // Collect the dropped keys BEFORE the write: the normalizer silently ignores
+            // anything outside the MagiSlot schema (a deliberate reduction — see MagiSlot
+            // in mesh-shared), which used to mean an operator could set `thinkingLevel`
+            // here and get no effect and no warning. Reported, never thrown, so a payload
+            // carrying an unknown key still writes exactly as before.
+            const ignoredFields = collectIgnoredMagiSlotFields(args?.slots);
             const slots = setMagiKindPanel(kind, args?.slots, requestedMeshId || undefined);
             const meshId = requestedMeshId || resolveScopedMeshId();
-            return { success: true, kind, slots, meshId: meshId ?? null };
+            return {
+                success: true,
+                kind,
+                slots,
+                meshId: meshId ?? null,
+                ...(ignoredFields.length ? { ignoredFields } : {}),
+            };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

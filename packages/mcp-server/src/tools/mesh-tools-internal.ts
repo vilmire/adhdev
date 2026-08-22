@@ -363,6 +363,7 @@ export {
     setMagiKindPanel,
     removeMagiKindPanel,
     normalizeMagiSlots,
+    collectIgnoredMagiSlotFields,
     getMeshMission,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,

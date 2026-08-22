@@ -7318,6 +7318,8 @@ async function meshMagiKindPanelSet(ctx, args) {
   const scope = magiPanelScope(meshId, ctx.mesh.name);
   try {
     const current = (0, import_daemon_core6.getMagiKindPanel)(kind, meshId) ?? [];
+    const ignoredFields = (0, import_daemon_core6.collectIgnoredMagiSlotFields)(args.slots);
+    const ignoredNote = ignoredFields.length ? { ignoredFields, ignoredFieldsNote: "These keys are not part of the MAGI slot schema and were DROPPED (the panel was still saved without them). A MAGI panel decides WHO answers independently; per-slot routing axes like thinkingLevel/difficulty/maxParallel belong on the node capability slots (mesh_node_slots_set)." } : {};
     if (!write) {
       const preview = (0, import_daemon_core6.normalizeMagiSlots)(args.slots, ctx.mesh.nodes.map((n) => n.id));
       return JSON.stringify({
@@ -7328,6 +7330,7 @@ async function meshMagiKindPanelSet(ctx, args) {
         replacement: true,
         currentSlots: current,
         slots: preview,
+        ...ignoredNote,
         note: `Dry-run only \u2014 no file written. This is a WHOLESALE replacement of the kind's slot list for mesh '${meshId}' (machine-local ~/.adhdev/meshes.json); the currentSlots would be fully replaced. Other meshes on this machine are unaffected. Re-run with write=true after explicit user approval.`
       }, null, 2);
     }
@@ -7340,6 +7343,7 @@ async function meshMagiKindPanelSet(ctx, args) {
       replacement: true,
       previousSlots: current,
       slots,
+      ...ignoredNote,
       nextAction: "Verify with mesh_magi_kind_panel_list, then mesh_magi_review({ task_kind }) resolves this binding."
     }, null, 2);
   } catch (e) {

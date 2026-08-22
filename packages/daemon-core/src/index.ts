@@ -239,7 +239,7 @@ export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
 export {
   listMeshes, listMeshesReadOnly, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh,
   addNode, removeNode, updateNode, normalizeRepoIdentity,
-  listMagiKindPanels, listMagiKindPanelsReadOnly, getMagiKindPanel, setMagiKindPanel, removeMagiKindPanel, normalizeMagiSlots, resolveScopedMeshId,
+  listMagiKindPanels, listMagiKindPanelsReadOnly, getMagiKindPanel, setMagiKindPanel, removeMagiKindPanel, normalizeMagiSlots, collectIgnoredMagiSlotFields, resolveScopedMeshId,
 } from './config/mesh-config.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
 // MAGI panel / common-output / synthesis types (re-exported from the mesh-shared
