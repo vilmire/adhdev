@@ -18,6 +18,79 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 // tick, so a small streak distinguishes the two without racing a live-but-slow worker.
 export const ACKED_DEATH_CONSECUTIVE_READ_FAILURES = 3;
 
+// DISPATCH-FAILURE-DEATH-SIGNAL (2026-08-23): how many CONSECUTIVE dispatch failures whose
+// reason PROVES the worker is absent (see isWorkerAbsenceDispatchFailure) end an acked hold.
+//
+// Deliberately the SAME value as ACKED_DEATH_CONSECUTIVE_READ_FAILURES, and deliberately a
+// separate named constant. It is the same value because it answers the same question on the
+// same axis — "distinguish a transient probe blip from a session that genuinely went away" —
+// and a hold should not be harder to end via one death signal than the other. It is a separate
+// name because the two count DIFFERENT events (failed transcript reads vs refused dispatches),
+// so a future tuning of one must not silently re-tune the other; that is the same reasoning
+// resolveAckedHoldHardCeilingMs gives for not importing the queue-side ceiling.
+//
+// 3 is NOT taken from the incident's observed run of 3. That run is evidence the signal EXISTS
+// and is repeatable, not evidence for a threshold — a threshold read off the one sample that
+// produced it is unfalsifiable. The bound comes from the failure model: these reasons are only
+// emitted after the transport positively resolved the target and found no adapter, so a single
+// one is already strong evidence; the streak exists solely to absorb the one structural race
+// that can produce a spurious instance — a dispatch landing inside a session's restart/respawn
+// window, which self-heals within a tick or two. Two ticks of slack over that race, with the
+// counter resetting on ANY contrary evidence (a successful read, a successful dispatch, or a
+// non-absence failure reason), is the smallest bound that cannot fire on it.
+export const ACKED_DEATH_CONSECUTIVE_DISPATCH_FAILURES = 3;
+
+/**
+ * DISPATCH-FAILURE-DEATH-SIGNAL: does this dispatch-failure reason PROVE the target worker
+ * is absent, as opposed to merely failing to reach it?
+ *
+ * This is an ALLOW-LIST, and it must stay one. The default for an unrecognised reason is
+ * `false` (not a death signal → keep holding, let the bounded ceiling govern), because the
+ * cost of the two mistakes is wildly asymmetric: a missed death signal costs latency that the
+ * 90-min ceiling already bounds, while a false death signal tears a LIVE worker off a turn it
+ * is actively running and discards its work. A deny-list would invert that default and make
+ * every future failure reason a death signal by omission.
+ *
+ * Included — the transport positively RESOLVED the destination and found no worker there:
+ *   • 'CLI agent not running: <type>'      cli-manager.ts — findAdapter returned nothing for
+ *                                          the target session; the adapter map is authoritative.
+ *   • 'No provider instance for session'   cli-manager.ts — same absence on the multipart path.
+ *   • 'No mesh worker session bound to node' cli-manager.ts — node-scoped lookup found no
+ *                                          session; refused rather than fuzzy-matching.
+ *
+ * Excluded, and WHY each is a retry rather than a death (this is the enumeration the
+ * investigation asked for, kept next to the predicate so it cannot drift from it):
+ *   • dispatch_confirm_timeout / bare 'timeout'  — the worker may be alive and merely wedged or
+ *     slow; a timeout is never positive evidence of absence (the same rule mesh-terminal-
+ *     admission applies to completion).
+ *   • p2p_timeout / p2p_no_route / p2p_not_connected / p2p_datachannel_closed / p2p_unavailable
+ *     — the TRANSPORT is down. The worker's fate is unknown and is frequently fine; these
+ *     recover on their own and are exactly the transient class retries exist for.
+ *   • p2p_daemon_offline / daemon_mesh_target_offline — the whole target daemon is unreachable.
+ *     Genuinely often death, but it is the DAEMON-liveness axis, not this one, and the mesh
+ *     node-liveness/orphan-prune paths already own it. Claiming it here would double-own it.
+ *   • 'Refusing duplicate mesh dispatch' — the opposite of death: positive proof a live session
+ *     is already working the task. Its own rebind path handles it.
+ *   • provider-capability rejections / 'message required for send_chat' — permanent, but they
+ *     say the PAYLOAD is unacceptable, not that the worker is gone; the queue axis fails these
+ *     rows on its own budget.
+ *   • self-dial refusal / mesh_logic_or_provider_failure — a routing/logic defect, not worker
+ *     absence; already terminal via failTaskAsUndeliverable.
+ *
+ * Matching is substring-based on the error text because these errors cross a P2P boundary that
+ * preserves only `message` (see classifyP2pRelayFailure's structured-signal fallback), so no
+ * error code survives the trip. Anchored on distinctive fragments that no excluded reason above
+ * contains.
+ */
+export function isWorkerAbsenceDispatchFailure(reason: string | undefined | null): boolean {
+    const text = readNonEmptyString(reason);
+    if (!text) return false;
+    const normalized = text.toLowerCase();
+    return normalized.includes('cli agent not running')
+        || normalized.includes('no provider instance for session')
+        || normalized.includes('no mesh worker session bound to node');
+}
+
 // R4f backstop (b): the absolute death-deadline. An acked task is held indefinitely until this much
 // time has elapsed since its generating_started ack (dispatch.updatedAt); past it, a persistently
 // idle session is synthesized as a notification-loss net. This is set FAR above any observed emit
@@ -231,6 +304,99 @@ export function deleteHoldState(synthKey: string, meshId: string): void {
     const store = holdStore();
     if (!store) return;
     try { store.deleteInflightHold(taskIdFromSynthKey(meshId, synthKey)); } catch { /* degrade */ }
+}
+
+// ---------------------------------------------------------------------------
+// DISPATCH-FAILURE-DEATH-SIGNAL (2026-08-23) — streak state
+// ---------------------------------------------------------------------------
+// Per-task run of CONSECUTIVE worker-absence dispatch failures, keyed by synth key.
+//
+// WHY THIS EXISTS. The acked-hold axis was structurally BLIND to dispatch failures. When a
+// dispatch failed with 'CLI agent not running' — the adapter map's own authoritative statement
+// that no worker exists for the target session — that fact was recorded ONLY on the queue axis
+// (a `dispatch_failed` ledger row that is not even a member of MeshLedgerKind, carries no
+// top-level taskId, and has zero readers anywhere in src) and never reached the hold. The hold
+// therefore went on probing a session that provably did not exist until the 90-min ceiling.
+//
+// Measured live 2026-08-22: three consecutive `dispatch_failed: "CLI agent not running: kimi"`
+// while a hold ran to the ceiling at 5,405,993ms — the worker had been provably absent for
+// roughly the last 57 of those 90 minutes. The evidence existed; nothing was listening.
+//
+// This is a NEW SIGNAL, not a retuning. The 90-min ceiling is untouched and remains the final
+// backstop for every hold this does not cover (the excluded reasons documented on
+// isWorkerAbsenceDispatchFailure, and any hold that never sees a dispatch at all).
+//
+// PROCESS-LOCAL rather than a mesh_inflight_hold column, deliberately. Dispatch failures for a
+// task arrive in a burst of seconds while the reconcile tick is ~4s, so the streak's lifetime
+// is far shorter than any restart window; persisting it would add a schema migration to bound
+// a counter that never needs to survive one. A restart clears it, which fails SAFE: the hold
+// reverts to being governed by the ceiling, exactly as it was before this signal existed.
+//
+// Lives in this leaf module (not mesh-completion-synthesis, which makes the terminalization
+// DECISION) so the dispatch path can feed the signal without importing the heavy PHASE-4
+// synthesis core.
+const ackedHoldDispatchFailureStreak = new Map<string, { count: number; lastReason: string }>();
+
+/**
+ * DISPATCH-FAILURE-DEATH-SIGNAL: record the outcome of a dispatch attempt against a task's
+ * acked hold, so the hold can observe what the queue axis already knows.
+ *
+ * Call on EVERY dispatch resolution, success and failure alike. A success, or a failure whose
+ * reason does not prove worker absence, RESETS the streak — that reset is what keeps a worker
+ * that is merely unreachable, or that recovers, from ever accumulating toward a death verdict.
+ * Only an unbroken run of positively-absent reasons advances it.
+ *
+ * Recording is decoupled from acting: this only moves the counter. The terminalization decision
+ * is made in the reconcile loop, where the dispatch row's `acked` status and the hold state are
+ * both in hand — the same division of labour the read-failure death signal already uses.
+ *
+ * CALL-SITE CONTRACT (deliverTaskToSession, mesh-queue-assignment.ts). The failure call must sit
+ * BELOW the duplicate-dispatch rebind early-return: a refusal that names a live holder is
+ * positive proof the worker EXISTS, and routing it here would count the healthiest possible
+ * outcome toward a death verdict. The success call is not optional bookkeeping — without it the
+ * streak would count failures cumulatively rather than consecutively, and any task that failed
+ * three times over its whole life would eventually be declared dead.
+ */
+export function recordAckedHoldDispatchOutcome(
+    meshId: string,
+    taskId: string,
+    outcome: { ok: true } | { ok: false; reason?: string | null },
+): void {
+    const key = inFlightSynthKey(meshId, taskId);
+    if (outcome.ok || !isWorkerAbsenceDispatchFailure(outcome.reason)) {
+        // Any contrary evidence clears the run. A successful dispatch proves a worker is there;
+        // a non-absence failure (transport down, timeout, duplicate refusal) is not evidence of
+        // absence at all, and treating it as neutral is what keeps this signal conservative.
+        ackedHoldDispatchFailureStreak.delete(key);
+        return;
+    }
+    const prior = ackedHoldDispatchFailureStreak.get(key)?.count ?? 0;
+    ackedHoldDispatchFailureStreak.set(key, {
+        count: prior + 1,
+        lastReason: readNonEmptyString(outcome.reason) || 'worker_absent',
+    });
+}
+
+/** Read the current absence run for a task (undefined when none is accrued). */
+export function getAckedHoldDispatchFailureStreak(
+    meshId: string,
+    taskId: string,
+): { count: number; lastReason: string } | undefined {
+    return ackedHoldDispatchFailureStreak.get(inFlightSynthKey(meshId, taskId));
+}
+
+/**
+ * Clear a task's absence run. Called from terminalizeAckedHold: the synth key is task-scoped,
+ * not attempt-scoped, so a task later re-dispatched would otherwise inherit the dead attempt's
+ * run and could terminalize on its FIRST failure.
+ */
+export function clearAckedHoldDispatchFailureStreak(synthKey: string): void {
+    ackedHoldDispatchFailureStreak.delete(synthKey);
+}
+
+/** Test hook: clear the dispatch-failure streaks between cases. */
+export function __resetAckedHoldDispatchFailureStreakForTests(): void {
+    ackedHoldDispatchFailureStreak.clear();
 }
 
 // Restart rehydration: on the first touch of a mesh this process, pull its persisted

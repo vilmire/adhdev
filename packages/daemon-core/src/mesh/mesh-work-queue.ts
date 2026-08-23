@@ -2116,6 +2116,13 @@ export function updateDirectDispatchStatus(
  * SIBLING-DISPATCH-ORPHAN: the reason a task's queue row was abandoned while a sibling
  * direct-dispatch row was still live. Recorded verbatim in the audit ledger entry.
  */
+// DISPATCH-FAILURE-DEATH-SIGNAL: re-exported from the acked-hold leaf so the dispatch path
+// (mesh-queue-assignment) can feed the signal through the queue module it already imports.
+// Safe direction: mesh-reconcile-acked-hold is a leaf (logger + store + utils only) and does
+// not import this module, so this cannot form the dependency cycle that keeps
+// terminalizeSiblingDispatch from calling terminalizeAckedHold directly.
+export { recordAckedHoldDispatchOutcome } from './mesh-reconcile-acked-hold.js';
+
 export type SiblingDispatchTerminalizeReason =
     | 'queue_task_cancelled'
     | 'queue_task_requeued'

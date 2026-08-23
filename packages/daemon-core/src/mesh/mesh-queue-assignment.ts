@@ -6,7 +6,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, claimNextTask, updateTaskStatus, getQueue, recordTaskAutoLaunch, getActiveDirectDispatches, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask, recordAckedHoldDispatchOutcome } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
@@ -534,6 +534,7 @@ function deliverTaskToSession(
         if (timer) clearTimeout(timer);
         const isQueued = res && typeof res === 'object' && res.status === 'queued';
         updateSessionDeliveryStatus(delivery.id, isQueued ? 'queued' : 'delivered');
+        recordAckedHoldDispatchOutcome(ctx.meshId, ctx.task.id, { ok: true });
         // TURN-LEDGER (Stage 5): the transport confirm IS the delivered evidence — the
         // prompt/input submission reached the provider/PTY boundary and the durable
         // delivery record was just committed above. Record the ACK idempotently; a
@@ -628,6 +629,7 @@ function deliverTaskToSession(
         // ledger entry so the reconcile loop re-dispatches it. Identical for both transports.
         LOG.error('MeshQueue', `Failed to dispatch task via ${ctx.transport} to node ${ctx.nodeId}: ${e?.message}`);
         updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
+        recordAckedHoldDispatchOutcome(ctx.meshId, ctx.task.id, { ok: false, reason: e?.message });
         // The dispatch failed — the task is no longer in-flight (it returns to pending
         // for a clean re-dispatch). Clear the single-flight mark so a legitimate
         // requeue/re-claim is not blocked as if a worker were still generating.

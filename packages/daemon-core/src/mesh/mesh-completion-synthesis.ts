@@ -39,6 +39,9 @@ import {
 } from './mesh-reconcile-v2-backstop.js';
 import {
     ACKED_DEATH_CONSECUTIVE_READ_FAILURES,
+    ACKED_DEATH_CONSECUTIVE_DISPATCH_FAILURES,
+    getAckedHoldDispatchFailureStreak,
+    clearAckedHoldDispatchFailureStreak,
     resolveAckedDeathDeadlineMs,
     resolveAckedHoldHardCeilingMs,
     resolveAckedTranscriptFastTrackGraceMs,
@@ -163,6 +166,36 @@ function escapeTailFingerprint(messages: ChatMessage[]): string {
 // is queued to the coordinator; only an `acked_hold_terminalized` audit record, so
 // the next occurrence is diagnosable from the ledger rather than re-derived from
 // symptoms.
+// ---------------------------------------------------------------------------
+// DISPATCH-FAILURE-DEATH-SIGNAL (2026-08-23)
+// ---------------------------------------------------------------------------
+// Per-task streak of CONSECUTIVE worker-absence dispatch failures, keyed by synth key.
+//
+// WHY THIS EXISTS. The acked-hold axis was structurally BLIND to dispatch failures. When a
+// dispatch failed with 'CLI agent not running' — the adapter map's own authoritative statement
+// that no worker exists for the target session — that fact was recorded ONLY on the queue axis
+// (a `dispatch_failed` ledger row that is not in MeshLedgerKind, carries no top-level taskId,
+// and has zero readers anywhere in src) and never reached the hold. The hold therefore kept
+// probing a session that provably did not exist until the 90-min ceiling fired.
+//
+// Measured live 2026-08-22: three consecutive `dispatch_failed: "CLI agent not running: kimi"`
+// while a hold ran on to the ceiling at 5,405,993ms — the worker had been provably absent for
+// roughly the last 57 of those 90 minutes. The evidence existed the whole time; nothing was
+// listening for it.
+//
+// This is a NEW SIGNAL, not a retuning. The 90-min ceiling is untouched and remains the final
+// backstop for every hold that this signal does not cover (the excluded reasons in
+// isWorkerAbsenceDispatchFailure, and any hold that never sees a dispatch at all).
+//
+// The streak is PROCESS-LOCAL rather than a mesh_inflight_hold column, deliberately. Dispatch
+// failures for one task arrive in a burst of seconds while the reconcile tick is ~4s, so the
+// streak's whole lifetime is far shorter than any restart window; persisting it would add a
+// schema migration to bound a counter that never needs to survive one. A restart clears it,
+// which fails SAFE: the hold reverts to being governed by the ceiling, exactly as before.
+// The streak map and its recorder live in mesh-reconcile-acked-hold.ts (the leaf that owns
+// all acked-hold state) so the DISPATCH path can feed the signal without importing this
+// module — this one is the heavy PHASE-4 synthesis core, and the dispatch hot path has no
+// business pulling it in. Only the DECISION lives here, next to the other death signals.
 function terminalizeAckedHold(args: {
     meshId: string;
     taskId: string;
@@ -170,7 +203,7 @@ function terminalizeAckedHold(args: {
     nodeId: string;
     providerType?: string;
     synthKey: string;
-    reason: 'acked_read_failure_death' | 'acked_hold_time_ceiling';
+    reason: 'acked_read_failure_death' | 'acked_hold_time_ceiling' | 'acked_dispatch_failure_death';
     detail: Record<string, unknown>;
 }): void {
     const { meshId, taskId, sessionId, nodeId, providerType, synthKey, reason, detail } = args;
@@ -180,6 +213,11 @@ function terminalizeAckedHold(args: {
     // Then drop the hold state (Map cache + persisted mesh_inflight_hold row) so the
     // read-failure counter cannot resurrect on a later tick or survive a restart.
     deleteHoldState(synthKey, meshId);
+    // Same for the dispatch-failure streak: the synth key is task-scoped, not attempt-scoped,
+    // so a task that is later re-dispatched would otherwise inherit the dead attempt's run and
+    // could terminalize its FIRST failure. Cleared here (rather than only on the reset path)
+    // because this is the one place every terminalization funnels through.
+    clearAckedHoldDispatchFailureStreak(synthKey);
     try {
         appendLedgerEntry(meshId, {
             kind: 'acked_hold_terminalized',
@@ -321,6 +359,42 @@ export async function reconcileUnterminatedDirectDispatches(
         // on the ack: it answers "how long have we been holding", which is the thing being
         // bounded. A hold with no anchor yet (legacy row) simply isn't ceiling-checked this
         // tick — the next setHoldState stamps one.
+        // DISPATCH-FAILURE-DEATH-SIGNAL (2026-08-23). Checked alongside the ceiling and BEFORE
+        // the read, for the same reason the ceiling is: it bounds the hold independently of
+        // whichever downstream gate is doing the holding — and here, additionally, because
+        // probing a session the adapter map has already said does not exist cannot inform the
+        // decision. This is the faster, EARLIER signal the incident showed was missing; it does
+        // not replace or relax the ceiling below, which still governs every hold this does not
+        // cover.
+        //
+        // Gated on `isAcked` exactly as the read-failure death signal is: a never-acked dispatch
+        // has no in-flight turn to declare dead, and its redelivery is the queue axis's business
+        // (dispatchFailureCount / MAX_DISPATCH_FAILURES), not this one.
+        if (isAcked) {
+            const dispatchStreak = getAckedHoldDispatchFailureStreak(mesh.id, taskId);
+            if (dispatchStreak && dispatchStreak.count >= ACKED_DEATH_CONSECUTIVE_DISPATCH_FAILURES) {
+                LOG.warn('MeshReconcile', `Acked-hold dispatch-failure death signal: task ${taskId} on node ${nodeId} (mesh ${mesh.id}) `
+                    + `failed dispatch ${dispatchStreak.count}x consecutively with a worker-absence reason `
+                    + `("${dispatchStreak.lastReason}") — the target adapter does not exist, so the worker cannot be `
+                    + `holding this turn; marking the dispatch row STALE and deleting the synth hold `
+                    + `(no completion is asserted — the transcript never showed one).`);
+                terminalizeAckedHold({
+                    meshId: mesh.id,
+                    taskId,
+                    sessionId,
+                    nodeId,
+                    ...(providerType ? { providerType } : {}),
+                    synthKey,
+                    reason: 'acked_dispatch_failure_death',
+                    detail: {
+                        consecutiveDispatchFailures: dispatchStreak.count,
+                        threshold: ACKED_DEATH_CONSECUTIVE_DISPATCH_FAILURES,
+                        lastReason: dispatchStreak.lastReason,
+                    },
+                });
+                continue;
+            }
+        }
         if (isAcked) {
             const ceilingMs = resolveAckedHoldHardCeilingMs();
             const heldSinceMs = getHoldState(synthKey, mesh.id)?.heldSinceMs;
