@@ -277,7 +277,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                 description: 'Optional record of your planning decision, for adoption measurement: {decision, ready_worker_tasks, known_graph_steps, single_reason, capability_blockers}. It is stored as provenance with the graph and never changes execution.',
             },
             orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
-            mission_id: { type: 'string', description: 'Mission every task in this batch belongs to unless an entry overrides it (full/exact id). For multi-task work, create the mission first (mesh_mission_upsert) and pass it here. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted.' },
+            mission_id: { type: 'string', description: 'Optional. Mission every task in this batch belongs to unless an entry overrides it (full/exact id). Recommended for multi-task work: create the mission first (mesh_mission_upsert) and pass it here. Omit entirely for a one-off batch that does not need mission tracking. An unresolvable id rejects the WHOLE batch (atomic) before anything is inserted.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
             block_duplicate: { type: 'boolean', description: 'G4: when any entry matches an in-flight task with the same message+target, refuse the WHOLE batch (it is atomic) with code duplicate_suspect. Default false = warn-only via duplicateSuspects in the response.' },
             blockDuplicate: { type: 'boolean', description: 'CamelCase alias for block_duplicate.' },
@@ -707,8 +707,8 @@ export const MESH_CHECKPOINT_TOOL = {
 
 export const MESH_MISSION_UPSERT_TOOL = {
     name: 'mesh_mission_upsert',
-    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. '
-        + 'Create a mission before enqueueing a multi-task batch, then submit that plan as ONE mesh_enqueue_batch carrying the mission_id (a top-level mission_id applies to every entry; mesh_enqueue_task is the single-step fallback). Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
+    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. Optional — a mesh_enqueue_batch does not require a mission; use one when you want the plan tracked as a durable, named unit of work. '
+        + 'Recommended for multi-task work: create a mission first, then submit that plan as ONE mesh_enqueue_batch carrying the mission_id (a top-level mission_id applies to every entry; mesh_enqueue_task is the single-step fallback). A one-off graph with no need for that tracking can call mesh_enqueue_batch directly without a mission_id. Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
         + 'Single mission: pass title (and optionally mission_id to update an existing one). '
         + 'Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.',
     inputSchema: {
