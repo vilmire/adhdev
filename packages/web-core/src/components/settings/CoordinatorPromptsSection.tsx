@@ -110,7 +110,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
 
     if (!daemonId) {
         return (
-            <div className="text-[12px] text-text-muted">
+            <div className="text-xs text-text-muted">
                 Connect a daemon to edit coordinator prompts.
             </div>
         )
@@ -118,7 +118,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
 
     return (
         <div className="flex flex-col gap-4">
-            <div className="text-[12px] text-text-muted">
+            <div className="text-xs text-text-muted">
                 <p>
                     Customize the coordinator prompt this daemon's mesh coordinator
                     sessions get. <span className="font-mono text-[11px]">{dir || '~/.adhdev/coordinator-prompts/'}</span>
@@ -132,8 +132,8 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                 </p>
             </div>
 
-            {error && <div className="text-[12px] text-status-error bg-status-error/10 border border-status-error/40 rounded px-3 py-2">{error}</div>}
-            {loading && <div className="text-[12px] text-text-muted">Loading…</div>}
+            {error && <div className="text-xs text-status-error bg-status-error/10 border border-status-error/40 rounded px-3 py-2">{error}</div>}
+            {loading && <div className="text-xs text-text-muted">Loading…</div>}
 
             <div className="flex flex-col gap-6">
                 {Object.entries(drafts).map(([key, entry]) => (
@@ -142,7 +142,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
 
                         <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.overrideLabel')}</label>
                         <textarea
-                            className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-[12px] font-mono text-text-primary"
+                            className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
                             rows={4}
                             value={entry.override}
                             onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], override: e.target.value } }))}
@@ -162,7 +162,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
 
                         <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.appendLabel')}</label>
                         <textarea
-                            className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-[12px] font-mono text-text-primary"
+                            className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
                             rows={3}
                             value={entry.append}
                             onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], append: e.target.value } }))}

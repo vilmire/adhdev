@@ -684,7 +684,7 @@ export default function CliTerminalPane({
                                             key={label}
                                             type="button"
                                             aria-pressed={active}
-                                            className={`h-9 rounded-lg border text-[12px] font-semibold transition-colors ${
+                                            className={`h-9 rounded-lg border text-xs font-semibold transition-colors ${
                                                 active
                                                     ? 'border-sky-400/50 bg-sky-400/25 text-white'
                                                     : 'border-white/10 bg-white/[0.06] hover:bg-white/[0.12]'
@@ -698,18 +698,18 @@ export default function CliTerminalPane({
                                 <div className="my-2 h-px bg-white/10" />
                                 {/* Function keys — also modifier-aware (e.g. Ctrl+Arrow, Shift+Tab). */}
                                 <div className="grid grid-cols-3 gap-1.5">
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Escape')}>Esc</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Tab')}>Tab</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Enter')}>Enter</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Escape')}>Esc</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Tab')}>Tab</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Enter')}>Enter</button>
                                     <span aria-hidden="true" />
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowUp')} aria-label="Arrow up">↑</button>
                                     <span aria-hidden="true" />
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowLeft')} aria-label="Arrow left">←</button>
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowDown')} aria-label="Arrow down">↓</button>
                                     <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('ArrowRight')} aria-label="Arrow right">→</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0003')} title="Send SIGINT (Ctrl-C)">Ctrl-C</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Space')}>Space</button>
-                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Backspace')}>Bksp</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0003')} title="Send SIGINT (Ctrl-C)">Ctrl-C</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Space')}>Space</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-xs font-semibold hover:bg-white/[0.12]" onClick={() => sendEncodedKey('Backspace')}>Bksp</button>
                                 </div>
                             </div>
                         )}

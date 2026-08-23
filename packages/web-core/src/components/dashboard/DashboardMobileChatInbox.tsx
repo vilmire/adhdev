@@ -270,7 +270,7 @@ function DashboardMobileChatItem({
                     <div className="flex items-center gap-2 pr-[124px]">
                         <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
                     </div>
-                    <div className={`text-[12px] font-medium truncate flex items-center ${metaClassName}`}>
+                    <div className={`text-xs font-medium truncate flex items-center ${metaClassName}`}>
                         <span className="truncate">{metaText}</span>
                         <GitStatusPill git={item.conversation.git} compact className="ml-1 max-w-[6.5rem] shrink-0" />
                         {isReconnecting ? (
@@ -562,7 +562,7 @@ export default function DashboardMobileChatInbox({
                                                     {machine.unread > 0 ? <span className="text-accent-primary">{t('mobileInbox.newCount', { count: machine.unread })}</span> : machine.total > 0 ? t('mobileInbox.chatCount', { count: machine.total }) : t('mobileInbox.idle')}
                                                 </span>
                                             </div>
-                                            <div className="text-[12px] font-medium text-text-secondary truncate">{machine.subtitle}</div>
+                                            <div className="text-xs font-medium text-text-secondary truncate">{machine.subtitle}</div>
                                             {machine.total > 0 ? (
                                                 <div className="text-[13px] text-text-muted mt-0.5">
                                                     {t('mobileInbox.chatCount', { count: machine.total })}{machine.unread > 0 ? t('mobileInbox.unreadSuffix', { count: machine.unread }) : ''}{machine.generatingCount > 0 ? t('mobileInbox.collapsedGeneratingSuffix', { count: machine.generatingCount }) : ''}
@@ -745,7 +745,7 @@ export default function DashboardMobileChatInbox({
                             <div className="flex items-center justify-between gap-3 px-4 py-3 text-left">
                                 <div className="min-w-0">
                                     <div className="flex items-center gap-2">
-                                        <span className="text-[12px] font-bold uppercase tracking-wider text-text-secondary">{t('mobileInbox.hiddenTabs')}</span>
+                                        <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">{t('mobileInbox.hiddenTabs')}</span>
                                         <MobileGeneratingIndicator
                                             count={hiddenGeneratingCount}
                                             label={t('mobileInbox.generatingCount', { count: hiddenGeneratingCount })}
@@ -758,7 +758,7 @@ export default function DashboardMobileChatInbox({
                                 </div>
                                 <button
                                     type="button"
-                                    className="shrink-0 rounded-full border border-border-subtle bg-bg-primary/70 px-3 py-1.5 text-[12px] font-semibold text-accent-primary hover:border-border-default"
+                                    className="shrink-0 rounded-full border border-border-subtle bg-bg-primary/70 px-3 py-1.5 text-xs font-semibold text-accent-primary hover:border-border-default"
                                     onClick={onShowAllHidden}
                                 >
                                     {t('mobileInbox.restoreAll')}
