@@ -1076,7 +1076,13 @@
             "sessionCleanupLabel": "移除节点时，其会话……",
             "sessionCleanupHint": "将转录清理与运行时／进程清理分开。",
             "mcpMode": "MCP 模式：",
-            "mcpDescription": "· mesh MCP 服务器可直接从你的 CLI 智能体使用。"
+            "mcpDescription": "· mesh MCP 服务器可直接从你的 CLI 智能体使用。",
+            "repoMeshJsonTitle": "来自此仓库 (.adhdev/mesh.json)",
+            "repoMeshJsonReadOnly": "只读",
+            "repoMeshJsonHint": "此仓库提交的协调器提示词文本，会与上方字段叠加生效。请在仓库文件中修改，而不是在这里:",
+            "repoMeshJsonOverrideLabel": "仓库 override",
+            "repoMeshJsonAppendLabel": "仓库 append",
+            "repoMeshJsonInvalid": "无法解析此仓库的 .adhdev/mesh.json，因此其提示词层被忽略。"
         },
         "nodeList": {
             "title": "节点与提供方（{{count}}）",
@@ -1249,7 +1255,8 @@
             "view": "查看默认提示词",
             "rendering": "渲染中……",
             "retry": "重试",
-            "info": "这是 Override 为空时协调器会话所获得的内容。"
+            "info": "这是 Override 为空时协调器会话所获得的内容。",
+            "launchScopeNote": "任务、近期活动和运行注记会在启动时追加，此处不显示。"
         },
         "hermesMcp": {
             "title": "Hermes MCP 配置",
@@ -3055,7 +3062,9 @@
             "overrideDesc": "<strong>Override</strong> 会替换该 CLI 的守护进程内置基础提示词。",
             "appendDesc": "<strong>Append</strong> 会在胜出的基础提示词之后追加。",
             "overrideLabel": "Override",
-            "appendLabel": "Append"
+            "appendLabel": "Append",
+            "sectionTitle": "协调器提示词",
+            "sectionDescription": "本机网格协调器会话按 CLI 划分的基础提示词。网格级提示词位于 Repo Mesh 页面。"
         },
         "appearance": {
             "modeLabel": "模式",
