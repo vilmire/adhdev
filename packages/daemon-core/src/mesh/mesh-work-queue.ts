@@ -10,7 +10,7 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { closeAttemptForReassignment, openTurnAttempt, proposeTurnCompletion, recordTurnAck, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
+import { closeAttemptForReassignment, openTurnAttempt, recordTurnAck, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
 // GRAPH-ORCHESTRATION Phase B: THE single terminal choke point (design :311-334).
 // updateTaskStatus / updateSessionTaskStatus delegate every terminal flip to it.
 import {
@@ -1350,7 +1350,6 @@ export function cancelTask(
                 providerType: entry.assignedProviderType,
             }
             : undefined;
-        entry.status = 'cancelled';
         entry.cancelledAt = now;
         if (opts?.reason) entry.cancelReason = opts.reason;
         // PIN-PARKING: cancelling a parked task IS a coordinator decision — the "it is
@@ -1370,28 +1369,52 @@ export function cancelTask(
         // coordinator's stale-nonce guard — same mechanism reclaimStrandedAssignedTask uses.
         entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
         delete entry.attemptId;
+        // Persist the cancel-specific bookkeeping ABOVE (cancelledAt/cancelReason, the
+        // cleared assignment, the bumped nonce) BEFORE the choke point runs: the runner
+        // re-reads the row inside its own transaction, so anything not yet written would
+        // be clobbered by its flip. The row is still non-terminal at this point, which is
+        // exactly what the runner's replay fence expects for a first terminal.
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        endTaskDispatchInFlight(meshId, taskId);
         // SIBLING-DISPATCH-ORPHAN: a direct-dispatched task carries a second row in
         // mesh_direct_dispatches. Clearing the assignment above drops this task from every
         // queue-side counter, but that row would survive with status 'acked' — which
         // buildMeshActiveWork renders as `generating`, so the cancelled task would keep
         // showing up as live work with no sweeper to ever collect it.
         terminalizeSiblingDispatch(meshId, taskId, 'queue_task_cancelled');
-        // TURN-LEDGER (Stage 5): cancellation is a terminal CompletionProposal like any
-        // other — routed through the reducer so a cancel that races a late worker
-        // completion commits exactly one terminal outcome (no resurrection either way).
-        try {
-            proposeTurnCompletion({
-                meshId,
-                taskId,
-                outcome: 'cancelled',
-                source: 'cancellation',
-                reason: opts?.reason ?? 'operator_cancel',
-            });
-        } catch { /* reducer proposal is best-effort — the cancel already committed above */ }
+        // GRAPH-ORCHESTRATION Phase B: a cancel is a terminal acceptance like any other,
+        // so it routes through the SAME choke point as completion/failure rather than
+        // writing `status = 'cancelled'` inline. Before this, a cancelled task left its
+        // graph node stuck in `declared`/`materialized` and the graph itself `active`
+        // forever: `classifyGraphRollup` never saw a settled node, so the graph could
+        // reach no terminal state, and `cleanupOnGraphFailure` (which keys on
+        // `graph.status === 'cancelled'`) was structurally unreachable — the workspace of
+        // a cancelled branch was never collected.
+        //
+        // Routing here also SUBSUMES the standalone proposeTurnCompletion this function
+        // used to make: the runner's step-1 settle issues the identical `cancellation`
+        // proposal inside the transaction, so the attempt fence and the row can no longer
+        // disagree, and a cancel racing a late worker completion still commits exactly one
+        // terminal outcome. It is one settle, not two — the reducer is idempotent, but the
+        // point is that the row flip and the settle are now the same transaction.
+        //
+        // Downstream policy is UNCHANGED by design: the runner applies the graph-side
+        // cancel cascade only under `on_dependency_failure: 'cancel'`, and under the
+        // default `block` it merely records a derived-failure outbox row — dependents stay
+        // pending and a retry of the cancelled task still recovers them.
+        const commit = commitTaskTerminalAndAdvanceGraph({
+            meshId,
+            taskId,
+            status: 'cancelled',
+            sessionId: priorAssignment?.sessionId,
+            source: 'cancellation',
+            reason: opts?.reason ?? 'operator_cancel',
+        });
+        // The queue-side dependent cascade is the pre-graph sibling of the runner's
+        // graph-node cascade and is still required: it terminalizes dependents that have
+        // NO backing graph node (the legacy/ad-hoc enqueue path). Like the graph cascade
+        // it is a no-op unless the policy is `cancel`.
         const cascaded = propagateDependencyFailure(meshId, taskId);
-        return { entry, cascaded, priorAssignment };
+        return { entry: commit.entry ?? entry, cascaded, priorAssignment };
     });
     if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
     // Surface the prior binding to the caller (out-of-band from the persisted row, so it is
