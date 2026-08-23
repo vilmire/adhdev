@@ -880,11 +880,15 @@ describe('task_already_claimed — an assigned task is immutable (design :334)',
 describe('structural pins — the choke point cannot be silently bypassed', () => {
     const read = (rel: string) => fs.readFileSync(path.join(MESH_SRC_DIR, rel), 'utf8');
 
-    it('both queue status mutators delegate their terminal branch to the runner', () => {
+    it('every terminal-writing queue mutator delegates its terminal branch to the runner', () => {
         const src = read('mesh-work-queue.ts');
         const delegations = src.match(/commitTaskTerminalAndAdvanceGraph\(\{/g) ?? [];
-        // Exactly two call sites: updateTaskStatus and updateSessionTaskStatus.
-        expect(delegations.length).toBe(2);
+        // Exactly three call sites: updateTaskStatus, updateSessionTaskStatus, and
+        // cancelTask. cancelTask joined them in CANCEL-GRAPH-ROLLUP — it used to write
+        // `entry.status = 'cancelled'` inline, which left the backing graph node
+        // unsettled and the graph permanently `active` (so a cancelled branch's
+        // workspace could never be collected). See mesh-cancel-graph-rollup.test.ts.
+        expect(delegations.length).toBe(3);
     });
 
     it('no mesh source file flips a queue row to a literal terminal status outside the runner', () => {
@@ -899,8 +903,10 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
         }
         // Permitted writers:
         //   - mesh-work-queue.ts: the documented legacy failure/cancel writers
-        //     (cancelTask, dependency cascade, requeue-cap auto-fail, zombie sweep —
-        //     NON-GOALS with no completion envelope).
+        //     (dependency cascade, requeue-cap auto-fail, zombie sweep — NON-GOALS
+        //     with no completion envelope). NOTE: cancelTask is no longer among them;
+        //     it delegates to the choke point (CANCEL-GRAPH-ROLLUP), and the pin in
+        //     mesh-cancel-graph-rollup.test.ts keeps its inline write from regrowing.
         //   - mesh-graph-transition-runner.ts: phase C1's run_if SKIP path, which
         //     cancels a still-PENDING placeholder for a node whose condition was
         //     false (design :356-359). It is inside the choke point by definition.
