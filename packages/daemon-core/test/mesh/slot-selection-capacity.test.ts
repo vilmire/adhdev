@@ -172,6 +172,55 @@ describe('provider selection orders slots by capacity, then fitness', () => {
         expect(freeform).toHaveLength(4);
     });
 
+    it('★ freeform does not penalize a graded slot against an idle ungraded slot (fitness neutrality)', () => {
+        // Regression for a fitness bug: a freeform task used to score a graded
+        // slot (e.g. difficulty:['difficult']) at 0 while an ungraded slot scored
+        // 20 (the "general-purpose fallback", meant for legacy/no-slot nodes on a
+        // CLASSIFIED task — never for freeform). With both slots equally idle,
+        // fitness alone decided order, so the graded slot always lost to the
+        // ungraded one purely for having declared a grade. Fixed: freeform takes
+        // no difficulty-axis score at all, so array order (input order) decides
+        // the tie — neither slot kind is preferred over the other.
+        const meshId = freshMesh();
+        const node = {
+            id: NODE_ID,
+            policy: { slots: [
+                { provider: 'hard', difficulty: ['difficult'] },
+                { provider: 'general' },
+            ] },
+        };
+
+        const order = __orderSlotsForProviderSelectionForTests(meshId, NODE_ID, node, { difficulty: 'freeform' });
+        // Neither slot is filtered (freeform is unconstrained — see the cardinality
+        // test above) and neither is ranked ahead of the other by fitness: the
+        // graded 'hard' slot keeps its input-order position instead of being
+        // pushed behind 'general'.
+        expect(order.map(s => s.provider)).toEqual(['hard', 'general']);
+    });
+
+    it('a graded slot still wins fitness for its OWN matching classified difficulty (no over-correction)', () => {
+        // Guards against overcorrecting the freeform-neutrality fix: for a
+        // CLASSIFIED task (not freeform), an EXACT difficulty match (100) must
+        // still outrank a slot that merely COVERS the task via the upward-tier
+        // rule (slotDifficultyTierForTask — a 'difficult' slot admits a 'medium'
+        // task but scores 0, not 100) on the same node. Untouched by the
+        // freeform change, which only zeroes the score when diff === 'freeform'.
+        // (An ungraded slot can't be used for this check: taskRequiresDifficultyFloor
+        // hard-excludes it from a classified task on any node with explicit slots
+        // — that would test the floor gate, not the fitness scorer.)
+        const meshId = freshMesh();
+        const node = {
+            id: NODE_ID,
+            policy: { slots: [
+                { provider: 'covers-only', difficulty: ['difficult'] },
+                { provider: 'exact', difficulty: ['medium'] },
+            ] },
+        };
+
+        const order = __orderSlotsForProviderSelectionForTests(meshId, NODE_ID, node, { difficulty: 'medium' });
+        expect(order.map(s => s.provider)).toEqual(['exact', 'covers-only']);
+    });
+
     it('an uncapped slot is always considered available', () => {
         const meshId = freshMesh();
         const uncapped = {
