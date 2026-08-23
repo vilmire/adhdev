@@ -254,7 +254,7 @@ let fsmDriverSeq = 0;
 //       absorbed as a literal newline rather than submitting, with a
 //       nondeterministic length (observed 0–~2s, driven by ConPTY byte timing).
 //       So we VERIFY instead of guessing: hold the CR behind the head+tail
-//       echo-gate (scheduleWin32Submit phase 1), then resend the submit key on a
+//       echo-gate (scheduleVerifiedSubmit phase 1), then resend the submit key on a
 //       fixed cadence until the FSM observes the agent has actually left the idle
 //       composer (status flips away from 'idle' — submitted / generating / modal),
 //       bounded by a retry budget (phase 2). Once submission is observed we stop
@@ -303,6 +303,56 @@ const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
 const WIN32_ECHO_PROBE_CHARS = 16;
 const WIN32_ECHO_MAX_WAIT_MS = 20_000;
 
+// ── POSIX-ENTER-DROP (2026-08-23, grok-cli/darwin) ───────────────────────────
+//
+// Live defect: a ~several-KB coordinator brief was injected into a grok-cli
+// session and the submit CR never took — the body sat unsent in the composer
+// until the owner pressed Enter by hand. Coordinator-side the session read
+// `runtimeInputAck: true`, 1 user message, 0 assistant messages, status
+// `generating` — i.e. a SILENT submit failure that looks like healthy work.
+//
+// Root cause: the verification machinery above (echo-gate → resend-until-observed)
+// was gated on `process.platform === 'win32'`. Every POSIX send took the blind
+// branch in actuallySendMessage: write the whole body in ONE send_keys, then fire
+// the CR from a bare setTimeout(beforeSubmit). That timer was NOT a function of
+// body size — resolveSubmitDelayMs scaled on newline COUNT only — so a multi-KB
+// single-paragraph body (few newlines) scored the 200ms floor. On a TUI that is
+// still ingesting and re-rendering kilobytes of pasted text, a CR at 200ms is
+// absorbed by the composer as part of the paste rather than acting as submit.
+//
+// Why grok and not claude/kimi on the same day: this is a race, not a per-provider
+// bug. Its margin is (echo+render time) vs (a fixed 200ms). grok's manifest asks
+// for 1200ms via `sendDelayMs`/`submitStrategy: wait_for_echo`, but BOTH fields are
+// dead on the spec path — they are only read by cli-adapters/provider-cli-config.ts,
+// which belonged to the legacy ProviderCliAdapter engine deleted in 48e5ed1a. kimi
+// and opencode happen to carry delay_ms_before_submit: 1200 in their SPEC (the field
+// that is still live), which is why they clear the same payload; grok/claude/codex/
+// antigravity ship 200 and are all exposed. So the fix must be platform-general and
+// provider-general, not a grok special case.
+//
+// Fix: the win32 gate is not win32-specific in nature — it verifies an EFFECT
+// (body echoed, then agent left the composer) instead of guessing a duration. It is
+// now shared by both platforms for bodies at or above VERIFIED_SUBMIT_MIN_CHARS.
+// Below that threshold the legacy immediate path is kept verbatim so the overwhelming
+// majority of sends ("y", "continue", a one-line question) are byte-for-byte
+// unchanged and pay ZERO added latency — the over-correction guard the owner asked
+// for. Above it we trade a few hundred ms for a confirmed submit, which is exactly
+// the owner's stated preference: "입력이 늦는 것보단 확실하게 동작하는 게 더 중요함."
+//
+// The threshold is deliberately well below the observed failure size (thousands of
+// chars) and well above an interactive one-liner. 512 chars is larger than any
+// realistic hand-typed reply but far smaller than any pasted brief.
+export const VERIFIED_SUBMIT_MIN_CHARS = 512;
+
+/** True when `text` is large enough that the blind timed CR is unsafe and the
+ *  echo-verified submit path should be used. Platform-independent: the win32
+ *  path always verifies (its ConPTY failure modes are worse), POSIX verifies
+ *  only from the threshold up. */
+export function shouldUseVerifiedSubmit(text: string, platform: NodeJS.Platform = process.platform): boolean {
+    if (platform === 'win32') return true;
+    return text.length >= VERIFIED_SUBMIT_MIN_CHARS;
+}
+
 // FIX-B-v2 — how a newline-bearing win32 body's OWN embedded newlines are written
 // (see concern (B) above). 'paste' (default) wraps the body in a bracketed-paste so
 // the Ink composer absorbs the whole thing as text; 'soft_newline' rewrites each
@@ -335,8 +385,17 @@ function normalizeForEcho(s: string): string {
 export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
     const lines = countNewlines(text);
     const linesBonus = Math.min(800, lines * 80);
+    // LENGTH bonus (POSIX-ENTER-DROP). The line-count bonus alone misses the exact
+    // shape that failed live: a MULTI-KILOBYTE body on FEW lines (a pasted task
+    // brief is one long wrapped paragraph). Such a body scored only the 200ms floor
+    // while taking far longer than that to stream through the PTY and echo into the
+    // composer, so the CR fired mid-arrival. Length is the dimension that actually
+    // predicts echo time, so it gets its own bonus — capped, because the echo-gate
+    // (scheduleVerifiedSubmit) is what guarantees correctness; this only sets a
+    // sane opening wait before the gate starts polling.
+    const lengthBonus = Math.min(800, Math.floor(text.length / 1000) * 200);
     const spec = typeof specBeforeSubmit === 'number' && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
-    return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus);
+    return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
 }
 
 /** Re-export of the shared surrogate-safe splitter so existing imports of
@@ -417,7 +476,7 @@ export class FsmDriver implements ISpecDriver {
      *  resets the stall reference) or another full stall window lapses. */
     private lastRefocusAt = 0;
     /** Timer driving the win32 verification-based submit resend loop (see
-     *  WIN32_SUBMIT_* and scheduleWin32Submit). Re-arms itself until the FSM
+     *  WIN32_SUBMIT_* and scheduleVerifiedSubmit). Re-arms itself until the FSM
      *  leaves idle (submitted) or the resend budget is spent. */
     private win32SubmitTimer: ReturnType<typeof setTimeout> | null = null;
     /** Wall-clock (ms) of the most recent raw PTY output chunk. Advances on every
@@ -435,6 +494,12 @@ export class FsmDriver implements ISpecDriver {
      *  is absorbed by ConPTY the same way a send_message submit CR is, so the confirm
      *  must be resent until the modal actually resolves (status leaves 'approval'). */
     private win32ModalConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+    /** SUBMIT-SILENT-FAILURE: set when scheduleVerifiedSubmit spent its whole resend
+     *  budget without the FSM ever leaving 'idle' — i.e. the body is still sitting
+     *  unsent in the composer. Cleared on the next send. Exposed via
+     *  lastSubmitUnconfirmed() so a supervisor can distinguish "agent is thinking"
+     *  from "the prompt was never actually submitted". */
+    private submitUnconfirmed = false;
 
     private currentEval: CurrentEval | null = null;
     private stateHistory: HistoryEntry[] = [];
@@ -1403,8 +1468,16 @@ export class FsmDriver implements ISpecDriver {
         this.sendInFlightAt = Date.now();
     }
 
+    /** SUBMIT-SILENT-FAILURE: true when the most recent send exhausted its submit
+     *  resend budget without the agent ever leaving the composer. A caller seeing
+     *  this should treat an apparent 'generating' status as untrustworthy. */
+    lastSubmitUnconfirmed(): boolean {
+        return this.submitUnconfirmed;
+    }
+
     private actuallySendMessage(text: string): void {
         const sm = this.spec.send_message;
+        this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text);
 
@@ -1421,7 +1494,19 @@ export class FsmDriver implements ISpecDriver {
         // over the typing visual there.
         if (process.platform === 'win32') {
             this.writeWin32Body(text);
-            this.scheduleWin32Submit(sm.submit_key, beforeSubmit, text);
+            this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
+            return;
+        }
+
+        // POSIX-ENTER-DROP: a large body takes the same echo-verified submit the
+        // win32 path uses. The body itself is written exactly as before (one write,
+        // no bracketed paste — POSIX composers do not need it and wrapping would be
+        // an unvalidated behaviour change); only the CR is now effect-verified
+        // instead of blind-timed. Short bodies keep the original immediate path.
+        if (perChar === 0 && shouldUseVerifiedSubmit(text)) {
+            this.adapter.send_keys(text);
+            this.markBodyWrite();
+            this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
             return;
         }
 
@@ -1451,7 +1536,7 @@ export class FsmDriver implements ISpecDriver {
 
     /** Record a win32 body write so the settle-gate counts it as input activity
      *  even before the echo arrives. */
-    private markWin32Write(): void {
+    private markBodyWrite(): void {
         this.lastWin32WriteAt = Date.now();
     }
 
@@ -1478,7 +1563,7 @@ export class FsmDriver implements ISpecDriver {
      *   - 'soft_newline': replace each embedded newline with a non-submitting
      *     Shift+Enter (CSI-u) so the body is typed as one multi-line entry.
      * The trailing submit CR is NOT written here — it stays separate and is fired
-     * later by scheduleWin32Submit (concern (A)). The bracketed-paste markers are
+     * later by scheduleVerifiedSubmit (concern (A)). The bracketed-paste markers are
      * written as their own atomic segments (never chunked), so chunking can never
      * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
      */
@@ -1518,7 +1603,7 @@ export class FsmDriver implements ISpecDriver {
         }
 
         if (segments.length <= 1) {
-            this.markWin32Write();
+            this.markBodyWrite();
             this.adapter.send_keys(segments[0] ?? text);
             return;
         }
@@ -1526,7 +1611,7 @@ export class FsmDriver implements ISpecDriver {
         const writeNext = (): void => {
             this.win32WriteTimer = null;
             if (idx >= segments.length) return;
-            this.markWin32Write();
+            this.markBodyWrite();
             this.adapter.send_keys(segments[idx]);
             idx += 1;
             if (idx < segments.length) {
@@ -1557,7 +1642,7 @@ export class FsmDriver implements ISpecDriver {
      *  idle and stop the instant the agent leaves idle (submitted → generating /
      *  approval). This preserves the win32 lone-CR-swallow handling.
      */
-    private scheduleWin32Submit(submitKey: string, initialDelayMs: number, body: string): void {
+    private scheduleVerifiedSubmit(submitKey: string, initialDelayMs: number, body: string): void {
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         const startedAt = Date.now();
 
@@ -1596,10 +1681,34 @@ export class FsmDriver implements ISpecDriver {
         const fire = (attempt: number): void => {
             this.win32SubmitTimer = null;
             this.adapter.send_keys(submitKey);
-            if (attempt + 1 >= WIN32_SUBMIT_MAX_RESENDS) return;
+            if (attempt + 1 >= WIN32_SUBMIT_MAX_RESENDS) {
+                // SUBMIT-SILENT-FAILURE detection. We have spent the entire resend
+                // budget and the FSM never left 'idle' — the body is sitting unsent in
+                // the composer. This is precisely the state that previously presented
+                // to the coordinator as runtimeInputAck:true + status generating + zero
+                // assistant output: work that looks in-flight but will never progress.
+                // Say so loudly; a silent give-up is what made the live defect cost an
+                // owner-side manual Enter to notice.
+                if (this.currentStatus() === 'idle') {
+                    this.submitUnconfirmed = true;
+                    LOG.error(
+                        'FsmDriver',
+                        `[${this.specTag()}] SUBMIT NOT CONFIRMED after ${WIN32_SUBMIT_MAX_RESENDS} submit-key attempts ` +
+                        `(len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). ` +
+                        'The message is likely still sitting unsent in the composer — the agent is NOT working on it.',
+                    );
+                }
+                return;
+            }
             this.win32SubmitTimer = setTimeout(() => {
                 // Left the idle composer → it submitted; stop resending.
-                if (this.currentStatus() !== 'idle') { this.win32SubmitTimer = null; return; }
+                if (this.currentStatus() !== 'idle') {
+                    this.win32SubmitTimer = null;
+                    if (attempt > 0) {
+                        LOG.warn('FsmDriver', `[${this.specTag()}] submit confirmed only after ${attempt + 1} attempts (len=${body.length})`);
+                    }
+                    return;
+                }
                 fire(attempt + 1);
             }, WIN32_SUBMIT_RESEND_GAP_MS);
         };
@@ -1622,7 +1731,15 @@ export class FsmDriver implements ISpecDriver {
             // Body present in the composer AND output quiet (full body arrived) → submit.
             if (bodyEchoed() && settled) { fire(0); return; }
             // Last-resort blind fire so a body that truly never confirms cannot hang.
-            if (waited >= WIN32_ECHO_MAX_WAIT_MS) { fire(0); return; }
+            if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
+                LOG.warn(
+                    'FsmDriver',
+                    `[${this.specTag()}] body never confirmed in composer after ${waited}ms (len=${body.length}) — ` +
+                    'firing submit key blind; resend net will verify.',
+                );
+                fire(0);
+                return;
+            }
             this.win32SubmitTimer = setTimeout(waitForEcho, WIN32_SUBMIT_SETTLE_POLL_MS);
         };
 
@@ -1733,7 +1850,7 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /**
-     * win32 modal-confirm CR resend loop. Mirrors scheduleWin32Submit's phase-2
+     * win32 modal-confirm CR resend loop. Mirrors scheduleVerifiedSubmit's phase-2
      * verified resend, but gated on still being IN a modal (status 'approval')
      * rather than still idle: the first CR fires immediately, then resends every
      * WIN32_SUBMIT_RESEND_GAP_MS while the FSM is still showing the modal, up to
