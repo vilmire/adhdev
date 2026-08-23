@@ -369,17 +369,18 @@ describe('★the 60-minute backfill safety net survives the axis split', () => {
 
         // Inside the routing horizon: kimi is network-axis, so cadence never
         // touches it and nothing else has asked. It stays untouched.
-        vi.setSystemTime(START + QUOTA_ROUTABLE_MAX_AGE_MS - 60_000)
-        await vi.advanceTimersByTimeAsync(1000)
+        // (Time moves by ADVANCE only: setSystemTime shifts pending one-shot
+        // timers by the jump delta, which would move the chain's next wake —
+        // a fake-timers artifact, not real behaviour.)
+        await vi.advanceTimersByTimeAsync(QUOTA_ROUTABLE_MAX_AGE_MS - 60_000)
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
 
         // ★Past the horizon the snapshot would fail open at the routing gate, so
         // the safety net fetches anyway — no event, no read, no user. This is
         // the guarantee that (c)/(d)-style "events only" designs cannot make.
         const past = START + QUOTA_ROUTABLE_MAX_AGE_MS + 1000
-        vi.setSystemTime(past)
         fetchKimiQuota.mockResolvedValue(okQuota('kimi', past))
-        await vi.advanceTimersByTimeAsync(1000)
+        await vi.advanceTimersByTimeAsync(62_000)
         expect(fetchKimiQuota).toHaveBeenCalledTimes(2)
         handle.stop()
     })

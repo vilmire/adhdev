@@ -51,10 +51,17 @@ import { loadQuotaCache, saveQuotaCache } from './persist.js';
  * the scale of a work session, and a tick used to cost a codex child-process
  * spawn for every provider.
  *
- * As of the 2026-08-21 axis split this is the tick RATE, not the refresh policy:
- * what each tick actually probes is decided per provider by its axis TTL (see
- * QUOTA_AXIS and isDueByAxisTtl). The NETWORK axis is excluded from cadenced
- * ticking entirely — see QUOTA_AXIS.
+ * As of the 2026-08-21 axis split this is a scheduling FALLBACK, not the refresh
+ * policy: what each wake actually probes is decided per provider by its axis TTL
+ * (see QUOTA_AXIS and isDueByAxisTtl). The NETWORK axis is excluded from
+ * cadenced ticking entirely — see QUOTA_AXIS.
+ *
+ * As of the timer-chain change (see startQuotaRefreshLoop) the loop no longer
+ * wakes on this fixed period; it sleeps until the earliest per-provider EXPIRY.
+ * This constant still serves three roles there: the first wake's delay, the
+ * fallback when no expiry is computable, and the ceiling on sleeps while any
+ * provider is disabled (so a later enable is still noticed within one
+ * interval, exactly as when this was the tick period).
  */
 export const QUOTA_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -417,6 +424,32 @@ let ambientIsEnabled: QuotaProviderEnabled | undefined;
 /** Test seam: drop the ambient enable gate registered by the loop. */
 export function __resetQuotaAmbientEnableGateForTests(): void {
     ambientIsEnabled = undefined;
+    quotaCacheChangedListener = undefined; // same ambient, same leak risk
+}
+
+/**
+ * The refresh loop's reschedule hook. Every refresh path — periodic wake, boot,
+ * event-driven, scheduled retry, SWR revalidate, force refresh — funnels
+ * through refreshQuotaCacheOnce, so notifying from there is how the loop's
+ * timer chain learns that the cache changed UNDER it and recomputes its next
+ * wake (see startQuotaRefreshLoop). Without this a mid-chain refresh would
+ * leave the chain sleeping on stale expiry times — e.g. an event-driven
+ * refresh at turn end would not restart the file axis's TTL cadence while the
+ * machine is active.
+ *
+ * A single slot, not a set: exactly one loop runs per daemon. A listener that
+ * throws must never break the refresh that triggered it.
+ */
+let quotaCacheChangedListener: (() => void) | undefined;
+
+function notifyQuotaCacheChanged(): void {
+    const listener = quotaCacheChangedListener;
+    if (!listener) return;
+    try {
+        listener();
+    } catch (e: any) {
+        LOG.warn('Quota', `Quota cache-change listener failed: ${e?.message || e}`);
+    }
 }
 
 /**
@@ -444,6 +477,11 @@ export function clearQuotaCache(): void {
     }
     failureRetries.clear();
     revalidateInFlight.clear();
+    // Also drop the loop's reschedule hook: a leaked listener from a loop that
+    // was never stopped would otherwise let that loop keep re-arming itself
+    // inside LATER tests (observed 2026-08-23: one mid-test assertion failure
+    // before handle.stop() cascaded into phantom fetches in the next file).
+    quotaCacheChangedListener = undefined;
 }
 
 /**
@@ -623,6 +661,9 @@ export async function refreshQuotaCacheOnce(
     // cannot be written leaves the in-memory result untouched.
     const snapshot = readQuotaCache();
     if (snapshot) saveQuotaCache(snapshot);
+    // Tell the refresh loop's timer chain the expiry landscape just changed so
+    // it can recompute its next wake (see quotaCacheChangedListener).
+    notifyQuotaCacheChanged();
 }
 
 /**
@@ -898,6 +939,12 @@ export interface QuotaRefreshLoopOptions {
      * re-learn a number that cannot have changed.
      */
     hasRecentCliActivity: () => boolean;
+    /**
+     * The FIRST wake's delay, the fallback cadence when no next expiry is
+     * computable, and the sleep ceiling while any provider is disabled (see
+     * startQuotaRefreshLoop). ★No longer a fixed tick period — the chain
+     * otherwise sleeps per computeNextWakeDelayMs.
+     */
     intervalMs?: number;
     /** Injectable for tests; defaults to the real per-provider fetchers. */
     fetchers?: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<ProviderQuota> }>;
@@ -910,13 +957,103 @@ export interface QuotaRefreshLoopOptions {
 }
 
 /**
- * Start the periodic refresh. Mirrors the mesh reconcile loop's shape: a single
- * non-overlapping interval that unrefs itself so it never keeps the process
- * alive, plus a stop() handle for shutdown.
+ * Floor under a computed chain wake: a provider that is due NOW still waits a
+ * beat, so a pathological entry that stays "due" after being probed cannot
+ * spin the chain in a tight loop. Applied BEFORE the intervalMs ceiling so
+ * tests injecting a tiny interval still get their cadence.
+ */
+const MIN_CHAIN_WAKE_DELAY_MS = 1_000;
+
+/**
+ * How long the timer chain may sleep before the next wake has work to do, or
+ * undefined when nothing is computable (no enable gate, or no enabled
+ * provider at all) and the caller should fall back to the fixed interval.
  *
- * The first tick runs on the interval, not at boot — a daemon that just started
- * has no activity to have consumed quota, and a boot-time codex spawn would
- * compete with startup work for no benefit.
+ * ★This must mirror the wake's own selection logic EXACTLY. Predicting short
+ * costs an early wake that finds nothing due (harmless); predicting long
+ * skips a refresh the design promises (the 2026-08-15 class of defect). The
+ * candidates are therefore the same three the wake checks, read off the same
+ * two clocks:
+ *
+ *   - missing entry            → due now (0);
+ *   - transient-failure retry  → its retryAtMs, while the retry budget lasts
+ *                                (mirrors isFailureRetryDue);
+ *   - staleness backfill       → the LATER of the two clocks' horizons, because
+ *                                the wake requires BOTH: isSnapshotStaleForRouting
+ *                                reads `updatedAt` and isBackfillDueByAttemptClock
+ *                                reads `fetchedAt`. A clock that cannot be dated
+ *                                counts as already satisfied, matching those
+ *                                predicates;
+ *   - axis TTL (file axis)     → `fetchedAt` + TTL, but ONLY while the machine
+ *                                is active. An idle machine's number cannot
+ *                                have moved, so the TTL must not wake the chain
+ *                                every 60s to fetch nothing. This is the
+ *                                idle-quiet win: a settled idle machine sleeps
+ *                                straight to the backfill horizon.
+ */
+function computeNextWakeDelayMs(
+    fetchers: ReadonlyArray<{ provider: QuotaProvider }>,
+    isEnabled: QuotaProviderEnabled | undefined,
+    active: boolean,
+    now: number = Date.now(),
+): number | undefined {
+    if (!isEnabled) return undefined;
+    let nextAt = Number.POSITIVE_INFINITY;
+    for (const { provider } of fetchers) {
+        if (!isEnabled(provider)) continue;
+        const entry = cache.get(provider);
+        if (!entry) return 0; // missing entry → the backfill is due now
+        if (entry.status !== 'ok') {
+            const retryAtMs = entry.metadata?.retryAtMs;
+            if (typeof retryAtMs === 'number'
+                && (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES) {
+                nextAt = Math.min(nextAt, retryAtMs);
+            }
+        }
+        const updatedAtMs = Number(entry.updatedAt);
+        const dataDueAt = Number.isFinite(updatedAtMs) && updatedAtMs > 0
+            ? updatedAtMs + QUOTA_ROUTABLE_MAX_AGE_MS
+            : Number.NEGATIVE_INFINITY;
+        const attemptedAt = lastAttemptAt(entry);
+        const attemptDueAt = attemptedAt === undefined
+            ? Number.NEGATIVE_INFINITY
+            : attemptedAt + QUOTA_ROUTABLE_MAX_AGE_MS;
+        nextAt = Math.min(nextAt, Math.max(dataDueAt, attemptDueAt));
+        if (active) {
+            const ttl = QUOTA_AXIS_TTL_MS[provider];
+            if (Number.isFinite(ttl)) {
+                nextAt = Math.min(nextAt, attemptedAt === undefined ? now : attemptedAt + ttl);
+            }
+        }
+    }
+    if (!Number.isFinite(nextAt)) return undefined; // no enabled provider at all
+    return Math.max(nextAt - now, 0);
+}
+
+/**
+ * Start the periodic refresh. A single non-overlapping chain of one-shot
+ * timers — NOT a fixed setInterval: each wake recomputes the next wake from
+ * the per-provider expiry landscape (computeNextWakeDelayMs) and re-arms
+ * itself, and every out-of-band refresh (event-driven, SWR, force, scheduled
+ * retry) nudges the chain through quotaCacheChangedListener so a mid-chain
+ * refresh is always followed by a freshly computed wake. Timers unref
+ * themselves so the chain never keeps the process alive, plus a stop() handle
+ * for shutdown.
+ *
+ * ★Why a chain: an idle machine whose snapshots are all inside the routing
+ * horizon has no work until the oldest one ages out — waking every 15 minutes
+ * to discover that was the last reason the "idle daemon is never quiet"
+ * complaint (owner reason ②) survived the axis split. A settled idle machine
+ * now sleeps straight to the backfill horizon (up to
+ * QUOTA_ROUTABLE_MAX_AGE_MS), while an ACTIVE machine wakes at the file axis's
+ * short TTL — fresher cheap numbers than the fixed interval ever gave.
+ *
+ * ★The backfill safety net is UNAFFECTED: the chain's candidates include the
+ * staleness horizon for every enabled provider, and the computed sleep is
+ * CEILINGED at QUOTA_ROUTABLE_MAX_AGE_MS, so a broken expiry computation or a
+ * clock-skewed entry can delay a wake, never cancel it. The wake's own
+ * selection logic (backfillDue + the idle gate) is unchanged below — only the
+ * timer shape changed.
  */
 export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRefreshLoopHandle {
     const intervalMs = options.intervalMs ?? QUOTA_REFRESH_INTERVAL_MS;
@@ -925,8 +1062,74 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
     // revalidate, force refresh) — see ambientIsEnabled.
     if (options.isEnabled) ambientIsEnabled = options.isEnabled;
     let running = false;
-    const timer = setInterval(() => {
-        if (running) return; // never overlap ticks
+    let stopped = false;
+    let timer: NodeJS.Timeout | null = null;
+
+    /**
+     * Compute the next wake and (re)arm the single chain timer. Any pending
+     * timer is cleared first, so a reschedule never stacks a second chain.
+     */
+    const scheduleNext = (): void => {
+        if (stopped) return;
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+        let delayMs = intervalMs; // fallback: the pre-chain fixed cadence
+        try {
+            let active = false;
+            try {
+                active = options.hasRecentCliActivity();
+            } catch {
+                // Same contract as the wake itself: an unreadable activity
+                // signal reads as idle — staleness, never a spawn storm.
+                active = false;
+            }
+            const computed = computeNextWakeDelayMs(fetchers, options.isEnabled, active);
+            if (computed !== undefined) {
+                delayMs = Math.max(computed, MIN_CHAIN_WAKE_DELAY_MS);
+                // ★Ceiling: never sleep past the routing staleness horizon. The
+                // backfill MUST fire within it (the 2026-08-15 safety net), so
+                // this is also what makes "the chain sleeps forever" impossible
+                // even if the expiry computation or the wall clock misbehaves.
+                delayMs = Math.min(delayMs, QUOTA_ROUTABLE_MAX_AGE_MS);
+                // Enable-latency ceiling: while ANY provider is disabled, a
+                // later enable can create a missing entry the chain cannot
+                // otherwise observe until it wakes. Cap the sleep at the old
+                // interval so "enable takes effect on the next tick" keeps its
+                // pre-chain meaning. A machine whose gate admits every fetcher
+                // has no such surprise coming and gets the full horizon sleep.
+                if (options.isEnabled && fetchers.some(({ provider }) => !options.isEnabled!(provider))) {
+                    delayMs = Math.min(delayMs, intervalMs);
+                }
+            }
+        } catch {
+            delayMs = intervalMs; // a computation failure must never kill the chain
+        }
+        timer = setTimeout(runWake, delayMs);
+        if (typeof timer.unref === 'function') timer.unref();
+    };
+
+    // Out-of-band refreshes (event-driven, SWR, force, scheduled retry, boot)
+    // all land in the cache between wakes; recompute the next wake from the
+    // fresh state. Skipped while a wake is in flight — that wake reschedules
+    // itself in its finally, with even fresher state.
+    const rescheduleFromOutside = (): void => {
+        if (stopped || running) return;
+        scheduleNext();
+    };
+    quotaCacheChangedListener = rescheduleFromOutside;
+
+    const runWake = (): void => {
+        timer = null;
+        if (stopped) return;
+        if (running) {
+            // Cannot happen with a single non-overlapping chain — but if it
+            // ever did, dropping the wake without rescheduling would kill the
+            // chain, and that failure mode is not acceptable.
+            scheduleNext();
+            return;
+        }
         let active = false;
         try {
             active = options.hasRecentCliActivity();
@@ -1014,18 +1217,39 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
         // actual probing to what this tick selected.
         const needsPrune = !!options.isEnabled
             && fetchers.some(({ provider }) => !options.isEnabled!(provider) && cache.has(provider));
-        if (due.length === 0 && !needsPrune) return;
+        if (due.length === 0 && !needsPrune) {
+            // Nothing to do — the idle-quiet path. Re-arm for the next real
+            // expiry instead of the fixed interval.
+            scheduleNext();
+            return;
+        }
         running = true;
         const probeOnly = new Set(due.map(({ provider }) => provider));
         void refreshQuotaCacheOnce(fetchers, options.isEnabled, { probeOnly })
             .catch((e: any) => LOG.warn('Quota', `Quota refresh tick error: ${e?.message || e}`))
-            .finally(() => { running = false; });
-    }, intervalMs);
+            .finally(() => {
+                running = false;
+                scheduleNext();
+            });
+    };
+
+    // The first wake runs on the interval, not at boot — a daemon that just
+    // started has no activity to have consumed quota, and a boot-time codex
+    // spawn would compete with startup work for no benefit. From the second
+    // wake on, the chain sleeps per computeNextWakeDelayMs.
+    timer = setTimeout(runWake, intervalMs);
     if (typeof timer.unref === 'function') timer.unref();
-    LOG.info('Quota', `Quota refresh loop started (interval ${intervalMs}ms, per-axis TTL, idle machines skipped)`);
+    LOG.info('Quota', `Quota refresh loop started (first wake ${intervalMs}ms, then per-provider expiry chain; per-axis TTL, idle machines skipped)`);
     return {
         stop() {
-            clearInterval(timer);
+            stopped = true;
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            if (quotaCacheChangedListener === rescheduleFromOutside) {
+                quotaCacheChangedListener = undefined;
+            }
             LOG.info('Quota', 'Quota refresh loop stopped');
         },
     };

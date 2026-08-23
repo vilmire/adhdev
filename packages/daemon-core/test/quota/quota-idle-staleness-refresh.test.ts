@@ -115,15 +115,16 @@ describe('the idle machine keeps ALTERNATIVE providers routable', () => {
         })
 
         // Inside the routing horizon the idle gate still holds — no extra fetch.
-        vi.setSystemTime(start + QUOTA_ROUTABLE_MAX_AGE_MS - 60_000)
-        await vi.advanceTimersByTimeAsync(1000)
+        // (Time moves by ADVANCE only: setSystemTime shifts pending one-shot
+        // timers by the jump delta, which would move the chain's next wake —
+        // a fake-timers artifact, not real behaviour.)
+        await vi.advanceTimersByTimeAsync(QUOTA_ROUTABLE_MAX_AGE_MS - 60_000)
         expect(fetchCodexQuota).toHaveBeenCalledTimes(1)
 
         // Past the horizon the snapshot would fail open at the routing gate, so
         // the loop refreshes it despite the machine being idle.
-        vi.setSystemTime(start + QUOTA_ROUTABLE_MAX_AGE_MS + 1000)
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli', start + QUOTA_ROUTABLE_MAX_AGE_MS + 1000))
-        await vi.advanceTimersByTimeAsync(1000)
+        await vi.advanceTimersByTimeAsync(62_000)
         expect(fetchCodexQuota).toHaveBeenCalledTimes(2)
 
         handle.stop()
