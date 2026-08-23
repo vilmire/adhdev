@@ -174,9 +174,18 @@ function assertConfigDirIsolatedInTestRuntime(env: NodeJS.ProcessEnv, resolvedOv
         }
         return;
     }
+    // Unset pin. The danger is not "no pin" per se — it is the fallback landing
+    // on the developer's LIVE state dir. Judge the DESTINATION, exactly as the
+    // override branch above does: a suite that relocated $HOME to a throwaway
+    // dir resolves to <tmpHome>/.adhdev, which is isolated by construction and
+    // is the only way to exercise the fallback RULE itself (service-instance
+    // descriptors, daemon pid paths). Throwing there blocked tests that were
+    // already isolated while catching nothing real.
+    const fallbackDir = join(homedir(), getTrackIdentity(resolveBuildTrack(env)).configDirName);
+    if (!isLiveTrackHomeDir(fallbackDir)) return;
     throw new Error(
         'resolveConfigDir() reached the real-home fallback in a test runtime with ADHDEV_CONFIG_DIR unset: '
-        + 'a test is about to touch the LIVE ~/.adhdev(-preview) state dir. '
+        + `a test is about to touch the LIVE ${fallbackDir} state dir. `
         + 'Pin ADHDEV_CONFIG_DIR to a tmp dir in test setup, or pass an explicit env/homeDir to resolveConfigDir.',
     );
 }

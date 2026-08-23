@@ -201,6 +201,27 @@ describe('resolveConfigDir test-runtime fail-fast gate', () => {
     }
   });
 
+  // Same class as TMP-HOME-NOT-LIVE, other branch: the UNSET-pin throw used to
+  // fire without looking at where the fallback would land. A suite that
+  // relocated $HOME to a tmp dir resolves to <tmpHome>/.adhdev — isolated by
+  // construction, and the only way to exercise the fallback RULE itself
+  // (daemon-cloud service-instance descriptors, daemon pid paths). Judge the
+  // destination, not the mere absence of a pin.
+  it('does NOT throw with an unset pin when $HOME is a tmp dir (fallback lands outside live state)', () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'adhdev-cfgdir-unset-'));
+    const originalHome = process.env.HOME;
+    try {
+      process.env.HOME = tmpHome;
+      delete process.env.ADHDEV_CONFIG_DIR;
+      expect(() => resolveConfigDir()).not.toThrow();
+      expect(resolveConfigDir()).toBe(join(tmpHome, '.adhdev'));
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   it('throws when ADHDEV_CONFIG_DIR is pinned to the live ~/.adhdev-preview home', () => {
     const { homedir } = require('os') as typeof import('os');
     const livePreview = join(homedir(), '.adhdev-preview');
