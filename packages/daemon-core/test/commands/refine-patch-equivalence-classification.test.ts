@@ -183,6 +183,143 @@ describe('classifyPatchEquivalenceFailure', () => {
     }
   })
 
+  // ── ★worktree-scoped submodule probe (2026-08-22 false-block regression) ──
+  //
+  // The classifier used to resolve submodule paths against `repoRoot` (the BASE
+  // repo). A worktree shares the base's object store for ROOT history, but
+  // <base>/sub and <worktree>/sub are separate checkouts with separate object
+  // stores and separate remote-tracking refs. The base mirror routinely lacks
+  // the branch-side submodule commit and carries a stale origin/main — so the
+  // probe reported `reachableFromOriginMain: false` for a commit that WAS on
+  // the submodule's main. These tests pin the worktree scoping and, just as
+  // importantly, that a genuinely unreachable commit is STILL blocked.
+
+  /**
+   * Base repo + a linked worktree, each with its own submodule checkout.
+   * The base's submodule checkout is deliberately left STALE (no fetch), which
+   * is what the real base mirror looks like.
+   */
+  function setupBaseAndWorktreeWithSubmodule() {
+    const tmp = makeTmp()
+    const submoduleOrigin = join(tmp, 'sub-origin')
+    const root = join(tmp, 'root')
+    const worktree = join(tmp, 'wt')
+
+    initRepo(submoduleOrigin)
+    const subC1 = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'sub v1')
+
+    initRepo(root)
+    commitFile(root, 'top.txt', 'top base\n', 'root init')
+    git(root, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+    git(join(root, 'sub'), ['checkout', '-q', subC1])
+    git(root, ['add', 'sub'])
+    git(root, ['commit', '-q', '-m', 'pin submodule at v1'])
+    const baseHead = git(root, ['rev-parse', 'HEAD'])
+
+    // A NEW submodule commit published to the submodule origin's main AFTER the
+    // base checkout last fetched. The base mirror therefore has neither the
+    // object nor an origin/main that contains it — exactly the incident state.
+    const subC2 = commitFile(submoduleOrigin, 'mod.txt', 'v2\n', 'sub v2 (published)')
+
+    // The worktree: a real linked worktree on a feature branch, with its own
+    // submodule checkout that HAS fetched the submodule origin.
+    git(root, ['worktree', 'add', '-q', '-b', 'feature', worktree, baseHead])
+    git(worktree, ['submodule', 'update', '--init', '-q'])
+    git(join(worktree, 'sub'), ['fetch', '-q', 'origin'])
+    git(join(worktree, 'sub'), ['checkout', '-q', subC2])
+    git(worktree, ['add', 'sub'])
+    git(worktree, ['commit', '-q', '-m', 'bump submodule to published v2'])
+    const branchHead = git(worktree, ['rev-parse', 'HEAD'])
+
+    return { tmp, submoduleOrigin, root, worktree, subC1, subC2, baseHead, branchHead }
+  }
+
+  it('★worktree-scoped probe: a PUBLISHED submodule commit is not reported unreachable when the base mirror is stale', async () => {
+    const { root, worktree, baseHead, branchHead, subC2 } = setupBaseAndWorktreeWithSubmodule()
+
+    // Precondition: the base mirror genuinely cannot answer (stale). If this
+    // ever stops holding, the test below would pass vacuously.
+    let baseCanAnswer = true
+    try {
+      git(join(root, 'sub'), ['merge-base', '--is-ancestor', subC2, 'refs/remotes/origin/main'])
+    } catch { baseCanAnswer = false }
+    expect(baseCanAnswer).toBe(false)
+
+    const summary = await runMeshRefinePatchEquivalenceGate(root, baseHead, branchHead)
+    const classification = await classifyPatchEquivalenceFailure(root, baseHead, branchHead, summary, {
+      targetBaseRef: baseHead,
+      worktreeRoot: worktree,
+    })
+
+    const sub = (classification.evidence.submoduleGitlinks || []).find(g => g.path === 'sub')
+    // The commit IS on the submodule's origin/main → must never be `false`.
+    expect(sub?.reachableFromOriginMain).not.toBe(false)
+    expect(classification.detailedReason).not.toBe('submodule_unreachable')
+    expect(classification.evidence.submoduleReachabilityUndeterminable).toBeFalsy()
+    // And the probe must have run in the worktree checkout, not the base mirror.
+    expect(sub?.probedRepo).toContain('wt')
+  })
+
+  it('★OVER-CORRECTION GUARD: a genuinely UNREACHABLE submodule commit is STILL blocked', async () => {
+    const { root, worktree, baseHead, subC1 } = setupBaseAndWorktreeWithSubmodule()
+
+    // Create a submodule commit that exists ONLY in the worktree's submodule
+    // checkout and was never pushed to the submodule origin. Even with the
+    // worktree scoping + ensureSubmoduleCommitLocal pre-fetch, this must be
+    // provably unreachable and must keep blocking.
+    const wtSub = join(worktree, 'sub')
+    git(wtSub, ['checkout', '-q', subC1])
+    const unpublished = commitFile(wtSub, 'never-pushed.txt', 'local only\n', 'sub unpublished')
+    git(worktree, ['add', 'sub'])
+    git(worktree, ['commit', '-q', '-m', 'bump submodule to UNPUBLISHED commit'])
+    const branchHead = git(worktree, ['rev-parse', 'HEAD'])
+
+    const summary = await runMeshRefinePatchEquivalenceGate(root, baseHead, branchHead)
+    const classification = await classifyPatchEquivalenceFailure(root, baseHead, branchHead, summary, {
+      targetBaseRef: baseHead,
+      worktreeRoot: worktree,
+      autoPublishSubmoduleMainCommits: false,
+    })
+
+    const sub = (classification.evidence.submoduleGitlinks || []).find(g => g.path === 'sub')
+    expect(sub?.branchCommit).toBe(unpublished)
+    // Provably not reachable — a real `false`, not an unanswered probe.
+    expect(sub?.reachableFromOriginMain).toBe(false)
+    expect(sub?.undeterminable || []).not.toContain('reachableFromOriginMain')
+    expect(classification.detailedReason).toBe('submodule_unreachable')
+    expect(classification.recommendedAction).toMatch(/publish/i)
+  })
+
+  it('★"undeterminable" is a DISTINCT state from "unreachable" — never folded into false', async () => {
+    const { root, worktree, baseHead, branchHead } = setupBaseAndWorktreeWithSubmodule()
+
+    // Make the probe genuinely unanswerable: delete the submodule's
+    // remote-tracking ref AND its remote, in BOTH checkouts, so neither the
+    // worktree nor the base can resolve refs/remotes/origin/main and no fetch
+    // strategy can restore it.
+    for (const sub of [join(worktree, 'sub'), join(root, 'sub')]) {
+      try { git(sub, ['remote', 'remove', 'origin']) } catch { /* may not exist */ }
+      try { git(sub, ['update-ref', '-d', 'refs/remotes/origin/main']) } catch { /* ignore */ }
+    }
+
+    const summary = await runMeshRefinePatchEquivalenceGate(root, baseHead, branchHead)
+    const classification = await classifyPatchEquivalenceFailure(root, baseHead, branchHead, summary, {
+      targetBaseRef: baseHead,
+      worktreeRoot: worktree,
+    })
+
+    const sub = (classification.evidence.submoduleGitlinks || []).find(g => g.path === 'sub')
+    // ★The whole point: unanswered must NOT become `false`.
+    expect(sub?.reachableFromOriginMain).toBeUndefined()
+    expect(sub?.undeterminable || []).toContain('reachableFromOriginMain')
+    expect(classification.evidence.submoduleReachabilityUndeterminable).toBe(true)
+    expect(classification.detailedReason).toBe('submodule_reachability_undeterminable')
+    expect(classification.detailedReason).not.toBe('submodule_unreachable')
+    // The wording must say "could not determine", not "publish this commit".
+    expect(classification.detailedReasonDescription).toMatch(/could not determine/i)
+    expect(classification.recommendedAction).toMatch(/do not publish/i)
+  })
+
   it('evidence always carries baseHead/branchHead/ahead/behind + policy value', async () => {
     const tmp = makeTmp()
     const root = join(tmp, 'root')

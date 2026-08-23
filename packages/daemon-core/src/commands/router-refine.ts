@@ -53,7 +53,7 @@ import {
     RefineContext,
     RefineExecFileAsync,
     RefineStageOutcome,
-    classifyPatchEquivalenceFailure,
+    classifyAndWarnPatchEquivalenceFailure,
     collectTrivialFastForwardGitlinkResolutions,
     convergeDivergedSubmoduleGitlinks,
     recordMeshRefineStage,
@@ -849,13 +849,10 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                         error: submoduleHintPatchEquivalence.error,
                         actionableHint: submoduleHintPatchEquivalence.actionableHint,
                     });
-                    const classification = await classifyPatchEquivalenceFailure(
-                        repoRoot, baseHead, ctx.branchHead, submoduleHintPatchEquivalence,
-                        {
-                            targetBaseRef: baseHead,
-                            autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(ctx.mesh, node.workspace).enabled,
-                        },
-                    );
+                    const classification = await classifyAndWarnPatchEquivalenceFailure(node.id, repoRoot, baseHead, ctx.branchHead, submoduleHintPatchEquivalence, {
+                        targetBaseRef: baseHead, worktreeRoot: node.workspace,
+                        autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(ctx.mesh, node.workspace).enabled,
+                    });
                     return { kind: 'terminal', result: {
                         success: false,
                         code: 'patch_equivalence_failed',
@@ -1097,16 +1094,14 @@ export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx
                 // branch itself has no changes (degenerate), which is NOT already-merged.
                 const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId && !!patchEquivalence.expectedPatchId;
                 if (!alreadyMergedViaOtherPath) {
-                    const classification = await classifyPatchEquivalenceFailure(
-                        repoRoot, baseHead, branchHead, patchEquivalence,
-                        {
-                            targetBaseRef: baseHead,
-                            autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace).enabled,
-                        },
-                    );
+                    const classification = await classifyAndWarnPatchEquivalenceFailure(node.id, repoRoot, baseHead, branchHead, patchEquivalence, {
+                        targetBaseRef: baseHead, worktreeRoot: node.workspace,
+                        autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace).enabled,
+                    });
                     recordMeshRefineStage(refineStages, 'patch_equivalence_classification', 'failed', patchEquivalenceStarted, {
                         detailedReason: classification.detailedReason,
                         recommendedAction: classification.recommendedAction,
+                        ...(classification.evidence.submoduleReachabilityUndeterminable ? { submoduleReachabilityUndeterminable: true } : {}),
                     });
                     return { kind: 'terminal', result: {
                         success: false,

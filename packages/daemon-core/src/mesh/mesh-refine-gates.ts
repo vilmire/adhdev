@@ -24,7 +24,7 @@ import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
-import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, readChangedGitlinkPaths, readTreeObject } from './mesh-refine-gitlink-utils.js';
+import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readTreeObject, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
 // Submodule-gitlink convergence lives in its own module (pure move, file-size gate);
 // re-exported here so existing importers of this module are unaffected.
 export * from './mesh-refine-submodule-converge.js';
@@ -731,6 +731,12 @@ export type MeshRefinePatchEquivalenceDetailedReasonCode =
     | 'base_divergence'
     /** Submodule gitlink commit is not reachable from the submodule's remote main branch (publish needed). */
     | 'submodule_unreachable'
+    /**
+     * ★Submodule reachability COULD NOT BE JUDGED (missing object / missing origin/main
+     * in the probed repo). Distinct from `submodule_unreachable`, which asserts the commit
+     * is genuinely unpublished. Still blocks — but "make the probe answerable", not "publish".
+     */
+    | 'submodule_reachability_undeterminable'
     /** Genuine non-equivalent content: expected tree vs actual merge diff differ. */
     | 'actual_patch_diff'
     /** Submodule gitlink trivial fast-forward mis-judged as non-equivalent (HEAD descends origin/main, patch-id equal, blocked only by the gitlink). */
@@ -767,11 +773,29 @@ export type MeshRefinePatchEquivalenceFailureClassification = {
             path: string;
             baseCommit?: string;
             branchCommit?: string;
-            /** True when branchCommit descends baseCommit (a strict fast-forward advance). */
+            /** branchCommit descends baseCommit (strict ff). Omitted when unanswerable — see `undeterminable`. */
             fastForward?: boolean;
-            /** True when branchCommit is reachable from the submodule's local origin/main. */
+            /**
+             * branchCommit is reachable from the submodule's local origin/main. `false`
+             * ONLY when both operands resolved and git answered "no"; omitted when the
+             * probe was unanswerable — see `undeterminable`.
+             */
             reachableFromOriginMain?: boolean;
+            /**
+             * ★Which probes could not be judged (missing object / missing origin/main /
+             * unreadable submodule path). A listed probe has its boolean OMITTED rather
+             * than set to false, so "could not tell" is never misread as "proven unpublished".
+             */
+            undeterminable?: Array<'fastForward' | 'reachableFromOriginMain'>;
+            /** The repo the reachability probes actually ran in (worktree submodule checkout). */
+            probedRepo?: string;
         }>;
+        /**
+         * ★Set when at least one submodule reachability probe was undeterminable.
+         * Surfaced on the evidence root so the coordinator sees "we could not judge"
+         * without walking the per-gitlink array.
+         */
+        submoduleReachabilityUndeterminable?: boolean;
         /** Effective auto-publish-submodule-main-commits policy value at classification time. */
         autoPublishSubmoduleMainCommits?: boolean;
         /** Set when the classifier itself errored (detailedReason === 'unclassified'). */
@@ -789,26 +813,59 @@ export type MeshRefinePatchEquivalenceFailureClassification = {
  *
  * Priority of classification (first match wins):
  *   1. already_converged     — ahead 0 & behind 0 & no residual diff
- *   2. submodule_unreachable  — a changed gitlink commit is not reachable from the
- *                               submodule's origin/main (publish needed)
- *   3. trivial_ff_misjudgment — HEAD descends origin/main AND (excl. gitlinks) the
+ *   2. submodule_unreachable  — a changed gitlink commit is PROVABLY not reachable
+ *                               from the submodule's origin/main (publish needed)
+ *   3. submodule_reachability_undeterminable — the reachability probe could not be
+ *                               answered at all (missing object / missing origin/main)
+ *   4. trivial_ff_misjudgment — HEAD descends origin/main AND (excl. gitlinks) the
  *                               patch-ids match — blocked only by a ff gitlink
- *   4. base_divergence        — HEAD is not a descendant of the target base
- *   5. actual_patch_diff      — genuine content divergence (the residual case)
+ *   5. base_divergence        — HEAD is not a descendant of the target base
+ *   6. actual_patch_diff      — genuine content divergence (the residual case)
  *
  * `targetBaseRef` is the ref the branch is meant to land on (e.g. 'origin/main'
  * or the pinned baseHead SHA). `autoPublishSubmoduleMainCommits` is threaded in so
  * the submodule_unreachable recommendation can name the current policy value.
+ *
+ * ★`worktreeRoot` — the refine node's WORKTREE. Root history (rev-list, merge-base,
+ * diff) reads from `repoRoot`, which is correct: a worktree shares its base's object
+ * store, so both heads resolve there. **Submodule** probes share nothing —
+ * `<repoRoot>/<path>` and `<worktreeRoot>/<path>` are separate checkouts with
+ * separate object stores and remote-tracking refs. Probing the base mirror was the
+ * 2026-08-22 false-block: its `origin/main` was stale and it had never fetched the
+ * branch's submodule commit, so a commit already on the submodule's main was
+ * reported unreachable. The gate body (`collectFastForwardGitlinkPaths` /
+ * `collectTrivialFastForwardGitlinkResolutions`) has always scoped to the worktree
+ * and pre-fetched via {@link ensureSubmoduleCommitLocal}; the classifier now follows
+ * suit. Omitted → falls back to `repoRoot` (single-repo callers/tests).
  */
+/**
+ * {@link classifyPatchEquivalenceFailure} + the loud undeterminable warning, in one
+ * call. Both refine call sites need exactly this pair, and forgetting the warning is
+ * how "we could not judge" goes silent — so they are bound together here.
+ */
+export async function classifyAndWarnPatchEquivalenceFailure(
+    nodeId: string,
+    repoRoot: string,
+    baseHead: string,
+    branchHead: string,
+    summary: MeshRefinePatchEquivalenceSummary,
+    options: { targetBaseRef?: string; autoPublishSubmoduleMainCommits?: boolean; worktreeRoot?: string } = {},
+): Promise<MeshRefinePatchEquivalenceFailureClassification> {
+    const classification = await classifyPatchEquivalenceFailure(repoRoot, baseHead, branchHead, summary, options);
+    warnRefineSubmoduleUndeterminable(nodeId, classification.evidence);
+    return classification;
+}
+
 export async function classifyPatchEquivalenceFailure(
     repoRoot: string,
     baseHead: string,
     branchHead: string,
     summary: MeshRefinePatchEquivalenceSummary,
-    options: { targetBaseRef?: string; autoPublishSubmoduleMainCommits?: boolean } = {},
+    options: { targetBaseRef?: string; autoPublishSubmoduleMainCommits?: boolean; worktreeRoot?: string } = {},
 ): Promise<MeshRefinePatchEquivalenceFailureClassification> {
     const targetBaseRef = options.targetBaseRef || baseHead;
     const autoPublish = options.autoPublishSubmoduleMainCommits;
+    const submoduleProbeRoot = options.worktreeRoot || repoRoot;
     const evidence: MeshRefinePatchEquivalenceFailureClassification['evidence'] = {
         baseHead,
         branchHead,
@@ -874,19 +931,14 @@ export async function classifyPatchEquivalenceFailure(
                     baseCommit = baseLs.split(/\s+/)[2];
                     branchCommit = branchLs.split(/\s+/)[2];
                 } catch { continue; }
-                const submoduleRepo = pathJoin(repoRoot, p);
-                let fastForward: boolean | undefined;
-                let reachableFromOriginMain: boolean | undefined;
-                if (branchCommit) {
-                    if (baseCommit) {
-                        fastForward = execGitOk(submoduleRepo, ['merge-base', '--is-ancestor', baseCommit, branchCommit]);
-                    }
-                    reachableFromOriginMain = execGitOk(submoduleRepo, ['merge-base', '--is-ancestor', branchCommit, 'refs/remotes/origin/main']);
-                }
-                submoduleGitlinks.push({ path: p, baseCommit, branchCommit, fastForward, reachableFromOriginMain });
+                submoduleGitlinks.push(probeSubmoduleGitlinkReachability({
+                    path: p, baseCommit, branchCommit, probeRoot: submoduleProbeRoot, baseRepoRoot: repoRoot,
+                }));
             }
         } catch { /* submodule inspection is best-effort */ }
         if (submoduleGitlinks.length) evidence.submoduleGitlinks = submoduleGitlinks;
+        const undeterminableGitlinks = submoduleGitlinks.filter(g => (g.undeterminable || []).includes('reachableFromOriginMain'));
+        if (undeterminableGitlinks.length > 0) evidence.submoduleReachabilityUndeterminable = true;
 
         // Existing gate signal: the merge-tree trivial-ff evaluation, if the gate
         // captured it (a genuine non-trivial submodule conflict lands here too).
@@ -905,8 +957,10 @@ export async function classifyPatchEquivalenceFailure(
             };
         }
 
-        // 2. submodule_unreachable: a changed gitlink is not reachable from the
-        //    submodule's origin/main. This is the publish-needed artifact.
+        // 2. submodule_unreachable: a changed gitlink is PROVABLY not reachable from
+        //    the submodule's origin/main. This is the publish-needed artifact, and it
+        //    still blocks — `reachableFromOriginMain === false` is now only ever set
+        //    when both operands resolved and git answered "no" (see probeGitAncestry).
         const unreachable = submoduleGitlinks.filter(g => g.reachableFromOriginMain === false);
         if (unreachable.length > 0) {
             const paths = unreachable.map(g => g.path).join(', ');
@@ -914,6 +968,23 @@ export async function classifyPatchEquivalenceFailure(
                 detailedReason: 'submodule_unreachable',
                 detailedReasonDescription: `Submodule gitlink commit(s) not reachable from submodule origin/main (publish needed): ${paths}.`,
                 recommendedAction: `Publish the submodule commit(s) to submodule origin/main, then retry mesh_refine_node (policy allowAutoPublishSubmoduleMainCommits=${autoPublish === undefined ? 'unknown' : autoPublish}).`,
+                evidence,
+            };
+        }
+
+        // 2b. ★submodule_reachability_undeterminable: the probe could not be answered.
+        //     A SEPARATE code from submodule_unreachable on purpose: "we could not judge",
+        //     not "nothing to converge" and not "unpublished". Conflating them is the
+        //     2026-08-22 false-block. Still blocks (never merge on an unanswered submodule
+        //     question), but the action is to make the probe answerable, not to publish.
+        if (undeterminableGitlinks.length > 0) {
+            const refs = undeterminableGitlinks
+                .map(g => `${g.path}@${(g.branchCommit || '?').slice(0, 12)} (probed: ${g.probedRepo || 'unknown'})`)
+                .join(', ');
+            return {
+                detailedReason: 'submodule_reachability_undeterminable',
+                detailedReasonDescription: `Could NOT determine whether submodule gitlink commit(s) are reachable from submodule origin/main — the probe had no answer (missing commit object and/or missing refs/remotes/origin/main in the probed repo): ${refs}. This is "undeterminable", NOT "unpublished".`,
+                recommendedAction: 'Make the probe answerable, then rerun mesh_refine_node: fetch the submodule remote in the probed checkout (`git -C <probedRepo> fetch origin main`) so both the gitlink commit object and refs/remotes/origin/main exist locally. Do NOT publish/push the submodule commit on the strength of this result — reachability was never established either way.',
                 evidence,
             };
         }
@@ -959,16 +1030,6 @@ export async function classifyPatchEquivalenceFailure(
             recommendedAction: 'Inspect the refineStages and patchEquivalence summary manually to determine the cause.',
             evidence,
         };
-    }
-}
-
-/** Small helper: run a git command in `cwd` and return whether it exited 0. */
-function execGitOk(cwd: string, args: string[]): boolean {
-    try {
-        execFileSync(GIT, args, { cwd, encoding: 'utf8', maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, windowsHide: true });
-        return true;
-    } catch {
-        return false;
     }
 }
 

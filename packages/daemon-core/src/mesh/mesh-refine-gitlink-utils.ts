@@ -9,6 +9,9 @@
  */
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
+import { resolve as pathResolve } from 'path';
+
+import { LOG } from '../logging/logger.js';
 
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 
@@ -55,6 +58,155 @@ export function readTreeObject(repoRoot: string, ref: string, path: string): str
     } catch {
         return undefined;
     }
+}
+
+/**
+ * Tri-state result of an ancestry probe: answered yes, answered no, or COULD NOT
+ * BE ANSWERED. See {@link probeGitAncestry} for why the third state must exist.
+ */
+export type GitAncestryProbe = true | false | 'undeterminable';
+
+/**
+ * Whether every ref/object named in `refs` resolves inside `cwd`. A missing
+ * object is the difference between "not an ancestor" and "we cannot tell".
+ */
+function gitRefsResolvable(cwd: string, refs: string[]): boolean {
+    for (const ref of refs) {
+        if (!ref) return false;
+        try {
+            execFileSync(GIT, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd, stdio: 'ignore', windowsHide: true });
+        } catch {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * `merge-base --is-ancestor` as a THREE-state probe.
+ *
+ * ★The two-state predecessor (`execGitOk`, in mesh-refine-gates.ts) is the
+ * 2026-08-22 false-block: it ran `merge-base --is-ancestor <commit>
+ * refs/remotes/origin/main` and folded EVERY non-zero exit into `false`. git
+ * exits non-zero both for "no, not an ancestor" (exit 1) and for "fatal: Not a
+ * valid object name" / a missing `refs/remotes/origin/main` — i.e. "we could not
+ * judge". The classifier then published `reachableFromOriginMain: false`, which
+ * reads as *proof of an unpublished submodule commit* and blocks the branch. In
+ * that incident the commit was already on the submodule's `refs/heads/main`;
+ * only the repo being probed lacked the object.
+ *
+ * So: resolve every ref FIRST. If any is missing → `'undeterminable'`, never
+ * `false`. Only a clean exit-1 from a probe whose operands both exist is a real
+ * "not an ancestor" — and that answer still blocks, exactly as before.
+ */
+export function probeGitAncestry(cwd: string, ancestor: string, descendant: string): GitAncestryProbe {
+    try {
+        if (!fs.existsSync(cwd)) return 'undeterminable';
+    } catch {
+        return 'undeterminable';
+    }
+    if (!gitRefsResolvable(cwd, [ancestor, descendant])) return 'undeterminable';
+    try {
+        execFileSync(GIT, ['merge-base', '--is-ancestor', ancestor, descendant], { cwd, stdio: 'ignore', windowsHide: true });
+        return true;
+    } catch (e: any) {
+        // Both operands resolved above, so exit 1 is git's real "no". Anything
+        // else (signal, spawn failure, unexpected status) is not an answer.
+        return e?.status === 1 ? false : 'undeterminable';
+    }
+}
+
+export type SubmoduleGitlinkReachability = {
+    path: string;
+    baseCommit?: string;
+    branchCommit?: string;
+    fastForward?: boolean;
+    reachableFromOriginMain?: boolean;
+    undeterminable?: Array<'fastForward' | 'reachableFromOriginMain'>;
+    probedRepo?: string;
+};
+
+/**
+ * Fast-forward + origin/main reachability for ONE changed gitlink, as tri-state
+ * evidence.
+ *
+ * ★`probeRoot` is the refine node's WORKTREE, not the base repo. `<base>/<path>`
+ * and `<worktree>/<path>` are independent checkouts with separate object stores
+ * and separate remote-tracking refs; the base mirror routinely lacks the
+ * branch-side submodule commit and carries a stale `origin/main`. Probing it is
+ * the 2026-08-22 false-block, where a commit already on the submodule's main was
+ * reported unreachable.
+ *
+ * `baseRepoRoot` is still needed as the FETCH SOURCE: the base-side gitlink commit
+ * may only exist in the base checkout, so — same discipline the gate body already
+ * follows — {@link ensureSubmoduleCommitLocal} pulls both commits into the probed
+ * store first, so a merely-absent object cannot degrade the probe.
+ *
+ * An unanswerable probe leaves its boolean UNDEFINED and records the probe name in
+ * `undeterminable`; it is never reported as `false`.
+ */
+export function probeSubmoduleGitlinkReachability(input: {
+    path: string;
+    baseCommit?: string;
+    branchCommit?: string;
+    probeRoot: string;
+    baseRepoRoot: string;
+}): SubmoduleGitlinkReachability {
+    const { path, baseCommit, branchCommit, probeRoot, baseRepoRoot } = input;
+    const submoduleRepo = pathResolve(probeRoot, path);
+    const baseSubmoduleRepo = pathResolve(baseRepoRoot, path);
+    if (baseCommit) ensureSubmoduleCommitLocal(submoduleRepo, baseSubmoduleRepo, baseCommit);
+    if (branchCommit) ensureSubmoduleCommitLocal(submoduleRepo, baseSubmoduleRepo, branchCommit);
+
+    let fastForward: boolean | undefined;
+    let reachableFromOriginMain: boolean | undefined;
+    const undeterminable: Array<'fastForward' | 'reachableFromOriginMain'> = [];
+    if (branchCommit) {
+        if (baseCommit) {
+            const ff = probeGitAncestry(submoduleRepo, baseCommit, branchCommit);
+            if (ff === 'undeterminable') undeterminable.push('fastForward');
+            else fastForward = ff;
+        }
+        const reach = probeGitAncestry(submoduleRepo, branchCommit, 'refs/remotes/origin/main');
+        if (reach === 'undeterminable') undeterminable.push('reachableFromOriginMain');
+        else reachableFromOriginMain = reach;
+    }
+    return {
+        path, baseCommit, branchCommit, fastForward, reachableFromOriginMain,
+        ...(undeterminable.length ? { undeterminable } : {}),
+        probedRepo: submoduleRepo,
+    };
+}
+
+/**
+ * ★The loud warning text for an unanswerable submodule reachability probe, or
+ * undefined when every probe was answered. Kept next to {@link probeGitAncestry}
+ * because it exists to preserve that function's third state all the way to the
+ * operator: this means "we could not judge", NOT "the commit is unpublished" and
+ * NOT "nothing to converge". The 2026-08-22 false-block was exactly this signal
+ * folded into a plain `reachableFromOriginMain: false`.
+ */
+export function buildSubmoduleReachabilityUndeterminableWarning(
+    nodeId: string,
+    evidence: {
+        submoduleGitlinks?: Array<{ path: string; branchCommit?: string; probedRepo?: string; undeterminable?: string[] }>;
+        submoduleReachabilityUndeterminable?: boolean;
+    },
+): string | undefined {
+    if (!evidence.submoduleReachabilityUndeterminable) return undefined;
+    const entries = (evidence.submoduleGitlinks || [])
+        .filter(g => (g.undeterminable || []).includes('reachableFromOriginMain'))
+        .map(g => `${g.path}@${(g.branchCommit || '?').slice(0, 12)} (probed: ${g.probedRepo || 'unknown'})`)
+        .join(', ');
+    return `[Refinery] Could NOT determine submodule gitlink reachability from submodule origin/main for node ${nodeId} — `
+        + `probe had NO ANSWER (missing commit object and/or missing refs/remotes/origin/main in the probed repo). `
+        + `"undeterminable", NOT "unpublished" and NOT "nothing to converge": ${entries}`;
+}
+
+/** {@link buildSubmoduleReachabilityUndeterminableWarning}, emitted via LOG.warn when it applies. */
+export function warnRefineSubmoduleUndeterminable(nodeId: string, evidence: any): void {
+    const message = buildSubmoduleReachabilityUndeterminableWarning(nodeId, evidence);
+    if (message) LOG.warn('Mesh', message);
 }
 
 /** Whether `commit` is a commit object present in the submodule's local object store. */
