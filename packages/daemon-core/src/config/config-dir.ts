@@ -91,9 +91,44 @@ function liveTrackHomeDirs(homeDir: string = homedir()): string[] {
     ];
 }
 
-function isLiveTrackHomeDir(resolved: string, homeDir: string = homedir()): boolean {
+/**
+ * The home dir to measure "live" against — captured from the ORIGINAL process
+ * environment at module load, before any test can relocate it.
+ *
+ * The gate must answer one question: "is this path the developer's real
+ * ~/.adhdev(-preview)?" Deriving that from a call-time `homedir()` gets it
+ * wrong in two ways that were both observed on 2026-08-23:
+ *
+ *   1. $HOME relocation — the standard way a test stays isolated is to point
+ *      $HOME at a tmp dir and stage `<tmpHome>/.adhdev` under it. homedir()
+ *      follows $HOME on POSIX, so liveTrackHomeDirs() re-derived itself
+ *      against the relocated home and the gate matched the isolated dir as
+ *      "live", firing on exactly the tests doing the right thing.
+ *   2. mocked os — suites that `vi.mock('os')` with a homedir() stub (e.g. a
+ *      fixture dir under the repo) hit the same inversion without $HOME being
+ *      touched at all.
+ *
+ * Together those accounted for 45 failures across 10 files. Anchoring to the
+ * process's original HOME fixes both while keeping the gate's real teeth: an
+ * inherited ADHDEV_CONFIG_DIR pointing at the true live dir still throws,
+ * because that path is unaffected by mocks or later $HOME edits.
+ *
+ * Note this deliberately reads process.env directly rather than calling
+ * homedir(): several suites install PARTIAL `os` mocks, and importing another
+ * os export here would throw "No export is defined on the os mock".
+ */
+const ORIGINAL_HOME_DIR = typeof process.env.HOME === 'string' && process.env.HOME.trim() !== ''
+    ? process.env.HOME.trim()
+    : (typeof process.env.USERPROFILE === 'string' ? process.env.USERPROFILE.trim() : '');
+
+function isLiveTrackHomeDir(resolved: string, homeDir?: string): boolean {
     const needle = normalizeConfigPath(resolved);
-    return liveTrackHomeDirs(homeDir).some((live) => normalizeConfigPath(live) === needle);
+    // An explicitly injected homeDir is a caller assertion; honor it. Otherwise
+    // measure against the original process home, never a mocked/relocated one.
+    const bases = homeDir !== undefined
+        ? [homeDir]
+        : [ORIGINAL_HOME_DIR].filter((v) => v !== '');
+    return bases.some((base) => liveTrackHomeDirs(base).some((live) => normalizeConfigPath(live) === needle));
 }
 
 function processLooksLikeNodeTestRunner(): boolean {

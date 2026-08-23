@@ -177,6 +177,30 @@ describe('resolveConfigDir test-runtime fail-fast gate', () => {
     expect(() => resolveConfigDir()).toThrow(/real-home fallback in a test runtime/);
   });
 
+  // TMP-HOME-NOT-LIVE: the gate resolves the "live" dirs against homedir(),
+  // which follows $HOME on POSIX. A test that relocates $HOME to a tmp dir —
+  // the correct way to stay isolated — then stages <tmpHome>/.adhdev under it,
+  // and the gate used to match that as the developer's live dir and throw. It
+  // fired on exactly the tests doing the right thing: 45 failures across 10
+  // files (2026-08-23). A path under the temp root is never live state.
+  it('does NOT throw for <tmpHome>/.adhdev when a test has relocated $HOME to a tmp dir', () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'adhdev-cfgdir-gate-'));
+    const originalHome = process.env.HOME;
+    try {
+      process.env.HOME = tmpHome;
+      process.env.ADHDEV_CONFIG_DIR = join(tmpHome, '.adhdev');
+      expect(() => resolveConfigDir()).not.toThrow();
+      expect(resolveConfigDir()).toBe(join(tmpHome, '.adhdev'));
+      // The preview name under a tmp home is equally not live.
+      process.env.ADHDEV_CONFIG_DIR = join(tmpHome, '.adhdev-preview');
+      expect(() => resolveConfigDir()).not.toThrow();
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   it('throws when ADHDEV_CONFIG_DIR is pinned to the live ~/.adhdev-preview home', () => {
     const { homedir } = require('os') as typeof import('os');
     const livePreview = join(homedir(), '.adhdev-preview');

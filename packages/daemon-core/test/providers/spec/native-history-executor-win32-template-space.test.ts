@@ -19,7 +19,11 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-const WIN_HOME = 'C:\\Users\\tester';
+// Declared via vi.hoisted: vi.mock is hoisted above every top-level statement,
+// so a plain `const WIN_HOME` below it is still in its temporal dead zone when
+// the factory runs ("Cannot access 'WIN_HOME' before initialization"). vi.hoisted
+// lifts the value with the mock so both land before module evaluation.
+const { WIN_HOME } = vi.hoisted(() => ({ WIN_HOME: 'C:\\Users\\tester' }));
 
 // Only the executor's 'node:os' import is mocked; the rest of the module
 // graph keeps the real builtin. The tests below call pure string helpers

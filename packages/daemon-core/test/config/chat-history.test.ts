@@ -94,7 +94,13 @@ function spawnHistoryWriterProcess(historySessionId: string, workspace: string, 
   `
   return spawn(process.execPath, ['--input-type=module', '--import', 'tsx', '--eval', script], {
     cwd: process.cwd(),
-    env: { ...process.env, HOME: mockHomeDir },
+    // ADHDEV_CONFIG_DIR (pinned in beforeEach to <mockHomeDir>/.adhdev) is what
+    // the child actually resolves through, and it takes precedence over $HOME.
+    // Do NOT relocate the child's HOME on top of it: the test-runtime isolation
+    // gate measures "is this the live ~/.adhdev" against the process's own
+    // HOME, so a child whose HOME *is* mockHomeDir sees <HOME>/.adhdev and
+    // fails closed on a dir that is in fact the isolated fixture.
+    env: { ...process.env, ADHDEV_CONFIG_DIR: path.join(mockHomeDir, '.adhdev') },
     stdio: 'pipe',
   })
 }
