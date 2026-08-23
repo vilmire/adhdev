@@ -12,6 +12,7 @@ import { IconMesh } from '../../components/Icons'
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import QuotaPolicyStep from '../../components/setup-wizard/QuotaPolicyStep'
 import CoordinatorPromptDefaultPreview, { StartFromDefaultButton } from './CoordinatorPromptDefaultPreview'
+import RepoMeshJsonAppendNotice from './RepoMeshJsonAppendNotice'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -541,6 +542,21 @@ export function MeshDetailView({
                                 onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
                                 disabled={savingCoordinatorPrompt} placeholder={t('repoMesh.detail.appendPlaceholder')} />
                         </FormField>
+
+                        {/* ── Repo-committed prompt layer (.adhdev/mesh.json) ──
+                             The two fields above are MACHINE-LOCAL (meshes.json, written by
+                             update_mesh). A repo may ALSO declare coordinator prompt text in
+                             `.adhdev/mesh.json`, which the launch path stacks in — so without
+                             this an operator reads an empty Append box while real repo text
+                             ships in every coordinator prompt. Read-only on purpose: that file
+                             is repo-committed, so editing it from the dashboard would dirty the
+                             working tree. Renders nothing when the repo declares no prompt. */}
+                        <RepoMeshJsonAppendNotice
+                            daemonId={coordinatorDaemonId}
+                            workspace={selectedHostNode?.workspace || ''}
+                            sendCommand={sendCommand}
+                        />
+
                         <details className="mt-2 text-xs text-text-muted">
                             <summary className="cursor-pointer select-none">{t('repoMesh.detail.availablePlaceholders')}</summary>
                             <p className="mt-1">{t('repoMesh.detail.placeholdersIntro')}</p>

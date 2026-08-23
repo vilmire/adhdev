@@ -1076,7 +1076,13 @@
             "sessionCleanupLabel": "노드 제거 시 해당 세션은…",
             "sessionCleanupHint": "트랜스크립트 정리를 런타임/프로세스 정리와 분리합니다.",
             "mcpMode": "MCP 모드:",
-            "mcpDescription": "· 메시 MCP 서버는 CLI 에이전트에서 직접 사용할 수 있습니다."
+            "mcpDescription": "· 메시 MCP 서버는 CLI 에이전트에서 직접 사용할 수 있습니다.",
+            "repoMeshJsonTitle": "이 저장소에서 (.adhdev/mesh.json)",
+            "repoMeshJsonReadOnly": "읽기 전용",
+            "repoMeshJsonHint": "이 저장소가 커밋한 코디네이터 프롬프트 텍스트로, 위 필드와 함께 쌓입니다. 여기가 아니라 저장소 파일에서 수정하세요:",
+            "repoMeshJsonOverrideLabel": "저장소 override",
+            "repoMeshJsonAppendLabel": "저장소 append",
+            "repoMeshJsonInvalid": "이 저장소의 .adhdev/mesh.json 을 파싱할 수 없어 해당 프롬프트 레이어가 무시됩니다."
         },
         "nodeList": {
             "title": "노드 & 프로바이더 ({{count}})",
@@ -1249,7 +1255,8 @@
             "view": "기본 프롬프트 보기",
             "rendering": "렌더링 중…",
             "retry": "다시 시도",
-            "info": "재정의가 비어 있을 때 코디네이터 세션이 받는 내용입니다."
+            "info": "재정의가 비어 있을 때 코디네이터 세션이 받는 내용입니다.",
+            "launchScopeNote": "미션·최근 활동·운영 노트는 런치 시 추가되며 여기에는 표시되지 않습니다."
         },
         "hermesMcp": {
             "title": "Hermes MCP 구성",
@@ -3055,7 +3062,9 @@
             "overrideDesc": "<strong>Override</strong>는 해당 CLI의 데몬 내장 기본 프롬프트를 대체합니다.",
             "appendDesc": "<strong>Append</strong>는 선택된 기본 프롬프트 뒤에 추가됩니다.",
             "overrideLabel": "Override",
-            "appendLabel": "Append"
+            "appendLabel": "Append",
+            "sectionTitle": "코디네이터 프롬프트",
+            "sectionDescription": "이 머신의 메시 코디네이터 세션에 적용되는 CLI별 기본 프롬프트입니다. 메시 단위 프롬프트는 Repo Mesh 페이지에 있습니다."
         },
         "appearance": {
             "modeLabel": "모드",

@@ -1081,7 +1081,13 @@
             "sessionCleanupLabel": "Al eliminar un nodo, sus sesiones…",
             "sessionCleanupHint": "Separa la limpieza de transcripciones de la limpieza de runtime/procesos.",
             "mcpMode": "Modo MCP:",
-            "mcpDescription": "· El servidor MCP del mesh se puede usar directamente desde tu agente CLI."
+            "mcpDescription": "· El servidor MCP del mesh se puede usar directamente desde tu agente CLI.",
+            "repoMeshJsonTitle": "De este repositorio (.adhdev/mesh.json)",
+            "repoMeshJsonReadOnly": "Solo lectura",
+            "repoMeshJsonHint": "Este repositorio incluye texto del prompt del coordinador que se suma a los campos de arriba. Edítalo en el archivo del repositorio, no aquí:",
+            "repoMeshJsonOverrideLabel": "Override del repositorio",
+            "repoMeshJsonAppendLabel": "Append del repositorio",
+            "repoMeshJsonInvalid": "No se pudo analizar el .adhdev/mesh.json de este repositorio, por lo que su capa de prompt se ignora."
         },
         "nodeList": {
             "title": "Nodos y proveedores ({{count}})",
@@ -1254,7 +1260,8 @@
             "view": "Ver el prompt predeterminado",
             "rendering": "Renderizando…",
             "retry": "Reintentar",
-            "info": "Esto es lo que recibe una sesión de coordinador cuando Override está vacío."
+            "info": "Esto es lo que recibe una sesión de coordinador cuando Override está vacío.",
+            "launchScopeNote": "La misión, la actividad reciente y las notas operativas se añaden al iniciar y no se muestran aquí."
         },
         "hermesMcp": {
             "title": "Configuración de Hermes MCP",
@@ -3060,7 +3067,9 @@
             "overrideDesc": "<strong>Override</strong> reemplaza el prompt base integrado del daemon para esa CLI.",
             "appendDesc": "<strong>Append</strong> se apila después de la base que prevalezca.",
             "overrideLabel": "Override",
-            "appendLabel": "Append"
+            "appendLabel": "Append",
+            "sectionTitle": "Prompts del coordinador",
+            "sectionDescription": "Prompt base por CLI para las sesiones del coordinador de malla en esta máquina. Los prompts a nivel de malla están en la página Repo Mesh."
         },
         "appearance": {
             "modeLabel": "Modo",
