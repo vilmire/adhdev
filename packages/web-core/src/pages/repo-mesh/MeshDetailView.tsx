@@ -11,7 +11,7 @@ import { IconMesh } from '../../components/Icons'
 // surface — the named-panel CRUD (MagiPanelManager) was removed.
 import MagiKindPanelEditor from '../../components/MeshGraph/MagiKindPanelEditor'
 import QuotaPolicyStep from '../../components/setup-wizard/QuotaPolicyStep'
-import CoordinatorPromptDefaultPreview, { StartFromDefaultButton } from './CoordinatorPromptDefaultPreview'
+import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import RepoMeshJsonAppendNotice from './RepoMeshJsonAppendNotice'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
 import type { ActiveConversation } from '../../components/dashboard/types'
@@ -502,8 +502,14 @@ export function MeshDetailView({
                  Stored in this mesh's coordinator config (systemPromptOverride / systemPromptAppend)
                  via `update_mesh`. Applies only to this mesh. The default base prompt is always
                  rendered read-only above the Override field (coordinator_prompt_preview) so
-                 "leave empty to keep the default" is never a blank guess, and "Start from default"
-                 seeds Override with it for small edits instead of writing one from scratch. */}
+                 "leave empty to keep the default" is never a blank guess.
+                 There is deliberately no "copy default into Override" button: the preview is the
+                 fully-expanded prompt ({{tokens}} already substituted with live node/policy text),
+                 and copying that into Override would freeze a one-time snapshot there — it would
+                 stop tracking node/policy changes the moment it's saved. An override is meant to
+                 be authored with the literal {{token}} syntax documented below instead, so it keeps
+                 re-expanding on every render. (Removed 2026-08-24; see git history for the prior
+                 "Start from default" button if this needs revisiting.) */}
             {features.coordinatorPrompt && (
                 <Section title={t('repoMesh.detail.coordinatorPromptTitle')} collapsible defaultOpen={false}
                     badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
@@ -526,15 +532,6 @@ export function MeshDetailView({
                                 rows={6} value={coordinatorPromptDraft.override}
                                 onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
                                 disabled={savingCoordinatorPrompt} placeholder={t('repoMesh.detail.overridePlaceholder')} />
-                            <StartFromDefaultButton
-                                daemonId={activeDaemonId}
-                                meshId={selectedMesh.id}
-                                cliType={coordinatorCliType}
-                                sendCommand={sendCommand}
-                                disabled={savingCoordinatorPrompt}
-                                hasContent={!!coordinatorPromptDraft.override.trim()}
-                                onApply={text => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: text })}
-                            />
                         </FormField>
                         <FormField label={t('repoMesh.detail.appendLabel')} hint={t('repoMesh.detail.appendHint')}>
                             <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"

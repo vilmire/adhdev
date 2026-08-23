@@ -1,8 +1,5 @@
 /**
- * Collapsible "View the default coordinator prompt" preview, plus a shared
- * `useCoordinatorPromptDefault` hook so other surfaces (e.g. a "Start from
- * default" button that seeds the override editor) can fetch the same
- * rendered default without duplicating the load logic.
+ * Collapsible "View the default coordinator prompt" preview.
  *
  * The Override textarea replaces the daemon's built-in base prompt, but when it
  * is left empty the operator sees only a blank field with no idea what that
@@ -10,6 +7,15 @@
  * `coordinator_prompt_preview` daemon command (daemon-core low-family handler)
  * and shows it read-only, on demand, so "leave empty to keep the default" is no
  * longer an invisible choice.
+ *
+ * There used to be a "Start from default" button here that copied this same
+ * rendered text into the Override field. It was removed: the rendered text is
+ * fully expanded ({{tokens}} already substituted with live node/policy state),
+ * so copying it into Override froze that one-time snapshot — the saved
+ * override stopped tracking mesh changes the instant it was written. Override
+ * authors write literal {{token}} syntax (see coordinator-prompt-placeholders.ts)
+ * so their prompt keeps re-expanding on every render, same as this preview
+ * does. This component stays read-only-preview-only for that reason.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -119,44 +125,5 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
                 </div>
             )}
         </div>
-    )
-}
-
-interface StartFromDefaultButtonProps {
-    daemonId: string
-    meshId: string
-    cliType: string
-    sendCommand: Props['sendCommand']
-    disabled?: boolean
-    /** Whether Override already has content — gates the overwrite confirm. */
-    hasContent: boolean
-    onApply: (text: string) => void
-}
-
-/**
- * "Start from default" — fetches the rendered default prompt and copies it into
- * the Override field, so an operator can make a small edit instead of writing an
- * override from scratch. Confirms before clobbering existing Override content.
- */
-export function StartFromDefaultButton({ daemonId, meshId, cliType, sendCommand, disabled, hasContent, onApply }: StartFromDefaultButtonProps) {
-    const { t } = useTranslation()
-    const { loading, load } = useCoordinatorPromptDefault(daemonId, meshId, cliType, sendCommand)
-
-    const handleClick = useCallback(async () => {
-        if (hasContent && !window.confirm(t('repoMesh.detail.startFromDefaultConfirm'))) return
-        const text = await load()
-        if (typeof text === 'string') onApply(text)
-    }, [hasContent, load, onApply, t])
-
-    return (
-        <button
-            type="button"
-            className="btn btn-secondary btn-sm mt-2"
-            onClick={() => void handleClick()}
-            disabled={disabled || loading || !daemonId || !meshId}
-            title={t('repoMesh.detail.startFromDefaultTitle')}
-        >
-            {loading ? t('repoMesh.promptPreview.rendering') : t('repoMesh.detail.startFromDefault')}
-        </button>
     )
 }
