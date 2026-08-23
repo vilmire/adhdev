@@ -35,6 +35,7 @@
     "build:types": "tsc -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap false",
     "dev": "tsup --watch --no-clean",
     "lint": "eslint \"src/mesh/**/*.ts\"",
+    "lint:prune": "eslint \"src/mesh/**/*.ts\" --prune-suppressions",
     "test": "vitest run",
     "test:fast": "vitest run --config vitest.fast.config.mts",
     "test:fast:ci": "vitest run --config vitest.fast.config.mts --silent --reporter=dot",

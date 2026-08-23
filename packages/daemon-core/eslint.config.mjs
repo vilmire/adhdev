@@ -15,6 +15,10 @@
 // opinions), only the identity-comparison syntax under src/mesh/**. Existing
 // intentional local-pool canonical comparisons are individually opted out with an
 // inline eslint-disable + reason at the site — never bulk --fix'd away.
+//
+// Run by `npm run lint` (daemon-core) / `npm run lint` (root), which is wired
+// into BOTH the CI chain and `.adhdev/refine.json`. Pre-existing violation sites
+// are frozen in `eslint-suppressions.json`; see the rule comment below.
 
 import tseslint from 'typescript-eslint';
 
@@ -64,11 +68,18 @@ export default tseslint.config({
   },
   rules: {
     'no-restricted-syntax': [
-      // WARN for now: introducing the rule enumerates the pre-existing violation
-      // sites without failing CI. TASK 6-3 (A-2) fixes the queue-assignment pool
-      // site to be error-clean; the remaining enumerated sites are reviewed and
-      // flipped to 'error' in a follow-up. Do NOT bulk --fix.
-      'warn',
+      // ERROR (2026-08-24). This landed as 'warn' on 2026-07-04 with a "flip it in
+      // a follow-up" note; the follow-up did not come for 50 days and `npm run
+      // lint` was in no chain, so the guard never held anything. It is now an
+      // error, and the pre-existing sites are frozen in
+      // `eslint-suppressions.json` (ESLint native bulk suppressions) rather than
+      // left as warnings — a baseline can only shrink, a warning stays forever.
+      //
+      // To clear a frozen site: fix it, then `npm run lint:prune` to drop its
+      // suppression. Unused suppressions FAIL the gate, so the baseline ratchets
+      // down and can never silently absorb a new violation. Do NOT bulk --fix,
+      // and do NOT re-run `--suppress-all` to make a new violation go away.
+      'error',
       ...identityComparisonSelectors.map((selector) => ({
         selector,
         message: IDENTITY_MESSAGE,
