@@ -53,9 +53,12 @@ import {
     RefineContext,
     RefineExecFileAsync,
     RefineStageOutcome,
+    buildSubmoduleConvergeDeclineDetails,
     classifyAndWarnPatchEquivalenceFailure,
     collectTrivialFastForwardGitlinkResolutions,
     convergeDivergedSubmoduleGitlinks,
+    describeMintedUnpublishedCommits,
+    describeSubmoduleConvergeDecline,
     recordMeshRefineStage,
     resolveRefineryAutoPublishSubmoduleMainCommits,
     rootRebaseResolvingGitlinks,
@@ -707,7 +710,11 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                     // and keeps the landed oss history linear. On any real submodule content
                     // conflict it backs out cleanly → we FALL BACK to the historical
                     // defer→patch_equivalence path below.
-                    const converge = convergeDivergedSubmoduleGitlinks(node.workspace, repoRoot, baseHead, branchHead);
+                    // ★Auto-publish decides whether MINTING a submodule commit is legitimate:
+                    // with it off a minted commit can never be reachable, so converge declines.
+                    const convergeAutoPublish = resolveRefineryAutoPublishSubmoduleMainCommits(ctx.mesh, node.workspace);
+                    const converge = convergeDivergedSubmoduleGitlinks(node.workspace, repoRoot, baseHead, branchHead,
+                        { allowAutoPublishSubmoduleMainCommits: convergeAutoPublish.enabled });
                     if (converge.converged) {
                         gitlinkResolutions = converge.resolutions;
                         recordMeshRefineStage(refineStages, 'submodule_gitlink_converge', 'passed', syncStarted, {
@@ -716,26 +723,24 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                         });
                         LOG.info('Mesh', `[Refinery] Auto-converged diverged submodule gitlink(s) onto base for node ${node.id}: `
                             + converge.resolutions.map(r => `${r.path}→${r.rebasedCommit.slice(0, 12)}`).join(', '));
-                        // Fall through (do NOT return) → the gitlink-aware root rebase below runs.
+                        // ★Loud when a commit was SYNTHESIZED, not merely re-pointed.
+                        const minted = describeMintedUnpublishedCommits(node.id, converge.gitlinks, convergeAutoPublish.enabled);
+                        if (minted) LOG.warn('Mesh', minted);
+                        // Falls through (no return) → the gitlink-aware root rebase below runs.
                     } else {
-                        // Fail-safe: convergence declined (conflict / unreachable / not a real
-                        // divergence) → preserve the historical defer→blocked_review behavior.
+                        // Fail-safe: declined (conflict / unreachable / publish-required / not a
+                        // real divergence) → preserve the historical defer→blocked_review path.
                         recordMeshRefineStage(refineStages, 'submodule_gitlink_converge', 'skipped', syncStarted, {
                             reason: 'submodule_conflict_defer_to_patch_equivalence',
                             convergeReason: converge.reason,
                             gitlinks: converge.gitlinks,
+                            // ★Structural next step, so the coordinator is told to PUBLISH
+                            // rather than retry the rebase (retrying re-mints the orphan).
+                            ...buildSubmoduleConvergeDeclineDetails(converge.reason, convergeAutoPublish.enabled),
                         });
-                        if (converge.reason === 'submodule_commit_unavailable') {
-                            // ★Loud, because this reason means "we could not judge", not "there
-                            // is nothing to converge". Silently defaulting to the not_diverged
-                            // wording is what previously made this look like a stale daemon.
-                            LOG.warn('Mesh', `[Refinery] Could NOT determine submodule gitlink divergence for node ${node.id} — `
-                                + `a gitlink commit is missing from the local submodule object store (auto-converge could not run): `
-                                + converge.gitlinks
-                                    .filter(g => g.action === 'skipped_commit_unavailable')
-                                    .map(g => `${g.path} (missing: ${(g.unavailable || []).join('+') || 'unknown'}; base=${(g.baseCommit || '?').slice(0, 12)} branch=${(g.branchCommit || '?').slice(0, 12)})`)
-                                    .join(', '));
-                        }
+                        // ★Loud for the two reasons that do NOT mean "nothing to converge".
+                        const declined = describeSubmoduleConvergeDecline(node.id, converge.reason, converge.gitlinks);
+                        if (declined) LOG.warn('Mesh', declined);
                         recordMeshRefineStage(refineStages, 'sync_base', 'passed', syncStarted, {
                             ahead: divergence.ahead,
                             behind: divergence.behind,

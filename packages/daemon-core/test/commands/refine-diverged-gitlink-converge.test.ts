@@ -36,6 +36,16 @@ function commitFile(repo: string, name: string, content: string, message: string
   return git(repo, ['rev-parse', 'HEAD'])
 }
 
+/**
+ * The rewrite (mint-a-new-submodule-commit) path is only reachable when the
+ * Refinery is allowed to publish submodule commits to submodule origin main —
+ * otherwise the pre-mint publish gate defers instead, because a minted commit
+ * could never satisfy the downstream reachability gate. Tests whose SUBJECT is
+ * the rebase/rewrite behaviour therefore opt into that policy explicitly; the
+ * gate's own behaviour is covered by the pre-mint publish gate describe-block.
+ */
+const AUTO_PUBLISH_ON = { allowAutoPublishSubmoduleMainCommits: true } as const
+
 const cleanups: string[] = []
 
 function makeTmp(): string {
@@ -129,7 +139,7 @@ describe('convergeDivergedSubmoduleGitlinks', () => {
     expect(() => git(subRepo, ['merge-base', '--is-ancestor', subBase, subBranch])).toThrow()
     expect(() => git(subRepo, ['merge-base', '--is-ancestor', subBranch, subBase])).toThrow()
 
-    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
     expect(result.converged).toBe(true)
     expect(result.resolutions).toHaveLength(1)
     const [res] = result.resolutions
@@ -190,7 +200,7 @@ describe('rootRebaseResolvingGitlinks + patch-equivalence (end-to-end auto-conve
     const { base, wt, baseHead, branchHead } = setupDivergedSubmodule()
 
     // STEP 1: converge the submodule.
-    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
     expect(converge.converged).toBe(true)
 
     // STEP 2: gitlink-aware root rebase onto baseHead.
@@ -225,7 +235,7 @@ describe('rootRebaseResolvingGitlinks + patch-equivalence (end-to-end auto-conve
 
   it('(b) a genuinely conflicting submodule keeps the block (no converge, no rebase)', () => {
     const { base, wt, baseHead, branchHead } = setupDivergedSubmodule({ conflicting: true })
-    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
     expect(converge.converged).toBe(false)
     expect(converge.reason).toBe('rebase_conflict')
     // The branch head is untouched — fail-safe fell back to blocked_review.
@@ -247,7 +257,7 @@ describe('rootRebaseResolvingGitlinks + patch-equivalence (end-to-end auto-conve
     git(wt, ['commit', '-q', '-m', 'branch edits top.txt'])
     const branchHead2 = git(wt, ['rev-parse', 'HEAD'])
 
-    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead2, branchHead2)
+    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead2, branchHead2, AUTO_PUBLISH_ON)
     expect(converge.converged).toBe(true) // the submodule itself is non-conflicting
     const rebased = rootRebaseResolvingGitlinks(wt, baseHead2, converge.resolutions)
     expect(rebased.ok).toBe(false)
@@ -368,7 +378,7 @@ describe('parallel-refine published-twin (Gap #1/Gap #2 regression)', () => {
     const submoduleOrigin = git(subRepo, ['remote', 'get-url', 'origin'])
     commitFile(submoduleOrigin, 'unrelated.txt', 'unrelated\n', 'unrelated published commit')
 
-    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
     expect(result.converged).toBe(true)
     expect(result.resolutions).toHaveLength(1)
     const [res] = result.resolutions
@@ -565,7 +575,7 @@ describe('detached-HEAD base submodule object fetch (M-REFINE-SUBMODULE-OBJECT-F
     // 4. And it is genuinely absent from the worktree's submodule object store.
     expect(() => git(wtSubRepo, ['cat-file', '-e', `${subBase}^{commit}`])).toThrow()
 
-    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
 
     // The fetch now reaches the detached commit → divergence is judged → converge runs.
     expect(result.converged).toBe(true)
@@ -584,7 +594,7 @@ describe('detached-HEAD base submodule object fetch (M-REFINE-SUBMODULE-OBJECT-F
   it('end-to-end: the converged branch passes the patch-equivalence gate', async () => {
     const { base, wt, baseHead, branchHead } = setupDetachedBaseSubmodule()
 
-    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    const converge = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
     expect(converge.converged).toBe(true)
     const rebased = rootRebaseResolvingGitlinks(wt, baseHead, converge.resolutions)
     expect(rebased.ok).toBe(true)
@@ -699,5 +709,194 @@ describe('detached-HEAD base submodule object fetch (M-REFINE-SUBMODULE-OBJECT-F
     expect(result.converged).toBe(false)
     expect(result.reason).toBe('not_diverged')
     expect(result.gitlinks[0].action).toBe('skipped_not_diverged')
+  })
+})
+
+/**
+ * ★PRE-MINT PUBLISH GATE (auto-rebase orphan gitlink incident).
+ *
+ * The incident: the Refinery hit a diverged gitlink whose branch-side submodule
+ * commit was never pushed, rebased it anyway, and MINTED a brand-new submodule
+ * commit (1bd259f0 analog) that existed on exactly one machine. The downstream
+ * reachability gate then blocked the merge — as it must — but by that point the
+ * branch had already been rewritten to point at an orphan, and the reported next
+ * step ("rebase") re-minted a fresh orphan on every retry.
+ *
+ * The fix stops BEFORE the rewrite whenever minting is provably futile: the new
+ * commit could never be reachable because nobody is allowed to publish it. When
+ * publishing IS allowed, minting is legitimate and must still happen — that
+ * distinction is what these tests pin down, alongside the untouched paths.
+ */
+describe('pre-mint publish gate (auto-rebase orphan gitlink)', () => {
+  it('defers instead of minting when the branch-side commit is unpublished and auto-publish is OFF', () => {
+    const { base, wt, baseHead, branchHead, subBranch } = setupDivergedSubmodule()
+    const subRepo = join(wt, 'sub')
+    const subHeadBefore = git(subRepo, ['rev-parse', 'HEAD'])
+    const rootHeadBefore = git(wt, ['rev-parse', 'HEAD'])
+
+    // Default policy = auto-publish disabled.
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+
+    expect(result.converged).toBe(false)
+    expect(result.reason).toBe('submodule_publish_required')
+    expect(result.resolutions).toEqual([])
+    expect(result.gitlinks).toHaveLength(1)
+    expect(result.gitlinks[0].action).toBe('publish_required_before_rebase')
+    expect(result.gitlinks[0].path).toBe('sub')
+    // The evidence a coordinator needs to act: which commit must be published.
+    expect(result.gitlinks[0].branchCommit).toBe(subBranch)
+    expect(result.gitlinks[0].remoteMainRef).toBeTruthy()
+
+    // ★No rewrite happened — nothing was minted and neither HEAD moved. This is the
+    // property the incident violated: the branch must be left exactly as the worker
+    // left it, so the only remaining action is to publish.
+    expect(git(subRepo, ['rev-parse', 'HEAD'])).toBe(subHeadBefore)
+    expect(git(wt, ['rev-parse', 'HEAD'])).toBe(rootHeadBefore)
+    expect(() => git(subRepo, ['rev-parse', '--verify', 'REBASE_HEAD'])).toThrow()
+  })
+
+  it('★over-correction guard: still mints when auto-publish is ON (reachability is obtainable)', () => {
+    // The mesh in production runs with allowAutoPublishSubmoduleMainCommits=true.
+    // Gating that case would break normal sibling convergence — the gate must be
+    // scoped to "nobody will publish this", not "this is unpublished".
+    const { base, wt, baseHead, branchHead, subBase, subBranch } = setupDivergedSubmodule()
+    const subRepo = join(wt, 'sub')
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
+
+    expect(result.converged).toBe(true)
+    expect(result.resolutions).toHaveLength(1)
+    expect(result.gitlinks[0].action).toBe('rebased')
+    // A genuinely new commit was minted, and the branch work survived it.
+    expect(result.resolutions[0].rebasedCommit).not.toBe(subBranch)
+    expect(git(subRepo, ['merge-base', '--is-ancestor', subBase, result.resolutions[0].rebasedCommit])).toBe('')
+    expect(git(subRepo, ['ls-tree', '-r', '--name-only', result.resolutions[0].rebasedCommit])).toMatch(/other\.txt/)
+    // ★Observability: the record says plainly that a commit was SYNTHESIZED and is
+    // not yet on any remote — the fact the coordinator missed during the incident.
+    expect(result.gitlinks[0].mintedUnpublishedCommit).toBe(true)
+    expect(result.gitlinks[0].remoteMainRef).toBeTruthy()
+  })
+
+  it('★over-correction guard: never fires when a published equivalent exists (normal path, auto-publish OFF)', async () => {
+    // The published-twin path resolves to an ALREADY-PUBLISHED commit, so nothing is
+    // minted and no publish is owed. The gate must stay out of its way even with
+    // auto-publish disabled — this is the common sibling-convergence case.
+    const { base, wt, baseHead, branchHead, subPublished } = setupPublishedTwinSubmodule()
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+
+    expect(result.converged).toBe(true)
+    expect(result.reason).toBeUndefined()
+    expect(result.gitlinks[0].action).toBe('converged_to_published')
+    expect(result.resolutions[0].rebasedCommit).toBe(subPublished)
+    // Nothing was synthesized, so nothing is owed a publish.
+    expect(result.gitlinks[0].mintedUnpublishedCommit).toBeUndefined()
+
+    // End-to-end: still merges cleanly.
+    const rebased = rootRebaseResolvingGitlinks(wt, baseHead, result.resolutions)
+    expect(rebased.ok).toBe(true)
+    const pe = await runMeshRefinePatchEquivalenceGate(base, baseHead, rebased.branchHead!)
+    expect(pe.status).toBe('passed')
+  })
+
+  it('★over-correction guard: never fires on a trivial fast-forward gitlink (not diverged)', () => {
+    // A strict-ff gitlink never reaches the rewrite path at all, so the gate must
+    // report not_diverged exactly as before — no publish demand for a pointer that
+    // only moved forward.
+    const tmp = makeTmp()
+    const submoduleOrigin = join(tmp, 'sub-origin')
+    const base = join(tmp, 'base')
+    initRepo(submoduleOrigin)
+    const s1 = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'v1')
+    const s2 = commitFile(submoduleOrigin, 'mod.txt', 'v2\n', 'v2')
+    initRepo(base)
+    commitFile(base, 'top.txt', 'top\n', 'init')
+    git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+    git(join(base, 'sub'), ['fetch', '-q', 'origin'])
+    git(join(base, 'sub'), ['checkout', '-q', s1])
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'pin v1'])
+    const baseHead = git(base, ['rev-parse', 'HEAD'])
+    const wt = join(tmp, 'wt')
+    git(base, ['worktree', 'add', '-q', '--detach', wt, baseHead])
+    git(wt, ['checkout', '-q', '-b', 'feat'])
+    git(wt, ['submodule', 'update', '-q', '--init'])
+    git(join(wt, 'sub'), ['fetch', '-q', 'origin'])
+    git(join(wt, 'sub'), ['checkout', '-q', s2])
+    git(wt, ['add', 'sub'])
+    git(wt, ['commit', '-q', '-m', 'bump sub v2'])
+    const branchHead = git(wt, ['rev-parse', 'HEAD'])
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+    expect(result.reason).toBe('not_diverged')
+    expect(result.gitlinks[0].action).toBe('skipped_not_diverged')
+    expect(result.gitlinks.some(g => g.action === 'publish_required_before_rebase')).toBe(false)
+  })
+
+  it('★over-correction guard: a real content conflict still reports rebase_conflict, not publish_required', () => {
+    // A conflicting submodule is unpublished too, so a gate placed carelessly would
+    // shadow the more specific diagnosis. `rebase_conflict` is differently
+    // actionable (resolve the conflict) and must win.
+    const { base, wt, baseHead, branchHead, subBranch } = setupDivergedSubmodule({ conflicting: true })
+    const subRepo = join(wt, 'sub')
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+
+    expect(result.converged).toBe(false)
+    expect(result.reason).toBe('rebase_conflict')
+    expect(git(subRepo, ['rev-parse', 'HEAD'])).toBe(subBranch)
+  })
+
+  it('does not fire when the branch-side commit is already published on the submodule remote main', () => {
+    // Unpublished-ness is the trigger, not divergence: when the branch-side commit
+    // is already reachable from origin/main, a rebase of it produces a tip whose
+    // history is publishable, so the gate must stay silent even with auto-publish
+    // off. Built by publishing the branch-side sibling to origin/main directly.
+    const tmp = makeTmp()
+    const submoduleOrigin = join(tmp, 'sub-origin')
+    const base = join(tmp, 'base')
+
+    initRepo(submoduleOrigin)
+    const subMB = commitFile(submoduleOrigin, 'mod.txt', 'v1\n', 'sub v1')
+    // The branch-side commit is published on origin/main...
+    const subBranch = commitFile(submoduleOrigin, 'other.txt', 'branch-line\n', 'sub branch add (published)')
+    // ...while the base side is a sibling off the merge base, unpublished on main.
+    git(submoduleOrigin, ['checkout', '-q', '-b', 'basesub', subMB])
+    const subBase = commitFile(submoduleOrigin, 'mod.txt', 'v1\nbase-line\n', 'sub base edit')
+    git(submoduleOrigin, ['checkout', '-q', 'main'])
+
+    initRepo(base)
+    commitFile(base, 'top.txt', 'top\n', 'root init')
+    git(base, ['submodule', 'add', '-q', submoduleOrigin, 'sub'])
+    git(join(base, 'sub'), ['fetch', '-q', 'origin'])
+    git(join(base, 'sub'), ['checkout', '-q', subMB])
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'pin sub at merge-base'])
+    const rootMB = git(base, ['rev-parse', 'HEAD'])
+    writeFileSync(join(base, 'sibling.txt'), 'sibling\n', 'utf-8')
+    git(base, ['add', 'sibling.txt'])
+    git(join(base, 'sub'), ['checkout', '-q', subBase])
+    git(base, ['add', 'sub'])
+    git(base, ['commit', '-q', '-m', 'base: sub->subBase + sibling'])
+    const baseHead = git(base, ['rev-parse', 'HEAD'])
+
+    const wt = join(tmp, 'wt')
+    git(base, ['worktree', 'add', '-q', '--detach', wt, rootMB])
+    git(wt, ['checkout', '-q', '-b', 'feat'])
+    git(wt, ['submodule', 'update', '-q', '--init'])
+    git(join(wt, 'sub'), ['fetch', '-q', 'origin'])
+    git(join(wt, 'sub'), ['checkout', '-q', subBranch])
+    git(wt, ['add', 'sub'])
+    writeFileSync(join(wt, 'ours.txt'), 'ours\n', 'utf-8')
+    git(wt, ['add', 'ours.txt'])
+    git(wt, ['commit', '-q', '-m', 'branch: sub->subBranch + ours'])
+    const branchHead = git(wt, ['rev-parse', 'HEAD'])
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+
+    expect(result.reason).not.toBe('submodule_publish_required')
+    expect(result.converged).toBe(true)
+    // The rewrite ran and is NOT flagged as owing a publish.
+    expect(result.gitlinks[0].mintedUnpublishedCommit).toBeUndefined()
   })
 })

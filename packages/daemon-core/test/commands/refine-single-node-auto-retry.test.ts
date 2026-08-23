@@ -141,7 +141,10 @@ describe('★ pointer re-targeting gate: never silently drop a side', () => {
       git(repo, 'commit', '-q', '-m', 'branch points at branchCommit')
       const branchHead = git(repo, 'rev-parse', 'HEAD')
 
-      const result = convergeDivergedSubmoduleGitlinks(repo, repo, baseHead, branchHead)
+      // Auto-publish ON: this test's subject is the branch-work-survival guard on the
+      // REWRITE path, which the pre-mint publish gate would otherwise short-circuit
+      // (the branch-side submodule commit here is not published to any remote main).
+      const result = convergeDivergedSubmoduleGitlinks(repo, repo, baseHead, branchHead, { allowAutoPublishSubmoduleMainCommits: true })
 
       // The gate must refuse: rebasing branchCommit onto baseCommit drops it entirely,
       // so converging would stage a pointer from which the branch work is unreachable.
@@ -191,7 +194,10 @@ describe('★ pointer re-targeting gate: never silently drop a side', () => {
       git(repo, 'commit', '-q', '-m', 'branch points at branchCommit')
       const branchHead = git(repo, 'rev-parse', 'HEAD')
 
-      const result = convergeDivergedSubmoduleGitlinks(repo, repo, baseHead, branchHead)
+      // Auto-publish ON: this test's subject is the branch-work-survival guard on the
+      // REWRITE path, which the pre-mint publish gate would otherwise short-circuit
+      // (the branch-side submodule commit here is not published to any remote main).
+      const result = convergeDivergedSubmoduleGitlinks(repo, repo, baseHead, branchHead, { allowAutoPublishSubmoduleMainCommits: true })
 
       // Genuine convergence is NOT blocked by the gate.
       expect(result.reason).not.toBe('rebase_dropped_branch_commits')

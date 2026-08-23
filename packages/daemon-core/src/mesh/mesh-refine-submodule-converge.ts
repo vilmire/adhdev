@@ -187,6 +187,14 @@ export type SubmoduleGitlinkConvergeResult = {
      *                         commits are NOT reachable from the rebased tip (git
      *                         skipped them as already-applied). Converging would
      *                         silently discard the branch side, so we refuse.
+     *   submodule_publish_required — ★PRE-MINT GATE: the divergence is real and
+     *                         convergeable, but the rebase would MINT a submodule
+     *                         commit reachable from nowhere on the submodule's
+     *                         remote, and auto-publish is DISABLED — so the
+     *                         downstream reachability gate is guaranteed to reject
+     *                         it. Refusing before the rewrite keeps the branch
+     *                         untouched and makes the reported action the one that
+     *                         actually unblocks: publish the submodule commit.
      */
     reason?: string;
     /**
@@ -201,15 +209,73 @@ export type SubmoduleGitlinkConvergeResult = {
         baseCommit?: string;
         branchCommit?: string;
         rebasedCommit?: string;
-        action: 'rebased' | 'converged_to_published' | 'skipped_not_diverged' | 'skipped_commit_unavailable' | 'rebase_conflict' | 'rebase_dropped_branch_commits';
+        action: 'rebased' | 'converged_to_published' | 'skipped_not_diverged' | 'skipped_commit_unavailable' | 'rebase_conflict' | 'rebase_dropped_branch_commits' | 'publish_required_before_rebase';
         /**
          * Which side's commit could not be made available locally. Only set with
          * `skipped_commit_unavailable`, so the log/stage record names the object
          * that is actually missing instead of just saying "not diverged".
          */
         unavailable?: Array<'base' | 'branch'>;
+        /**
+         * ★Observability (Gap #3): set on `rebased` to state plainly that this
+         * action MINTED a submodule commit that exists on no remote yet. The
+         * incident was made worse by the coordinator not noticing the Refinery had
+         * synthesized a commit at all — the stage record said "rebased" and read as
+         * a pointer move. `mintedUnpublishedCommit: true` says otherwise.
+         *
+         * It is `true` only when the rewrite was allowed to proceed despite the new
+         * tip being unreachable from the submodule remote — i.e. auto-publish is
+         * enabled and a publish is expected to follow.
+         */
+        mintedUnpublishedCommit?: boolean;
+        /**
+         * Which submodule remote ref the publish-required decision was made
+         * against (`refs/remotes/origin/main` etc.), or `undefined` when no remote
+         * main ref could be resolved at all. Only set with
+         * `publish_required_before_rebase` / `mintedUnpublishedCommit`.
+         */
+        remoteMainRef?: string;
     }>;
 };
+
+/**
+ * Options for {@link convergeDivergedSubmoduleGitlinks}.
+ */
+export type ConvergeDivergedSubmoduleGitlinksOptions = {
+    /**
+     * Mirrors the Refinery's `allowAutoPublishSubmoduleMainCommits` policy
+     * (resolved by `resolveRefineryAutoPublishSubmoduleMainCommits`).
+     *
+     * ★This flag is what separates "minting is pointless" from "minting is
+     * legitimate", and the pre-mint gate MUST respect it:
+     *  - `false` (default) — nobody will publish the minted commit, so the
+     *    downstream reachability gate WILL fail on it. Refuse before the rewrite.
+     *  - `true` — the Refinery is permitted to push the submodule commit to the
+     *    submodule's origin main, so reachability is obtainable and the rewrite is
+     *    justified. Gating it here would block normal convergence.
+     */
+    allowAutoPublishSubmoduleMainCommits?: boolean;
+};
+
+/**
+ * Whether `commit` is reachable from the submodule's remote main ref — i.e.
+ * already published. Undefined `remoteMainRef` (no origin main resolvable) counts
+ * as NOT reachable: we have no evidence of publication, and the pre-mint gate's
+ * whole job is to refuse to synthesize commits we cannot show are publishable.
+ */
+function isCommitReachableFromRemoteMain(
+    submoduleRepoPath: string,
+    commit: string,
+    remoteMainRef: string | undefined,
+): boolean {
+    if (!remoteMainRef) return false;
+    try {
+        execFileSync(GIT, ['merge-base', '--is-ancestor', commit, remoteMainRef], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 /**
  * STEP 1 of auto-converging diverged oss-style submodule gitlinks: rebase the
@@ -244,6 +310,7 @@ export function convergeDivergedSubmoduleGitlinks(
     baseRepoRoot: string,
     baseHead: string,
     branchHead: string,
+    options: ConvergeDivergedSubmoduleGitlinksOptions = {},
 ): SubmoduleGitlinkConvergeResult {
     const changed = readChangedGitlinkPaths(worktreeRoot, baseHead, branchHead);
     if (changed.length === 0) {
@@ -323,6 +390,62 @@ export function convergeDivergedSubmoduleGitlinks(
             continue;
         }
 
+        // ★ PRE-MINT PUBLISH GATE (Gap #3) — refuse to synthesize a commit whose
+        // rejection is already certain.
+        //
+        // Reaching here means: the gitlink is genuinely diverged AND no published
+        // equivalent exists on the submodule remote. The rebase below would
+        // therefore MINT a brand-new submodule commit that is reachable from no
+        // remote. The downstream `refineSubmoduleReachabilityStage` then demands it
+        // be published — so with auto-publish off, running the rebase cannot
+        // possibly end in a merge. It only rewrites the branch's submodule history
+        // (and, via STEP 2, the root branch) on the way to a guaranteed block,
+        // leaving an orphan gitlink pointing at a commit that exists on one machine.
+        //
+        // The honest move is to stop BEFORE the rewrite: the branch stays exactly as
+        // the worker left it, and the reported next step is the one that actually
+        // unblocks — publish the submodule commit, not "rebase again".
+        //
+        // ★The gate is deliberately narrow, because over-correcting here would block
+        // the normal convergence path that sibling worktrees rely on. It fires ONLY
+        // when auto-publish is disabled. When the policy allows the Refinery to push
+        // the submodule commit to origin main, reachability IS obtainable and
+        // minting is legitimate — so the rewrite proceeds untouched (and is tagged
+        // `mintedUnpublishedCommit` for observability).
+        //
+        // ★It also fires only when the rebase would actually SUCCEED. A submodule
+        // whose content genuinely conflicts must keep reporting `rebase_conflict`:
+        // that is both more specific and differently actionable (resolve the
+        // conflict vs publish the commit), and letting the publish gate shadow it
+        // would weaken conflict detection. `merge-tree --write-tree` answers
+        // "would this replay conflict?" without touching the checkout.
+        const branchAlreadyPublished = isCommitReachableFromRemoteMain(submoduleRepoPath, branchCommit, remoteMainRef);
+        const willMintUnpublishedCommit = !branchAlreadyPublished;
+        const wouldConflict = (() => {
+            try {
+                execFileSync(GIT, ['merge-tree', '--write-tree', baseCommit, branchCommit], {
+                    cwd: submoduleRepoPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+                });
+                return false;
+            } catch {
+                // Non-zero exit = conflicted merge → let the real rebase below produce
+                // the precise `rebase_conflict` outcome and its checkout restore.
+                return true;
+            }
+        })();
+        if (willMintUnpublishedCommit && !wouldConflict && options.allowAutoPublishSubmoduleMainCommits !== true) {
+            gitlinks.push({
+                path,
+                baseCommit,
+                branchCommit,
+                action: 'publish_required_before_rebase',
+                remoteMainRef,
+            });
+            // Nothing was rewritten — the submodule checkout is untouched, so there is
+            // no state to restore. Caller keeps defer→blocked_review.
+            return { converged: false, reason: 'submodule_publish_required', resolutions: [], gitlinks };
+        }
+
         // Rebase the branch-side submodule commit(s) onto the base-side commit in a
         // DETACHED HEAD (never move a submodule branch ref). A conflict aborts and
         // restores the submodule checkout to the branch-side commit.
@@ -384,7 +507,17 @@ export function convergeDivergedSubmoduleGitlinks(
             return { converged: false, reason: 'rebase_dropped_branch_commits', resolutions: [], gitlinks };
         }
 
-        gitlinks.push({ path, baseCommit, branchCommit, rebasedCommit, action: 'rebased' });
+        // ★Name the synthesis explicitly (Gap #3). `action: 'rebased'` alone reads
+        // like a pointer move; when the rebase minted a commit that no remote yet
+        // carries, the stage record must say so — a publish is still owed.
+        gitlinks.push({
+            path,
+            baseCommit,
+            branchCommit,
+            rebasedCommit,
+            action: 'rebased',
+            ...(willMintUnpublishedCommit ? { mintedUnpublishedCommit: true, remoteMainRef } : {}),
+        });
         resolutions.push({ path, baseCommit, branchCommit, rebasedCommit: rebasedCommit! });
     }
 
@@ -398,6 +531,101 @@ export function convergeDivergedSubmoduleGitlinks(
         return { converged: false, reason, resolutions: [], gitlinks };
     }
     return { converged: resolutions.length > 0, resolutions, gitlinks };
+}
+
+/**
+ * The structural next step recorded on the `submodule_gitlink_converge` stage
+ * when the pre-mint publish gate defers. Kept next to the gate (rather than
+ * inline at the call site) so the wording and the decision cannot drift apart.
+ *
+ * ★It must say PUBLISH, not "rebase". Telling the coordinator to retry the rebase
+ * is what the incident did, and each retry minted a fresh orphan commit.
+ */
+export const SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION =
+    'Publish the branch-side submodule commit(s) to submodule origin main, then rerun mesh_refine_node. '
+    + 'Do NOT retry the rebase: the branch was intentionally left unrewritten because a rebase here would '
+    + 'mint a submodule commit the reachability gate must reject.';
+
+/**
+ * Human-readable log line for a pre-mint publish-gate deferral — names each
+ * gitlink and the commit that must be published.
+ */
+export function describeSubmodulePublishRequired(
+    nodeId: string,
+    gitlinks: SubmoduleGitlinkConvergeResult['gitlinks'],
+): string {
+    const pending = gitlinks.filter(g => g.action === 'publish_required_before_rebase');
+    return `[Refinery] Refusing to auto-converge diverged submodule gitlink(s) for node ${nodeId} — `
+        + `the rebase would create a NEW submodule commit that is not reachable from the submodule remote, and `
+        + `allowAutoPublishSubmoduleMainCommits is disabled, so the reachability gate would reject it. `
+        + `The branch was left untouched. NEXT STEP: publish the branch-side submodule commit(s) to submodule `
+        + `origin main, then rerun mesh_refine_node — do NOT rebase: `
+        + pending
+            .map(g => `${g.path} (branch=${(g.branchCommit || '?').slice(0, 12)} base=${(g.baseCommit || '?').slice(0, 12)} remote=${g.remoteMainRef || 'unresolved'})`)
+            .join(', ');
+}
+
+/**
+ * Log line for a declined convergence whose reason means something OTHER than
+ * "there was nothing to converge" — returns undefined for the ordinary reasons
+ * (not_diverged / rebase_conflict / dropped commits) that need no extra warning.
+ *
+ * Two reasons qualify, and conflating either with "not diverged" has already
+ * misled an investigation once each:
+ *   submodule_publish_required   — we DECLINED to rewrite (publish first)
+ *   submodule_commit_unavailable — we could not JUDGE (missing object)
+ */
+export function describeSubmoduleConvergeDecline(
+    nodeId: string,
+    reason: string | undefined,
+    gitlinks: SubmoduleGitlinkConvergeResult['gitlinks'],
+): string | undefined {
+    if (reason === 'submodule_publish_required') {
+        return describeSubmodulePublishRequired(nodeId, gitlinks);
+    }
+    if (reason === 'submodule_commit_unavailable') {
+        return `[Refinery] Could NOT determine submodule gitlink divergence for node ${nodeId} — `
+            + `a gitlink commit is missing from the local submodule object store (auto-converge could not run): `
+            + gitlinks
+                .filter(g => g.action === 'skipped_commit_unavailable')
+                .map(g => `${g.path} (missing: ${(g.unavailable || []).join('+') || 'unknown'}; base=${(g.baseCommit || '?').slice(0, 12)} branch=${(g.branchCommit || '?').slice(0, 12)})`)
+                .join(', ');
+    }
+    return undefined;
+}
+
+/**
+ * Extra stage-record fields for a declined convergence. Only the pre-mint
+ * publish-gate deferral carries a structural `recommendedAction`; every other
+ * decline reason keeps the historical (field-free) record shape.
+ */
+export function buildSubmoduleConvergeDeclineDetails(
+    reason: string | undefined,
+    autoPublishEnabled: boolean,
+): { recommendedAction?: string; autoPublishAllowed?: boolean } {
+    if (reason !== 'submodule_publish_required') return {};
+    return {
+        recommendedAction: SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION,
+        autoPublishAllowed: autoPublishEnabled,
+    };
+}
+
+/**
+ * Human-readable log line for the observability gap the incident exposed: a
+ * convergence that SYNTHESIZED submodule commit(s) rather than merely re-pointing
+ * the gitlink. Returns undefined when nothing was minted (nothing to say).
+ */
+export function describeMintedUnpublishedCommits(
+    nodeId: string,
+    gitlinks: SubmoduleGitlinkConvergeResult['gitlinks'],
+    autoPublishEnabled: boolean,
+): string | undefined {
+    const minted = gitlinks.filter(g => g.mintedUnpublishedCommit);
+    if (minted.length === 0) return undefined;
+    return `[Refinery] Node ${nodeId}: the convergence MINTED ${minted.length} new submodule commit(s) not reachable `
+        + `from the submodule remote (allowed because allowAutoPublishSubmoduleMainCommits=${autoPublishEnabled}); `
+        + `a publish is still required before merge: `
+        + minted.map(g => `${g.path}→${(g.rebasedCommit || '?').slice(0, 12)} (remote=${g.remoteMainRef || 'unresolved'})`).join(', ');
 }
 
 export type RootRebaseGitlinkResolveResult = {
