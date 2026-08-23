@@ -25,8 +25,8 @@ import { execFileSync } from 'node:child_process';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import { LOG } from '../logging/logger.js';
-import type { GitAncestryProbe, GitlinkTrivialFastForwardEvaluation } from './mesh-refine-gitlink-utils.js';
-import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, isSubmoduleFastForward, probeGitAncestry, probeSubmoduleFastForward, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readChangedPathKinds, readTreeObject, warnGitlinkFastForwardUndeterminable, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
+import type { GitAncestryProbe, GitlinkTrivialFastForwardEvaluation, MeshRefineStageStatus, MeshRefineSubmoduleReachabilityEntry, MeshRefineSubmoduleReachabilitySummary } from './mesh-refine-gitlink-utils.js';
+import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, isSubmoduleFastForward, probeGitAncestry, probeSubmoduleFastForward, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readChangedPathKinds, readTreeObject, verifyRemoteBranchContainsCommit, warnGitlinkFastForwardUndeterminable, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
 // Submodule-gitlink convergence lives in its own module (pure move, file-size gate);
 // re-exported here so existing importers of this module are unaffected.
 export * from './mesh-refine-submodule-converge.js';
@@ -101,7 +101,6 @@ type MeshRefineValidationSummary = {
     };
 };
 
-type MeshRefineStageStatus = 'passed' | 'failed' | 'skipped';
 
 type MeshRefinePatchEquivalenceSummary = {
     status: MeshRefineStageStatus;
@@ -169,49 +168,7 @@ type MeshRefineSubmoduleAlignmentSummary = {
     stderr?: string;
 };
 
-type MeshRefineSubmoduleReachabilityEntry = {
-    path: string;
-    commit: string;
-    reachable: boolean;
-    publishRequired?: boolean;
-    /**
-     * Gap #2 (parallel-refine twin): set when the gitlink commit is NOT reachable
-     * from origin/<default> but a commit with an IDENTICAL tree already is — a
-     * sibling job published the same content under a different SHA. Publishing
-     * this commit would mint duplicate history; the remedy is to converge the
-     * gitlink to this published commit, so `publishRequired` is false.
-     */
-    equivalentPublishedCommit?: string;
-    autoPublishAllowed?: boolean;
-    autoPublishAttempted?: boolean;
-    autoPublishSucceeded?: boolean;
-    autoPublishVerified?: boolean;
-    autoPublishRefspec?: string;
-    autoPublishSkippedReason?: string;
-    importedFromWorktree?: boolean;
-    checkedLocal?: boolean;
-    localReachable?: boolean;
-    remote?: string;
-    remoteUrl?: string;
-    remoteReachable?: boolean;
-    remoteMainBranch?: string;
-    remoteMainReachable?: boolean;
-    fetchedFromOrigin?: boolean;
-    error?: string;
-    publishStdout?: string;
-    publishStderr?: string;
-};
 
-type MeshRefineSubmoduleReachabilitySummary = {
-    status: MeshRefineStageStatus;
-    checked: number;
-    unreachable: MeshRefineSubmoduleReachabilityEntry[];
-    entries: MeshRefineSubmoduleReachabilityEntry[];
-    durationMs: number;
-    autoPublishAllowed?: boolean;
-    autoPublishPolicySource?: string;
-    error?: string;
-};
 
 export type MeshRefineAsyncJobStatus = 'accepted' | 'completed' | 'failed';
 
@@ -476,25 +433,6 @@ export function recordMeshRefineStage(
     });
 }
 
-export function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReachabilityEntry[]): string {
-    const convergeable = entries.filter(entry => entry.equivalentPublishedCommit);
-    const publishable = entries.filter(entry => !entry.equivalentPublishedCommit);
-    const parts: string[] = [];
-    if (convergeable.length > 0) {
-        const refs = convergeable
-            .map(entry => `${entry.path}: ${entry.commit} → ${entry.equivalentPublishedCommit}`)
-            .join(', ');
-        parts.push(`Converge the submodule gitlink(s) to the already-published equivalent commit(s) (${refs}): a commit with an identical tree already exists on the submodule remote main branch, so publishing the local same-content twin is wrong. Retarget the gitlink to the published commit, commit the root pointer update, then rerun mesh_refine_node.`);
-    }
-    if (publishable.length > 0) {
-        const refs = publishable
-            .map(entry => `${entry.path}@${entry.commit}`)
-            .join(', ');
-        parts.push(`Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to the configured submodule remote main branch, then rerun mesh_refine_node.`);
-    }
-    parts.push('Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.');
-    return parts.join(' ');
-}
 
 /**
  * Async git exec helper used across the synchronous-refine stage pipeline. Bound
@@ -1780,10 +1718,11 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             });
             return String(stdout || '');
         };
-        const verifyRemoteMainContainsCommit = async (submodulePath: string, commit: string, branch = 'main'): Promise<void> => {
-            await runGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
-            await runGit(submodulePath, ['merge-base', '--is-ancestor', commit, `refs/remotes/origin/${branch}`]);
-        };
+        // ★Tri-state (see verifyRemoteBranchContainsCommit): a failed fetch is
+        // 'undeterminable', NOT the same value as git's "not an ancestor". The
+        // shared-catch predecessor could push on a fetch failure.
+        const verifyRemoteMainContainsCommit = (submodulePath: string, commit: string, branch = 'main') =>
+            verifyRemoteBranchContainsCommit(runGit, submodulePath, commit, branch);
         const publishCommitToRemoteMain = async (submodulePath: string, commit: string, branch = 'main'): Promise<{ stdout: string; stderr: string; refspec: string }> => {
             const refspec = `${commit}:refs/heads/${branch}`;
             const { stdout, stderr } = await execFileAsync(GIT, ['push', 'origin', refspec], {
@@ -1816,6 +1755,13 @@ export async function runMeshRefineSubmoduleReachabilityGate(
          * equality against recent commits on the freshly-fetched remote ref.
          * Fail-safe: any git error (commit not local, ref missing) returns
          * undefined and the historical publish-required path runs unchanged.
+         *
+         * ★Per-candidate errors are caught PER CANDIDATE, not by the outer catch.
+         * A single unreadable tree object used to abort the whole loop and report
+         * "no twin", silently discarding every remaining candidate — and "no twin"
+         * is what permits the auto-publish push below. A partial enumeration
+         * failure must not be reported as a complete negative; skip the bad
+         * candidate and keep looking.
          */
         const findEquivalentPublishedCommit = async (submodulePath: string, commit: string, remoteRef: string): Promise<string | undefined> => {
             try {
@@ -1824,8 +1770,13 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                 const candidates = (await runGit(submodulePath, ['rev-list', '--max-count=100', remoteRef]))
                     .split('\n').map(s => s.trim()).filter(Boolean);
                 for (const candidate of candidates) {
-                    const tree = (await runGit(submodulePath, ['rev-parse', `${candidate}^{tree}`])).trim();
-                    if (tree === targetTree) return candidate;
+                    let tree = '';
+                    try {
+                        tree = (await runGit(submodulePath, ['rev-parse', `${candidate}^{tree}`])).trim();
+                    } catch {
+                        continue; // unreadable candidate — keep scanning the rest
+                    }
+                    if (tree && tree === targetTree) return candidate;
                 }
             } catch { /* no equivalence evidence */ }
             return undefined;
@@ -1913,13 +1864,34 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                         submodulePath: gitlink.path,
                     });
                     entry.remoteMainBranch = submoduleDefaultBranch;
-                    try {
-                        await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                    const verdict = await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                    if (verdict.state === 'contained') {
                         entry.fetchedFromOrigin = true;
                         entry.remoteReachable = true;
                         entry.remoteMainReachable = true;
                         entry.reachable = true;
-                    } catch (e: any) {
+                    } else if (verdict.state === 'undeterminable') {
+                        // ★We never obtained an answer (fetch failed, or an operand
+                        // did not resolve). This is NOT evidence the commit is
+                        // unpublished, so it must not prescribe — much less perform
+                        // — a publish. Leave `remoteMainReachable` UNDEFINED rather
+                        // than false, and keep `publishRequired` false so the
+                        // auto-publish push cannot fire on absent evidence. The gate
+                        // still FAILS (reachable stays false), so the merge blocks;
+                        // the operator is told we could not judge, not that the
+                        // commit needs pushing.
+                        const e: any = verdict.error;
+                        entry.remoteMainUndeterminable = true;
+                        entry.publishRequired = false;
+                        const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                        entry.error = `Submodule remote main reachability for origin/${submoduleDefaultBranch} could not be determined (the remote was not successfully consulted): ${details}. This is not evidence that ${gitlink.commit} is unpublished — resolve the remote access problem and re-run; Refinery will not publish on an undetermined verdict.`;
+                        if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                            entry.autoPublishAllowed = true;
+                            entry.autoPublishAttempted = false;
+                            entry.autoPublishSkippedReason = `remote main containment for origin/${submoduleDefaultBranch} could not be determined, so Refinery will not push — a failed fetch is not proof the commit is unpublished`;
+                        }
+                    } else {
+                        const e: any = verdict.error;
                         entry.remoteReachable = false;
                         entry.remoteMainReachable = false;
                         // Gap #2: before prescribing "publish", check whether the freshly
@@ -1927,8 +1899,10 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                         // (identical tree) — the parallel-refine twin case. Publishing a
                         // same-content twin is wrong; converging the gitlink to the
                         // published commit is the remedy. Only the ancestry-only verdict
-                        // ("not an ancestor") reaches here, so this is exactly the stale /
-                        // twin misjudgment the publish prescription got wrong.
+                        // ("not an ancestor", on a fetch that SUCCEEDED) reaches here —
+                        // the undeterminable branch above intercepts every case where the
+                        // remote was not actually consulted — so this is exactly the stale
+                        // / twin misjudgment the publish prescription got wrong.
                         const equivalentPublished = await findEquivalentPublishedCommit(submodulePath, gitlink.commit, `refs/remotes/origin/${submoduleDefaultBranch}`);
                         if (equivalentPublished) {
                             entry.equivalentPublishedCommit = equivalentPublished;
@@ -1952,14 +1926,30 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                                     entry.publishStdout = truncateValidationOutput(publish.stdout);
                                     entry.publishStderr = truncateValidationOutput(publish.stderr);
                                     entry.autoPublishSucceeded = true;
-                                    await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
-                                    entry.fetchedFromOrigin = true;
-                                    entry.remoteReachable = true;
-                                    entry.remoteMainReachable = true;
-                                    entry.autoPublishVerified = true;
-                                    entry.publishRequired = false;
-                                    entry.reachable = true;
-                                    entry.error = undefined;
+                                    // The verify is now tri-state and no longer throws, so
+                                    // check it explicitly — treating a non-'contained'
+                                    // verdict as success would make post-publish
+                                    // verification vacuous.
+                                    const postPublish = await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                                    if (postPublish.state !== 'contained') {
+                                        entry.autoPublishVerified = false;
+                                        const postDetails = truncateValidationOutput(
+                                            (postPublish as { error: any }).error?.stderr
+                                            || (postPublish as { error: any }).error?.message
+                                            || String((postPublish as { error: any }).error),
+                                        );
+                                        if (postPublish.state === 'undeterminable') entry.remoteMainUndeterminable = true;
+                                        else entry.remoteMainReachable = false;
+                                        entry.error = `Submodule auto-publish to origin/${submoduleDefaultBranch} reported success but post-publish verification did not confirm containment (${postPublish.state}): ${postDetails}`;
+                                    } else {
+                                        entry.fetchedFromOrigin = true;
+                                        entry.remoteReachable = true;
+                                        entry.remoteMainReachable = true;
+                                        entry.autoPublishVerified = true;
+                                        entry.publishRequired = false;
+                                        entry.reachable = true;
+                                        entry.error = undefined;
+                                    }
                                 } catch (publishError: any) {
                                     entry.autoPublishSucceeded = false;
                                     entry.autoPublishVerified = false;
@@ -1999,12 +1989,17 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             autoPublishPolicySource: options.autoPublishPolicySource,
         };
     } catch (e: any) {
-        const unreachable = entries.filter(entry => !entry.reachable).map(entry => ({ ...entry, publishRequired: true }));
+        // ★`!== false`, not a hard `true`: an entry that already reached a
+        // determined verdict of "no publish needed" — the twin case, or an
+        // undetermined remote-main probe — must keep it. Overwriting those with
+        // `true` because a LATER gitlink threw would resurrect the publish
+        // prescription this gate exists to withhold.
+        const unreachable = entries.filter(entry => !entry.reachable).map(entry => ({ ...entry, publishRequired: entry.publishRequired !== false }));
         return {
             status: 'failed',
             checked: entries.length,
             unreachable,
-            entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: true }),
+            entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: entry.publishRequired !== false }),
             durationMs: Date.now() - startedAt,
             autoPublishAllowed: options.allowAutoPublishSubmoduleMainCommits === true,
             autoPublishPolicySource: options.autoPublishPolicySource,

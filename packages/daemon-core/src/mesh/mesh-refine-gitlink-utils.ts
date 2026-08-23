@@ -434,3 +434,194 @@ export function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: s
         return [];
     }
 }
+
+/**
+ * Tri-state result of "is this commit contained in the remote's default branch?".
+ *
+ * `absent` means git ANSWERED no. `undeterminable` means we never got an answer.
+ * Collapsing the two is the 2026-08-23 false-publish: see
+ * {@link verifyRemoteBranchContainsCommit}.
+ */
+export type RemoteContainmentState = 'contained' | 'absent' | 'undeterminable';
+
+export type RemoteContainmentVerdict =
+    | { state: 'contained' }
+    | { state: 'absent' | 'undeterminable'; error: any };
+
+/**
+ * Fetch the remote branch, then ask whether `commit` is an ancestor of it — as a
+ * THREE-state verdict.
+ *
+ * ★The two-state predecessor (inline in `runMeshRefineSubmoduleReachabilityGate`)
+ * is the 2026-08-23 false-publish. It ran `fetch origin` and `merge-base
+ * --is-ancestor` under ONE shared `catch`, so every failure of EITHER collapsed
+ * to the same value. The caller read that value as "the commit is not on
+ * origin/main": it set `publishRequired: true` and, when
+ * `allowAutoPublishSubmoduleMainCommits` was enabled, performed a real `git
+ * push`. A failed fetch — offline, auth rejected, remote deleted, DNS, timeout —
+ * was therefore indistinguishable from a genuine "not published", and could
+ * publish a commit on evidence that was never obtained. The in-code comment even
+ * asserted "Only the ancestry-only verdict reaches here", which the shared catch
+ * made false.
+ *
+ * So the fetch is judged FIRST and separately, and both ancestry operands are
+ * resolved before the comparison — same discipline as {@link probeGitAncestry}.
+ * When we do not know, the answer is `'undeterminable'` and the safe default is
+ * to NOT push. Only a successful fetch followed by a clean exit-1 from
+ * `--is-ancestor` is a real "no", and that still blocks and still prescribes a
+ * publish, exactly as before.
+ *
+ * `runGit` is injected so the caller keeps its own exec policy (timeouts,
+ * maxBuffer, windowsHide) rather than this module imposing one.
+ */
+export async function verifyRemoteBranchContainsCommit(
+    runGit: (cwd: string, args: string[]) => Promise<string>,
+    submodulePath: string,
+    commit: string,
+    branch = 'main',
+): Promise<RemoteContainmentVerdict> {
+    try {
+        await runGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+    } catch (fetchError: any) {
+        // The remote was never consulted — no ancestry verdict exists.
+        return { state: 'undeterminable', error: fetchError };
+    }
+    const remoteRef = `refs/remotes/origin/${branch}`;
+    // ★The REMOTE ref must resolve. If `refs/remotes/origin/<branch>` does not
+    // exist even after a successful fetch (branch absent on the remote, refspec
+    // wrote nothing), there is no set to test membership in — `--is-ancestor`
+    // would fail for a reason that is not "not an ancestor". Undeterminable.
+    try {
+        await runGit(submodulePath, ['rev-parse', '--verify', '--quiet', `${remoteRef}^{commit}`]);
+    } catch (resolveError: any) {
+        return { state: 'undeterminable', error: resolveError };
+    }
+    // ★The CANDIDATE commit is checked separately, and its absence is a
+    // DETERMINATE 'absent' — not undeterminable. The gate probes the base
+    // checkout, whose object store legitimately lacks a commit that lives only
+    // in the node's worktree or only on a remote feature branch. We just
+    // fetched origin/<branch>; if the object is still not here, it is
+    // demonstrably not in origin/<branch> either — which is exactly the
+    // publish-required verdict this gate exists to produce. Reporting it as
+    // "we could not tell" would over-correct the fetch fix into a fail-open
+    // hole. Pinned by mesh-refine-validation.test.ts "does not treat submodule
+    // feature-branch reachability as remote main convergence".
+    //
+    // It must be a separate probe because `merge-base --is-ancestor` exits 128
+    // (fatal: not a valid object) for a missing candidate, which is
+    // indistinguishable by exit code from a genuine spawn/environment failure.
+    try {
+        await runGit(submodulePath, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`]);
+    } catch (missingCandidate: any) {
+        return { state: 'absent', error: missingCandidate };
+    }
+    try {
+        await runGit(submodulePath, ['merge-base', '--is-ancestor', commit, remoteRef]);
+        return { state: 'contained' };
+    } catch (ancestryError: any) {
+        // Both operands resolved above, so exit 1 is git's real "no". Anything
+        // else (signal, spawn failure) is not an answer.
+        return ancestryError?.code === 1
+            ? { state: 'absent', error: ancestryError }
+            : { state: 'undeterminable', error: ancestryError };
+    }
+}
+
+/** Outcome of one Refinery stage. Moved here with the reachability shapes
+ *  that reference it (pure move); re-exported by mesh-refine-gates.ts. */
+export type MeshRefineStageStatus = 'passed' | 'failed' | 'skipped';
+
+/* ── submodule reachability: result shapes + operator prose ──────────────────
+ * Moved here (pure move) from mesh-refine-gates.ts alongside
+ * verifyRemoteBranchContainsCommit, which produces the verdicts these shapes
+ * carry. Both were previously module-private types in the gates file; they are
+ * exported now that they live in the shared module, and mesh-refine-gates.ts
+ * re-exports them via its `export *` barrel, so every existing import path
+ * keeps working unchanged.
+ */
+
+export type MeshRefineSubmoduleReachabilityEntry = {
+    path: string;
+    commit: string;
+    reachable: boolean;
+    publishRequired?: boolean;
+    /**
+     * Gap #2 (parallel-refine twin): set when the gitlink commit is NOT reachable
+     * from origin/<default> but a commit with an IDENTICAL tree already is — a
+     * sibling job published the same content under a different SHA. Publishing
+     * this commit would mint duplicate history; the remedy is to converge the
+     * gitlink to this published commit, so `publishRequired` is false.
+     */
+    equivalentPublishedCommit?: string;
+    autoPublishAllowed?: boolean;
+    autoPublishAttempted?: boolean;
+    autoPublishSucceeded?: boolean;
+    autoPublishVerified?: boolean;
+    autoPublishRefspec?: string;
+    autoPublishSkippedReason?: string;
+    importedFromWorktree?: boolean;
+    checkedLocal?: boolean;
+    localReachable?: boolean;
+    remote?: string;
+    remoteUrl?: string;
+    remoteReachable?: boolean;
+    remoteMainBranch?: string;
+    remoteMainReachable?: boolean;
+    /**
+     * ★Set when remote-main containment COULD NOT BE JUDGED — the `fetch` failed
+     * (offline / auth / remote gone / timeout) or an operand did not resolve, so
+     * the remote was never actually consulted. Distinct from
+     * `remoteMainReachable: false`, which means git answered "not an ancestor".
+     * An undetermined verdict is NOT evidence the commit is unpublished, so it
+     * never sets `publishRequired` and never permits the auto-publish push;
+     * `remoteMainReachable` is left UNDEFINED rather than false.
+     */
+    remoteMainUndeterminable?: boolean;
+    fetchedFromOrigin?: boolean;
+    error?: string;
+    publishStdout?: string;
+    publishStderr?: string;
+};
+
+export type MeshRefineSubmoduleReachabilitySummary = {
+    status: MeshRefineStageStatus;
+    checked: number;
+    unreachable: MeshRefineSubmoduleReachabilityEntry[];
+    entries: MeshRefineSubmoduleReachabilityEntry[];
+    durationMs: number;
+    autoPublishAllowed?: boolean;
+    autoPublishPolicySource?: string;
+    error?: string;
+};
+
+export function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmoduleReachabilityEntry[]): string {
+    // ★An undetermined remote-main probe is NOT a publish candidate: we never
+    // consulted the remote, so "push this commit" is a prescription written from
+    // absent evidence. It gets its own instruction — fix the remote access and
+    // re-run — and is excluded from the approve-a-push list below.
+    const undeterminable = entries.filter(entry => entry.remoteMainUndeterminable);
+    const decided = entries.filter(entry => !entry.remoteMainUndeterminable);
+    const convergeable = decided.filter(entry => entry.equivalentPublishedCommit);
+    const publishable = decided.filter(entry => !entry.equivalentPublishedCommit);
+    const parts: string[] = [];
+    if (undeterminable.length > 0) {
+        const refs = undeterminable
+            .map(entry => `${entry.path}@${entry.commit}`)
+            .join(', ');
+        parts.push(`Submodule remote main containment could not be determined for (${refs}) — the submodule remote was not successfully consulted (network, auth, or a missing remote). This is NOT evidence that the commit is unpublished, so do not push it: restore access to the submodule remote and rerun mesh_refine_node to obtain a real verdict.`);
+    }
+    if (convergeable.length > 0) {
+        const refs = convergeable
+            .map(entry => `${entry.path}: ${entry.commit} → ${entry.equivalentPublishedCommit}`)
+            .join(', ');
+        parts.push(`Converge the submodule gitlink(s) to the already-published equivalent commit(s) (${refs}): a commit with an identical tree already exists on the submodule remote main branch, so publishing the local same-content twin is wrong. Retarget the gitlink to the published commit, commit the root pointer update, then rerun mesh_refine_node.`);
+    }
+    if (publishable.length > 0) {
+        const refs = publishable
+            .map(entry => `${entry.path}@${entry.commit}`)
+            .join(', ');
+        parts.push(`Ask the user for explicit approval to push/publish the unreachable submodule commit(s) (${refs}) to the configured submodule remote main branch, then rerun mesh_refine_node.`);
+    }
+    parts.push('Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.');
+    return parts.join(' ');
+}
