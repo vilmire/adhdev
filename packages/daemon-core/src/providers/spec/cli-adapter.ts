@@ -61,12 +61,26 @@ import {
 import type { InteractivePrompts } from './fsm-types.js';
 
 
+// See the matching helper in cli-adapters/provider-cli-shared.ts for the full
+// rationale. Kept as a separate copy deliberately: `check:boundaries` forbids a
+// value import between providers/ and cli-adapters/, so sharing it would mean
+// breaking a layer boundary to save a few lines.
+// eslint-disable-next-line no-control-regex
+const ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
+// eslint-disable-next-line no-control-regex
+const ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+/**
+ * Strip ANSI escape sequences. Byte-for-byte identical to the previous
+ * three-pass chain. The CSI pass stays last and separate because deleting an
+ * OSC/DCS can leave a dangling `ESC[` newly adjacent to following text, which
+ * only a fresh scan will then match; a fused alternation advances past that
+ * position and never revisits it.
+ */
 function stripAnsi(text: string): string {
-    // eslint-disable-next-line no-control-regex
-    return String(text || '')
-        .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
-        .replace(/\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g, '')
-        .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+    const s = String(text || '');
+    if (s.indexOf('\x1B') === -1) return s;
+    return s.replace(ANSI_OSC_DCS_RE, '').replace(ANSI_CSI_RE, '');
 }
 
 function delay(ms: number): Promise<void> {

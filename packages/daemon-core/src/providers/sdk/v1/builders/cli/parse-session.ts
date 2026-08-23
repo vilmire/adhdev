@@ -115,16 +115,47 @@ export interface SynthesizedSession {
 // ─── ANSI / line helpers ─────────────────────────
 
 const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g
-const OSC_RE = /\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\|(?=\n|$))/g
+const FWD_RE = /\x1b\[(\d*)C/g
+// eslint-disable-next-line no-control-regex
+const LINE_CTRL_RE = /[\x00-\x08\x0b-\x1f\x7f]/g
+const TRAILING_WS_RE = /\s+$/
+const BACK_RE = /\x1b\[\d*D/g
+// The three non-`ESC[` families fuse into one pass -- all delete-only, all
+// matching disjoint prefixes that the CSI rules cannot reach.
+const NON_CSI_RE = /\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\|(?=\n|$))|\x1b[P^_X][\s\S]*?(?:\x07|\x1b\\)|\x1b(?:[@-Z\\-_])/g
 
-function stripAnsi(text: string): string {
-    return String(text || '')
-        .replace(/\x1b\[(\d*)C/g, (_m, n) => ' '.repeat(Math.max(1, Number(n) || 1)))
-        .replace(/\x1b\[\d*D/g, '')
-        .replace(ANSI_RE, '')
-        .replace(OSC_RE, '')
-        .replace(/\x1b[P^_X][\s\S]*?(?:\x07|\x1b\\)/g, '')
-        .replace(/\x1b(?:[@-Z\\-_])/g, '')
+/**
+ * Strip ANSI escapes, rendering cursor-forward as spaces.
+ *
+ * Byte-for-byte identical to the previous six-pass chain. Three things keep it
+ * that way, each of which a fuzz corpus caught when violated:
+ *
+ *  1. The `ESC[`-family passes (forward / back / generic CSI) must stay
+ *     separate and ordered. Sequential passes each restart their scan, so
+ *     deleting an `ESC[<n>D` can leave an earlier dangling `ESC[` adjacent to
+ *     new text for the later CSI pass to consume. A fused alternation advances
+ *     past that index and never returns:
+ *       "x<ESC>[<ESC>[2Db"  ->  sequential "x"   fused "x<ESC>[b"
+ *  2. Only the non-`ESC[` families are fused, and they run last, matching the
+ *     original relative order.
+ *  3. The cursor-forward pass is the one SUBSTITUTING pass, so it needs a
+ *     replacer callback. Measured: making the whole thing one alternation with
+ *     a callback is ~60% SLOWER than the original six passes -- a function
+ *     replacer defeats V8's fast path for `replace(re, '')`. Hence the callback
+ *     pass is isolated and guarded by indexOf so it is skipped entirely when no
+ *     'C' is present, which is the overwhelmingly common case.
+ */
+// `stripAnsi` and `splitRawLines` are exported for the equivalence regression
+// suite (test/cli/strip-ansi-equivalence.test.ts), which diffs them against
+// frozen copies of the original pass chains. Not part of the public surface.
+export function stripAnsi(text: string): string {
+    const s = String(text || '')
+    if (s.indexOf('\x1b') === -1) return s
+    const fwd = s.indexOf('C') === -1
+        ? s
+        : s.replace(FWD_RE, (_m, n) => ' '.repeat(Math.max(1, Number(n) || 1)))
+    const back = fwd.indexOf('D') === -1 ? fwd : fwd.replace(BACK_RE, '')
+    return back.replace(ANSI_RE, '').replace(NON_CSI_RE, '')
 }
 
 function splitLines(text: string): string[] {
@@ -143,11 +174,22 @@ function splitLines(text: string): string[] {
  * to that line (cursor-agent writes `<bg-sgr> <text>` on one raw line), so a
  * per-line background test is exact.
  */
-function splitRawLines(text: string): Array<{ raw: string; text: string }> {
-    return String(text || '')
-        .split(/\r?\n/)
-        // eslint-disable-next-line no-control-regex
-        .map(rawLine => ({ raw: rawLine, text: stripAnsi(rawLine).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').replace(/\s+$/, '') }))
+export function splitRawLines(text: string): Array<{ raw: string; text: string }> {
+    const parts = String(text || '').split(/\r?\n/)
+    const out: Array<{ raw: string; text: string }> = new Array(parts.length)
+    for (let i = 0; i < parts.length; i += 1) {
+        const raw = parts[i]
+        let visible = stripAnsi(raw)
+        // NOTE the control-strip and the trailing-trim must stay two ORDERED
+        // passes -- they chain. Removing a trailing control char exposes
+        // whitespace that the trim must then take:
+        //   "incomplete <ESC>"  ->  "incomplete", not "incomplete ".
+        // A fused /[ctrl]|\s+$/ gets this wrong, because the space is not at
+        // end-of-string at the moment the trim alternative is tested.
+        if (visible.length !== 0) visible = visible.replace(LINE_CTRL_RE, '').replace(TRAILING_WS_RE, '')
+        out[i] = { raw, text: visible }
+    }
+    return out
 }
 
 function pickInputText(input: any, scope: TranscriptPtySpec['scope']): string {

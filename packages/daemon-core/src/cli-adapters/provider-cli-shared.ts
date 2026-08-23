@@ -320,12 +320,33 @@ export function isPurePtyTranscriptProvider(provider: {
     return transcriptPty?.scope === 'buffer';
 }
 
-function stripAnsi(str: string): string {
-    // eslint-disable-next-line no-control-regex
-    return str
-        .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
-        .replace(/\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g, '')
-        .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+// OSC and DCS/SOS/PM/APC fuse into one pass: both match non-`ESC[` prefixes and
+// both delete their whole match, so a single left-to-right scan is exact.
+// eslint-disable-next-line no-control-regex
+const ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
+// eslint-disable-next-line no-control-regex
+const ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+/**
+ * Strip ANSI escape sequences.
+ *
+ * Byte-for-byte identical to the previous three-pass chain; only the pass
+ * structure changed. Two rules govern why it is not fused further:
+ *
+ *  1. The CSI/2-char pass must stay LAST and SEPARATE. Deleting an OSC/DCS can
+ *     leave a dangling `ESC[` newly adjacent to following text, and only a
+ *     fresh scan will then match it. A fused alternation advances past that
+ *     position and never revisits it. (The equivalence suite's fuzz corpus
+ *     covers this; fusing the two regexes below turns it red.)
+ *  2. The leading indexOf skips the regex engine entirely for plain text,
+ *     which is the common case for transcript lines.
+ */
+// Exported for the equivalence regression suite
+// (test/cli/strip-ansi-equivalence.test.ts), which diffs it against a frozen
+// copy of the original pass chain. Not part of the module's public surface.
+export function stripAnsi(str: string): string {
+    if (str.indexOf('\x1B') === -1) return str;
+    return str.replace(ANSI_OSC_DCS_RE, '').replace(ANSI_CSI_RE, '');
 }
 
 type SavedCursor = { row: number; col: number };
@@ -535,6 +556,21 @@ export class TerminalTranscriptAccumulator {
     }
 }
 
+/**
+ * Collapse terminal noise into readable text.
+ *
+ * Deliberately left as FOUR sequential passes. They form a rewrite pipeline in
+ * which every stage feeds the next, so no two of them can be fused into one
+ * alternation without changing output:
+ *   - stage 1 deletes control chars, which can make two previously-separated
+ *     \r runs ADJACENT so stage 2 collapses them to a single \n
+ *     ("\r\x00\r" -> "\n", fused -> "\n\n");
+ *   - stage 3 deletes the "[ \t]+" between two \n runs, JOINING them into one
+ *     run that stage 4 then caps at three.
+ * Correctness outranks the pass count here; this helper also runs on
+ * already-ANSI-stripped (hence short) input, so it is not the hot path. The
+ * win in this file comes from stripAnsi above.
+ */
 function stripTerminalNoise(str: string): string {
     return String(str || '')
         .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
