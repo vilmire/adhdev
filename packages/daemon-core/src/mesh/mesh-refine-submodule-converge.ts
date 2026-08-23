@@ -19,7 +19,8 @@ import * as fs from 'fs';
 import { resolve as pathResolve } from 'path';
 import { execFileSync } from 'node:child_process';
 
-import { GIT, ensureSubmoduleCommitLocal, readChangedGitlinkPaths, readTreeObject, submoduleCommitPresent } from './mesh-refine-gitlink-utils.js';
+import type { GitAncestryProbe } from './mesh-refine-gitlink-utils.js';
+import { GIT, ensureSubmoduleCommitLocal, probeGitAncestry, readChangedGitlinkPaths, readTreeObject, submoduleCommitPresent } from './mesh-refine-gitlink-utils.js';
 
 /**
  * Classification of a changed gitlink pair, used by the diverged-converge path.
@@ -195,6 +196,17 @@ export type SubmoduleGitlinkConvergeResult = {
      *                         it. Refusing before the rewrite keeps the branch
      *                         untouched and makes the reported action the one that
      *                         actually unblocks: publish the submodule commit.
+     *   submodule_publication_undeterminable — ★UNDETERMINED-PUBLICATION GATE: we
+     *                         could not establish whether the branch-side commit is
+     *                         already published (the submodule origin fetch failed,
+     *                         or no remote main ref resolves), so `refs/remotes/
+     *                         origin/*` is stale or absent. Distinct from
+     *                         `submodule_publish_required`, which is a POSITIVE
+     *                         finding that the commit is unpublished. Minting on
+     *                         absent evidence can synthesize a redundant twin of a
+     *                         commit that is in fact already on origin, so we stop —
+     *                         and unlike the publish gate this fires even when
+     *                         auto-publish is enabled.
      */
     reason?: string;
     /**
@@ -209,7 +221,7 @@ export type SubmoduleGitlinkConvergeResult = {
         baseCommit?: string;
         branchCommit?: string;
         rebasedCommit?: string;
-        action: 'rebased' | 'converged_to_published' | 'skipped_not_diverged' | 'skipped_commit_unavailable' | 'rebase_conflict' | 'rebase_dropped_branch_commits' | 'publish_required_before_rebase';
+        action: 'rebased' | 'converged_to_published' | 'skipped_not_diverged' | 'skipped_commit_unavailable' | 'rebase_conflict' | 'rebase_dropped_branch_commits' | 'publish_required_before_rebase' | 'publication_undeterminable';
         /**
          * Which side's commit could not be made available locally. Only set with
          * `skipped_commit_unavailable`, so the log/stage record names the object
@@ -232,9 +244,19 @@ export type SubmoduleGitlinkConvergeResult = {
          * Which submodule remote ref the publish-required decision was made
          * against (`refs/remotes/origin/main` etc.), or `undefined` when no remote
          * main ref could be resolved at all. Only set with
-         * `publish_required_before_rebase` / `mintedUnpublishedCommit`.
+         * `publish_required_before_rebase` / `mintedUnpublishedCommit` /
+         * `publication_undeterminable`.
          */
         remoteMainRef?: string;
+        /**
+         * ★Whether the submodule's `git fetch origin` actually succeeded. Only set
+         * with `publication_undeterminable`, to distinguish its two causes: the
+         * remote could not be reached at all (`false`), versus the fetch worked but
+         * no remote main ref resolves / the ancestry probe could not run (`true`).
+         * The old code swallowed the fetch error entirely, which is what let a
+         * network failure read as a publication verdict.
+         */
+        remoteFetched?: boolean;
     }>;
 };
 
@@ -259,22 +281,54 @@ export type ConvergeDivergedSubmoduleGitlinksOptions = {
 
 /**
  * Whether `commit` is reachable from the submodule's remote main ref — i.e.
- * already published. Undefined `remoteMainRef` (no origin main resolvable) counts
- * as NOT reachable: we have no evidence of publication, and the pre-mint gate's
- * whole job is to refuse to synthesize commits we cannot show are publishable.
+ * already published — as a THREE-state answer.
+ *
+ * ★The two-state predecessor returned a bare `false` for three different
+ * situations: "git answered no", "no origin main ref resolves", and "the probe
+ * itself failed". Only the first is evidence. The other two mean we could not
+ * ask, and the caller turns a `false` into `willMintUnpublishedCommit = true`,
+ * which — when auto-publish is enabled — runs `checkout --detach` + `rebase`
+ * and MINTS a new submodule commit. Combined with the swallowed fetch at the
+ * call site (a failed fetch leaves a stale or absent `refs/remotes/origin/*`),
+ * a transient network failure could therefore synthesize a commit on the claim
+ * that the content was unpublished — when it may already be on origin.
+ *
+ * So: `undefined` remoteMainRef and probe failure are `'undeterminable'`, never
+ * `false`. Only git's real exit-1 is `false`, and that still mints exactly as
+ * before. Ancestry itself is delegated to {@link probeGitAncestry}, the shared
+ * tri-state probe, so the operand-resolution discipline is not re-implemented.
  */
-function isCommitReachableFromRemoteMain(
-    submoduleRepoPath: string,
-    commit: string,
-    remoteMainRef: string | undefined,
-): boolean {
-    if (!remoteMainRef) return false;
+/**
+ * Whether the submodule checkout has an `origin` remote configured at all.
+ *
+ * ★The distinction this draws is load-bearing: a MISSING remote and an
+ * UNREACHABLE one produce byte-identical `git fetch` output ("'origin' does not
+ * appear to be a git repository"), but they must be handled in opposite ways.
+ * Unreachable = we failed to obtain a publication verdict → fail closed. Missing
+ * = there is no published history to be unpublished against and nothing will
+ * ever be pushed → converge normally. Reading the configured URL answers this
+ * without parsing error strings.
+ */
+function submoduleHasOriginRemote(submoduleRepoPath: string): boolean {
     try {
-        execFileSync(GIT, ['merge-base', '--is-ancestor', commit, remoteMainRef], { cwd: submoduleRepoPath, stdio: 'ignore' });
-        return true;
+        const url = execFileSync(GIT, ['remote', 'get-url', 'origin'], {
+            cwd: submoduleRepoPath,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        return !!url.trim();
     } catch {
         return false;
     }
+}
+
+function probeCommitReachableFromRemoteMain(
+    submoduleRepoPath: string,
+    commit: string,
+    remoteMainRef: string | undefined,
+): GitAncestryProbe {
+    if (!remoteMainRef) return 'undeterminable';
+    return probeGitAncestry(submoduleRepoPath, commit, remoteMainRef);
 }
 
 /**
@@ -374,11 +428,31 @@ export function convergeDivergedSubmoduleGitlinks(
         // (same tree, different SHA). Converging the gitlink to that published
         // commit keeps the landed history on public commits instead of minting a
         // local same-content twin that the reachability gate would then (wrongly)
-        // demand be pushed. Best-effort fetch; any failure leaves no evidence and
-        // the rewrite path below runs unchanged.
+        // demand be pushed.
+        //
+        // ★The fetch outcome is RECORDED, not swallowed. A failed fetch leaves
+        // `refs/remotes/origin/*` stale or absent, so every "is it published?"
+        // answer derived below is being read off state the remote never
+        // confirmed. The old code discarded that fact, and the resulting
+        // `false` ("not published") is what authorizes minting a commit.
+        //
+        // ★But "there is no remote" is NOT the same as "we could not reach the
+        // remote". A submodule with no `origin` configured has no published
+        // history to be unpublished against, and nothing will ever be pushed to
+        // it — that is a DETERMINATE answer, not a missing one, so it must not
+        // trip the undetermined-publication gate below. `git fetch` alone cannot
+        // tell the two apart (both say "'origin' does not appear to be a git
+        // repository"), so ask for the configured URL instead of reading error
+        // text. Local-only submodule topologies keep converging as before.
+        const originConfigured = submoduleHasOriginRemote(submoduleRepoPath);
+        let remoteFetched = true;
         try {
             execFileSync(GIT, ['-c', 'protocol.file.allow=always', 'fetch', '-q', 'origin'], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'] });
-        } catch { /* offline / no origin → no published-equivalence evidence */ }
+        } catch {
+            // Offline / auth / remote gone → no published-equivalence evidence. When
+            // there is no origin at all this is expected and carries no uncertainty.
+            remoteFetched = false;
+        }
         const remoteMainRef = resolveSubmoduleRemoteMainRef(submoduleRepoPath);
         const publishedEquivalent = remoteMainRef
             ? findEquivalentPublishedSubmoduleCommit(submoduleRepoPath, baseCommit, branchCommit, remoteMainRef)
@@ -419,8 +493,15 @@ export function convergeDivergedSubmoduleGitlinks(
         // conflict vs publish the commit), and letting the publish gate shadow it
         // would weaken conflict detection. `merge-tree --write-tree` answers
         // "would this replay conflict?" without touching the checkout.
-        const branchAlreadyPublished = isCommitReachableFromRemoteMain(submoduleRepoPath, branchCommit, remoteMainRef);
-        const willMintUnpublishedCommit = !branchAlreadyPublished;
+        // ★Tri-state. `undeterminable` means we never obtained a publication
+        // verdict — a failed fetch, a missing origin main ref, or a probe that
+        // could not run. It is NOT "unpublished".
+        const branchPublished = probeCommitReachableFromRemoteMain(submoduleRepoPath, branchCommit, remoteMainRef);
+        // ★Gated on `originConfigured`: with no remote there is nothing we failed to
+        // learn, so the undetermined-publication gate must not fire.
+        const publicationUndeterminable = originConfigured
+            && (branchPublished === 'undeterminable' || !remoteFetched);
+        const willMintUnpublishedCommit = branchPublished !== true;
         const wouldConflict = (() => {
             try {
                 execFileSync(GIT, ['merge-tree', '--write-tree', baseCommit, branchCommit], {
@@ -433,6 +514,34 @@ export function convergeDivergedSubmoduleGitlinks(
                 return true;
             }
         })();
+        // ★ UNDETERMINED-PUBLICATION GATE — do not mint on absent evidence.
+        //
+        // Unlike the publish gate below, this one fires REGARDLESS of the
+        // auto-publish policy. The policy's premise is "reachability is
+        // obtainable, so minting is legitimate" — but that premise assumes we
+        // actually know the commit is unpublished. When the remote was never
+        // successfully consulted we know nothing: the content may already be on
+        // origin, in which case the rebase mints a redundant same-content twin
+        // that the reachability gate then (wrongly) demands be pushed. Minting
+        // is irreversible history; not minting costs one retry. So when we
+        // cannot tell, we stop — fail-closed — and say so.
+        //
+        // ★It still defers to `wouldConflict` for the same reason the publish
+        // gate does: a genuine content conflict is more specific and
+        // differently actionable, so let the real rebase report it.
+        if (publicationUndeterminable && !wouldConflict) {
+            gitlinks.push({
+                path,
+                baseCommit,
+                branchCommit,
+                action: 'publication_undeterminable',
+                remoteMainRef,
+                remoteFetched,
+            });
+            // Nothing was rewritten — the submodule checkout is untouched.
+            return { converged: false, reason: 'submodule_publication_undeterminable', resolutions: [], gitlinks };
+        }
+
         if (willMintUnpublishedCommit && !wouldConflict && options.allowAutoPublishSubmoduleMainCommits !== true) {
             gitlinks.push({
                 path,
@@ -547,6 +656,21 @@ export const SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION =
     + 'mint a submodule commit the reachability gate must reject.';
 
 /**
+ * The structural next step for an UNDETERMINED publication verdict.
+ *
+ * ★Deliberately different from the publish action above. That one is a POSITIVE
+ * finding ("the commit is not on origin — publish it"). This one is the absence
+ * of a finding, so prescribing a publish would be acting on evidence nobody
+ * obtained: the commit may already be on origin, and publishing/rebasing would
+ * mint a redundant twin. The only correct instruction is to restore remote
+ * access so a real verdict can be reached.
+ */
+export const SUBMODULE_PUBLICATION_UNDETERMINABLE_RECOMMENDED_ACTION =
+    'Restore access to the submodule remote (the publication check could not be run), then rerun mesh_refine_node. '
+    + 'Do NOT publish and do NOT retry the rebase on this evidence: it is unknown whether the branch-side commit '
+    + 'is already on origin, so minting or pushing here can synthesize a redundant twin of a published commit.';
+
+/**
  * Human-readable log line for a pre-mint publish-gate deferral — names each
  * gitlink and the commit that must be published.
  */
@@ -570,10 +694,12 @@ export function describeSubmodulePublishRequired(
  * "there was nothing to converge" — returns undefined for the ordinary reasons
  * (not_diverged / rebase_conflict / dropped commits) that need no extra warning.
  *
- * Two reasons qualify, and conflating either with "not diverged" has already
- * misled an investigation once each:
+ * Three reasons qualify, and conflating any of them with "not diverged" has
+ * already misled an investigation:
  *   submodule_publish_required   — we DECLINED to rewrite (publish first)
  *   submodule_commit_unavailable — we could not JUDGE (missing object)
+ *   submodule_publication_undeterminable — we could not JUDGE (remote never
+ *                                  consulted), so we refused to MINT
  */
 export function describeSubmoduleConvergeDecline(
     nodeId: string,
@@ -582,6 +708,20 @@ export function describeSubmoduleConvergeDecline(
 ): string | undefined {
     if (reason === 'submodule_publish_required') {
         return describeSubmodulePublishRequired(nodeId, gitlinks);
+    }
+    if (reason === 'submodule_publication_undeterminable') {
+        // ★Must NOT read as "publish the commit": we do not know that it is
+        // unpublished. The actionable step is to restore remote access so a real
+        // verdict can be obtained.
+        return `[Refinery] Could NOT determine whether the branch-side submodule commit(s) are already published for node ${nodeId} — `
+            + `the submodule remote was not successfully consulted, so refs/remotes/origin/* is stale or absent. `
+            + `Refusing to rebase: minting a submodule commit on absent evidence can synthesize a redundant twin of a commit `
+            + `that is already on origin. The branch was left untouched. NEXT STEP: restore access to the submodule remote `
+            + `and rerun mesh_refine_node — do NOT publish or rebase on this evidence: `
+            + gitlinks
+                .filter(g => g.action === 'publication_undeterminable')
+                .map(g => `${g.path} (branch=${(g.branchCommit || '?').slice(0, 12)} base=${(g.baseCommit || '?').slice(0, 12)} remote=${g.remoteMainRef || 'unresolved'} fetched=${g.remoteFetched === true})`)
+                .join(', ');
     }
     if (reason === 'submodule_commit_unavailable') {
         return `[Refinery] Could NOT determine submodule gitlink divergence for node ${nodeId} — `
@@ -603,6 +743,14 @@ export function buildSubmoduleConvergeDeclineDetails(
     reason: string | undefined,
     autoPublishEnabled: boolean,
 ): { recommendedAction?: string; autoPublishAllowed?: boolean } {
+    // ★The undetermined verdict gets its own action, NOT the publish one — see the
+    // constant for why prescribing a publish on absent evidence is the wrong move.
+    // Without this branch the stage record carried no next step at all, leaving the
+    // coordinator with a bare decline and the same "just retry the rebase" instinct
+    // the publish gate exists to prevent.
+    if (reason === 'submodule_publication_undeterminable') {
+        return { recommendedAction: SUBMODULE_PUBLICATION_UNDETERMINABLE_RECOMMENDED_ACTION };
+    }
     if (reason !== 'submodule_publish_required') return {};
     return {
         recommendedAction: SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION,

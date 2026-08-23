@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -8,10 +8,18 @@ import {
   buildSubmodulePublishRequiredNextStep,
   collectTrivialFastForwardGitlinkResolutions,
   convergeDivergedSubmoduleGitlinks,
+  describeSubmoduleConvergeDecline,
   rootRebaseResolvingGitlinks,
   runMeshRefinePatchEquivalenceGate,
   runMeshRefineSubmoduleReachabilityGate,
 } from '../../src/commands/router'
+// Imported from the source module rather than the router barrel: these two are
+// not re-exported there, and the decline-details contract does not need a wider
+// public surface just to be tested.
+import {
+  SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION,
+  buildSubmoduleConvergeDeclineDetails,
+} from '../../src/mesh/mesh-refine-submodule-converge'
 
 // --- git helpers --------------------------------------------------------
 
@@ -125,7 +133,7 @@ function setupDivergedSubmodule(opts?: { conflicting?: boolean }) {
   git(wt, ['commit', '-q', '-m', 'branch: sub->subBranch + ours'])
   const branchHead = git(wt, ['rev-parse', 'HEAD'])
 
-  return { base, wt, rootMB, baseHead, branchHead, subMB, subBase, subBranch }
+  return { base, wt, rootMB, baseHead, branchHead, subMB, subBase, subBranch, submoduleOrigin }
 }
 
 // -----------------------------------------------------------------------
@@ -898,5 +906,181 @@ describe('pre-mint publish gate (auto-rebase orphan gitlink)', () => {
     expect(result.converged).toBe(true)
     // The rewrite ran and is NOT flagged as owing a publish.
     expect(result.gitlinks[0].mintedUnpublishedCommit).toBeUndefined()
+  })
+})
+
+/**
+ * ★UNDETERMINED-PUBLICATION GATE (shared-catch class, finding #2).
+ *
+ * The pre-mint publish gate asks "is the branch-side commit already published?"
+ * That question used to be answered two-state: `isCommitReachableFromRemoteMain`
+ * returned a bare `false` for "git said no", for "no origin main ref resolves",
+ * AND for "the probe failed". Upstream of it, the submodule `git fetch origin`
+ * error was swallowed entirely, so a failed fetch left `refs/remotes/origin/*`
+ * stale or absent and every derived answer was read off state the remote never
+ * confirmed.
+ *
+ * A `false` means `willMintUnpublishedCommit`, and with auto-publish enabled
+ * that runs `checkout --detach` + `rebase` — MINTING a submodule commit. So a
+ * transient network failure could synthesize a commit on the claim that the
+ * content was unpublished, when it may already be on origin. That minted commit
+ * is then what the reachability gate sees and can be pushed.
+ *
+ * Contract pinned here: when we could not consult the remote we do NOT mint —
+ * regardless of the auto-publish policy — and we say we could not tell rather
+ * than claiming a publish is required.
+ *
+ * ★Every fixture's `origin` is a LOCAL path that is renamed away. No test here
+ * reaches a network, and none can push.
+ */
+describe('undetermined-publication gate (fetch failure must not mint a commit)', () => {
+  it('★does NOT mint when the submodule fetch fails, even with auto-publish ON', () => {
+    // The core regression. Auto-publish ON is the production configuration and
+    // the one where the old code would have rebased.
+    const { base, wt, baseHead, branchHead, subBranch, submoduleOrigin } = setupDivergedSubmodule()
+    const subRepo = join(wt, 'sub')
+    const subHeadBefore = git(subRepo, ['rev-parse', 'HEAD'])
+    const rootHeadBefore = git(wt, ['rev-parse', 'HEAD'])
+    const subObjectsBefore = git(subRepo, ['rev-list', '--all']).split('\n').length
+
+    // Break the remote: origin now points at a path that does not exist, so
+    // `git fetch origin` fails and no remote-tracking ref can be refreshed.
+    // Also drop the stale remote-tracking refs so nothing can be read off them.
+    renameSync(submoduleOrigin, `${submoduleOrigin}-moved`)
+    for (const ref of ['refs/remotes/origin/main', 'refs/remotes/origin/branchsub']) {
+      try { git(subRepo, ['update-ref', '-d', ref]) } catch { /* may not exist */ }
+    }
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
+
+    expect(result.converged).toBe(false)
+    expect(result.reason).toBe('submodule_publication_undeterminable')
+    expect(result.resolutions).toEqual([])
+    expect(result.gitlinks).toHaveLength(1)
+    expect(result.gitlinks[0].action).toBe('publication_undeterminable')
+    // The evidence: the remote was never successfully consulted.
+    expect(result.gitlinks[0].remoteFetched).toBe(false)
+
+    // ★Nothing was minted and neither HEAD moved.
+    expect(git(subRepo, ['rev-parse', 'HEAD'])).toBe(subHeadBefore)
+    expect(git(subRepo, ['rev-parse', 'HEAD'])).toBe(subBranch)
+    expect(git(wt, ['rev-parse', 'HEAD'])).toBe(rootHeadBefore)
+    expect(git(subRepo, ['rev-list', '--all']).split('\n').length).toBe(subObjectsBefore)
+    expect(() => git(subRepo, ['rev-parse', '--verify', 'REBASE_HEAD'])).toThrow()
+  })
+
+  it('★does NOT mint when the fetch fails and auto-publish is OFF either', () => {
+    const { base, wt, baseHead, branchHead, submoduleOrigin } = setupDivergedSubmodule()
+    const subRepo = join(wt, 'sub')
+    const subHeadBefore = git(subRepo, ['rev-parse', 'HEAD'])
+    renameSync(submoduleOrigin, `${submoduleOrigin}-moved`)
+    for (const ref of ['refs/remotes/origin/main', 'refs/remotes/origin/branchsub']) {
+      try { git(subRepo, ['update-ref', '-d', ref]) } catch { /* may not exist */ }
+    }
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead)
+
+    expect(result.converged).toBe(false)
+    // ★Reported as "could not tell", NOT as the positive "publish is required"
+    // claim — we have no evidence the commit is unpublished.
+    expect(result.reason).toBe('submodule_publication_undeterminable')
+    expect(git(subRepo, ['rev-parse', 'HEAD'])).toBe(subHeadBefore)
+  })
+
+  it('★tells the operator to restore remote access, not to publish', () => {
+    const { base, wt, baseHead, branchHead, submoduleOrigin } = setupDivergedSubmodule()
+    renameSync(submoduleOrigin, `${submoduleOrigin}-moved`)
+    for (const ref of ['refs/remotes/origin/main', 'refs/remotes/origin/branchsub']) {
+      try { git(join(wt, 'sub'), ['update-ref', '-d', ref]) } catch { /* may not exist */ }
+    }
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
+    const message = describeSubmoduleConvergeDecline('node-x', result.reason, result.gitlinks)
+
+    expect(message).toBeTruthy()
+    expect(message).toContain('Could NOT determine')
+    expect(message).toContain('restore access to the submodule remote')
+    // ★Must not read as the publish prescription — that is the wrong remedy here.
+    expect(message).not.toContain('NEXT STEP: publish')
+  })
+
+  it('★over-correction guard: a REACHABLE remote with a genuinely unpublished commit still behaves exactly as before', () => {
+    // The remote is intact and the probe answers "no" for real, so the historical
+    // verdict must survive untouched: publish-required with auto-publish OFF...
+    const off = setupDivergedSubmodule()
+    const resultOff = convergeDivergedSubmoduleGitlinks(off.wt, off.base, off.baseHead, off.branchHead)
+    expect(resultOff.converged).toBe(false)
+    expect(resultOff.reason).toBe('submodule_publish_required')
+    expect(resultOff.gitlinks[0].action).toBe('publish_required_before_rebase')
+
+    // ...and a real mint with auto-publish ON.
+    const on = setupDivergedSubmodule()
+    const resultOn = convergeDivergedSubmoduleGitlinks(on.wt, on.base, on.baseHead, on.branchHead, AUTO_PUBLISH_ON)
+    expect(resultOn.converged).toBe(true)
+    expect(resultOn.gitlinks[0].action).toBe('rebased')
+    expect(resultOn.gitlinks[0].mintedUnpublishedCommit).toBe(true)
+    expect(resultOn.resolutions).toHaveLength(1)
+  })
+
+  it('★over-correction guard: a real content conflict still reports rebase_conflict, not undeterminable', () => {
+    // The conflict path is more specific and differently actionable; the new gate
+    // defers to it exactly as the publish gate does.
+    const { base, wt, baseHead, branchHead, submoduleOrigin } = setupDivergedSubmodule({ conflicting: true })
+    renameSync(submoduleOrigin, `${submoduleOrigin}-moved`)
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
+
+    expect(result.converged).toBe(false)
+    expect(result.reason).toBe('rebase_conflict')
+  })
+
+  it('★over-correction guard: a submodule with NO origin at all is not "undeterminable"', () => {
+    // ★The regression this pins: an unreachable remote and a MISSING one produce
+    // byte-identical `git fetch` output, so gating purely on "the fetch failed"
+    // swept up every local-only submodule topology — a repo that never had an
+    // origin was told its publication verdict could not be obtained, when in fact
+    // there is no published history to be unpublished against and nothing will
+    // ever be pushed. That is a determinate answer, not a missing one.
+    //
+    // It is not hypothetical: it broke two passing tests in
+    // refine-single-node-auto-retry.test.ts, whose fixture builds exactly this
+    // shape (`git init` with no remote).
+    const { base, wt, baseHead, branchHead } = setupDivergedSubmodule()
+    const subRepo = join(wt, 'sub')
+    // Remove the remote outright, and any refs it left behind, so the only thing
+    // distinguishing this from an outage is the absence of the remote itself.
+    git(subRepo, ['remote', 'remove', 'origin'])
+    for (const ref of ['refs/remotes/origin/main', 'refs/remotes/origin/branchsub']) {
+      try { git(subRepo, ['update-ref', '-d', ref]) } catch { /* may not exist */ }
+    }
+
+    const result = convergeDivergedSubmoduleGitlinks(wt, base, baseHead, branchHead, AUTO_PUBLISH_ON)
+
+    expect(result.reason).not.toBe('submodule_publication_undeterminable')
+    // With auto-publish ON and no remote to contradict it, the historical
+    // behaviour is a normal converge.
+    expect(result.converged).toBe(true)
+    expect(result.gitlinks[0].action).toBe('rebased')
+  })
+
+  it('★the undetermined decline carries its own next step — not the publish prescription', () => {
+    // The stage record is what the coordinator reads. Before this, the new reason
+    // fell through `buildSubmoduleConvergeDeclineDetails` to `{}`, so an
+    // undetermined decline arrived with NO recommendedAction at all — leaving the
+    // "just retry the rebase" instinct that the publish gate exists to prevent.
+    const undetermined = buildSubmoduleConvergeDeclineDetails('submodule_publication_undeterminable', true)
+    expect(undetermined.recommendedAction).toBeTruthy()
+    expect(undetermined.recommendedAction).toContain('Restore access to the submodule remote')
+    expect(undetermined.recommendedAction).toContain('Do NOT publish')
+    // ★It must NOT be the publish action: that asserts a finding nobody obtained.
+    expect(undetermined.recommendedAction).not.toBe(SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION)
+    // ★And it must not claim an auto-publish verdict either — the axis is irrelevant
+    // when the question was never answered.
+    expect(undetermined.autoPublishAllowed).toBeUndefined()
+
+    // The positive finding keeps its own, unchanged prescription.
+    const publishRequired = buildSubmoduleConvergeDeclineDetails('submodule_publish_required', true)
+    expect(publishRequired.recommendedAction).toBe(SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION)
+    expect(publishRequired.autoPublishAllowed).toBe(true)
   })
 })
