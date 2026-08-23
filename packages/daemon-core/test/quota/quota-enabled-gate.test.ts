@@ -12,9 +12,13 @@ const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
+const fetchAntigravityQuota = vi.fn()
+const fetchGrokQuota = vi.fn()
 
+vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
+vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
@@ -74,6 +78,8 @@ describe('quota enable gate — refreshQuotaCacheOnce', () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
+        fetchAntigravityQuota.mockResolvedValue(okQuota('antigravity-cli'))
 
         // First: everything enabled — codex gets measured and cached.
         await refreshQuotaCacheOnce(undefined, () => true)
@@ -92,11 +98,15 @@ describe('quota enable gate — refreshQuotaCacheOnce', () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
+        fetchAntigravityQuota.mockResolvedValue(okQuota('antigravity-cli'))
 
         await refreshQuotaCacheOnce()
         expect(fetchClaudeQuota).toHaveBeenCalledTimes(1)
         expect(fetchCodexQuota).toHaveBeenCalledTimes(1)
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
+        expect(fetchGrokQuota).toHaveBeenCalledTimes(1)
+        expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
     })
 })
 

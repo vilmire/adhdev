@@ -128,10 +128,11 @@ describe('resolveConfigDir test-runtime fail-fast gate', () => {
     ADHDEV_CONFIG_DIR: process.env.ADHDEV_CONFIG_DIR,
     VITEST: process.env.VITEST,
     NODE_ENV: process.env.NODE_ENV,
+    NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT,
   };
 
   afterEach(() => {
-    for (const key of ['ADHDEV_CONFIG_DIR', 'VITEST', 'NODE_ENV'] as const) {
+    for (const key of ['ADHDEV_CONFIG_DIR', 'VITEST', 'NODE_ENV', 'NODE_TEST_CONTEXT'] as const) {
       const original = ORIGINAL_GATE_ENV[key];
       if (original === undefined) delete process.env[key];
       else process.env[key] = original;
@@ -163,8 +164,37 @@ describe('resolveConfigDir test-runtime fail-fast gate', () => {
   it('does NOT throw outside a test runtime (no VITEST, NODE_ENV != test)', () => {
     delete process.env.ADHDEV_CONFIG_DIR;
     delete process.env.VITEST;
+    delete process.env.NODE_TEST_CONTEXT;
     process.env.NODE_ENV = 'production';
     expect(() => resolveConfigDir()).not.toThrow();
+  });
+
+  it('throws under NODE_TEST_CONTEXT even when VITEST and NODE_ENV=test are absent (node --test)', () => {
+    delete process.env.ADHDEV_CONFIG_DIR;
+    delete process.env.VITEST;
+    process.env.NODE_ENV = 'production';
+    process.env.NODE_TEST_CONTEXT = 'child';
+    expect(() => resolveConfigDir()).toThrow(/real-home fallback in a test runtime/);
+  });
+
+  it('throws when ADHDEV_CONFIG_DIR is pinned to the live ~/.adhdev-preview home', () => {
+    const { homedir } = require('os') as typeof import('os');
+    const livePreview = join(homedir(), '.adhdev-preview');
+    process.env.ADHDEV_CONFIG_DIR = livePreview;
+    expect(() => resolveConfigDir()).toThrow(/pinned to the LIVE/);
+  });
+
+  it('throws when ADHDEV_CONFIG_DIR is pinned to the live ~/.adhdev home', () => {
+    const { homedir } = require('os') as typeof import('os');
+    const liveStable = join(homedir(), '.adhdev');
+    process.env.ADHDEV_CONFIG_DIR = liveStable;
+    expect(() => resolveConfigDir()).toThrow(/pinned to the LIVE/);
+  });
+
+  it('does NOT throw for an injected env whose ADHDEV_CONFIG_DIR looks like a live home (fallback-rule tests stay pure)', () => {
+    const { homedir } = require('os') as typeof import('os');
+    const livePreview = join(homedir(), '.adhdev-preview');
+    expect(resolveConfigDir({ ADHDEV_CONFIG_DIR: livePreview }, '/nonexistent-home')).toBe(livePreview);
   });
 });
 

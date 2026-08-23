@@ -18,9 +18,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const fetchClaudeQuota = vi.fn();
 const fetchCodexQuota = vi.fn();
 const fetchKimiQuota = vi.fn();
+const fetchAntigravityQuota = vi.fn();
+const fetchGrokQuota = vi.fn();
 
+vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }));
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }));
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }));
+vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }));
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }));
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage: vi.fn(), OPENCODE_USAGE_DAYS: 7 }));
 
@@ -74,6 +78,8 @@ describe('quotaProviderEnabledFromLoader — the two axes', () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'));
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'));
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'));
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'));
+        fetchAntigravityQuota.mockResolvedValue(okQuota('antigravity-cli'));
 
         const predicate = quotaProviderEnabledFromLoader({
             isMachineProviderEnabled: () => true,
@@ -93,6 +99,8 @@ describe('quotaProviderEnabledFromLoader — the two axes', () => {
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'));
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'));
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'));
+        fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'));
+        fetchAntigravityQuota.mockResolvedValue(okQuota('antigravity-cli'));
 
         // Loaders predating the axis (and minimal test doubles) have no quota
         // method — the predicate must fall back to the machine gate alone.

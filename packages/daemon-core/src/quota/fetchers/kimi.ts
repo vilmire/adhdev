@@ -28,7 +28,7 @@ import {
     type QuotaWindow,
 } from '../types.js';
 import type { QuotaFetchDeps } from './deps.js';
-import { resolveDeps } from './deps.js';
+import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
 
 const DEFAULT_BASE_URL = 'https://api.kimi.com/coding/v1';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -241,6 +241,7 @@ function retryAfterMs(header: string | null, nowMs: number): number | undefined 
  * resolves to a snapshot whose `status` is 'error' or 'unavailable'.
  */
 export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    assertInjectedNetworkFetchInTest(overrides, 'fetchKimiQuota');
     const deps = resolveDeps(overrides);
 
     const credentialsResult = readCredentials(deps);

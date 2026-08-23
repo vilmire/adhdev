@@ -16,6 +16,13 @@
  * removes cross-file DB contention entirely. Unconditional on purpose — the parent
  * runner process's value is inherited via env by the children and must not suppress
  * their own per-process isolation.
+ *
+ * Defense in depth: daemon-core resolveConfigDir() now also refuses (a) an unset
+ * pin under NODE_TEST_CONTEXT (`node --test` does not set VITEST) and (b) a pin
+ * that resolves to the live ~/.adhdev or ~/.adhdev-preview home. Forgetting this
+ * --import used to silently write mesh_adopt_* / sess-coord graphs into the live
+ * mesh-runtime.db. That is now a loud throw, not a filter the coordinator has
+ * to remember.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

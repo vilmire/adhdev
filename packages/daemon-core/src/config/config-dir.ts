@@ -45,40 +45,100 @@ export const DEFAULT_CONFIG_DIR_NAME = '.adhdev';
  * which both wastes a syscall on every call and trips test mocks whose
  * homedir stub closes over a not-yet-initialized binding at module load.
  */
+/**
+ * True when this process is a test runner. Covers vitest (`VITEST`), most
+ * runners' default `NODE_ENV=test`, and Node's own test runner
+ * (`NODE_TEST_CONTEXT`, set by `node --test` — which does NOT set VITEST).
+ *
+ * The 2026-08 config-dir gate originally keyed only on VITEST/NODE_ENV=test,
+ * so mcp-server's `node --test` suite (synthetic mesh_adopt_* / mesh_graph_*
+ * rows, sess-coord) could write the live ~/.adhdev-preview/mesh-ledger
+ * silently. Exporting this keeps quota-fetcher isolation on the same
+ * definition — a third surface of the same class will keep appearing.
+ */
+export function isTestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+    if (env.VITEST) return true;
+    if (env.NODE_ENV === 'test') return true;
+    if (env.NODE_TEST_CONTEXT) return true;
+    return false;
+}
+
 export function resolveConfigDir(
     env: NodeJS.ProcessEnv = process.env,
     homeDir?: string,
 ): string {
     const override = env.ADHDEV_CONFIG_DIR;
-    if (override && override.trim()) return override.trim();
-    assertConfigDirPinnedInTestRuntime(env);
+    if (override && override.trim()) {
+        const resolved = override.trim();
+        assertConfigDirIsolatedInTestRuntime(env, resolved);
+        return resolved;
+    }
+    assertConfigDirIsolatedInTestRuntime(env);
     // Fallback branch only (see above): track-aware default dir name.
     return join(homeDir ?? homedir(), getTrackIdentity(resolveBuildTrack(env)).configDirName);
+}
+
+function normalizeConfigPath(p: string, platform: NodeJS.Platform = process.platform): string {
+    const unified = p.trim().replace(/[\\/]+$/, '').replace(/\\/g, '/');
+    return platform === 'win32' ? unified.toLowerCase() : unified;
+}
+
+/** The two canonical live homes on THIS machine (real homedir, both tracks). */
+function liveTrackHomeDirs(homeDir: string = homedir()): string[] {
+    return [
+        join(homeDir, getTrackIdentity('stable').configDirName),
+        join(homeDir, getTrackIdentity('preview').configDirName),
+    ];
+}
+
+function isLiveTrackHomeDir(resolved: string, homeDir: string = homedir()): boolean {
+    const needle = normalizeConfigPath(resolved);
+    return liveTrackHomeDirs(homeDir).some((live) => normalizeConfigPath(live) === needle);
+}
+
+function processLooksLikeNodeTestRunner(): boolean {
+    return process.execArgv.some((arg) => arg === '--test' || arg.startsWith('--test='));
 }
 
 /**
  * Fail-fast gate against silent live-state pollution from tests.
  *
- * Reaching the real-home fallback on the PROCESS env inside a test runtime
- * (vitest sets VITEST=true; vitest and most runners default NODE_ENV=test)
- * means some test forgot to pin ADHDEV_CONFIG_DIR — and every state write
- * below this resolution (daemon/mesh-coordinators.json, state.json,
- * mesh-runtime.db, logs/) then lands in the developer's LIVE
- * ~/.adhdev(-preview) dir. saveRegistry() rewrites the whole coordinator map,
- * so one unisolated case evicts every real coordinator entry (2026-08-21
- * incident: six fixture entries replaced the live registry; the badge loss
- * was misdiagnosed for hours because the write was silent). A loud throw here
- * converts that silent pollution into an immediate, attributable failure.
+ * Two holes, both observed:
+ *
+ *  1. UNSET pin — reaching the real-home fallback on the PROCESS env inside a
+ *     test runtime means some test forgot ADHDEV_CONFIG_DIR, and every state
+ *     write below this resolution (daemon/mesh-coordinators.json, state.json,
+ *     mesh-runtime.db, logs/) lands in the developer's LIVE ~/.adhdev(-preview).
+ *     saveRegistry() rewrites the whole coordinator map, so one unisolated case
+ *     evicts every real coordinator entry (2026-08-21 incident).
+ *
+ *  2. PINNED TO THE LIVE DIR — the first gate only fired when the override was
+ *     absent. `node --test` (mcp-server) does not set VITEST; a shell that
+ *     inherited ADHDEV_CONFIG_DIR=~/.adhdev-preview from the live daemon then
+ *     sailed through and wrote synthetic graphs into the live mesh-runtime.db
+ *     (mesh_adopt_* / sess-coord, 2026-08-23). An inherited live path is the
+ *     same class as an unset pin.
  *
  * Only the default process-env call is gated: unit tests of the fallback rule
  * itself inject an explicit (env, homeDir) pair, which stays pure and
  * gate-free. Fix the TEST when this fires — pin ADHDEV_CONFIG_DIR to a tmp dir
- * in setup (see test/helpers/setup-env.ts), or inject an explicit env — never
- * the gate.
+ * in setup (see test/helpers/setup-env.ts / mcp-server test/setup-test-env.ts),
+ * or inject an explicit env — never the gate.
  */
-function assertConfigDirPinnedInTestRuntime(env: NodeJS.ProcessEnv): void {
+function assertConfigDirIsolatedInTestRuntime(env: NodeJS.ProcessEnv, resolvedOverride?: string): void {
     if (env !== process.env) return;
-    if (!env.VITEST && env.NODE_ENV !== 'test') return;
+    if (!isTestRuntimeEnv(env) && !processLooksLikeNodeTestRunner()) return;
+    if (resolvedOverride) {
+        if (isLiveTrackHomeDir(resolvedOverride)) {
+            throw new Error(
+                'resolveConfigDir() is pinned to the LIVE ~/.adhdev(-preview) dir in a test runtime: '
+                + 'a test inherited or re-assigned ADHDEV_CONFIG_DIR to the developer\'s real state dir '
+                + `(${resolvedOverride}). Pin ADHDEV_CONFIG_DIR to a tmp dir in test setup, `
+                + 'or pass an explicit env/homeDir to resolveConfigDir.',
+            );
+        }
+        return;
+    }
     throw new Error(
         'resolveConfigDir() reached the real-home fallback in a test runtime with ADHDEV_CONFIG_DIR unset: '
         + 'a test is about to touch the LIVE ~/.adhdev(-preview) state dir. '

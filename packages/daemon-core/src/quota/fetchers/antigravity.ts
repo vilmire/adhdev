@@ -291,7 +291,7 @@ import {
     type QuotaWindow,
 } from '../types.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
-import { resolveDeps } from './deps.js';
+import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
 
 /**
  * Default Cloud Code host — the one `agy` itself uses.
@@ -905,6 +905,7 @@ function retryAfterMs(header: string | null, nowMs: number): number | undefined 
  * problem can never exclude the provider from routing (fail-open).
  */
 export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    assertInjectedNetworkFetchInTest(overrides, 'fetchAntigravityQuota');
     const deps = resolveDeps(overrides);
 
     const credentialsResult = await readCredentials(deps);

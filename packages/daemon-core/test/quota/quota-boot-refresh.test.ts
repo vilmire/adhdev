@@ -10,10 +10,12 @@ const fetchCodexQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
 const fetchAntigravityQuota = vi.fn()
+const fetchGrokQuota = vi.fn()
 
 vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
+vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
@@ -42,6 +44,24 @@ function deferred<T>() {
     return { promise, resolve }
 }
 
+function mockAllProvidersOk() {
+    fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
+    fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+    fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+    fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
+    fetchAntigravityQuota.mockResolvedValue(okQuota('antigravity-cli'))
+    fetchOpencodeUsage.mockResolvedValue(okQuota('opencode'))
+}
+
+function mockAllProvidersDeferred(gate: { promise: Promise<void> }) {
+    fetchClaudeQuota.mockReturnValue(gate.promise.then(() => okQuota('claude-cli')))
+    fetchCodexQuota.mockReturnValue(gate.promise.then(() => okQuota('codex-cli')))
+    fetchKimiQuota.mockReturnValue(gate.promise.then(() => okQuota('kimi')))
+    fetchGrokQuota.mockReturnValue(gate.promise.then(() => okQuota('grok-cli')))
+    fetchAntigravityQuota.mockReturnValue(gate.promise.then(() => okQuota('antigravity-cli')))
+    fetchOpencodeUsage.mockReturnValue(gate.promise.then(() => okQuota('opencode')))
+}
+
 afterEach(() => {
     clearQuotaCache()
     __resetQuotaBootRefreshForTests()
@@ -51,9 +71,7 @@ afterEach(() => {
 describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
     it('returns synchronously before the fetch settles (does not block the caller)', async () => {
         const gate = deferred<void>()
-        fetchClaudeQuota.mockReturnValue(gate.promise.then(() => okQuota('claude-cli')))
-        fetchCodexQuota.mockReturnValue(gate.promise.then(() => okQuota('codex-cli')))
-        fetchKimiQuota.mockReturnValue(gate.promise.then(() => okQuota('kimi')))
+        mockAllProvidersDeferred(gate)
 
         // Call it exactly the way daemon-lifecycle.ts does: no await, no .then.
         const returnValue = refreshQuotaCacheOnBoot()
@@ -68,9 +86,7 @@ describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
     })
 
     it('populates the cache once the deferred fetch resolves', async () => {
-        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
-        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
-        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        mockAllProvidersOk()
 
         refreshQuotaCacheOnBoot()
         await vi.waitFor(() => {
@@ -84,20 +100,17 @@ describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
         // refreshQuotaCacheOnBoot takes no session/activity argument at all: there
         // is no hasRecentCliActivity call in its path, so it cannot be idle-gated
         // by construction. This is the regression test for that shape.
-        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
-        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
-        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        mockAllProvidersOk()
 
         refreshQuotaCacheOnBoot()
         await vi.waitFor(() => expect(readQuotaCache()).toBeDefined())
         expect(fetchCodexQuota).toHaveBeenCalledTimes(1)
+        expect(fetchGrokQuota).toHaveBeenCalledTimes(1)
     })
 
     it('is idempotent: a second call before the first resolves does not double-fetch', async () => {
         const gate = deferred<void>()
-        fetchClaudeQuota.mockReturnValue(gate.promise.then(() => okQuota('claude-cli')))
-        fetchCodexQuota.mockReturnValue(gate.promise.then(() => okQuota('codex-cli')))
-        fetchKimiQuota.mockReturnValue(gate.promise.then(() => okQuota('kimi')))
+        mockAllProvidersDeferred(gate)
 
         refreshQuotaCacheOnBoot()
         refreshQuotaCacheOnBoot() // reentrant call while the first is still in flight
@@ -108,9 +121,7 @@ describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
     })
 
     it('is idempotent: a call after the cache is already populated does not re-fetch', async () => {
-        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
-        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
-        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
+        mockAllProvidersOk()
 
         refreshQuotaCacheOnBoot()
         await vi.waitFor(() => expect(readQuotaCache()).toBeDefined())
@@ -120,12 +131,12 @@ describe('refreshQuotaCacheOnBoot — non-blocking contract', () => {
         expect(fetchCodexQuota).not.toHaveBeenCalled()
         expect(fetchClaudeQuota).not.toHaveBeenCalled()
         expect(fetchKimiQuota).not.toHaveBeenCalled()
+        expect(fetchGrokQuota).not.toHaveBeenCalled()
     })
 
     it('a fetch failure is caught and recorded, never thrown back at the caller', async () => {
+        mockAllProvidersOk()
         fetchClaudeQuota.mockRejectedValue(new Error('boom'))
-        fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
-        fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
         expect(() => refreshQuotaCacheOnBoot()).not.toThrow()
         await vi.waitFor(() => {

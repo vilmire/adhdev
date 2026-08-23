@@ -51,7 +51,7 @@ import {
     type ProviderQuota,
 } from '../types.js';
 import type { QuotaFetchDeps } from './deps.js';
-import { resolveDeps } from './deps.js';
+import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
 
 const DEFAULT_BASE_URL = 'https://cli-chat-proxy.grok.com/v1';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -305,6 +305,7 @@ function retryAfterMs(header: string | null, nowMs: number): number | undefined 
  * never exclude the provider from routing (fail-open).
  */
 export async function fetchGrokQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    assertInjectedNetworkFetchInTest(overrides, 'fetchGrokQuota');
     const deps = resolveDeps(overrides);
 
     const credentialsResult = readCredentials(deps);

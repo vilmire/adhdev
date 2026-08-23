@@ -12,6 +12,7 @@
 
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import { isTestRuntimeEnv } from '../../config/config-dir.js';
 import { loadConfig } from '../../config/config.js';
 
 /** Minimal response surface a fetcher relies on. */
@@ -78,6 +79,24 @@ export interface QuotaFetchDeps {
      * tick to stop collecting.
      */
     showAccountEmail?: () => boolean;
+}
+
+/**
+ * Network quota fetchers (grok / kimi / antigravity) must not use the default
+ * global `fetch` inside a test runtime — that is a live provider endpoint, and
+ * on a machine with ~/.grok/auth.json (etc.) it actually fires. File/CLI
+ * fetchers (claude statusline, codex spawn, opencode stats) do not call this.
+ *
+ * Call at the top of the fetcher, BEFORE credential reads, so a missing mock
+ * fails loudly even when the developer is signed out.
+ */
+export function assertInjectedNetworkFetchInTest(overrides: QuotaFetchDeps, caller: string): void {
+    if (overrides.fetch) return;
+    if (!isTestRuntimeEnv()) return;
+    throw new Error(
+        `${caller}() in a test runtime without an injected fetch: this would hit a live provider endpoint. `
+        + 'Mock the fetcher module, or pass deps.fetch (see test/quota/grok-quota.test.ts).',
+    );
 }
 
 /** Fill in real implementations for anything a caller did not override. */

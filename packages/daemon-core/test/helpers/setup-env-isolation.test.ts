@@ -21,13 +21,18 @@ import { getConfigDir } from '../../src/config/config.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
 
 describe('setup-env config-dir isolation', () => {
-    it('ADHDEV_CONFIG_DIR is pinned to a throwaway temp dir, never the real ~/.adhdev', () => {
-        const realHome = path.join(os.homedir(), '.adhdev');
+    it('ADHDEV_CONFIG_DIR is pinned to a throwaway temp dir, never a live track home', () => {
+        const liveHomes = [
+            path.join(os.homedir(), '.adhdev'),
+            path.join(os.homedir(), '.adhdev-preview'),
+        ];
         expect(process.env.ADHDEV_CONFIG_DIR).toBeTruthy();
-        expect(path.resolve(process.env.ADHDEV_CONFIG_DIR!)).not.toBe(path.resolve(realHome));
-        expect(path.resolve(getConfigDir())).not.toBe(path.resolve(realHome));
-        // The pinned dir is a per-run mkdtemp product, so the ledger path derived
-        // from it cannot be the live ledger either.
-        expect(getLedgerDir()).not.toBe(path.join(realHome, 'mesh-ledger'));
+        const pinned = path.resolve(process.env.ADHDEV_CONFIG_DIR!);
+        const resolved = path.resolve(getConfigDir());
+        for (const live of liveHomes) {
+            expect(pinned).not.toBe(path.resolve(live));
+            expect(resolved).not.toBe(path.resolve(live));
+            expect(getLedgerDir()).not.toBe(path.join(live, 'mesh-ledger'));
+        }
     });
 });
