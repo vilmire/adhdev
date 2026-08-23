@@ -286,3 +286,151 @@ export function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmod
     }
     return false;
 }
+
+/**
+ * Per-path detail for the changed gitlinks inspected by the trivial-ff
+ * evaluation. Lives here (rather than in mesh-refine-gates.ts) next to the
+ * probes that populate it.
+ */
+export type GitlinkFastForwardDetail = {
+    path: string;
+    baseCommit?: string;
+    branchCommit?: string;
+    /**
+     * True only when the ancestry probe ANSWERED yes. An unanswerable probe is
+     * false here (it is not a proven fast-forward, so it must block) and is
+     * additionally flagged via `fastForwardUndeterminable` — do not read
+     * `fastForward: false` alone as "diverged".
+     */
+    fastForward: boolean;
+    /**
+     * Set when the fast-forward probe could not be answered at all (a gitlink
+     * commit missing from the local submodule object store, or a missing
+     * submodule checkout) — "we could not judge", NOT "these diverged".
+     */
+    fastForwardUndeterminable?: boolean;
+};
+
+/**
+ * Check, inside a submodule repo, whether `baseCommit` is an ancestor of
+ * `branchCommit` (i.e. advancing the gitlink from base→branch is a pure
+ * fast-forward), as a THREE-state probe.
+ *
+ * ★This was the third recurrence of one class of defect (after
+ * `isSubmoduleDivergedSibling` and `execGitOk`): a `cat-file -e` presence check
+ * and a `merge-base --is-ancestor` answer sharing ONE `catch { return false }`.
+ * git exits non-zero for two categorically different things — "no, not an
+ * ancestor" (exit 1, both operands real) and "I could not look" (missing object,
+ * missing checkout, spawn failure). Folding them together turns a merely-absent
+ * object into a positive claim of divergence, which the trivial-ff evaluation
+ * then reported as `diverged_gitlinks:<path>` — a statement about the history
+ * that was never measured. It is fail-closed (nothing is wrongly merged) but it
+ * MISDIAGNOSES: a coordinator reading "diverged" rebases a submodule that never
+ * diverged, which is exactly the wasted work this class of fix exists to stop.
+ *
+ * So the presence check and the ancestry answer are separated: only a clean
+ * exit-1 from a probe whose operands both resolve is a real `false`. Everything
+ * else is `'undeterminable'`, and callers must keep blocking on it while
+ * reporting it as "could not judge", never as "diverged". Delegates to
+ * {@link probeGitAncestry}, the shared tri-state probe landed for `execGitOk`.
+ */
+export function probeSubmoduleFastForward(submoduleRepoPath: string, baseCommit: string, branchCommit: string): GitAncestryProbe {
+    if (!baseCommit || !branchCommit) return 'undeterminable';
+    if (baseCommit === branchCommit) return true;
+    return probeGitAncestry(submoduleRepoPath, baseCommit, branchCommit);
+}
+
+/**
+ * Two-state view of {@link probeSubmoduleFastForward} for call sites that only
+ * need "is it safe to treat this gitlink as a proven fast-forward?". An
+ * unanswerable probe is NOT a proven fast-forward, so it collapses to false —
+ * identical to the historical behaviour, and deliberately conservative.
+ *
+ * ★Do NOT use this where the answer is reported to an operator as a *reason*.
+ * There, use the tri-state probe so "undeterminable" stays distinguishable from
+ * "diverged" — that distinction is the entire point of the tri-state.
+ */
+export function isSubmoduleFastForward(submoduleRepoPath: string, baseCommit: string, branchCommit: string): boolean {
+    return probeSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit) === true;
+}
+
+/**
+ * ★The loud warning text for a gitlink whose fast-forward probe had NO ANSWER,
+ * or undefined when every gitlink was judged. Sibling of
+ * {@link buildSubmoduleReachabilityUndeterminableWarning}, and it exists for the
+ * same reason: to carry the third state all the way to the operator instead of
+ * letting it read as `diverged_gitlinks`. "We could not judge" is not "these
+ * diverged" — the fix for the first is to fetch the missing object, the fix for
+ * the second is to rebase, and telling them apart is what saves a wasted rebase.
+ */
+export function buildGitlinkFastForwardUndeterminableWarning(
+    label: string,
+    gitlinks: GitlinkFastForwardDetail[],
+): string | undefined {
+    const entries = gitlinks.filter(entry => entry.fastForwardUndeterminable);
+    if (entries.length === 0) return undefined;
+    const detail = entries
+        .map(entry => `${entry.path} (base=${(entry.baseCommit || '?').slice(0, 12)} branch=${(entry.branchCommit || '?').slice(0, 12)})`)
+        .join(', ');
+    return `[Refinery] Could NOT determine submodule gitlink fast-forward for ${label} — `
+        + `ancestry probe had NO ANSWER (a gitlink commit is missing from the local submodule object store, `
+        + `or the submodule checkout is absent). "undeterminable", NOT "diverged": ${detail}`;
+}
+
+/** {@link buildGitlinkFastForwardUndeterminableWarning}, emitted via LOG.warn when it applies. */
+export function warnGitlinkFastForwardUndeterminable(
+    label: string,
+    gitlinks: GitlinkFastForwardDetail[],
+): void {
+    const message = buildGitlinkFastForwardUndeterminableWarning(label, gitlinks);
+    if (message) LOG.warn('Mesh', message);
+}
+
+/**
+ * Outcome of the trivial-gitlink-fast-forward evaluation (implemented in
+ * mesh-refine-gates.ts; the type lives here beside the probes that populate it).
+ */
+export type GitlinkTrivialFastForwardEvaluation = {
+    /** True only when the merge-tree conflict is *fully* explained by trivial-ff gitlinks. */
+    trivial: boolean;
+    /**
+     * Why the evaluation declined to treat the conflict as trivial (set when
+     * trivial=false). ★`diverged_gitlinks:` and `undeterminable_gitlinks:` are
+     * DIFFERENT claims — measured divergence vs no answer — and must stay
+     * distinguishable here; that distinction is what avoids a wasted rebase.
+     */
+    reason?: string;
+    /** Per-path detail for the changed gitlinks that were inspected. */
+    gitlinks: GitlinkFastForwardDetail[];
+};
+
+/**
+ * Read the set of paths that differ between two refs, tagging whether each is a
+ * gitlink (submodule, mode 160000) on either side. Returns one entry per
+ * changed path. Empty on error.
+ */
+export function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: string): Array<{ path: string; isGitlink: boolean }> {
+    try {
+        const output = execFileSync(GIT, ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+        });
+        const result: Array<{ path: string; isGitlink: boolean }> = [];
+        const seen = new Set<string>();
+        for (const line of output.split('\n')) {
+            if (!line.trim()) continue;
+            const metaAndPath = line.split('\t');
+            const meta = metaAndPath[0] || '';
+            const path = metaAndPath[metaAndPath.length - 1]?.trim();
+            if (!path || seen.has(path)) continue;
+            seen.add(path);
+            const parts = meta.split(/\s+/);
+            const isGitlink = !!(parts[0]?.includes('160000') || parts[1]?.includes('160000'));
+            result.push({ path, isGitlink });
+        }
+        return result;
+    } catch {
+        return [];
+    }
+}

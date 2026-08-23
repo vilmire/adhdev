@@ -320,6 +320,67 @@ describe('classifyPatchEquivalenceFailure', () => {
     expect(classification.recommendedAction).toMatch(/do not publish/i)
   })
 
+  // ★The ROOT-REPO twin of the test above, and the 4th instance of the same
+  // defect class (after isSubmoduleDivergedSibling, execGitOk and
+  // isSubmoduleFastForward). `classifyPatchEquivalenceFailure` used a local
+  // two-state `gitOk` helper for `merge-base --is-ancestor`, folding exit 128
+  // ("that ref does not resolve here") into exit 1 ("not an ancestor"). It then
+  // published `base_divergence` — prose asserting the branch diverged — and
+  // prescribed a REBASE for what is really a missing-object problem.
+  //
+  // INJECTION: restore `gitOk` in place of `probeGitAncestry` and this goes red
+  // with detailedReason === 'base_divergence'.
+  it('★base ancestry that CANNOT be judged is undeterminable, NOT base_divergence', async () => {
+    const tmp = makeTmp()
+    const root = join(tmp, 'root')
+    initRepo(root)
+    const baseHead = commitFile(root, 'a.txt', 'a\n', 'c1')
+    git(root, ['checkout', '-q', '-b', 'feature'])
+    const branchHead = commitFile(root, 'b.txt', 'b\n', 'branch advance')
+
+    // A branch head that does not resolve in `root` at all — the shape that
+    // occurs when branchHead was resolved in the node workspace but the
+    // classifier runs against a repo whose object store lacks it.
+    const unresolvableHead = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+
+    const summary = await runMeshRefinePatchEquivalenceGate(root, baseHead, branchHead)
+    const classification = await classifyPatchEquivalenceFailure(root, baseHead, unresolvableHead, summary, {
+      targetBaseRef: baseHead,
+    })
+
+    // ★"could not judge" must not masquerade as a measured divergence...
+    expect(classification.detailedReason).toBe('base_ancestry_undeterminable')
+    expect(classification.detailedReason).not.toBe('base_divergence')
+    expect(classification.evidence.baseAncestryUndeterminable).toBe(true)
+    // ...and the boolean is OMITTED rather than set false.
+    expect(classification.evidence.baseDiverged).toBeUndefined()
+    // The prescription must not be "rebase" — that is the wasted-rebase cost.
+    expect(classification.detailedReasonDescription).toMatch(/could not determine/i)
+    expect(classification.recommendedAction).toMatch(/do not rebase/i)
+  })
+
+  // ★★OVER-CORRECTION GUARD for the base-ancestry tri-state: a REAL divergence
+  // (both refs resolve, git answers "not an ancestor") must still be reported as
+  // base_divergence and must still prescribe a rebase. Together with the
+  // 'base_divergence' test above, this pins that the new third state cannot
+  // swallow measured divergences.
+  it('still reports a REAL base divergence as base_divergence with a rebase action', async () => {
+    const tmp = makeTmp()
+    const root = join(tmp, 'root')
+    initRepo(root)
+    const c1 = commitFile(root, 'shared.txt', 'line1\n', 'c1')
+    const baseHead = commitFile(root, 'shared.txt', 'line1\nBASE\n', 'base advance')
+    git(root, ['checkout', '-q', '-b', 'feature', c1])
+    const branchHead = commitFile(root, 'shared.txt', 'line1\nBRANCH\n', 'branch advance')
+
+    const { classification } = await classifyForBranch(root, baseHead, branchHead)
+
+    expect(classification.detailedReason).toBe('base_divergence')
+    expect(classification.evidence.baseDiverged).toBe(true)
+    expect(classification.evidence.baseAncestryUndeterminable).toBeUndefined()
+    expect(classification.recommendedAction).toMatch(/rebase/i)
+  })
+
   it('evidence always carries baseHead/branchHead/ahead/behind + policy value', async () => {
     const tmp = makeTmp()
     const root = join(tmp, 'root')

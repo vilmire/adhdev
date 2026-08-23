@@ -24,10 +24,13 @@ import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
-import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readTreeObject, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
+import { LOG } from '../logging/logger.js';
+import type { GitAncestryProbe, GitlinkTrivialFastForwardEvaluation } from './mesh-refine-gitlink-utils.js';
+import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, isSubmoduleFastForward, probeGitAncestry, probeSubmoduleFastForward, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readChangedPathKinds, readTreeObject, warnGitlinkFastForwardUndeterminable, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
 // Submodule-gitlink convergence lives in its own module (pure move, file-size gate);
 // re-exported here so existing importers of this module are unaffected.
 export * from './mesh-refine-submodule-converge.js';
+export * from './mesh-refine-gitlink-utils.js';
 import type { CommandRouterResult } from '../commands/router.js';
 
 // Fix (4): resolve the git executable to an absolute path once on win32. A bare `git` handed to
@@ -630,6 +633,8 @@ export async function runMeshRefinePatchEquivalenceGate(
             if (!isSubmoduleConflict) throw mergeTreeErr;
             const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, baseHead, branchHead);
             if (!evaluation.trivial) {
+                // Loud when the block is "could not judge" rather than "diverged".
+                warnGitlinkFastForwardUndeterminable('patch-equivalence gate', evaluation.gitlinks);
                 return {
                     status: 'failed',
                     equivalent: false,
@@ -729,6 +734,14 @@ export async function runMeshRefinePatchEquivalenceGate(
 export type MeshRefinePatchEquivalenceDetailedReasonCode =
     /** Worktree base diverged from target base (HEAD is not a descendant of origin/main). */
     | 'base_divergence'
+    /**
+     * ★Base ancestry COULD NOT BE JUDGED (the target base ref and/or the branch head
+     * does not resolve in the classified repo). Distinct from `base_divergence`, which
+     * asserts HEAD genuinely does not descend the base. Still blocks — but the remedy is
+     * "make the probe answerable" (fetch/verify the refs), NOT "rebase". The root-repo
+     * twin of `submodule_reachability_undeterminable`.
+     */
+    | 'base_ancestry_undeterminable'
     /** Submodule gitlink commit is not reachable from the submodule's remote main branch (publish needed). */
     | 'submodule_unreachable'
     /**
@@ -761,8 +774,21 @@ export type MeshRefinePatchEquivalenceFailureClassification = {
         behind?: number;
         /** How many commits the branch is ahead of the merge-base. */
         ahead?: number;
-        /** True when HEAD is NOT a descendant of the target base (diverged). */
+        /**
+         * True when HEAD is NOT a descendant of the target base (diverged).
+         * ★`false`/`true` ONLY when both operands resolved and git actually
+         * answered. OMITTED when the ancestry probe was unanswerable — see
+         * `baseAncestryUndeterminable`. Never read "absent" as "not diverged".
+         */
         baseDiverged?: boolean;
+        /**
+         * ★Set when the base-ancestry probe could not be answered at all (the
+         * base ref or branch head does not resolve in the classified repo). The
+         * root-repo twin of `submoduleReachabilityUndeterminable`: "we could not
+         * judge", NOT "the branch diverged" — the remedy is to make the operands
+         * resolvable, not to rebase.
+         */
+        baseAncestryUndeterminable?: boolean;
         expectedPatchId?: string;
         actualPatchId?: string;
         patchIdEqual?: boolean;
@@ -882,10 +908,6 @@ export async function classifyPatchEquivalenceFailure(
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
             windowsHide: true,
         });
-        const gitOk = (args: string[]): boolean => {
-            try { git(args); return true; } catch { return false; }
-        };
-
         // ahead/behind of branch vs the target base ref. left = base-only (behind),
         // right = branch-only (ahead).
         let ahead = 0;
@@ -900,8 +922,23 @@ export async function classifyPatchEquivalenceFailure(
         evidence.behind = behind;
         // HEAD (branchHead) diverged from the target base = base is NOT an ancestor
         // of the branch. behind>0 with the base ref not reachable from HEAD.
-        const baseIsAncestor = gitOk(['merge-base', '--is-ancestor', targetBaseRef, branchHead]);
-        evidence.baseDiverged = !baseIsAncestor;
+        //
+        // ★Tri-state, for the same reason as the submodule probes: the two-state
+        // predecessor here folded "not an ancestor" (exit 1) together with "the ref
+        // does not resolve in this repo" (exit 128 — routine when branchHead was
+        // resolved in the node workspace but classification runs in repoRoot). The
+        // unanswered case then surfaced as the `base_divergence` prose claim below,
+        // prescribing a REBASE for what is actually a missing-object problem —
+        // wasting exactly the rebase this class of fix exists to prevent. Note the
+        // ahead/behind probe above fails on the same operands and leaves 0/0, so the
+        // bogus message even read "ahead 0, behind 0" while asserting divergence.
+        const baseAncestry = probeGitAncestry(repoRoot, targetBaseRef, branchHead);
+        const baseIsAncestor = baseAncestry === true;
+        if (baseAncestry === 'undeterminable') {
+            evidence.baseAncestryUndeterminable = true;
+        } else {
+            evidence.baseDiverged = !baseAncestry;
+        }
 
         // Residual/actual diff stat (best-effort): what the merge would still introduce.
         let diffStat = '';
@@ -1005,7 +1042,23 @@ export async function classifyPatchEquivalenceFailure(
             };
         }
 
+        // 3b. base_ancestry_undeterminable: the probe had NO ANSWER, so we cannot
+        //     say whether HEAD descends the base. ★This must be tested BEFORE the
+        //     base_divergence branch below, which keys off `!baseIsAncestor` and
+        //     would otherwise absorb the unanswered case and report it as a
+        //     measured divergence — the defect this branch exists to prevent. The
+        //     remedy is to make the operands resolvable, NOT to rebase.
+        if (baseAncestry === 'undeterminable') {
+            return {
+                detailedReason: 'base_ancestry_undeterminable',
+                detailedReasonDescription: `Could NOT determine whether HEAD descends ${targetBaseRef} — the ancestry probe had no answer (${targetBaseRef} and/or ${branchHead.slice(0, 12)} does not resolve in ${repoRoot}). This is "undeterminable", NOT "diverged": the ahead/behind counts above are unmeasured, not zero.`,
+                recommendedAction: `Make the probe answerable before judging: fetch/verify that ${targetBaseRef} and the branch head both resolve in ${repoRoot} (e.g. git fetch origin, git rev-parse --verify), then retry mesh_refine_node. Do NOT rebase on the strength of this result — no divergence has been measured.`,
+                evidence,
+            };
+        }
+
         // 4. base_divergence: HEAD is not a descendant of the target base.
+        //    Reached only when the probe ANSWERED (see 3b) — this is a measured claim.
         if (!baseIsAncestor) {
             return {
                 detailedReason: 'base_divergence',
@@ -1099,7 +1152,9 @@ export async function checkWorktreeChangesPatchEquivalentInRef(
             const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, ref, worktreeHead);
             if (!evaluation.trivial) {
                 // A genuine submodule divergence (or unfetched objects): we cannot
-                // prove containment, so block conservatively.
+                // prove containment, so block conservatively. The reason string now
+                // says which of the two it was; make the unanswerable case loud.
+                warnGitlinkFastForwardUndeterminable(`containment check for ${ref}`, evaluation.gitlinks);
                 return {
                     contained: false,
                     ref,
@@ -1297,72 +1352,6 @@ function resolveGitDir(repoRoot: string): string {
  * accept the branch's recorded gitlink, so a fast-forwardable bump is safe to
  * resolve to the branch side without any conflict.
  */
-type GitlinkTrivialFastForwardEvaluation = {
-    /** True only when the merge-tree conflict is *fully* explained by trivial-ff gitlinks. */
-    trivial: boolean;
-    /** Why the evaluation declined to treat the conflict as trivial (set when trivial=false). */
-    reason?: string;
-    /** Per-path detail for the changed gitlinks that were inspected. */
-    gitlinks: Array<{
-        path: string;
-        baseCommit?: string;
-        branchCommit?: string;
-        fastForward: boolean;
-    }>;
-};
-
-/**
- * Check, inside a submodule repo, whether `baseCommit` is an ancestor of
- * `branchCommit` (i.e. advancing the gitlink from base→branch is a pure
- * fast-forward). Returns false on any error or when either commit is missing
- * locally — safety first, ambiguity stays "not a fast-forward".
- */
-function isSubmoduleFastForward(submoduleRepoPath: string, baseCommit: string, branchCommit: string): boolean {
-    if (!baseCommit || !branchCommit) return false;
-    if (baseCommit === branchCommit) return true;
-    try {
-        if (!fs.existsSync(submoduleRepoPath)) return false;
-        // Both commits must exist locally for the ancestry check to be meaningful.
-        execFileSync(GIT, ['cat-file', '-e', `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
-        execFileSync(GIT, ['cat-file', '-e', `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
-        // exit 0 ⇒ baseCommit is an ancestor of branchCommit ⇒ branch fast-forwards base.
-        execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Read the set of paths that differ between two refs, tagging whether each is a
- * gitlink (submodule, mode 160000) on either side. Returns one entry per
- * changed path. Empty on error.
- */
-function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: string): Array<{ path: string; isGitlink: boolean }> {
-    try {
-        const output = execFileSync(GIT, ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-        });
-        const result: Array<{ path: string; isGitlink: boolean }> = [];
-        const seen = new Set<string>();
-        for (const line of output.split('\n')) {
-            if (!line.trim()) continue;
-            const metaAndPath = line.split('\t');
-            const meta = metaAndPath[0] || '';
-            const path = metaAndPath[metaAndPath.length - 1]?.trim();
-            if (!path || seen.has(path)) continue;
-            seen.add(path);
-            const parts = meta.split(/\s+/);
-            const isGitlink = !!(parts[0]?.includes('160000') || parts[1]?.includes('160000'));
-            result.push({ path, isGitlink });
-        }
-        return result;
-    } catch {
-        return [];
-    }
-}
 
 /**
  * Return the changed gitlink paths between base and branch whose advance is a
@@ -1467,22 +1456,40 @@ export function evaluateGitlinkTrivialFastForward(
         const baseCommit = readTreeObject(repoRoot, baseHead, path);
         const branchCommit = readTreeObject(repoRoot, branchHead, path);
         const submoduleRepoPath = pathResolve(repoRoot, path);
-        const fastForward = !!baseCommit && !!branchCommit
-            && isSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit);
-        return { path, baseCommit, branchCommit, fastForward };
+        const probe = (!!baseCommit && !!branchCommit)
+            ? probeSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit)
+            : 'undeterminable' as GitAncestryProbe;
+        return {
+            path,
+            baseCommit,
+            branchCommit,
+            fastForward: probe === true,
+            ...(probe === 'undeterminable' ? { fastForwardUndeterminable: true } : {}),
+        };
     });
 
     if (changedGitlinks.length === 0) {
         return { trivial: false, reason: 'no_changed_gitlinks', gitlinks: changedGitlinks };
     }
 
-    const nonFastForward = changedGitlinks.filter(entry => !entry.fastForward);
-    if (nonFastForward.length > 0) {
-        return {
-            trivial: false,
-            reason: `diverged_gitlinks:${nonFastForward.map(entry => entry.path).join(',')}`,
-            gitlinks: changedGitlinks,
-        };
+    // ★Split the block reason by WHAT WE ACTUALLY KNOW. Both cases still block —
+    // the gate's strength is unchanged — but they are opposite statements:
+    //   diverged      — git answered "not an ancestor" with both commits present.
+    //   undeterminable — git was never able to answer (missing object/checkout).
+    // Reporting the second as `diverged_gitlinks` is a claim about the history
+    // that was never measured, and it has already cost a coordinator an
+    // unnecessary submodule rebase. Undeterminable is reported separately and
+    // LOUDLY (see warnGitlinkFastForwardUndeterminable).
+    const undeterminable = changedGitlinks.filter(entry => entry.fastForwardUndeterminable);
+    const diverged = changedGitlinks.filter(entry => !entry.fastForward && !entry.fastForwardUndeterminable);
+    if (undeterminable.length > 0 || diverged.length > 0) {
+        const parts: string[] = [];
+        // Diverged first: it is the stronger, measured claim.
+        if (diverged.length > 0) parts.push(`diverged_gitlinks:${diverged.map(entry => entry.path).join(',')}`);
+        if (undeterminable.length > 0) {
+            parts.push(`undeterminable_gitlinks:${undeterminable.map(entry => entry.path).join(',')}`);
+        }
+        return { trivial: false, reason: parts.join(' '), gitlinks: changedGitlinks };
     }
 
     // Prove there is no *other* conflict (regular files, or a gitlink that
