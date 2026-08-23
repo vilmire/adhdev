@@ -28,6 +28,18 @@
 // Config (env): ADHDEV_EVENT_LOOP_MONITOR_INTERVAL_MS (default 10s; 0 disables),
 // ADHDEV_EVENT_LOOP_LAG_WARN_MS (default 5s — the freeze blackouts were 15–34s,
 // so 5s catches them with margin without nagging on ordinary GC pauses).
+//
+// SUMMARY-HEARTBEAT (2026-08-24): the WARN/DEBUG split above left a gap below
+// 5s — the per-tick numbers exist but only at DEBUG, and the daemon's default
+// log level is 'info' with no env var to raise it (raising it globally would
+// also turn on ~30 unrelated debug call sites, including a 5s P2P heartbeat).
+// So "no WARNs fired" was unfalsifiable evidence for "lag stayed under 1s": it
+// only proved lag stayed under 5s. This adds a second, independent line at
+// INFO level — a rollup over several ticks, not a duplicate of the per-tick
+// DEBUG line — so a numeric max is visible at the default log level without
+// touching the WARN threshold or its diagnostic text. ADHDEV_EVENT_LOOP_LAG_SUMMARY_TICKS
+// (default 6 → one INFO line/minute at the default 10s tick) controls the
+// rollup width; 0 disables the summary line while leaving WARN/DEBUG intact.
 // ---------------------------------------------------------------------------
 
 import { monitorEventLoopDelay, type IntervalHistogram } from 'node:perf_hooks';
@@ -36,8 +48,11 @@ import { AsyncBatchWriter } from '../logging/async-batch-writer.js';
 
 export const EVENT_LOOP_MONITOR_INTERVAL_ENV = 'ADHDEV_EVENT_LOOP_MONITOR_INTERVAL_MS';
 export const EVENT_LOOP_LAG_WARN_ENV = 'ADHDEV_EVENT_LOOP_LAG_WARN_MS';
+export const EVENT_LOOP_LAG_SUMMARY_TICKS_ENV = 'ADHDEV_EVENT_LOOP_LAG_SUMMARY_TICKS';
 export const DEFAULT_EVENT_LOOP_MONITOR_INTERVAL_MS = 10_000;
 export const DEFAULT_EVENT_LOOP_LAG_WARN_MS = 5_000;
+/** 6 ticks × the default 10s interval = one INFO summary line per minute. */
+export const DEFAULT_EVENT_LOOP_LAG_SUMMARY_TICKS = 6;
 
 export interface EventLoopMonitorHandle {
     stop(): void;
@@ -57,10 +72,14 @@ export function resolveEventLoopLagWarnMs(env: NodeJS.ProcessEnv = process.env):
     return parseMs(env[EVENT_LOOP_LAG_WARN_ENV], DEFAULT_EVENT_LOOP_LAG_WARN_MS);
 }
 
-/** Injectable sink so tests can capture lines without touching the log file. */
-export type EventLoopMonitorLogFn = (level: 'debug' | 'warn', message: string) => void;
+export function resolveEventLoopLagSummaryTicks(env: NodeJS.ProcessEnv = process.env): number {
+    return parseMs(env[EVENT_LOOP_LAG_SUMMARY_TICKS_ENV], DEFAULT_EVENT_LOOP_LAG_SUMMARY_TICKS);
+}
 
-function defaultLogFn(level: 'debug' | 'warn', message: string): void {
+/** Injectable sink so tests can capture lines without touching the log file. */
+export type EventLoopMonitorLogFn = (level: 'debug' | 'info' | 'warn', message: string) => void;
+
+function defaultLogFn(level: 'debug' | 'info' | 'warn', message: string): void {
     if (level === 'warn') {
         LOG.warn('EventLoop', message);
         // A lag warning is the one line that must not be lost to the condition
@@ -68,6 +87,8 @@ function defaultLogFn(level: 'debug' | 'warn', message: string): void {
         // long enough to trigger this warning is exactly a loop that may never
         // give that timer a tick. Drain synchronously so the evidence survives.
         AsyncBatchWriter.flushSync();
+    } else if (level === 'info') {
+        LOG.info('EventLoop', message);
     } else {
         LOG.debug('EventLoop', message);
     }
@@ -82,10 +103,12 @@ function defaultLogFn(level: 'debug' | 'warn', message: string): void {
 export function startEventLoopMonitor(opts?: {
     intervalMs?: number;
     warnMs?: number;
+    summaryTicks?: number;
     logFn?: EventLoopMonitorLogFn;
 }): EventLoopMonitorHandle {
     const intervalMs = opts?.intervalMs ?? resolveEventLoopMonitorIntervalMs();
     const warnMs = opts?.warnMs ?? resolveEventLoopLagWarnMs();
+    const summaryTicks = opts?.summaryTicks ?? resolveEventLoopLagSummaryTicks();
     const logFn = opts?.logFn ?? defaultLogFn;
     if (intervalMs <= 0) return { stop: () => { /* disabled */ } };
 
@@ -105,6 +128,16 @@ export function startEventLoopMonitor(opts?: {
     // used here and not `ps`/`top` output.
     let lastCpu: NodeJS.CpuUsage | null = null;
     let lastCpuAt: number | null = null;
+    // SUMMARY rollup — worst-of across `summaryTicks` ticks, flushed as one
+    // INFO line then reset. Independent of the WARN path: a tick that WARNs
+    // still folds into the rollup (so the summary's max is never lower than
+    // the last WARN it covers), but the rollup's own emission never touches
+    // warnMs or the WARN text. This is the only numeric-max signal visible at
+    // the daemon's default 'info' log level.
+    let summaryMaxMs = 0;
+    let summaryP99Ms = 0;
+    let summaryMeanSum = 0;
+    let summaryTickCount = 0;
     const timer = setInterval(() => {
         try {
             const now = Date.now();
@@ -118,7 +151,12 @@ export function startEventLoopMonitor(opts?: {
             expectedTickAt = now + intervalMs;
             const maxMs = histogram.max / 1e6;
             const p99Ms = histogram.percentile(99) / 1e6;
-            const meanMs = histogram.mean / 1e6;
+            // histogram.mean is NaN when the window recorded zero samples
+            // (e.g. a window shorter than the histogram's own sampling
+            // resolution) — normalize so it can't poison toFixed() output or
+            // the summary rollup's running sum below.
+            const rawMeanMs = histogram.mean / 1e6;
+            const meanMs = Number.isFinite(rawMeanMs) ? rawMeanMs : 0;
             histogram.reset();
             const worstMs = Math.max(driftMs, maxMs);
             // Self CPU% over the window: ~100% (or more, across threads) means
@@ -156,6 +194,24 @@ export function startEventLoopMonitor(opts?: {
                     + ` Expect IPC probe timeouts and reconcile-tick gaps in this window.`);
             } else {
                 logFn('debug', message);
+            }
+
+            if (summaryTicks > 0) {
+                summaryMaxMs = Math.max(summaryMaxMs, worstMs);
+                summaryP99Ms = Math.max(summaryP99Ms, p99Ms);
+                summaryMeanSum += meanMs;
+                summaryTickCount += 1;
+                if (summaryTickCount >= summaryTicks) {
+                    const windowMs = summaryTickCount * intervalMs;
+                    const summaryMeanMs = summaryMeanSum / summaryTickCount;
+                    logFn('info', `event-loop lag summary: max=${summaryMaxMs.toFixed(0)}ms`
+                        + ` p99=${summaryP99Ms.toFixed(0)}ms mean=${summaryMeanMs.toFixed(1)}ms`
+                        + ` over ${summaryTickCount} ticks / ${windowMs}ms`);
+                    summaryMaxMs = 0;
+                    summaryP99Ms = 0;
+                    summaryMeanSum = 0;
+                    summaryTickCount = 0;
+                }
             }
         } catch { /* never let observability take the loop down */ }
     }, intervalMs);
