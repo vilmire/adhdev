@@ -168,6 +168,21 @@ describe('mesh-json-config — coordinator merge', () => {
         expect(merged.providerType).toBe('claude-cli');
         expect(merged.preferredNodeId).toBe('node_1');
     });
+
+    // The settings/RepoMesh edit fields round-trip through this merge on every
+    // mesh load (see applyRepoMeshConfig below). Placeholder expansion only
+    // happens later, at buildCoordinatorSystemPrompt render time — if this merge
+    // ever expanded {{tokens}} instead of carrying them literally, an editor
+    // reopened after a save would show baked-in text instead of the template the
+    // user authored, and a re-save would freeze it that way permanently.
+    it('carries {{placeholder}} tokens in override/append literally — never expands them', () => {
+        const merged = mergeEffectiveCoordinatorConfig(
+            { systemPromptAppend: 'Repo append {{nodes}}' },
+            { systemPromptOverride: 'Local override {{meshName}} {{tools}}', systemPromptAppend: 'Local append {{policy}}' },
+        );
+        expect(merged.systemPromptOverride).toBe('Local override {{meshName}} {{tools}}');
+        expect(merged.systemPromptAppend).toBe('Repo append {{nodes}}\n\nLocal append {{policy}}');
+    });
 });
 
 describe('mesh-json-config — operating notes merge (ledger wins)', () => {
