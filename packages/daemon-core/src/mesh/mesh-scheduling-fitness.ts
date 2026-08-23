@@ -257,6 +257,18 @@ export interface SlotFitnessScoreBreakdown {
  * as a HARD FLOOR and exclude lower/ungraded slots before quota ranking. The +1
  * mismatch result remains solely for diagnostics and legacy/unclassified callers.
  *
+ * FREEFORM NEUTRALITY: a `freeform` task takes NO difficulty-axis score at all —
+ * not the exact-match 100, not the mismatch 0, and not the ungraded-slot 20
+ * fallback either. The 20-point fallback exists for a DIFFERENT case (a classified
+ * task landing on a node whose slots carry no operator-authored difficulty at
+ * all, e.g. legacy providerPriority-derived slots); it was never meant to
+ * apply to freeform. Scoring it for freeform too would silently rank an
+ * ungraded slot above an idle, equally-available graded slot on the same node,
+ * penalizing the operator for having declared a grade on a task type that
+ * (by design, see taskRequiresDifficultyFloor) carries no grade of its own to
+ * match against. Both slot kinds score 0 on this axis for freeform, so
+ * difficulty contributes nothing to their ordering — load/priority/quota decide.
+ *
  * `quotaBonus` is the QUOTA SPREAD axis (mesh-quota-routing.ts): a bounded
  * 0..spreadBonusMax headroom preference for the slot's provider, computed by
  * the CALLER from the node's reported facts and passed in as a plain number.
@@ -270,7 +282,7 @@ export function scoreSlotForTaskBreakdown(slot: NodeCapabilitySlot, task: Fitnes
     const base = 1;
     let difficulty = 0;
     const diff = isMeshTaskDifficulty(task.difficulty) ? task.difficulty as MeshTaskDifficulty : undefined;
-    if (diff) {
+    if (diff && diff !== 'freeform') {
         if (slot.difficulty?.length) {
             difficulty = slot.difficulty.includes(diff) ? 100 : 0; // exact difficulty match dominates
         } else {
