@@ -52,6 +52,15 @@ export type MeshLedgerKind =
     // payload: { reason: MeshClaimRefusalReason, detail? }
     | 'claim_refused'
     | 'p2p_dispatch_failed'
+    // DISPATCH-FAILED-UNQUERYABLE: a queue dispatch failed (transport reject or hang
+    // timeout) and the task was returned to pending — the record of WHY a task bounced.
+    // Appended by deliverTaskToSession's failure path, which wrote it as
+    // `'dispatch_failed' as any` for its whole life: not in this union, so not in
+    // TASK_LIFECYCLE_LEDGER_KINDS, so persisted to the indexed SQLite task_id column as
+    // NULL and invisible to every kind+taskId join. Distinct from 'p2p_dispatch_failed',
+    // which is the mcp-server P2P-transport-specific row.
+    // payload: { taskId, deliveryId, error, retryable, transport }
+    | 'dispatch_failed'
     // DUP-CLAIM-REBIND: a dispatch was refused because the node is ALREADY working this
     // exact task on another live session, so the turn attempt was re-pointed at that
     // holder instead of being cancelled (which used to discard the holder's real
@@ -318,6 +327,7 @@ const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLed
     'task_approval_needed',
     'task_question_pending',
     'p2p_dispatch_failed',
+    'dispatch_failed',
     'dispatch_duplicate_rebound',
     'queue_hold_hard_deadline',
 ]);

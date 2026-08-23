@@ -314,9 +314,12 @@ export function deleteHoldState(synthKey: string, meshId: string): void {
 // WHY THIS EXISTS. The acked-hold axis was structurally BLIND to dispatch failures. When a
 // dispatch failed with 'CLI agent not running' — the adapter map's own authoritative statement
 // that no worker exists for the target session — that fact was recorded ONLY on the queue axis
-// (a `dispatch_failed` ledger row that is not even a member of MeshLedgerKind, carries no
-// top-level taskId, and has zero readers anywhere in src) and never reached the hold. The hold
+// (a `dispatch_failed` ledger row that was not even a member of MeshLedgerKind, carried no
+// top-level taskId, and had zero readers anywhere in src) and never reached the hold. The hold
 // therefore went on probing a session that provably did not exist until the 90-min ceiling.
+// (The row's own unqueryability was fixed separately 2026-08-23 — 'dispatch_failed' is now a
+// real MeshLedgerKind in TASK_LIFECYCLE_LEDGER_KINDS, so it carries a top-level taskId. That
+// makes the evidence joinable; this module remains the axis that ACTS on it.)
 //
 // Measured live 2026-08-22: three consecutive `dispatch_failed: "CLI agent not running: kimi"`
 // while a hold ran to the ceiling at 5,405,993ms — the worker had been provably absent for

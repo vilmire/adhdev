@@ -717,7 +717,13 @@ function deliverTaskToSession(
         }
         try {
             appendLedgerEntry(ctx.meshId, {
-                kind: 'dispatch_failed' as any,
+                // 'dispatch_failed' is a real MeshLedgerKind and a member of
+                // TASK_LIFECYCLE_LEDGER_KINDS, so appendLedgerEntry derives the top-level
+                // taskId from payload.taskId below. It spent its whole life as
+                // `as any` — off the union, hence off the lifecycle set, hence written to
+                // the indexed SQLite task_id column as NULL and unreachable by the
+                // kind+taskId join every reader uses. Do not reintroduce the cast.
+                kind: 'dispatch_failed',
                 nodeId: ctx.nodeId,
                 sessionId: ctx.sessionId,
                 payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable, transport: ctx.transport },

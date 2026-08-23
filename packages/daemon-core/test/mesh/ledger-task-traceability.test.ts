@@ -168,4 +168,57 @@ describe('ledger task traceability', () => {
         expect(ledgerEntryTaskId({ taskId: '  ', payload: { taskId: 'payload' } })).toBe('payload');
         expect(ledgerEntryTaskId({ payload: {} })).toBeUndefined();
     });
+
+    // DISPATCH-FAILED-UNQUERYABLE (2026-08-23).
+    //
+    // deliverTaskToSession's failure path appends a `dispatch_failed` row — the record of WHY a
+    // task bounced back to pending. It was written as `kind: 'dispatch_failed' as any`: not a
+    // member of MeshLedgerKind, therefore absent from TASK_LIFECYCLE_LEDGER_KINDS, therefore
+    // never given the top-level taskId every other lifecycle kind gets.
+    //
+    // ★ Where it actually broke: SQLite, the PRIMARY runtime store. appendLedgerEntry persists
+    // `taskId: entry.taskId ?? null` into the indexed task_id column with no derivation, so the
+    // row landed with task_id = NULL and fell out of every index-backed kind+task_id join. The
+    // JSONL path masks this — readLedgerFile() backfills taskId from payload on read for legacy
+    // lines — so a JSONL-only assertion passes even with the defect present. That mask is why
+    // this went unnoticed, and why the assertion below reads the store directly.
+    //
+    // Injection check: drop 'dispatch_failed' from TASK_LIFECYCLE_LEDGER_KINDS and the SQLite
+    // task_id assertion goes red (the JSONL one stays green — it is not the defect).
+    it('(B) promotes taskId for dispatch_failed so the failure joins the task lifecycle', () => {
+        appendLedgerEntry(meshId, {
+            kind: 'task_dispatched',
+            nodeId: 'node_z', sessionId: 'sess_9',
+            payload: { taskId: 'task-df', routingDecision: { source: 'queue' } },
+        });
+        appendLedgerEntry(meshId, {
+            kind: 'dispatch_failed',
+            nodeId: 'node_z', sessionId: 'sess_9',
+            payload: {
+                taskId: 'task-df',
+                deliveryId: 'del-1',
+                error: 'CLI agent not running: kimi',
+                retryable: true,
+                transport: 'local',
+            },
+        });
+
+        // ★ The real assertion: the SQLite row carries task_id, so the join is index-backed.
+        const stored = MeshRuntimeStore.getInstance()
+            .readLedgerEntriesOrdered(meshId, { kinds: ['dispatch_failed'] });
+        expect(stored).toHaveLength(1);
+        expect(stored[0].taskId).toBe('task-df');
+
+        const [failed] = readLedgerEntries(meshId, { kind: ['dispatch_failed'] });
+        expect(failed).toBeDefined();
+        expect(failed.taskId).toBe('task-df');
+        expect(ledgerEntryTaskId(failed)).toBe('task-df');
+        // payload copy is untouched — legacy readers keying off payload still work.
+        expect((failed.payload as any).taskId).toBe('task-df');
+        expect((failed.payload as any).error).toBe('CLI agent not running: kimi');
+
+        // And it joins the lifecycle by taskId alone, which is what made the row useless.
+        const lifecycle = readLedgerEntries(meshId).filter(e => e.taskId === 'task-df').map(e => e.kind);
+        expect(lifecycle).toEqual(expect.arrayContaining(['task_dispatched', 'dispatch_failed']));
+    });
 });
