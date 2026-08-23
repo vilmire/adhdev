@@ -128,7 +128,7 @@ export default function RepoMeshJsonAppendNotice({ daemonId, workspace, sendComm
     return (
         <div className="mt-3 rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-                <span className="text-[13px] font-semibold">{t('repoMesh.detail.repoMeshJsonTitle')}</span>
+                <span className="text-[13px] leading-tight font-semibold">{t('repoMesh.detail.repoMeshJsonTitle')}</span>
                 <span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">
                     {t('repoMesh.detail.repoMeshJsonReadOnly')}
                 </span>
