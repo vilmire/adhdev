@@ -167,7 +167,13 @@ interface RunResult {
  * Dispatch `text` through a real FsmDriver against the ingesting composer.
  * `ingestMs` is how long the composer swallows CRs after the body lands.
  */
-async function run(text: string, ingestMs: number, totalWaitMs = 2600): Promise<RunResult> {
+async function run(
+    text: string,
+    ingestMs: number,
+    totalWaitMs = 2600,
+    /** MANIFEST-SEND-DELAY: the provider manifest's sendDelayMs, as route.ts threads it. */
+    manifestSendDelayMs?: number,
+): Promise<RunResult> {
     const factory = new IngestingFactory();
     factory.ingestMs = ingestMs;
     const driver = new FsmDriver({
@@ -175,6 +181,7 @@ async function run(text: string, ingestMs: number, totalWaitMs = 2600): Promise<
         workingDir: os.tmpdir(),
         hotReload: false,
         transportFactory: factory,
+        manifestSendDelayMs,
     });
     driver.start();
     const pty = factory.last!;
@@ -256,6 +263,34 @@ describe('POSIX-ENTER-DROP — large-body submit is echo-verified', () => {
         // echo-gate settle window.
         expect(res.firstCrDelayMs).not.toBeNull();
         expect(res.firstCrDelayMs!).toBeLessThan(600);
+    });
+
+    // ── MANIFEST-SEND-DELAY: the declared value must change real driver behaviour,
+    //    not merely survive a pure-function unit test. The fixture spec declares the
+    //    same 200ms grok-cli ships, so a manifest asking for 1200 is observable as a
+    //    genuinely later first CR.
+    it('a manifest sendDelayMs actually delays the real driver\'s first submit key', async () => {
+        setPlatform('darwin');
+        const withManifest = await run(SHORT_BODY, 0, 1800, 1200);
+        expect(withManifest.firstCrDelayMs).not.toBeNull();
+        // Spec says 200; the manifest asked for 1200 and is now honoured.
+        expect(withManifest.firstCrDelayMs!).toBeGreaterThan(900);
+    });
+
+    it('a provider declaring no manifest sendDelayMs is unchanged (over-correction guard)', async () => {
+        setPlatform('darwin');
+        const res = await run(SHORT_BODY, 0, 900, undefined);
+        expect(res.submits).toBeGreaterThanOrEqual(1);
+        expect(res.firstCrDelayMs).not.toBeNull();
+        expect(res.firstCrDelayMs!).toBeLessThan(600);
+    });
+
+    it('a wired manifest delay still submits — the longer wait does not break the send', async () => {
+        setPlatform('darwin');
+        // The guard against "wiring it made sends time out": a large body under an
+        // ingesting composer AND a 1200ms manifest floor must still reach submit.
+        const res = await run(LARGE_BODY, 300, 3000, 1200);
+        expect(res.submits).toBeGreaterThanOrEqual(1);
     });
 
     it('stops resending once the agent is observed to have left the composer', async () => {

@@ -185,6 +185,10 @@ export class SpecCliAdapter implements CliAdapter {
         /** FSMLOG-SESSION-ATTRIBUTION (D3): owning session id, passed to the driver purely so its
          *  log lines are attributable to a session when several run concurrently. */
         sessionId?: string,
+        /** MANIFEST-SEND-DELAY: submit tuning declared by the provider MANIFEST (as opposed to
+         *  the spec). Optional so the many test call sites and out-of-tree embedders that build
+         *  an adapter without a manifest keep their existing behaviour unchanged. */
+        manifestTuning?: { sendDelayMs?: number },
     ) {
         const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
         this.spec = {
@@ -215,6 +219,7 @@ export class SpecCliAdapter implements CliAdapter {
             transportFactory,
             extraCliArgs: cliArgs,
             sessionId,
+            manifestSendDelayMs: manifestTuning?.sendDelayMs,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
     }
