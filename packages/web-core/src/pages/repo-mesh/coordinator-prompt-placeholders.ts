@@ -24,6 +24,7 @@ export const COORDINATOR_PROMPT_PLACEHOLDERS: CoordinatorPromptPlaceholder[] = [
     { token: 'policy', description: "The mesh's effective policy section (safety, scheduling, etc.).", example: '(rendered policy section)' },
     { token: 'tools', description: 'The canonical MCP tools reference table.', example: '(tools table)' },
     { token: 'workflow', description: 'The standard coordinator workflow guidance section.', example: '(workflow section)' },
+    { token: 'quota', description: 'The quota-awareness section.', example: '(quota section)' },
     { token: 'onboarding', description: 'Onboarding/reinit guidance section.', example: '(onboarding section)' },
     { token: 'rules', description: 'CLI-type-specific and policy-derived rules section.', example: '(rules section)' },
     { token: 'toolExposurePreflight', description: 'Preflight guidance for verifying tool exposure before relying on it.', example: '(preflight section)' },

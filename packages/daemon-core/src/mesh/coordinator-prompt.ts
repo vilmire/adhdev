@@ -434,6 +434,7 @@ function readUserPromptFile(cliType: string | undefined, suffix: string): string
  *   {{policy}}          — full policy section
  *   {{tools}}           — the canonical tools table
  *   {{workflow}}        — the canonical orchestration workflow
+ *   {{quota}}           — the quota-awareness section
  *   {{onboarding}}      — the guided init/reinit onboarding section
  *   {{rules}}           — the canonical rules section (with coordinatorNote)
  *   {{toolExposurePreflight}} — the MCP-missing preflight reminder
