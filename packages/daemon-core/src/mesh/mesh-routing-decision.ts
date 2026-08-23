@@ -1,8 +1,8 @@
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
-import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, type ProviderQuotaRiskSnapshot, type QuotaFactsContext, type QuotaRankingRationale } from './mesh-quota-routing.js';
-import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaBonusDiagnostic, type ProviderQuotaGateBlock, type ProviderQuotaRiskSnapshot, type QuotaFactsContext, type QuotaRankingRationale } from './mesh-quota-routing.js';
+import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotCapacityRemaining, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
 
 export interface MeshIntraNodeLoser {
     providerType: string;
@@ -58,14 +58,39 @@ export interface ResolvedProviderSelection {
     selectionTrajectory?: MeshSelectionTrajectory;
 }
 
-interface ProviderSlotCandidate {
+export interface ProviderSlotCandidate {
     slot: NodeCapabilitySlot;
     providerType: string;
 }
 
+export interface ProviderSelectionPreviewScore {
+    providerType: string;
+    model?: string;
+    selectionRank: number;
+    capacitySortKey: 0 | 1;
+    capacityAvailable: boolean;
+    capacity: { available: boolean; slotCap?: number; providerCap?: number };
+    difficultyEligible: boolean;
+    admittedToFloorTier: boolean;
+    base: number;
+    difficulty: number;
+    tags: number;
+    quotaBonus: number;
+    total: number;
+}
+
+export interface ProviderQuotaGateDiagnostic {
+    providerType: string;
+    bonus: Omit<ProviderQuotaBonusDiagnostic, 'providerType'>;
+    gate: {
+        outcome: 'clear' | 'skip' | 'hard-block' | 'fail-open' | 'not-evaluated-floor';
+        reason?: string;
+    };
+}
+
 interface ProviderQuotaRanking {
     clear: string[];
-    gated: Array<{ providerType: string; block: { reason: string } }>;
+    gated: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
 }
 
 export interface ProviderSelectionDiagnostics {
@@ -80,6 +105,10 @@ export interface ProviderSelectionDiagnostics {
      *  (the mesh_status selection rationale) can apply its own, looser bound
      *  instead of inheriting a cap chosen for the ledger's byte budget. */
     allLosers?: MeshIntraNodeLoser[];
+    /** In-memory preview-only details. Never copied into a durable routing
+     * decision; requested explicitly with `unbounded: true`. */
+    previewScores?: ProviderSelectionPreviewScore[];
+    quotaDiagnostics?: ProviderQuotaGateDiagnostic[];
 }
 
 // Compact, durable routing rationale written into task_dispatched. Candidate arrays
@@ -123,18 +152,41 @@ export function buildProviderSelectionDiagnostics(args: {
     candidateSlots: ProviderSlotCandidate[];
     ranked: ProviderQuotaRanking;
     winner?: ProviderSlotCandidate;
+    /** Preview-only: do not apply durable payload array caps, and expose the
+     * full score/quota explanation used to build the selection. */
+    unbounded?: boolean;
+    /** One observation time for an internally consistent preview snapshot. */
+    now?: number;
+    /** Full mesh roster for physical-daemon sibling capacity accounting. */
+    meshNodes?: readonly unknown[];
+    /** Read-only tasks reserve the last free slot for write work. */
+    forReadonlyTask?: boolean;
 }): ProviderSelectionDiagnostics {
-    const now = Date.now();
+    const now = args.now ?? Date.now();
     const riskSnapshot = quotaRiskSnapshotForCandidates(args.node, args.ranked.clear, args.quotaRouting, now, args.quotaFactsContext);
     const allRisks = quotaRiskSnapshotForCandidates(args.node, args.candidateSlots.map(candidate => candidate.providerType), args.quotaRouting, now, args.quotaFactsContext);
     const riskByProvider = new Map(allRisks.map(snapshot => [snapshot.providerType, snapshot]));
-    const scoreDetails = args.task ? args.usableSlots.map(candidate => ({
-        providerType: candidate.providerType,
-        ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
-        capacityAvailable: slotHasCapacity(args.meshId ?? '', args.nodeId, args.node, candidate.slot),
-        difficultyEligible: !args.difficultyFloorRequired || slotDifficultyTierForTask(candidate.slot, args.task!.difficulty) !== undefined,
-        ...scoreSlotForTaskBreakdown(candidate.slot, args.task!, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
-    })) : [];
+    const scoreDetails = args.task ? args.usableSlots.map((candidate, selectionRank) => {
+        const selectionCapacity = slotCapacityRemaining(
+            args.meshId ?? '', args.nodeId, args.node, candidate.slot, args.meshNodes,
+        );
+        const taskCapacity = args.forReadonlyTask
+            ? slotCapacityRemaining(
+                args.meshId ?? '', args.nodeId, args.node, candidate.slot, args.meshNodes, true,
+            )
+            : selectionCapacity;
+        return {
+            providerType: candidate.providerType,
+            ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
+            selectionRank,
+            capacitySortKey: (selectionCapacity.available ? 1 : 0) as 0 | 1,
+            capacityAvailable: selectionCapacity.available,
+            capacity: taskCapacity,
+            difficultyEligible: !args.difficultyFloorRequired || slotDifficultyTierForTask(candidate.slot, args.task!.difficulty) !== undefined,
+            admittedToFloorTier: args.candidateSlots.includes(candidate),
+            ...scoreSlotForTaskBreakdown(candidate.slot, args.task!, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
+        };
+    }) : [];
     const quotaOrder = [
         ...args.ranked.clear.map(providerType => ({ providerType, ...(riskByProvider.get(providerType)?.risk !== undefined ? { quotaRisk: riskByProvider.get(providerType)!.risk } : {}) })),
         ...args.ranked.gated.map(entry => ({ providerType: entry.providerType, ...(riskByProvider.get(entry.providerType)?.risk !== undefined ? { quotaRisk: riskByProvider.get(entry.providerType)!.risk } : {}), gated: true })),
@@ -142,7 +194,53 @@ export function buildProviderSelectionDiagnostics(args: {
     if (args.taskId) {
         LOG.info('MeshQueue', `ROUTING DECISION taskId=${args.taskId} nodeId=${args.nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrder)} winner=${args.ranked.clear[0] ?? 'none'}`);
     }
-    if (!args.winner || !args.task) return { riskSnapshot };
+    const bonusDiagnostics = args.task && args.unbounded
+        ? quotaSpreadBonusDiagnosticsByProvider(
+            args.node,
+            args.usableSlots.map(candidate => candidate.providerType),
+            args.quotaRouting,
+            now,
+            args.quotaFactsContext,
+        )
+        : [];
+    const rankedProviders = new Set([
+        ...args.ranked.clear,
+        ...args.ranked.gated.map(entry => entry.providerType),
+    ]);
+    const quotaDiagnostics: ProviderQuotaGateDiagnostic[] = bonusDiagnostics.map(detail => {
+        const { providerType, ...bonus } = detail;
+        const gated = args.ranked.gated.find(entry => entry.providerType === detail.providerType);
+        if (!rankedProviders.has(detail.providerType)) {
+            return { providerType, bonus, gate: { outcome: 'not-evaluated-floor' } };
+        }
+        if (gated) {
+            return {
+                providerType,
+                bonus,
+                gate: {
+                    outcome: gated.block.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON ? 'hard-block' : 'skip',
+                    reason: gated.block.reason,
+                },
+            };
+        }
+        const failOpen = detail.zeroReason === 'stale'
+            || detail.zeroReason === 'no-data'
+            || detail.zeroReason === 'opted-out'
+            || detail.zeroReason === 'provider-disabled'
+            || detail.zeroReason === 'snapshot-error';
+        return {
+            providerType,
+            bonus,
+            gate: failOpen
+                ? { outcome: 'fail-open', reason: detail.zeroReason }
+                : { outcome: 'clear' },
+        };
+    });
+    const previewOnly = args.unbounded ? {
+        previewScores: scoreDetails,
+        quotaDiagnostics,
+    } : {};
+    if (!args.winner || !args.task) return { riskSnapshot, ...previewOnly };
 
     const winner = args.winner;
     const losers = args.usableSlots.filter(candidate => candidate.slot !== winner.slot).map(candidate => {
@@ -173,15 +271,15 @@ export function buildProviderSelectionDiagnostics(args: {
     return {
         riskSnapshot,
         ...(losers.length ? { allLosers: losers } : {}),
-        ...(riskSnapshot.length ? { quotaRiskSnapshot: riskSnapshot.slice(0, ROUTING_ARRAY_MAX) } : {}),
-        ...(riskSnapshot.length > ROUTING_ARRAY_MAX ? { quotaRisksOmitted: riskSnapshot.length - ROUTING_ARRAY_MAX } : {}),
-        ...(losers.length ? { intraNodeLosers: losers.slice(0, INTRA_NODE_LOSERS_MAX) } : {}),
-        ...(losers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: losers.length - INTRA_NODE_LOSERS_MAX } : {}),
+        ...(riskSnapshot.length ? { quotaRiskSnapshot: args.unbounded ? riskSnapshot : riskSnapshot.slice(0, ROUTING_ARRAY_MAX) } : {}),
+        ...(!args.unbounded && riskSnapshot.length > ROUTING_ARRAY_MAX ? { quotaRisksOmitted: riskSnapshot.length - ROUTING_ARRAY_MAX } : {}),
+        ...(losers.length ? { intraNodeLosers: args.unbounded ? losers : losers.slice(0, INTRA_NODE_LOSERS_MAX) } : {}),
+        ...(!args.unbounded && losers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: losers.length - INTRA_NODE_LOSERS_MAX } : {}),
         selectionTrajectory: {
-            candidates: candidates.slice(0, ROUTING_ARRAY_MAX),
-            ...(candidates.length > ROUTING_ARRAY_MAX ? { candidatesOmitted: candidates.length - ROUTING_ARRAY_MAX } : {}),
-            quotaOrder: quotaOrder.slice(0, ROUTING_ARRAY_MAX),
-            ...(quotaOrder.length > ROUTING_ARRAY_MAX ? { quotaOrderOmitted: quotaOrder.length - ROUTING_ARRAY_MAX } : {}),
+            candidates: args.unbounded ? candidates : candidates.slice(0, ROUTING_ARRAY_MAX),
+            ...(!args.unbounded && candidates.length > ROUTING_ARRAY_MAX ? { candidatesOmitted: candidates.length - ROUTING_ARRAY_MAX } : {}),
+            quotaOrder: args.unbounded ? quotaOrder : quotaOrder.slice(0, ROUTING_ARRAY_MAX),
+            ...(!args.unbounded && quotaOrder.length > ROUTING_ARRAY_MAX ? { quotaOrderOmitted: quotaOrder.length - ROUTING_ARRAY_MAX } : {}),
             providerWinner: {
                 providerType: winner.providerType,
                 ...(winner.slot.model ? { model: winner.slot.model } : {}),
@@ -189,7 +287,94 @@ export function buildProviderSelectionDiagnostics(args: {
                 ...(winnerRisk !== undefined ? { quotaRisk: winnerRisk } : {}),
             },
         },
+        ...previewOnly,
     };
+}
+
+export interface ProviderSelectionCoreResult {
+    reason?: string;
+    candidateSlots: ProviderSlotCandidate[];
+    candidates: ProviderSlotCandidate[];
+    ranked: ProviderQuotaRanking;
+    winner?: ProviderSlotCandidate;
+    diagnostics: ProviderSelectionDiagnostics;
+}
+
+/**
+ * Canonical post-detection provider selector shared by production assignment
+ * and mesh_route_preview. It owns the hard capacity/tier collapse, provider
+ * de-duplication, Stage 3 quota ordering, winner lookup, and diagnostics call.
+ * Callers provide usable slots; production still owns CLI detection, while the
+ * read-only preview uses the configured/facts-admitted slot snapshot.
+ */
+export function selectProviderWithDiagnostics(args: {
+    node: any;
+    nodeId: string;
+    meshId?: string;
+    task: FitnessTask;
+    taskId?: string;
+    quotaRouting?: RepoMeshQuotaRoutingPolicy | null;
+    quotaFactsContext?: QuotaFactsContext | null;
+    quotaBonusByProvider?: Record<string, number>;
+    difficultyFloorRequired: boolean;
+    usableSlots: ProviderSlotCandidate[];
+    unbounded?: boolean;
+    now?: number;
+    meshNodes?: readonly unknown[];
+    forReadonlyTask?: boolean;
+}): ProviderSelectionCoreResult {
+    let candidateSlots = args.usableSlots;
+    if (args.difficultyFloorRequired) {
+        const available = args.usableSlots.filter(candidate => slotHasCapacity(
+            args.meshId ?? '', args.nodeId, args.node, candidate.slot, args.meshNodes,
+        ));
+        if (!available.length) {
+            const ranked = { clear: [], gated: [] };
+            const diagnostics = args.unbounded ? buildProviderSelectionDiagnostics({
+                ...args,
+                candidateSlots: [],
+                ranked,
+            }) : { riskSnapshot: [] };
+            return {
+                reason: `task_difficulty_floor_wait:${args.task.difficulty}`,
+                candidateSlots: [],
+                candidates: [],
+                ranked,
+                diagnostics,
+            };
+        }
+        const tier = Math.min(...available.map(candidate =>
+            slotDifficultyTierForTask(candidate.slot, args.task.difficulty) ?? Number.POSITIVE_INFINITY));
+        candidateSlots = available.filter(candidate =>
+            slotDifficultyTierForTask(candidate.slot, args.task.difficulty) === tier);
+    }
+
+    const candidates: ProviderSlotCandidate[] = [];
+    const seenProviders = new Set<string>();
+    for (const candidate of candidateSlots) {
+        if (seenProviders.has(candidate.providerType)) continue;
+        seenProviders.add(candidate.providerType);
+        candidates.push(candidate);
+    }
+    const now = args.now ?? Date.now();
+    const ranked = rankProvidersByQuotaGate(
+        args.node,
+        candidates.map(candidate => candidate.providerType),
+        args.quotaRouting,
+        now,
+        args.quotaFactsContext,
+    );
+    const winner = ranked.clear.length
+        ? candidates.find(candidate => candidate.providerType === ranked.clear[0]) ?? candidates[0]
+        : undefined;
+    const diagnostics = buildProviderSelectionDiagnostics({
+        ...args,
+        now,
+        candidateSlots,
+        ranked,
+        winner,
+    });
+    return { candidateSlots, candidates, ranked, winner, diagnostics };
 }
 
 /**

@@ -157,6 +157,9 @@ export interface LiveLocalProviderEnablementSource {
 
 export interface QuotaFactsContext {
     nodes?: any[];
+    /** Observation-only callers (mesh_route_preview) must not consume the
+     * production fail-open log rate limit or emit routing logs. */
+    suppressObservabilityLogs?: boolean;
     /** Present only when the caller runs on the quota-OWNING daemon and had a
      *  live cache to inject. Absent → the nodeFacts copies are read exactly as
      *  before (remote nodes, tests, pre-measurement boot). */
@@ -359,7 +362,9 @@ function logStaleQuotaFailOpen(
     quota: { updatedAt: number },
     policy: RepoMeshQuotaRoutingPolicy | null | undefined,
     now: number,
+    context?: QuotaFactsContext | null,
 ): void {
+    if (context?.suppressObservabilityLogs === true) return;
     const staleAfterMs = resolveQuotaRoutingPolicy(policy).staleAfterMs;
     const nodeId = typeof node?.nodeId === 'string' && node.nodeId ? node.nodeId
         : typeof node?.id === 'string' && node.id ? node.id : 'unknown';
@@ -468,6 +473,7 @@ function logAbsentQuotaFailOpen(
     now: number,
     context?: QuotaFactsContext | null,
 ): void {
+    if (context?.suppressObservabilityLogs === true) return;
     const staleAfterMs = resolveQuotaRoutingPolicy(policy).staleAfterMs;
     const nodeId = typeof node?.nodeId === 'string' && node.nodeId ? node.nodeId
         : typeof node?.id === 'string' && node.id ? node.id : 'unknown';
@@ -620,7 +626,7 @@ export function evaluateProviderQuotaGate(
         sessionTrustworthy = isRetainedWindowTrustworthy(quota.session, facts, quota, policy, now);
         weeklyTrustworthy = isRetainedWindowTrustworthy(quota.weekly, facts, quota, policy, now);
     } else if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
-        logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now);
+        logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);
         return null; // fail-open on stale
     }
     const resolved = resolveQuotaRoutingPolicy(policy);
@@ -1340,4 +1346,71 @@ export function quotaSpreadBonusByProvider(
         out[provider] = bonus;
     }
     return out;
+}
+
+export type QuotaSpreadBonusZeroReason =
+    | 'stale'
+    | 'no-data'
+    | 'opted-out'
+    | 'provider-disabled'
+    | 'snapshot-error'
+    | 'zero-headroom';
+
+export interface ProviderQuotaBonusDiagnostic {
+    providerType: string;
+    value: number;
+    zeroReason?: QuotaSpreadBonusZeroReason;
+    snapshotStatus?: string;
+    failureKind?: string;
+}
+
+/**
+ * Explain the output of quotaSpreadBonusByProvider without reimplementing its
+ * scoring formula. The production bonus function above remains the sole
+ * calculator; this observer only classifies why its returned value is zero.
+ * Everything is an in-memory facts/cache read through quotaEntryFor — no quota
+ * fetch is performed.
+ */
+export function quotaSpreadBonusDiagnosticsByProvider(
+    node: any,
+    providerTypes: string[],
+    policy?: RepoMeshQuotaRoutingPolicy | null,
+    now: number = Date.now(),
+    context?: QuotaFactsContext | null,
+): ProviderQuotaBonusDiagnostic[] {
+    const bonuses = quotaSpreadBonusByProvider(node, policy, now, context);
+    return [...new Set(providerTypes)].map(providerType => {
+        const value = bonuses[providerType] ?? 0;
+        const entry = quotaEntryFor(node, providerType, context, now);
+        if (!entry) {
+            const absentReason = classifyAbsentQuotaReason(node, providerType, context);
+            const zeroReason: QuotaSpreadBonusZeroReason = absentReason === 'probe_disabled'
+                ? 'opted-out'
+                : absentReason === 'provider_disabled'
+                    ? 'provider-disabled'
+                    : 'no-data';
+            return { providerType, value, ...(value === 0 ? { zeroReason } : {}) };
+        }
+
+        const { facts, quota } = entry;
+        const snapshotStatus = typeof quota.status === 'string' ? quota.status : undefined;
+        const failureKind = typeof (quota as any).metadata?.failureKind === 'string'
+            ? (quota as any).metadata.failureKind
+            : undefined;
+        let zeroReason: QuotaSpreadBonusZeroReason | undefined;
+        if (value === 0) {
+            if (!isQuotaSnapshotFresh(facts, quota, policy, now)) zeroReason = 'stale';
+            else if (failureKind === 'no-data') zeroReason = 'no-data';
+            else if (quota.status !== 'ok') zeroReason = 'snapshot-error';
+            else if (!quota.session && !quota.weekly) zeroReason = 'no-data';
+            else zeroReason = 'zero-headroom';
+        }
+        return {
+            providerType,
+            value,
+            ...(zeroReason ? { zeroReason } : {}),
+            ...(snapshotStatus ? { snapshotStatus } : {}),
+            ...(failureKind ? { failureKind } : {}),
+        };
+    });
 }

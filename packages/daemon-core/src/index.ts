@@ -473,6 +473,10 @@ export type { LastQuotaRankingRecord, ProviderQuotaRiskSnapshot } from './mesh/m
 export { evaluateProviderQuotaGate, rankProvidersByQuotaGate, quotaRiskSnapshotForCandidates } from './mesh/mesh-quota-routing.js';
 export type { ProviderQuotaGateBlock, ProviderQuotaGateRanking } from './mesh/mesh-quota-routing.js';
 
+// ── Mesh Route Preview (read-only hypothetical routing) ──
+export { buildMeshRoutePreview, buildNodeRoutePreview } from './mesh/mesh-route-preview.js';
+export type { MeshRoutePreviewQuery, NodeRoutePreview } from './mesh/mesh-route-preview.js';
+
 // ── Mesh Host Ownership ──
 export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHostOwner, normalizeMeshDaemonRole, requireMeshHostQueueOwner, resolveMeshHostStatus } from './mesh/mesh-host-ownership.js';
 

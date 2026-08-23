@@ -63,6 +63,7 @@ export {
     MESH_REVIEW_INBOX_TOOL,
     MESH_SEND_TASK_TOOL,
     MESH_STATUS_TOOL,
+    MESH_ROUTE_PREVIEW_TOOL,
     MESH_TASK_HISTORY_TOOL,
     MESH_VIEW_QUEUE_TOOL,
     chooseDispatchableSession,
@@ -87,6 +88,10 @@ export {
     meshListNodes,
     meshStatus,
 } from './mesh-tools-status.js';
+
+export {
+    meshRoutePreview,
+} from './mesh-tools-route-preview.js';
 
 export {
     meshEnqueueTask,

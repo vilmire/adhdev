@@ -27,7 +27,7 @@ import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, rankProvidersByQuotaGate, recordLastQuotaRanking, recordLastQuotaRankingOutcome, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, recordLastQuotaRanking, recordLastQuotaRankingOutcome, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -44,7 +44,7 @@ import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadT
 import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearQuotaClaimBlockState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
-import { buildAutoLaunchRoutingDecision, buildProviderSelectionDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
+import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import {
     sweepAutoLaunchOrphanSessions,
     autoLaunchWriteWouldClobberWinner,
@@ -1653,23 +1653,6 @@ async function resolveUsableProvider(
         return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
     }
 
-    // HARD DIFFICULTY FLOOR: exclude lower and saturated slots before quota ranking,
-    // or WAIT when every sufficient slot is full. Freeform/legacy stay unchanged.
-    let candidateSlots = usableSlots;
-    if (difficultyFloorRequired) {
-        const available = usableSlots.filter(candidate => slotHasCapacity(meshId ?? '', nodeId, node, candidate.slot));
-        if (!available.length) return { reason: `task_difficulty_floor_wait:${task!.difficulty}` };
-        const tier = Math.min(...available.map(candidate => slotDifficultyTierForTask(candidate.slot, task!.difficulty) ?? Number.POSITIVE_INFINITY));
-        candidateSlots = available.filter(candidate => slotDifficultyTierForTask(candidate.slot, task!.difficulty) === tier);
-    }
-    const candidates: Array<{ slot: NodeCapabilitySlot; providerType: string }> = [];
-    const seenProviders = new Set<string>();
-    for (const candidate of candidateSlots) {
-        if (seenProviders.has(candidate.providerType)) continue;
-        seenProviders.add(candidate.providerType);
-        candidates.push(candidate);
-    }
-
     // QUOTA GATE, inside the loop: split the usable candidates by the gate and
     // order the survivors by EXPIRY RISK, descending (remaining × elapsed window
     // fraction × reading confidence — an unused remainder evaporates at the
@@ -1681,15 +1664,14 @@ async function resolveUsableProvider(
     // unconditionally last (rankProvidersByQuotaGate, RETAINED READINGS — the
     // fleet-wide stranding that fixed). ALL-gated is reported under its own
     // reason so a quota WAIT is never conflated with a slot config error.
-    const ranked = rankProvidersByQuotaGate(node, candidates.map(c => c.providerType), quotaRouting, Date.now(), quotaFactsContext);
-    const winner = ranked.clear.length
-        ? candidates.find(candidate => candidate.providerType === ranked.clear[0]) ?? candidates[0]
-        : undefined;
-    // `allLosers` is destructured OUT: the rationale's input, not durable.
-    const { riskSnapshot, allLosers, ...routingDiagnostics } = buildProviderSelectionDiagnostics({
-        node, nodeId, meshId, task, taskId, quotaRouting, quotaFactsContext,
-        quotaBonusByProvider, difficultyFloorRequired, usableSlots, candidateSlots, ranked, winner,
+    const selection = selectProviderWithDiagnostics({
+        node, nodeId, meshId, task: task!, taskId, quotaRouting, quotaFactsContext,
+        quotaBonusByProvider, difficultyFloorRequired, usableSlots,
     });
+    if (selection.reason) return { reason: selection.reason };
+    const { ranked, winner } = selection;
+    const { riskSnapshot, allLosers, ...routingDiagnostics } = selection.diagnostics;
+    // `allLosers` is destructured OUT: the rationale's input, not durable.
     const rationale = selectionRationaleFrom(routingDiagnostics.selectionTrajectory, allLosers);
     if (!ranked.clear.length) {
         const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');

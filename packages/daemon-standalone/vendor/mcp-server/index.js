@@ -626,6 +626,7 @@ function buildMagiPanelProposal(detected, opts = {}) {
 }
 var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_status",
+  "mesh_route_preview",
   "mesh_list_nodes",
   // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
   "mesh_enqueue_batch",
@@ -1052,6 +1053,34 @@ var MESH_STATUS_TOOL = {
       includeUsage: { type: "boolean", description: "Opt in to the token/cost usage rollup for this mesh (usage.total, usage.retained, usage.byNode, usage.costCoverage). Default false \u2014 usage is not read on ordinary status polls. Token counts come from each provider native transcript; costUsd is only present for providers that compute one themselves (hermes), so costCoverage reports how many sessions contributed a cost." },
       compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Folds per-node session arrays to sessionSummary and de-duplicates daemon-shared sessions into daemonSessions. Set false (or verbose=true) for the full dashboard-grade payload." },
       verbose: { type: "boolean", description: "Force the full payload; overrides compact." }
+    }
+  }
+};
+var MESH_ROUTE_PREVIEW_TOOL = {
+  name: "mesh_route_preview",
+  description: "Preview where a hypothetical task would route, and why, from the current in-memory mesh/queue/quota-facts snapshot. Read-only and fetch-free: it does not enqueue, write, probe CLIs, or refresh quota. Returns the full unbounded slot breakdown (capacity-first order, hard difficulty floor, fitness components, quota bonus with zero reason, gate outcome, and Stage 3 quota reordering). Capacity is a point-in-time live queue reading and can change immediately after the response.",
+  inputSchema: {
+    type: "object",
+    required: ["difficulty"],
+    properties: {
+      difficulty: {
+        type: "string",
+        enum: ["easy", "medium", "difficult", "freeform"],
+        description: "Hypothetical task difficulty. Classified tasks enforce the hard difficulty floor; freeform contributes zero on every difficulty score axis."
+      },
+      required_tags: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional capability tags the hypothetical task requires."
+      },
+      readonly: {
+        type: "boolean",
+        description: "Whether to preview read-only scheduling semantics, including the reserved-last-slot capacity rule."
+      },
+      target_node_id: {
+        type: "string",
+        description: "Optional node pin. When omitted, preview all eligible nodes in scheduling order."
+      }
     }
   }
 };
@@ -2191,6 +2220,7 @@ var MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
 };
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
+  MESH_ROUTE_PREVIEW_TOOL,
   MESH_LIST_NODES_TOOL,
   // GRAPH-ORCHESTRATION Phase F — batch BEFORE task. Registry order is what a
   // client that lists tools without ranking sees first, so the default enqueue
@@ -4940,6 +4970,29 @@ async function meshListNodes(ctx) {
   }, null, 2);
 }
 
+// src/tools/mesh-tools-route-preview.ts
+var import_daemon_core7 = require("@adhdev/daemon-core");
+var ROUTABLE_DIFFICULTIES = /* @__PURE__ */ new Set(["easy", "medium", "difficult", "freeform"]);
+async function meshRoutePreview(ctx, args) {
+  const difficulty = typeof args?.difficulty === "string" ? args.difficulty.trim() : "";
+  if (!ROUTABLE_DIFFICULTIES.has(difficulty)) {
+    return JSON.stringify({
+      success: false,
+      tool: "mesh_route_preview",
+      error: "difficulty must be one of: easy, medium, difficult, freeform"
+    }, null, 2);
+  }
+  const requiredTags = Array.isArray(args.required_tags) ? args.required_tags : Array.isArray(args.requiredTags) ? args.requiredTags : [];
+  const targetNodeId = typeof args.target_node_id === "string" ? args.target_node_id : args.targetNodeId;
+  return JSON.stringify((0, import_daemon_core7.buildMeshRoutePreview)({
+    mesh: ctx.mesh,
+    difficulty,
+    requiredTags,
+    readonly: args.readonly === true,
+    targetNodeId
+  }), null, 2);
+}
+
 // src/tools/mesh-tools-graph.ts
 function readGraphTaskFields(entry) {
   const inputsFrom = entry.inputs_from ?? entry.inputsFrom;
@@ -6540,7 +6593,7 @@ async function meshReviewInbox(ctx, args = {}) {
 }
 
 // src/tools/mesh-tools-magi.ts
-var import_daemon_core7 = require("@adhdev/daemon-core");
+var import_daemon_core8 = require("@adhdev/daemon-core");
 var MAGI_MAX_REPLICAS = 12;
 var MAGI_MIN_TARGETS = 2;
 var MAGI_CLUSTER_JACCARD = 0.4;
@@ -7739,7 +7792,7 @@ function computeMagiCleanupTargets(replicaTasks) {
 function resolveMagiAutoCleanupMode(ctx, perCallOverride) {
   if (perCallOverride === true) return "stop_and_delete";
   if (perCallOverride === false) return "preserve";
-  return (0, import_daemon_core7.resolveMagiSessionCleanupMode)(ctx.mesh?.policy?.magiSessionCleanup);
+  return (0, import_daemon_core8.resolveMagiSessionCleanupMode)(ctx.mesh?.policy?.magiSessionCleanup);
 }
 async function cleanupMagiAutoLaunchedSessions(ctx, args) {
   if (args.mode === "preserve") return null;
@@ -8306,7 +8359,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
 }
 
 // src/tools/mesh-tools-session.ts
-var import_daemon_core8 = require("@adhdev/daemon-core");
+var import_daemon_core9 = require("@adhdev/daemon-core");
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
   return {
@@ -9170,7 +9223,7 @@ async function meshLaunchSession(ctx, args) {
           supportedProviders: slotProviders
         }, null, 2);
       }
-      const explicitBlock = (0, import_daemon_core8.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+      const explicitBlock = (0, import_daemon_core9.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
       if (explicitBlock) {
         explicitTypeQuotaWarning = {
           quotaWarning: `Provider '${requestedType}' on node '${args.node_id}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly \u2014 the session may fail immediately if the provider rejects on quota.`,
@@ -9208,7 +9261,7 @@ async function meshLaunchSession(ctx, args) {
         failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
       }
       if (detectedCandidates.length) {
-        const ranked = (0, import_daemon_core8.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+        const ranked = (0, import_daemon_core9.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
         if (ranked.clear.length) {
           resolvedProviderType = ranked.clear[0];
         } else {
@@ -11401,6 +11454,9 @@ async function startMcpServer(opts) {
         switch (name) {
           case "mesh_status":
             text = await meshStatus(meshCtx, a);
+            break;
+          case "mesh_route_preview":
+            text = await meshRoutePreview(meshCtx, a);
             break;
           case "mesh_list_nodes":
             text = await meshListNodes(meshCtx);

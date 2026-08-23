@@ -55,6 +55,35 @@ export const MESH_STATUS_TOOL = {
     },
 };
 
+export const MESH_ROUTE_PREVIEW_TOOL = {
+    name: 'mesh_route_preview',
+    description: 'Preview where a hypothetical task would route, and why, from the current in-memory mesh/queue/quota-facts snapshot. Read-only and fetch-free: it does not enqueue, write, probe CLIs, or refresh quota. Returns the full unbounded slot breakdown (capacity-first order, hard difficulty floor, fitness components, quota bonus with zero reason, gate outcome, and Stage 3 quota reordering). Capacity is a point-in-time live queue reading and can change immediately after the response.',
+    inputSchema: {
+        type: 'object' as const,
+        required: ['difficulty'],
+        properties: {
+            difficulty: {
+                type: 'string' as const,
+                enum: ['easy', 'medium', 'difficult', 'freeform'],
+                description: 'Hypothetical task difficulty. Classified tasks enforce the hard difficulty floor; freeform contributes zero on every difficulty score axis.',
+            },
+            required_tags: {
+                type: 'array' as const,
+                items: { type: 'string' as const },
+                description: 'Optional capability tags the hypothetical task requires.',
+            },
+            readonly: {
+                type: 'boolean' as const,
+                description: 'Whether to preview read-only scheduling semantics, including the reserved-last-slot capacity rule.',
+            },
+            target_node_id: {
+                type: 'string' as const,
+                description: 'Optional node pin. When omitted, preview all eligible nodes in scheduling order.',
+            },
+        },
+    },
+};
+
 export const MESH_LIST_NODES_TOOL = {
     name: 'mesh_list_nodes',
     description: 'List all nodes in the mesh with their capabilities, platform, and workspace paths.',
@@ -1418,6 +1447,7 @@ export const MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
 
 export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
+    MESH_ROUTE_PREVIEW_TOOL,
     MESH_LIST_NODES_TOOL,
     // GRAPH-ORCHESTRATION Phase F — batch BEFORE task. Registry order is what a
     // client that lists tools without ranking sees first, so the default enqueue

@@ -20,6 +20,7 @@
  */
 export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_status',
+    'mesh_route_preview',
     'mesh_list_nodes',
     // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
     'mesh_enqueue_batch',

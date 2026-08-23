@@ -177,6 +177,7 @@ export { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
 // public `./tools/mesh-tools.js` import path (server.ts, help.ts) is unchanged.
 export {
     MESH_STATUS_TOOL,
+    MESH_ROUTE_PREVIEW_TOOL,
     MESH_LIST_NODES_TOOL,
     MESH_ENQUEUE_TASK_TOOL,
     MESH_VIEW_QUEUE_TOOL,

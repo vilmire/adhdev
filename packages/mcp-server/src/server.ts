@@ -37,7 +37,7 @@ import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, MESH_PLAN_ONBOARDING_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL,
-  meshStatus, meshListNodes, meshSendTask, meshReadChat,
+  meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
   meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshGraphView, meshGraphGateClaim, meshGraphGateRelease, meshGraphGateAbandon,
   meshReadDebug, meshReadTerminal, meshSendKeys,
@@ -232,6 +232,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         let text: string;
         switch (name) {
           case 'mesh_status': text = await meshStatus(meshCtx, a as any); break;
+          case 'mesh_route_preview': text = await meshRoutePreview(meshCtx, a as any); break;
           case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
           case 'mesh_enqueue_task': text = await meshEnqueueTask(meshCtx, a as any); break;
           case 'mesh_enqueue_batch': text = await meshEnqueueBatch(meshCtx, a as any); break;

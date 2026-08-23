@@ -330,10 +330,11 @@ export function orderSlotsForProviderSelection(
     node: any,
     task: FitnessTask,
     quotaBonusByProvider?: Record<string, number>,
+    meshNodes?: readonly unknown[],
 ): NodeCapabilitySlot[] {
     return [...slotsMeetingTaskDifficultyFloor(node, slots, task)].sort((a, b) => {
-        const capDelta = Number(slotHasCapacity(meshId, nodeId, node, b))
-            - Number(slotHasCapacity(meshId, nodeId, node, a));
+        const capDelta = Number(slotHasCapacity(meshId, nodeId, node, b, meshNodes))
+            - Number(slotHasCapacity(meshId, nodeId, node, a, meshNodes));
         if (capDelta !== 0) return capDelta; // slots with headroom first
         return scoreSlotForTask(b, task, quotaBonusByProvider?.[b.provider] ?? 0)
             - scoreSlotForTask(a, task, quotaBonusByProvider?.[a.provider] ?? 0);

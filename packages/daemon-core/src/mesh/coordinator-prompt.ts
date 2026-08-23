@@ -1058,6 +1058,7 @@ const TOOLS_SECTION = `## Available Tools
 | Tool | Purpose |
 |------|---------|
 | \`mesh_status\` | Nodes' health, git state, sessions, branch convergence |
+| \`mesh_route_preview\` | Explain a hypothetical difficulty/tags/readonly/node route from the current point-in-time capacity + quota-facts snapshot (read-only, fetch-free) |
 | \`mesh_list_nodes\` | List nodes with workspace paths |
 | \`mesh_enqueue_batch\` | **DEFAULT enqueue surface** for a plan with two or more known graph steps. Atomically enqueues a dependency-wired task set; \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Carries the full graph surface: \`inputs_from\`, \`run_if\`, \`gates\` + \`gated_by\`, \`workspaces\` + \`workspace_ref\` |
 | \`mesh_enqueue_task\` | SINGLE-TASK FALLBACK — one ready task with no declarable downstream step; idle nodes auto-claim |
