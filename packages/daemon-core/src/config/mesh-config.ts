@@ -6,7 +6,7 @@
  * uses this file as the single source of truth.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { randomBytes, randomUUID } from 'crypto';
 import { shortHash } from '../system/hash.js';
@@ -35,29 +35,125 @@ function getMeshConfigPath(): string {
     return join(getConfigDir(), 'meshes.json');
 }
 
-function loadMeshConfig(options: { persistMigrations?: boolean } = {}): LocalMeshConfig {
+// ─── Write serialization (lockless read-modify-write fix) ─────────────────
+//
+// Every mutator below is a read-modify-write over the WHOLE meshes.json
+// document, and every save is a whole-file overwrite. Two writers on the same
+// machine interleaving (observed live: clone_mesh_node's addNode against
+// apply_mesh_host_join; and plan_mesh_onboarding's eager-migration persist
+// rewriting a copy loaded BEFORE nodes were added — updatedAt 15:50:06 older
+// than nodes stamped 15:50:13/15:50:31) is a last-writer-wins overwrite that
+// silently drops the other writer's entries. Node-level fixes:
+//   1. every mutator's load→mutate→save span runs under a cross-process
+//      mkdir lock (withMeshConfigWriteLock), so a writer always reads what the
+//      previous writer committed;
+//   2. the save itself is atomic (tmp sibling + rename), so a reader never
+//      sees a torn half-written file.
+// The lock is best-effort: on acquisition timeout the write proceeds unlocked
+// (degrades to the pre-fix behavior) rather than wedging the registry, and a
+// lock abandoned by a crashed process is broken after STALE_MS.
+
+const MESH_CONFIG_LOCK_WAIT_MS = 2000;
+const MESH_CONFIG_LOCK_STALE_MS = 15_000;
+const MESH_CONFIG_LOCK_POLL_MS = 25;
+
+// In-process reentrancy: loadMeshConfig's eager-migration persist runs INSIDE
+// mutators that already hold the lock. Node is single-threaded and every
+// writer here is synchronous, so a plain boolean is a correct guard.
+let meshConfigLockHeldInProcess = false;
+
+function sleepBlockingMs(ms: number): void {
+    if (ms <= 0) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireMeshConfigLock(): (() => void) | null {
+    const lockPath = `${getMeshConfigPath()}.lock`;
+    const deadline = Date.now() + MESH_CONFIG_LOCK_WAIT_MS;
+    while (Date.now() <= deadline) {
+        try {
+            mkdirSync(lockPath);
+            return () => {
+                try {
+                    rmSync(lockPath, { recursive: true, force: true });
+                } catch {
+                    // Ignore lock cleanup failures.
+                }
+            };
+        } catch (error: any) {
+            if (error?.code !== 'EEXIST') return null;
+            try {
+                const stat = statSync(lockPath);
+                if (Date.now() - stat.mtimeMs > MESH_CONFIG_LOCK_STALE_MS) {
+                    // Abandoned by a crashed writer; break it.
+                    rmSync(lockPath, { recursive: true, force: true });
+                    continue;
+                }
+            } catch {
+                // Lock disappeared between stat attempts; retry immediately.
+                continue;
+            }
+            sleepBlockingMs(MESH_CONFIG_LOCK_POLL_MS);
+        }
+    }
+    return null;
+}
+
+/**
+ * Run a full load→mutate→save span under the cross-process meshes.json lock.
+ * Reentrant within this process (see meshConfigLockHeldInProcess). When the
+ * lock cannot be acquired the span still runs — a slow or wedged peer must
+ * degrade write isolation, never block mesh operations outright.
+ */
+function withMeshConfigWriteLock<T>(fn: () => T): T {
+    if (meshConfigLockHeldInProcess) return fn();
+    const release = acquireMeshConfigLock();
+    if (!release) return fn();
+    meshConfigLockHeldInProcess = true;
+    try {
+        return fn();
+    } finally {
+        meshConfigLockHeldInProcess = false;
+        release();
+    }
+}
+
+/** Raw read of meshes.json: no migration, no persist, never throws. */
+function readMeshConfigFile(): LocalMeshConfig {
     const path = getMeshConfigPath();
     if (!existsSync(path)) return { meshes: [] };
     try {
         const raw = JSON.parse(readFileSync(path, 'utf-8'));
         if (!raw || !Array.isArray(raw.meshes)) return { meshes: [] };
-        const config = raw as LocalMeshConfig;
-        const migrated = migrateLoadedMeshConfig(config);
-        // Persist eagerly when the on-load migration changed anything, so the
-        // dead field is gone from disk even on a pure-read path (mesh_status /
-        // mesh_list_nodes) that never otherwise mutates the config. Best-effort:
-        // a write failure (e.g. read-only fs) must not break reads, so swallow.
-        if (migrated && options.persistMigrations !== false) {
-            try {
-                saveMeshConfig(config);
-            } catch {
-                // keep the in-memory strip; disk converges on the next mutating op
-            }
-        }
-        return config;
+        return raw as LocalMeshConfig;
     } catch {
         return { meshes: [] };
     }
+}
+
+function loadMeshConfig(options: { persistMigrations?: boolean } = {}): LocalMeshConfig {
+    const config = readMeshConfigFile();
+    const migrated = migrateLoadedMeshConfig(config);
+    // Persist eagerly when the on-load migration changed anything, so the
+    // dead field is gone from disk even on a pure-read path (mesh_status /
+    // mesh_list_nodes) that never otherwise mutates the config. Best-effort:
+    // a write failure (e.g. read-only fs) must not break reads, so swallow.
+    if (migrated && options.persistMigrations !== false) {
+        try {
+            // RE-READ under the write lock and re-migrate the fresh copy.
+            // Persisting the copy loaded above would itself be a lockless
+            // read-modify-write: a peer's commit landing between our read and
+            // our save would be overwritten with the stale copy (the exact
+            // 2026-08-22 live evidence this module's lock now fixes).
+            withMeshConfigWriteLock(() => {
+                const fresh = readMeshConfigFile();
+                if (migrateLoadedMeshConfig(fresh)) saveMeshConfig(fresh);
+            });
+        } catch {
+            // keep the in-memory strip; disk converges on the next mutating op
+        }
+    }
+    return config;
 }
 
 /**
@@ -250,7 +346,12 @@ export function normalizeCapabilityTags(value: unknown): string[] | undefined {
 
 function saveMeshConfig(config: LocalMeshConfig): void {
     const path = getMeshConfigPath();
-    writeFileSync(path, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    // Atomic publish: write a per-process tmp sibling, then rename over the
+    // target — a concurrent reader never sees a torn, half-written file.
+    // (Overwrite ORDERING between writers is the write lock's job, not this.)
+    const tmpPath = `${path}.tmp-${process.pid}`;
+    writeFileSync(tmpPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    renameSync(tmpPath, path);
 }
 
 // ─── Repo Identity Normalization ────────────────
@@ -346,7 +447,11 @@ export interface CreateMeshOptions {
     hostDaemonId?: string;
 }
 
-export function createMesh(opts: CreateMeshOptions): LocalMeshEntry {
+export function createMesh(...args: Parameters<typeof createMeshUnlocked>): ReturnType<typeof createMeshUnlocked> {
+    return withMeshConfigWriteLock(() => createMeshUnlocked(...args));
+}
+
+function createMeshUnlocked(opts: CreateMeshOptions): LocalMeshEntry {
     const config = loadMeshConfig();
 
     if (config.meshes.length >= 20) {
@@ -389,7 +494,11 @@ export interface UpdateMeshOptions {
     meshHost?: RepoMeshHostMetadata;
 }
 
-export function updateMesh(meshId: string, opts: UpdateMeshOptions): LocalMeshEntry | undefined {
+export function updateMesh(...args: Parameters<typeof updateMeshUnlocked>): ReturnType<typeof updateMeshUnlocked> {
+    return withMeshConfigWriteLock(() => updateMeshUnlocked(...args));
+}
+
+function updateMeshUnlocked(meshId: string, opts: UpdateMeshOptions): LocalMeshEntry | undefined {
     const config = loadMeshConfig();
     const mesh = config.meshes.find(m => m.id === meshId);
     if (!mesh) return undefined;
@@ -405,7 +514,11 @@ export function updateMesh(meshId: string, opts: UpdateMeshOptions): LocalMeshEn
     return mesh;
 }
 
-export function deleteMesh(meshId: string): boolean {
+export function deleteMesh(...args: Parameters<typeof deleteMeshUnlocked>): ReturnType<typeof deleteMeshUnlocked> {
+    return withMeshConfigWriteLock(() => deleteMeshUnlocked(...args));
+}
+
+function deleteMeshUnlocked(meshId: string): boolean {
     const config = loadMeshConfig();
     const idx = config.meshes.findIndex(m => m.id === meshId);
     if (idx === -1) return false;
@@ -464,6 +577,12 @@ export interface ConfigureMeshHostPairingOptions {
 }
 
 export function configureMeshHostPairing(
+    ...args: Parameters<typeof configureMeshHostPairingUnlocked>
+): ReturnType<typeof configureMeshHostPairingUnlocked> {
+    return withMeshConfigWriteLock(() => configureMeshHostPairingUnlocked(...args));
+}
+
+function configureMeshHostPairingUnlocked(
     meshId: string,
     opts: ConfigureMeshHostPairingOptions,
 ): { mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; hostAddress: string } | undefined {
@@ -501,6 +620,12 @@ export interface CreateMeshHostPairingTokenOptions {
 }
 
 export function createMeshHostPairingToken(
+    ...args: Parameters<typeof createMeshHostPairingTokenUnlocked>
+): ReturnType<typeof createMeshHostPairingTokenUnlocked> {
+    return withMeshConfigWriteLock(() => createMeshHostPairingTokenUnlocked(...args));
+}
+
+function createMeshHostPairingTokenUnlocked(
     meshId: string,
     opts: CreateMeshHostPairingTokenOptions = {},
 ): { mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; token: string; tokenId: string; expiresAt?: string } | undefined {
@@ -551,6 +676,12 @@ export interface ApplyMeshHostJoinOptions {
 }
 
 export function applyMeshHostJoinRequest(
+    ...args: Parameters<typeof applyMeshHostJoinRequestUnlocked>
+): ReturnType<typeof applyMeshHostJoinRequestUnlocked> {
+    return withMeshConfigWriteLock(() => applyMeshHostJoinRequestUnlocked(...args));
+}
+
+function applyMeshHostJoinRequestUnlocked(
     meshId: string,
     opts: ApplyMeshHostJoinOptions,
 ): { accepted: true; mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; node: LocalMeshNodeEntry; tokenId: string } | { accepted: false; mesh?: LocalMeshEntry; meshHost?: RepoMeshHostMetadata; tokenId?: string; reason: string } | undefined {
@@ -666,6 +797,12 @@ export interface SetMeshHostPinResult {
  * exactly one node carries the flag after a forced re-home.
  */
 export function setMeshHostPin(
+    ...args: Parameters<typeof setMeshHostPinUnlocked>
+): ReturnType<typeof setMeshHostPinUnlocked> {
+    return withMeshConfigWriteLock(() => setMeshHostPinUnlocked(...args));
+}
+
+function setMeshHostPinUnlocked(
     meshId: string,
     opts: { hostDaemonId?: string; hostNodeId?: string; hostAddress?: string; force?: boolean; now?: string },
 ): SetMeshHostPinResult | undefined {
@@ -766,6 +903,12 @@ export function setMeshHostPin(
 }
 
 export function markMeshHostPairingJoined(
+    ...args: Parameters<typeof markMeshHostPairingJoinedUnlocked>
+): ReturnType<typeof markMeshHostPairingJoinedUnlocked> {
+    return withMeshConfigWriteLock(() => markMeshHostPairingJoinedUnlocked(...args));
+}
+
+function markMeshHostPairingJoinedUnlocked(
     meshId: string,
     opts: { hostDaemonId?: string; hostNodeId?: string; joinedAt?: string; token?: string; tokenId?: string },
 ): { mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata } | undefined {
@@ -822,7 +965,11 @@ export interface AddNodeOptions {
     id?: string;
 }
 
-export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntry | undefined {
+export function addNode(...args: Parameters<typeof addNodeUnlocked>): ReturnType<typeof addNodeUnlocked> {
+    return withMeshConfigWriteLock(() => addNodeUnlocked(...args));
+}
+
+function addNodeUnlocked(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntry | undefined {
     const config = loadMeshConfig();
     const mesh = config.meshes.find(m => m.id === meshId);
     if (!mesh) return undefined;
@@ -891,7 +1038,11 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
     return node;
 }
 
-export function removeNode(meshId: string, nodeId: string): boolean {
+export function removeNode(...args: Parameters<typeof removeNodeUnlocked>): ReturnType<typeof removeNodeUnlocked> {
+    return withMeshConfigWriteLock(() => removeNodeUnlocked(...args));
+}
+
+function removeNodeUnlocked(meshId: string, nodeId: string): boolean {
     const config = loadMeshConfig();
     const mesh = config.meshes.find(m => m.id === meshId);
     if (!mesh) return false;
@@ -909,6 +1060,12 @@ export function removeNode(meshId: string, nodeId: string): boolean {
 }
 
 export function updateNode(
+    ...args: Parameters<typeof updateNodeUnlocked>
+): ReturnType<typeof updateNodeUnlocked> {
+    return withMeshConfigWriteLock(() => updateNodeUnlocked(...args));
+}
+
+function updateNodeUnlocked(
     meshId: string,
     nodeId: string,
     opts: {
@@ -1212,7 +1369,11 @@ export function getMagiKindPanel(kind: string, meshId?: string): MagiSlot[] | un
  * node list, so a slot can no longer point at a node the mesh does not have.
  * Returns the normalized, persisted slots.
  */
-export function setMagiKindPanel(kind: string, slots: unknown, meshId?: string): MagiSlot[] {
+export function setMagiKindPanel(...args: Parameters<typeof setMagiKindPanelUnlocked>): ReturnType<typeof setMagiKindPanelUnlocked> {
+    return withMeshConfigWriteLock(() => setMagiKindPanelUnlocked(...args));
+}
+
+function setMagiKindPanelUnlocked(kind: string, slots: unknown, meshId?: string): MagiSlot[] {
     const key = normalizeMagiTaskKindKey(kind);
     const stored = loadMeshConfig();
     const mesh = resolveScopedMesh(stored, meshId);
@@ -1234,7 +1395,11 @@ export function setMagiKindPanel(kind: string, slots: unknown, meshId?: string):
 }
 
 /** Remove one task_kind's binding from one mesh. True when a binding was removed. */
-export function removeMagiKindPanel(kind: string, meshId?: string): boolean {
+export function removeMagiKindPanel(...args: Parameters<typeof removeMagiKindPanelUnlocked>): ReturnType<typeof removeMagiKindPanelUnlocked> {
+    return withMeshConfigWriteLock(() => removeMagiKindPanelUnlocked(...args));
+}
+
+function removeMagiKindPanelUnlocked(kind: string, meshId?: string): boolean {
     let key: MagiTaskKind;
     try { key = normalizeMagiTaskKindKey(kind); } catch { return false; }
     const stored = loadMeshConfig();
@@ -1314,7 +1479,11 @@ export function getDifficultyBrains(meshId?: string): DifficultyBrainMap {
  * getDifficultyBrains falls back to the defaults again for it — other meshes are
  * untouched either way. Returns the normalized, persisted map.
  */
-export function setDifficultyBrains(map: unknown, meshId?: string): DifficultyBrainMap {
+export function setDifficultyBrains(...args: Parameters<typeof setDifficultyBrainsUnlocked>): ReturnType<typeof setDifficultyBrainsUnlocked> {
+    return withMeshConfigWriteLock(() => setDifficultyBrainsUnlocked(...args));
+}
+
+function setDifficultyBrainsUnlocked(map: unknown, meshId?: string): DifficultyBrainMap {
     const normalized = normalizeDifficultyBrainMap(map);
     const stored = loadMeshConfig();
     const mesh = resolveScopedMesh(stored, meshId);
@@ -1411,7 +1580,11 @@ export function getMeshQuotaRouting(meshId?: string): RepoMeshQuotaRoutingPolicy
  * readers fall back to DEFAULT_QUOTA_ROUTING_POLICY. Returns the normalized,
  * persisted overrides.
  */
-export function setMeshQuotaRouting(input: unknown, meshId?: string): RepoMeshQuotaRoutingPolicy {
+export function setMeshQuotaRouting(...args: Parameters<typeof setMeshQuotaRoutingUnlocked>): ReturnType<typeof setMeshQuotaRoutingUnlocked> {
+    return withMeshConfigWriteLock(() => setMeshQuotaRoutingUnlocked(...args));
+}
+
+function setMeshQuotaRoutingUnlocked(input: unknown, meshId?: string): RepoMeshQuotaRoutingPolicy {
     const overrides = validateQuotaRoutingOverrides(input);
     const stored = loadMeshConfig();
     const mesh = resolveScopedMesh(stored, meshId);
