@@ -1497,7 +1497,7 @@ export function splitTemplateRoot(template: string): { root: string; segments: s
  * Accepts posix- or native-separated templates; decomposition happens in
  * posix template space via splitTemplateRoot.
  */
-function expandDirGlob(template: string): string[] {
+function expandDirGlobUncached(template: string): string[] {
     const { root, segments } = splitTemplateRoot(template);
     let dirs: string[] = [root];
     for (const seg of segments) {
@@ -1528,6 +1528,98 @@ function expandDirGlob(template: string): string[] {
         dirs = next;
     }
     return dirs;
+}
+
+// ─── GLOB-EXPANSION MEMO ─────────────────────────────────────────────────────
+//
+// Why: resolveJsonlSourcePathDetailed falls through up to three glob-walking
+// pickers in ONE status tick (:646-669 — exact pick, then session-bound, then
+// newest-recent), and each re-walks the identical tree. On the measured machine
+// `~/.claude/projects` holds 579 dirs / 2,285 transcripts, so one pass costs
+// ~26ms warm and the tick paid it three times over. The status reporter runs
+// every 5s per live CLI session, so the waste scales with session count.
+//
+// expandDirGlobUncached is a pure function of the template string (dirs on
+// disk in, dir list out), which is what makes memoizing it safe.
+//
+// TTL is the real mechanism, not mtime. Directory mtime only reflects changes
+// to a directory's DIRECT children, so a validity check anchored on the glob
+// root cannot see a new session appear deeper in a multi-level template:
+// `~/.claude/projects/*` (1 level) would be caught, but kimi's
+// `~/.kimi-code/sessions/*/session_*/agents/main` (3 levels) never would — a
+// new session would stay invisible for as long as the entry lived. A TTL
+// shorter than the 5s tick sidesteps that entirely: every tick re-walks at
+// least once, so worst-case staleness for a new session is bounded by the TTL
+// and never by the depth of the template.
+const GLOB_CACHE_TTL_MS = 3_000;
+const GLOB_CACHE_MAX_ENTRIES = 512;
+// Namespaced so a key can never collide with a differently-derived cache key
+// added later. enumerateSessionFiles passes a fully wildcarded template while
+// the session-bound pickers pass an expandPath() result with a concrete
+// session id and date baked in; both are complete keys on their own, and the
+// prefix keeps the two families structurally separate rather than relying on
+// their strings happening never to coincide.
+const GLOB_CACHE_PREFIX = 'glob:';
+
+interface GlobCacheEntry {
+    dirs: string[];
+    expiresAtMs: number;
+}
+
+const globCache = new Map<string, GlobCacheEntry>();
+let globCacheHits = 0;
+let globCacheMisses = 0;
+
+/** Observability for the memo — asserted by tests, surfaced for perf work. */
+export function getGlobCacheStats(): { hits: number; misses: number; size: number } {
+    return { hits: globCacheHits, misses: globCacheMisses, size: globCache.size };
+}
+
+/**
+ * Test hook: drop the memo (and its counters).
+ *
+ * The cache is module-global, so without this a suite would inherit whatever a
+ * previous test left behind — and vitest reuses the process across files.
+ */
+export function __clearGlobCacheForTest(): void {
+    globCache.clear();
+    globCacheHits = 0;
+    globCacheMisses = 0;
+}
+
+function pruneGlobCache(nowMs: number): void {
+    for (const [key, entry] of globCache) {
+        if (entry.expiresAtMs <= nowMs) globCache.delete(key);
+    }
+    // Bound the map even when nothing has expired: `{yyyy}{mm}{dd}` in a
+    // template mints a fresh key every calendar day, and each live session
+    // contributes its own session-bound key, so the key space grows without a
+    // cap. Evict oldest-first (Map preserves insertion order).
+    while (globCache.size >= GLOB_CACHE_MAX_ENTRIES) {
+        const oldest = globCache.keys().next();
+        if (oldest.done) break;
+        globCache.delete(oldest.value);
+    }
+}
+
+/**
+ * Memoized `expandDirGlobUncached`. Returns a defensive copy: callers push into
+ * and sort their own result arrays, and handing out the cached instance would
+ * let one caller corrupt the next one's view.
+ */
+function expandDirGlob(template: string): string[] {
+    const key = `${GLOB_CACHE_PREFIX}${template}`;
+    const now = Date.now();
+    const hit = globCache.get(key);
+    if (hit && hit.expiresAtMs > now) {
+        globCacheHits += 1;
+        return hit.dirs.slice();
+    }
+    globCacheMisses += 1;
+    const dirs = expandDirGlobUncached(template);
+    pruneGlobCache(now);
+    globCache.set(key, { dirs, expiresAtMs: now + GLOB_CACHE_TTL_MS });
+    return dirs.slice();
 }
 
 function walkAllDirs(root: string, out: string[]): void {
