@@ -426,10 +426,13 @@ async function defaultRemoveWorktree(req: WorkspaceRemoveRequest): Promise<Works
  * re-stamps 'complete'. This reuses the established guard rather than inventing
  * a second half-ready predicate.
  *
- * Best-effort by contract: a mesh with no config twin (pure inline/cloud mesh)
- * makes addNode a no-op, and a daemon with no router has no inline cache. The
- * saga must not fail because membership publication failed — the worktree
- * itself is already correct — so every failure is swallowed and reported false.
+ * Best-effort by contract: a daemon with no router has no inline cache and a
+ * mesh with no config twin makes addNode a no-op. The saga must not fail because
+ * membership publication failed — the worktree itself is already correct — so
+ * every failure is swallowed and reported false (the saga LOGS a false return;
+ * it is never silent). A pure-inline mesh with a cold cache is NOT left
+ * unpublished: the inline half hydrates a shell mesh and upserts into it (see
+ * the COLD/COLD HYDRATE-ON-MISS branch below).
  */
 async function registerWorkspaceNode(
     req: WorkspaceNodeRegistrationRequest,
@@ -519,6 +522,25 @@ async function registerWorkspaceNode(
     try {
         if (cachedInline && registry?.updateInlineMeshNode) {
             registry.updateInlineMeshNode(req.meshId, cachedInline, node);
+            published = true;
+        } else if (!cachedInline && !mesh && registry?.updateInlineMeshNode) {
+            // COLD/COLD HYDRATE-ON-MISS: pure-inline (cloud) mesh — no config twin
+            // — whose inline cache was never warmed. Gating the inline write on
+            // cache warmth made the publish decision depend on state the saga does
+            // not control (whether some earlier read happened to warm the cache),
+            // and the reconcile loop cannot close that window either: its
+            // file→cache merge (mesh-reconcile-loop.ts PHASE 0.5) is itself gated
+            // on a warm cache. So BOTH halves skipped and published:false was
+            // swallowed, stranding a real on-disk worktree with no membership.
+            // Hydrate a minimal shell and upsert through the same seam the
+            // router's own hydrate-on-miss paths use
+            // (markWorktreeBootstrapTerminalState / seedRemoteClonedWorktreeNode).
+            // Deliberately NOT done when a config twin exists: warming a cold
+            // cache for a file-backed mesh would flip its reads from always-fresh
+            // 'local_config' to a snapshot (the exact regression PHASE 0.5's
+            // warm-gate avoids), and the durable half above already published.
+            const shell = { id: req.meshId, nodes: [] as any[], updatedAt: new Date().toISOString() };
+            registry.updateInlineMeshNode(req.meshId, shell, node);
             published = true;
         }
     } catch { /* best-effort mirror */ }

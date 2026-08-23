@@ -476,6 +476,12 @@ async function prepareClaimedIntent(
  * real resource and it is already correct, so a registry write that fails (no
  * config twin, no router/inline cache, a mocked mesh-config in tests) must not
  * fail or retry-loop the saga. It is logged, never thrown.
+ *
+ * A FALSE return is logged too: it means neither half published (no config
+ * twin AND no inline-cache seam), leaving a real on-disk worktree with no
+ * membership entry — previously this was swallowed silently, which is exactly
+ * how the "worktree on disk, absent from mesh_list_nodes" defect class went
+ * unnoticed until an operator tripped over it.
  */
 async function registerWorkspaceNodeBestEffort(
     intent: MeshGraphWorkspaceIntentRow,
@@ -484,7 +490,7 @@ async function registerWorkspaceNodeBestEffort(
     bootstrapStatus: 'running' | 'complete',
 ): Promise<void> {
     try {
-        await ports.registerNode({
+        const published = await ports.registerNode({
             meshId: intent.meshId,
             nodeId: created.nodeId,
             worktreePath: created.worktreePath,
@@ -492,6 +498,9 @@ async function registerWorkspaceNodeBestEffort(
             sourceNodeId: intent.sourceNodeId,
             bootstrapStatus,
         });
+        if (!published) {
+            LOG.warn('MeshGraphWorkspace', `node registration (${bootstrapStatus}) published NOTHING for ${intent.graphId}/${intent.workspaceRef}: node ${created.nodeId} exists on disk at ${created.worktreePath} but is in no membership view (mesh ${intent.meshId} has no config twin on this daemon and no inline-cache seam accepted it) — mesh_list_nodes will not show it`);
+        }
     } catch (e: any) {
         LOG.warn('MeshGraphWorkspace', `node registration (${bootstrapStatus}) failed for ${intent.graphId}/${intent.workspaceRef}: ${e?.message || e}`);
     }

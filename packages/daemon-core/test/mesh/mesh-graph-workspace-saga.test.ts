@@ -33,11 +33,15 @@ const meshConfigMocks = vi.hoisted(() => ({
     getMesh: vi.fn(),
     getMeshByRepo: vi.fn(),
     listMeshes: vi.fn(() => [] as any[]),
+    addNode: vi.fn(),
+    updateNode: vi.fn(),
 }));
 vi.mock('../../src/config/mesh-config.js', () => ({
     getMesh: meshConfigMocks.getMesh,
     getMeshByRepo: meshConfigMocks.getMeshByRepo,
     listMeshes: meshConfigMocks.listMeshes,
+    addNode: meshConfigMocks.addNode,
+    updateNode: meshConfigMocks.updateNode,
 }));
 
 import {
@@ -65,6 +69,7 @@ import {
     updateTaskStatus,
 } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { LOG } from '../../src/logging/logger.js';
 import type { MeshTaskGraphNodeRow } from '../../src/mesh/mesh-graph-types.js';
 import type { WorkspaceInspectReport } from '../../src/mesh/mesh-graph-workspace-safety.js';
 
@@ -81,6 +86,8 @@ function cleanup(id: string) {
     __resetMeshRuntimeStoreForTests();
     __resetMeshGraphTransitionRunnerForTests();
     meshConfigMocks.getMesh.mockReset();
+    meshConfigMocks.addNode.mockReset();
+    meshConfigMocks.updateNode.mockReset();
     for (const root of realGitRoots.splice(0)) {
         try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
@@ -1022,6 +1029,139 @@ describe('injection guard — registerNode option is wired, not discarded', () =
         const tags = buildMeshNodeCapabilityTags(captured);
         expect(tags).toContain('worktree=graph-z-ws');
         expect(tags).toContain('converge=refine');
+    });
+});
+
+// ── 9. P4 — publication is not gated on inline-cache warmth ─────────────────
+//
+// Regression pin for the cold/cold publish window: a pure-inline (cloud) mesh
+// has no config twin, so the durable half no-ops; and when this daemon's inline
+// cache was never warmed, the inline half used to no-op too (it was gated on
+// getCachedInlineMesh returning a hit). Both halves skipped, published:false
+// was silently swallowed, and the saga worktree stayed on disk with no
+// membership — the reconcile loop cannot close that window because its
+// file→cache merge is itself gated on a warm cache. The fix hydrates a shell
+// mesh and upserts through updateInlineMeshNode (the router's own
+// hydrate-on-miss pattern), and the saga LOGS a false return.
+
+describe('publish is not gated on inline-cache warmth (P4)', () => {
+    it('COLD/COLD repro: pure-inline mesh with a never-warmed cache still publishes (hydrate-on-miss shell)', async () => {
+        const { createDefaultWorkspaceSagaPorts } = await import('../../src/mesh/mesh-graph-workspace-ports.js');
+        const seen: Array<{ meshArg: any; node: any }> = [];
+        const registry = {
+            getCachedInlineMesh: () => undefined, // cache NEVER warmed
+            updateInlineMeshNode: (_m: string, mesh: any, node: any) => {
+                mesh.nodes.push(node);
+                seen.push({ meshArg: mesh, node });
+            },
+            removeInlineMeshNode: () => true,
+            invalidateAggregateMeshStatus: () => { /* noop */ },
+        };
+        meshConfigMocks.getMesh.mockReturnValue(undefined); // no config twin (cloud mesh)
+
+        const ports = createDefaultWorkspaceSagaPorts({ registry });
+        const published = await ports.registerNode({
+            meshId: 'mesh_cloud_cold', nodeId: 'node_ws_cold', worktreePath: '/tmp/ws-cold',
+            branchIdentity: 'graph-cold-ws', bootstrapStatus: 'running',
+        });
+
+        // Pre-fix both halves skipped: published stayed false and nothing was
+        // upserted. Reverting the hydrate-on-miss branch turns this red.
+        expect(published).toBe(true);
+        expect(seen).toHaveLength(1);
+        expect(seen[0].node.id).toBe('node_ws_cold');
+        expect(seen[0].node.isLocalWorktree).toBe(true);
+        expect(seen[0].node.worktreeBootstrap?.status).toBe('running');
+        expect(seen[0].meshArg.nodes).toContain(seen[0].node);
+    });
+
+    it('over-correction guard: a WARM cache still publishes into the existing cached object (no shell)', async () => {
+        const { createDefaultWorkspaceSagaPorts } = await import('../../src/mesh/mesh-graph-workspace-ports.js');
+        const cached = {
+            id: 'mesh_warm',
+            nodes: [{ id: 'base', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon_1', machineId: 'm1' }] as any[],
+        };
+        let seenMesh: any;
+        const registry = {
+            getCachedInlineMesh: () => cached,
+            updateInlineMeshNode: (_m: string, mesh: any, node: any) => {
+                seenMesh = mesh;
+                mesh.nodes.push(node);
+            },
+            removeInlineMeshNode: () => true,
+            invalidateAggregateMeshStatus: () => { /* noop */ },
+        };
+        meshConfigMocks.getMesh.mockReturnValue(undefined);
+
+        const ports = createDefaultWorkspaceSagaPorts({ registry });
+        const published = await ports.registerNode({
+            meshId: 'mesh_warm', nodeId: 'node_ws_warm', worktreePath: '/tmp/ws-warm',
+            branchIdentity: 'graph-warm-ws', bootstrapStatus: 'complete',
+        });
+
+        expect(published).toBe(true);
+        // Object identity pin: the write went into the live cache entry, not a
+        // freshly hydrated shell (which would discard every other cached node).
+        expect(seenMesh).toBe(cached);
+        expect(cached.nodes.map(n => n.id)).toEqual(['base', 'node_ws_warm']);
+        // Scheduling identity is still inherited from the cached source node.
+        const node = cached.nodes.find(n => n.id === 'node_ws_warm');
+        expect(node.daemonId).toBe('daemon_1');
+        expect(node.machineId).toBe('m1');
+    });
+
+    it('config-twin mesh with a COLD cache publishes durably and does NOT warm the inline cache', async () => {
+        const { createDefaultWorkspaceSagaPorts } = await import('../../src/mesh/mesh-graph-workspace-ports.js');
+        // Reconcile-loop PHASE 0.5 design constraint: never warm a cold cache for
+        // a file-backed mesh — that would flip its reads from always-fresh
+        // 'local_config' to a snapshot. The durable addNode half is the publish.
+        meshConfigMocks.getMesh.mockReturnValue({
+            id: 'mesh_file', name: 'm',
+            nodes: [{ id: 'base', workspace: '/repo', repoRoot: '/repo' }],
+        });
+        meshConfigMocks.addNode.mockReturnValue({ id: 'node_ws_file' });
+        const updateInline = vi.fn();
+        const registry = {
+            getCachedInlineMesh: () => undefined,
+            updateInlineMeshNode: updateInline,
+            removeInlineMeshNode: () => true,
+            invalidateAggregateMeshStatus: () => { /* noop */ },
+        };
+
+        const ports = createDefaultWorkspaceSagaPorts({ registry });
+        const published = await ports.registerNode({
+            meshId: 'mesh_file', nodeId: 'node_ws_file', worktreePath: '/tmp/ws-file',
+            branchIdentity: 'graph-file-ws', bootstrapStatus: 'running',
+        });
+
+        expect(published).toBe(true);
+        expect(meshConfigMocks.addNode).toHaveBeenCalledTimes(1);
+        expect(updateInline).not.toHaveBeenCalled();
+    });
+
+    it('published:false is surfaced as a warning — never swallowed silently', async () => {
+        const id = meshId('register_unpublished');
+        try {
+            seedGraphWithWorkspace(id);
+            const fake = createFakePorts();
+            const ports: WorkspaceSagaPorts = {
+                ...fake.ports,
+                registerNode: async () => false,
+            };
+            const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => { /* capture only */ });
+            const tick = await runWorkspaceSagaTick(id, ports);
+
+            // Still best-effort: the saga completes, the worktree is the real
+            // resource. But the silence is gone.
+            expect(tick.steps[0]?.sagaState).toBe('ready');
+            const surfacing = warnSpy.mock.calls
+                .map(([, msg]) => String(msg))
+                .filter(msg => msg.includes('published NOTHING'));
+            expect(surfacing.length).toBeGreaterThan(0);
+            expect(surfacing[0]).toContain(id);
+        } finally {
+            cleanup(id);
+        }
     });
 });
 
