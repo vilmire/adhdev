@@ -69,5 +69,12 @@ export function createCliAdapter(
         throw new Error(formatNoResolvableSpecError(provider.type, dir));
     }
     LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (${path.relative(dir || '', specPath) || specPath})`);
-    return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId);
+    // MANIFEST-SEND-DELAY: hand the manifest's own submit tuning to the adapter. Until
+    // now the manifest was consumed here purely as a carrier for _resolvedSpecPath and
+    // its `sendDelayMs` went nowhere on the spec path (its only reader died with the
+    // ProviderCliAdapter engine in 48e5ed1a) — so a provider could declare 1200ms and
+    // silently run at 200ms. The driver treats it as a floor, never a reduction.
+    return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
+        sendDelayMs: provider.sendDelayMs,
+    });
 }

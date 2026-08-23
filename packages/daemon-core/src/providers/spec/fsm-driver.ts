@@ -178,6 +178,22 @@ export interface SpecDriverOpts {
      * back to a per-instance short uid, which still groups one driver's lines together.
      */
     sessionId?: string;
+    /**
+     * MANIFEST-SEND-DELAY: the provider manifest's `sendDelayMs`, threaded in from
+     * route.ts so the spec path actually honours it. Before this it was DEAD on the
+     * spec path — its only reader belonged to the ProviderCliAdapter engine deleted
+     * in 48e5ed1a — which made manifests actively misleading: grok-cli declares
+     * `sendDelayMs: 1200` while its spec says 200, so it ran at 200 and an
+     * investigation into a grok submit failure was nearly waved off on the strength
+     * of the declared-but-unused 1200.
+     *
+     * It is a FLOOR, not an override: resolveSubmitDelayMs takes the max of this,
+     * the spec's `delay_ms_before_submit`, and the size-derived bonus. A manifest
+     * therefore can only ask for MORE settling time than the spec/heuristic already
+     * computed, never less — so wiring it cannot shorten any existing wait and
+     * cannot weaken the echo-gate that d7332b84 put in front of the submit key.
+     */
+    manifestSendDelayMs?: number;
 }
 
 function countNewlines(s: string): number {
@@ -322,13 +338,19 @@ const WIN32_ECHO_MAX_WAIT_MS = 20_000;
 //
 // Why grok and not claude/kimi on the same day: this is a race, not a per-provider
 // bug. Its margin is (echo+render time) vs (a fixed 200ms). grok's manifest asks
-// for 1200ms via `sendDelayMs`/`submitStrategy: wait_for_echo`, but BOTH fields are
-// dead on the spec path — they are only read by cli-adapters/provider-cli-config.ts,
+// for 1200ms via `sendDelayMs`/`submitStrategy: wait_for_echo`, but BOTH fields were
+// dead on the spec path — they were only read by cli-adapters/provider-cli-config.ts,
 // which belonged to the legacy ProviderCliAdapter engine deleted in 48e5ed1a. kimi
 // and opencode happen to carry delay_ms_before_submit: 1200 in their SPEC (the field
 // that is still live), which is why they clear the same payload; grok/claude/codex/
 // antigravity ship 200 and are all exposed. So the fix must be platform-general and
 // provider-general, not a grok special case.
+//
+// UPDATE (MANIFEST-SEND-DELAY): `sendDelayMs` is no longer dead — route.ts now threads
+// it in as SpecDriverOpts.manifestSendDelayMs and resolveSubmitDelayMs folds it into
+// its max(), so grok's declared 1200 is finally the value it runs at. `submitStrategy`
+// is deliberately still not consulted; see resolveEchoConfirmPolicy below for why
+// wiring it would be either a no-op or a regression.
 //
 // Fix: the win32 gate is not win32-specific in nature — it verifies an EFFECT
 // (body echoed, then agent left the composer) instead of guessing a duration. It is
@@ -351,6 +373,35 @@ export const VERIFIED_SUBMIT_MIN_CHARS = 512;
 export function shouldUseVerifiedSubmit(text: string, platform: NodeJS.Platform = process.platform): boolean {
     if (platform === 'win32') return true;
     return text.length >= VERIFIED_SUBMIT_MIN_CHARS;
+}
+
+/**
+ * MANIFEST-SUBMIT-STRATEGY — why the manifest's `submitStrategy` is NOT wired to
+ * the echo-gate, decided deliberately rather than overlooked.
+ *
+ * `submitStrategy: 'wait_for_echo'` means "confirm the text echoed before pressing
+ * Enter". That is precisely what scheduleVerifiedSubmit's echo-gate does, and since
+ * d7332b84 it runs unconditionally for every body at/above VERIFIED_SUBMIT_MIN_CHARS
+ * on BOTH platforms. So the two mechanisms are not complementary — they are the same
+ * guarantee, one declared and one implemented. Wiring the declaration on top yields:
+ *
+ *  - 'wait_for_echo' → a NO-OP. All 8 shipped manifests declare exactly this, and the
+ *    gate they are asking for is already running for them.
+ *  - 'immediate'     → a REGRESSION. It would let a manifest switch OFF the echo
+ *    verification that d7332b84 added to fix a silent submit failure — reintroducing
+ *    that defect for any provider carrying the schema's default. Note the JSON Schema
+ *    defaults this field to "immediate", so honouring it as an off-switch would break
+ *    every out-of-tree provider that simply omits the field.
+ *
+ * The safety property is therefore: echo verification is decided by BODY SIZE and
+ * PLATFORM (facts about the risk), never by provider self-declaration. This function
+ * exists to make that contract explicit and testable — it maps any declared strategy
+ * to whether verification may be skipped, and the answer is always "no".
+ */
+export function resolveEchoConfirmPolicy(
+    _submitStrategy?: 'wait_for_echo' | 'immediate',
+): { mayDisableEchoConfirm: false } {
+    return { mayDisableEchoConfirm: false };
 }
 
 // FIX-B-v2 — how a newline-bearing win32 body's OWN embedded newlines are written
@@ -382,7 +433,26 @@ function normalizeForEcho(s: string): string {
     return s.replace(/\s+/g, '');
 }
 
-export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text: string): number {
+/**
+ * The opening wait before the submit key, in ms.
+ *
+ * Three inputs, combined with max() so no source can shorten another:
+ *  - `specBeforeSubmit` — the spec's `send_message.delay_ms_before_submit`.
+ *  - `manifestSendDelayMs` — the provider manifest's `sendDelayMs` (MANIFEST-SEND-DELAY).
+ *    Previously dead on this path; see SpecDriverOpts.manifestSendDelayMs.
+ *  - the size-derived floor+bonus below.
+ *
+ * max() rather than precedence is deliberate: the size bonus exists because a
+ * multi-KB body needs more time than any static declaration anticipated, so a
+ * static manifest value must not be able to undercut it. Equally, a manifest that
+ * asks for longer than the spec wins. Providers that declare nothing are byte-for-byte
+ * unchanged, since an absent value contributes 0 to the max.
+ */
+export function resolveSubmitDelayMs(
+    specBeforeSubmit: number | undefined,
+    text: string,
+    manifestSendDelayMs?: number,
+): number {
     const lines = countNewlines(text);
     const linesBonus = Math.min(800, lines * 80);
     // LENGTH bonus (POSIX-ENTER-DROP). The line-count bonus alone misses the exact
@@ -395,7 +465,14 @@ export function resolveSubmitDelayMs(specBeforeSubmit: number | undefined, text:
     // sane opening wait before the gate starts polling.
     const lengthBonus = Math.min(800, Math.floor(text.length / 1000) * 200);
     const spec = typeof specBeforeSubmit === 'number' && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
-    return Math.max(spec, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
+    // Guard against a hostile/typo'd manifest: NaN and Infinity would poison the max
+    // (NaN silently, Infinity by hanging the send), so only finite positives count.
+    const manifest = typeof manifestSendDelayMs === 'number'
+        && Number.isFinite(manifestSendDelayMs)
+        && manifestSendDelayMs > 0
+        ? manifestSendDelayMs
+        : 0;
+    return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
 }
 
 /** Re-export of the shared surrogate-safe splitter so existing imports of
@@ -1479,7 +1556,7 @@ export class FsmDriver implements ISpecDriver {
         const sm = this.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
-        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text);
+        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.opts.manifestSendDelayMs);
 
         // win32 ConPTY submit: the text and the submit key (CR) must NOT be
         // combined into one PTY write — Ink-based TUIs (claude-cli) treat a
