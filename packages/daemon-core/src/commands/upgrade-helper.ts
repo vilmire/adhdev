@@ -384,6 +384,47 @@ export function execNpmCommandSync(
  * matches what the caller asked for is the caller's job (only the mandatory
  * path requires exact equality; a dist-tag lookup by definition returns
  * something different from the tag it was given).
+ *
+ * ## Cold-start resilience (win32 on-access AV scan)
+ *
+ * On Windows this spawns a PORTABLE `node.exe` running `npm-cli.js`
+ * (resolveSiblingNpmInvocation). Those files live outside the usual trusted
+ * locations, so Microsoft Defender's on-access scanner reads them end-to-end the
+ * FIRST time they are executed. Measured on a real user machine:
+ *
+ *   cold spawn 10,897ms  |  warm spawn 758ms  |  raw HTTPS HEAD 129ms
+ *
+ * The 10s timeout above therefore fires on the cold spawn and never on the warm
+ * one — the daemon-side upgrade dies before `npm install` is even reached, and
+ * the very next attempt succeeds. That is a ~14x spread, so NO fixed timeout can
+ * separate "AV is scanning" from "the registry is down": the scan cost scales
+ * with file count, disk speed and which AV is installed.
+ *
+ * The fix is to retry, because the retry is what the measurement already proves
+ * works — the second spawn hits a warm scanner cache. Deliberately NOT chosen:
+ *
+ *   - Raising the timeout: picks a new arbitrary number against a distribution
+ *     with no upper bound, and makes a genuinely dead registry hang that much
+ *     longer on every call.
+ *   - Querying the registry over plain HTTPS (129ms, very tempting): `npm view`
+ *     is not merely an HTTP GET. It resolves the full `.npmrc` hierarchy
+ *     (project / user / global / builtin) for `registry`, `@scope:registry`,
+ *     per-registry `_authToken` + `always-auth`, `proxy`/`https-proxy`/`noproxy`,
+ *     `strict-ssl` and custom `cafile`. Reimplementing that is how a private
+ *     registry or a corporate MITM proxy silently starts resolving against
+ *     public npm — a correctness and supply-chain regression far worse than the
+ *     latency it saves. (This is not hypothetical: an authenticated
+ *     `//registry.npmjs.org/:_authToken` + `always-auth=true` is present on
+ *     developer machines in this project today.) Keeping npm as the resolver
+ *     keeps one source of truth for registry identity.
+ *
+ * Retries are scoped to TIMEOUTS ONLY (`ETIMEDOUT`, or a SIGTERM kill, which is
+ * how execFileSync enforces `timeout`). A real failure — unpublished version,
+ * 404, auth rejection, DNS failure — exits non-zero WITHOUT `ETIMEDOUT` and is
+ * rethrown on the first attempt, so a dead registry still fails fast instead of
+ * being retried into a multiple of the timeout. A caller that opted out of the
+ * timeout entirely (the interactive CLI) can never time out, so it never
+ * retries either.
  */
 export function resolveNpmPublishedVersion(
   packageName: string,
@@ -395,31 +436,89 @@ export function resolveNpmPublishedVersion(
     stdio?: ExecFileSyncOptions['stdio'];
     /** Injection seam for tests; defaults to the shared execNpmCommandSync path. */
     execFileSync?: (file: string, args: readonly string[], options: Record<string, unknown>) => string | Buffer;
+    /**
+     * Extra attempts allowed after a TIMEOUT (not after a real failure).
+     * Defaults to 2 → at most 3 spawns. Set 0 to disable retrying.
+     */
+    timeoutRetries?: number;
+    /** Observability seam: called before each retry. Defaults to the upgrade log. */
+    onRetry?: (info: { attempt: number; attempts: number; timeoutMs: number; error: unknown }) => void;
   } = {},
 ): string {
   const args = ['view', `${packageName}@${tagOrVersion}`, 'version'];
+  const effectiveTimeout = 'timeout' in options ? options.timeout : 10_000;
   const execOptions: ExecFileSyncOptions = {
     encoding: 'utf-8',
-    ...('timeout' in options ? (options.timeout === undefined ? {} : { timeout: options.timeout }) : { timeout: 10_000 }),
+    ...(effectiveTimeout === undefined ? {} : { timeout: effectiveTimeout }),
     ...(options.stdio ? { stdio: options.stdio } : {}),
   };
 
-  if (options.execFileSync) {
-    // Mirror execNpmCommandSync's argv/option assembly so an injected runner
-    // observes exactly what the real one would have executed.
-    const runnerOptions = surface?.execOptions || getNpmExecOptions();
-    return String(options.execFileSync(
-      surface?.npmExecutable || 'npm',
-      [...(surface?.npmArgsPrefix || []), ...args],
-      {
-        ...execOptions,
-        ...runnerOptions,
-        ...(process.platform === 'win32' ? { windowsHide: true } : {}),
-      },
-    )).trim();
-  }
+  const runOnce = (): string => {
+    if (options.execFileSync) {
+      // Mirror execNpmCommandSync's argv/option assembly so an injected runner
+      // observes exactly what the real one would have executed.
+      const runnerOptions = surface?.execOptions || getNpmExecOptions();
+      return String(options.execFileSync(
+        surface?.npmExecutable || 'npm',
+        [...(surface?.npmArgsPrefix || []), ...args],
+        {
+          ...execOptions,
+          ...runnerOptions,
+          ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+        },
+      )).trim();
+    }
+    return String(execNpmCommandSync(args, execOptions, surface)).trim();
+  };
 
-  return String(execNpmCommandSync(args, execOptions, surface)).trim();
+  // No timeout configured → the spawn cannot be killed for slowness, so there is
+  // no cold-scan failure to recover from and retrying would only multiply a real
+  // error. Run exactly once, preserving the interactive CLI's behavior verbatim.
+  const retries = effectiveTimeout === undefined ? 0 : Math.max(0, options.timeoutRetries ?? 2);
+  const attempts = retries + 1;
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return runOnce();
+    } catch (error) {
+      lastError = error;
+      // Retry ONLY a timeout, and only while attempts remain. Anything else —
+      // a 404, an auth failure, an offline registry — is a real answer and is
+      // rethrown immediately so the caller still fails fast.
+      // `effectiveTimeout` is necessarily defined here: `retries` is forced to 0
+      // when it is undefined, so this branch is unreachable without a timeout.
+      if (attempt >= attempts || effectiveTimeout === undefined || !isSpawnTimeoutError(error)) throw error;
+      const info = { attempt, attempts, timeoutMs: effectiveTimeout, error };
+      if (options.onRetry) options.onRetry(info);
+      else {
+        appendUpgradeLog(
+          `npm view ${packageName}@${tagOrVersion} timed out after ${effectiveTimeout}ms `
+          + `(attempt ${attempt}/${attempts}); retrying. This is expected on the first run after `
+          + `install while on-access antivirus scans the bundled node/npm binaries.`,
+        );
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * True when a child process was killed for exceeding its `timeout`, as opposed
+ * to exiting on its own with a non-zero status.
+ *
+ * Node surfaces the kill as `code: 'ETIMEDOUT'`; it delivers the configured
+ * `killSignal` (default SIGTERM) and leaves `status` null, whereas a process
+ * that ran to completion and failed reports a numeric `status` and no
+ * `ETIMEDOUT`. Both shapes are checked because the `code` field is the
+ * documented contract while the signal is the observable mechanism, and a
+ * caller may override `killSignal`.
+ */
+function isSpawnTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; signal?: unknown; status?: unknown };
+  if (candidate.code === 'ETIMEDOUT') return true;
+  return typeof candidate.signal === 'string' && candidate.signal !== '' && candidate.status == null;
 }
 
 /**

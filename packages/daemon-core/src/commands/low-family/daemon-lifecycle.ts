@@ -90,7 +90,14 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
             );
 
             // Check the build track's dist-tag and resolve it to a concrete install version.
-            const latest = resolveNpmPublishedVersion(pkgName, npmTag, npmSurface);
+            // A first-run timeout here is the expected cost of on-access AV scanning the
+            // bundled node/npm binaries, not a fault — say so, so a slow upgrade reads as
+            // "warming up" in the log rather than as an unexplained stall.
+            const latest = resolveNpmPublishedVersion(pkgName, npmTag, npmSurface, {
+                onRetry: ({ attempt, attempts, timeoutMs }) => {
+                    LOG.info('Upgrade', `Version lookup timed out after ${timeoutMs}ms (attempt ${attempt}/${attempts}); retrying — first-run antivirus scanning of the bundled node/npm binaries is the usual cause.`);
+                },
+            });
             LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
             let currentInstalled: string | null = null;
             try {
