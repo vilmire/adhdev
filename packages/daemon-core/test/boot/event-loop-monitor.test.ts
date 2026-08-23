@@ -47,18 +47,25 @@ describe('startEventLoopMonitor', () => {
             logFn: (level, msg) => lines.push({ level, msg }),
         })
         try {
-            // Freeze the loop for ~80ms, synchronously — exactly the shape of
-            // the machine-saturation blackout, at test scale.
+            // Block the loop for ~80ms in one synchronous stretch — the
+            // self-blocked shape (this process burning CPU), at test scale.
             const until = Date.now() + 80
             while (Date.now() < until) { /* spin */ }
-            // Let a couple of monitor ticks fire post-freeze.
+            // Let a couple of monitor ticks fire post-stall.
             await new Promise(resolve => setTimeout(resolve, 90))
 
             const warns = lines.filter(l => l.level === 'warn')
             expect(warns.length).toBeGreaterThanOrEqual(1)
             expect(warns[0].msg).toMatch(/event-loop lag: drift=\d+ms/)
             expect(warns[0].msg).toContain('EXCEEDS 20ms')
-            expect(warns[0].msg).toContain('frozen')
+            // The WARN must offer the discriminator, not assert a cause. The
+            // old line claimed "machine saturation, not one slow handler"
+            // unconditionally, which is the opposite of what this test just
+            // produced: the loop was blocked by this process itself.
+            expect(warns[0].msg).toContain('selfCpu')
+            expect(warns[0].msg).toContain('blocked its own loop')
+            expect(warns[0].msg).toContain('machine saturation')
+            expect(warns[0].msg).not.toMatch(/frozen\/unscheduled \(machine saturation\), not one slow handler/)
         } finally {
             handle.stop()
         }

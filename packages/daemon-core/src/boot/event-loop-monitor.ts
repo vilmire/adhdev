@@ -10,12 +10,20 @@
 // have stopped") instead of reading a direct measurement.
 //
 // This monitor samples `perf_hooks.monitorEventLoopDelay` on a fixed interval
-// and logs the worst-case delay observed per window. A frozen process produces
+// and logs the worst-case delay observed per window. A stalled process produces
 // a WARN line naming the blackout duration on the very next tick after it
-// resumes — positive evidence, in the log, that the whole process stalled
-// (not any single handler). The per-tick DEBUG line also turns future log gaps
-// into proof: a gap WITH lag WARNs around it is a freeze; a gap in a handler
-// that still ticks is not.
+// resumes — positive evidence, in the log, that the loop stopped turning. The
+// per-tick DEBUG line also turns future log gaps into proof: a gap WITH lag
+// WARNs around it is a stall; a gap in a handler that still ticks is not.
+//
+// The WARN deliberately does NOT assert which of the two stall shapes occurred.
+// Both produce lag and they need opposite fixes, so the line reports `selfCpu`
+// and names the discriminator instead: high self CPU means this process blocked
+// its own loop (one slow synchronous handler); low self CPU with high drift
+// means the OS did not schedule it (machine saturation). A previous version
+// asserted the machine-saturation reading unconditionally and sent a real
+// investigation (2026-08-23) down the wrong path while this PID alone was hot
+// at load average 2.48 — hence the discriminator, not a verdict.
 //
 // Config (env): ADHDEV_EVENT_LOOP_MONITOR_INTERVAL_MS (default 10s; 0 disables),
 // ADHDEV_EVENT_LOOP_LAG_WARN_MS (default 5s — the freeze blackouts were 15–34s,
@@ -24,6 +32,7 @@
 
 import { monitorEventLoopDelay, type IntervalHistogram } from 'node:perf_hooks';
 import { LOG } from '../logging/logger.js';
+import { AsyncBatchWriter } from '../logging/async-batch-writer.js';
 
 export const EVENT_LOOP_MONITOR_INTERVAL_ENV = 'ADHDEV_EVENT_LOOP_MONITOR_INTERVAL_MS';
 export const EVENT_LOOP_LAG_WARN_ENV = 'ADHDEV_EVENT_LOOP_LAG_WARN_MS';
@@ -52,8 +61,16 @@ export function resolveEventLoopLagWarnMs(env: NodeJS.ProcessEnv = process.env):
 export type EventLoopMonitorLogFn = (level: 'debug' | 'warn', message: string) => void;
 
 function defaultLogFn(level: 'debug' | 'warn', message: string): void {
-    if (level === 'warn') LOG.warn('EventLoop', message);
-    else LOG.debug('EventLoop', message);
+    if (level === 'warn') {
+        LOG.warn('EventLoop', message);
+        // A lag warning is the one line that must not be lost to the condition
+        // it reports: the batch writer flushes on a timer, and a loop blocked
+        // long enough to trigger this warning is exactly a loop that may never
+        // give that timer a tick. Drain synchronously so the evidence survives.
+        AsyncBatchWriter.flushSync();
+    } else {
+        LOG.debug('EventLoop', message);
+    }
 }
 
 /**
@@ -81,6 +98,13 @@ export function startEventLoopMonitor(opts?: {
     }
 
     let expectedTickAt: number | null = null;
+    // Previous cpuUsage sample, so each window reports the CPU this PROCESS
+    // burned during that window. process.cpuUsage() reads counters Node already
+    // holds — no child process, no /proc walk, no syscall that could block the
+    // very loop we are measuring. That constraint is why this is the CPU signal
+    // used here and not `ps`/`top` output.
+    let lastCpu: NodeJS.CpuUsage | null = null;
+    let lastCpuAt: number | null = null;
     const timer = setInterval(() => {
         try {
             const now = Date.now();
@@ -97,10 +121,39 @@ export function startEventLoopMonitor(opts?: {
             const meanMs = histogram.mean / 1e6;
             histogram.reset();
             const worstMs = Math.max(driftMs, maxMs);
-            const message = `event-loop lag: drift=${driftMs.toFixed(0)}ms max=${maxMs.toFixed(0)}ms p99=${p99Ms.toFixed(0)}ms mean=${meanMs.toFixed(1)}ms over ${intervalMs}ms window`;
+            // Self CPU% over the window: ~100% (or more, across threads) means
+            // this process was RUNNING the whole time — it blocked itself. A
+            // low value while lagging means it was waiting to be scheduled.
+            const cpuNow = process.cpuUsage();
+            let cpuPct: number | null = null;
+            if (lastCpu !== null && lastCpuAt !== null) {
+                const elapsedMs = now - lastCpuAt;
+                if (elapsedMs > 0) {
+                    const usedMs = ((cpuNow.user - lastCpu.user) + (cpuNow.system - lastCpu.system)) / 1000;
+                    cpuPct = (usedMs / elapsedMs) * 100;
+                }
+            }
+            lastCpu = cpuNow;
+            lastCpuAt = now;
+            const cpuPart = cpuPct === null ? '' : ` selfCpu=${cpuPct.toFixed(0)}%`;
+            const message = `event-loop lag: drift=${driftMs.toFixed(0)}ms max=${maxMs.toFixed(0)}ms p99=${p99Ms.toFixed(0)}ms mean=${meanMs.toFixed(1)}ms${cpuPart} over ${intervalMs}ms window`;
             if (worstMs >= warnMs) {
-                logFn('warn', `${message} — EXCEEDS ${warnMs}ms: the whole daemon process was frozen/unscheduled`
-                    + ` (machine saturation), not one slow handler. Expect IPC probe timeouts and reconcile-tick gaps in this window.`);
+                // Do NOT assert a cause here. Both shapes produce lag and they
+                // need opposite fixes, so state the discriminator and let the
+                // reader decide:
+                //   selfCpu high (~100%+) → this process blocked its own loop
+                //     in one long synchronous stretch. Find the handler.
+                //   selfCpu low + drift high → the process was runnable but not
+                //     scheduled. Look at machine-wide load, not at our handlers.
+                // An earlier version of this line asserted "machine saturation,
+                // not one slow handler" unconditionally. That reading was wrong
+                // in a real incident (load average 2.48, this PID alone hot) and
+                // it misdirected the investigation toward the machine, so the
+                // assertion is gone on purpose — do not reintroduce it.
+                logFn('warn', `${message} — EXCEEDS ${warnMs}ms. Cause is one of two shapes:`
+                    + ` high selfCpu ⇒ this process blocked its own loop (one slow synchronous handler);`
+                    + ` low selfCpu with high drift ⇒ the process was unscheduled (machine saturation).`
+                    + ` Expect IPC probe timeouts and reconcile-tick gaps in this window.`);
             } else {
                 logFn('debug', message);
             }
