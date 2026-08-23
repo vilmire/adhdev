@@ -39,6 +39,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/mesh-status.test.ts',
   'test/commands/mesh-worktree-bootstrap.test.ts',
   'test/commands/refine-diverged-gitlink-converge.test.ts',
+  'test/commands/refine-gitlink-ff-undeterminable.test.ts',
   'test/commands/refine-gitlink-trivial-ff.test.ts',
   'test/commands/refine-patch-equivalence-classification.test.ts',
   'test/commands/refine-trivial-ff-gitlink-rebase.test.ts',
