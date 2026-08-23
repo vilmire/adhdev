@@ -68,6 +68,8 @@ import {
     runMeshRefineValidationGate,
     truncateValidationOutput,
 } from '../mesh/mesh-refine-gates.js';
+// DS2 base-movement CAS probe — tri-state, fail-closed on an unobtained verdict.
+import { buildRefineBaseCasBlockedResult, describeRefineBaseCasStage, probeRefineBaseCas } from '../mesh/mesh-refine-base-cas.js';
 // REFINE-CONCURRENCY-CAP: process-wide serial execution of refine pipelines —
 // see mesh-refine-concurrency.ts for the freeze RCA this comes from.
 import { runWithRefineExecutionSlot } from '../mesh/mesh-refine-concurrency.js';
@@ -537,7 +539,15 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
                 fetchWarning = `git fetch origin ${baseBranch} failed (proceeding with local HEAD): ${e?.message}`;
             }
 
-            // Prefer origin/<baseBranch> as the authoritative base; fall back to local HEAD if fetch failed.
+            // Prefer origin/<baseBranch> as the authoritative base.
+            //
+            // ★The fallback is narrower than "if fetch failed" (what this comment used to
+            // claim): `rev-parse origin/<base>` reads the LOCAL remote-tracking ref, which
+            // survives a failed fetch, so a failed fetch normally still pins a STALE origin
+            // SHA here — only `fetchWarning` records it. Local HEAD is reached solely when
+            // no remote-tracking ref exists at all. That is fine as a STARTING point
+            // because base_cas re-checks before merging — which is why it must stay
+            // fail-closed.
             let baseHeadRaw: string;
             try {
                 const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
@@ -1550,44 +1560,28 @@ export async function refineMergeAndFinalizeStage(self: DaemonCommandRouter, ctx
 export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
             const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync } = ctx;
 
-            // DS2 base-movement CAS: re-fetch origin/<baseBranch> and compare its live SHA
-            // against the baseHead pinned in resolve_refs. If it advanced (a sibling/peer
-            // pushed while this node validated), the merge would be onto a stale base — bail
-            // retryable so the re-run rebases onto and re-validates the NEW base. Fail-open:
-            // a fetch/parse error skips the check (proceed with the merge as before).
+            // DS2 base-movement CAS: re-fetch origin/<baseBranch> and compare its live
+            // SHA against the baseHead pinned in resolve_refs. If it advanced (a peer
+            // pushed while this node validated), the merge would be onto a stale base —
+            // bail retryable so the re-run rebases onto and re-validates the NEW base.
+            //
+            // ★TRI-STATE and fail-CLOSED; see ./mesh/mesh-refine-base-cas.ts for why an
+            // unobtained verdict must not read as "unmoved". This is the only
+            // time-of-check guard in front of the merge and the push below.
             const casStarted = Date.now();
-            let baseMoved = false;
-            let liveBaseHead: string | undefined;
-            try {
-                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
-                const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
-                liveBaseHead = stdout.trim();
-                baseMoved = !!liveBaseHead && liveBaseHead !== baseHead;
-            } catch { /* fail-open: cannot verify → proceed (merge itself still guards) */ }
-            if (baseMoved) {
-                recordMeshRefineStage(refineStages, 'base_cas', 'failed', casStarted, {
-                    pinnedBaseHead: baseHead, liveBaseHead, retryable: true,
-                });
-                return { kind: 'terminal', result: {
-                    success: false,
-                    code: 'base_moved',
-                    convergenceStatus: 'blocked_review',
-                    retryable: true,
-                    error: `Base ${baseBranch} advanced from ${baseHead.slice(0, 7)} to ${(liveBaseHead || '').slice(0, 7)} after this node was validated; re-run refine to rebase onto and re-validate the new base.`,
-                    branch,
-                    into: baseBranch,
-                    pinnedBaseHead: baseHead,
-                    liveBaseHead,
-                    validationSummary,
-                    patchEquivalence,
-                    submoduleReachability,
-                    refineStages,
-                    finalBranchConvergenceState: {
-                        branch, baseBranch, merged: false, removed: false, status: 'blocked_review',
-                    },
-                } };
+            const cas = await probeRefineBaseCas({
+                execFileAsync, repoRoot, baseBranch, pinnedBaseHead: baseHead, env: gitChildEnv(),
+            });
+            const casStage = describeRefineBaseCasStage(cas, baseHead);
+            recordMeshRefineStage(refineStages, 'base_cas', casStage.status, casStarted, casStage.detail);
+            // 'moved' and 'undeterminable' both refuse BEFORE the merge. 'no_origin' and
+            // 'unmoved' fall through and converge.
+            if (cas.state === 'undeterminable' || cas.state === 'moved') {
+                return { kind: 'terminal', result: buildRefineBaseCasBlockedResult({
+                    cas, baseBranch, branch, pinnedBaseHead: baseHead,
+                    validationSummary, patchEquivalence, submoduleReachability, refineStages,
+                }) };
             }
-            recordMeshRefineStage(refineStages, 'base_cas', 'passed', casStarted, { pinnedBaseHead: baseHead });
 
             let mergeResult: Record<string, unknown> | undefined;
             const mergeStarted = Date.now();
@@ -2162,12 +2156,17 @@ export type BatchNodeConvergence = 'merged_to_main' | 'blocked_review' | 'skippe
  *     NOT merge, so it correctly stays blocked_review.)
  *   everything else that failed                   → blocked_review.
  *
- * DS2: `retryable` is set for a base-movement family blocker (base_moved / base_locked)
- * — the node did NOT converge because the base advanced or was locked WHILE it ran, not
- * because of its own content. The batch gives ONLY these a second pass (they may succeed
- * once the base settles / the lease frees); a real conflict is never retried.
+ * DS2: `retryable` is set for a base-movement family blocker (base_moved / base_locked /
+ * base_cas_undeterminable) — the node did NOT converge because the base advanced, was
+ * locked, or COULD NOT BE READ while it ran, not because of its own content. The batch
+ * gives ONLY these a second pass (they may succeed once the base settles / the lease
+ * frees / origin is reachable again); a real conflict is never retried.
+ *
+ * ★`base_cas_undeterminable` is retryable because nothing was merged: the CAS refuses
+ * BEFORE `git merge`, so a retry costs one fetch. A transient failure is exactly what a
+ * second pass fixes; a persistent one re-lands on the same fail-closed refusal.
  */
-const RETRYABLE_BASE_MOVEMENT_CODES = new Set(['base_moved', 'base_locked']);
+const RETRYABLE_BASE_MOVEMENT_CODES = new Set(['base_moved', 'base_locked', 'base_cas_undeterminable']);
 
 export function classifyBatchNodeConvergence(result: Record<string, unknown>): { convergence: BatchNodeConvergence; code: string; stage?: string; retryable: boolean } {
     const code = typeof result.code === 'string' ? result.code : '';
@@ -2590,7 +2589,8 @@ export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId:
  * Delegates the retryable judgement to `classifyBatchNodeConvergence` — the exact
  * classifier the batch path's retryQueue uses — so the single-node and batch paths
  * cannot drift apart on what "retryable" means. Only the base-movement family
- * (base_moved / base_locked) qualifies; a real conflict never does.
+ * (base_moved / base_locked / base_cas_undeterminable) qualifies; a real conflict never
+ * does.
  *
  * `alreadyRetried` is the bound: a result that already carries the retry marker is
  * terminal no matter what it failed with. This is what makes the retry exactly-once

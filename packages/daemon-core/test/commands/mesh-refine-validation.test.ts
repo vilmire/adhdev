@@ -1313,10 +1313,18 @@ describe('refine_mesh_node validation gate', () => {
       initGitRepo(repo)
       const worktree = createWorktreeWithCommit(root, repo)
       const mesh = createMesh(repo, worktree, 'node-push-fail')
-      // Break the push: repoint origin at a bare repo that rejects the push by removing
-      // it, so `git push origin main` fails (no such remote path). The merge still lands
-      // on local base; DS1 must NOT clean up the worktree and must report merged/pushed=false.
-      execFileSync('git', ['remote', 'set-url', 'origin', join(root, 'does-not-exist.git')], { cwd: repo })
+      // Break the PUSH ONLY: point `remote.origin.pushurl` at a path that does not
+      // exist, so `git push origin main` fails while `git fetch origin main` keeps
+      // working against the real bare origin. The merge still lands on local base; DS1
+      // must NOT clean up the worktree and must report merged/pushed=false.
+      //
+      // ★It used to `set-url` the whole remote, which broke fetch too — and the DS2
+      // base-movement CAS runs a fetch BEFORE the merge. Once that CAS became
+      // fail-closed (an unreachable origin is an unobtained verdict, not "the base did
+      // not move"), a fetch-breaking fixture stopped exercising the push path at all:
+      // the node was blocked at base_cas and never reached the merge. `pushurl` breaks
+      // exactly the one operation this test is about.
+      execFileSync('git', ['config', 'remote.origin.pushurl', join(root, 'does-not-exist.git')], { cwd: repo })
       const router = createRouter()
 
       const accepted: any = await router.execute('refine_mesh_node', {
