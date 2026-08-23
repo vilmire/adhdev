@@ -356,10 +356,10 @@ export default function SetupWizard({
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4">
             <div>
                 <h2 className="text-base font-semibold text-text-primary">{t('setupWizard.title')}</h2>
-                <p className="mt-1.5 text-[11px] text-text-muted">{t('setupWizard.machines.description')}</p>
+                <p className="mt-1.5 text-2xs text-text-muted">{t('setupWizard.machines.description')}</p>
             </div>
 
-            {listError && <p className="text-[11px] text-red-400">{listError}</p>}
+            {listError && <p className="text-2xs text-red-400">{listError}</p>}
 
             <div className="rounded-xl border border-border-subtle bg-bg-primary p-4">
                 <MachinesStep

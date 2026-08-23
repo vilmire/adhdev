@@ -21,9 +21,9 @@ export default function RemoteWaitingState({
                 <img src="/otter-logo.png" alt="" className="w-8 h-8 opacity-90" />
             </div>
             <div className="text-white/85 text-[13px] font-semibold tracking-wide">{waitingLabel}</div>
-            <div className="text-[11px] text-white/40">{waitingHint}</div>
+            <div className="text-2xs text-white/40">{waitingHint}</div>
             {transportType === 'relay' && (
-                <div className="text-[10px] font-medium" style={{ color: 'var(--status-warning)', opacity: 0.8 }}>{t('remote.waitingState.turnRelayActive')}</div>
+                <div className="text-3xs font-medium" style={{ color: 'var(--status-warning)', opacity: 0.8 }}>{t('remote.waitingState.turnRelayActive')}</div>
             )}
         </div>
     )

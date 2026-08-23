@@ -129,7 +129,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                         key={s}
                         type="button"
                         onClick={() => { setStatusFilter(s); setShowAll(false) }}
-                        className={`rounded-full border px-2.5 py-0.5 text-[11px] capitalize transition-colors ${
+                        className={`rounded-full border px-2.5 py-0.5 text-2xs capitalize transition-colors ${
                             statusFilter === s
                                 ? 'border-accent-primary text-accent-primary'
                                 : 'border-border-subtle text-text-muted hover:text-text-secondary'
@@ -141,7 +141,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                 <button
                     type="button"
                     onClick={() => { setStatusFilter('all'); setShowAll(false) }}
-                    className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
+                    className={`rounded-full border px-2.5 py-0.5 text-2xs transition-colors ${
                         statusFilter === 'all'
                             ? 'border-accent-primary text-accent-primary'
                             : 'border-border-subtle text-text-muted hover:text-text-secondary'
@@ -168,12 +168,12 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                                     {mission.title || mission.id}
                                 </span>
                                 {mission.status && (
-                                    <span className="shrink-0 rounded-full border border-border-subtle px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-muted">
+                                    <span className="shrink-0 rounded-full border border-border-subtle px-2 py-0.5 text-3xs uppercase tracking-wide text-text-muted">
                                         {mission.status}
                                     </span>
                                 )}
                                 {total > 0 && (
-                                    <span className="shrink-0 text-[11px] text-text-muted">{t('repoMesh.missions.taskCount', { count: total })}</span>
+                                    <span className="shrink-0 text-2xs text-text-muted">{t('repoMesh.missions.taskCount', { count: total })}</span>
                                 )}
                             </div>
                             {goalText && (

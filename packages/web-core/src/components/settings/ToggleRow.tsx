@@ -17,7 +17,7 @@ export function ToggleRow({ label, description, checked, disabled, onChange, ext
         <div className={`flex justify-between items-center ${disabled ? 'opacity-60' : ''}`}>
             <div className="pr-4">
                 <div className="font-medium text-sm">{label}</div>
-                <div className="text-[11px] text-text-muted mt-0.5">{description}</div>
+                <div className="text-2xs text-text-muted mt-0.5">{description}</div>
             </div>
             <div className="flex items-center gap-3 shrink-0">
                 {extra}

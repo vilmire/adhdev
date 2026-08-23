@@ -30,7 +30,7 @@ export default function StandaloneLayout({ children }: LayoutProps) {
     const footerItems = useMemo<AppShellNavItem[]>(() => ([
         {
             id: 'docs',
-            label: <><span>{t('nav.docs')}</span><span className="ml-auto text-[9px] text-text-muted">↗</span></>,
+            label: <><span>{t('nav.docs')}</span><span className="ml-auto text-4xs text-text-muted">↗</span></>,
             icon: <IconBook />,
             onSelect: () => window.open('https://docs.adhf.dev', '_blank'),
             title: t('nav.docs'),

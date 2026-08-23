@@ -132,7 +132,7 @@ export default function HistoryModal({
                         <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? getSavedHistoryModalTitle(t) : t('historyModal.chatHistory')}</h3>
                         <div className="text-xs text-text-muted mt-0.5">{getConversationHistorySubtitle(activeConv)}</div>
                         {isSavedSessionMode && (
-                            <div className="text-[11px] text-text-muted mt-1">{getSavedHistoryHelperLabel(t)}</div>
+                            <div className="text-2xs text-text-muted mt-1">{getSavedHistoryHelperLabel(t)}</div>
                         )}
                     </div>
                     <button onClick={onClose} className="btn btn-secondary btn-sm rounded-md px-1.5 py-1.5 border-transparent bg-transparent hover:bg-bg-secondary"><IconX size={16} /></button>
@@ -184,7 +184,7 @@ export default function HistoryModal({
                                         <option value="messages">{t('historyModal.sortMessages')}</option>
                                     </select>
                                 </div>
-                                <label className="mt-2 flex items-center gap-2 text-[11px] text-text-muted">
+                                <label className="mt-2 flex items-center gap-2 text-2xs text-text-muted">
                                     <input
                                         type="checkbox"
                                         checked={filters.resumableOnly}
@@ -219,18 +219,18 @@ export default function HistoryModal({
                                                 }`}>
                                                     {session.title || t('historyModal.untitledSession')}
                                                 </div>
-                                                <div className="text-[11px] text-text-muted font-mono truncate">
+                                                <div className="text-2xs text-text-muted font-mono truncate">
                                                     {session.providerSessionId}
                                                 </div>
                                             </div>
-                                            <div className="text-[11px] text-text-muted shrink-0">
+                                            <div className="text-2xs text-text-muted shrink-0">
                                                 {formatSavedSessionTime(session.lastMessageAt)}
                                             </div>
                                         </div>
                                         <div className="mt-2 text-[12px] text-text-muted line-clamp-2">
                                             {session.preview || t('historyModal.noSavedPreview')}
                                         </div>
-                                        <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-text-muted">
+                                        <div className="mt-3 flex items-center justify-between gap-3 text-2xs text-text-muted">
                                             <div className="truncate">
                                                 {session.workspace || t('historyModal.workspaceUnknown')}
                                                 {usesSelectedWorkspace ? t('historyModal.selectedWorkspaceSuffix') : ''}
@@ -272,9 +272,9 @@ export default function HistoryModal({
                                 {chat.title || t('historyModal.untitledSession')}
                             </div>
                             <div className="flex justify-between items-center">
-                                <div className="text-[11px] text-text-muted font-mono">{chat.id.substring(0, 12)}...</div>
+                                <div className="text-2xs text-text-muted font-mono">{chat.id.substring(0, 12)}...</div>
                                 {activeChatId === chat.id && (
-                                    <span className="text-[10px] bg-accent text-white px-2 py-0.5 rounded-[10px] font-extrabold">{t('historyModal.statusActive')}</span>
+                                    <span className="text-3xs bg-accent text-white px-2 py-0.5 rounded-[10px] font-extrabold">{t('historyModal.statusActive')}</span>
                                 )}
                             </div>
                         </div>
@@ -328,7 +328,7 @@ export default function HistoryModal({
                                 })}
                             </div>
                             {pendingSwitch.kind === 'saved' && (
-                                <div className="mt-2 text-[11px] text-text-muted font-mono truncate">
+                                <div className="mt-2 text-2xs text-text-muted font-mono truncate">
                                     {pendingSwitch.session.workspace || t('historyModal.workspaceUnknown')}
                                     {pendingSwitch.session.lastMessageAt ? ` · ${formatSavedSessionTime(pendingSwitch.session.lastMessageAt)}` : ''}
                                 </div>

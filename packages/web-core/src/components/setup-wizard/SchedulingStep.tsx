@@ -26,7 +26,7 @@ export default function SchedulingStep({ value, onChange, recommended, disabled 
         <div className="flex flex-col gap-3">
             <div>
                 <h3 className="text-sm font-semibold text-text-primary">{t('setupWizard.scheduling.title')}</h3>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                <p className="mt-1 text-2xs leading-relaxed text-text-muted">
                     {t('setupWizard.scheduling.description')}
                 </p>
             </div>
@@ -48,7 +48,7 @@ export default function SchedulingStep({ value, onChange, recommended, disabled 
                                     <span className="flex items-center gap-2 text-sm text-text-primary">
                                         {t(opt.labelKey)}
                                         {recommended === opt.value && (
-                                            <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">{t('repoMesh.detail.recommended')}</span>
+                                            <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-3xs font-medium text-accent-primary">{t('repoMesh.detail.recommended')}</span>
                                         )}
                                     </span>
                                     <span className="block text-[12px] text-text-muted">{t(opt.descriptionKey)}</span>
@@ -59,7 +59,7 @@ export default function SchedulingStep({ value, onChange, recommended, disabled 
                 </div>
             </fieldset>
 
-            <p className="text-[10px] leading-relaxed text-text-muted">
+            <p className="text-3xs leading-relaxed text-text-muted">
                 {t('setupWizard.stagedNote')}
             </p>
         </div>

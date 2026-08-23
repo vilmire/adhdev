@@ -25,7 +25,7 @@ interface MachineCommandCenterProps {
 
 function SectionTitle({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
     return (
-        <div className="flex items-center gap-2 text-[11px] font-semibold text-text-muted tracking-[0.14em] uppercase">
+        <div className="flex items-center gap-2 text-2xs font-semibold text-text-muted tracking-[0.14em] uppercase">
             {icon}
             <span>{children}</span>
         </div>
@@ -79,7 +79,7 @@ export default function MachineCommandCenter({
                                                 {getConversationTitle(conversation)}
                                             </span>
                                             {activityAt > 0 && (
-                                                <span className="text-[11px] text-text-muted shrink-0">
+                                                <span className="text-2xs text-text-muted shrink-0">
                                                     {formatRelativeTime(activityAt)}
                                                 </span>
                                             )}
@@ -116,7 +116,7 @@ export default function MachineCommandCenter({
                                                 {launch.label}
                                             </span>
                                             {updatedLabel && (
-                                                <span className="text-[11px] text-text-muted shrink-0">
+                                                <span className="text-2xs text-text-muted shrink-0">
                                                     {updatedLabel}
                                                 </span>
                                             )}

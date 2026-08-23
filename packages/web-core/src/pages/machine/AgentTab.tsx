@@ -625,7 +625,7 @@ export default function AgentTab({
             {/* ═══ Launch Form ═══ */}
             <div className={`px-5 py-5 rounded-xl mb-6 bg-bg-secondary border ${config.accent} relative overflow-hidden`}>
                 <div className="absolute top-0 left-0 w-full height-[1px] bg-gradient-to-r from-transparent via-border-default to-transparent" />
-                <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-4 flex items-center gap-2">
+                <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-4 flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-accent-primary/60" />
                     {t('machine.agentTab.selectToLaunch', { label: config.label })}
                 </div>
@@ -670,7 +670,7 @@ export default function AgentTab({
                                         <span className="text-xs font-semibold text-text-primary text-center">
                                             {d.name || formatIdeType(d.type)}
                                         </span>
-                                        <span className={`text-[9px] mt-0.5 uppercase tracking-wider font-medium ${isReady ? 'text-green-400' : isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
+                                        <span className={`text-4xs mt-0.5 uppercase tracking-wider font-medium ${isReady ? 'text-green-400' : isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
                                             {isReady ? t('machine.agentTab.openSession') : isPending ? t('machine.agentTab.starting') : isSelected ? t('machine.agentTab.configure') : t('machine.agentTab.select')}
                                         </span>
                                     </div>
@@ -705,7 +705,7 @@ export default function AgentTab({
                                         <span className="text-xs font-semibold text-text-primary text-center">
                                             {p.displayName}
                                         </span>
-                                        <span className={`text-[9px] mt-0.5 uppercase tracking-wider font-medium ${isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
+                                        <span className={`text-4xs mt-0.5 uppercase tracking-wider font-medium ${isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
                                             {isPending ? t('machine.agentTab.starting') : isSelected ? t('machine.agentTab.configure') : t('machine.agentTab.select')}
                                         </span>
                                     </div>
@@ -714,7 +714,7 @@ export default function AgentTab({
                         }) : (
                             <div className="col-span-full py-6 text-center bg-bg-primary/50 border border-dashed border-border-default rounded-xl text-xs text-text-muted">
                                 {t('machine.agentTab.noProviders', { category: category.toUpperCase() })}
-                                <div className="mt-1 text-[11px] text-text-muted">
+                                <div className="mt-1 text-2xs text-text-muted">
                                     {t('machine.agentTab.noProvidersHint')}
                                 </div>
                             </div>
@@ -725,7 +725,7 @@ export default function AgentTab({
                 {/* Configuration Panel (2-step setup) */}
                 {selectedType && (isIde ? launchableIdes.find(d => d.type === selectedType) : categoryProviders.find(p => p.type === selectedType)) && (
                     <div className="mt-5 pt-5 border-t border-border-default flex flex-col gap-4 animate-in slide-in-from-top-2 fade-in duration-200">
-                        <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider flex items-center justify-between">
+                        <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider flex items-center justify-between">
                             <span>{t('machine.agentTab.launchSettings')}</span>
                             <span className="text-accent-primary font-bold">{isIde ? formatIdeType(selectedType) : providerLabelMap.get(selectedType) || selectedType}</span>
                         </div>
@@ -769,7 +769,7 @@ export default function AgentTab({
                                 <div className="flex flex-col sm:flex-row gap-3">
                                     {isAcp && (
                                         <div className="flex flex-col gap-1.5 flex-1">
-                                            <span className="text-[10px] font-semibold text-text-secondary uppercase">{t('machine.agentTab.targetModel')}</span>
+                                            <span className="text-3xs font-semibold text-text-secondary uppercase">{t('machine.agentTab.targetModel')}</span>
                                             <input
                                                 type="text"
                                                 placeholder={t('machine.agentTab.leaveEmptyDefault')}
@@ -780,7 +780,7 @@ export default function AgentTab({
                                         </div>
                                     )}
                                     <div className="flex flex-col gap-1.5 flex-1">
-                                        <span className="text-[10px] font-semibold text-text-secondary uppercase">{t('machine.agentTab.startupArguments')}</span>
+                                        <span className="text-3xs font-semibold text-text-secondary uppercase">{t('machine.agentTab.startupArguments')}</span>
                                         <input
                                             type="text"
                                             placeholder={t('machine.agentTab.optionalFlags')}
@@ -835,7 +835,7 @@ export default function AgentTab({
             </div>
 
             {/* ═══ Running Agents ═══ */}
-            <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-2.5">
+            <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-2.5">
                 {t('machine.agentTab.running', { count: managedEntries.length + pendingLaunchTypes.filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped')).length })}
             </div>
 
@@ -854,7 +854,7 @@ export default function AgentTab({
                                             <div className="font-semibold text-[13px] text-text-primary">
                                                 {isIde ? formatIdeType(type) : (providerLabelMap.get(type) || type)}
                                             </div>
-                                            <div className="text-[11px] text-text-muted">
+                                            <div className="text-2xs text-text-muted">
                                                 {launchingAgentType === type
                                                     ? t('machine.agentTab.launchingProcess')
                                                     : t('machine.agentTab.waitingProcess')}
@@ -862,7 +862,7 @@ export default function AgentTab({
                                         </div>
                                     </div>
                                     <span
-                                        className="px-2 py-0.5 rounded-md text-[10px] font-semibold"
+                                        className="px-2 py-0.5 rounded-md text-3xs font-semibold"
                                         style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', color: 'var(--status-warning)' }}
                                     >
                                         {t('machine.agentTab.startingBadge')}
@@ -883,9 +883,9 @@ export default function AgentTab({
                                         <div>
                                             <div className="font-semibold text-[13px] text-text-primary">
                                                 {getName(entry)}
-                                                {ide?.version && <span className="text-[10px] text-text-muted ml-1.5">v{ide.version}</span>}
+                                                {ide?.version && <span className="text-3xs text-text-muted ml-1.5">v{ide.version}</span>}
                                             </div>
-                                            <div className="text-[11px] text-text-muted flex min-w-0 flex-wrap items-center gap-2">
+                                            <div className="text-2xs text-text-muted flex min-w-0 flex-wrap items-center gap-2">
                                                 <span className="truncate">{entry.workspace || '—'}</span>
                                                 {onOpenGitDialog && entry.git && entry.workspace ? (
                                                     <button
@@ -906,14 +906,14 @@ export default function AgentTab({
                                                 )}
                                             </div>
                                             {cli && (cli.runtimeKey || cli.runtimeWriteOwner) && (
-                                                <div className="text-[10px] text-text-muted flex gap-2 mt-0.5 flex-wrap">
+                                                <div className="text-3xs text-text-muted flex gap-2 mt-0.5 flex-wrap">
                                                     {cli.runtimeKey && (
                                                         <>
                                                             <span className="text-text-secondary">{t('machine.agentTab.localTerminal')}</span>
                                                             <span className="font-mono text-text-secondary">adhdev attach {cli.runtimeKey}</span>
                                                             <button
                                                                 type="button"
-                                                                className="flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] bg-bg-glass hover:bg-bg-glass-hover border border-border-subtle text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+                                                                className="flex items-center justify-center px-1.5 py-0.5 rounded text-4xs bg-bg-glass hover:bg-bg-glass-hover border border-border-subtle text-text-muted hover:text-text-primary transition-colors cursor-pointer"
                                                                 onClick={() => {
                                                                     void navigator.clipboard?.writeText(`adhdev attach ${cli.runtimeKey}`)
                                                                     setCopiedRuntimeKey(cli.runtimeKey || null)
@@ -936,7 +936,7 @@ export default function AgentTab({
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1.5">
-                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
+                                        <span className={`px-2 py-0.5 rounded-md text-3xs font-semibold ${
                                             normalizedStatus === 'stopped' ? 'bg-red-500/[0.08] text-red-500'
                                                 : normalizedStatus === 'generating' ? 'bg-orange-500/[0.08] text-orange-400'
                                                     : 'bg-green-500/[0.08] text-green-500'
@@ -1089,7 +1089,7 @@ export default function AgentTab({
                                 {ide && ide.aiAgents.length > 0 && (
                                     <div className="flex gap-1 mb-2 flex-wrap">
                                         {ide.aiAgents.map(a => (
-                                            <span key={a.id} className={`px-2 py-0.5 rounded-md text-[10px] ${
+                                            <span key={a.id} className={`px-2 py-0.5 rounded-md text-3xs ${
                                                 isManagedStatusWorking(a.status) ? 'bg-orange-500/[0.08] text-orange-400' : 'bg-indigo-500/[0.06] text-indigo-400'
                                             }`}>{a.name} · {normalizeManagedStatus(a.status)}</span>
                                         ))}
@@ -1099,7 +1099,7 @@ export default function AgentTab({
                                 {/* IDE: Extension Toggles */}
                                 {ide && (ideExtensions[ide.type] || []).length > 0 && sendDaemonCommand && (
                                     <div className="mt-2 pt-2 border-t border-border-subtle">
-                                        <div className="text-[10px] text-text-muted font-semibold uppercase tracking-wider mb-1.5">{t('machine.agentTab.extensions')}</div>
+                                        <div className="text-3xs text-text-muted font-semibold uppercase tracking-wider mb-1.5">{t('machine.agentTab.extensions')}</div>
                                         <div className="flex flex-wrap gap-2">
                                             {(ideExtensions[ide.type] || []).map(ext => (
                                                 <button
@@ -1126,7 +1126,7 @@ export default function AgentTab({
                                                             setExtToggling(null);
                                                         }
                                                     }}
-                                                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors duration-150 cursor-pointer ${
+                                                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-2xs font-medium border transition-colors duration-150 cursor-pointer ${
                                                         ext.enabled
                                                             ? 'bg-accent-primary/10 border-accent-primary/20 text-accent-primary-light'
                                                             : 'bg-bg-glass border-border-subtle text-text-muted'
@@ -1136,7 +1136,7 @@ export default function AgentTab({
                                                         ext.enabled ? 'bg-accent-primary shadow-glow' : 'bg-zinc-600'
                                                     }`} />
                                                     {ext.name}
-                                                    <span className="text-[9px] font-normal">{ext.enabled ? 'ON' : 'OFF'}</span>
+                                                    <span className="text-4xs font-normal">{ext.enabled ? 'ON' : 'OFF'}</span>
                                                 </button>
                                             ))}
                                         </div>

@@ -82,7 +82,7 @@ export default function Approvals() {
                         nowMs={nowMs}
                     />
                     {approvals.length === 0 && (
-                        <div className="text-[11px] opacity-50 text-center">{t('approvals.emptyHint')}</div>
+                        <div className="text-2xs opacity-50 text-center">{t('approvals.emptyHint')}</div>
                     )}
                 </>
             )}

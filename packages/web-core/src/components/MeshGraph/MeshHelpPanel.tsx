@@ -114,7 +114,7 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
         >
             <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                    <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{t('meshGraph.help.kicker')}</div>
+                    <div className={`text-3xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{t('meshGraph.help.kicker')}</div>
                     <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('meshGraph.help.title')}</div>
                 </div>
                 <button
@@ -135,9 +135,9 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
                         className={`rounded-xl border p-3 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}
                     >
                         <dt className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{section.term}</dt>
-                        <dd className={`mt-1 text-[11px] leading-5 ${meshTheme.textSecondary}`}>{section.summary}</dd>
+                        <dd className={`mt-1 text-2xs leading-5 ${meshTheme.textSecondary}`}>{section.summary}</dd>
                         {section.details && section.details.length > 0 && (
-                            <ul className={`mt-1.5 flex flex-col gap-1 text-[11px] leading-5 ${meshTheme.textMuted}`}>
+                            <ul className={`mt-1.5 flex flex-col gap-1 text-2xs leading-5 ${meshTheme.textMuted}`}>
                                 {section.details.map((line, i) => (
                                     <li key={i} className="flex gap-1.5">
                                         <span aria-hidden className="select-none">·</span>

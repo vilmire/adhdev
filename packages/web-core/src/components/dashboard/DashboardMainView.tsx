@@ -844,12 +844,12 @@ export default function DashboardMainView({
                                                 <div className="min-w-0">
                                                     <div className="text-sm font-semibold text-text-primary">{t(`dashboard.shortcutDefs.${action.id}.label`, action.label)}</div>
                                                     <div className="text-xs text-text-secondary mt-1">{t(`dashboard.shortcutDefs.${action.id}.description`, action.description)}</div>
-                                                    <div className="text-[11px] text-text-muted mt-2">
+                                                    <div className="text-2xs text-text-muted mt-2">
                                                         {t('dashboard.guide.shortcuts.default')} <span className="font-mono">{action.defaultShortcut}</span>
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-2 shrink-0">
-                                                    <span className="text-[11px] font-mono px-2 py-1 rounded bg-surface-secondary border border-border-subtle min-w-[72px] text-center">
+                                                    <span className="text-2xs font-mono px-2 py-1 rounded bg-surface-secondary border border-border-subtle min-w-[72px] text-center">
                                                         {shortcutListening === action.id
                                                             ? (shortcutListeningDraft.length > 0 ? `${shortcutListeningDraft.join(' ')} ...` : t('dashboard.guide.shortcuts.listening'))
                                                             : (actionShortcuts[action.id] || t('dashboard.guide.shortcuts.off'))}
@@ -881,7 +881,7 @@ export default function DashboardMainView({
                                     ))}
                                 </div>
 
-                                <div className="text-[11px] text-text-muted mt-4">
+                                <div className="text-2xs text-text-muted mt-4">
                                     {t('dashboard.guide.shortcuts.footer', { keys: modifierShortcutHint })}
                                 </div>
                             </>

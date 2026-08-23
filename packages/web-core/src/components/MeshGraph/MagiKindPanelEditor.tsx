@@ -341,8 +341,8 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                         <div key={kind} className={`${meshTheme.cardClass} rounded-2xl p-4 flex flex-col gap-3`}>
                             <div className="flex flex-wrap items-center gap-2">
                                 <span className={`text-[13px] font-semibold ${meshTheme.textPrimary}`}>{t(labelKey)}</span>
-                                <span className={`font-mono text-[10px] ${meshTheme.textMuted}`}>{hint}</span>
-                                <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${isBound
+                                <span className={`font-mono text-3xs ${meshTheme.textMuted}`}>{hint}</span>
+                                <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${isBound
                                     ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'
                                     : 'border-slate-400/20 bg-slate-500/10 text-slate-300'}`}>
                                     {isBound ? t('meshGraph.magiKind.agentCount', { count: kindPanels[kind]!.length }) : t('meshGraph.magiKind.off')}
@@ -351,7 +351,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
 
                             <div className="flex flex-col gap-2">
                                 {slots.length === 0 && (
-                                    <div className={`rounded-xl border p-2.5 text-[11px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+                                    <div className={`rounded-xl border p-2.5 text-2xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
                                         {t('meshGraph.magiKind.noAgents')}
                                     </div>
                                 )}
@@ -365,7 +365,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                     return (
                                         <div key={idx} className={`rounded-xl border p-2.5 grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto_auto] gap-x-2 gap-y-1 items-start ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
                                             <label className="flex flex-col gap-1">
-                                                <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.machine')}</span>
+                                                <span className={`text-4xs uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.machine')}</span>
                                                 <select className={inputClass} value={s.nodeId} onChange={e => updateSlot(kind, idx, { nodeId: e.target.value })} title={t('meshGraph.magiKind.machineTitle')}>
                                                     <option value="">{t('meshGraph.magiKind.anyMachine')}</option>
                                                     {knownNodeIds.map(id => {
@@ -383,7 +383,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                                 </select>
                                             </label>
                                             <label className="flex flex-col gap-1">
-                                                <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.provider')} *</span>
+                                                <span className={`text-4xs uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.provider')} *</span>
                                                 <select className={inputClass} value={s.provider} onChange={e => updateSlot(kind, idx, { provider: e.target.value })} title={t('meshGraph.magiKind.providerTitle')}>
                                                     <option value="">{t('meshGraph.magiKind.selectProvider')}</option>
                                                     {providerOptions.map(p => <option key={p} value={p}>{p}</option>)}
@@ -391,7 +391,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                                 </select>
                                             </label>
                                             <label className="flex flex-col gap-1">
-                                                <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.model')}</span>
+                                                <span className={`text-4xs uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.model')}</span>
                                                 {(() => {
                                                     // Same control as the slot editor / New-session dialog: a
                                                     // provider-scoped dropdown when the provider declares models
@@ -417,7 +417,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                                             {/* Back to the dropdown — only when the provider has a list to go back to. */}
                                                             {models.length > 0 && (
                                                                 <button type="button"
-                                                                    className={`self-start bg-transparent border-none cursor-pointer p-0 text-[10px] ${meshTheme.textSecondary} hover:underline`}
+                                                                    className={`self-start bg-transparent border-none cursor-pointer p-0 text-3xs ${meshTheme.textSecondary} hover:underline`}
                                                                     onClick={() => updateSlot(kind, idx, { model: '' })}>
                                                                     {t('meshGraph.magiKind.backToModelList')}
                                                                 </button>
@@ -427,7 +427,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                                                 })()}
                                             </label>
                                             <label className="flex flex-col gap-1">
-                                                <span className={`text-[9px] uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.copies')}</span>
+                                                <span className={`text-4xs uppercase tracking-wide ${meshTheme.textSecondary}`}>{t('meshGraph.magiKind.copies')}</span>
                                                 <input className={`${inputClass} sm:w-16`} value={s.n} placeholder="1" inputMode="numeric"
                                                     title={t('meshGraph.magiKind.copiesTitle')}
                                                     onChange={e => updateSlot(kind, idx, { n: e.target.value })} />

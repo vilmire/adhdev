@@ -41,7 +41,7 @@ export default function InstallCommand() {
             {/* OS Tabs */}
             <div className="flex gap-1 mb-3 font-sans">
                 <button
-                    className={`text-[10px] px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                    className={`text-3xs px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
                         platform === 'unix'
                             ? 'bg-accent-primary/12 text-accent-primary border border-accent-primary/25'
                             : 'bg-transparent text-text-muted border border-transparent hover:text-text-secondary'
@@ -51,7 +51,7 @@ export default function InstallCommand() {
                     macOS / Linux
                 </button>
                 <button
-                    className={`text-[10px] px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                    className={`text-3xs px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
                         platform === 'windows'
                             ? 'bg-accent-primary/12 text-accent-primary border border-accent-primary/25'
                             : 'bg-transparent text-text-muted border border-transparent hover:text-text-secondary'
@@ -66,13 +66,13 @@ export default function InstallCommand() {
             {platform === 'windows' && (
                 <div className="flex gap-1 mb-3 font-sans">
                     <button
-                        className={`text-[9px] px-2 py-0.5 rounded font-semibold cursor-pointer transition-all ${
+                        className={`text-4xs px-2 py-0.5 rounded font-semibold cursor-pointer transition-all ${
                             winShell === 'powershell' ? 'bg-accent-primary/10 text-accent-primary' : 'text-text-muted hover:text-text-secondary'
                         }`}
                         onClick={() => setWinShell('powershell')}
                     >PowerShell</button>
                     <button
-                        className={`text-[9px] px-2 py-0.5 rounded font-semibold cursor-pointer transition-all ${
+                        className={`text-4xs px-2 py-0.5 rounded font-semibold cursor-pointer transition-all ${
                             winShell === 'cmd' ? 'bg-accent-primary/10 text-accent-primary' : 'text-text-muted hover:text-text-secondary'
                         }`}
                         onClick={() => setWinShell('cmd')}
@@ -88,13 +88,13 @@ export default function InstallCommand() {
             >
                 <span className="text-text-muted select-none">{INSTALL_COMMANDS[shell].prompt}</span>
                 <span className="flex-1 break-all">{INSTALL_COMMANDS[shell].cmd}</span>
-                <span className="text-[9px] font-sans text-accent-primary opacity-0 group-hover:opacity-100 transition-opacity shrink-0 select-none">
+                <span className="text-4xs font-sans text-accent-primary opacity-0 group-hover:opacity-100 transition-opacity shrink-0 select-none">
                     {copied ? <IconCheck size={12} /> : <IconClipboard size={12} />}
                 </span>
             </div>
 
             {/* npm fallback */}
-            <div className="text-text-muted text-[10px] font-sans mt-2">
+            <div className="text-text-muted text-3xs font-sans mt-2">
                 Or via npm: <span className="text-text-secondary font-mono">npm i -g @adhdev/daemon-standalone &amp;&amp; adhdev-standalone</span>
             </div>
         </div>

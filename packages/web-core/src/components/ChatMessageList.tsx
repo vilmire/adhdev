@@ -514,7 +514,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                     <button
                         type="button"
                         onClick={handleLoadMoreClick}
-                        className={`text-[11px] rounded-xl px-4 py-1.5 cursor-pointer border transition-all ${
+                        className={`text-2xs rounded-xl px-4 py-1.5 cursor-pointer border transition-all ${
                             loadError && hiddenLiveCount === 0
                                 ? 'bg-transparent border-yellow-500/30 text-yellow-400 opacity-80 hover:opacity-100'
                                 : 'bg-transparent border-border-subtle text-text-muted opacity-70 hover:opacity-100 hover:border-accent/40'
@@ -595,7 +595,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         <div className="dot" />
                         <div className="dot" />
                         <div className="dot" />
-                        <span className="text-[11px] text-text-muted ml-1">{t('chatList.agentGenerating')}</span>
+                        <span className="text-2xs text-text-muted ml-1">{t('chatList.agentGenerating')}</span>
                     </div>
                 </div>
             )}

@@ -241,11 +241,11 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
 
                         {prefs.globalEnabled && (
                             <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
-                                <div className="text-[11px] text-text-muted">
+                                <div className="text-2xs text-text-muted">
                                     {renderPushSection ? t('notifications.browserBackgroundInfoWithPush') : t('notifications.browserBackgroundInfo')}
                                 </div>
                                 {browserPermission === 'default' && (
-                                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-300">
+                                    <div className="flex flex-wrap items-center gap-2 text-2xs text-amber-300">
                                         <span>{t('notifications.permissionDefault')}</span>
                                         <button
                                             onClick={() => { void requestNotificationPermission().then(setBrowserPermission) }}
@@ -256,12 +256,12 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                     </div>
                                 )}
                                 {browserPermission === 'denied' && (
-                                    <div className="text-[11px] text-amber-300">
+                                    <div className="text-2xs text-amber-300">
                                         {t('notifications.permissionDenied')}
                                     </div>
                                 )}
                                 {browserPermission === 'unsupported' && (
-                                    <div className="text-[11px] text-amber-300">
+                                    <div className="text-2xs text-amber-300">
                                         {t('notifications.permissionUnsupported')}
                                     </div>
                                 )}
@@ -302,7 +302,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                         )}
 
                         {!prefs.globalEnabled && (
-                            <p className="text-[11px] text-text-muted italic">
+                            <p className="text-2xs text-text-muted italic">
                                 {t('notifications.allDisabled')}
                             </p>
                         )}
@@ -315,7 +315,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                     className="mb-4"
                 >
                     <div className="flex justify-end mb-3 -mt-1">
-                        <button onClick={fetchAllSettings} disabled={loading} className="machine-btn text-[11px]">
+                        <button onClick={fetchAllSettings} disabled={loading} className="machine-btn text-2xs">
                             {loading ? t('notifications.loading') : t('notifications.refresh')}
                         </button>
                     </div>
@@ -350,10 +350,10 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                             <div className="flex items-center justify-between mb-2">
                                                 <div className="flex items-center gap-2">
                                                     <span
-                                                        className="px-2 py-0.5 rounded text-[10px] font-bold"
+                                                        className="px-2 py-0.5 rounded text-3xs font-bold"
                                                         style={{ background: color.bg, color: color.text, border: `1px solid ${color.border}` }}
                                                     >{category.toUpperCase()}</span>
-                                                    <span className="text-[11px] text-text-muted">{t('notifications.providerCount', { count: entries.length })}</span>
+                                                    <span className="text-2xs text-text-muted">{t('notifications.providerCount', { count: entries.length })}</span>
                                                 </div>
                                             </div>
                                             {keyStats.length > 0 && (
@@ -371,7 +371,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                                                 label={
                                                                     <span className="flex items-center gap-1.5">
                                                                         <span>{label}</span>
-                                                                        <span className="text-[10px] text-text-muted">({onCount}/{total})</span>
+                                                                        <span className="text-3xs text-text-muted">({onCount}/{total})</span>
                                                                     </span>
                                                                 }
                                                                 description={description}
@@ -418,7 +418,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
         <div>
             <button
                 onClick={() => setExpanded(!expanded)}
-                className="machine-btn text-[10px] mb-2"
+                className="machine-btn text-3xs mb-2"
             >
                 {expanded ? t('notifications.hideDetails') : t('notifications.showDetails', { count: entries.length })}
             </button>
@@ -435,7 +435,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
                                 <div className="flex items-center gap-1.5">
                                     <span className="font-medium text-text-primary truncate">{prov.displayName}</span>
                                     {multiMachine && (
-                                        <span className="text-[9px] text-text-muted bg-bg-secondary px-1 py-px rounded">{prov.machineLabel}</span>
+                                        <span className="text-4xs text-text-muted bg-bg-secondary px-1 py-px rounded">{prov.machineLabel}</span>
                                     )}
                                 </div>
                             </div>
@@ -444,8 +444,8 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
                                 const saving = savingKey === `${prov.type}.${s.key}`
                                 return (
                                     <div key={s.key} className="flex items-center gap-1 shrink-0">
-                                        <span className="text-[9px] text-text-muted">{s.label || s.key}</span>
-                                        {saving && <span className="text-[8px] text-violet-400">...</span>}
+                                        <span className="text-4xs text-text-muted">{s.label || s.key}</span>
+                                        {saving && <span className="text-5xs text-violet-400">...</span>}
                                         <Toggle checked={val} onChange={v => void onSet(prov.machineId, prov.type, s.key, v)} />
                                     </div>
                                 )

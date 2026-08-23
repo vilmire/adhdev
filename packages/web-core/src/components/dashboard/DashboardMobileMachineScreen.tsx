@@ -200,7 +200,7 @@ export default function DashboardMobileMachineScreen({
             <div className="flex-1 min-h-0 overflow-y-auto py-2 flex flex-col gap-2 -webkit-overflow-scrolling-touch">
                 {hasCurrentChats && (
                     <section className="flex flex-col gap-0">
-                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Current Chats</div>
+                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Current Chats</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
                             {conversationCards.map(card => (
                                 <button
@@ -221,7 +221,7 @@ export default function DashboardMobileMachineScreen({
 
                 {hasRecentLaunches && (
                     <section className="flex flex-col gap-0">
-                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Recent Launches</div>
+                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Recent Launches</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
                             {visibleRecentLaunchCards.map(card => (
                                 <button
@@ -233,7 +233,7 @@ export default function DashboardMobileMachineScreen({
                                     <div className="flex items-center justify-between gap-3 w-full">
                                         <span className="text-sm font-bold text-text-primary truncate">{card.primary}</span>
                                         {card.updatedLabel && (
-                                            <span className="text-[11px] text-text-muted shrink-0">{card.updatedLabel}</span>
+                                            <span className="text-2xs text-text-muted shrink-0">{card.updatedLabel}</span>
                                         )}
                                     </div>
                                     <span className="text-xs leading-relaxed text-text-secondary">
@@ -263,7 +263,7 @@ export default function DashboardMobileMachineScreen({
                   */}
                 {false && (
                     <section className="flex flex-col gap-0">
-                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Start</div>
+                        <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Start</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
                             <div className="flex flex-col gap-2.5 w-full p-3.5 rounded-2xl border border-border-default/80 bg-surface-primary/90">
                                 <div className="text-sm font-bold text-text-primary">Workspace</div>
@@ -297,7 +297,7 @@ export default function DashboardMobileMachineScreen({
                                                     <IconFolder size={17} />
                                                 </span>
                                                 <div className="min-w-0 flex-1">
-                                                    <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-muted mb-1">Selected folder</div>
+                                                    <div className="text-3xs font-bold uppercase tracking-[0.08em] text-text-muted mb-1">Selected folder</div>
                                                     <div className="text-[12px] leading-relaxed text-text-primary break-all">
                                                         {launcher.resolvedWorkspacePath || launcher.browseCurrentPath || 'No folder selected yet.'}
                                                     </div>
@@ -327,7 +327,7 @@ export default function DashboardMobileMachineScreen({
                                     </div>
                                 )}
                                 {launcher.resolvedWorkspacePath && (
-                                    <div className="text-[11px] leading-relaxed text-text-muted break-all">{launcher.resolvedWorkspacePath}</div>
+                                    <div className="text-2xs leading-relaxed text-text-muted break-all">{launcher.resolvedWorkspacePath}</div>
                                 )}
                             </div>
                         </div>
@@ -407,7 +407,7 @@ export default function DashboardMobileMachineScreen({
                                                 }}
                                             >
                                                 <span className="text-[13px] font-bold text-text-primary">{ide.name}</span>
-                                                <span className="text-[11px] leading-relaxed text-text-muted break-all">
+                                                <span className="text-2xs leading-relaxed text-text-muted break-all">
                                                     {launcher.resolvedWorkspacePath || 'Use selected workspace'}
                                                 </span>
                                             </button>
@@ -462,7 +462,7 @@ export default function DashboardMobileMachineScreen({
                                                 <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-text-primary">
                                                     <ProviderLogo type={provider.type} label={provider.displayName} size={15} />{provider.displayName}
                                                 </span>
-                                                <span className="text-[11px] leading-relaxed text-text-muted break-all">
+                                                <span className="text-2xs leading-relaxed text-text-muted break-all">
                                                     {launcher.resolvedWorkspacePath || 'Use selected workspace'}
                                                 </span>
                                             </button>
@@ -490,7 +490,7 @@ export default function DashboardMobileMachineScreen({
                 )}
 
                 <section className="flex flex-col gap-0">
-                    <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Inspect</div>
+                    <div className="text-2xs font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Inspect</div>
                     <div className="grid grid-cols-1 gap-2.5 px-4">
                         {selectedMachineNeedsUpgrade && (
                             <button
@@ -559,10 +559,10 @@ export default function DashboardMobileMachineScreen({
                         launcher.launchConfirm.providerType && (launcher.launchConfirmSessionsLoading || launcher.launchConfirmSavedSessions.length > 0) && (
                             <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                                 <div className="flex items-center justify-between mb-1">
-                                    <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
-                                    {launcher.launchConfirmSessionsLoading && <div className="text-[10px] text-text-secondary font-medium">Loading...</div>}
+                                    <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
+                                    {launcher.launchConfirmSessionsLoading && <div className="text-3xs text-text-secondary font-medium">Loading...</div>}
                                 </div>
-                                <div className="text-[11px] text-text-secondary mb-2">{getSavedHistoryHelperLabel(t)}</div>
+                                <div className="text-2xs text-text-secondary mb-2">{getSavedHistoryHelperLabel(t)}</div>
                                 <div className="grid grid-cols-1 gap-2 mb-2">
                                     <input
                                         type="text"
@@ -599,7 +599,7 @@ export default function DashboardMobileMachineScreen({
                                         <option value="messages">Most messages</option>
                                     </select>
                                 </div>
-                                <label className="mb-2 flex items-center gap-2 text-[11px] text-text-muted">
+                                <label className="mb-2 flex items-center gap-2 text-2xs text-text-muted">
                                     <input
                                         type="checkbox"
                                         checked={launcher.launchConfirmResumableOnly}
@@ -622,7 +622,7 @@ export default function DashboardMobileMachineScreen({
                                     ))}
                                 </select>
                                 {!launcher.launchConfirmSessionsLoading && launcher.launchConfirmSavedSessions.length > 0 && launcher.filteredLaunchConfirmSavedSessions.length === 0 && (
-                                    <div className="mt-2 text-[11px] text-text-muted">No saved history matches these filters.</div>
+                                    <div className="mt-2 text-2xs text-text-muted">No saved history matches these filters.</div>
                                 )}
                                 {launcher.launchConfirmResumeId && (() => {
                                     const selectedSession = launcher.filteredLaunchConfirmSavedSessions.find(
@@ -631,7 +631,7 @@ export default function DashboardMobileMachineScreen({
                                     if (!selectedSession) return null
                                     const summary = buildSavedHistorySummaryView(selectedSession)
                                     return (
-                                        <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-[11px] text-text-muted leading-relaxed">
+                                        <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-2xs text-text-muted leading-relaxed">
                                             <div className="font-semibold text-text-primary truncate">{summary.title}</div>
                                             <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
                                             <div className="mt-1">{summary.metaLine}</div>

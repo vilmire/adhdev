@@ -44,7 +44,7 @@ function AgentRow({ type, name, status, statusTone = 'idle', workspace, isActive
                 className="flex-1 flex items-center gap-2 cursor-pointer min-w-0"
             >
                 <ProviderLogo type={type} label={name} size={16} />
-                <span className="font-semibold text-[11px] text-text-primary">{name}</span>
+                <span className="font-semibold text-2xs text-text-primary">{name}</span>
                 {hidden && (
                     <span
                         className="inline-flex shrink-0 text-text-muted"
@@ -55,9 +55,9 @@ function AgentRow({ type, name, status, statusTone = 'idle', workspace, isActive
                     </span>
                 )}
                 {workspace && (
-                    <span className="text-[9px] text-text-muted overflow-hidden text-ellipsis whitespace-nowrap max-w-[100px]">{workspace}</span>
+                    <span className="text-4xs text-text-muted overflow-hidden text-ellipsis whitespace-nowrap max-w-[100px]">{workspace}</span>
                 )}
-                <span className={`ml-auto flex items-center gap-1 text-[9px] font-medium ${isActive ? 'text-orange-400' : 'text-text-muted'}`}>
+                <span className={`ml-auto flex items-center gap-1 text-4xs font-medium ${isActive ? 'text-orange-400' : 'text-text-muted'}`}>
                     {isActive && <IconZap size={10} />}
                     {status}
                 </span>
@@ -68,7 +68,7 @@ function AgentRow({ type, name, status, statusTone = 'idle', workspace, isActive
                         animation: statusTone === 'active' ? 'pulse-dot 1.5s infinite' : 'none',
                     }}
                 />
-                <span className="text-[9px] text-text-muted">→</span>
+                <span className="text-4xs text-text-muted">→</span>
             </div>
         </div>
     )
@@ -204,7 +204,7 @@ export default function MachinesPage() {
                 {/* Cross-Machine Active Agents Feed */}
                 {allActiveAgents.length > 0 && (
                     <div className="bg-bg-secondary border border-orange-500/10 rounded-xl px-4 py-3 mb-4">
-                        <div className="text-[10px] text-text-muted uppercase tracking-wide font-bold mb-2 flex items-center gap-1.5">
+                        <div className="text-3xs text-text-muted uppercase tracking-wide font-bold mb-2 flex items-center gap-1.5">
                             <span
                                 className="w-1.5 h-1.5 rounded-full bg-orange-500"
                                 style={{ animation: 'pulse-dot 1.5s infinite' }}
@@ -222,16 +222,16 @@ export default function MachinesPage() {
                                 >
                                     <ProviderLogo type={agent.type} label={agent.name} size={16} />
                                     <span className="text-xs text-orange-400 font-semibold">{agent.name}</span>
-                                    {agent.workspace && <span className="text-[9px] text-text-muted max-w-20 overflow-hidden text-ellipsis whitespace-nowrap">· {agent.workspace}</span>}
-                                    <span className="text-[10px] text-text-muted">on {agent.machine}</span>
-                                    <span className="ml-auto text-[10px] text-orange-500 flex items-center gap-1">
+                                    {agent.workspace && <span className="text-4xs text-text-muted max-w-20 overflow-hidden text-ellipsis whitespace-nowrap">· {agent.workspace}</span>}
+                                    <span className="text-3xs text-text-muted">on {agent.machine}</span>
+                                    <span className="ml-auto text-3xs text-orange-500 flex items-center gap-1">
                                         <span
                                             className="w-1 h-1 rounded-full bg-orange-500"
                                             style={{ animation: 'pulse-dot 1s infinite' }}
                                         />
                                         {t('machine.card.generating')}
                                     </span>
-                                    <span className="text-[10px] text-text-muted">→</span>
+                                    <span className="text-3xs text-text-muted">→</span>
                                 </div>
                             ))}
                         </div>
@@ -291,7 +291,7 @@ export default function MachinesPage() {
                                                 <div className="font-semibold text-sm text-text-primary tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">
                                                     {machine.nickname || machine.hostname}
                                                 </div>
-                                                <div className="text-[10px] text-text-muted flex gap-1 items-center">
+                                                <div className="text-3xs text-text-muted flex gap-1 items-center">
                                                     {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
                                                         <span>{machine.system.cpus} cores · {formatBytes(machine.system.totalMem)}</span>
                                                     )}
@@ -313,7 +313,7 @@ export default function MachinesPage() {
                                             {/* Transport type badge */}
                                             {connState === 'connected' && transport && transport !== 'unknown' && (
                                                 <span
-                                                    className={`text-[9px] font-semibold px-[5px] py-px rounded ${
+                                                    className={`text-4xs font-semibold px-[5px] py-px rounded ${
                                                         transport === 'relay'
                                                             ? 'bg-orange-500/[0.08] border border-orange-500/20 text-orange-400'
                                                             : 'bg-green-500/[0.08] border border-green-500/20 text-green-500'
@@ -337,11 +337,11 @@ export default function MachinesPage() {
                                     {/* Connection status line (blocked / connecting) */}
                                     {isBlocked ? (
                                         <div className="flex items-center justify-between gap-2 mt-2.5 px-2.5 py-1.5 rounded-lg bg-red-500/[0.06] border border-red-500/15">
-                                            <span className="text-[11px] font-medium text-red-400">{t('machine.card.connectionFailed')}</span>
+                                            <span className="text-2xs font-medium text-red-400">{t('machine.card.connectionFailed')}</span>
                                             {retryConnection && (
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); retryConnection(machine.machineId) }}
-                                                    className="px-2.5 py-0.5 rounded-md text-[10px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
+                                                    className="px-2.5 py-0.5 rounded-md text-3xs font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
                                                 >
                                                     {t('machine.card.reconnect')}
                                                 </button>
@@ -350,7 +350,7 @@ export default function MachinesPage() {
                                     ) : isConnecting && (
                                         <div className="flex items-center gap-2 mt-2.5 px-2.5 py-1.5 rounded-lg bg-bg-secondary border border-border-subtle">
                                             <LoadingSpinner size={12} thickness={2} />
-                                            <span className="text-[11px] font-medium text-text-secondary">{t('machine.card.connecting')}</span>
+                                            <span className="text-2xs font-medium text-text-secondary">{t('machine.card.connecting')}</span>
                                         </div>
                                     )}
 
@@ -363,7 +363,7 @@ export default function MachinesPage() {
                                     {/* Compact Agent List — IDEs */}
                                     {machine.ideSessions.length > 0 && (
                                         <div className="mb-1.5">
-                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionIDEs')}</div>
+                                            <div className="text-4xs text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionIDEs')}</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.ideSessions.map(ide => {
                                                     const active = isAgentActive(ide.agents, ide.childSessions, ide.activeChat)
@@ -399,11 +399,11 @@ export default function MachinesPage() {
                                                                     {activeStreams.map((stream, si) => (
                                                                         <div
                                                                             key={si}
-                                                                            className="flex items-center gap-1.5 px-2 py-0.5 text-[10px] text-text-secondary"
+                                                                            className="flex items-center gap-1.5 px-2 py-0.5 text-3xs text-text-secondary"
                                                                         >
                                                                             <ProviderLogo type={stream.providerType} size={12} />
                                                                             <span className="font-medium">{stream.providerName}</span>
-                                                                            <span className={`ml-auto text-[9px] ${
+                                                                            <span className={`ml-auto text-4xs ${
                                                                                 isManagedStatusWorking(stream.status)
                                                                                     ? 'text-orange-400' : 'text-text-muted'
                                                                             }`}>
@@ -423,7 +423,7 @@ export default function MachinesPage() {
                                     {/* Compact Agent List — CLIs */}
                                     {machine.cliSessions.length > 0 && (
                                         <div className="mb-1.5">
-                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionCLIs')}</div>
+                                            <div className="text-4xs text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionCLIs')}</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.cliSessions.map(cli => {
                                                     const active = isManagedStatusWorking(cli.status)
@@ -453,7 +453,7 @@ export default function MachinesPage() {
                                     {/* Compact Agent List — ACP Agents */}
                                     {machine.acpSessions.length > 0 && (
                                         <div className="mb-1.5">
-                                            <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionACPAgents')}</div>
+                                            <div className="text-4xs text-text-muted uppercase tracking-wide font-semibold mb-1">{t('machine.card.sectionACPAgents')}</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.acpSessions.map(acp => {
                                                     const active = isManagedStatusWorking(acp.status)
@@ -482,7 +482,7 @@ export default function MachinesPage() {
 
                                     {/* Nothing running */}
                                     {totalAgents === 0 && isOnline && (
-                                        <div className="text-[11px] text-text-muted italic">
+                                        <div className="text-2xs text-text-muted italic">
                                             {t('machine.card.noAgentsRunning')} ·{' '}
                                             <span
                                                 onClick={(e) => { e.stopPropagation(); navigate(`/machines/${machine.machineId}`) }}

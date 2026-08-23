@@ -45,7 +45,7 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
             style={{ background: 'linear-gradient(135deg, var(--status-warning), color-mix(in srgb, var(--status-warning) 85%, #000))' }}
         >
             {activeConv.modalMessage && (
-                <div className="text-[11px] opacity-85 mb-1.5 whitespace-nowrap overflow-hidden text-ellipsis max-w-full">
+                <div className="text-2xs opacity-85 mb-1.5 whitespace-nowrap overflow-hidden text-ellipsis max-w-full">
                     {activeConv.modalMessage.replace(/[\n\r]+/g, ' ').slice(0, 120)}
                 </div>
             )}

@@ -603,8 +603,8 @@ export default function MeshObservabilitySurface({
                         {/* Direction toggle */}
                         <div
                             className={meshTheme.isDark
-                                ? 'flex items-center gap-0.5 rounded-md border border-white/10 bg-slate-950/40 p-0.5 text-[10px]'
-                                : 'flex items-center gap-0.5 rounded-md border border-slate-300 bg-white/70 p-0.5 text-[10px]'}
+                                ? 'flex items-center gap-0.5 rounded-md border border-white/10 bg-slate-950/40 p-0.5 text-3xs'
+                                : 'flex items-center gap-0.5 rounded-md border border-slate-300 bg-white/70 p-0.5 text-3xs'}
                             role="group"
                             aria-label="Graph layout direction"
                         >
@@ -727,11 +727,11 @@ export default function MeshObservabilitySurface({
                     {/* Right sidebar — selected node detail */}
                     {selectedGraphNode && detailSelection?.kind === 'node' && (
                         <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 z-20 rounded-2xl border shadow-2xl sm:relative sm:inset-auto sm:z-auto sm:w-72 sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:shadow-none overflow-y-auto p-4 ${meshTheme.isDark ? 'border-white/10 bg-slate-950 sm:bg-transparent' : 'border-slate-200 bg-white sm:bg-transparent'}`}>
-                            <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.selectedNode')}</div>
+                            <div className={`mb-2 text-3xs font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.selectedNode')}</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                     <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
-                                    <div className={`mt-0.5 font-mono text-[11px] ${meshTheme.textMuted}`}>{selectedGraphNode.id.slice(0, 16)}</div>
+                                    <div className={`mt-0.5 font-mono text-2xs ${meshTheme.textMuted}`}>{selectedGraphNode.id.slice(0, 16)}</div>
                                 </div>
                                 <div className="flex shrink-0 items-center gap-1.5">
                                     {selectedGraphNode.behind > 0 && (
@@ -812,10 +812,10 @@ export default function MeshObservabilitySurface({
                             </div>
                             {selectedNodeSessionEntries.length > 0 && (
                                 <div className="mt-3">
-                                    <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.activeSessions')}</div>
+                                    <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.activeSessions')}</div>
                                     <div className="flex flex-col gap-1.5">
                                         {selectedNodeSessionEntries.map(entry => (
-                                            <div key={entry.session.sessionId} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                            <div key={entry.session.sessionId} className={`rounded-lg border px-2.5 py-1.5 text-2xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
                                                 <div className="flex items-center justify-between gap-2">
                                                     <span className={`min-w-0 truncate font-mono select-text ${meshTheme.textMuted}`} title={entry.session.sessionId}>{shortSessionId(entry.session.sessionId)}</span>
                                                     <Badge label={sessionStatusLabel(entry.session)} tone={sessionTone(sessionStatusLabel(entry.session))} />
@@ -826,7 +826,7 @@ export default function MeshObservabilitySurface({
                                                     <span>{sessionElapsedLabel(entry.session)}</span>
                                                 </div>
                                                 {entry.session.statusNote && (
-                                                    <div className={`mt-1 text-[10px] leading-4 ${meshTheme.textMuted}`}>
+                                                    <div className={`mt-1 text-3xs leading-4 ${meshTheme.textMuted}`}>
                                                         {entry.session.statusNote}
                                                     </div>
                                                 )}
@@ -839,7 +839,7 @@ export default function MeshObservabilitySurface({
                                 </div>
                             )}
                             <div className="mt-3">
-                                <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.ledger')}</div>
+                                <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.ledger')}</div>
                                 <div className="grid grid-cols-2 gap-1.5">
                                     <Row label={t('meshGraph.obs.fieldCompleted')} value={String(ledgerSummary.taskCompleted)} />
                                     <Row label={t('meshGraph.obs.fieldFailed')} value={<span className={ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}>{ledgerSummary.taskFailed}</span>} />
@@ -854,10 +854,10 @@ export default function MeshObservabilitySurface({
                                 if (nodeTasks.length === 0) return null
                                 return (
                                     <div className="mt-3">
-                                        <div className={`mb-1.5 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.queueTasks')}</div>
+                                        <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.queueTasks')}</div>
                                         <div className="flex flex-col gap-1.5">
                                             {nodeTasks.map(task => (
-                                                <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                                <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-2xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span className={`font-mono ${meshTheme.textMuted}`}>{task.id.slice(0, 12)}</span>
                                                         <Badge label={task.status ?? 'unknown'} tone={sessionTone(task.status)} />
@@ -901,11 +901,11 @@ export default function MeshObservabilitySurface({
                         old hover preview; click is the primary drill-down path). */}
                     {selectedGraphEdge && detailSelection?.kind === 'edge' && (
                         <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 z-20 rounded-2xl border shadow-2xl sm:relative sm:inset-auto sm:z-auto sm:w-72 sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:shadow-none overflow-y-auto p-4 ${meshTheme.isDark ? 'border-white/10 bg-slate-950 sm:bg-transparent' : 'border-slate-200 bg-white sm:bg-transparent'}`}>
-                            <div className={`mb-2 text-[10px] font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.selectedEdge')}</div>
+                            <div className={`mb-2 text-3xs font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.selectedEdge')}</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                     <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphEdge.label || edgeTypeLabel(selectedGraphEdge)}</div>
-                                    <div className={`mt-0.5 break-all font-mono text-[11px] ${meshTheme.textMuted}`}>{selectedGraphEdge.id}</div>
+                                    <div className={`mt-0.5 break-all font-mono text-2xs ${meshTheme.textMuted}`}>{selectedGraphEdge.id}</div>
                                 </div>
                                 <button
                                     type="button"

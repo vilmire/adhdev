@@ -213,7 +213,7 @@ export default function InteractivePromptModal({
                       </span>
                     )}
                     {/* Type label makes the checkbox-vs-radio distinction explicit per question. */}
-                    <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-normal text-text-muted">
+                    <span className="rounded-full border border-border-subtle px-2 py-0.5 text-3xs font-semibold uppercase tracking-normal text-text-muted">
                       {typeLabel}
                     </span>
                   </div>

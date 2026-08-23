@@ -554,19 +554,19 @@ export function ChatThemeSection() {
                                 style={{ background: p.containerBg }}
                             >
                                 <div
-                                    className="self-start rounded-xl px-3 py-1.5 text-[10px] max-w-[75%]"
+                                    className="self-start rounded-xl px-3 py-1.5 text-3xs max-w-[75%]"
                                     style={{ background: p.assistantBubble, border: p.assistantBorder, color: p.textColor }}
                                 >
                                     {t('settings.theme.helloHelp')}
                                 </div>
                                 <div
-                                    className="self-end rounded-xl px-3 py-1.5 text-[10px] max-w-[75%]"
+                                    className="self-end rounded-xl px-3 py-1.5 text-3xs max-w-[75%]"
                                     style={{ background: p.userBubble, color: userTextColor }}
                                 >
                                     {t('settings.theme.fixBug')}
                                 </div>
                                 <div
-                                    className="self-start rounded-xl px-3 py-1.5 text-[10px] max-w-[75%]"
+                                    className="self-start rounded-xl px-3 py-1.5 text-3xs max-w-[75%]"
                                     style={{ background: p.assistantBubble, border: p.assistantBorder, color: p.textColor }}
                                 >
                                     {t('settings.theme.onIt')}
@@ -578,7 +578,7 @@ export function ChatThemeSection() {
                                     <div className="text-sm font-bold text-text-primary">
                                         {theme.id === 'custom' ? t('settings.theme.customLabel') : theme.name}
                                     </div>
-                                    <div className="text-[10px] text-text-muted">{theme.description}</div>
+                                    <div className="text-3xs text-text-muted">{theme.description}</div>
                                 </div>
                             </div>
                         </button>

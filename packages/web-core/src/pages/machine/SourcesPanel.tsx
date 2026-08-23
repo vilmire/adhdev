@@ -127,21 +127,21 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
         <Card padding="none" className="px-4.5 py-3.5">
             <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-wider text-sky-400">External sources</div>
-                    <div className="text-[11px] text-text-muted mt-1">
+                    <div className="text-2xs font-semibold uppercase tracking-wider text-sky-400">External sources</div>
+                    <div className="text-2xs text-text-muted mt-1">
                         3rd-party git URLs you've added. Providers here may ship JavaScript the daemon will execute — activation requires a confirmation.
                     </div>
                 </div>
                 <div className="flex gap-1.5">
-                    <button onClick={() => void load()} disabled={loading} className="machine-btn text-[10px]">{loading ? <IconSpinner size={11} /> : '↻'} Refresh</button>
-                    <button onClick={() => setAddOpen(true)} className="machine-btn text-[10px] bg-sky-500/[0.08] border-sky-500/20 text-sky-300 hover:bg-sky-500/[0.14]">+ Add source</button>
+                    <button onClick={() => void load()} disabled={loading} className="machine-btn text-3xs">{loading ? <IconSpinner size={11} /> : '↻'} Refresh</button>
+                    <button onClick={() => setAddOpen(true)} className="machine-btn text-3xs bg-sky-500/[0.08] border-sky-500/20 text-sky-300 hover:bg-sky-500/[0.14]">+ Add source</button>
                 </div>
             </div>
 
-            {error && <div className="mb-2 text-[11px] text-red-400 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">{error}</div>}
+            {error && <div className="mb-2 text-2xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">{error}</div>}
 
             {sources.length === 0 ? (
-                <div className="text-[11px] text-text-muted italic">No external sources registered. Use "+ Add source" to register a 3rd-party provider git URL.</div>
+                <div className="text-2xs text-text-muted italic">No external sources registered. Use "+ Add source" to register a 3rd-party provider git URL.</div>
             ) : (
                 <ul className="flex flex-col gap-2">
                     {sources.map(s => (
@@ -149,16 +149,16 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                             <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">
                                     <div className="font-mono text-[12px] text-text-primary">{s.name}</div>
-                                    <div className="text-[10px] text-text-muted truncate">{s.url} <span className="opacity-60">@ {s.ref}</span></div>
+                                    <div className="text-3xs text-text-muted truncate">{s.url} <span className="opacity-60">@ {s.ref}</span></div>
                                 </div>
                                 <button
                                     type="button"
                                     onClick={() => void remove(s.name)}
                                     disabled={removingName === s.name}
-                                    className="machine-btn text-[10px] text-red-400 hover:bg-red-500/[0.10]"
+                                    className="machine-btn text-3xs text-red-400 hover:bg-red-500/[0.10]"
                                 >{removingName === s.name ? '…' : 'Remove'}</button>
                             </div>
-                            <div className="mt-1.5 text-[10px] text-text-muted">
+                            <div className="mt-1.5 text-3xs text-text-muted">
                                 {Object.entries(s.providers).map(([cat, types]) => (
                                     <span key={cat} className="mr-3"><span className="text-text-secondary">{cat}:</span> {types.length}</span>
                                 ))}
@@ -170,14 +170,14 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
 
             {conflicts.length > 0 && (
                 <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2">
-                    <div className="text-[11px] font-semibold text-amber-300 mb-1.5">Conflicts</div>
-                    <div className="text-[10px] text-text-muted mb-2">
+                    <div className="text-2xs font-semibold text-amber-300 mb-1.5">Conflicts</div>
+                    <div className="text-3xs text-text-muted mb-2">
                         Multiple sources expose the same provider type. Pick which source's copy should be active.
                     </div>
                     <ul className="flex flex-col gap-1.5">
                         {conflicts.map(c => (
                             <li key={c.type} className="flex items-center justify-between gap-2">
-                                <div className="font-mono text-[11px]">{c.type} <span className="text-text-muted">({c.category})</span></div>
+                                <div className="font-mono text-2xs">{c.type} <span className="text-text-muted">({c.category})</span></div>
                                 <div className="flex gap-1.5 flex-wrap">
                                     {c.candidates.map(cand => (
                                         <button
@@ -185,7 +185,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                                             type="button"
                                             onClick={() => void setActive(c.type, cand)}
                                             disabled={settingActive === `${c.type}:${cand}`}
-                                            className={`text-[10px] px-2 py-0.5 rounded border ${
+                                            className={`text-3xs px-2 py-0.5 rounded border ${
                                                 c.active === cand
                                                     ? 'bg-amber-500/[0.18] border-amber-500/40 text-amber-200'
                                                     : 'border-border-subtle text-text-secondary hover:bg-amber-500/[0.06]'
@@ -204,46 +204,46 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
 
             {addOpen && (
                 <div className="mt-3 rounded border border-sky-500/30 bg-sky-500/[0.06] px-3 py-3">
-                    <div className="text-[11px] font-semibold text-sky-300 mb-2">Add external source</div>
+                    <div className="text-2xs font-semibold text-sky-300 mb-2">Add external source</div>
                     <div className="grid md:grid-cols-3 gap-2">
-                        <label className="flex flex-col gap-1 text-[10px] text-text-secondary md:col-span-3">
+                        <label className="flex flex-col gap-1 text-3xs text-text-secondary md:col-span-3">
                             <span>Git URL</span>
                             <input
                                 type="text"
                                 value={addUrl}
                                 onChange={e => setAddUrl(e.target.value)}
                                 placeholder="https://github.com/vendor/extra-providers"
-                                className="machine-input text-[11px] font-mono"
+                                className="machine-input text-2xs font-mono"
                             />
                         </label>
-                        <label className="flex flex-col gap-1 text-[10px] text-text-secondary">
+                        <label className="flex flex-col gap-1 text-3xs text-text-secondary">
                             <span>Ref (branch/tag)</span>
                             <input
                                 type="text"
                                 value={addRef}
                                 onChange={e => setAddRef(e.target.value)}
                                 placeholder="main"
-                                className="machine-input text-[11px]"
+                                className="machine-input text-2xs"
                             />
                         </label>
-                        <label className="flex flex-col gap-1 text-[10px] text-text-secondary md:col-span-2">
+                        <label className="flex flex-col gap-1 text-3xs text-text-secondary md:col-span-2">
                             <span>Name (optional, auto-derived from URL)</span>
                             <input
                                 type="text"
                                 value={addName}
                                 onChange={e => setAddName(e.target.value)}
                                 placeholder="@vendor-extra-providers"
-                                className="machine-input text-[11px] font-mono"
+                                className="machine-input text-2xs font-mono"
                             />
                         </label>
                     </div>
                     <div className="mt-3 flex items-center justify-end gap-2">
-                        <button type="button" onClick={() => setAddOpen(false)} className="machine-btn text-[10px]">Cancel</button>
+                        <button type="button" onClick={() => setAddOpen(false)} className="machine-btn text-3xs">Cancel</button>
                         <button
                             type="button"
                             onClick={() => void add()}
                             disabled={adding || !addUrl.trim()}
-                            className="machine-btn text-[10px] bg-sky-500/[0.10] border-sky-500/30 text-sky-200 hover:bg-sky-500/[0.18]"
+                            className="machine-btn text-3xs bg-sky-500/[0.10] border-sky-500/30 text-sky-200 hover:bg-sky-500/[0.18]"
                         >{adding ? 'Cloning…' : 'Clone + register'}</button>
                     </div>
                 </div>

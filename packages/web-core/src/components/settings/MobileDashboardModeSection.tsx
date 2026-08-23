@@ -77,7 +77,7 @@ export function MobileDashboardModeSection() {
                 setMobileDashboardMode(checked ? 'chat' : 'workspace')
             }}
             extra={
-                <span className="text-[11px] text-text-muted">
+                <span className="text-2xs text-text-muted">
                     {chatModeEnabled ? 'Chat mode' : 'Workspace'}
                 </span>
             }

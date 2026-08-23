@@ -359,12 +359,12 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             {/* Toolbar: filter + create + refresh + advanced toggle */}
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">
-                    <span className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mr-2">{t('machine.providers.filter')}</span>
+                    <span className="text-2xs text-text-muted font-semibold uppercase tracking-wider mr-2">{t('machine.providers.filter')}</span>
                     {(['cli', 'ide', 'acp', 'extension', 'all'] as const).map(cat => (
                         <button
                             key={cat}
                             onClick={() => setFilter(cat)}
-                            className={`machine-btn text-[10px] px-2 py-0.5 ${
+                            className={`machine-btn text-3xs px-2 py-0.5 ${
                                 filter === cat ? 'bg-accent-primary/15 border-accent-primary/40 text-accent-primary' : ''
                             }`}
                         >{cat.toUpperCase()}</button>
@@ -373,20 +373,20 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 <div className="flex gap-1.5">
                     <button
                         onClick={() => setShowSources(v => !v)}
-                        className={`machine-btn text-[10px] ${showSources ? 'bg-sky-500/[0.10] border-sky-500/30 text-sky-300' : ''}`}
+                        className={`machine-btn text-3xs ${showSources ? 'bg-sky-500/[0.10] border-sky-500/30 text-sky-300' : ''}`}
                         title="Manage 3rd-party provider sources"
                     >{t('machine.providers.sources')}</button>
                     <button
                         onClick={() => setShowClone(true)}
-                        className="machine-btn text-[10px]"
+                        className="machine-btn text-3xs"
                         title="Create a new provider from an existing one"
                     >{t('machine.providers.create')}</button>
-                    <button onClick={fetchSettings} disabled={loading} className="machine-btn text-[10px]">
+                    <button onClick={fetchSettings} disabled={loading} className="machine-btn text-3xs">
                         {loading ? <IconSpinner size={11} /> : '↻'} {t('machine.providers.refresh')}
                     </button>
                     <button
                         onClick={() => setShowSourceConfig(v => !v)}
-                        className="machine-btn text-[10px]"
+                        className="machine-btn text-3xs"
                         title="Show source configuration (advanced)"
                     >{t('machine.providers.advanced')}</button>
                 </div>
@@ -398,8 +398,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 and, before this section, uninstallable from the dashboard). */}
             {channelNewTypes.length > 0 && (
                 <Card padding="none" className="px-4.5 py-3.5">
-                    <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.newChannelTypesTitle')}</div>
-                    <div className="text-[11px] text-text-muted mt-1 mb-2.5">{t('machine.providers.newChannelTypesDesc')}</div>
+                    <div className="text-2xs font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.newChannelTypesTitle')}</div>
+                    <div className="text-2xs text-text-muted mt-1 mb-2.5">{t('machine.providers.newChannelTypesDesc')}</div>
                     <div className="flex flex-col gap-1.5">
                         {channelNewTypes.map((providerType) => (
                             <div key={providerType} className="flex items-center justify-between gap-3 text-[13px]">
@@ -431,40 +431,40 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 <Card padding="none" className="px-4.5 py-3.5">
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.sourceConfigTitle')}</div>
-                            <div className="text-[11px] text-text-muted mt-1">{t('machine.providers.sourceConfigDesc')}</div>
+                            <div className="text-2xs font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.sourceConfigTitle')}</div>
+                            <div className="text-2xs text-text-muted mt-1">{t('machine.providers.sourceConfigDesc')}</div>
                         </div>
-                        <button onClick={fetchSourceConfig} className="machine-btn text-[10px]">↻ Refresh</button>
+                        <button onClick={fetchSourceConfig} className="machine-btn text-3xs">↻ Refresh</button>
                     </div>
                     <div className="grid md:grid-cols-[180px_1fr_auto] gap-3 items-end">
-                        <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
+                        <label className="flex flex-col gap-1 text-2xs text-text-secondary">
                             <span className="font-medium text-text-primary">{t('machine.providers.sourceMode')}</span>
                             <select
                                 value={sourceModeInput}
                                 onChange={e => setSourceModeInput(e.target.value as 'normal' | 'no-upstream')}
-                                className="machine-input text-[11px]"
+                                className="machine-input text-2xs"
                             >
                                 <option value="normal">normal</option>
                                 <option value="no-upstream">no-upstream</option>
                             </select>
                         </label>
-                        <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
+                        <label className="flex flex-col gap-1 text-2xs text-text-secondary">
                             <span className="font-medium text-text-primary">{t('machine.providers.explicitProviderDir')}</span>
                             <input
                                 type="text"
                                 value={providerDirInput}
                                 onChange={e => setProviderDirInput(e.target.value)}
                                 placeholder={t('machine.providers.providerDirPlaceholder')}
-                                className="machine-input text-[11px]"
+                                className="machine-input text-2xs"
                             />
                         </label>
                         <button
                             onClick={() => void handleApplySourceConfig()}
                             disabled={sourceSaving}
-                            className="machine-btn text-[10px] bg-accent-primary/[0.08] border-accent-primary/20 text-accent-primary hover:bg-accent-primary/[0.14]"
+                            className="machine-btn text-3xs bg-accent-primary/[0.08] border-accent-primary/20 text-accent-primary hover:bg-accent-primary/[0.14]"
                         >{sourceSaving ? t('machine.providers.applying') : t('machine.providers.applyReload')}</button>
                     </div>
-                    <div className="mt-3 grid gap-1 text-[10px] text-text-muted">
+                    <div className="mt-3 grid gap-1 text-3xs text-text-muted">
                         <div><span className="text-text-secondary font-medium">{t('machine.providers.userRoot')}</span> {sourceConfig?.userDir || '—'}</div>
                         <div><span className="text-text-secondary font-medium">{t('machine.providers.upstreamRoot')}</span> {sourceConfig?.upstreamDir || '—'}</div>
                         <div><span className="text-text-secondary font-medium">{t('machine.providers.providerRoots')}</span> {sourceConfig?.providerRoots?.join(' → ') || '—'}</div>

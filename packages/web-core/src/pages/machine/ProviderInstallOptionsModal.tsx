@@ -79,7 +79,7 @@ export default function ProviderInstallOptionsModal({
                 <div className="text-[13px] font-semibold text-text-primary">
                     {t('machine.installOptions.title', { provider: displayName })}
                 </div>
-                <div className="mt-1 text-[11px] text-text-muted">
+                <div className="mt-1 text-2xs text-text-muted">
                     {t('machine.installOptions.subtitle')}
                 </div>
 
@@ -96,11 +96,11 @@ export default function ProviderInstallOptionsModal({
                                 <span className="block text-[12px] font-medium text-text-primary">
                                     {t('machine.installOptions.quotaLabel')}
                                 </span>
-                                <span className="mt-0.5 block text-[11px] text-text-muted">
+                                <span className="mt-0.5 block text-2xs text-text-muted">
                                     {t('machine.installOptions.quotaHint')}
                                 </span>
                                 {quotaInstallsClaudeStatusline && quotaEnabled && (
-                                    <span className="mt-1 block text-[11px] text-amber-400">
+                                    <span className="mt-1 block text-2xs text-amber-400">
                                         {t('machine.installOptions.quotaClaudeNote')}
                                     </span>
                                 )}
@@ -123,11 +123,11 @@ export default function ProviderInstallOptionsModal({
                                 is "automatic" — this defaults ON, so the user has
                                 to be able to understand the consequence by
                                 reading it once. */}
-                            <span className="mt-0.5 block text-[11px] text-text-muted">
+                            <span className="mt-0.5 block text-2xs text-text-muted">
                                 {t('machine.installOptions.autoApproveHint')}
                             </span>
                             {autoApprove && (
-                                <span className="mt-1 block text-[11px] text-amber-400">
+                                <span className="mt-1 block text-2xs text-amber-400">
                                     {t('machine.installOptions.autoApproveWarning')}
                                 </span>
                             )}
@@ -135,12 +135,12 @@ export default function ProviderInstallOptionsModal({
                     </label>
                 </div>
 
-                <div className="mt-3 text-[10px] text-text-muted">
+                <div className="mt-3 text-3xs text-text-muted">
                     {t('machine.installOptions.changeableLater')}
                 </div>
 
                 <div className="mt-4 flex justify-end gap-2">
-                    <button onClick={onCancel} className="machine-btn text-[11px] px-3 py-1">
+                    <button onClick={onCancel} className="machine-btn text-2xs px-3 py-1">
                         {t('machine.installOptions.cancel')}
                     </button>
                     <button
@@ -148,7 +148,7 @@ export default function ProviderInstallOptionsModal({
                             quotaEnabled: supportsQuota ? quotaEnabled : undefined,
                             autoApprove,
                         })}
-                        className="machine-btn text-[11px] px-3 py-1 border-accent-primary/30 bg-accent-primary/15 text-accent-primary"
+                        className="machine-btn text-2xs px-3 py-1 border-accent-primary/30 bg-accent-primary/15 text-accent-primary"
                         data-provider-type={providerType}
                     >
                         {t('machine.installOptions.confirm')}

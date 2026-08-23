@@ -193,7 +193,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                                 href={`${githubUrl}/tree/${status?.branch || 'main'}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="truncate text-[10px] text-text-secondary hover:text-accent-primary underline"
+                                className="truncate text-3xs text-text-secondary hover:text-accent-primary underline"
                                 title="Open on GitHub"
                             >
                                 GitHub ↗

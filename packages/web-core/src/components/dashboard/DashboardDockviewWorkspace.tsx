@@ -1760,7 +1760,7 @@ export default function DashboardDockviewWorkspace({
                                 Press a key combo (e.g. {isMac ? '⌘+1' : 'Ctrl+1'}, {isMac ? '⌥+A' : 'Alt+A'})
                             </div>
                             <div className="text-lg font-mono text-accent animate-pulse">Listening...</div>
-                            <div className="text-[10px] text-text-muted mt-3">Press Esc to cancel</div>
+                            <div className="text-3xs text-text-muted mt-3">Press Esc to cancel</div>
                         </div>
                     </div>,
                     shortcutOverlayDocument.body,

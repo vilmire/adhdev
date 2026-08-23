@@ -23,7 +23,7 @@ const RISK_CLASS: Record<AutoApproveModeRisk, string> = {
 export function AutoApproveRiskBadge({ risk }: { risk: AutoApproveModeRisk }) {
     const { t } = useTranslation()
     return (
-        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${RISK_CLASS[risk]}`}>
+        <span className={`rounded-full border px-2 py-0.5 text-3xs font-semibold uppercase tracking-wide ${RISK_CLASS[risk]}`}>
             {t(`newSession.autoApproveRisk.${risk}`)}
         </span>
     )
@@ -38,7 +38,7 @@ export function AutoApproveModeSelector({
     const { t } = useTranslation()
     return (
         <div className="space-y-2">
-            <div className="text-[11px] text-text-muted">
+            <div className="text-2xs text-text-muted">
                 {t('newSession.autoApproveModeDescription')}
             </div>
             <div className="grid grid-cols-1 gap-2" role="radiogroup" aria-label={t('newSession.autoApproveMode')}>
@@ -92,7 +92,7 @@ export function LegacyAutoApproveToggle({
         >
             <span>
                 <span className="block text-sm font-semibold text-text-primary">{t('newSession.autoApproveLegacy')}</span>
-                <span className="mt-0.5 block text-[11px] text-text-muted">{t('newSession.autoApproveLegacyDescription')}</span>
+                <span className="mt-0.5 block text-2xs text-text-muted">{t('newSession.autoApproveLegacyDescription')}</span>
             </span>
             <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-surface-secondary'}`}>
                 <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />

@@ -353,7 +353,7 @@ export default function ChatPane({
                     </div>
                     <div className="flex flex-col items-center gap-1.5">
                         <div className="text-[13px] text-blue-400 font-medium">{t('chatPane.connectingToMachine')}<span className="connecting-dots"></span></div>
-                        <div className="text-[11px] opacity-35">{t('chatPane.establishingP2P')}</div>
+                        <div className="text-2xs opacity-35">{t('chatPane.establishingP2P')}</div>
                     </div>
                 </div>
             );
@@ -369,7 +369,7 @@ export default function ChatPane({
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
                         {isFocusingAgent ? <span className="inline-flex items-center gap-1.5"><IconSpinner size={12} />{t('chatPane.switchingPanel')}</span> : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
-                    <div className="text-[11px] opacity-35 max-w-[280px]">{t('chatPane.clickToSwitchMonitoring')}</div>
+                    <div className="text-2xs opacity-35 max-w-[280px]">{t('chatPane.clickToSwitchMonitoring')}</div>
                 </div>
             );
         }
@@ -381,7 +381,7 @@ export default function ChatPane({
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
                         {isFocusingAgent ? <span className="inline-flex items-center gap-1.5"><IconSpinner size={12} />{t('chatPane.openingPanel')}</span> : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
-                    <div className="text-[11px] opacity-35 max-w-[280px]">{t('chatPane.openPanelHint')}</div>
+                    <div className="text-2xs opacity-35 max-w-[280px]">{t('chatPane.openPanelHint')}</div>
                 </div>
             );
         }

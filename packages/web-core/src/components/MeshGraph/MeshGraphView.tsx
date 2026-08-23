@@ -447,7 +447,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 <div className="flex min-w-0 items-center justify-center gap-2">
                     <span className={`shrink-0 text-sm ${meshTheme.isDark ? 'text-sky-200' : 'text-sky-600'}`} aria-hidden><IconGitBranch size={13} /></span>
                     <span className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{node.label}</span>
-                    <span className={`shrink-0 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.panel.defaultBranch')}</span>
+                    <span className={`shrink-0 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.panel.defaultBranch')}</span>
                     {attention && (
                         <span className={`shrink-0 h-2 w-2 rounded-full ${attention.tone === 'danger' ? 'bg-rose-400' : attention.tone === 'warn' ? 'bg-amber-400' : 'bg-sky-400'}`} title={translateAttentionLabel(attention.label, node, t)} aria-hidden />
                     )}
@@ -489,13 +489,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         <span className={`truncate text-xs font-semibold ${meshTheme.textPrimary}`}>{node.label}</span>
                     </span>
                     {shortCommit && (
-                        <span className={`shrink-0 font-mono text-[9px] ${meshTheme.textMuted}`}>{shortCommit}</span>
+                        <span className={`shrink-0 font-mono text-4xs ${meshTheme.textMuted}`}>{shortCommit}</span>
                     )}
                 </div>
                 <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
-                    <span className={`shrink-0 rounded-full border px-1.5 py-px text-[9px] ${stateClass}`}>{stateLabel}</span>
+                    <span className={`shrink-0 rounded-full border px-1.5 py-px text-4xs ${stateClass}`}>{stateLabel}</span>
                     {node.submodulePath && node.submodulePath !== node.label && (
-                        <span className={`min-w-0 truncate text-[9px] ${meshTheme.textMuted}`}>{node.submodulePath}</span>
+                        <span className={`min-w-0 truncate text-4xs ${meshTheme.textMuted}`}>{node.submodulePath}</span>
                     )}
                 </div>
                 <Handle type="source" position={direction === 'TB' ? Position.Bottom : Position.Right} isConnectable={false} style={{ opacity: 0, pointerEvents: 'none' }} />
@@ -549,7 +549,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         {/* Truncated labels get the full name as a hover tooltip. */}
                         <div className={`truncate text-xs font-semibold leading-4 ${meshTheme.textPrimary}`} title={node.label}>{node.label}</div>
                         {!isDefaultBranchNode && (
-                            <div className={`truncate text-[10px] leading-3.5 ${meshTheme.textMuted}`} title={subtitle}>{subtitle}</div>
+                            <div className={`truncate text-3xs leading-3.5 ${meshTheme.textMuted}`} title={subtitle}>{subtitle}</div>
                         )}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -564,22 +564,22 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </div>
                 </div>
                 {node.health === 'unknown' && !attentionBadge && (
-                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[9px] italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
+                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
                         <span className="truncate">{t('meshGraph.obs.connecting')}</span>
                     </div>
                 )}
                 {attentionBadge && (
-                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
+                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
                         <span className="truncate">{attentionLabel}</span>
                     </div>
                 )}
                 {!attentionBadge && node.branch && !isSubmoduleNode && node.health !== 'unknown' && (
-                    <div className={`mt-1 min-w-0 max-w-full truncate text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-1.5 py-px inline-block`} title={node.branch}>
+                    <div className={`mt-1 min-w-0 max-w-full truncate text-3xs ${getBadgeClasses('meta', meshTheme.isDark)} rounded-full border px-1.5 py-px inline-block`} title={node.branch}>
                         {node.branch}
                     </div>
                 )}
                 {sessionSummaryLabel && (
-                    <div className={`mt-1 min-w-0 max-w-full truncate text-[9px] ${meshTheme.isDark ? 'text-cyan-100/85' : 'text-sky-700'}`} title={sessionTooltipLines.join('\n')}>
+                    <div className={`mt-1 min-w-0 max-w-full truncate text-4xs ${meshTheme.isDark ? 'text-cyan-100/85' : 'text-sky-700'}`} title={sessionTooltipLines.join('\n')}>
                         {sessionSummaryLabel}
                     </div>
                 )}
@@ -598,23 +598,23 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 ].filter(Boolean).join('\n')}
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-1.5">
-                                    <span className={`min-w-0 truncate text-[9px] ${meshTheme.textMuted}`}>
+                                    <span className={`min-w-0 truncate text-4xs ${meshTheme.textMuted}`}>
                                         {session.providerType || t('meshGraph.panel.providerUnknown')}
                                     </span>
-                                    <span className={`shrink-0 rounded-full border px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.1em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
+                                    <span className={`shrink-0 rounded-full border px-1 py-0 text-5xs font-semibold uppercase tracking-[0.1em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
                                         {formatSessionStatusLabel(session)}
                                     </span>
                                 </div>
                                 {/* Role + age — the raw session id says nothing at a glance
                                     and stays available in the tooltip above. */}
-                                <div className={`mt-0.5 flex min-w-0 items-center gap-1.5 text-[8px] ${meshTheme.textMuted}`}>
+                                <div className={`mt-0.5 flex min-w-0 items-center gap-1.5 text-5xs ${meshTheme.textMuted}`}>
                                     <span className="shrink-0">{getSessionRoleLabel(session)}</span>
                                     <span className="min-w-0 truncate tabular-nums">{sessionElapsedLabel(session).includes('not reported') ? '' : sessionElapsedLabel(session)}</span>
                                 </div>
                             </div>
                         ))}
                         {visibleCardSessions.length > CARD_SESSION_ROW_CAP && (
-                            <div className={`text-[8px] ${meshTheme.textMuted}`} title={sessionTooltipLines.join('\n')}>
+                            <div className={`text-5xs ${meshTheme.textMuted}`} title={sessionTooltipLines.join('\n')}>
                                 {t('meshGraph.panel.moreChats', { count: visibleCardSessions.length - CARD_SESSION_ROW_CAP })}
                             </div>
                         )}
@@ -655,7 +655,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                     <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{node.label}</div>
-                    <div className={`truncate text-[11px] ${meshTheme.textMuted}`}>{subtitle}</div>
+                    <div className={`truncate text-2xs ${meshTheme.textMuted}`}>{subtitle}</div>
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 shrink-0">
                     {hasActiveSession && (
@@ -670,18 +670,18 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             </div>
 
             {attentionBadge ? (
-                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
+                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-0.5 text-3xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
                     <span className="truncate">{attentionLabel}</span>
                 </div>
             ) : node.branch && !isSubmoduleNode ? (
-                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[10px] ${getBadgeClasses('meta', meshTheme.isDark)}`} title={node.branch}>
+                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-3xs ${getBadgeClasses('meta', meshTheme.isDark)}`} title={node.branch}>
                     <span className="truncate">{node.branch}</span>
                 </div>
             ) : null}
 
             {sessionSummaryLabel && (
                 <div
-                    className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-[10px] font-medium ${meshTheme.isDark ? 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                    className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-3xs font-medium ${meshTheme.isDark ? 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
                     title={sessionTooltipLines.join('\n')}
                 >
                     <span className="truncate">{sessionSummaryLabel}</span>
@@ -693,7 +693,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 one card. The summary pill above + the labeled list below remain. */}
 
             <div className="mt-3">
-                <div className="flex min-w-0 flex-wrap gap-1 text-[9px]">
+                <div className="flex min-w-0 flex-wrap gap-1 text-4xs">
                     {/* Health pill only when it says something the dot cannot: online is
                         the normal state and stays dot-only, so the badge row is quiet on
                         a healthy mesh and loud exactly where something is off. */}
@@ -753,13 +753,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     )}
                 </div>
 
-                <div className={`mt-3 text-[11px] leading-5 ${meshTheme.textSecondary}`} style={summaryTextStyle}>
+                <div className={`mt-3 text-2xs leading-5 ${meshTheme.textSecondary}`} style={summaryTextStyle}>
                     {nodeSummary}
                 </div>
 
                 {visibleSessions.length > 0 && (
                     <div className="mt-3">
-                        <div className={`mb-1.5 text-[9px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>
+                        <div className={`mb-1.5 text-4xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>
                             {t('meshGraph.panel.attachedChats')}
                         </div>
                         <div className="flex flex-col gap-1.5">
@@ -781,25 +781,25 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                         ].filter(Boolean).join('\n')}
                                     >
                                         <div className="flex min-w-0 items-center justify-between gap-2">
-                                            <span className={`min-w-0 truncate font-mono text-[10px] select-text ${meshTheme.textPrimary}`}>
+                                            <span className={`min-w-0 truncate font-mono text-3xs select-text ${meshTheme.textPrimary}`}>
                                                 {shortSessionId(session.sessionId)}
                                             </span>
-                                            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
+                                            <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-4xs font-semibold uppercase tracking-[0.12em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
                                                 {formatSessionStatusLabel(session)}
                                             </span>
                                         </div>
-                                        <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[9px] ${meshTheme.textMuted}`}>
+                                        <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-4xs ${meshTheme.textMuted}`}>
                                             <span className="truncate">{session.providerType || t('meshGraph.panel.providerUnknown')}</span>
                                             <span>{roleLabel}</span>
                                             <span>{formatElapsedSince(startedAt)}</span>
                                             {session.difficulty && (
-                                                <span className={`shrink-0 rounded-full border px-1.5 py-0 text-[8px] font-semibold uppercase tracking-[0.1em] ${getDifficultyBadgeClasses(session.difficulty, meshTheme.isDark)}`}>
+                                                <span className={`shrink-0 rounded-full border px-1.5 py-0 text-5xs font-semibold uppercase tracking-[0.1em] ${getDifficultyBadgeClasses(session.difficulty, meshTheme.isDark)}`}>
                                                     {difficultyLabel(session.difficulty, t)}
                                                 </span>
                                             )}
                                         </div>
                                         {session.statusNote && (
-                                            <div className={`mt-1 text-[9px] leading-4 ${meshTheme.textMuted}`}>
+                                            <div className={`mt-1 text-4xs leading-4 ${meshTheme.textMuted}`}>
                                                 {session.statusNote}
                                             </div>
                                         )}
@@ -807,7 +807,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 )
                             })}
                             {visibleSessions.length > CARD_SESSION_ROW_CAP && (
-                                <div className={`text-[9px] ${meshTheme.textMuted}`} title={sessionTooltipLines.join('\n')}>
+                                <div className={`text-4xs ${meshTheme.textMuted}`} title={sessionTooltipLines.join('\n')}>
                                     {t('meshGraph.panel.moreChats', { count: visibleSessions.length - CARD_SESSION_ROW_CAP })}
                                 </div>
                             )}
@@ -817,7 +817,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
                 {shouldShowCallout && calloutText && (
                     <div
-                        className={`mt-3 rounded-xl border px-3 py-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/8 text-cyan-50/90' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                        className={`mt-3 rounded-xl border px-3 py-2 text-3xs leading-4 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/8 text-cyan-50/90' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
                         style={calloutTextStyle}
                     >
                         {calloutText}
@@ -926,7 +926,7 @@ function getEdgePath(args: EdgeProps<FlowEdge>): [string, number, number] {
 }
 
 function getEdgeLabelClasses(edge: MeshGraphEdge, isDark: boolean): string {
-    const base = 'nodrag nopan rounded-md border px-2 py-1 text-[10px] font-semibold shadow-sm'
+    const base = 'nodrag nopan rounded-md border px-2 py-1 text-3xs font-semibold shadow-sm'
     switch (edge.type) {
         case 'orphanLink':
             return isDark
@@ -1367,13 +1367,13 @@ export default function MeshGraphView({
         <MeshGraphMultiMachineContext.Provider value={multiMachine}>
         <div ref={surfaceRef} className={`${meshTheme.graphShellClass} ${getGraphMinHeightClass(data.nodes.length)}`} style={{ height: '100%' }}>
             <div
-                className={`pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 px-3 py-1 text-[10px] transition-opacity duration-700 ${meshTheme.graphStatChipClass} ${showPanHint ? 'opacity-100' : 'opacity-0'}`}
+                className={`pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 px-3 py-1 text-3xs transition-opacity duration-700 ${meshTheme.graphStatChipClass} ${showPanHint ? 'opacity-100' : 'opacity-0'}`}
                 aria-hidden={!showPanHint}
             >
                 {t('meshGraph.obs.panHint')}
             </div>
             {presentEdgeTypes.length > 0 && (
-                <div className={`pointer-events-none absolute right-3 top-2 z-10 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 rounded-xl border px-2.5 py-1.5 text-[9px] ${meshTheme.isDark ? 'border-white/10 bg-slate-950/75 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
+                <div className={`pointer-events-none absolute right-3 top-2 z-10 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 rounded-xl border px-2.5 py-1.5 text-4xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/75 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
                     {presentEdgeTypes.map(type => (
                         <span key={type} className="flex items-center gap-1">
                             <svg width="16" height="4" aria-hidden>

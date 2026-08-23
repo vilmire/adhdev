@@ -249,7 +249,7 @@ const ChatInputBar = memo(function ChatInputBar({
                             <button
                                 type="button"
                                 onClick={() => removeAttachment(i)}
-                                className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-[10px] leading-none"
+                                className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-3xs leading-none"
                                 aria-label={`Remove ${att.name}`}
                             >
                                 ✕
@@ -386,7 +386,7 @@ const ChatInputBar = memo(function ChatInputBar({
                         type="button"
                         onClick={() => { void forceSubmitDraft(); }}
                         disabled={!hasDraft}
-                        className={`h-10 px-3 rounded-full text-[11px] font-medium border border-border-subtle shrink-0 transition-colors ${
+                        className={`h-10 px-3 rounded-full text-2xs font-medium border border-border-subtle shrink-0 transition-colors ${
                             hasDraft
                                 ? 'bg-bg-secondary text-text-primary hover:bg-[var(--surface-tertiary)]'
                                 : 'bg-bg-secondary text-text-muted cursor-default opacity-60'
@@ -401,12 +401,12 @@ const ChatInputBar = memo(function ChatInputBar({
 
             {/* Attach error / drag hint */}
             {(attachError || (canAttachImages && isDragOver)) && (
-                <div className={`pt-1.5 px-1 text-[11px] ${attachError ? 'text-red-400' : 'text-[var(--accent-primary)]'}`}>
+                <div className={`pt-1.5 px-1 text-2xs ${attachError ? 'text-red-400' : 'text-[var(--accent-primary)]'}`}>
                     {attachError || t('chatInput.dropImage')}
                 </div>
             )}
             {inlineStatusMessage && !attachError && (
-                <div className="pt-2 px-1 text-[11px] text-text-muted opacity-80">
+                <div className="pt-2 px-1 text-2xs text-text-muted opacity-80">
                     {inlineStatusMessage}
                 </div>
             )}

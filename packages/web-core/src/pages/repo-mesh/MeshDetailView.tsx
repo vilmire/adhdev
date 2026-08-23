@@ -402,7 +402,7 @@ export function MeshDetailView({
                                         <span className="flex items-center gap-2 text-sm text-text-primary">
                                             {t(opt.labelKey)}
                                             {recommendedDistribution === opt.value && (
-                                                <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">{t('repoMesh.detail.recommended')}</span>
+                                                <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-3xs font-medium text-accent-primary">{t('repoMesh.detail.recommended')}</span>
                                             )}
                                         </span>
                                         <span className="block text-xs text-text-muted">{t(opt.descriptionKey)}</span>
@@ -505,7 +505,7 @@ export function MeshDetailView({
                  seeds Override with it for small edits instead of writing one from scratch. */}
             {features.coordinatorPrompt && (
                 <Section title={t('repoMesh.detail.coordinatorPromptTitle')} collapsible defaultOpen={false}
-                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
+                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
                     description={t('repoMesh.detail.coordinatorPromptDescription')}>
 
                     <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
@@ -582,7 +582,7 @@ export function MeshDetailView({
 
             {/* ── Safety & Git (advanced) ── */}
             <Section title={t('repoMesh.detail.safetyTitle')} collapsible defaultOpen={false}
-                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
+                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
                 description={t('repoMesh.detail.safetyDescription')}>
                 <div className="grid gap-4 sm:grid-cols-2">
                     {[

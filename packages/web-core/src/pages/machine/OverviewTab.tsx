@@ -33,7 +33,7 @@ const QUOTA_TONE_CLASS: Record<string, string> = {
 
 function QuotaChip({ label, tone, title }: { label: string; tone: string; title?: string }) {
     return (
-        <span title={title} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${QUOTA_TONE_CLASS[tone] ?? QUOTA_TONE_CLASS.default}`}>
+        <span title={title} className={`rounded-full px-2 py-0.5 text-3xs font-medium ${QUOTA_TONE_CLASS[tone] ?? QUOTA_TONE_CLASS.default}`}>
             {label}
         </span>
     )
@@ -55,7 +55,7 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
     if (entries.length === 0) return null
     return (
         <Card padding="lg" className="mb-5">
-            <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-3">
+            <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-3">
                 {t('machine.quota.title')}
             </div>
             <div className="flex flex-col gap-2">
@@ -70,7 +70,7 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                             {/* Whose quota — omitted entirely for providers that
                                 report no account (Claude Code exposes none). */}
                             {formatQuotaAccount(quota) && (
-                                <span className="text-[10px] text-text-secondary" title={t('machine.quota.accountHint')}>
+                                <span className="text-3xs text-text-secondary" title={t('machine.quota.accountHint')}>
                                     {formatQuotaAccount(quota)}
                                 </span>
                             )}
@@ -86,7 +86,7 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                                 <QuotaChip label={usage} tone="info" title={t('machine.quota.usageHint')} />
                             )}
                             {!session && !weekly && !usage && (
-                                <span className="text-[11px] text-text-secondary" title={t('machine.quota.failureHint')}>
+                                <span className="text-2xs text-text-secondary" title={t('machine.quota.failureHint')}>
                                     {describeQuotaFailure(quota)}
                                 </span>
                             )}
@@ -129,7 +129,7 @@ export default function OverviewTab({
 
             {/* Resource Usage */}
             <Card padding="lg" className="mb-5">
-                <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-3">
+                <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-3">
                     Resource Usage
                 </div>
                 <div className="flex gap-6">

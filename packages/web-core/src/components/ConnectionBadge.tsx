@@ -15,7 +15,7 @@ export default function ConnectionBadge({ connection }: ConnectionBadgeProps) {
 
     const connected = connection.status === 'connected'
     return (
-        <div className={`px-2 py-0.5 rounded text-[9px] font-semibold flex items-center gap-1 ${
+        <div className={`px-2 py-0.5 rounded text-4xs font-semibold flex items-center gap-1 ${
             connected ? 'bg-green-500/[0.08] text-green-400' : 'bg-yellow-500/[0.08] text-yellow-400'
         }`}>
             <span

@@ -33,7 +33,7 @@ export default function ScreenshotToolbar({
         <div className="flex items-center gap-1">
             {children}
             <button className={btnClass} onClick={onZoomOut} title={t('screenshot.zoomOut')}>➖</button>
-            <span className="text-[11px] text-text-muted min-w-9 text-center font-semibold">
+            <span className="text-2xs text-text-muted min-w-9 text-center font-semibold">
                 {zoom}%
             </span>
             <button className={btnClass} onClick={onZoomIn} title={t('screenshot.zoomIn')}>➕</button>

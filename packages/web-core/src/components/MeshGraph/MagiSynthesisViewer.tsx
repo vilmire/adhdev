@@ -137,7 +137,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                             <span className={`min-w-0 flex-1 truncate text-[13px] font-semibold ${meshTheme.textPrimary}`} title={group.question || group.consensusGroupId}>
                                 {group.question || group.panel || group.consensusGroupId}
                             </span>
-                            <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                            <span className={`shrink-0 rounded-full border px-2 py-0.5 text-3xs font-semibold uppercase tracking-[0.14em] ${
                                 isSynthesized
                                     ? (dk ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
                                     : (dk ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
@@ -147,7 +147,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         </div>
 
                         {/* Counts */}
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-2xs">
                             {typeof group.answered === 'number' && (
                                 <span className={meshTheme.textSecondary}>
                                     {t('meshGraph.synthesis.answered', { answered: group.answered, total: group.replicaCount ?? '?' })}
@@ -172,14 +172,14 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
 
                         {/* Independence banner */}
                         {group.independenceBanner && (
-                            <div className={`mt-2 rounded-lg border px-2.5 py-1.5 text-[11px] ${dk ? 'border-amber-500/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
+                            <div className={`mt-2 rounded-lg border px-2.5 py-1.5 text-2xs ${dk ? 'border-amber-500/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
                                 {group.independenceBanner}
                             </div>
                         )}
 
                         {/* Git skew */}
                         {group.gitSkew?.skewed && (
-                            <div className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>
+                            <div className={`mt-2 text-2xs ${meshTheme.textSecondary}`}>
                                 <span className={dk ? 'text-amber-300' : 'text-amber-600'}>{t('meshGraph.synthesis.gitSkewLabel')}</span>
                                 {group.gitSkew.note || t('meshGraph.synthesis.gitSkewNote', { count: branches.length, branches: branches.join(', ') })}
                             </div>
@@ -188,11 +188,11 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         {/* needs_verification preview (bounded) */}
                         {group.needsVerification && group.needsVerification.length > 0 && (
                             <div className={`mt-3 pt-3 ${sepClass}`}>
-                                <span className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.needsVerification')}</span>
+                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.needsVerification')}</span>
                                 <ul className="mt-1.5 flex flex-col gap-1">
                                     {group.needsVerification.map((item, i) => (
                                         <li key={i} className={`flex items-start gap-2 text-[12px] ${meshTheme.textPrimary}`}>
-                                            <span className={`mt-0.5 shrink-0 rounded px-1 py-0.5 text-[9px] uppercase ${dk ? 'bg-white/8 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{item.category}</span>
+                                            <span className={`mt-0.5 shrink-0 rounded px-1 py-0.5 text-4xs uppercase ${dk ? 'bg-white/8 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{item.category}</span>
                                             <span className="min-w-0">{item.claim}</span>
                                         </li>
                                     ))}
@@ -203,7 +203,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         {/* Open questions */}
                         {group.openQuestions && group.openQuestions.length > 0 && (
                             <div className={`mt-3 pt-3 ${sepClass}`}>
-                                <span className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.openQuestions')}</span>
+                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.openQuestions')}</span>
                                 <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4">
                                     {group.openQuestions.map((q, i) => (
                                         <li key={i} className={`text-[12px] ${meshTheme.textPrimary}`}>{q}</li>
@@ -215,7 +215,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         {/* Raw answers — live-only, not persisted */}
                         <div className={`mt-3 pt-3 ${sepClass}`}>
                             <div className="flex flex-wrap items-center gap-2">
-                                <span className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.rawReplicaAnswers')}</span>
+                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.rawReplicaAnswers')}</span>
                                 <Button
                                     variant="secondary"
                                     size="sm"
@@ -228,14 +228,14 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                                     {rawState?.loading ? t('meshGraph.synthesis.loading') : rawState?.fetched ? t('meshGraph.synthesis.reloadRaw') : t('meshGraph.synthesis.loadRaw')}
                                 </Button>
                             </div>
-                            <p className={`mt-1 text-[11px] ${meshTheme.textMuted}`}>
+                            <p className={`mt-1 text-2xs ${meshTheme.textMuted}`}>
                                 {t('meshGraph.synthesis.rawNotice')}
                             </p>
                             {rawState?.error && (
-                                <div className={`mt-2 text-[11px] ${dk ? 'text-rose-300' : 'text-rose-600'}`}>{rawState.error}</div>
+                                <div className={`mt-2 text-2xs ${dk ? 'text-rose-300' : 'text-rose-600'}`}>{rawState.error}</div>
                             )}
                             {rawState?.fetched && !rawState.error && rawReplicas.length === 0 && (
-                                <div className={`mt-2 text-[11px] ${meshTheme.textMuted}`}>
+                                <div className={`mt-2 text-2xs ${meshTheme.textMuted}`}>
                                     {t('meshGraph.synthesis.rawEmpty')}
                                 </div>
                             )}
@@ -247,7 +247,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                                                 <span className="flex-1 truncate" title={replica.nodeId || undefined}>{replica.provider || '?'}{replica.nodeId ? ` @ ${resolveNodeLabel(replica.nodeId)}` : ''}</span>
                                                 {replica.rawAnswerTruncated && <span className={meshTheme.textMuted}>{t('meshGraph.synthesis.truncated')}</span>}
                                             </summary>
-                                            <pre className={`max-h-64 overflow-auto whitespace-pre-wrap px-2.5 pb-2 font-mono text-[11px] ${meshTheme.textPrimary}`}>{replica.rawAnswer}</pre>
+                                            <pre className={`max-h-64 overflow-auto whitespace-pre-wrap px-2.5 pb-2 font-mono text-2xs ${meshTheme.textPrimary}`}>{replica.rawAnswer}</pre>
                                         </details>
                                     ))}
                                 </div>

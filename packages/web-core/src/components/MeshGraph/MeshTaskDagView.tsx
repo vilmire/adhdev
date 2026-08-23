@@ -112,8 +112,8 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     const style = STATUS_STYLES[task.status] ?? STATUS_STYLES.pending
     const statusClass = theme.isDark ? style.dark : style.light
     const chipClass = theme.isDark
-        ? 'rounded-full border border-white/10 bg-white/[0.06] px-1.5 py-px text-[9px] text-slate-300'
-        : 'rounded-full border border-slate-200 bg-white/80 px-1.5 py-px text-[9px] text-slate-500'
+        ? 'rounded-full border border-white/10 bg-white/[0.06] px-1.5 py-px text-4xs text-slate-300'
+        : 'rounded-full border border-slate-200 bg-white/80 px-1.5 py-px text-4xs text-slate-500'
     return (
         <div
             className={`rounded-2xl border px-3 py-2.5 shadow-sm transition-shadow ${statusClass} ${selected ? (theme.isDark ? 'ring-2 ring-cyan-300/60' : 'ring-2 ring-sky-400/70') : ''}`}
@@ -124,14 +124,14 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
             <div className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-1.5">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot} ${style.pulse ? 'animate-pulse' : ''}`} aria-hidden />
-                    <span className="truncate text-[10px] font-semibold uppercase tracking-wide opacity-80">{task.status}</span>
+                    <span className="truncate text-3xs font-semibold uppercase tracking-wide opacity-80">{task.status}</span>
                 </span>
-                <span className={`shrink-0 font-mono text-[9px] ${theme.isDark ? 'text-slate-400' : 'text-slate-400'}`} title={task.id}>{task.id.slice(0, 8)}</span>
+                <span className={`shrink-0 font-mono text-4xs ${theme.isDark ? 'text-slate-400' : 'text-slate-400'}`} title={task.id}>{task.id.slice(0, 8)}</span>
             </div>
             {/* Markdown-syntax-stripped plain text; a cancelled card mutes rather
                 than strikes through — multi-line struck text was unreadable. */}
             <div
-                className={`mt-1.5 text-[11px] leading-[15px] ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
+                className={`mt-1.5 text-2xs leading-[15px] ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
                 style={messageClampStyle}
                 title={queueTaskDisplayText(task.message)}
             >
@@ -147,8 +147,8 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                 {dagNode.waitingOn.length > 0 && (
                     <span
                         className={theme.isDark
-                            ? 'rounded-full border border-amber-400/25 bg-amber-500/10 px-1.5 py-px text-[9px] text-amber-200'
-                            : 'rounded-full border border-amber-300 bg-amber-50 px-1.5 py-px text-[9px] text-amber-700'}
+                            ? 'rounded-full border border-amber-400/25 bg-amber-500/10 px-1.5 py-px text-4xs text-amber-200'
+                            : 'rounded-full border border-amber-300 bg-amber-50 px-1.5 py-px text-4xs text-amber-700'}
                         title={dagNode.waitingOn.join(', ')}
                     >
                         {t('meshGraph.taskDag.waitsOn', { count: dagNode.waitingOn.length })}
@@ -157,8 +157,8 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                 {dagNode.blocked && (
                     <span
                         className={theme.isDark
-                            ? 'rounded-full border border-rose-400/25 bg-rose-500/10 px-1.5 py-px text-[9px] text-rose-200'
-                            : 'rounded-full border border-rose-300 bg-rose-50 px-1.5 py-px text-[9px] text-rose-700'}
+                            ? 'rounded-full border border-rose-400/25 bg-rose-500/10 px-1.5 py-px text-4xs text-rose-200'
+                            : 'rounded-full border border-rose-300 bg-rose-50 px-1.5 py-px text-4xs text-rose-700'}
                         title={task.blockedReason}
                     >
                         {t('meshGraph.taskDag.blocked')}
@@ -301,7 +301,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }
                 : tone === 'info'
                     ? (meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
                     : (meshTheme.isDark ? 'border-white/10 bg-white/[0.05] text-slate-300' : 'border-slate-200 bg-white/85 text-slate-600')
-        return <span className={`rounded-full border px-2 py-0.5 text-[10px] ${toneClass}`}>{label}</span>
+        return <span className={`rounded-full border px-2 py-0.5 text-3xs ${toneClass}`}>{label}</span>
     }
 
     return (
@@ -334,7 +334,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }
                         <button
                             type="button"
                             onClick={() => setTerminalLimit(limit => limit + TASK_DAG_LOAD_MORE_STEP)}
-                            className={`pointer-events-auto rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${meshTheme.isDark
+                            className={`pointer-events-auto rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${meshTheme.isDark
                                 ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                                 : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
                         >
@@ -350,7 +350,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }
             </div>}
 
             {/* Edge-state legend */}
-            <div className={`pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-[10px] ${meshTheme.isDark ? 'border-white/10 bg-slate-950/80 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
+            <div className={`pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-3xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/80 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
                 {(['satisfied', 'waiting', 'failed'] as const).map(state => (
                     <span key={state} className="flex items-center gap-1">
                         <span
@@ -367,7 +367,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }
             {selectedNode && (
                 <div className={`absolute right-3 top-3 z-20 w-72 max-w-[calc(100%-24px)] overflow-y-auto rounded-2xl border p-3.5 shadow-xl backdrop-blur ${meshTheme.isDark ? 'border-white/10 bg-slate-950/95 text-slate-200' : 'border-slate-200 bg-white/95 text-slate-700'}`} style={{ maxHeight: 'calc(100% - 24px)' }}>
                     <div className="mb-2 flex items-start justify-between gap-2">
-                        <span className={`text-[10px] font-semibold uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.selectedTask')}</span>
+                        <span className={`text-3xs font-semibold uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.selectedTask')}</span>
                         <button
                             type="button"
                             onClick={() => setSelectedTaskId(null)}
@@ -377,22 +377,22 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }
                             ✕
                         </button>
                     </div>
-                    <div className="mb-2 font-mono text-[10px] opacity-70" title={selectedNode.task.id}>{selectedNode.task.id.slice(0, 8)}</div>
-                    <div className="mb-2 whitespace-pre-wrap text-[11px] leading-4">{queueTaskDisplayText(selectedNode.task.message)}</div>
-                    <div className="flex flex-wrap gap-1.5 text-[10px]">
+                    <div className="mb-2 font-mono text-3xs opacity-70" title={selectedNode.task.id}>{selectedNode.task.id.slice(0, 8)}</div>
+                    <div className="mb-2 whitespace-pre-wrap text-2xs leading-4">{queueTaskDisplayText(selectedNode.task.message)}</div>
+                    <div className="flex flex-wrap gap-1.5 text-3xs">
                         {statBadge(selectedNode.task.status, selectedNode.task.status === 'failed' ? 'danger' : selectedNode.task.status === 'assigned' ? 'info' : 'default')}
                         {selectedNode.task.difficulty && statBadge(selectedNode.task.difficulty)}
                         {selectedNode.task.missionId && statBadge(selectedNode.task.missionId, 'info')}
                         {selectedNode.task.assignedNodeId && statBadge(`@ ${selectedNode.task.assignedNodeId.slice(0, 14)}`)}
                     </div>
                     {selectedNode.waitingOn.length > 0 && (
-                        <div className="mt-2 text-[10px]">
+                        <div className="mt-2 text-3xs">
                             <span className="font-semibold">{t('meshGraph.taskDag.waitsOn', { count: selectedNode.waitingOn.length })}:</span>
                             <span className="ml-1 font-mono opacity-80">{selectedNode.waitingOn.map(id => id.slice(0, 8)).join(', ')}</span>
                         </div>
                     )}
                     {selectedNode.task.blockedReason && (
-                        <div className={`mt-2 rounded-lg border px-2 py-1.5 text-[10px] ${meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                        <div className={`mt-2 rounded-lg border px-2 py-1.5 text-3xs ${meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
                             {selectedNode.task.blockedReason}
                         </div>
                     )}

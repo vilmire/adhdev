@@ -43,12 +43,12 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                 <h2 id="launch-pick-title" className="text-sm font-semibold text-text-primary m-0 mb-1">
                     Where should this run?
                 </h2>
-                <p className="text-[11px] text-text-muted m-0 mb-4">
+                <p className="text-2xs text-text-muted m-0 mb-4">
                     Nothing is assumed. Pick a saved workspace, your default workspace, or home — or cancel and type a path.
                 </p>
                 <div className="flex flex-col gap-2 mb-4 max-h-48 overflow-y-auto">
                     {(machine.workspaces || []).length === 0 ? (
-                        <span className="text-[11px] text-text-muted">No saved workspaces yet. Add one in Overview or type a path above.</span>
+                        <span className="text-2xs text-text-muted">No saved workspaces yet. Add one in Overview or type a path above.</span>
                     ) : (
                         (machine.workspaces || []).map(w => (
                             <button
@@ -66,7 +66,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                                 }}
                             >
                                 <span className="font-medium text-text-primary block truncate">{w.label || w.path}</span>
-                                <span className="text-[10px] text-text-muted font-mono truncate block">{w.path}</span>
+                                <span className="text-3xs text-text-muted font-mono truncate block">{w.path}</span>
                             </button>
                         ))
                     )}
@@ -74,7 +74,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                 <div className="flex flex-wrap gap-2">
                     <button
                         type="button"
-                        className="machine-btn text-[11px] flex-1 min-w-[120px]"
+                        className="machine-btn text-2xs flex-1 min-w-[120px]"
                         disabled={!machine.defaultWorkspacePath}
                         onClick={() => {
                             setLaunchPick(null)
@@ -90,7 +90,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                     </button>
                     <button
                         type="button"
-                        className="machine-btn text-[11px] flex-1 min-w-[120px]"
+                        className="machine-btn text-2xs flex-1 min-w-[120px]"
                         onClick={() => {
                             setLaunchPick(null)
                             void runLaunchCliCore({
@@ -105,7 +105,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                     </button>
                     <button
                         type="button"
-                        className="machine-btn text-[11px] flex-1 min-w-[80px]"
+                        className="machine-btn text-2xs flex-1 min-w-[80px]"
                         onClick={() => setLaunchPick(null)}
                     >
                         Cancel

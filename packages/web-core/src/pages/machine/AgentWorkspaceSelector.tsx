@@ -77,7 +77,7 @@ export default function AgentWorkspaceSelector({
                     )
                 )}
             </div>
-            <div className="mt-1.5 text-[10px] text-text-muted">
+            <div className="mt-1.5 text-3xs text-text-muted">
                 {selectedWorkspace === '__custom__'
                     ? (resolvedWorkspacePath
                         ? <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>

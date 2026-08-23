@@ -63,14 +63,14 @@ export default function NodeTagEditor({ node, saving, onSave }: Props) {
     return (
         <div className="mt-2" onClick={e => e.stopPropagation()}>
             <div className="flex flex-wrap items-center gap-1">
-                <span className="text-[10px] uppercase tracking-wide text-text-muted mr-1">{t('repoMesh.tagEditor.routingTags')}</span>
+                <span className="text-3xs uppercase tracking-wide text-text-muted mr-1">{t('repoMesh.tagEditor.routingTags')}</span>
                 {autoTags.map(at => (
-                    <span key={at.tag} className="rounded-full border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-text-muted" title={t('repoMesh.tagEditor.autoDerivedTitle')}>
+                    <span key={at.tag} className="rounded-full border border-border-subtle bg-bg-secondary px-1.5 py-0.5 font-mono text-3xs text-text-muted" title={t('repoMesh.tagEditor.autoDerivedTitle')}>
                         {at.tag}
                     </span>
                 ))}
                 {custom.map(ct => (
-                    <span key={ct} className="inline-flex items-center gap-1 rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-accent-primary" title={t('repoMesh.tagEditor.customTagTitle')}>
+                    <span key={ct} className="inline-flex items-center gap-1 rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 font-mono text-3xs text-accent-primary" title={t('repoMesh.tagEditor.customTagTitle')}>
                         {ct}
                         <button type="button" className="text-accent-primary/70 hover:text-accent-primary bg-transparent border-none cursor-pointer p-0 leading-none"
                             onClick={() => removeTag(ct)} disabled={saving} aria-label={t('repoMesh.tagEditor.remove', { tag: ct })}>×</button>
@@ -95,9 +95,9 @@ export default function NodeTagEditor({ node, saving, onSave }: Props) {
                     </button>
                 )}
             </div>
-            {draftError && <div className="mt-1 text-[11px] text-amber-400">{draftError}</div>}
+            {draftError && <div className="mt-1 text-2xs text-amber-400">{draftError}</div>}
             {custom.length === 0 && autoTags.length === 0 && (
-                <div className="mt-1 text-[11px] text-text-muted">{t('repoMesh.tagEditor.empty')}</div>
+                <div className="mt-1 text-2xs text-text-muted">{t('repoMesh.tagEditor.empty')}</div>
             )}
         </div>
     )

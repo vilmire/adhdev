@@ -65,7 +65,7 @@ export function MeshHealthPanel({
         return (
             <div className={`flex flex-col items-center rounded-lg border px-2 py-1.5 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
                 <span className={`tabular-nums text-sm font-semibold leading-none ${valClass}`}>{value}</span>
-                <span className={`mt-0.5 text-[9px] uppercase tracking-wide ${meshTheme.textMuted}`}>{label}</span>
+                <span className={`mt-0.5 text-4xs uppercase tracking-wide ${meshTheme.textMuted}`}>{label}</span>
             </div>
         )
     }
@@ -104,7 +104,7 @@ export function MeshHealthPanel({
             {ledgerSummary.lastActivityAt && (
                 <div className={`flex items-center justify-between ${meshTheme.textMuted}`}>
                     <span>{t('meshGraph.health.lastActivity')}</span>
-                    <span className="font-mono text-[10px]">{ledgerSummary.lastActivityAt.slice(5, 16)}</span>
+                    <span className="font-mono text-3xs">{ledgerSummary.lastActivityAt.slice(5, 16)}</span>
                 </div>
             )}
 
@@ -128,7 +128,7 @@ export function MeshHealthPanel({
                                 <div key={node.nodeId} className="flex items-center gap-2">
                                     <span className={`size-1.5 shrink-0 rounded-full ${dotClass}`} />
                                     <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={node.workspace}>{node.machineLabel}</span>
-                                    <span className={`shrink-0 font-mono text-[10px] ${meshTheme.textMuted}`}>{isConnecting ? '…' : connState}</span>
+                                    <span className={`shrink-0 font-mono text-3xs ${meshTheme.textMuted}`}>{isConnecting ? '…' : connState}</span>
                                 </div>
                             )
                         })}
@@ -148,10 +148,10 @@ export function MeshHealthPanel({
                         <div className="flex flex-col gap-0.5 px-2.5 pb-2">
                             {asyncRefineJobs.slice(0, 8).map(job => (
                                 <div key={job.jobId} className="flex items-center gap-2">
-                                    <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`}>
+                                    <span className={`min-w-0 flex-1 truncate font-mono text-3xs ${meshTheme.textMuted}`}>
                                         {job.branch ?? job.jobId.slice(0, 14)}{job.into ? ` → ${job.into}` : ''}
                                     </span>
-                                    <span className={`shrink-0 text-[9px] font-semibold ${
+                                    <span className={`shrink-0 text-4xs font-semibold ${
                                         job.status === 'failed' ? (dk ? 'text-rose-300' : 'text-rose-600')
                                         : job.status === 'running' || job.status === 'accepted' ? (dk ? 'text-sky-300' : 'text-sky-600')
                                         : (dk ? 'text-emerald-300' : 'text-emerald-600')
@@ -175,10 +175,10 @@ export function MeshHealthPanel({
                             {failedQueueTasks.map(task => (
                                 <div key={task.id} className="flex flex-col gap-0.5">
                                     <div className="flex items-center gap-2">
-                                        <span className={`font-mono text-[10px] ${meshTheme.textMuted}`}>{task.id.slice(0, 10)}</span>
+                                        <span className={`font-mono text-3xs ${meshTheme.textMuted}`}>{task.id.slice(0, 10)}</span>
                                         {task.message && <span className={`flex-1 truncate ${dk ? 'text-slate-300' : 'text-slate-700'}`}>{task.message.slice(0, 55)}</span>}
                                     </div>
-                                    {task.cancelReason && <div className={`truncate text-[10px] ${meshTheme.textMuted}`}>{task.cancelReason.slice(0, 55)}</div>}
+                                    {task.cancelReason && <div className={`truncate text-3xs ${meshTheme.textMuted}`}>{task.cancelReason.slice(0, 55)}</div>}
                                 </div>
                             ))}
                         </div>
@@ -205,11 +205,11 @@ export function MeshHealthPanel({
                         <div className="flex flex-col gap-0.5 px-2.5 pb-2">
                             {sessionEntries.map(entry => (
                                 <div key={entry.session.sessionId} className="flex items-center gap-2">
-                                    <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`} title={entry.session.sessionId}>
+                                    <span className={`min-w-0 flex-1 truncate font-mono text-3xs ${meshTheme.textMuted}`} title={entry.session.sessionId}>
                                         {shortSessionId(entry.session.sessionId)}
                                     </span>
                                     <span className={`shrink-0 ${meshTheme.textMuted}`}>{entry.session.providerType || '?'}</span>
-                                    <span className={`shrink-0 text-[9px] font-semibold ${meshTheme.textMuted}`}>{sessionStatusLabel(entry.session)}</span>
+                                    <span className={`shrink-0 text-4xs font-semibold ${meshTheme.textMuted}`}>{sessionStatusLabel(entry.session)}</span>
                                 </div>
                             ))}
                         </div>
@@ -226,22 +226,22 @@ export function MeshHealthPanel({
             <summary className={`flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`}>
                 <span className="flex-1">{t('meshGraph.health.panelTitle')}</span>
                 {activeRefineJobs.length > 0 && (
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700'}`}>
+                    <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700'}`}>
                         {activeRefineJobs.length} refining
                     </span>
                 )}
                 {failedRefineJobs.length > 0 && (
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                    <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
                         {failedRefineJobs.length} refine failed
                     </span>
                 )}
                 {hasLedgerFailures && (
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                    <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
                         {ledgerSummary.recentFailures} recent failures
                     </span>
                 )}
                 {isBootstrapMode && (
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
+                    <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
                         awaiting live data
                     </span>
                 )}

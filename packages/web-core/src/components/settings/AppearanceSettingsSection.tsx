@@ -45,7 +45,7 @@ export function AppearanceSettingsSection({
             {/* Theme */}
             <div className="border-t border-border-subtle pt-4">
                 <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.themeLabel')}</div>
-                <p className="text-[11px] text-text-muted mb-3">{themeDescription}</p>
+                <p className="text-2xs text-text-muted mb-3">{themeDescription}</p>
                 <ChatThemeSection />
             </div>
 
@@ -55,7 +55,7 @@ export function AppearanceSettingsSection({
             {/* Mobile */}
             <div className="border-t border-border-subtle pt-4">
                 <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.mobileLabel')}</div>
-                <p className="text-[11px] text-text-muted mb-3">{mobileDescription}</p>
+                <p className="text-2xs text-text-muted mb-3">{mobileDescription}</p>
                 <MobileDashboardModeSection />
             </div>
         </div>

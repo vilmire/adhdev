@@ -71,7 +71,7 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                         <div className="px-4 py-3.5 pl-5">
                             <div className="flex items-center gap-2 pr-8">
                                 <span
-                                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em]"
+                                    className="inline-flex items-center rounded-full px-2 py-0.5 text-3xs font-bold uppercase tracking-[0.08em]"
                                     style={{
                                         background: tone.chipBg,
                                         color: tone.chipText,

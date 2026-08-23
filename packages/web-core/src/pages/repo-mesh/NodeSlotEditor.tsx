@@ -137,7 +137,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
             {drafts.map((d, i) => (
                 <div key={i} className="rounded-xl border border-border-subtle bg-bg-secondary/40 p-2.5">
                     <div className="flex items-center gap-1.5 mb-2">
-                        <span className="text-[11px] font-semibold text-text-muted">#{i + 1}</span>
+                        <span className="text-2xs font-semibold text-text-muted">#{i + 1}</span>
                         <div className="ml-auto flex items-center gap-1">
                             <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border-subtle text-text-muted hover:text-text-primary disabled:opacity-40" disabled={i === 0} onClick={() => move(i, -1)} title={t('repoMesh.slotEditor.moveUp')}>↑</button>
                             <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border-subtle text-text-muted hover:text-text-primary disabled:opacity-40" disabled={i === drafts.length - 1} onClick={() => move(i, 1)} title={t('repoMesh.slotEditor.moveDown')}>↓</button>
@@ -148,7 +148,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <label className="flex flex-col gap-1">
-                            <span className="text-[11px] text-text-muted">{t('repoMesh.slotEditor.provider')}</span>
+                            <span className="text-2xs text-text-muted">{t('repoMesh.slotEditor.provider')}</span>
                             {providerTypes.length > 0 ? (
                                 <select className={selectCls} value={d.provider} onChange={e => changeProvider(i, e.target.value)}>
                                     <option value="">{t('repoMesh.slotEditor.select')}</option>
@@ -168,7 +168,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                             return (
                                 <>
                                     <label className="flex flex-col gap-1">
-                                        <span className="text-[11px] text-text-muted">{t('repoMesh.slotEditor.model')}</span>
+                                        <span className="text-2xs text-text-muted">{t('repoMesh.slotEditor.model')}</span>
                                         {models.length > 0 && !modelIsCustom ? (
                                             <select className={selectCls} value={models.includes(d.model) ? d.model : ''}
                                                 onChange={e => update(i, { model: e.target.value === '__custom__' ? ' ' : e.target.value })}>
@@ -184,7 +184,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                                                 {/* Back to the dropdown — only when the provider has a list to go back to. */}
                                                 {models.length > 0 && (
                                                     <button type="button"
-                                                        className="self-start bg-transparent border-none cursor-pointer p-0 text-[10px] text-text-muted hover:underline"
+                                                        className="self-start bg-transparent border-none cursor-pointer p-0 text-3xs text-text-muted hover:underline"
                                                         onClick={() => update(i, { model: '' })}>
                                                         {t('repoMesh.slotEditor.backToModelList')}
                                                     </button>
@@ -193,7 +193,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                                         )}
                                     </label>
                                     <label className="flex flex-col gap-1">
-                                        <span className="text-[11px] text-text-muted">{t('repoMesh.slotEditor.thinking')}</span>
+                                        <span className="text-2xs text-text-muted">{t('repoMesh.slotEditor.thinking')}</span>
                                         <select className={selectCls} value={d.thinkingLevel} onChange={e => update(i, { thinkingLevel: e.target.value })}>
                                             {thinking.map(l => <option key={l || '_default'} value={l}>{l || t('repoMesh.slotEditor.thinkingDefault')}</option>)}
                                         </select>
@@ -203,13 +203,13 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                         })()}
                     </div>
                     <div className="mt-2">
-                        <span className="text-[11px] text-text-muted">{t('repoMesh.slotEditor.difficulty')}</span>
+                        <span className="text-2xs text-text-muted">{t('repoMesh.slotEditor.difficulty')}</span>
                         <div className="mt-1 flex flex-wrap gap-1.5">
                             {MESH_TASK_DIFFICULTIES.map(diff => {
                                 const on = d.difficulty.includes(diff)
                                 return (
                                     <button key={diff} type="button"
-                                        className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors ${on ? 'border-accent-primary/60 bg-accent-primary/15 text-accent-primary' : 'border-border-subtle bg-bg-primary/60 text-text-muted hover:text-text-primary'}`}
+                                        className={`rounded-full border px-2.5 py-0.5 text-2xs font-medium transition-colors ${on ? 'border-accent-primary/60 bg-accent-primary/15 text-accent-primary' : 'border-border-subtle bg-bg-primary/60 text-text-muted hover:text-text-primary'}`}
                                         onClick={() => toggleDifficulty(i, diff)}>
                                         {DIFFICULTY_LABEL[diff]}
                                     </button>
@@ -219,13 +219,13 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                     </div>
                     <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <label className="flex flex-col gap-1">
-                            <span className="text-[11px] text-text-muted">{t('repoMesh.slotEditor.capabilityTags')}</span>
+                            <span className="text-2xs text-text-muted">{t('repoMesh.slotEditor.capabilityTags')}</span>
                             <input className={selectCls} value={d.capability.join(', ')}
                                 placeholder="worktree, os=darwin"
                                 onChange={e => update(i, { capability: e.target.value.split(',').map(c => c.trim()).filter(Boolean) })} />
                         </label>
                         <label className="flex flex-col gap-1">
-                            <span className="text-[11px] text-text-muted">{t('repoMesh.slotEditor.maxParallel')}</span>
+                            <span className="text-2xs text-text-muted">{t('repoMesh.slotEditor.maxParallel')}</span>
                             <input type="number" inputMode="numeric" min={1} className={selectCls} value={d.maxParallel}
                                 placeholder={t('repoMesh.slotEditor.maxParallelPlaceholder')}
                                 onChange={e => update(i, { maxParallel: e.target.value })} />

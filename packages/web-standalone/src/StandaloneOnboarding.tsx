@@ -169,7 +169,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
             title={t('standalone.onboarding.title')}
             footer={(
                 <div className="flex w-full items-center gap-2">
-                    <div className="text-[11px] text-text-muted">
+                    <div className="text-2xs text-text-muted">
                         {t(selected.size !== 1 ? 'standalone.onboarding.selectedCount_other' : 'standalone.onboarding.selectedCount_one', { count: selected.size })}
                     </div>
                     <div className="ml-auto flex gap-2">
@@ -217,7 +217,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                 <button
                                     key={tab.key}
                                     onClick={() => setFilter(tab.key)}
-                                    className={`machine-btn text-[10px] px-2 py-0.5 ${
+                                    className={`machine-btn text-3xs px-2 py-0.5 ${
                                         filter === tab.key ? 'bg-accent-primary/12 border-accent-primary/40 text-accent-primary' : ''
                                     }`}
                                 >{tab.label} <span className="opacity-60">({count})</span></button>
@@ -240,7 +240,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                     <div className="flex flex-col gap-4">
                         {groups.map(group => (
                             <div key={group.category}>
-                                <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted mb-1.5">
+                                <div className="text-3xs font-semibold uppercase tracking-wider text-text-muted mb-1.5">
                                     {CATEGORY_GROUP_LABEL[group.category] ?? group.category}
                                 </div>
                                 <div className="grid gap-1.5">
@@ -268,11 +268,11 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                                 <div className="min-w-0 flex-1">
                                                     <div className="text-[13px] font-medium text-text-primary truncate">{p.displayName}</div>
                                                     {details && (
-                                                        <div className="text-[10px] text-text-muted truncate">{details}</div>
+                                                        <div className="text-3xs text-text-muted truncate">{details}</div>
                                                     )}
                                                 </div>
                                                 {result && (
-                                                    <span className={`text-[10px] font-semibold ${result.ok ? 'text-status-online' : 'text-status-error'}`}>
+                                                    <span className={`text-3xs font-semibold ${result.ok ? 'text-status-online' : 'text-status-error'}`}>
                                                         {result.ok ? t('standalone.onboarding.installed') : t('standalone.onboarding.installFailed', { error: result.error ?? 'failed' })}
                                                     </span>
                                                 )}

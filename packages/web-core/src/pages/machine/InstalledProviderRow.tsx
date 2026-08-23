@@ -240,7 +240,7 @@ export default function InstalledProviderRow({
             >
                 <ProviderLogo type={prov.type} label={prov.displayName} size={20} className="shrink-0" />
                 <span className="text-[13px] font-semibold text-text-primary truncate">{prov.displayName}</span>
-                <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${PROVIDER_CATEGORY_COLOR[prov.category as ProviderCategory]?.badge ?? 'border-border-subtle text-text-muted'}`}>
+                <span className={`text-4xs font-semibold px-1.5 py-px rounded border ${PROVIDER_CATEGORY_COLOR[prov.category as ProviderCategory]?.badge ?? 'border-border-subtle text-text-muted'}`}>
                     {prov.category.toUpperCase()}
                 </span>
                 {(providerInfo as any)?.trust && (
@@ -251,7 +251,7 @@ export default function InstalledProviderRow({
                     />
                 )}
                 {isRuntime && (
-                    <span className={`text-[9px] font-semibold px-1.5 py-px rounded border ${STATUS_CLASS[machineStatus] ?? STATUS_CLASS.disabled}`}>
+                    <span className={`text-4xs font-semibold px-1.5 py-px rounded border ${STATUS_CLASS[machineStatus] ?? STATUS_CLASS.disabled}`}>
                         {STATUS_LABEL_I18N[machineStatus] ?? machineStatus}
                     </span>
                 )}
@@ -260,7 +260,7 @@ export default function InstalledProviderRow({
                         percent windows chip for quota providers, usage chip for
                         usage-shaped ones (opencode). */}
                     {quotaChip && (
-                        <span className={`text-[9px] font-semibold px-1.5 py-px rounded border shrink-0 ${quotaChip.tone}`} title={quotaChip.title}>
+                        <span className={`text-4xs font-semibold px-1.5 py-px rounded border shrink-0 ${quotaChip.tone}`} title={quotaChip.title}>
                             {quotaChip.label}
                         </span>
                     )}
@@ -288,21 +288,21 @@ export default function InstalledProviderRow({
                     {onQuotaToggle && quotaEnabled !== undefined && (
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <div className="text-[11px] text-text-secondary font-medium">{t('machine.providerRow.quotaTracking')}</div>
-                                <div className="text-[10px] text-text-muted">{t('machine.providerRow.quotaTrackingHint')}</div>
+                                <div className="text-2xs text-text-secondary font-medium">{t('machine.providerRow.quotaTracking')}</div>
+                                <div className="text-3xs text-text-muted">{t('machine.providerRow.quotaTrackingHint')}</div>
                             </div>
                             {confirmQuotaEnable ? (
                                 <div className="flex flex-col items-end gap-1.5 shrink-0">
-                                    <div className="text-[11px] font-medium text-amber-400">{t('machine.providerRow.quotaClaudeConfirmTitle')}</div>
-                                    <div className="text-[10px] text-text-muted max-w-[420px] text-right">{t('machine.providerRow.quotaClaudeConfirmBody')}</div>
+                                    <div className="text-2xs font-medium text-amber-400">{t('machine.providerRow.quotaClaudeConfirmTitle')}</div>
+                                    <div className="text-3xs text-text-muted max-w-[420px] text-right">{t('machine.providerRow.quotaClaudeConfirmBody')}</div>
                                     <div className="flex gap-1.5">
                                         <button
                                             onClick={(e) => { e.stopPropagation(); setConfirmQuotaEnable(false); void onQuotaToggle(prov.type, true) }}
-                                            className="machine-btn text-[10px] px-2 py-0.5 text-amber-400 border-amber-500/25"
+                                            className="machine-btn text-3xs px-2 py-0.5 text-amber-400 border-amber-500/25"
                                         >{t('machine.providerRow.quotaClaudeConfirmOk')}</button>
                                         <button
                                             onClick={(e) => { e.stopPropagation(); setConfirmQuotaEnable(false) }}
-                                            className="machine-btn text-[10px] px-2 py-0.5"
+                                            className="machine-btn text-3xs px-2 py-0.5"
                                         >{t('machine.providerRow.quotaClaudeConfirmCancel')}</button>
                                     </div>
                                 </div>
@@ -329,8 +329,8 @@ export default function InstalledProviderRow({
                     {onQuotaAccountLabelToggle && quotaAccountLabelEnabled !== undefined && (
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <div className="text-[11px] text-text-secondary font-medium">{t('machine.providerRow.quotaAccountLabel')}</div>
-                                <div className="text-[10px] text-text-muted">{t('machine.providerRow.quotaAccountLabelHint')}</div>
+                                <div className="text-2xs text-text-secondary font-medium">{t('machine.providerRow.quotaAccountLabel')}</div>
+                                <div className="text-3xs text-text-muted">{t('machine.providerRow.quotaAccountLabelHint')}</div>
                             </div>
                             <RowSwitch
                                 checked={quotaAccountLabelEnabled}
@@ -341,7 +341,7 @@ export default function InstalledProviderRow({
                     )}
                     {/* Details: manifest metadata + source identity. Pulled
                         from the daemon's status broadcast — no extra round-trip. */}
-                    <div className="grid gap-1 text-[10px] text-text-muted">
+                    <div className="grid gap-1 text-3xs text-text-muted">
                         <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelType')}</span> <span className="font-mono">{prov.type}</span></div>
                         {(providerInfo as any)?.providerVersion && (
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVersion')}</span> {(providerInfo as any).providerVersion}</div>
@@ -414,7 +414,7 @@ export default function InstalledProviderRow({
                         })()}
                     </div>
                     {isRuntime && (
-                        <div className="grid gap-1 text-[10px] text-text-muted">
+                        <div className="grid gap-1 text-3xs text-text-muted">
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelDetection')}</span> {formatCheck(providerInfo?.lastDetection)}</div>
                             <div><span className="text-text-secondary font-medium">{t('machine.providerRow.labelVerification')}</span> {formatCheck(providerInfo?.lastVerification)}</div>
                         </div>
@@ -426,14 +426,14 @@ export default function InstalledProviderRow({
                             {prov.schema.map(s => (
                                 <div key={s.key} className="flex items-center justify-between gap-3">
                                     <div className="flex-1 min-w-0">
-                                        <div className="text-[11px] font-medium text-text-primary">
+                                        <div className="text-2xs font-medium text-text-primary">
                                             {s.label || s.key}
                                             {savingKey === `${prov.type}.${s.key}` && (
-                                                <span className="ml-1.5 text-[9px] text-accent-primary">{t('machine.providerRow.saving')}</span>
+                                                <span className="ml-1.5 text-4xs text-accent-primary">{t('machine.providerRow.saving')}</span>
                                             )}
                                         </div>
                                         {s.description && (
-                                            <div className="text-[10px] text-text-muted mt-px">{s.description}</div>
+                                            <div className="text-3xs text-text-muted mt-px">{s.description}</div>
                                         )}
                                     </div>
                                     <div className="shrink-0">
@@ -460,13 +460,13 @@ export default function InstalledProviderRow({
                                                     if (s.max !== undefined && v > s.max) return
                                                     void onSetSetting(prov.type, s.key, v)
                                                 }}
-                                                className="machine-input w-20 text-center text-[11px]"
+                                                className="machine-input w-20 text-center text-2xs"
                                             />
                                         ) : s.type === 'select' && s.options ? (
                                             <select
                                                 value={String(prov.values[s.key] ?? s.default ?? '')}
                                                 onChange={e => void onSetSetting(prov.type, s.key, e.target.value)}
-                                                className="machine-input text-[11px]"
+                                                className="machine-input text-2xs"
                                             >
                                                 {s.options.map(o => <option key={o} value={o}>{o}</option>)}
                                             </select>
@@ -475,7 +475,7 @@ export default function InstalledProviderRow({
                                                 type="text"
                                                 defaultValue={String(prov.values[s.key] ?? s.default ?? '')}
                                                 onBlur={e => void onSetSetting(prov.type, s.key, e.target.value)}
-                                                className="machine-input w-[180px] text-[11px]"
+                                                className="machine-input w-[180px] text-2xs"
                                             />
                                         )}
                                     </div>
@@ -491,12 +491,12 @@ export default function InstalledProviderRow({
                                 <button
                                     onClick={() => void onDetect(prov.type)}
                                     disabled={!enabled || savingKey === `${prov.type}.detect`}
-                                    className={`machine-btn text-[10px] px-2 py-0.5 text-blue-400 border-blue-500/25 ${enabled ? '' : 'opacity-40 cursor-not-allowed'}`}
+                                    className={`machine-btn text-3xs px-2 py-0.5 text-blue-400 border-blue-500/25 ${enabled ? '' : 'opacity-40 cursor-not-allowed'}`}
                                     title={enabled ? 'Run detection for the configured executable' : 'Enable provider before detection'}
                                 >{t('machine.providerRow.detect')}</button>
                                 <button
                                     onClick={() => void onResetCommand(prov.type)}
-                                    className="machine-btn text-[10px] px-2 py-0.5"
+                                    className="machine-btn text-3xs px-2 py-0.5"
                                 >{t('machine.providerRow.resetCommand')}</button>
                             </>
                         )}
@@ -507,7 +507,7 @@ export default function InstalledProviderRow({
                             <button
                                 onClick={() => setConfirmActivate(true)}
                                 disabled={pinBusy !== null}
-                                className="machine-btn text-[10px] px-2 py-0.5 text-amber-400 border-amber-500/25"
+                                className="machine-btn text-3xs px-2 py-0.5 text-amber-400 border-amber-500/25"
                                 title={t('machine.providerRow.specPinUpdateHint')}
                             >{t('machine.providerRow.specPinUpdate')}</button>
                         )}
@@ -520,12 +520,12 @@ export default function InstalledProviderRow({
                                             .finally(() => { setPinBusy(null); setConfirmActivate(false) })
                                     }}
                                     disabled={pinBusy !== null}
-                                    className="machine-btn text-[10px] px-2 py-0.5 text-amber-400 border-amber-500/25"
+                                    className="machine-btn text-3xs px-2 py-0.5 text-amber-400 border-amber-500/25"
                                 >{pinBusy === 'activate' ? t('machine.providerRow.specPinUpdating') : t('machine.providerRow.specPinUpdateConfirm')}</button>
                                 <button
                                     onClick={() => setConfirmActivate(false)}
                                     disabled={pinBusy !== null}
-                                    className="machine-btn text-[10px] px-2 py-0.5"
+                                    className="machine-btn text-3xs px-2 py-0.5"
                                 >{t('machine.providerRow.specPinCancel')}</button>
                             </>
                         )}
@@ -536,7 +536,7 @@ export default function InstalledProviderRow({
                                     void onRollbackUpdate().finally(() => setPinBusy(null))
                                 }}
                                 disabled={pinBusy !== null}
-                                className="machine-btn text-[10px] px-2 py-0.5"
+                                className="machine-btn text-3xs px-2 py-0.5"
                                 title={t('machine.providerRow.specPinRollbackHint', { version: pin.previousVersion })}
                             >{pinBusy === 'rollback' ? t('machine.providerRow.specPinRollingBack') : t('machine.providerRow.specPinRollback')}</button>
                         )}

@@ -95,7 +95,7 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
                     )}
                     {!loading && !error && prompt !== null && (
                         <>
-                            <div className="mb-1 flex items-center justify-between text-[11px] text-text-muted">
+                            <div className="mb-1 flex items-center justify-between text-2xs text-text-muted">
                                 <span>{t('repoMesh.promptPreview.info')}</span>
                                 {bytes !== null && <span>{(bytes / 1024).toFixed(1)} KB</span>}
                             </div>

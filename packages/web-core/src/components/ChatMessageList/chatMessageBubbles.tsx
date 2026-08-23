@@ -189,7 +189,7 @@ function MessagePartsRenderer({ parts, renderAsPreformatted }: { parts: Structur
                     if (part.resource.text) {
                         return (
                             <div key={`resource-${index}`} className="rounded-md border border-border-subtle p-2">
-                                <div className="text-[11px] opacity-70 mb-1">{label}</div>
+                                <div className="text-2xs opacity-70 mb-1">{label}</div>
                                 {renderTextLikeContent(part.resource.text, true)}
                             </div>
                         );
@@ -424,7 +424,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                         <button
                             type="button"
                             onClick={onToggleTextExpanded}
-                            className="mt-1.5 text-[11px] font-semibold text-[var(--accent-primary)] p-0 opacity-80"
+                            className="mt-1.5 text-2xs font-semibold text-[var(--accent-primary)] p-0 opacity-80"
                         >
                             {isTextExpanded ? 'Collapse ↑' : `Show more (${Math.round(displayContent.length / 100) * 100} chars) ↓`}
                         </button>

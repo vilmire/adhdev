@@ -69,7 +69,7 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
                     />
                 )}
             </div>
-            <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>
+            <p className={`mt-2 text-2xs ${meshTheme.textSecondary}`}>
                 {t('mesh.status.distributionTitle')}
             </p>
         </div>
@@ -136,13 +136,13 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
                     />
                 )}
                 {freshness && (
-                    <span className={`text-[10px] ${meshTheme.textSecondary}`} title={t('mesh.status.quotaFreshnessHint')}>
+                    <span className={`text-3xs ${meshTheme.textSecondary}`} title={t('mesh.status.quotaFreshnessHint')}>
                         {freshness}
                     </span>
                 )}
             </div>
             {machine.quota.length === 0 ? (
-                <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
+                <div className={`mt-1.5 text-2xs ${meshTheme.textSecondary}`}>
                     {/* Two different silences, kept apart: a machine that has sent
                         no runtime facts at all (offline/degraded peer — we simply
                         have not heard from it) vs one that reports but whose
@@ -160,12 +160,12 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
                         const hasWindows = !!(session || weekly)
                         return (
                             <div key={provider} className="flex flex-wrap items-center gap-1.5">
-                                <span className={`text-[11px] ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
+                                <span className={`text-2xs ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
                                 {/* Whose quota this is. Absent for providers that
                                     report no account (Claude Code exposes none), and
                                     then nothing renders — no placeholder. */}
                                 {formatQuotaAccount(quota) && (
-                                    <span className={`text-[10px] ${meshTheme.textSecondary}`} title={t('mesh.status.quotaAccountHint')}>
+                                    <span className={`text-3xs ${meshTheme.textSecondary}`} title={t('mesh.status.quotaAccountHint')}>
                                         {formatQuotaAccount(quota)}
                                     </span>
                                 )}
@@ -184,7 +184,7 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
                                     />
                                 )}
                                 {!hasWindows && (
-                                    <span className={`text-[11px] ${meshTheme.textSecondary}`} title="This machine reported that it could not read this provider's quota">
+                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title="This machine reported that it could not read this provider's quota">
                                         {describeQuotaFailure(quota)}
                                     </span>
                                 )}
@@ -193,7 +193,7 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
                                     has no outbound quota API, unlike codex/kimi. Not a
                                     fourth state; a hint on the existing failure line. */}
                                 {shouldShowClaudeSetupHint(provider, quota) && (
-                                    <span className={`text-[11px] ${meshTheme.textSecondary} opacity-80`}>
+                                    <span className={`text-2xs ${meshTheme.textSecondary} opacity-80`}>
                                         {t('mesh.status.quotaClaudeSetupHint')}
                                     </span>
                                 )}
@@ -220,12 +220,12 @@ function MeshMachinesQuotaSection({ status }: { status: RepoMeshStatus }) {
     const unreported = machines.filter(machine => !machine.hasReported)
     return (
         <div className="flex flex-col gap-2">
-            <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
+            <span className={`px-1 text-2xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
                 {t('mesh.status.machinesQuota')}
             </span>
             {reported.map(machine => <MeshMachineQuotaCard key={machine.machineKey} machine={machine} />)}
             {unreported.length > 0 && (
-                <div className={`rounded-xl border px-3 py-2 text-[11px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+                <div className={`rounded-xl border px-3 py-2 text-2xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
                     {t('mesh.status.machinesNotReporting', {
                         count: unreported.length,
                         machines: unreported.map(machine => machine.label).join(', '),
@@ -309,7 +309,7 @@ function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus
                 <MeshNodeSchedulingBadges scheduling={node.scheduling} />
             </div>
             {healthIssue && (
-                <div className={`mt-1.5 truncate text-[11px] ${meshTheme.isDark ? 'text-amber-200/85' : 'text-amber-700'}`} title={healthIssue}>
+                <div className={`mt-1.5 truncate text-2xs ${meshTheme.isDark ? 'text-amber-200/85' : 'text-amber-700'}`} title={healthIssue}>
                     {healthIssue}
                 </div>
             )}
@@ -320,7 +320,7 @@ function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus
                     ))}
                 </div>
             )}
-            <div className={`mt-1.5 text-[11px] ${meshTheme.textSecondary}`}>
+            <div className={`mt-1.5 text-2xs ${meshTheme.textSecondary}`}>
                 {summarizeNodeDrift(node)}
                 {head ? <span className="ml-2 font-mono opacity-70">@{head}</span> : null}
             </div>
@@ -363,7 +363,7 @@ function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
                 <div className="mt-2 flex flex-col gap-1.5">
                     {skew.map(entry => (
                         <div key={entry.provider} className="flex flex-wrap items-center gap-1.5">
-                            <span className={`text-[11px] font-semibold ${meshTheme.textPrimary}`}>{entry.provider}</span>
+                            <span className={`text-2xs font-semibold ${meshTheme.textPrimary}`}>{entry.provider}</span>
                             {entry.versions.map(v => (
                                 <Badge
                                     key={v.version}
@@ -377,7 +377,7 @@ function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
                 </div>
             )}
             {status.providerVersionSkewWarning && (
-                <p className={`mt-2 text-[11px] ${meshTheme.textSecondary}`}>{status.providerVersionSkewWarning}</p>
+                <p className={`mt-2 text-2xs ${meshTheme.textSecondary}`}>{status.providerVersionSkewWarning}</p>
             )}
         </div>
     )
@@ -399,7 +399,7 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
                 worktree card below. */}
             <MeshMachinesQuotaSection status={canonicalStatus} />
             <div className="flex flex-col gap-2">
-                <span className={`px-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
+                <span className={`px-1 text-2xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
                     {t('mesh.status.nodesRuntime')}
                 </span>
                 {canonicalStatus.nodes.length === 0 ? (

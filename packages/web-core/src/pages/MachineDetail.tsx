@@ -582,7 +582,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                         {daemonCtx.retryConnection && machineId && (
                                             <button
                                                 onClick={() => daemonCtx.retryConnection!(machineId)}
-                                                className="px-2.5 py-0.5 rounded text-[11px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
+                                                className="px-2.5 py-0.5 rounded text-2xs font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
                                             >
                                                 {t('machine.detail.reconnect')}
                                             </button>
@@ -627,7 +627,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     title={t('machine.detail.providerStaleBadgeHint')}
                                     aria-label={t('machine.detail.providerStaleBadgeHint')}
                                     onClick={handleProviderStaleBadgeClick}
-                                    className={`px-1.5 py-0.5 rounded-full text-[10px] ml-1 cursor-pointer ${
+                                    className={`px-1.5 py-0.5 rounded-full text-3xs ml-1 cursor-pointer ${
                                         providerSyncBusy
                                             ? 'bg-amber-500/20 text-amber-300'
                                             : 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/30'
@@ -636,7 +636,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     {providerSyncBusy ? '…' : tab.count}
                                 </span>
                             ) : tab.count !== undefined ? (
-                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] ml-1 ${
+                                <span className={`px-1.5 py-0.5 rounded-full text-3xs ml-1 ${
                                     activeTab === tab.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-bg-glass-hover text-text-muted'
                                 }`}>
                                     {tab.count}

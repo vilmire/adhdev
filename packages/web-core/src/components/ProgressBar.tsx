@@ -26,8 +26,8 @@ export default function ProgressBar({
         return (
             <div className="flex-1">
                 <div className="flex justify-between mb-0.5">
-                    <span className="text-[9px] text-text-muted uppercase tracking-wide font-semibold">{label}</span>
-                    <span className="text-[10px] text-text-secondary font-semibold">{pct}%</span>
+                    <span className="text-4xs text-text-muted uppercase tracking-wide font-semibold">{label}</span>
+                    <span className="text-3xs text-text-secondary font-semibold">{pct}%</span>
                 </div>
                 <div className="h-1 bg-white/[0.04] rounded-sm overflow-hidden">
                     <div
@@ -42,7 +42,7 @@ export default function ProgressBar({
     return (
         <div className="flex-1">
             <div className="flex justify-between mb-1.5">
-                <span className="text-[11px] text-text-secondary font-medium">{label}</span>
+                <span className="text-2xs text-text-secondary font-medium">{label}</span>
                 <span className="text-[13px] text-text-primary font-bold">{pct}%</span>
             </div>
             <div className="h-1.5 bg-white/[0.04] rounded-sm overflow-hidden">
@@ -51,7 +51,7 @@ export default function ProgressBar({
                     style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${barColor}, ${barColor}cc)` }}
                 />
             </div>
-            {detail && <div className="text-[10px] text-text-muted mt-0.5">{detail}</div>}
+            {detail && <div className="text-3xs text-text-muted mt-0.5">{detail}</div>}
         </div>
     )
 }

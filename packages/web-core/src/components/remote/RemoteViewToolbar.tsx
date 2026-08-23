@@ -59,7 +59,7 @@ export default function RemoteViewToolbar({
                     }`}
                 >
                     <span className="text-sm">{inputMode === 'mouse' ? <IconMousePointer size={14} /> : <IconHand size={14} />}</span>
-                    <span className={`text-[10px] font-bold ${inputMode === 'mouse' ? 'text-blue-400' : 'text-slate-400'}`}>
+                    <span className={`text-3xs font-bold ${inputMode === 'mouse' ? 'text-blue-400' : 'text-slate-400'}`}>
                         {inputMode === 'mouse' ? t('remote.mouse') : t('remote.touch')}
                     </span>
                 </div>
@@ -108,16 +108,16 @@ export default function RemoteViewToolbar({
                         style={{ background: isConnActive ? 'rgba(34,197,94,0.12)' : 'rgba(234,179,8,0.12)' }}
                     >
                         <div className="w-1 h-1 rounded-full" style={{ background: isConnActive ? '#22c55e' : '#eab308', boxShadow: isConnActive ? '0 0 4px #22c55e80' : '0 0 4px #eab30880' }} />
-                        <span className="text-[8px] font-extrabold" style={{ color: isConnActive ? '#22c55e' : '#eab308' }}>
+                        <span className="text-5xs font-extrabold" style={{ color: isConnActive ? '#22c55e' : '#eab308' }}>
                             {isConnActive ? t('remote.connected') : t('remote.ws')}
                         </span>
                     </div>
                     {zoom > 1.0 && (
-                        <span className="text-[8px] font-bold text-indigo-400">{Math.round(zoom * 100)}%</span>
+                        <span className="text-5xs font-bold text-indigo-400">{Math.round(zoom * 100)}%</span>
                     )}
                     {transportType === 'direct' && (
                         <span
-                            className="text-[8px] font-bold px-1 py-0.5 rounded"
+                            className="text-5xs font-bold px-1 py-0.5 rounded"
                             style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)' }}
                             title={t('remote.directP2PTitle')}
                         >
@@ -126,7 +126,7 @@ export default function RemoteViewToolbar({
                     )}
                     {transportType === 'relay' && (
                         <span
-                            className="text-[8px] font-bold px-1 py-0.5 rounded"
+                            className="text-5xs font-bold px-1 py-0.5 rounded"
                             style={{ color: 'var(--status-warning)', background: 'color-mix(in srgb, var(--status-warning) 12%, transparent)' }}
                             title={t('remote.turnRelayTitle')}
                         >
@@ -135,7 +135,7 @@ export default function RemoteViewToolbar({
                     )}
                     {screenshotUsage && screenshotUsage.dailyBudgetMinutes > 0 && (
                         <span
-                            className="text-[8px] font-bold px-1 py-0.5 rounded"
+                            className="text-5xs font-bold px-1 py-0.5 rounded"
                             style={{
                                 color: screenshotUsage.budgetExhausted ? '#ef4444' : '#c4b5fd',
                                 background: screenshotUsage.budgetExhausted ? 'rgba(239,68,68,0.1)' : 'rgba(139,92,246,0.14)',
@@ -148,7 +148,7 @@ export default function RemoteViewToolbar({
                         </span>
                     )}
                     {lastActionStatus && (
-                        <span className="text-[8px] text-neutral-500 font-semibold max-w-[100px] overflow-hidden text-ellipsis whitespace-nowrap">{lastActionStatus}</span>
+                        <span className="text-5xs text-neutral-500 font-semibold max-w-[100px] overflow-hidden text-ellipsis whitespace-nowrap">{lastActionStatus}</span>
                     )}
                 </div>
             </div>

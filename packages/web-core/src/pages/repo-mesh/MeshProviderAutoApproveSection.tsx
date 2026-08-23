@@ -212,8 +212,8 @@ export function MeshProviderAutoApproveSection({
                 even when the host is offline or advertises no providers. */}
             <div className="rounded-xl border border-border-subtle bg-bg-secondary/40 p-3.5">
                 <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.machineSection.title')}</div>
-                <div className="mt-1 text-[11px] text-text-muted">{t('repoMesh.providerAutoApprove.machineSection.hint')}</div>
-                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                <div className="mt-1 text-2xs text-text-muted">{t('repoMesh.providerAutoApprove.machineSection.hint')}</div>
+                <div className="mt-3 flex flex-wrap gap-2 text-2xs">
                     <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineAutoApproveEnabled ? 'border-status-online/25 bg-status-online/10 text-status-online' : 'border-border-subtle bg-surface-secondary/40 text-text-muted'}`}>
                         {machineAutoApproveEnabled
                             ? t('repoMesh.providerAutoApprove.machineSection.autoApproveOn')
@@ -267,7 +267,7 @@ export function MeshProviderAutoApproveSection({
                     {loadError && <AlertBanner variant="error" onDismiss={() => setLoadError(null)}>{loadError}</AlertBanner>}
                     {/* The union is complete only when every node has reported. */}
                     {unreportedNodeCount > 0 && (
-                        <div className="text-[11px] text-text-muted">
+                        <div className="text-2xs text-text-muted">
                             {t('repoMesh.providerAutoApprove.partialInventory', { count: unreportedNodeCount })}
                         </div>
                     )}
@@ -275,7 +275,7 @@ export function MeshProviderAutoApproveSection({
                     {/* ── Section 1: repository default (editable) + Section 3 per provider ── */}
                     <div className="space-y-1">
                         <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.repoSection.title')}</div>
-                        <div className="text-[11px] text-text-muted">{t('repoMesh.providerAutoApprove.repoSection.hint')}</div>
+                        <div className="text-2xs text-text-muted">{t('repoMesh.providerAutoApprove.repoSection.hint')}</div>
                     </div>
 
                     <div className="space-y-5">
@@ -293,7 +293,7 @@ export function MeshProviderAutoApproveSection({
                                         <span className="text-sm font-semibold text-text-primary">{provider.label}</span>
                                         <button
                                             type="button"
-                                            className="text-[11px] text-text-muted underline decoration-dotted hover:text-text-primary disabled:opacity-40"
+                                            className="text-2xs text-text-muted underline decoration-dotted hover:text-text-primary disabled:opacity-40"
                                             onClick={() => applyDefault(provider.type, undefined)}
                                             disabled={!requestedModeId || saving}
                                         >
@@ -308,7 +308,7 @@ export function MeshProviderAutoApproveSection({
                                         onSelectMode={mode => onSelectMode(provider.type, mode)}
                                     />
                                     {!requestedModeId && (
-                                        <div className="mt-1.5 text-[11px] text-text-muted">
+                                        <div className="mt-1.5 text-2xs text-text-muted">
                                             {t('repoMesh.providerAutoApprove.repoSection.usesProviderDefault')}
                                         </div>
                                     )}
@@ -322,7 +322,7 @@ export function MeshProviderAutoApproveSection({
 
                     <div className="space-y-1">
                         <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.effectiveSection.title')}</div>
-                        <div className="text-[11px] text-text-muted">{t('repoMesh.providerAutoApprove.effectiveSection.hint')}</div>
+                        <div className="text-2xs text-text-muted">{t('repoMesh.providerAutoApprove.effectiveSection.hint')}</div>
                     </div>
 
                     {saveError && <AlertBanner variant="error" onDismiss={() => setSaveError(null)}>{saveError}</AlertBanner>}
@@ -465,7 +465,7 @@ function MachinePolicyToggle({
         >
             <span>
                 <span className="block text-[13px] font-semibold text-text-primary">{label}</span>
-                <span className="mt-0.5 block text-[11px] text-text-muted">{hint}</span>
+                <span className="mt-0.5 block text-2xs text-text-muted">{hint}</span>
             </span>
             <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-surface-secondary'}`}>
                 <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />

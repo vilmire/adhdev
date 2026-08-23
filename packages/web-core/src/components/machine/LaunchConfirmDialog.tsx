@@ -79,7 +79,7 @@ export default function LaunchConfirmDialog({
                 <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 flex flex-col gap-3">
                     {workspaceOptions && workspaceOptions.length > 0 && onWorkspaceChange && (
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
-                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-1">
                                 {t('machine.launchConfirm.workspace')}
                             </div>
                             <select
@@ -95,7 +95,7 @@ export default function LaunchConfirmDialog({
                                 ))}
                             </select>
                             {selectedWorkspace?.description && (
-                                <div className="mt-2 text-[11px] text-text-muted break-all">
+                                <div className="mt-2 text-2xs text-text-muted break-all">
                                     {selectedWorkspace.description}
                                 </div>
                             )}
@@ -104,7 +104,7 @@ export default function LaunchConfirmDialog({
                     {historyProviderNode}
                     {details.map((detail) => (
                         <div key={`${detail.label}:${detail.value}`} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
-                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-1">
                                 {detail.label}
                             </div>
                             <div className="text-sm text-text-primary break-all">
@@ -114,7 +114,7 @@ export default function LaunchConfirmDialog({
                     ))}
                     {showModelInput && onModelChange && (
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
-                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-1">
                                 {t('machine.launchConfirm.languageModel')}
                             </div>
                             <input
@@ -129,7 +129,7 @@ export default function LaunchConfirmDialog({
                     )}
                     {showArgsInput && onArgsChange && (
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
-                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-1">
                                 {t('machine.launchConfirm.cliArgs')}
                             </div>
                             <input

@@ -326,16 +326,16 @@ export default function SessionHostPanel({
                             <div className="font-medium text-[13px] text-text-primary">
                                 {session.displayName || linkedCli?.cliName || session.providerType}
                             </div>
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${lifecyclePillClass(session.lifecycle)}`}>
+                            <span className={`px-2 py-0.5 rounded-md text-3xs font-semibold ${lifecyclePillClass(session.lifecycle)}`}>
                                 {session.lifecycle}
                             </span>
                             {recoveryLabel && (
-                                <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-sky-500/[0.08] text-sky-300">
+                                <span className="px-2 py-0.5 rounded-md text-3xs font-semibold bg-sky-500/[0.08] text-sky-300">
                                     {recoveryLabel}
                                 </span>
                             )}
                         </div>
-                        <div className="text-[11px] text-text-secondary mt-1 flex flex-wrap gap-2">
+                        <div className="text-2xs text-text-secondary mt-1 flex flex-wrap gap-2">
                             <span className="text-text-primary/90">{session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || 'No workspace'}</span>
                             <span className="text-text-muted">·</span>
                             <span className="font-mono text-text-primary">{session.runtimeKey}</span>
@@ -346,7 +346,7 @@ export default function SessionHostPanel({
                                 </>
                             ) : null}
                         </div>
-                        <div className="text-[10px] text-text-secondary mt-1 flex flex-wrap gap-2">
+                        <div className="text-3xs text-text-secondary mt-1 flex flex-wrap gap-2">
                             <span className={session.writeOwner?.ownerType === 'user' ? 'text-amber-200' : 'text-text-primary/85'}>
                                 {describeOwner(session.writeOwner)}
                             </span>
@@ -364,7 +364,7 @@ export default function SessionHostPanel({
                         {section === 'recovery' && (session.lifecycle === 'interrupted' || session.lifecycle === 'failed' || session.lifecycle === 'stopped') && (
                             <button
                                 type="button"
-                                className="machine-btn text-[10px] px-2 py-1"
+                                className="machine-btn text-3xs px-2 py-1"
                                 disabled={!!busyActionKey}
                                 onClick={() => { void runSessionAction('session_host_resume_session', session) }}
                             >
@@ -373,7 +373,7 @@ export default function SessionHostPanel({
                         )}
                         <button
                             type="button"
-                            className="machine-btn text-[10px] px-2 py-1"
+                            className="machine-btn text-3xs px-2 py-1"
                             disabled={!!busyActionKey}
                             onClick={() => { void runSessionAction('session_host_restart_session', session) }}
                         >
@@ -382,7 +382,7 @@ export default function SessionHostPanel({
                         {section === 'live' && (session.lifecycle === 'running' || session.lifecycle === 'starting' || session.lifecycle === 'interrupted') && (
                             <button
                                 type="button"
-                                className="machine-btn text-[10px] px-2 py-1 border-red-500/20 text-red-300 hover:text-red-200"
+                                className="machine-btn text-3xs px-2 py-1 border-red-500/20 text-red-300 hover:text-red-200"
                                 disabled={!!busyActionKey}
                                 onClick={() => { void runSessionAction('session_host_stop_session', session) }}
                             >
@@ -399,7 +399,7 @@ export default function SessionHostPanel({
         <Card padding="lg" className="mb-5">
             <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
-                    <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                    <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5">
                         <IconServer size={14} /> Hosted Runtime Recovery
                     </div>
                     <div className="text-[12px] text-text-secondary mt-1">
@@ -419,7 +419,7 @@ export default function SessionHostPanel({
                                 : `Prune duplicates (${duplicateGroupCount})`}
                         </button>
                     )}
-                    <span className={`px-2 py-1 rounded-md text-[10px] font-semibold ${availabilityBadge.toneClass}`}>
+                    <span className={`px-2 py-1 rounded-md text-3xs font-semibold ${availabilityBadge.toneClass}`}>
                         {availabilityBadge.label}
                     </span>
                     <button
@@ -450,31 +450,31 @@ export default function SessionHostPanel({
                 <>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-4">
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Live runtimes</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Live runtimes</div>
                             <div className="text-[18px] font-semibold text-text-primary mt-1">{diagnostics.runtimeCount}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Recovery</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Recovery</div>
                             <div className="text-[18px] font-semibold text-text-primary mt-1">{recoverySessions.length}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Requests</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Requests</div>
                             <div className="text-[18px] font-semibold text-text-primary mt-1">{diagnostics.recentRequests.length}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Started</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Started</div>
                             <div className="text-[12px] font-medium text-text-primary mt-1">{formatRelativeTime(diagnostics.hostStartedAt)}</div>
-                            <div className="text-[10px] text-text-secondary mt-0.5">{formatClock(diagnostics.hostStartedAt)}</div>
+                            <div className="text-3xs text-text-secondary mt-0.5">{formatClock(diagnostics.hostStartedAt)}</div>
                         </div>
                     </div>
 
                     {latestWarnOrError && (
-                        <div className="rounded-xl border border-amber-500/[0.16] bg-amber-500/[0.07] px-3.5 py-3 text-[11px] text-text-secondary mb-4">
+                        <div className="rounded-xl border border-amber-500/[0.16] bg-amber-500/[0.07] px-3.5 py-3 text-2xs text-text-secondary mb-4">
                             <div className="flex items-center gap-1.5 text-amber-200 font-medium mb-1">
                                 <IconWarning size={13} /> Latest host warning
                             </div>
                             <div className="text-text-primary leading-relaxed">{latestWarnOrError.message}</div>
-                            <div className="text-[10px] text-text-secondary mt-1">
+                            <div className="text-3xs text-text-secondary mt-1">
                                 {formatClock(latestWarnOrError.timestamp)}
                                 {latestWarnOrError.sessionId ? ` · ${latestWarnOrError.sessionId}` : ''}
                             </div>
@@ -483,10 +483,10 @@ export default function SessionHostPanel({
 
                     <div className="mb-4 space-y-4">
                         <div>
-                            <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
+                            <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
                                 <IconTerminal size={14} /> Live Hosted Runtimes
                             </div>
-                            <div className="text-[11px] text-text-secondary mb-2.5">
+                            <div className="text-2xs text-text-secondary mb-2.5">
                                 {getSessionHostSectionHint('live')}
                             </div>
                             {liveSessions.length === 0 ? (
@@ -501,10 +501,10 @@ export default function SessionHostPanel({
                         </div>
 
                         <div>
-                            <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
+                            <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
                                 <IconServer size={14} /> Recovery Snapshots
                             </div>
-                            <div className="text-[11px] text-text-secondary mb-2.5">
+                            <div className="text-2xs text-text-secondary mb-2.5">
                                 {getSessionHostSectionHint('recovery')}
                             </div>
                             {recoverySessions.length === 0 ? (
@@ -520,10 +520,10 @@ export default function SessionHostPanel({
 
                         {inactiveSessions.length > 0 && (
                             <div>
-                                <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
+                                <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
                                     Inactive Records
                                 </div>
-                                <div className="text-[11px] text-text-secondary mb-2.5">
+                                <div className="text-2xs text-text-secondary mb-2.5">
                                     {getSessionHostSectionHint('inactive')}
                                 </div>
                                 <div className="space-y-2 opacity-85">
@@ -534,7 +534,7 @@ export default function SessionHostPanel({
                     </div>
 
                     <div>
-                        <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
+                        <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
                             Recent Host Activity
                         </div>
                         {recentTransitions.length === 0 ? (
@@ -546,7 +546,7 @@ export default function SessionHostPanel({
                                 {recentTransitions.map((transition) => {
                                     const session = sessions.find((item) => item.sessionId === transition.sessionId)
                                     return (
-                                        <div key={`${transition.sessionId}:${transition.timestamp}:${transition.action}`} className="px-3.5 py-2.5 text-[11px] flex items-start justify-between gap-3">
+                                        <div key={`${transition.sessionId}:${transition.timestamp}:${transition.action}`} className="px-3.5 py-2.5 text-2xs flex items-start justify-between gap-3">
                                             <div className="min-w-0">
                                                 <div className="text-text-primary font-medium">
                                                     {(session?.displayName || cliBySessionId.get(transition.sessionId)?.cliName || transition.sessionId)}
@@ -558,7 +558,7 @@ export default function SessionHostPanel({
                                                     {transition.error ? ` · ${transition.error}` : ''}
                                                 </div>
                                             </div>
-                                            <div className={`shrink-0 text-[10px] ${transition.success === false ? 'text-red-300' : 'text-text-secondary'}`}>
+                                            <div className={`shrink-0 text-3xs ${transition.success === false ? 'text-red-300' : 'text-text-secondary'}`}>
                                                 {formatClock(transition.timestamp)}
                                             </div>
                                         </div>
@@ -568,7 +568,7 @@ export default function SessionHostPanel({
                         )}
                     </div>
 
-                    <div className="text-[10px] text-text-secondary mt-3">
+                    <div className="text-3xs text-text-secondary mt-3">
                         Endpoint: <span className="font-mono text-text-primary">{diagnostics.endpoint || 'unknown'}</span>
                         {error ? <span className="text-amber-200"> · last error: {error}</span> : null}
                     </div>

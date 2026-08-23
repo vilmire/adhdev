@@ -405,9 +405,9 @@ function Card({ meshTheme, title, count, children, action }: {
     return (
         <div className={`flex min-w-0 flex-col overflow-hidden rounded-2xl border p-4 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/80'}`}>
             <div className="mb-3 flex items-center gap-2">
-                <span className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{title}</span>
+                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{title}</span>
                 {count !== undefined && (
-                    <span className={`tabular-nums text-[11px] ${meshTheme.textMuted}`}>{count}</span>
+                    <span className={`tabular-nums text-2xs ${meshTheme.textMuted}`}>{count}</span>
                 )}
                 {action && <span className="ml-auto">{action}</span>}
             </div>
@@ -424,9 +424,9 @@ function StatusBadge({ meshTheme, label, tone }: { meshTheme: MeshGraphTheme; la
         : tone === 'emerald' ? (dk ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
         : (dk ? 'border-white/10 bg-white/[0.04] text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600')
     // leading-none + align-middle + tracking-compensated right padding — same rationale as
-    // Badge in meshSurfacePrimitives.tsx (arbitrary text-[10px] carries no line-height, so
+    // Badge in meshSurfacePrimitives.tsx (arbitrary text-3xs carries no line-height, so
     // the chip inherited the row's and its border drifted against neighbouring text).
-    return <span className={`shrink-0 rounded-full border pl-2 pr-[calc(0.5rem-0.14em)] py-0.5 text-[10px] leading-none align-middle font-semibold uppercase tracking-[0.14em] ${cls}`}>{label}</span>
+    return <span className={`shrink-0 rounded-full border pl-2 pr-[calc(0.5rem-0.14em)] py-0.5 text-3xs leading-none align-middle font-semibold uppercase tracking-[0.14em] ${cls}`}>{label}</span>
 }
 
 function StatTile({ meshTheme, label, value, tone }: { meshTheme: MeshGraphTheme; label: string; value: number | string; tone?: Tone }) {
@@ -440,7 +440,7 @@ function StatTile({ meshTheme, label, value, tone }: { meshTheme: MeshGraphTheme
     return (
         <div className={`flex flex-col items-center rounded-lg border px-2 py-2 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
             <span className={`tabular-nums text-base font-semibold leading-none ${valClass}`}>{value}</span>
-            <span className={`mt-1 text-[9px] uppercase tracking-wide ${meshTheme.textMuted}`}>{label}</span>
+            <span className={`mt-1 text-4xs uppercase tracking-wide ${meshTheme.textMuted}`}>{label}</span>
         </div>
     )
 }
@@ -488,7 +488,7 @@ function MoreToggle({ meshTheme, expanded, hiddenCount, onToggle }: {
         <button
             type="button"
             onClick={onToggle}
-            className={`mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-medium ${meshTheme.textSecondary} hover:underline`}
+            className={`mt-1 self-start rounded-md px-1.5 py-0.5 text-2xs font-medium ${meshTheme.textSecondary} hover:underline`}
         >
             {expanded ? t('mesh.overview.showFewer') : t('mesh.overview.showMore', { count: hiddenCount })}
         </button>
@@ -566,7 +566,7 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, 
                     system clock/battery area and becomes untappable. */}
                 <div className={`sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b px-4 pb-3 pt-[calc(12px+env(safe-area-inset-top,0px))] ${dk ? 'border-white/8' : 'border-slate-200'}`}>
                     <div className="min-w-0">
-                        <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{kicker}</div>
+                        <div className={`text-3xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{kicker}</div>
                         <div className={`mt-0.5 break-all text-sm font-semibold ${meshTheme.textPrimary}`}>{title}</div>
                     </div>
                     {/* >=44px tap target (Apple HIG) while preserving the 32px
@@ -669,7 +669,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                     {showTruncatedLabel && !canFetchGoal && <span className={meshTheme.textMuted}> … (truncated)</span>}
                 </div>
             )}
-            {fetchError && <div className="text-[11px] text-amber-400">{fetchError}</div>}
+            {fetchError && <div className="text-2xs text-amber-400">{fetchError}</div>}
             {canFetchGoal && (
                 <button
                     type="button"
@@ -709,7 +709,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                                 <summary className="cursor-pointer select-none">{t('mesh.overview.incompleteTaskCount_other', { count: incompleteCount })}</summary>
                                 <div className="mt-1 flex flex-col gap-0.5 break-all">
                                     {stats.incompleteTaskIds.map(id => (
-                                        <span key={id} className={`font-mono text-[10px] ${meshTheme.textMuted}`}>{id}</span>
+                                        <span key={id} className={`font-mono text-3xs ${meshTheme.textMuted}`}>{id}</span>
                                     ))}
                                 </div>
                             </details>
@@ -759,7 +759,7 @@ function RoutingDecisionDetail({ meshTheme, routing, resolveNodeLabel }: { meshT
     const tags = routing.requiredTagsResult
     return (
         <div className="flex flex-col gap-1.5">
-            <div className={`text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingHeading')}</div>
+            <div className={`text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingHeading')}</div>
             <div className="grid gap-1.5 text-xs">
                 {routing.selectedNodeId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingDevice')} value={resolveNodeLabel(routing.selectedNodeId)} />}
                 {routing.daemonId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingDaemon')} value={routing.daemonId} />}
@@ -780,8 +780,8 @@ function RoutingDecisionDetail({ meshTheme, routing, resolveNodeLabel }: { meshT
             </div>
             {Array.isArray(routing.skippedCandidates) && routing.skippedCandidates.length > 0 && (
                 <div className="flex flex-col gap-1">
-                    <div className={`text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingSkipped')}</div>
-                    <div className={`flex flex-col gap-0.5 text-[11px] leading-4 ${meshTheme.textSecondary}`}>
+                    <div className={`text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingSkipped')}</div>
+                    <div className={`flex flex-col gap-0.5 text-2xs leading-4 ${meshTheme.textSecondary}`}>
                         {routing.skippedCandidates.map((c, i) => (
                             <div key={`${c.nodeId ?? 'node'}-${i}`}>
                                 <span>{resolveNodeLabel(c.nodeId)}</span>
@@ -828,8 +828,8 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
             {routing && <RoutingDecisionDetail meshTheme={meshTheme} routing={routing} resolveNodeLabel={resolveNodeLabel} />}
             {payloadJson && payloadJson !== '{}' && (
                 <div>
-                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</div>
-                    <pre className={`max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-[10px] leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
+                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</div>
+                    <pre className={`max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
                 </div>
             )}
         </div>
@@ -907,8 +907,8 @@ function MissionRow({ meshTheme, mission, onSelect }: {
         <ListRow meshTheme={meshTheme} onClick={onSelect} dimmed={muted}>
             <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
             <span className={`min-w-0 flex-1 truncate font-medium ${muted ? meshTheme.textSecondary : meshTheme.textPrimary}`}>{mission.title}</span>
-            {t.total > 0 && <span className={`shrink-0 tabular-nums text-[11px] ${meshTheme.textMuted}`}>✓{t.completed}/{t.total}</span>}
-            {lastActivity && <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{lastActivity}</span>}
+            {t.total > 0 && <span className={`shrink-0 tabular-nums text-2xs ${meshTheme.textMuted}`}>✓{t.completed}/{t.total}</span>}
+            {lastActivity && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{lastActivity}</span>}
         </ListRow>
     )
 }
@@ -957,7 +957,7 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
                     <button
                         type="button"
                         onClick={() => setShowPaused(v => !v)}
-                        className={`flex w-full items-center gap-1.5 text-[11px] font-medium ${meshTheme.textSecondary}`}
+                        className={`flex w-full items-center gap-1.5 text-2xs font-medium ${meshTheme.textSecondary}`}
                     >
                         <span className={`inline-block transition-transform ${showPaused ? 'rotate-90' : ''}`}>▸</span>
                         <span>{t('mesh.overview.pausedMissions')}</span>
@@ -976,7 +976,7 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
                     <button
                         type="button"
                         onClick={() => setShowHistory(v => !v)}
-                        className={`flex w-full items-center gap-1.5 text-[11px] font-medium ${meshTheme.textSecondary}`}
+                        className={`flex w-full items-center gap-1.5 text-2xs font-medium ${meshTheme.textSecondary}`}
                     >
                         <span className={`inline-block transition-transform ${showHistory ? 'rotate-90' : ''}`}>▸</span>
                         <span>{t('mesh.overview.completedHistory')}</span>
@@ -1013,7 +1013,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
             title={t('mesh.overview.ledgerCard')}
             // The tiles are ALL-TIME ledger totals, not current state — without
             // this caption "78 stalled" reads as 78 tasks stuck right now.
-            action={<span className={`text-[10px] ${meshTheme.textMuted}`}>{t('mesh.overview.ledgerAllTime')}</span>}
+            action={<span className={`text-3xs ${meshTheme.textMuted}`}>{t('mesh.overview.ledgerAllTime')}</span>}
         >
             <div className="grid grid-cols-3 gap-1.5">
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statDispatched')} value={ledgerSummary.taskDispatched} />
@@ -1025,7 +1025,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
             </div>
             {recent.length > 0 && (
                 <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentActivity')}</div>
+                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentActivity')}</div>
                     <div className="flex flex-col gap-0.5">
                         {list.visible.map(entry => {
                             const summary = payloadSummary(entry.payload)
@@ -1033,7 +1033,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
                                 <ListRow key={entry.id} meshTheme={meshTheme} onClick={() => onSelect(entry)}>
                                     <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind)} tone={ledgerKindTone(entry.kind)} />
                                     <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={entry.nodeId || undefined}>{summary || resolveNodeLabel(entry.nodeId) || entry.sessionId || '—'}</span>
-                                    <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(entry.timestamp) ?? ''}</span>
+                                    <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(entry.timestamp) ?? ''}</span>
                                 </ListRow>
                             )
                         })}
@@ -1042,7 +1042,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
                 </div>
             )}
             {(ledgerSummary.recentFailures > 0 || (lastActivity && recent.length === 0)) && (
-                <div className={`mt-2 flex items-center justify-between text-[11px] ${meshTheme.textMuted}`}>
+                <div className={`mt-2 flex items-center justify-between text-2xs ${meshTheme.textMuted}`}>
                     {ledgerSummary.recentFailures > 0
                         ? <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{t('mesh.overview.recentFailures', { count: ledgerSummary.recentFailures })}</span>
                         : <span />}
@@ -1091,14 +1091,14 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
             </div>
             {recent.length > 0 && (
                 <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                    <div className={`mb-1 text-[10px] uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentTasks')}</div>
+                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentTasks')}</div>
                     <div className="flex flex-col gap-0.5">
                         {list.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
                                 <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
                                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
-                                <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
+                                <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
                             </ListRow>
                         ))}
                         <MoreToggle meshTheme={meshTheme} expanded={list.expanded} hiddenCount={list.hiddenCount} onToggle={list.toggle} />
@@ -1134,11 +1134,11 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                             <div key={node.nodeId} className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden rounded-xl border px-3 py-2 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
                                 <StatusBadge meshTheme={meshTheme} label={node.health} tone={healthTone(node.health)} />
                                 <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{node.machineLabel}</span>
-                                {branch && <span className={`max-w-full truncate font-mono text-[11px] ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
-                                <span className={`max-w-full truncate font-mono text-[10px] ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
-                                {sessionCount > 0 && <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{sessionCount} session{sessionCount > 1 ? 's' : ''}</span>}
+                                {branch && <span className={`max-w-full truncate font-mono text-2xs ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
+                                <span className={`max-w-full truncate font-mono text-3xs ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
+                                {sessionCount > 0 && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{sessionCount} session{sessionCount > 1 ? 's' : ''}</span>}
                                 {typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion && (
-                                    <span className={`shrink-0 font-mono text-[10px] ${meshTheme.textMuted}`} title="Daemon build version reported by this node">v{node.daemonBuildVersion}</span>
+                                    <span className={`shrink-0 font-mono text-3xs ${meshTheme.textMuted}`} title="Daemon build version reported by this node">v{node.daemonBuildVersion}</span>
                                 )}
                                 {conv && <StatusBadge meshTheme={meshTheme} label={conv.label} tone={conv.tone} />}
                             </div>
@@ -1178,9 +1178,9 @@ function SessionsCard({ meshTheme, entries, onSelect }: {
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={session.sessionId}>
                                     {machine}{branch}
                                 </span>
-                                <span className={`shrink-0 text-[10px] ${meshTheme.textMuted}`}>{sessionRoleLabel(session)}</span>
+                                <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{sessionRoleLabel(session)}</span>
                                 <span className={`shrink-0 ${meshTheme.textMuted}`}>{session.providerType || '?'}</span>
-                                {!elapsed.includes('not reported') && <span className={`shrink-0 text-[10px] tabular-nums ${meshTheme.textMuted}`}>{elapsed}</span>}
+                                {!elapsed.includes('not reported') && <span className={`shrink-0 text-3xs tabular-nums ${meshTheme.textMuted}`}>{elapsed}</span>}
                                 <StatusBadge meshTheme={meshTheme} label={label} tone={sessionStatusTone(label)} />
                             </ListRow>
                         )
@@ -1215,17 +1215,17 @@ function RefineJobsCard({ meshTheme, jobs }: { meshTheme: MeshGraphTheme; jobs: 
                         return (
                             <div key={job.jobId} className="flex flex-col gap-0.5">
                                 <div className="flex items-center gap-2 text-xs">
-                                    <span className={`min-w-0 flex-1 truncate font-mono text-[10px] ${meshTheme.textMuted}`}>
+                                    <span className={`min-w-0 flex-1 truncate font-mono text-3xs ${meshTheme.textMuted}`}>
                                         {job.branch ?? job.jobId.slice(0, 14)}{job.into ? ` → ${job.into}` : ''}
                                     </span>
-                                    <span className={`shrink-0 text-[10px] font-semibold ${
+                                    <span className={`shrink-0 text-3xs font-semibold ${
                                         job.status === 'failed' ? (dk ? 'text-rose-300' : 'text-rose-600')
                                         : job.status === 'running' || job.status === 'accepted' ? (dk ? 'text-sky-300' : 'text-sky-600')
                                         : (dk ? 'text-emerald-300' : 'text-emerald-600')
                                     }`}>{job.status}</span>
                                 </div>
                                 {failureReason && (
-                                    <div className={`truncate pl-1 text-[10px] ${dk ? 'text-rose-200/80' : 'text-rose-600/90'}`} title={failureReason}>
+                                    <div className={`truncate pl-1 text-3xs ${dk ? 'text-rose-200/80' : 'text-rose-600/90'}`} title={failureReason}>
                                         {failureReason}
                                     </div>
                                 )}

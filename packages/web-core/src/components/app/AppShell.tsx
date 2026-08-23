@@ -131,7 +131,7 @@ const AppShellSidebar = memo(function AppShellSidebar({
 
             {sidebarSections.map(section => (
                 <div key={section.key} className={section.className ?? 'border-t border-border-subtle pt-2 mt-2'}>
-                    {!collapsed && section.title ? <div className="px-3 py-1 text-[10px] text-text-muted uppercase tracking-widest">{section.title}</div> : null}
+                    {!collapsed && section.title ? <div className="px-3 py-1 text-3xs text-text-muted uppercase tracking-widest">{section.title}</div> : null}
                     {section.items.map(renderNavItem)}
                 </div>
             ))}

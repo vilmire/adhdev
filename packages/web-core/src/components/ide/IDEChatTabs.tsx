@@ -18,7 +18,7 @@ export default function IDEChatTabs({
     return (
         <div className="flex border-b border-border-subtle bg-surface-primary shrink-0">
             <button
-                className={`flex-1 py-2.5 px-4 border-b-2 text-[11px] font-bold tracking-wide cursor-pointer transition-all font-[var(--font)] ${
+                className={`flex-1 py-2.5 px-4 border-b-2 text-2xs font-bold tracking-wide cursor-pointer transition-all font-[var(--font)] ${
                     activeChatTab === 'native'
                         ? 'text-text-primary border-accent-primary bg-bg-primary'
                         : 'text-text-muted border-transparent bg-transparent hover:text-text-secondary'
@@ -35,7 +35,7 @@ export default function IDEChatTabs({
                 return (
                     <button
                         key={tab.tabKey}
-                        className={`flex-1 py-2.5 px-4 border-b-2 text-[11px] font-bold tracking-wide cursor-pointer transition-all font-[var(--font)] flex items-center justify-center gap-1.5 ${
+                        className={`flex-1 py-2.5 px-4 border-b-2 text-2xs font-bold tracking-wide cursor-pointer transition-all font-[var(--font)] flex items-center justify-center gap-1.5 ${
                             isActive
                                 ? 'text-text-primary border-accent-primary bg-bg-primary'
                                 : 'text-text-muted border-transparent bg-transparent hover:text-text-secondary'
@@ -56,7 +56,7 @@ export default function IDEChatTabs({
                         {tab.title}
                         {needsApproval && (
                             <span
-                                className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold ml-0.5"
+                                className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-3xs font-bold ml-0.5"
                                 style={{ background: 'color-mix(in srgb, var(--status-warning) 13%, transparent)', color: 'var(--status-warning)' }}
                             >!</span>
                         )}

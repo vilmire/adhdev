@@ -92,7 +92,7 @@ export default function ManagedWorkspacesSection({
         <>
             <Card padding="lg" className="mb-4">
                 <div className="flex items-center justify-between gap-3 mb-3">
-                    <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                    <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider flex items-center gap-1.5">
                         <IconFolder size={14} /> Workspaces
                     </div>
                     <button
@@ -104,7 +104,7 @@ export default function ManagedWorkspacesSection({
                 </div>
 
                 {(machine.workspaces || []).length === 0 ? (
-                    <div className="text-[11px] text-text-muted py-4 text-center">
+                    <div className="text-2xs text-text-muted py-4 text-center">
                         No saved workspaces yet. Click <span className="text-text-secondary">+ Add workspace</span> to pick a folder.
                     </div>
                 ) : (
@@ -114,7 +114,7 @@ export default function ManagedWorkspacesSection({
                             return (
                                 <li
                                     key={w.id}
-                                    className={`flex items-start gap-2 text-[11px] rounded-lg border px-2.5 py-2 transition-colors ${
+                                    className={`flex items-start gap-2 text-2xs rounded-lg border px-2.5 py-2 transition-colors ${
                                         isDefault
                                             ? 'border-yellow-500/30 bg-yellow-500/[0.05]'
                                             : 'border-border-subtle bg-bg-primary'
@@ -135,11 +135,11 @@ export default function ManagedWorkspacesSection({
                                         <div className="font-medium text-text-primary truncate">
                                             {getWorkspaceDisplayLabel(w.path, w.label)}
                                         </div>
-                                        <div className="font-mono text-text-muted truncate text-[10px]" title={w.path}>{w.path}</div>
+                                        <div className="font-mono text-text-muted truncate text-3xs" title={w.path}>{w.path}</div>
                                     </div>
                                     <button
                                         type="button"
-                                        className="text-[10px] text-red-400/90 hover:underline shrink-0"
+                                        className="text-3xs text-red-400/90 hover:underline shrink-0"
                                         disabled={workspaceBusy}
                                         onClick={() => void handleWorkspaceRemove(w.id)}
                                     >{t('machine.managedWorkspaces.remove')}</button>

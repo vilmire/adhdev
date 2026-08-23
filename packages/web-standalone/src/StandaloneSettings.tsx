@@ -413,7 +413,7 @@ export default function StandaloneSettings() {
                                     <span className={`w-2 h-2 rounded-full ${ide.running ? 'bg-green-400' : 'bg-text-muted/30'}`} />
                                     <span className="text-sm font-medium text-text-primary">{ide.name}</span>
                                 </div>
-                                <span className="text-[11px] text-text-muted font-mono">{ide.type}</span>
+                                <span className="text-2xs text-text-muted font-mono">{ide.type}</span>
                             </div>
                         ))}
                     </div>
@@ -436,7 +436,7 @@ export default function StandaloneSettings() {
                     fontsSlot={
                         <div className="border-t border-border-subtle pt-4">
                             <div className="text-xs text-text-muted mb-1 font-medium">{t('standalone.settings.fontsLabel')}</div>
-                            <p className="text-[11px] text-text-muted mb-3">{t('standalone.settings.fontsDescription')}</p>
+                            <p className="text-2xs text-text-muted mb-3">{t('standalone.settings.fontsDescription')}</p>
                             <StandaloneFontSettingsSection
                                 value={fontPreferences}
                                 savedValue={normalizeStandaloneFontPreferences(preferences?.standaloneFontPreferences)}

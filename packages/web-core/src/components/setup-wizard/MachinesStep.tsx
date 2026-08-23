@@ -96,12 +96,12 @@ export default function MachinesStep(props: MachinesStepProps) {
             <div className="flex flex-col gap-3">
                 <div>
                     <h3 className="text-sm font-semibold text-text-primary">{t('setupWizard.machines.title')}</h3>
-                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                    <p className="mt-1 text-2xs leading-relaxed text-text-muted">
                         {t('setupWizard.machines.noMachinesDescription')}
                     </p>
                 </div>
                 {renderInstallOnboarding ? renderInstallOnboarding() : (
-                    <p className="text-[11px] text-text-muted">{t('setupWizard.machines.noMachinesFallback')}</p>
+                    <p className="text-2xs text-text-muted">{t('setupWizard.machines.noMachinesFallback')}</p>
                 )}
             </div>
         )
@@ -115,7 +115,7 @@ export default function MachinesStep(props: MachinesStepProps) {
         <div className="flex flex-col gap-3">
             <div>
                 <h3 className="text-sm font-semibold text-text-primary">{t('setupWizard.machines.title')}</h3>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                <p className="mt-1 text-2xs leading-relaxed text-text-muted">
                     {t('setupWizard.machines.description')}
                 </p>
             </div>
@@ -133,7 +133,7 @@ export default function MachinesStep(props: MachinesStepProps) {
                         >
                             <span className="min-w-0">
                                 <span className="block truncate text-sm text-text-primary">{mesh.name}</span>
-                                <span className="block truncate text-[11px] text-text-muted">
+                                <span className="block truncate text-2xs text-text-muted">
                                     {mesh.repoIdentity || mesh.repoRemoteUrl || ''} · {t('setupWizard.machines.nodeCount', { count: (mesh.nodes || []).length })}
                                 </span>
                             </span>
@@ -148,7 +148,7 @@ export default function MachinesStep(props: MachinesStepProps) {
                     <span className="text-sm text-text-primary">+ {t('setupWizard.machines.createNew')}</span>
                 </button>
                 {meshesLoading && meshes.length === 0 && (
-                    <p className="text-[11px] text-text-muted">{t('setupWizard.machines.loadingMeshes')}</p>
+                    <p className="text-2xs text-text-muted">{t('setupWizard.machines.loadingMeshes')}</p>
                 )}
             </div>
 
@@ -186,14 +186,14 @@ export default function MachinesStep(props: MachinesStepProps) {
                     {nodes.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
                             {nodes.map(node => (
-                                <span key={node.id} className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] text-text-secondary">
+                                <span key={node.id} className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs text-text-secondary">
                                     {nodeLabel(node)}
                                 </span>
                             ))}
                         </div>
                     )}
 
-                    <span className="text-[11px] font-medium text-text-secondary">{t('setupWizard.machines.attachTitle')}</span>
+                    <span className="text-2xs font-medium text-text-secondary">{t('setupWizard.machines.attachTitle')}</span>
 
                     {features.addNodeDaemonPicker && (
                         attachableDaemons.length > 0 ? (
@@ -205,7 +205,7 @@ export default function MachinesStep(props: MachinesStepProps) {
                                             key={d.id}
                                             type="button"
                                             onClick={() => onAttachDaemonIdChange(d.id)}
-                                            className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${selected ? 'border-accent-primary/60 bg-accent-primary/10 text-text-primary' : 'border-border-subtle bg-bg-secondary text-text-secondary hover:border-border-default'}`}
+                                            className={`rounded-full border px-2.5 py-1 text-2xs transition-colors ${selected ? 'border-accent-primary/60 bg-accent-primary/10 text-text-primary' : 'border-border-subtle bg-bg-secondary text-text-secondary hover:border-border-default'}`}
                                         >
                                             {daemonLabel(d)}
                                         </button>
@@ -213,7 +213,7 @@ export default function MachinesStep(props: MachinesStepProps) {
                                 })}
                             </div>
                         ) : (
-                            <p className="text-[11px] text-text-muted">{t('setupWizard.machines.allMachinesAttached')}</p>
+                            <p className="text-2xs text-text-muted">{t('setupWizard.machines.allMachinesAttached')}</p>
                         )
                     )}
 

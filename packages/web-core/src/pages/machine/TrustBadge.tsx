@@ -44,7 +44,7 @@ export default function TrustBadge({ trust, sourceName, description }: TrustBadg
         : LABEL[trust]
     return (
         <span
-            className={`text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap ${TONE[trust]}`}
+            className={`text-3xs px-1.5 py-0.5 rounded border whitespace-nowrap ${TONE[trust]}`}
             title={description}
         >
             {label}

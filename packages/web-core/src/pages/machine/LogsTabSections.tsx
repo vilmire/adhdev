@@ -61,7 +61,7 @@ function sourceLabel(source: DiagnosticSource): string {
 function DiagnosticEventRow({ event }: { event: DiagnosticEvent }) {
     return (
         <div className={`py-2 px-2 mb-2 rounded-lg border ${sectionTone(event.severity)}`}>
-            <div className="flex gap-2 text-[10px] text-text-muted flex-wrap">
+            <div className="flex gap-2 text-3xs text-text-muted flex-wrap">
                 <span>{formatDiagnosticTimestamp(event.ts)}</span>
                 <span>{event.severity.toUpperCase()}</span>
                 <span>{sourceLabel(event.source)}</span>
@@ -102,7 +102,7 @@ export function LogsToolbar({
     return (
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mr-1">
+                <span className="text-2xs text-text-muted font-semibold uppercase tracking-wider mr-1">
                     View
                 </span>
                 <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-bg-secondary p-1">
@@ -115,7 +115,7 @@ export function LogsToolbar({
                             key={option.id}
                             type="button"
                             onClick={() => onQuickFilterChange(option.id)}
-                            className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${
+                            className={`rounded-md px-2.5 py-1 text-2xs transition-colors ${
                                 quickFilter === option.id
                                     ? 'bg-accent-primary/15 text-accent-primary border border-accent-primary/30'
                                     : 'text-text-secondary hover:text-text-primary'
@@ -160,12 +160,12 @@ export function AdvancedSourceScope({
         <Card padding="sm">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-wrap gap-2 items-center">
-                    <span className="text-[10px] uppercase tracking-wider text-text-muted font-semibold">Advanced source scope</span>
+                    <span className="text-3xs uppercase tracking-wider text-text-muted font-semibold">Advanced source scope</span>
                     {(['debug', 'info', 'warn', 'error'] as const).map(level => (
                         <button
                             key={level}
                             onClick={() => onLogLevelChange(level)}
-                            className={`machine-btn text-[10px] px-2 py-0.5 ${
+                            className={`machine-btn text-3xs px-2 py-0.5 ${
                                 logLevel === level ? 'bg-accent-primary/15 border-accent-primary/40 text-accent-primary' : ''
                             }`}
                         >Daemon {level.toUpperCase()}+</button>
@@ -176,7 +176,7 @@ export function AdvancedSourceScope({
                         <button
                             key={filter.value}
                             onClick={() => onTraceCategoryChange(filter.value)}
-                            className={`machine-btn text-[10px] px-2 py-0.5 ${
+                            className={`machine-btn text-3xs px-2 py-0.5 ${
                                 traceCategory === filter.value ? 'bg-accent-primary/15 border-accent-primary/40 text-accent-primary' : ''
                             }`}
                         >
@@ -214,46 +214,46 @@ export function DiagnosticsSummaryCards({
     return (
         <div className="grid gap-3 md:grid-cols-3">
             <div className={`rounded-xl border p-3 ${summaryCardTone(diagnosticsSummary.issueCount > 0 ? 'warning' : 'good')}`}>
-                <div className="text-[10px] uppercase tracking-wider text-text-muted mb-2">Diagnostics timeline</div>
+                <div className="text-3xs uppercase tracking-wider text-text-muted mb-2">Diagnostics timeline</div>
                 <div className="text-[13px] text-text-primary font-medium">
                     {diagnosticEventsCount} visible event(s) · {diagnosticsSummary.issueCount} issue signal(s)
                 </div>
-                <div className="text-[11px] text-text-secondary mt-1">
+                <div className="text-2xs text-text-secondary mt-1">
                     {searchQuery.trim() ? `Filtered by “${searchQuery.trim()}”` : 'Daemon, trace, and browser signals merged by time'}
                 </div>
             </div>
 
             <div className={`rounded-xl border p-3 ${summaryCardTone(latestIssueTone)}`}>
-                <div className="text-[10px] uppercase tracking-wider text-text-muted mb-2">Latest issue</div>
+                <div className="text-3xs uppercase tracking-wider text-text-muted mb-2">Latest issue</div>
                 {diagnosticsSummary.latestIssue ? (
                     <>
                         <div className="text-[13px] text-text-primary font-medium">
                             {sourceLabel(diagnosticsSummary.latestIssue.source)} · {diagnosticsSummary.latestIssue.severity.toUpperCase()}
                         </div>
-                        <div className="text-[11px] text-text-secondary mt-1 line-clamp-2">
+                        <div className="text-2xs text-text-secondary mt-1 line-clamp-2">
                             {diagnosticsSummary.latestIssue.message}
                         </div>
-                        <div className="text-[10px] text-text-muted mt-2">
+                        <div className="text-3xs text-text-muted mt-2">
                             {formatDiagnosticTimestamp(diagnosticsSummary.latestIssue.ts)}
                         </div>
                     </>
                 ) : (
                     <>
                         <div className="text-[13px] text-text-primary font-medium">No visible warn/error signal</div>
-                        <div className="text-[11px] text-text-secondary mt-1">Use Issues or All if you need a narrower or rawer view.</div>
+                        <div className="text-2xs text-text-secondary mt-1">Use Issues or All if you need a narrower or rawer view.</div>
                     </>
                 )}
             </div>
 
             <div className={`rounded-xl border p-3 ${summaryCardTone(statusTone)}`}>
-                <div className="text-[10px] uppercase tracking-wider text-text-muted mb-2">Source status</div>
+                <div className="text-3xs uppercase tracking-wider text-text-muted mb-2">Source status</div>
                 <div className="text-[13px] text-text-primary font-medium">
                     {daemonFetchError || traceFetchError ? 'Needs attention' : autoRefresh ? 'Live polling every 3s' : 'Paused'}
                 </div>
-                <div className="text-[11px] text-text-secondary mt-1">
+                <div className="text-2xs text-text-secondary mt-1">
                     Last update: {formatTimestamp(lastUpdatedAt)}
                 </div>
-                <div className="text-[10px] text-text-muted mt-2 space-y-1">
+                <div className="text-3xs text-text-muted mt-2 space-y-1">
                     {sourceStates.map((source) => (
                         <div key={source.id}>{source.label}: {source.status}</div>
                     ))}
@@ -268,12 +268,12 @@ export function RepeatedPatternsPanel({ patterns }: { patterns: DiagnosticRepeat
 
     return (
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
-            <div className="text-[10px] uppercase tracking-wider text-text-muted mb-2">Repeated issue patterns</div>
+            <div className="text-3xs uppercase tracking-wider text-text-muted mb-2">Repeated issue patterns</div>
             <div className="grid gap-2 md:grid-cols-2">
                 {patterns.map((pattern) => (
                     <div key={pattern.key} className="rounded-lg border border-border-subtle bg-bg-primary px-3 py-2">
                         <div className="text-[12px] text-text-primary font-medium">{pattern.count}× {pattern.severity.toUpperCase()} · {sourceLabel(pattern.source)}</div>
-                        <div className="text-[11px] text-text-secondary mt-1 line-clamp-2">{pattern.message}</div>
+                        <div className="text-2xs text-text-secondary mt-1 line-clamp-2">{pattern.message}</div>
                     </div>
                 ))}
             </div>
@@ -313,13 +313,13 @@ export function DiagnosticsSections({
                     onClick={() => setSectionsOpen((current) => ({ ...current, timeline: !current.timeline }))}
                 >
                     <div>
-                        <div className="text-[10px] uppercase tracking-wider text-text-muted">Unified timeline</div>
-                        <div className="text-[11px] text-text-secondary mt-1">{diagnosticEvents.length} visible diagnostic event(s)</div>
+                        <div className="text-3xs uppercase tracking-wider text-text-muted">Unified timeline</div>
+                        <div className="text-2xs text-text-secondary mt-1">{diagnosticEvents.length} visible diagnostic event(s)</div>
                     </div>
-                    <div className="text-[11px] text-text-muted">{sectionsOpen.timeline ? 'Hide' : 'Show'}</div>
+                    <div className="text-2xs text-text-muted">{sectionsOpen.timeline ? 'Hide' : 'Show'}</div>
                 </button>
                 {sectionsOpen.timeline && (
-                    <div className="border-t border-border-subtle p-3 min-h-[180px] max-h-[440px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+                    <div className="border-t border-border-subtle p-3 min-h-[180px] max-h-[440px] overflow-y-auto font-mono text-2xs leading-relaxed">
                         {(streams.daemonLoading || streams.traceLoading) && diagnosticEvents.length === 0 && !streams.daemonFetchError && !streams.traceFetchError && (
                             <div className="p-6 text-center text-text-muted">Loading diagnostics…</div>
                         )}
@@ -344,17 +344,17 @@ export function DiagnosticsSections({
                     onClick={() => setSectionsOpen((current) => ({ ...current, daemon: !current.daemon }))}
                 >
                     <div>
-                        <div className="text-[10px] uppercase tracking-wider text-text-muted">Raw source · daemon logs</div>
-                        <div className="text-[11px] text-text-secondary mt-1">
+                        <div className="text-3xs uppercase tracking-wider text-text-muted">Raw source · daemon logs</div>
+                        <div className="text-2xs text-text-secondary mt-1">
                             {streams.daemonLogKind === 'text'
                                 ? `${visibleDaemonRawLines.length} visible raw line(s) from file fallback`
                                 : `${visibleDaemonLogs.length} visible structured line(s)`}
                         </div>
                     </div>
-                    <div className="text-[11px] text-text-muted">{sectionsOpen.daemon ? 'Hide' : 'Show'}</div>
+                    <div className="text-2xs text-text-muted">{sectionsOpen.daemon ? 'Hide' : 'Show'}</div>
                 </button>
                 {sectionsOpen.daemon && (
-                    <div className="border-t border-border-subtle p-3 min-h-[160px] max-h-[360px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+                    <div className="border-t border-border-subtle p-3 min-h-[160px] max-h-[360px] overflow-y-auto font-mono text-2xs leading-relaxed">
                         {streams.daemonLoading && visibleDaemonLogs.length === 0 && visibleDaemonRawLines.length === 0 && !streams.daemonFetchError && (
                             <div className="p-6 text-center text-text-muted">Loading daemon logs…</div>
                         )}
@@ -376,7 +376,7 @@ export function DiagnosticsSections({
                         {streams.daemonLogKind !== 'text' && visibleDaemonLogs.map((log, index) => (
                             <div key={`log-${index}`} className={`flex gap-2 py-1 px-2 mb-1 rounded-lg border ${sectionTone(log.level)}`}>
                                 <span className="text-text-muted min-w-[75px] shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                                <span className="font-semibold min-w-[32px] shrink-0 text-[9px]">{log.level === 'error' ? 'ERR' : log.level === 'warn' ? 'WRN' : log.level === 'debug' ? 'DBG' : 'INF'}</span>
+                                <span className="font-semibold min-w-[32px] shrink-0 text-4xs">{log.level === 'error' ? 'ERR' : log.level === 'warn' ? 'WRN' : log.level === 'debug' ? 'DBG' : 'INF'}</span>
                                 <span className="break-words">{log.message}</span>
                             </div>
                         ))}
@@ -391,16 +391,16 @@ export function DiagnosticsSections({
                     onClick={() => setSectionsOpen((current) => ({ ...current, trace: !current.trace }))}
                 >
                     <div>
-                        <div className="text-[10px] uppercase tracking-wider text-text-muted">
+                        <div className="text-3xs uppercase tracking-wider text-text-muted">
                             Raw source · daemon trace
                             {streams.traceCategory === 'session_host' ? ' · session_host only' : ''}
                         </div>
-                        <div className="text-[11px] text-text-secondary mt-1">{visibleTraceEntries.length} visible trace event(s)</div>
+                        <div className="text-2xs text-text-secondary mt-1">{visibleTraceEntries.length} visible trace event(s)</div>
                     </div>
-                    <div className="text-[11px] text-text-muted">{sectionsOpen.trace ? 'Hide' : 'Show'}</div>
+                    <div className="text-2xs text-text-muted">{sectionsOpen.trace ? 'Hide' : 'Show'}</div>
                 </button>
                 {sectionsOpen.trace && (
-                    <div className="border-t border-border-subtle p-3 min-h-[160px] max-h-[320px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+                    <div className="border-t border-border-subtle p-3 min-h-[160px] max-h-[320px] overflow-y-auto font-mono text-2xs leading-relaxed">
                         {streams.traceLoading && visibleTraceEntries.length === 0 && !streams.traceFetchError && (
                             <div className="p-6 text-center text-text-muted">Loading daemon trace…</div>
                         )}
@@ -418,7 +418,7 @@ export function DiagnosticsSections({
                         )}
                         {visibleTraceEntries.map((entry) => (
                             <div key={entry.id} className={`py-2 px-2 mb-2 rounded-lg border ${sectionTone(entry.level)}`}>
-                                <div className="flex gap-2 text-[10px] text-text-muted flex-wrap">
+                                <div className="flex gap-2 text-3xs text-text-muted flex-wrap">
                                     <span>{new Date(entry.ts).toLocaleTimeString()}</span>
                                     <span>{entry.level.toUpperCase()}</span>
                                     <span>{entry.category}.{entry.stage}</span>
@@ -438,13 +438,13 @@ export function DiagnosticsSections({
                     onClick={() => setSectionsOpen((current) => ({ ...current, web: !current.web }))}
                 >
                     <div>
-                        <div className="text-[10px] uppercase tracking-wider text-text-muted">Raw source · browser debug events</div>
-                        <div className="text-[11px] text-text-secondary mt-1">{visibleWebEvents.length} visible browser event(s)</div>
+                        <div className="text-3xs uppercase tracking-wider text-text-muted">Raw source · browser debug events</div>
+                        <div className="text-2xs text-text-secondary mt-1">{visibleWebEvents.length} visible browser event(s)</div>
                     </div>
-                    <div className="text-[11px] text-text-muted">{sectionsOpen.web ? 'Hide' : 'Show'}</div>
+                    <div className="text-2xs text-text-muted">{sectionsOpen.web ? 'Hide' : 'Show'}</div>
                 </button>
                 {sectionsOpen.web && (
-                    <div className="border-t border-border-subtle p-3 min-h-[140px] max-h-[260px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+                    <div className="border-t border-border-subtle p-3 min-h-[140px] max-h-[260px] overflow-y-auto font-mono text-2xs leading-relaxed">
                         {visibleWebEvents.length === 0 && (
                             <div className="p-6 text-center text-text-muted">
                                 {searchQuery.trim() ? 'No browser debug events match the current search.' : 'No browser debug events captured yet.'}
@@ -452,7 +452,7 @@ export function DiagnosticsSections({
                         )}
                         {visibleWebEvents.map((entry) => (
                             <div key={entry.id} className="py-2 px-2 mb-2 rounded-lg border border-border-subtle bg-bg-primary">
-                                <div className="flex gap-2 text-[10px] text-text-muted flex-wrap">
+                                <div className="flex gap-2 text-3xs text-text-muted flex-wrap">
                                     <span>{new Date(entry.ts).toLocaleTimeString()}</span>
                                     <span>{entry.kind}</span>
                                     {entry.topic && <span>topic={entry.topic}</span>}

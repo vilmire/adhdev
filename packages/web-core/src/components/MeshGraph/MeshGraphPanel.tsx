@@ -56,7 +56,7 @@ function HealthBadge({ health, isDark }: { health: string; isDark: boolean }) {
     }
     const colors = isDark ? darkColors : lightColors
     return (
-        <span className={`px-1.5 py-0.5 rounded text-[10px] border ${colors[health] || colors.unknown}`}>
+        <span className={`px-1.5 py-0.5 rounded text-3xs border ${colors[health] || colors.unknown}`}>
             {health}
         </span>
     )
@@ -159,11 +159,11 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
 
             <div className="flex flex-wrap items-center gap-2">
                 <HealthBadge health={node.health} isDark={meshTheme.isDark} />
-                {isSubmoduleNode && <span className={meshTheme.isDark ? 'rounded border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200' : 'rounded border border-violet-300 bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700'}>{t('meshGraph.panel.submoduleBadge')}</span>}
-                {node.dirty && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-amber-50 text-amber-700 border border-amber-300'}>{t('meshGraph.panel.dirtyBadge')}</span>}
-                {node.outOfSync && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.outOfSyncBadge')}</span>}
-                {node.hasConflicts && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.conflictBadge')}</span>}
-                {node.isOrphan && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.orphanBadge')}</span>}
+                {isSubmoduleNode && <span className={meshTheme.isDark ? 'rounded border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-3xs text-violet-200' : 'rounded border border-violet-300 bg-violet-50 px-1.5 py-0.5 text-3xs text-violet-700'}>{t('meshGraph.panel.submoduleBadge')}</span>}
+                {node.dirty && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-3xs bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'px-1.5 py-0.5 rounded text-3xs bg-amber-50 text-amber-700 border border-amber-300'}>{t('meshGraph.panel.dirtyBadge')}</span>}
+                {node.outOfSync && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-3xs bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-3xs bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.outOfSyncBadge')}</span>}
+                {node.hasConflicts && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-3xs bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-3xs bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.conflictBadge')}</span>}
+                {node.isOrphan && <span className={meshTheme.isDark ? 'px-1.5 py-0.5 rounded text-3xs bg-red-500/10 text-red-400 border border-red-500/20' : 'px-1.5 py-0.5 rounded text-3xs bg-rose-50 text-rose-700 border border-rose-300'}>{t('meshGraph.panel.orphanBadge')}</span>}
             </div>
 
             <div className="flex flex-col gap-0.5 mt-1">
@@ -187,8 +187,8 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
 
             {node.orphanReasons.length > 0 && (
                 <div className="mt-1">
-                    <div className={meshTheme.isDark ? 'mb-1 text-[10px] font-semibold text-red-400' : 'mb-1 text-[10px] font-semibold text-rose-700'}>{t('meshGraph.panel.orphanReasons')}</div>
-                    <ul className={meshTheme.isDark ? 'list-disc list-inside text-[10px] text-red-300 space-y-0.5' : 'list-disc list-inside text-[10px] text-rose-700 space-y-0.5'}>
+                    <div className={meshTheme.isDark ? 'mb-1 text-3xs font-semibold text-red-400' : 'mb-1 text-3xs font-semibold text-rose-700'}>{t('meshGraph.panel.orphanReasons')}</div>
+                    <ul className={meshTheme.isDark ? 'list-disc list-inside text-3xs text-red-300 space-y-0.5' : 'list-disc list-inside text-3xs text-rose-700 space-y-0.5'}>
                         {node.orphanReasons.map((r, i) => (
                             <li key={i}>{r}</li>
                         ))}
@@ -198,12 +198,12 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
 
             {node.sessionDetails.length > 0 && (
                 <div className="mt-2">
-                    <div className={meshTheme.isDark ? 'mb-1 text-[10px] font-semibold text-slate-300' : 'mb-1 text-[10px] font-semibold text-slate-700'}>{t('meshGraph.panel.attachedChats')}</div>
+                    <div className={meshTheme.isDark ? 'mb-1 text-3xs font-semibold text-slate-300' : 'mb-1 text-3xs font-semibold text-slate-700'}>{t('meshGraph.panel.attachedChats')}</div>
                     <div className="flex flex-col gap-1.5">
                         {node.sessionDetails.map(session => (
                             <div
                                 key={session.sessionId}
-                                className={meshTheme.isDark ? 'rounded-lg border border-white/8 bg-white/[0.03] px-2 py-1.5 text-[10px] text-slate-300' : 'rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[10px] text-slate-600'}
+                                className={meshTheme.isDark ? 'rounded-lg border border-white/8 bg-white/[0.03] px-2 py-1.5 text-3xs text-slate-300' : 'rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-3xs text-slate-600'}
                                 title={[
                                     `Session ID: ${session.sessionId}`,
                                     session.providerType ? `Provider: ${session.providerType}` : null,

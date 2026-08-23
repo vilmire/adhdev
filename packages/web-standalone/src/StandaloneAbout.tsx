@@ -71,7 +71,7 @@ export default function StandaloneAbout() {
             subtitle={t('standalone.about.subtitle')}
             widthClassName="max-w-5xl"
             actions={(
-                <div className="px-3 py-1 text-[11px] font-semibold tracking-wide rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                <div className="px-3 py-1 text-2xs font-semibold tracking-wide rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
                     SELFHOST v{__APP_VERSION__}
                 </div>
             )}
@@ -79,7 +79,7 @@ export default function StandaloneAbout() {
             <Section>
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                     <div className="max-w-2xl">
-                        <div className="text-[11px] font-semibold tracking-[0.18em] uppercase text-emerald-400 mb-2">{t('standalone.about.selfHostedEdition')}</div>
+                        <div className="text-2xs font-semibold tracking-[0.18em] uppercase text-emerald-400 mb-2">{t('standalone.about.selfHostedEdition')}</div>
                         <h2 className="text-2xl font-semibold tracking-tight text-text-primary mb-2">{t('standalone.about.headline')}</h2>
                         <p className="text-sm text-text-muted leading-relaxed">
                             {t('standalone.about.description')}
@@ -117,7 +117,7 @@ export default function StandaloneAbout() {
                         { label: 'CLI agents', items: BUILTIN_CLI_AGENTS.map(item => `${item.icon} ${item.name}`) },
                     ].map(group => (
                         <div key={group.label} className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-4">
-                            <div className="text-[11px] font-bold tracking-wider text-text-muted mb-3 uppercase">{group.label}</div>
+                            <div className="text-2xs font-bold tracking-wider text-text-muted mb-3 uppercase">{group.label}</div>
                             <div className="flex flex-col gap-1.5">
                                 {group.items.map(item => (
                                     <div key={item} className="rounded-md border border-border-subtle bg-bg-card px-2.5 py-1.5 text-[12px] text-text-secondary">
@@ -151,9 +151,9 @@ export default function StandaloneAbout() {
                     <table className="w-full text-[13px]">
                         <thead>
                             <tr className="bg-bg-secondary">
-                                <th className="text-left px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider">{t('standalone.about.featureHeader')}</th>
-                                <th className="text-center px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider w-[110px]">{t('standalone.about.selfhostHeader')}</th>
-                                <th className="text-center px-4 py-3 font-semibold text-accent-primary text-[11px] uppercase tracking-wider w-[110px]">{t('standalone.about.cloudHeader')}</th>
+                                <th className="text-left px-4 py-3 font-semibold text-text-muted text-2xs uppercase tracking-wider">{t('standalone.about.featureHeader')}</th>
+                                <th className="text-center px-4 py-3 font-semibold text-text-muted text-2xs uppercase tracking-wider w-[110px]">{t('standalone.about.selfhostHeader')}</th>
+                                <th className="text-center px-4 py-3 font-semibold text-accent-primary text-2xs uppercase tracking-wider w-[110px]">{t('standalone.about.cloudHeader')}</th>
                             </tr>
                         </thead>
                         <tbody>

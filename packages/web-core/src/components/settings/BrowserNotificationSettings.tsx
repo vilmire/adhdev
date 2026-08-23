@@ -70,11 +70,11 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
 
             {prefs.globalEnabled && (
                 <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
-                    <div className="text-[11px] text-text-muted">
+                    <div className="text-2xs text-text-muted">
                         {t('notifications.standaloneBackgroundInfo')}
                     </div>
                     {browserPermission === 'default' && (
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-status-warning">
+                        <div className="flex flex-wrap items-center gap-2 text-2xs text-status-warning">
                             <span>{t('notifications.standalonePermissionDefault')}</span>
                             <button
                                 onClick={() => { void requestNotificationPermission().then(setBrowserPermission) }}
@@ -85,12 +85,12 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
                         </div>
                     )}
                     {browserPermission === 'denied' && (
-                        <div className="text-[11px] text-status-warning">
+                        <div className="text-2xs text-status-warning">
                             {t('notifications.permissionDenied')}
                         </div>
                     )}
                     {browserPermission === 'unsupported' && (
-                        <div className="text-[11px] text-status-warning">
+                        <div className="text-2xs text-status-warning">
                             {t('notifications.standalonePermissionUnsupported')}
                         </div>
                     )}
@@ -121,7 +121,7 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
                 </div>
             )}
             {!prefs.globalEnabled && (
-                <p className="text-[11px] text-text-muted italic">
+                <p className="text-2xs text-text-muted italic">
                     {t('notifications.allDisabled')}
                 </p>
             )}

@@ -84,7 +84,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                 <div className="px-5 py-4 border-b border-border-subtle flex items-start justify-between gap-3">
                     <div className="min-w-0">
                         <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerClone.title')}</h2>
-                        <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerClone.subtitle')}</p>
+                        <p className="text-2xs text-text-muted mt-0.5">{t('machine.providerClone.subtitle')}</p>
                     </div>
                     <button
                         type="button"
@@ -100,7 +100,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                         <>
                             {/* Base Provider */}
                             <div>
-                                <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
+                                <label className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
                                     {t('machine.providerClone.baseProvider')}
                                 </label>
                                 <div className="grid grid-cols-3 gap-1.5">
@@ -115,7 +115,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                             }}
                                         >
                                             <div className="flex justify-center"><ProviderLogo type={p.type} label={p.displayName} size={22} /></div>
-                                            <div className="text-[10px] font-medium mt-0.5" style={{ color: baseType === p.type ? '#a78bfa' : 'var(--text-secondary)' }}>
+                                            <div className="text-3xs font-medium mt-0.5" style={{ color: baseType === p.type ? '#a78bfa' : 'var(--text-secondary)' }}>
                                                 {p.displayName}
                                             </div>
                                         </button>
@@ -125,7 +125,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
 
                             {/* Custom Type */}
                             <div>
-                                <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
+                                <label className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
                                     {t('machine.providerClone.providerTypeId')}
                                 </label>
                                 <input
@@ -134,14 +134,14 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                     placeholder={t('machine.providerClone.typeIdPlaceholder')}
                                     className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
                                 />
-                                <p className="text-[10px] text-text-muted mt-1">
+                                <p className="text-3xs text-text-muted mt-1">
                                     {t('machine.providerClone.typeIdHint')} <code className="text-accent-primary">~/.adhdev/providers/{customType || '...'}/</code>
                                 </p>
                             </div>
 
                             {/* Display Name */}
                             <div>
-                                <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
+                                <label className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
                                     {t('machine.providerClone.displayName')}
                                 </label>
                                 <input
@@ -153,7 +153,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                             </div>
 
                             {error && (
-                                <div className="px-3 py-2 rounded-lg bg-red-500/[0.06] border border-red-500/20 text-red-400 text-[11px]">
+                                <div className="px-3 py-2 rounded-lg bg-red-500/[0.06] border border-red-500/20 text-red-400 text-2xs">
                                     {error}
                                 </div>
                             )}
@@ -162,10 +162,10 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                         <div className="text-center py-6">
                             <div className="mb-2 flex justify-center text-emerald-400"><IconCheckCircle size={30} /></div>
                             <h3 className="text-[14px] font-semibold text-text-primary">{t('machine.providerClone.createdTitle')}</h3>
-                            <p className="text-[11px] text-text-muted mt-1">
+                            <p className="text-2xs text-text-muted mt-1">
                                 {t('machine.providerClone.createdDesc', { type: customType })} <code className="text-green-400">~/.adhdev/providers/{customType}/</code>
                             </p>
-                            <p className="text-[11px] text-text-muted mt-2">
+                            <p className="text-2xs text-text-muted mt-2">
                                 {t('machine.providerClone.createdRunHint', { type: customType })}
                             </p>
                         </div>

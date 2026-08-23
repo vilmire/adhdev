@@ -213,7 +213,7 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }:
         <div className="flex flex-col gap-3">
             <div>
                 <h3 className="text-sm font-semibold text-text-primary">{t('setupWizard.quotaPolicy.title')}</h3>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                <p className="mt-1 text-2xs leading-relaxed text-text-muted">
                     {t('setupWizard.quotaPolicy.description')}
                 </p>
             </div>
@@ -223,7 +223,7 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }:
                     const fieldError = errors[f.key]
                     return (
                         <label key={f.key} className="flex flex-col gap-1">
-                            <span className="text-[11px] text-text-muted">
+                            <span className="text-2xs text-text-muted">
                                 {f.label}{f.unit ? ` (${f.unit})` : ''}
                             </span>
                             <input
@@ -234,7 +234,7 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }:
                                 placeholder={String(f.placeholder)}
                                 onChange={e => update(f.key, e.target.value)}
                             />
-                            <span className={`text-[10px] leading-snug ${fieldError ? 'text-red-400' : 'text-text-muted'}`}>
+                            <span className={`text-3xs leading-snug ${fieldError ? 'text-red-400' : 'text-text-muted'}`}>
                                 {fieldError ? t(`setupWizard.quotaPolicy.errors.${fieldError}`) : f.hint}
                             </span>
                         </label>
@@ -242,12 +242,12 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave }:
                 })}
             </div>
 
-            <p className="text-[10px] leading-relaxed text-text-muted">
+            <p className="text-3xs leading-relaxed text-text-muted">
                 {t('setupWizard.quotaPolicy.blankMeansDefault')}
             </p>
 
             {error ? (
-                <p className="text-[11px] text-red-400">{error}</p>
+                <p className="text-2xs text-red-400">{error}</p>
             ) : null}
 
             <div className="flex items-center gap-2">

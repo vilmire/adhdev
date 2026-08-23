@@ -75,7 +75,7 @@ function FontControl({
             onChange={event => onChange({ preset: 'custom', customFamily: event.target.value })}
           />
         )}
-        <div className="text-[11px] text-text-muted">
+        <div className="text-2xs text-text-muted">
           <span className="font-medium text-text-secondary">{t('standalone.fonts.resolvedStack')}</span>{' '}
           <span className="font-mono break-all">{resolveStandaloneFontFamily(surface, value)}</span>
         </div>
@@ -142,7 +142,7 @@ export default function StandaloneFontSettingsSection({
               Chat: {getStandaloneFontPreferenceLabel('chat', value.chat.preset)} · Code: {getStandaloneFontPreferenceLabel('code', value.code.preset)} · Terminal: {getStandaloneFontPreferenceLabel('terminal', value.terminal.preset)}
             </div>
           </div>
-          <div className="text-[11px] text-text-muted">{t('standalone.fonts.defaults')} {getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset)} / {getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset)}</div>
+          <div className="text-2xs text-text-muted">{t('standalone.fonts.defaults')} {getStandaloneFontPreferenceLabel('chat', DEFAULT_STANDALONE_FONT_PREFERENCES.chat.preset)} / {getStandaloneFontPreferenceLabel('code', DEFAULT_STANDALONE_FONT_PREFERENCES.code.preset)}</div>
         </div>
 
         <div className="chat-container rounded-xl border border-border-subtle min-h-0 !p-4">

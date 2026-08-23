@@ -81,7 +81,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                         <span className="text-sm"><IconWarning size={14} /></span>
                         <span className="flex-1">CDP not connected — chat history & screenshots unavailable.</span>
                         <button
-                            className="btn btn-sm bg-yellow-500/15 text-yellow-500 border border-yellow-500/30 text-[10px] whitespace-nowrap shrink-0"
+                            className="btn btn-sm bg-yellow-500/15 text-yellow-500 border border-yellow-500/30 text-3xs whitespace-nowrap shrink-0"
                             onClick={handleRelaunch}
                         >Relaunch with CDP</button>
                     </div>

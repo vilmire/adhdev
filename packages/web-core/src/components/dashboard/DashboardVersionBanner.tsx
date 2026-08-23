@@ -63,22 +63,22 @@ export default function DashboardVersionBanner({
                             }}
                         >
                             <span className="font-medium text-text-primary">{name}</span>
-                            <span className="text-[10px] text-text-muted">v{currentVersion}</span>
+                            <span className="text-3xs text-text-muted">v{currentVersion}</span>
                             {isRequired && (
-                                <span className="text-[10px]" style={{ color: 'var(--status-danger)' }}>{t('dashboard.versionBanner.required')}</span>
+                                <span className="text-3xs" style={{ color: 'var(--status-danger)' }}>{t('dashboard.versionBanner.required')}</span>
                             )}
                             {state === 'upgrading' ? (
-                                <span className="text-[10px] animate-pulse" style={{ color: isRequired ? 'var(--status-danger)' : 'var(--status-warning)' }}>upgrading…</span>
+                                <span className="text-3xs animate-pulse" style={{ color: isRequired ? 'var(--status-danger)' : 'var(--status-warning)' }}>upgrading…</span>
                             ) : state === 'done' ? (
-                                <span className="text-[10px] text-green-400">✓ restarting</span>
+                                <span className="text-3xs text-green-400">✓ restarting</span>
                             ) : state === 'error' ? (
                                 <button
-                                    className="text-[10px] text-red-400 hover:text-red-300 underline cursor-pointer"
+                                    className="text-3xs text-red-400 hover:text-red-300 underline cursor-pointer"
                                     onClick={() => onUpgrade(daemon.id)}
                                 >{t('dashboard.versionBanner.retry')}</button>
                             ) : (
                                 <button
-                                    className="text-[10px] font-semibold cursor-pointer px-1.5 py-px rounded transition-colors"
+                                    className="text-3xs font-semibold cursor-pointer px-1.5 py-px rounded transition-colors"
                                     style={{
                                         color: isRequired ? 'var(--status-danger)' : 'var(--status-warning)',
                                         background: isRequired

@@ -139,7 +139,7 @@ function stateBadge(id: string): string {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
     return (
-        <div className="text-text-secondary text-[10px] uppercase tracking-widest font-semibold mb-1.5 mt-0.5">
+        <div className="text-text-secondary text-3xs uppercase tracking-widest font-semibold mb-1.5 mt-0.5">
             {children}
         </div>
     )
@@ -155,7 +155,7 @@ function CondTree({ node, depth = 0 }: { node: FsmCondNode; depth?: number }) {
     const color = node.result ? 'text-status-online' : 'text-text-muted'
     const dot = node.result ? '●' : '○'
     return (
-        <div style={{ marginLeft: depth * 10 }} className="font-mono text-[10px] leading-relaxed">
+        <div style={{ marginLeft: depth * 10 }} className="font-mono text-3xs leading-relaxed">
             <span className={color}>{dot} </span>
             <span className="text-text-secondary">{node.kind}</span>
             <span className="text-text-muted"> {node.detail}</span>
@@ -182,13 +182,13 @@ function TransitionRow({ t }: { t: FsmTransitionEval }) {
                 className="w-full flex items-center gap-2 px-2 py-1 hover:bg-bg-glass-hover text-left"
                 onClick={() => setOpen(o => !o)}
             >
-                <span className="text-[10px] text-text-muted w-3">{t.cond ? (open ? '▾' : '▸') : ' '}</span>
-                <span className={`font-mono text-[11px] px-1.5 py-0.5 rounded border ${status}`}>→ {t.to}</span>
-                <span className="text-text-secondary font-mono text-[10px] truncate">{t.label}</span>
+                <span className="text-3xs text-text-muted w-3">{t.cond ? (open ? '▾' : '▸') : ' '}</span>
+                <span className={`font-mono text-2xs px-1.5 py-0.5 rounded border ${status}`}>→ {t.to}</span>
+                <span className="text-text-secondary font-mono text-3xs truncate">{t.label}</span>
                 <span className="ml-auto flex items-center gap-1.5 shrink-0">
-                    {t.fires && <span className="text-status-online text-[10px] font-mono">FIRES</span>}
-                    {!t.holdSatisfied && <span className="text-status-warning text-[10px] font-mono">hold {t.holdRemainingMs}ms</span>}
-                    <span className={`text-[10px] font-mono ${t.condResult ? 'text-status-online' : 'text-text-muted'}`}>
+                    {t.fires && <span className="text-status-online text-3xs font-mono">FIRES</span>}
+                    {!t.holdSatisfied && <span className="text-status-warning text-3xs font-mono">hold {t.holdRemainingMs}ms</span>}
+                    <span className={`text-3xs font-mono ${t.condResult ? 'text-status-online' : 'text-text-muted'}`}>
                         {t.condResult ? 'cond✓' : 'cond✗'}
                     </span>
                 </span>
@@ -499,7 +499,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                     <div className="flex items-center gap-2.5 min-w-0 overflow-hidden">
                         <span className="text-sm font-semibold text-text-primary shrink-0">Spec Debug</span>
                         {snap && (
-                            <span className="text-[11px] text-text-secondary font-mono bg-surface-secondary px-1.5 py-0.5 rounded truncate">
+                            <span className="text-2xs text-text-secondary font-mono bg-surface-secondary px-1.5 py-0.5 rounded truncate">
                                 {snap.spec_id}
                             </span>
                         )}
@@ -508,7 +508,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         {snap?.specPath && (
                             <button
                                 type="button"
-                                className={`text-[11px] transition-colors px-2 py-1 rounded border ${editing ? 'text-accent-primary bg-accent-primary/20 border-accent' : 'text-text-secondary hover:text-text-primary hover:bg-bg-glass-hover border-transparent hover:border-border-default'}`}
+                                className={`text-2xs transition-colors px-2 py-1 rounded border ${editing ? 'text-accent-primary bg-accent-primary/20 border-accent' : 'text-text-secondary hover:text-text-primary hover:bg-bg-glass-hover border-transparent hover:border-border-default'}`}
                                 onClick={() => { if (editing) { setEditing(false) } else { void openEditor() } }}
                                 disabled={loading}
                             >
@@ -517,7 +517,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         )}
                         <button
                             type="button"
-                            className="text-[11px] text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-bg-glass-hover border border-transparent hover:border-border-default"
+                            className="text-2xs text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-bg-glass-hover border border-transparent hover:border-border-default"
                             onClick={() => { void handleSnapshot() }}
                             disabled={loading}
                         >
@@ -525,7 +525,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                         </button>
                         <button
                             type="button"
-                            className="text-[11px] text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-bg-glass-hover border border-transparent hover:border-border-default"
+                            className="text-2xs text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-bg-glass-hover border border-transparent hover:border-border-default"
                             onClick={() => { void load() }}
                             disabled={loading}
                         >
@@ -548,7 +548,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                 {editing && (
                     <div className="flex-1 flex flex-col min-h-0 px-4 py-3 gap-2">
                         <div className="flex items-center gap-2 shrink-0">
-                            <div className="inline-flex rounded border border-border-default overflow-hidden text-[10px]">
+                            <div className="inline-flex rounded border border-border-default overflow-hidden text-3xs">
                                 <button
                                     type="button"
                                     className={`px-2 py-0.5 ${!rawMode ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary hover:bg-bg-glass-hover'}`}
@@ -567,14 +567,14 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     onClick={() => { if (specModel) setSpecSource(JSON.stringify(specModel, null, 2)); setRawMode(true) }}
                                 >JSON</button>
                             </div>
-                            <span className="text-[10px] text-text-muted font-mono truncate flex-1" title={snap?.specPath}>{(snap?.specPath ?? '').split('/').slice(-3).join('/')}</span>
-                            {specDirty && <span className="text-status-warning text-[10px]">unsaved</span>}
+                            <span className="text-3xs text-text-muted font-mono truncate flex-1" title={snap?.specPath}>{(snap?.specPath ?? '').split('/').slice(-3).join('/')}</span>
+                            {specDirty && <span className="text-status-warning text-3xs">unsaved</span>}
                             {!rawMode && validationErrors.length > 0 && (
-                                <span className="text-status-error text-[10px]">{validationErrors.length} error{validationErrors.length > 1 ? 's' : ''}</span>
+                                <span className="text-status-error text-3xs">{validationErrors.length} error{validationErrors.length > 1 ? 's' : ''}</span>
                             )}
                             <button
                                 type="button"
-                                className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${(saveState === 'saving' || (!rawMode && validationErrors.length > 0)) ? 'text-text-muted border-border-default cursor-not-allowed' : 'text-status-online bg-status-online/20 border-status-online/40 hover:bg-status-online/20'}`}
+                                className={`text-2xs px-2.5 py-1 rounded border transition-colors ${(saveState === 'saving' || (!rawMode && validationErrors.length > 0)) ? 'text-text-muted border-border-default cursor-not-allowed' : 'text-status-online bg-status-online/20 border-status-online/40 hover:bg-status-online/20'}`}
                                 onClick={() => { void saveSpec() }}
                                 disabled={saveState === 'saving' || (!rawMode && validationErrors.length > 0)}
                             >
@@ -582,10 +582,10 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             </button>
                         </div>
                         {saveError && (
-                            <pre className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-2 text-[10px] whitespace-pre-wrap shrink-0 max-h-28 overflow-y-auto">{saveError}</pre>
+                            <pre className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-2 text-3xs whitespace-pre-wrap shrink-0 max-h-28 overflow-y-auto">{saveError}</pre>
                         )}
                         {!rawMode && validationErrors.length > 0 && (
-                            <div className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-1.5 text-[10px] shrink-0 max-h-24 overflow-y-auto space-y-0.5">
+                            <div className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-1.5 text-3xs shrink-0 max-h-24 overflow-y-auto space-y-0.5">
                                 {validationErrors.map((e, i) => <div key={i} className="font-mono">{e}</div>)}
                             </div>
                         )}
@@ -595,13 +595,13 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     value={specSource}
                                     onChange={e => { setSpecSource(e.target.value); setSpecDirty(true); setSaveState('idle') }}
                                     spellCheck={false}
-                                    className="w-full h-full min-h-[300px] font-mono text-[11px] leading-relaxed bg-bg-secondary text-text-primary border border-border-default rounded p-3 resize-none outline-none focus:border-accent"
+                                    className="w-full h-full min-h-[300px] font-mono text-2xs leading-relaxed bg-bg-secondary text-text-primary border border-border-default rounded p-3 resize-none outline-none focus:border-accent"
                                 />
                             ) : (
                                 <SpecFormBuilder model={specModel} onChange={onModelChange} onPreview={onPreview} preview={preview} onTestSections={onTestSections} sectionPreview={sectionPreview} />
                             )}
                         </div>
-                        <div className="text-[10px] text-text-muted shrink-0">
+                        <div className="text-3xs text-text-muted shrink-0">
                             {rawMode
                                 ? 'Raw JSON — validated on save.'
                                 : 'Build the FSM; from/to are constrained to existing states. "test" evaluates a condition against the live screen. Save hot-reloads the session.'}
@@ -633,7 +633,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                 Everything else — status, screen, modal, transcript — still
                                 shows. Surface the reason so the panel doesn't look broken. */}
                             {snap.nativeSource && (
-                                <div className="text-[11px] text-text-secondary bg-surface-secondary border border-border-default rounded-md px-3 py-2">
+                                <div className="text-2xs text-text-secondary bg-surface-secondary border border-border-default rounded-md px-3 py-2">
                                     <span className="text-accent-primary font-semibold">Native-source provider</span>
                                     <span className="text-text-muted"> — no state-machine spec.</span>
                                     <span className="text-text-muted"> State History, FSM transitions, and Sections are </span>
@@ -646,7 +646,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             )}
 
                             {/* Provider info */}
-                            <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[11px] bg-surface-secondary rounded-md px-3 py-2 border border-border-default">
+                            <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-2xs bg-surface-secondary rounded-md px-3 py-2 border border-border-default">
                                 {snap.name && (
                                     <>
                                         <span className="text-text-muted">Provider</span>
@@ -672,7 +672,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                         <span className="text-text-muted">Session</span>
                                         {/* min-w-0: same grid min-width:auto issue as Dir above — the id is a
                                             single unbroken token, so it floors the track even harder. */}
-                                        <span className="font-mono text-text-muted text-[10px] truncate min-w-0" title={snap.providerSessionId}>{snap.providerSessionId}</span>
+                                        <span className="font-mono text-text-muted text-3xs truncate min-w-0" title={snap.providerSessionId}>{snap.providerSessionId}</span>
                                     </>
                                 )}
                             </div>
@@ -683,30 +683,30 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     {snap.current_state ? snap.current_state.id : 'none'}
                                 </span>
                                 {snap.current_state?.label && snap.current_state.label !== snap.current_state.id && (
-                                    <span className="text-text-secondary text-[11px]">{snap.current_state.label}</span>
+                                    <span className="text-text-secondary text-2xs">{snap.current_state.label}</span>
                                 )}
                                 {snap.status && snap.status !== snap.current_state?.id && (
-                                    <span className="text-text-muted text-[11px]">
-                                        engine: <span className={`font-mono ${stateBadge(snap.status)} px-1 py-0.5 rounded text-[10px]`}>{snap.status}</span>
+                                    <span className="text-text-muted text-2xs">
+                                        engine: <span className={`font-mono ${stateBadge(snap.status)} px-1 py-0.5 rounded text-3xs`}>{snap.status}</span>
                                     </span>
                                 )}
                                 {snap.idleHoldPending && (
-                                    <span className="text-yellow-200 text-[10px] bg-yellow-600/25 border border-yellow-500/35 px-1.5 py-0.5 rounded font-mono">idle hold pending</span>
+                                    <span className="text-yellow-200 text-3xs bg-yellow-600/25 border border-yellow-500/35 px-1.5 py-0.5 rounded font-mono">idle hold pending</span>
                                 )}
                                 {snap.exited && (
-                                    <span className="text-status-error text-[10px] bg-status-error/20 border border-status-error/40 px-1.5 py-0.5 rounded font-mono">exited</span>
+                                    <span className="text-status-error text-3xs bg-status-error/20 border border-status-error/40 px-1.5 py-0.5 rounded font-mono">exited</span>
                                 )}
                                 {snap.cursorPosition != null && (
-                                    <span className="text-text-muted text-[11px] font-mono">
+                                    <span className="text-text-muted text-2xs font-mono">
                                         cursor: <span className="text-text-secondary">{snap.cursorPosition.row},{snap.cursorPosition.col}</span>
                                     </span>
                                 )}
                                 {snap.lastBusyAt > 0 && (
-                                    <span className="text-text-muted text-[11px] ml-auto">last busy: <span className="text-text-secondary">{formatAgo(snap.lastBusyAt)}</span></span>
+                                    <span className="text-text-muted text-2xs ml-auto">last busy: <span className="text-text-secondary">{formatAgo(snap.lastBusyAt)}</span></span>
                                 )}
                             </div>
                             {snap.completionIdleDebounce?.active && (
-                                <div className="flex items-center gap-2 text-[11px] bg-accent-primary/20 border border-accent rounded-md px-3 py-1.5 font-mono">
+                                <div className="flex items-center gap-2 text-2xs bg-accent-primary/20 border border-accent rounded-md px-3 py-1.5 font-mono">
                                     <span className="text-accent-primary">completion_idle_after</span>
                                     <span className="text-text-secondary">age: <span className="text-accent-primary">{snap.completionIdleDebounce.ageMs}ms</span></span>
                                     <span className="text-text-muted">/</span>
@@ -742,14 +742,14 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     <div>
                                         <div className="flex items-center gap-2 mb-1.5">
                                             <SectionLabel>FSM — outgoing from <span className="text-accent-primary font-mono normal-case">{snap.fsm.currentState}</span> (held {formatDur(snap.fsm.stateAgeMs)})</SectionLabel>
-                                            <label className="ml-auto flex items-center gap-1 text-[10px] text-text-muted cursor-pointer select-none mb-1.5">
+                                            <label className="ml-auto flex items-center gap-1 text-3xs text-text-muted cursor-pointer select-none mb-1.5">
                                                 <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="accent-[var(--accent-primary)]" />
                                                 live
                                             </label>
                                         </div>
                                         <div className="space-y-1">
                                             {snap.fsm.transitions.length === 0 && (
-                                                <div className="text-text-muted text-[11px] italic px-1">no outgoing transitions (terminal state)</div>
+                                                <div className="text-text-muted text-2xs italic px-1">no outgoing transitions (terminal state)</div>
                                             )}
                                             {snap.fsm.transitions.map((t, i) => <TransitionRow key={i} t={t} />)}
                                         </div>
@@ -763,7 +763,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             {snap.nativeSource && (
                                 <div>
                                     <SectionLabel>Sections</SectionLabel>
-                                    <div className="text-text-muted text-[11px] italic px-1">N/A (native-source provider)</div>
+                                    <div className="text-text-muted text-2xs italic px-1">N/A (native-source provider)</div>
                                 </div>
                             )}
                             {!snap.nativeSource && snap.sections && Object.keys(snap.sections).length > 0 && (
@@ -781,15 +781,15 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                                         className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-bg-glass-hover transition-colors text-left"
                                                         onClick={() => toggleSection(id)}
                                                     >
-                                                        <span className="text-[10px] text-text-muted w-3">{expanded ? '▾' : '▸'}</span>
-                                                        <span className="font-mono text-accent-primary w-20 shrink-0 text-[11px]">{id}</span>
+                                                        <span className="text-3xs text-text-muted w-3">{expanded ? '▾' : '▸'}</span>
+                                                        <span className="font-mono text-accent-primary w-20 shrink-0 text-2xs">{id}</span>
                                                         {!expanded && (
-                                                            <span className="text-text-secondary truncate font-mono text-[11px]">{preview}</span>
+                                                            <span className="text-text-secondary truncate font-mono text-2xs">{preview}</span>
                                                         )}
-                                                        <span className="ml-auto text-text-muted text-[10px] shrink-0">{lines.length}L</span>
+                                                        <span className="ml-auto text-text-muted text-3xs shrink-0">{lines.length}L</span>
                                                     </button>
                                                     {expanded && (
-                                                        <pre className="px-3 pb-2.5 pt-1 font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all bg-bg-secondary max-h-40 overflow-y-auto border-t border-border-default">
+                                                        <pre className="px-3 pb-2.5 pt-1 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all bg-bg-secondary max-h-40 overflow-y-auto border-t border-border-default">
                                                             {text || '(empty)'}
                                                         </pre>
                                                     )}
@@ -811,14 +811,14 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                             {[...snap.statusHistory].reverse().slice(0, 20).map((entry, i) => (
                                                 <div key={i} className="rounded px-2 py-1 hover:bg-bg-glass-hover transition-colors">
                                                     <div className="flex items-center gap-2 flex-wrap">
-                                                        <span className={`font-mono text-[11px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${stateBadge(entry.status)}`}>
+                                                        <span className={`font-mono text-2xs font-semibold px-1.5 py-0.5 rounded shrink-0 ${stateBadge(entry.status)}`}>
                                                             {entry.status}
                                                         </span>
-                                                        <span className="text-text-secondary text-[11px] shrink-0 tabular-nums">
+                                                        <span className="text-text-secondary text-2xs shrink-0 tabular-nums">
                                                             {formatAgo(entry.at)}
                                                         </span>
                                                         {entry.trigger && (
-                                                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0 text-text-secondary bg-bg-glass border border-border-default">
+                                                            <span className="text-3xs px-1.5 py-0.5 rounded font-mono shrink-0 text-text-secondary bg-bg-glass border border-border-default">
                                                                 {entry.trigger}
                                                             </span>
                                                         )}
@@ -827,7 +827,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                             ))}
                                         </div>
                                     ) : (
-                                        <div className="text-text-muted text-[11px] italic px-1">N/A (native-source provider — no state-machine rules)</div>
+                                        <div className="text-text-muted text-2xs italic px-1">N/A (native-source provider — no state-machine rules)</div>
                                     )}
                                 </div>
                             )}
@@ -838,29 +838,29 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                         {[...snap.stateHistory].reverse().slice(0, 20).map((entry, i) => (
                                             <div key={i} className="rounded px-2 py-1 hover:bg-bg-glass-hover transition-colors">
                                                 <div className="flex items-center gap-2 flex-wrap">
-                                                    <span className={`font-mono text-[11px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${stateBadge(entry.stateId)}`}>
+                                                    <span className={`font-mono text-2xs font-semibold px-1.5 py-0.5 rounded shrink-0 ${stateBadge(entry.stateId)}`}>
                                                         {entry.stateId}
                                                     </span>
-                                                    <span className="text-text-secondary text-[11px] shrink-0 tabular-nums">
+                                                    <span className="text-text-secondary text-2xs shrink-0 tabular-nums">
                                                         {formatAgo(entry.at)}
                                                     </span>
                                                     {entry.durationMs > 0 && (
-                                                        <span className="text-text-muted text-[11px]">
+                                                        <span className="text-text-muted text-2xs">
                                                             held <span className="text-text-secondary">{formatDur(entry.durationMs)}</span>
                                                         </span>
                                                     )}
                                                     {entry.reason && (
-                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0 ${REASON_COLORS[String(entry.reason)] ?? 'text-text-secondary bg-bg-glass border border-border-default'}`}>
+                                                        <span className={`text-3xs px-1.5 py-0.5 rounded font-mono shrink-0 ${REASON_COLORS[String(entry.reason)] ?? 'text-text-secondary bg-bg-glass border border-border-default'}`}>
                                                             {String(entry.reason)}
                                                         </span>
                                                     )}
                                                     {entry.debounceKind && String(entry.debounceKind) !== 'none' && (
-                                                        <span className="text-text-muted text-[10px] font-mono">
+                                                        <span className="text-text-muted text-3xs font-mono">
                                                             debounce:{String(entry.debounceKind)}
                                                         </span>
                                                     )}
                                                     {entry.matchedStateId && String(entry.matchedStateId) !== entry.stateId && (
-                                                        <span className="text-text-muted text-[10px] font-mono">
+                                                        <span className="text-text-muted text-3xs font-mono">
                                                             eval→<span className="text-text-secondary">{String(entry.matchedStateId)}</span>
                                                         </span>
                                                     )}
@@ -868,12 +868,12 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                                 {entry.matchedRules && entry.matchedRules.length > 0 && (
                                                     <div className="flex items-start gap-1 flex-wrap mt-0.5 ml-1 pl-1 border-l border-border-default">
                                                         {entry.matchedRules.slice(0, 3).map((rule, ri) => (
-                                                            <span key={ri} className="font-mono text-[10px] text-accent-primary bg-accent-primary/20 border border-accent px-1.5 py-0.5 rounded break-all">
+                                                            <span key={ri} className="font-mono text-3xs text-accent-primary bg-accent-primary/20 border border-accent px-1.5 py-0.5 rounded break-all">
                                                                 {typeof rule === 'string' ? rule : JSON.stringify(rule)}
                                                             </span>
                                                         ))}
                                                         {entry.matchedRules.length > 3 && (
-                                                            <span className="text-[10px] text-text-muted">+{entry.matchedRules.length - 3} more</span>
+                                                            <span className="text-3xs text-text-muted">+{entry.matchedRules.length - 3} more</span>
                                                         )}
                                                     </div>
                                                 )}
@@ -896,8 +896,8 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                                     <div>
                                         <SectionLabel>Transcript ({msgs.length} — {userCount}u / {assistantCount}a)</SectionLabel>
                                         {lastAssistant && (
-                                            <div className="bg-surface-secondary border border-border-default rounded-md p-2.5 text-[11px]">
-                                                <div className="text-text-muted mb-1 text-[10px]">
+                                            <div className="bg-surface-secondary border border-border-default rounded-md p-2.5 text-2xs">
+                                                <div className="text-text-muted mb-1 text-3xs">
                                                     Last assistant {lastAssistant.receivedAt ? formatAgo(lastAssistant.receivedAt) : ''}
                                                 </div>
                                                 <div className="text-text-secondary font-mono whitespace-pre-wrap line-clamp-4 break-all">
@@ -911,7 +911,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
                             {/* Spec path */}
                             {snap.specPath && (
-                                <div className="text-[10px] text-text-muted font-mono truncate border-t border-border-default pt-2 mt-1" title={snap.specPath}>
+                                <div className="text-3xs text-text-muted font-mono truncate border-t border-border-default pt-2 mt-1" title={snap.specPath}>
                                     {snap.specPath}
                                 </div>
                             )}
@@ -920,14 +920,14 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
                             <div>
                                 <button
                                     type="button"
-                                    className="text-[11px] text-text-secondary hover:text-text-primary transition-colors flex items-center gap-1.5"
+                                    className="text-2xs text-text-secondary hover:text-text-primary transition-colors flex items-center gap-1.5"
                                     onClick={() => setShowScreen(v => !v)}
                                 >
                                     <span className="text-text-muted">{showScreen ? '▾' : '▸'}</span>
                                     <span>Raw screen ({snap.screen ? snap.screen.split('\n').length : 0} lines)</span>
                                 </button>
                                 {showScreen && (
-                                    <pre className="mt-1.5 px-3 py-2 font-mono text-[11px] text-text-secondary whitespace-pre bg-bg-secondary rounded-md border border-border-default max-h-64 overflow-auto">
+                                    <pre className="mt-1.5 px-3 py-2 font-mono text-2xs text-text-secondary whitespace-pre bg-bg-secondary rounded-md border border-border-default max-h-64 overflow-auto">
                                         {snap.screen || '(empty)'}
                                     </pre>
                                 )}

@@ -367,7 +367,7 @@ export function MeshNotesTab({
                                                                 else next.add(note.id)
                                                                 return next
                                                             })}
-                                                            className={`mt-1 text-[11px] font-medium ${meshTheme.isDark ? 'text-sky-300 hover:text-sky-200' : 'text-sky-600 hover:text-sky-700'}`}
+                                                            className={`mt-1 text-2xs font-medium ${meshTheme.isDark ? 'text-sky-300 hover:text-sky-200' : 'text-sky-600 hover:text-sky-700'}`}
                                                         >
                                                             {expanded ? t('meshGraph.notes.showLess') : t('meshGraph.notes.showMore')}
                                                         </button>
@@ -382,7 +382,7 @@ export function MeshNotesTab({
                                             />
                                             {note.pinned && <Badge label={t('meshGraph.notes.pinned')} tone="info" />}
                                             {formatCreatedAt(note.createdAt) && (
-                                                <span className={`text-[11px] ${meshTheme.textMuted}`}>{formatCreatedAt(note.createdAt)}</span>
+                                                <span className={`text-2xs ${meshTheme.textMuted}`}>{formatCreatedAt(note.createdAt)}</span>
                                             )}
                                             <div className="ml-auto flex items-center gap-1.5">
                                                 <button

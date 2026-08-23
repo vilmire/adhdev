@@ -176,7 +176,7 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
                             />
                             {effectiveStreamTitle || formatIdeType(stream.agentType)}
                             {needsApproval && (
-                                <span className="text-[9px] px-1.5 py-px rounded-full bg-yellow-500/15 text-yellow-500 font-bold">
+                                <span className="text-4xs px-1.5 py-px rounded-full bg-yellow-500/15 text-yellow-500 font-bold">
                                     !
                                 </span>
                             )}
@@ -187,7 +187,7 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
                 <button
                     onClick={handleNewSession}
                     title="New Chat Session"
-                    className="px-2.5 py-1 border border-border-subtle bg-transparent text-text-muted rounded-md cursor-pointer text-[11px] hover:bg-bg-secondary transition-colors"
+                    className="px-2.5 py-1 border border-border-subtle bg-transparent text-text-muted rounded-md cursor-pointer text-2xs hover:bg-bg-secondary transition-colors"
                 >
                     + New
                 </button>
@@ -198,7 +198,7 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
                 <>
                     {/* Model/Status info bar */}
                     {activeStream && (activeStream.model || activeStream.status) && (
-                        <div className="flex items-center gap-2 px-3.5 py-1.5 text-[11px] text-text-muted border-b border-border-subtle bg-[var(--surface-primary)] shrink-0">
+                        <div className="flex items-center gap-2 px-3.5 py-1.5 text-2xs text-text-muted border-b border-border-subtle bg-[var(--surface-primary)] shrink-0">
                             {activeStream.model && (
                                 <span className="text-text-secondary">
                                     {activeStream.model}

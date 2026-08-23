@@ -403,7 +403,7 @@ export default function DashboardHeader({
                             className="header-title-status-dot"
                             style={{ background: dotColor, boxShadow: dotGlow }}
                         />
-                        <span className="header-count-mobile text-[10px] font-semibold opacity-60 ml-2 tracking-wide">
+                        <span className="header-count-mobile text-3xs font-semibold opacity-60 ml-2 tracking-wide">
                             <span
                                 className="inline-block w-[6px] h-[6px] rounded-full align-middle"
                                 style={{ background: dotColor, boxShadow: dotGlow }}

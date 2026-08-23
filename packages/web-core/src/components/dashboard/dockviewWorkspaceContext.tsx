@@ -284,7 +284,7 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
                 </div>
             </div>
             {shortcut && (
-                <span className="text-[9px] opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={shortcut}>
+                <span className="text-4xs opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={shortcut}>
                     {shortcut}
                 </span>
             )}

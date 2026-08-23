@@ -53,7 +53,7 @@ export function NodeHealthBadge({ status }: { status: string }) {
     const c = config[status] || { color: '#6b7280', label: status }
     return (
         <span
-            className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md"
+            className="inline-flex items-center gap-1 text-3xs font-semibold px-2 py-0.5 rounded-md"
             style={{ background: c.color + '15', color: c.color, border: `1px solid ${c.color}25` }}
             title={c.title}
         >

@@ -162,24 +162,24 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
         return (
             <div className="flex flex-col gap-2.5 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2.5">
                 <label className="flex flex-col gap-1">
-                    <span className="text-[11px] text-text-muted">{t('setupWizard.machines.meshName')}</span>
+                    <span className="text-2xs text-text-muted">{t('setupWizard.machines.meshName')}</span>
                     <input type="text" className={meshOnboardingInputCls} value={name} onChange={e => onNameChange(e.target.value)} />
                 </label>
 
                 {showDaemonPicker && daemons.length > 1 && (
                     <label className="flex flex-col gap-1">
-                        <span className="text-[11px] text-text-muted">{t('setupWizard.machines.machine')}</span>
+                        <span className="text-2xs text-text-muted">{t('setupWizard.machines.machine')}</span>
                         {machinePicker}
                     </label>
                 )}
 
                 <label className="flex flex-col gap-1">
-                    <span className="text-[11px] text-text-muted">{t('setupWizard.machines.workspace')}</span>
+                    <span className="text-2xs text-text-muted">{t('setupWizard.machines.workspace')}</span>
                     <WorkspacePicker workspaces={workspaces} value={workspace} onChange={onWorkspaceChange} />
                 </label>
 
                 <PlanStatus plan={plan} loading={planLoading} />
-                {warning && <p className="text-[11px] text-amber-400">{warning}</p>}
+                {warning && <p className="text-2xs text-amber-400">{warning}</p>}
 
                 <div className="flex justify-end">
                     <button type="button" className="btn btn-primary btn-sm" onClick={onCreate} disabled={disabled}>

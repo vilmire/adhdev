@@ -48,7 +48,7 @@ export default function WorkspacePicker({ workspaces, value, onChange, autoFocus
                 {workspaces.length > 0 && (
                     <button
                         type="button"
-                        className="self-start text-[10px] text-accent-primary hover:underline"
+                        className="self-start text-3xs text-accent-primary hover:underline"
                         onClick={() => setCustom(false)}
                     >
                         {t('setupWizard.machines.pickFromKnown')}
@@ -119,17 +119,17 @@ export function PlanStatus({ plan, loading }: { plan: any; loading: boolean }) {
     const { t } = useTranslation('common')
     const showLoading = useSettledLoading(loading, 250)
     let content: ReactNode = null
-    let className = 'text-[11px] text-text-muted'
+    let className = 'text-2xs text-text-muted'
     if (showLoading) {
         content = t('setupWizard.machines.planChecking')
     } else if (plan?.success === false) {
-        className = 'text-[11px] text-red-400'
+        className = 'text-2xs text-red-400'
         content = <>{plan.error}{plan.action ? ` ${plan.action}` : ''}</>
     } else if (planTargetsExistingMesh(plan)) {
-        className = 'text-[11px] text-amber-400'
+        className = 'text-2xs text-amber-400'
         content = plan.plan?.summary || t('setupWizard.machines.planExists')
     } else if (plan) {
-        className = 'text-[11px] text-emerald-400'
+        className = 'text-2xs text-emerald-400'
         content = t('setupWizard.machines.planOk', { identity: plan.discovery?.repoIdentity || plan.discovery?.repoRoot || '' })
     }
     return <p className={`${className} min-h-[1.4em]`}>{content}</p>

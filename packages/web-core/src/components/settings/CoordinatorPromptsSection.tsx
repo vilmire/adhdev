@@ -121,7 +121,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
             <div className="text-xs text-text-muted">
                 <p>
                     Customize the coordinator prompt this daemon's mesh coordinator
-                    sessions get. <span className="font-mono text-[11px]">{dir || '~/.adhdev/coordinator-prompts/'}</span>
+                    sessions get. <span className="font-mono text-2xs">{dir || '~/.adhdev/coordinator-prompts/'}</span>
                 </p>
                 <p className="mt-1">
                     <Trans i18nKey="settings.coordinatorPrompts.overrideDesc" ns="common" components={{ strong: <strong /> }} />
@@ -140,7 +140,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                     <div key={key} className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
                         <div className="text-[13px] font-semibold mb-2">{key}</div>
 
-                        <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.overrideLabel')}</label>
+                        <label className="block text-2xs uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.overrideLabel')}</label>
                         <textarea
                             className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
                             rows={4}
@@ -160,7 +160,7 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
                             </button>
                         </div>
 
-                        <label className="block text-[11px] uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.appendLabel')}</label>
+                        <label className="block text-2xs uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.appendLabel')}</label>
                         <textarea
                             className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
                             rows={3}

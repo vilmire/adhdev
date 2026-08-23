@@ -237,7 +237,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                 </span>
             </div>
             {shortcut && (
-                <span className="text-[9px] opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={`Ctrl+${shortcut}`}>{shortcut}</span>
+                <span className="text-4xs opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={`Ctrl+${shortcut}`}>{shortcut}</span>
             )}
         </div>
     )
@@ -440,7 +440,7 @@ export default function PaneGroupTabBar({
                         <div className="text-lg font-mono text-accent animate-pulse">
                             Listening...
                         </div>
-                        <div className="text-[10px] text-text-muted mt-3">{t('paneGroup.pressEscToCancel')}</div>
+                        <div className="text-3xs text-text-muted mt-3">{t('paneGroup.pressEscToCancel')}</div>
                     </div>
                 </div>
                 </ModalPortal>

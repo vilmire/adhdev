@@ -82,7 +82,7 @@ export default function WorkspaceBrowseDialog({
                         Parent
                     </button>
                     <div className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2">
-                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">{t('machine.workspaceBrowse.currentFolder')}</div>
+                        <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-1">{t('machine.workspaceBrowse.currentFolder')}</div>
                         <div className="flex items-center gap-2">
                             <input
                                 type="text"
@@ -132,7 +132,7 @@ export default function WorkspaceBrowseDialog({
                                     </span>
                                     <span className="min-w-0 flex-1">
                                         <span className="block text-sm font-medium text-text-primary truncate">{directory.name}</span>
-                                        <span className="block text-[11px] text-text-muted truncate">{directory.path}</span>
+                                        <span className="block text-2xs text-text-muted truncate">{directory.path}</span>
                                     </span>
                                 </button>
                             ))}

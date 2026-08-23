@@ -114,7 +114,7 @@ export function LaunchCategorySelector({
 
     return (
         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">{t('newSession.category')}</div>
+            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-2">{t('newSession.category')}</div>
             <div className="flex flex-wrap gap-2">
                 {([
                     { id: 'cli', label: LAUNCH_CATEGORY_LABELS.cli, enabled: cliEnabled },
@@ -859,7 +859,7 @@ export default function DashboardNewSessionDialog({
                                         disabled={busy}
                                     >
                                         <div className="text-sm font-semibold">{option.label}</div>
-                                        <div className="mt-0.5 text-[11px] opacity-80">{option.desc}</div>
+                                        <div className="mt-0.5 text-2xs opacity-80">{option.desc}</div>
                                     </button>
                                 ))}
                             </div>
@@ -888,7 +888,7 @@ export default function DashboardNewSessionDialog({
                                         ))}
                                         <option value="__custom__">{t('newSession.customFolder')}</option>
                                     </select>
-                                    <div className="mt-2 text-[11px] text-text-muted break-all">
+                                    <div className="mt-2 text-2xs text-text-muted break-all">
                                         {workspaceChoice === '__home__'
                                             ? t('newSession.launchWithoutWorkspace')
                                             : resolvedWorkspacePath || t('newSession.selectWorkspaceFolder')}
@@ -947,7 +947,7 @@ export default function DashboardNewSessionDialog({
                                                         {mesh.repoIdentity || t('newSession.repoMesh')}{typeof mesh.nodesCount === 'number' ? ` · ${t('newSession.nodeCount', { count: mesh.nodesCount })}` : ''}
                                                     </div>
                                                     {mesh.workspace && (
-                                                        <div className="mt-1 text-[11px] text-text-muted break-all">{t('newSession.coordinatorWorkspace', { path: mesh.workspace })}</div>
+                                                        <div className="mt-1 text-2xs text-text-muted break-all">{t('newSession.coordinatorWorkspace', { path: mesh.workspace })}</div>
                                                     )}
                                                 </button>
                                             ))}
@@ -968,7 +968,7 @@ export default function DashboardNewSessionDialog({
                         />
 
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">
+                            <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-2">
                                 {activeKind === 'ide' ? t('newSession.chooseIde') : activeKind === 'cli' ? t('newSession.chooseCliProvider') : t('newSession.chooseAcpProvider')}
                             </div>
                             <div className="grid grid-cols-1 gap-2">
@@ -1051,7 +1051,7 @@ export default function DashboardNewSessionDialog({
                             <LaunchSectionCard title={t('newSession.modelAndThinking')}>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                     <label className="flex flex-col gap-1">
-                                        <span className="text-[11px] text-text-muted">{t('newSession.model')}</span>
+                                        <span className="text-2xs text-text-muted">{t('newSession.model')}</span>
                                         {modelOptionsForTarget.length > 0 && !modelIsCustom ? (
                                             <select
                                                 value={modelOptionsForTarget.includes(initialModel) ? initialModel : ''}
@@ -1084,7 +1084,7 @@ export default function DashboardNewSessionDialog({
                                                 {modelOptionsForTarget.length > 0 && (
                                                     <button
                                                         type="button"
-                                                        className="self-start text-[11px] text-accent-primary bg-transparent border-none cursor-pointer p-0"
+                                                        className="self-start text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0"
                                                         onClick={() => { setModelIsCustom(false); setInitialModel('') }}
                                                         disabled={busy}
                                                     >
@@ -1095,7 +1095,7 @@ export default function DashboardNewSessionDialog({
                                         )}
                                     </label>
                                     <label className="flex flex-col gap-1">
-                                        <span className="text-[11px] text-text-muted">{t('newSession.thinkingLevel')}</span>
+                                        <span className="text-2xs text-text-muted">{t('newSession.thinkingLevel')}</span>
                                         <select
                                             value={initialThinkingLevel}
                                             onChange={(event) => setInitialThinkingLevel(event.target.value)}

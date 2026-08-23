@@ -18,7 +18,7 @@ function renderDiffLine(line: string, idx: number) {
 
     return (
         <div key={idx} className={`px-3 ${cls}`}>
-            <code className="whitespace-pre font-mono text-[11px] leading-5">{line}</code>
+            <code className="whitespace-pre font-mono text-2xs leading-5">{line}</code>
         </div>
     )
 }
@@ -70,7 +70,7 @@ export default function GitDiffPreview({ diff, binary, truncated, loading, error
                 {lines.map((line, idx) => renderDiffLine(line, idx))}
             </div>
             {truncated && (
-                <p className="px-3 py-1.5 text-[10px] text-text-secondary border-t border-border/30">
+                <p className="px-3 py-1.5 text-3xs text-text-secondary border-t border-border/30">
                     Diff truncated — run <code className="font-mono">git diff</code> locally for full output.
                 </p>
             )}

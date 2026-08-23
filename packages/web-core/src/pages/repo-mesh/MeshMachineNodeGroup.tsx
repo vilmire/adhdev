@@ -124,11 +124,11 @@ export function MeshMachineNodeGroup({
                                         list — only static machine nodes appear here. Live per-node runtime
                                         (active task count, sessions, git drift) lives on the Mesh "Status"
                                         tab. See MeshObservabilitySurface → MeshStatusTab. */}
-                                    {features.addNodeDaemonPicker && <span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-[10px] font-medium text-text-muted">{t('repoMesh.nodeList.setupInventory')}</span>}
+                                    {features.addNodeDaemonPicker && <span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('repoMesh.nodeList.setupInventory')}</span>}
                                 </div>
 
                                 {features.addNodeDaemonPicker && (
-                                    <div className="text-[11px] text-text-muted">
+                                    <div className="text-2xs text-text-muted">
                                         {t('repoMesh.nodeList.ownerMachine', {
                                             owner: daemonOwnerLabel(daemons.find(d => d.id === String((node as any).daemon_id || '')), userName),
                                             machine: (node as any).machine_label || (node as any).daemon_id || node.workspace,
@@ -136,7 +136,7 @@ export function MeshMachineNodeGroup({
                                     </div>
                                 )}
 
-                                <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
+                                <div className="text-3xs text-text-muted font-mono">{node.workspace}</div>
 
                                 {/* Routing tags — what a task's required_tags can target on this node.
                                     Auto-derived tags are read-only; custom tags are editable here. */}
@@ -147,7 +147,7 @@ export function MeshMachineNodeGroup({
                                 />
 
                                 {features.addNodeDaemonPicker && (
-                                    <div className="mt-2 text-[11px] text-amber-300">
+                                    <div className="mt-2 text-2xs text-amber-300">
                                         {t('repoMesh.nodeList.liveDetailGraphOwned')}
                                     </div>
                                 )}

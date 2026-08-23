@@ -17,7 +17,7 @@ export function PageHeader({ icon, title, subtitle, badge, actions, className }:
                 <h1 className="header-title flex items-center gap-2">
                     <span className="flex items-center text-lg">{icon}</span> {title}
                     {badge && (
-                        <span className="text-[10px] font-semibold px-1.5 py-px rounded-full bg-accent/10 text-accent-light">
+                        <span className="text-3xs font-semibold px-1.5 py-px rounded-full bg-accent/10 text-accent-light">
                             {badge.count !== undefined ? badge.count : ''} {badge.text}
                         </span>
                     )}

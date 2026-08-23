@@ -34,11 +34,11 @@ export default function SlotsStep({ nodes, providersByNodeId, stagedSlots, onSta
             <div className="flex flex-col gap-3">
                 <div>
                     <h3 className="text-sm font-semibold text-text-primary">{t('setupWizard.slots.title')}</h3>
-                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                    <p className="mt-1 text-2xs leading-relaxed text-text-muted">
                         {t('setupWizard.slots.description')}
                     </p>
                 </div>
-                <p className="text-[11px] text-text-muted">{t('setupWizard.slots.empty')}</p>
+                <p className="text-2xs text-text-muted">{t('setupWizard.slots.empty')}</p>
             </div>
         )
     }
@@ -47,7 +47,7 @@ export default function SlotsStep({ nodes, providersByNodeId, stagedSlots, onSta
         <div className="flex flex-col gap-3">
             <div>
                 <h3 className="text-sm font-semibold text-text-primary">{t('setupWizard.slots.title')}</h3>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                <p className="mt-1 text-2xs leading-relaxed text-text-muted">
                     {t('setupWizard.slots.description')}
                 </p>
             </div>
@@ -58,9 +58,9 @@ export default function SlotsStep({ nodes, providersByNodeId, stagedSlots, onSta
                     <div key={node.id} className="rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2.5">
                         <div className="mb-2 flex items-center gap-2">
                             <span className="text-[13px] font-medium text-text-primary">{nodeLabel(node)}</span>
-                            <span className="truncate text-[11px] text-text-muted">{node.workspace}</span>
+                            <span className="truncate text-2xs text-text-muted">{node.workspace}</span>
                             {staged && (
-                                <span className="ml-auto rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">
+                                <span className="ml-auto rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-3xs font-medium text-accent-primary">
                                     {t('setupWizard.staged')}
                                 </span>
                             )}
@@ -74,7 +74,7 @@ export default function SlotsStep({ nodes, providersByNodeId, stagedSlots, onSta
                 )
             })}
 
-            <p className="text-[10px] leading-relaxed text-text-muted">
+            <p className="text-3xs leading-relaxed text-text-muted">
                 {t('setupWizard.stagedNote')}
             </p>
         </div>

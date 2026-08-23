@@ -553,7 +553,7 @@ export default function ControlsBar({
         <div className="border-t border-border-subtle bg-[var(--surface-primary)] px-3 py-2 font-[var(--font)]">
             <div className="flex items-center gap-2 flex-wrap">
                 <span
-                    className="inline-flex h-7 items-center rounded-full border px-3 text-[11px] font-semibold tracking-[0.02em]"
+                    className="inline-flex h-7 items-center rounded-full border px-3 text-2xs font-semibold tracking-[0.02em]"
                     style={{
                         borderColor: `${accent}33`,
                         background: `${accent}12`,
@@ -586,15 +586,15 @@ export default function ControlsBar({
                                         onClick={() => void handleSelectToggle(ctrl)}
                                         title={ctrl.label}
                                     >
-                                        {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                        {ctrl.icon && <span className="text-2xs opacity-70">{ctrl.icon}</span>}
                                         <span className="min-w-0 overflow-hidden text-ellipsis">{isLoading ? 'Loading…' : currentLabel || ctrl.label}</span>
-                                        <span className="text-[9px] opacity-55">▼</span>
+                                        <span className="text-4xs opacity-55">▼</span>
                                     </button>
                                     {isOpen && options.length > 0 && (
                                         <>
                                             <div className="fixed inset-0 z-[var(--z-dropdown)]" onClick={() => setOpenDropdown(null)} />
                                             <div className="absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 min-w-44 overflow-y-auto rounded-xl border border-border-subtle bg-[var(--surface-primary)] shadow-[0_-8px_24px_rgba(0,0,0,0.35)] max-h-[240px]">
-                                                <div className="border-b border-border-subtle px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+                                                <div className="border-b border-border-subtle px-3 py-2 text-3xs font-semibold uppercase tracking-[0.08em] text-text-muted">
                                                     {ctrl.label}
                                                 </div>
                                                 {options.map(opt => (
@@ -614,7 +614,7 @@ export default function ControlsBar({
                                                     >
                                                         <span className="min-w-0 overflow-hidden text-ellipsis">{opt.label}</span>
                                                         {opt.value === currentValue && (
-                                                            <span className="shrink-0 text-[11px] font-semibold" style={{ color: accent }}>✓</span>
+                                                            <span className="shrink-0 text-2xs font-semibold" style={{ color: accent }}>✓</span>
                                                         )}
                                                     </button>
                                                 ))}
@@ -638,9 +638,9 @@ export default function ControlsBar({
                                     onClick={() => void handleCycleValue(ctrl)}
                                     title={`Click to cycle: ${options.map(option => option.label).join(' → ')}`}
                                 >
-                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    {ctrl.icon && <span className="text-2xs opacity-70">{ctrl.icon}</span>}
                                     <span className="min-w-0 overflow-hidden text-ellipsis">{currentLabel || ctrl.label}</span>
-                                    <span className="text-[10px] opacity-55">⟳</span>
+                                    <span className="text-3xs opacity-55">⟳</span>
                                 </button>
                             );
 
@@ -658,7 +658,7 @@ export default function ControlsBar({
                                     onClick={() => void handleToggleValue(ctrl)}
                                     aria-pressed={!!currentValue}
                                 >
-                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    {ctrl.icon && <span className="text-2xs opacity-70">{ctrl.icon}</span>}
                                     {ctrl.label}
                                 </button>
                             );
@@ -676,7 +676,7 @@ export default function ControlsBar({
                                     }}
                                     onClick={() => void handleActionClick(ctrl)}
                                 >
-                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    {ctrl.icon && <span className="text-2xs opacity-70">{ctrl.icon}</span>}
                                     <span className="min-w-0 overflow-hidden text-ellipsis">
                                         {ctrl.resultDisplay === 'inline' && currentValue
                                             ? `${ctrl.label}: ${currentValue}`
@@ -696,7 +696,7 @@ export default function ControlsBar({
                                         color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
                                     }}
                                 >
-                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    {ctrl.icon && <span className="text-2xs opacity-70">{ctrl.icon}</span>}
                                     <span className="min-w-0 overflow-hidden text-ellipsis">{currentValue ? `${ctrl.label}: ${currentValue}` : ctrl.label}</span>
                                 </span>
                             );

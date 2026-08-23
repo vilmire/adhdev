@@ -42,7 +42,7 @@ export function MeshQueueSection({ queueSummary, queueLoading, queueError, activ
                         ['statFailed', queueSummary?.historicalCounts.failed ?? queueSummary?.counts.failed ?? 0, 'text-red-400'],
                     ] as const).map(([labelKey, value, color]) => (
                         <div key={labelKey} className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2">
-                            <div className="text-[10px] uppercase tracking-wide text-text-muted">{t(`repoMesh.queue.${labelKey}`)}</div>
+                            <div className="text-3xs uppercase tracking-wide text-text-muted">{t(`repoMesh.queue.${labelKey}`)}</div>
                             <div className={`text-lg font-bold ${color}`}>{value}</div>
                         </div>
                     ))}
@@ -65,28 +65,28 @@ export function MeshQueueSection({ queueSummary, queueLoading, queueError, activ
                             <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0">
                                     <div className="flex items-center gap-2 mb-1">
-                                        <span className="font-mono text-[11px] text-text-muted">{item.id.slice(0, 12)}</span>
+                                        <span className="font-mono text-2xs text-text-muted">{item.id.slice(0, 12)}</span>
                                         <NodeHealthBadge status={item.status} />
                                         {item.staleAssigned && (
-                                            <span className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5" title={item.staleReason || t('repoMesh.queue.staleTitle')}>{t('repoMesh.queue.staleBadge')}</span>
+                                            <span className="text-3xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5" title={item.staleReason || t('repoMesh.queue.staleTitle')}>{t('repoMesh.queue.staleBadge')}</span>
                                         )}
                                         {(item.waitingOn?.length ?? 0) > 0 && (
-                                            <span className="text-[10px] text-sky-300 bg-sky-500/10 border border-sky-500/20 rounded-full px-2 py-0.5" title={t('repoMesh.queue.waitingOnTitle', { tasks: item.waitingOn!.join(', ') })}>
+                                            <span className="text-3xs text-sky-300 bg-sky-500/10 border border-sky-500/20 rounded-full px-2 py-0.5" title={t('repoMesh.queue.waitingOnTitle', { tasks: item.waitingOn!.join(', ') })}>
                                                 {t('repoMesh.queue.waitsOn', { count: item.waitingOn!.length })}
                                             </span>
                                         )}
                                         {item.blockedReason && (
-                                            <span className="text-[10px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5" title={item.blockedReason}>{t('repoMesh.queue.blocked')}</span>
+                                            <span className="text-3xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-full px-2 py-0.5" title={item.blockedReason}>{t('repoMesh.queue.blocked')}</span>
                                         )}
                                         {describeTaskDuration(item) && (
-                                            <span className="text-[10px] text-text-muted bg-surface-secondary border border-border-subtle rounded-full px-2 py-0.5" title={t('repoMesh.queue.durationTitle')}>
+                                            <span className="text-3xs text-text-muted bg-surface-secondary border border-border-subtle rounded-full px-2 py-0.5" title={t('repoMesh.queue.durationTitle')}>
                                                 {describeTaskDuration(item)}{(item.requeueCount ?? 0) > 0 ? t('repoMesh.queue.retry', { count: item.requeueCount }) : ''}
                                             </span>
                                         )}
                                     </div>
                                     {item.message && <div className="text-[12px] text-text-primary truncate" title={item.message}>{describeQueueTaskMessage(item.message)}</div>}
                                 </div>
-                                <div className="text-right text-[10px] text-text-muted shrink-0">
+                                <div className="text-right text-3xs text-text-muted shrink-0">
                                     {item.nodeId && <div>{t('repoMesh.queue.node', { id: item.nodeId.slice(0, 10) })}</div>}
                                     {item.sessionId && <div>{t('repoMesh.queue.session', { id: item.sessionId.slice(0, 10) })}</div>}
                                     {item.updatedAt && <div>{new Date(item.updatedAt).toLocaleTimeString()}</div>}

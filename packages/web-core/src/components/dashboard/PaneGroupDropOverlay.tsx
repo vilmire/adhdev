@@ -14,7 +14,7 @@ export default function PaneGroupDropOverlay({ dropAction, canSplit }: PaneGroup
                     opacity: canSplit ? 1 : 0.45,
                 }}
             >
-                <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
+                <div className="px-3 py-1.5 rounded-full text-2xs font-semibold text-white bg-black/45 backdrop-blur-sm">
                     Split Left
                 </div>
             </div>
@@ -25,7 +25,7 @@ export default function PaneGroupDropOverlay({ dropAction, canSplit }: PaneGroup
                     boxShadow: dropAction === 'merge' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
                 }}
             >
-                <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
+                <div className="px-3 py-1.5 rounded-full text-2xs font-semibold text-white bg-black/45 backdrop-blur-sm">
                     Move Here
                 </div>
             </div>
@@ -37,7 +37,7 @@ export default function PaneGroupDropOverlay({ dropAction, canSplit }: PaneGroup
                     opacity: canSplit ? 1 : 0.45,
                 }}
             >
-                <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
+                <div className="px-3 py-1.5 rounded-full text-2xs font-semibold text-white bg-black/45 backdrop-blur-sm">
                     Split Right
                 </div>
             </div>

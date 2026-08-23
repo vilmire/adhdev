@@ -428,7 +428,7 @@ function QuotaChip({ label, tone }: { label: string; tone: string }) {
         : tone === 'warn' ? 'bg-amber-500/10 text-amber-500'
         : tone === 'good' ? 'bg-emerald-500/10 text-emerald-500'
         : 'bg-white/5 text-text-secondary'
-    return <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${toneClass}`}>{label}</span>
+    return <span className={`rounded-full px-2 py-0.5 text-3xs font-medium ${toneClass}`}>{label}</span>
 }
 
 /**

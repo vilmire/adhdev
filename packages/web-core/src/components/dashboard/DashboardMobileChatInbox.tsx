@@ -296,10 +296,10 @@ function DashboardMobileChatItem({
                 </button>
                 <div className="mobile-inbox-corner-actions absolute top-3 right-3 flex items-center gap-1.5">
                     {shouldShowTimestamp && (
-                        <span className={`mr-0.5 text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>
+                        <span className={`mr-0.5 text-2xs font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>
                     )}
                     {isTaskComplete && (
-                        <span className="rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
+                        <span className="rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-3xs font-bold text-accent-primary">
                             {t('mobileInbox.done')}
                         </span>
                     )}
@@ -477,7 +477,7 @@ export default function DashboardMobileChatInbox({
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
                         {section === 'chats' && (attentionItems.length > 0 || unreadItems.length > 0) && (
-                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-accent-primary/16 bg-accent-primary/10 text-accent-primary text-[11px] font-bold shadow-[0_8px_20px_rgba(0,0,0,0.05)]">
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-accent-primary/16 bg-accent-primary/10 text-accent-primary text-2xs font-bold shadow-[0_8px_20px_rgba(0,0,0,0.05)]">
                                 <IconBell size={13} />
                                 <span>{attentionItems.length + unreadItems.length}</span>
                             </div>
@@ -554,7 +554,7 @@ export default function DashboardMobileChatInbox({
                                         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                                             <div className="flex items-center justify-between gap-2">
                                                 <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{machine.label}</span>
-                                                <span className="flex items-center gap-2 text-[11px] font-medium text-text-muted shrink-0">
+                                                <span className="flex items-center gap-2 text-2xs font-medium text-text-muted shrink-0">
                                                     <MobileGeneratingIndicator
                                                         count={machine.generatingCount}
                                                         label={t('mobileInbox.generatingCount', { count: machine.generatingCount })}

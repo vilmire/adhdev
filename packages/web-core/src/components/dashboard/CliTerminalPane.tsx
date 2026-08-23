@@ -605,7 +605,7 @@ export default function CliTerminalPane({
                     <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
                         <button
                             type="button"
-                            className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-medium text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-medium text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={() => { void loadOlderRuntimeScrollback(); }}
                             disabled={!sessionId || isLoadingScrollback}
                             title="Replay raw session scrollback so the terminal viewport can scroll farther up"
@@ -613,7 +613,7 @@ export default function CliTerminalPane({
                             {isLoadingScrollback ? t('terminal.loadingOlder') : t('terminal.loadOlderOutput')}
                         </button>
                         {scrollbackStatusMessage && (
-                            <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-[10px] text-white/70 backdrop-blur-sm">
+                            <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-3xs text-white/70 backdrop-blur-sm">
                                 {scrollbackStatusMessage}
                             </span>
                         )}
@@ -621,13 +621,13 @@ export default function CliTerminalPane({
                 )}
                 <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
                     {copyStatusMessage && (
-                        <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-[10px] text-white/70 backdrop-blur-sm">
+                        <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-3xs text-white/70 backdrop-blur-sm">
                             {copyStatusMessage}
                         </span>
                     )}
                     <button
                         type="button"
-                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
                         onClick={() => setShowSpecDebug(v => !v)}
                         title="Spec debug — inspect current state, sections, and transition history"
                     >
@@ -635,7 +635,7 @@ export default function CliTerminalPane({
                     </button>
                     <button
                         type="button"
-                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={() => { void copyCurrentTerminalText(); }}
                         disabled={!runtimeReady}
                         title="Copy selected terminal text, or the visible terminal viewport if nothing is selected"
@@ -645,7 +645,7 @@ export default function CliTerminalPane({
                     <div className="relative">
                         <button
                             type="button"
-                            className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={() => setTerminalControlsOpen((open) => !open)}
                             disabled={!runtimeReady}
                             aria-label={terminalControlsOpen ? t('terminal.closeControlKeys') : t('terminal.openControlKeys')}
@@ -663,10 +663,10 @@ export default function CliTerminalPane({
                                 className="absolute right-0 top-10 w-72 rounded-2xl border border-white/10 bg-[#0b0d12]/95 p-3 text-white/85 shadow-2xl shadow-black/40 backdrop-blur-md"
                             >
                                 <div className="mb-2 flex items-center justify-between gap-2">
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">Terminal keys</span>
+                                    <span className="text-3xs font-semibold uppercase tracking-[0.14em] text-white/45">Terminal keys</span>
                                     <button
                                         type="button"
-                                        className="rounded-full px-2 py-0.5 text-[11px] text-white/55 transition-colors hover:bg-white/10 hover:text-white/85"
+                                        className="rounded-full px-2 py-0.5 text-2xs text-white/55 transition-colors hover:bg-white/10 hover:text-white/85"
                                         onClick={() => setTerminalControlsOpen(false)}
                                         aria-label={t('terminal.closeControlKeys')}
                                     >
@@ -784,7 +784,7 @@ export default function CliTerminalPane({
                     </div>
                 </div>
                 {!runtimeReady && (
-                    <div className="absolute inset-x-2 top-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300 pointer-events-none">
+                    <div className="absolute inset-x-2 top-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-2xs text-red-300 pointer-events-none">
                         {runtimeStatusMessage}
                     </div>
                 )}

@@ -23,7 +23,7 @@ export default function MeshCoordinatorManualSetupPanel({
                     {setup.instructions}
                 </p>
             )}
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-text-muted">
+            <div className="mt-2 flex flex-wrap gap-2 text-2xs text-text-muted">
                 {setup.serverName && <span>Server: <code>{setup.serverName}</code></span>}
                 {setup.configFormat && <span>Format: <code>{setup.configFormat}</code></span>}
                 {setup.configPathCommand && <span>Config path: <code>{setup.configPathCommand}</code></span>}

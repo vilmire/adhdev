@@ -21,7 +21,7 @@ export default function LaunchSectionCard({
     <div className={`rounded-xl border border-border-subtle bg-bg-primary px-4 py-3 ${className}`.trim()}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">{title}</div>
+          <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">{title}</div>
           {description && (
             <div className="text-xs text-text-secondary mt-1">{description}</div>
           )}

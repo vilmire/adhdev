@@ -163,7 +163,7 @@ export function MeshListView({
                                         )}
                                     </div>
                                 </div>
-                                <div className="text-right text-[11px] text-text-muted shrink-0 ml-4">
+                                <div className="text-right text-2xs text-text-muted shrink-0 ml-4">
                                     <div>{new Date(mesh.createdAt || (mesh as any).created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
                                     <div className="text-text-muted/60">{mesh.nodes?.length ?? (mesh as any).nodeCount ?? 0} {t('repoMesh.list.nodesSuffix')}</div>
                                 </div>

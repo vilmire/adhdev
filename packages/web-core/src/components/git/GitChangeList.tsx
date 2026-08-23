@@ -75,19 +75,19 @@ export default function GitChangeList({ files, truncated, onFileClick, selectedP
                                 {stagedDot}
                             </span>
                             {!file.binary && (file.insertions > 0 || file.deletions > 0) && (
-                                <span className="shrink-0 font-mono text-[10px]">
+                                <span className="shrink-0 font-mono text-3xs">
                                     {file.insertions > 0 && <span className="text-status-online">+{file.insertions}</span>}
                                     {file.insertions > 0 && file.deletions > 0 && <span className="text-text-secondary"> </span>}
                                     {file.deletions > 0 && <span className="text-status-error">-{file.deletions}</span>}
                                 </span>
                             )}
-                            {file.binary && <span className="shrink-0 text-[10px] text-text-secondary">{t('git.changeList.binaryBadge')}</span>}
+                            {file.binary && <span className="shrink-0 text-3xs text-text-secondary">{t('git.changeList.binaryBadge')}</span>}
                         </li>
                     )
                 })}
             </ul>
             {truncated && (
-                <p className="px-3 py-1.5 text-[10px] text-text-secondary">
+                <p className="px-3 py-1.5 text-3xs text-text-secondary">
                     <Trans i18nKey="git.changeList.truncatedNote" ns="common" components={{ code: <code className="font-mono" /> }} />
                 </p>
             )}

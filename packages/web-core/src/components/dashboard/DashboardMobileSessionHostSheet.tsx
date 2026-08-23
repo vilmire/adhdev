@@ -346,11 +346,11 @@ export default function DashboardMobileSessionHostSheet({
                             <div className="text-[14px] font-bold text-text-primary">
                                 {session.displayName || linkedCli?.runtimeDisplayName || linkedCli?.cliName || session.providerType}
                             </div>
-                            <span className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${lifecyclePillClass(session.lifecycle)}`}>
+                            <span className={`rounded-md px-2 py-0.5 text-3xs font-semibold ${lifecyclePillClass(session.lifecycle)}`}>
                                 {session.lifecycle}
                             </span>
                             {recoveryLabel && (
-                                <span className="rounded-md bg-sky-500/[0.08] px-2 py-0.5 text-[10px] font-semibold text-sky-300">
+                                <span className="rounded-md bg-sky-500/[0.08] px-2 py-0.5 text-3xs font-semibold text-sky-300">
                                     {recoveryLabel}
                                 </span>
                             )}
@@ -358,7 +358,7 @@ export default function DashboardMobileSessionHostSheet({
                         <div className="mt-1 text-[12px] text-text-secondary">
                             {session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || 'No workspace'}
                         </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-text-secondary">
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-text-secondary">
                             <span className="font-mono text-text-primary">{session.runtimeKey}</span>
                             <span className="text-text-muted">·</span>
                             <span className={session.writeOwner?.ownerType === 'user' ? 'text-amber-200' : 'text-text-primary/85'}>
@@ -369,13 +369,13 @@ export default function DashboardMobileSessionHostSheet({
                                 <IconUsers size={11} /> {session.attachedClients.length}
                             </span>
                         </div>
-                        <div className="mt-1 text-[11px] text-text-secondary">
+                        <div className="mt-1 text-2xs text-text-secondary">
                             Active {formatRelativeTime(session.lastActivityAt)}
                             {session.osPid ? ` · pid ${session.osPid}` : ''}
                             {` · Next: ${nextActionLabel}`}
                         </div>
                         {recoveryError && (
-                            <div className="mt-2 rounded-xl border border-red-500/[0.18] bg-red-500/[0.07] px-3 py-2 text-[11px] text-red-200">
+                            <div className="mt-2 rounded-xl border border-red-500/[0.18] bg-red-500/[0.07] px-3 py-2 text-2xs text-red-200">
                                 {recoveryError}
                             </div>
                         )}
@@ -385,7 +385,7 @@ export default function DashboardMobileSessionHostSheet({
                     {linkedConversation && (
                         <button
                             type="button"
-                            className="machine-btn px-2.5 py-1 text-[11px]"
+                            className="machine-btn px-2.5 py-1 text-2xs"
                             onClick={() => {
                                 onOpenConversation(linkedConversation)
                                 onClose()
@@ -397,7 +397,7 @@ export default function DashboardMobileSessionHostSheet({
                     {section === 'recovery' && (session.lifecycle === 'interrupted' || session.lifecycle === 'failed' || session.lifecycle === 'stopped') && (
                         <button
                             type="button"
-                            className="machine-btn px-2.5 py-1 text-[11px]"
+                            className="machine-btn px-2.5 py-1 text-2xs"
                             disabled={!!busyActionKey}
                             onClick={() => { void runSessionAction('session_host_resume_session', session) }}
                         >
@@ -406,7 +406,7 @@ export default function DashboardMobileSessionHostSheet({
                     )}
                     <button
                         type="button"
-                        className="machine-btn px-2.5 py-1 text-[11px]"
+                        className="machine-btn px-2.5 py-1 text-2xs"
                         disabled={!!busyActionKey}
                         onClick={() => { void runSessionAction('session_host_restart_session', session) }}
                     >
@@ -415,7 +415,7 @@ export default function DashboardMobileSessionHostSheet({
                     {section === 'live' && (session.lifecycle === 'running' || session.lifecycle === 'starting' || session.lifecycle === 'interrupted') && (
                         <button
                             type="button"
-                            className="machine-btn border-red-500/20 px-2.5 py-1 text-[11px] text-red-300 hover:text-red-200"
+                            className="machine-btn border-red-500/20 px-2.5 py-1 text-2xs text-red-300 hover:text-red-200"
                             disabled={!!busyActionKey}
                             onClick={() => { void runSessionAction('session_host_stop_session', session) }}
                         >
@@ -440,7 +440,7 @@ export default function DashboardMobileSessionHostSheet({
                 <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-border-subtle" />
                 <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
                     <div className="min-w-0">
-                        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                        <div className="flex items-center gap-2 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
                             <IconServer size={14} /> Hosted Runtime Recovery
                         </div>
                         <div className="mt-1 text-[18px] font-black tracking-tight text-text-primary">
@@ -507,23 +507,23 @@ export default function DashboardMobileSessionHostSheet({
                         <>
                             <div className="grid grid-cols-3 gap-2">
                                 <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-3 py-3">
-                                    <div className="text-[10px] uppercase tracking-[0.16em] text-text-secondary">Live</div>
+                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">Live</div>
                                     <div className="mt-1 text-[18px] font-bold text-text-primary">{diagnostics.runtimeCount}</div>
                                 </div>
                                 <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-3 py-3">
-                                    <div className="text-[10px] uppercase tracking-[0.16em] text-text-secondary">Recovery</div>
+                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">Recovery</div>
                                     <div className="mt-1 text-[18px] font-bold text-text-primary">{recoverySessions.length}</div>
                                 </div>
                                 <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-3 py-3">
-                                    <div className="text-[10px] uppercase tracking-[0.16em] text-text-secondary">Started</div>
+                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">Started</div>
                                     <div className="mt-1 text-[12px] font-semibold text-text-primary">{formatRelativeTime(diagnostics.hostStartedAt)}</div>
-                                    <div className="mt-0.5 text-[10px] text-text-secondary">{formatClock(diagnostics.hostStartedAt)}</div>
+                                    <div className="mt-0.5 text-3xs text-text-secondary">{formatClock(diagnostics.hostStartedAt)}</div>
                                 </div>
                             </div>
 
                             {latestWarnOrError && (
                                 <div className="rounded-2xl border border-amber-500/[0.16] bg-amber-500/[0.07] px-4 py-3">
-                                    <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-200">
+                                    <div className="mb-1 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.16em] text-amber-200">
                                         <IconWarning size={13} /> Latest warning
                                     </div>
                                     <div className="text-[13px] leading-relaxed text-text-primary">{latestWarnOrError.message}</div>
@@ -531,14 +531,14 @@ export default function DashboardMobileSessionHostSheet({
                             )}
 
                             <div className="flex items-center justify-between gap-3 pt-1">
-                                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                                <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
                                     <IconTerminal size={14} /> Live hosted runtimes
                                 </div>
                                 <div className="flex items-center gap-2">
                                     {duplicateGroupCount > 0 && (
                                         <button
                                             type="button"
-                                            className="machine-btn px-2.5 py-1 text-[11px]"
+                                            className="machine-btn px-2.5 py-1 text-2xs"
                                             disabled={busyActionKey === 'session_host_prune_duplicate_sessions'}
                                             onClick={() => { void runPruneDuplicates() }}
                                         >
@@ -547,11 +547,11 @@ export default function DashboardMobileSessionHostSheet({
                                                 : `Prune ${duplicateGroupCount}`}
                                         </button>
                                     )}
-                                    <div className="text-[11px] text-text-secondary">{activeCliEntries.length} dashboard session{activeCliEntries.length === 1 ? '' : 's'}</div>
+                                    <div className="text-2xs text-text-secondary">{activeCliEntries.length} dashboard session{activeCliEntries.length === 1 ? '' : 's'}</div>
                                 </div>
                             </div>
 
-                            <div className="text-[11px] text-text-secondary leading-relaxed">
+                            <div className="text-2xs text-text-secondary leading-relaxed">
                                 {getSessionHostSectionHint('live')}
                             </div>
 
@@ -566,10 +566,10 @@ export default function DashboardMobileSessionHostSheet({
                             )}
 
                             <div className="pb-1">
-                                <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                                <div className="mb-2 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
                                     Recovery snapshots
                                 </div>
-                                <div className="mb-2 text-[11px] text-text-secondary leading-relaxed">
+                                <div className="mb-2 text-2xs text-text-secondary leading-relaxed">
                                     {getSessionHostSectionHint('recovery')}
                                 </div>
                                 {recoverySessions.length === 0 ? (
@@ -585,10 +585,10 @@ export default function DashboardMobileSessionHostSheet({
 
                             {inactiveSessions.length > 0 && (
                                 <div className="pb-1">
-                                    <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                                    <div className="mb-2 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
                                         Inactive records
                                     </div>
-                                    <div className="mb-2 text-[11px] text-text-secondary leading-relaxed">
+                                    <div className="mb-2 text-2xs text-text-secondary leading-relaxed">
                                         {getSessionHostSectionHint('inactive')}
                                     </div>
                                     <div className="space-y-2 opacity-85">
@@ -599,7 +599,7 @@ export default function DashboardMobileSessionHostSheet({
 
                             {recentTransitions.length > 0 && (
                                 <div className="pb-1">
-                                    <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                                    <div className="mb-2 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
                                         Recent activity
                                     </div>
                                     <div className="rounded-2xl border border-border-subtle bg-bg-secondary divide-y divide-border-subtle">
@@ -611,14 +611,14 @@ export default function DashboardMobileSessionHostSheet({
                                                         <div className="text-[12px] font-semibold text-text-primary">
                                                             {session?.displayName || transition.sessionId}
                                                         </div>
-                                                        <div className="mt-0.5 text-[11px] leading-relaxed text-text-secondary">
+                                                        <div className="mt-0.5 text-2xs leading-relaxed text-text-secondary">
                                                             {transition.action}
                                                             {transition.lifecycle ? ` · ${transition.lifecycle}` : ''}
                                                             {transition.detail ? ` · ${transition.detail}` : ''}
                                                             {transition.error ? ` · ${transition.error}` : ''}
                                                         </div>
                                                     </div>
-                                                    <div className={`shrink-0 text-[10px] ${transition.success === false ? 'text-red-300' : 'text-text-secondary'}`}>
+                                                    <div className={`shrink-0 text-3xs ${transition.success === false ? 'text-red-300' : 'text-text-secondary'}`}>
                                                         {formatClock(transition.timestamp)}
                                                     </div>
                                                 </div>

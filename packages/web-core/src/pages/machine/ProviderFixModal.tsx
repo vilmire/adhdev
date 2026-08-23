@@ -128,7 +128,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                         <ProviderLogo type={provider.type} label={provider.displayName} size={20} />
                         <div>
                             <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerFix.titlePrefix', { name: provider.displayName })}</h2>
-                            <p className="text-[11px] text-text-muted mt-0.5">{t('machine.providerFix.footerHint')}</p>
+                            <p className="text-2xs text-text-muted mt-0.5">{t('machine.providerFix.footerHint')}</p>
                         </div>
                     </div>
                     {/* >=44px tap target (Apple HIG); -m-2 keeps the visual
@@ -147,7 +147,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                         <div className="flex flex-col gap-4">
                             {/* Agent Selection */}
                             <div>
-                                <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">{t('machine.providerFix.aiAgent')}</label>
+                                <label className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">{t('machine.providerFix.aiAgent')}</label>
                                 <div className="flex gap-2">
                                     {AGENTS_I18N.map(a => (
                                         <button
@@ -162,7 +162,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                             <div className="text-[12px] font-semibold" style={{ color: agent === a.value ? a.color : 'var(--text-primary)' }}>
                                                 {a.label}
                                             </div>
-                                            <div className="text-[10px] text-text-muted">{a.desc}</div>
+                                            <div className="text-3xs text-text-muted">{a.desc}</div>
                                         </button>
                                     ))}
                                 </div>
@@ -171,11 +171,11 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                             {/* Script Selection */}
                             <div>
                                 <div className="flex items-center justify-between mb-1.5">
-                                    <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider">{t('machine.providerFix.scriptsToFix')}</label>
+                                    <label className="text-2xs text-text-muted font-semibold uppercase tracking-wider">{t('machine.providerFix.scriptsToFix')}</label>
                                     <div className="flex gap-1.5">
-                                        <button onClick={selectAll} className="text-[10px] text-accent-primary hover:text-accent-primary-light">{t('machine.providerFix.all')}</button>
-                                        <span className="text-[10px] text-text-muted">|</span>
-                                        <button onClick={selectNone} className="text-[10px] text-text-muted hover:text-text-secondary">{t('machine.providerFix.none')}</button>
+                                        <button onClick={selectAll} className="text-3xs text-accent-primary hover:text-accent-primary-light">{t('machine.providerFix.all')}</button>
+                                        <span className="text-3xs text-text-muted">|</span>
+                                        <button onClick={selectNone} className="text-3xs text-text-muted hover:text-text-secondary">{t('machine.providerFix.none')}</button>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-3 gap-1.5">
@@ -183,7 +183,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                         <button
                                             key={s}
                                             onClick={() => toggleScript(s)}
-                                            className="px-2.5 py-1.5 rounded-md border text-[11px] font-medium text-left transition-all"
+                                            className="px-2.5 py-1.5 rounded-md border text-2xs font-medium text-left transition-all"
                                             style={{
                                                 borderColor: selectedScripts.includes(s) ? 'color-mix(in srgb, var(--accent-primary) 40%, transparent)' : 'var(--border-subtle)',
                                                 background: selectedScripts.includes(s) ? 'color-mix(in srgb, var(--accent-primary) 8%, transparent)' : 'transparent',
@@ -198,7 +198,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
 
                             {/* Comment */}
                             <div>
-                                <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
+                                <label className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">
                                     {t('machine.providerFix.additionalInstructions')} <span className="text-text-muted font-normal">{t('machine.providerFix.optional')}</span>
                                 </label>
                                 <textarea
@@ -214,9 +214,9 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
 
                     {(phase === 'running' || phase === 'done' || phase === 'error') && (
                         <div>
-                            <label className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">{t('machine.providerFix.agentOutput')}</label>
+                            <label className="text-2xs text-text-muted font-semibold uppercase tracking-wider mb-1.5 block">{t('machine.providerFix.agentOutput')}</label>
                             <div
-                                className="rounded-lg border border-border-subtle bg-bg-secondary p-3 font-mono text-[11px] leading-relaxed text-text-secondary overflow-y-auto"
+                                className="rounded-lg border border-border-subtle bg-bg-secondary p-3 font-mono text-2xs leading-relaxed text-text-secondary overflow-y-auto"
                                 style={{ maxHeight: 320, minHeight: 200 }}
                             >
                                 {logs.map((line, i) => (
@@ -230,7 +230,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                 <div ref={logsEndRef} />
                             </div>
                             {error && (
-                                <div className="mt-2 px-3 py-2 rounded-lg bg-red-500/[0.06] border border-red-500/20 text-red-400 text-[11px]">
+                                <div className="mt-2 px-3 py-2 rounded-lg bg-red-500/[0.06] border border-red-500/20 text-red-400 text-2xs">
                                     {error}
                                 </div>
                             )}
@@ -240,7 +240,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
 
                 {/* Footer */}
                 <div className="px-5 py-3.5 border-t border-border-subtle flex justify-between items-center">
-                    <div className="text-[10px] text-text-muted">
+                    <div className="text-3xs text-text-muted">
                         {phase === 'config' && selectedScripts.length > 0 && t('machine.providerFix.scriptsSelected', { count: selectedScripts.length })}
                         {phase === 'running' && t('machine.providerFix.agentGenerating')}
                         {phase === 'done' && t('machine.providerFix.validateHint')}

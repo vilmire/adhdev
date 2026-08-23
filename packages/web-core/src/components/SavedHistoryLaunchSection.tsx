@@ -86,10 +86,10 @@ export default function SavedHistoryLaunchSection({
       )}
     >
       {summary ? (
-        <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-[11px] text-text-muted leading-relaxed">
+        <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-2xs text-text-muted leading-relaxed">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Selected saved history</div>
+              <div className="text-3xs uppercase tracking-[0.08em] text-text-muted">Selected saved history</div>
               <div className="mt-1 font-semibold text-text-primary truncate">{summary.title}</div>
               <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
               <div className="mt-1">{summary.metaLine}</div>
@@ -111,13 +111,13 @@ export default function SavedHistoryLaunchSection({
           </div>
         </div>
       ) : (
-        <div className="text-[11px] text-text-muted" aria-live="polite">
+        <div className="text-2xs text-text-muted" aria-live="polite">
           {refreshStatus}
         </div>
       )}
 
       {savedSessionsError && (
-        <div className="mt-2 text-[11px] text-status-error">{savedSessionsError}</div>
+        <div className="mt-2 text-2xs text-status-error">{savedSessionsError}</div>
       )}
     </LaunchSectionCard>
   )

@@ -129,7 +129,7 @@ function MachineTabBar({ groups, activeKey, onChange }: { groups: MachineGroup[]
                     >
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${group.online ? 'bg-green-400' : 'bg-neutral-500'}`} />
                         <span className="truncate max-w-[160px]">{group.label}</span>
-                        <span className="text-[11px] text-text-muted font-normal">
+                        <span className="text-2xs text-text-muted font-normal">
                             {t('repoMesh.nodeList.machineTabCounts', { nodes: group.nodes.length, slots: group.slotCount })}
                         </span>
                     </button>
@@ -267,7 +267,7 @@ export function MeshNodeList({
                             <div className="text-sm font-semibold text-text-primary">{t('repoMesh.nodeList.daemonCandidates')}</div>
                             <div className="text-xs text-text-muted">{t('repoMesh.nodeList.daemonCandidatesHint')}</div>
                         </div>
-                        <span className="text-[11px] text-text-muted shrink-0">{t('repoMesh.nodeList.available', { count: attachableDaemons.length })}</span>
+                        <span className="text-2xs text-text-muted shrink-0">{t('repoMesh.nodeList.available', { count: attachableDaemons.length })}</span>
                     </div>
                     {daemons.length === 0 ? (
                         <div className="text-xs text-text-muted">{t('repoMesh.nodeList.noDaemonsAvailable')}</div>
@@ -292,10 +292,10 @@ export function MeshNodeList({
                                         {/* min-w-0 on the truncating child; shrink-0 on the badge so the
                                             label yields first instead of the badge wrapping. */}
                                         <span className="text-sm font-medium truncate min-w-0">{daemonLabel(d)}</span>
-                                        {d.id === coordinatorDaemonId && <span className="text-[10px] text-accent-primary shrink-0">{t('repoMesh.nodeList.selectedHost')}</span>}
+                                        {d.id === coordinatorDaemonId && <span className="text-3xs text-accent-primary shrink-0">{t('repoMesh.nodeList.selectedHost')}</span>}
                                     </div>
-                                    <div className="mt-1 text-[11px] text-text-muted font-mono truncate">{d.id}</div>
-                                    <div className="mt-1 text-[11px] text-text-muted">{t('repoMesh.nodeList.workspacesDetected', { count: (d.workspaces || []).length })}</div>
+                                    <div className="mt-1 text-2xs text-text-muted font-mono truncate">{d.id}</div>
+                                    <div className="mt-1 text-2xs text-text-muted">{t('repoMesh.nodeList.workspacesDetected', { count: (d.workspaces || []).length })}</div>
                                 </button>
                             ))}
                         </div>
@@ -345,11 +345,11 @@ export function MeshNodeList({
                                                 className={`text-left text-xs px-3 py-2 rounded-lg border transition-colors ${nodeWorkspace === w.path ? 'border-accent-primary bg-accent-primary/10 text-text-primary' : 'border-border-subtle bg-bg-primary hover:bg-violet-500/10 text-text-primary'}`}
                                                 onClick={() => onNodeWorkspaceChange(w.path)}>
                                                 <span className="font-medium block truncate">{w.label || w.path.split('/').pop()}</span>
-                                                <span className="text-[10px] text-text-muted font-mono truncate block">{w.path}</span>
+                                                <span className="text-3xs text-text-muted font-mono truncate block">{w.path}</span>
                                             </button>
                                         ))}
                                     </div>
-                                    <button type="button" className="text-[11px] text-accent-primary bg-transparent border-none cursor-pointer p-0" onClick={() => { onNodeCustomPathChange(true); onNodeWorkspaceChange('') }}>{t('repoMesh.nodeList.enterCustomPath')}</button>
+                                    <button type="button" className="text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0" onClick={() => { onNodeCustomPathChange(true); onNodeWorkspaceChange('') }}>{t('repoMesh.nodeList.enterCustomPath')}</button>
                                 </>
                             ) : (
                                 <>
@@ -367,7 +367,7 @@ export function MeshNodeList({
                                                             <div className="mt-2 flex flex-wrap gap-1.5">
                                                                 {knownWorkspaces.slice(0, 6).map(w => (
                                                                     <button key={w.id || w.path} type="button" onClick={() => onNodeWorkspaceChange(w.path)}
-                                                                        className="text-[11px] px-2 py-0.5 rounded-full border border-border-subtle hover:border-accent-primary/50 text-text-muted hover:text-text-primary transition-colors bg-transparent cursor-pointer" title={w.path}>
+                                                                        className="text-2xs px-2 py-0.5 rounded-full border border-border-subtle hover:border-accent-primary/50 text-text-muted hover:text-text-primary transition-colors bg-transparent cursor-pointer" title={w.path}>
                                                                         {w.label || w.path.split('/').filter(Boolean).pop() || w.path}
                                                                     </button>
                                                                 ))}
@@ -381,7 +381,7 @@ export function MeshNodeList({
                                         <>
                                             <Input value={nodeWorkspace} onChange={e => onNodeWorkspaceChange(e.target.value)} placeholder="/Users/dev/projects/myapp" onKeyDown={e => { if (e.key === 'Enter') onAddNode() }} />
                                             {nodePickerWorkspaces.length > 0 && (
-                                                <button type="button" className="text-[11px] text-accent-primary bg-transparent border-none cursor-pointer p-0 mt-1" onClick={() => { onNodeCustomPathChange(false); onNodeWorkspaceChange('') }}>{t('repoMesh.nodeList.pickFromSaved')}</button>
+                                                <button type="button" className="text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0 mt-1" onClick={() => { onNodeCustomPathChange(false); onNodeWorkspaceChange('') }}>{t('repoMesh.nodeList.pickFromSaved')}</button>
                                             )}
                                         </>
                                     )}

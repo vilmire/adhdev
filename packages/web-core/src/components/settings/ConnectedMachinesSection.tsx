@@ -256,7 +256,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                 <span>{ide.id.substring(0, 12)}…</span>
                                 {version && (
                                     <span
-                                        className={`px-1.5 py-0.5 rounded text-[10px] ${!isOutdated ? 'bg-bg-secondary' : ''}`}
+                                        className={`px-1.5 py-0.5 rounded text-3xs ${!isOutdated ? 'bg-bg-secondary' : ''}`}
                                         style={isOutdated ? { background: 'color-mix(in srgb, var(--status-warning) 15%, transparent)', color: 'var(--status-warning)' } : undefined}
                                     >
                                         v{version}
@@ -313,7 +313,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                 <div className="flex items-center gap-3 mt-2.5 pt-2.5 border-t border-border-subtle/50">
                     {/* P2P Status */}
                     {p2p && (
-                        <div className="flex items-center gap-1.5 text-[11px]">
+                        <div className="flex items-center gap-1.5 text-2xs">
                             <span
                                 className={`w-1.5 h-1.5 rounded-full ${
                                     p2p.state === 'connected' ? 'bg-status-online' :
@@ -339,7 +339,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
 
                     {/* Connected instances summary */}
                     {totalInstances > 0 ? (
-                        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                        <div className="flex items-center gap-2 text-2xs text-text-muted">
                             {connectedIdes.map(ideInst => {
                                 const label = getIdeLabel(ideInst.type)
                                 const cdp = ideInst.cdpConnected
@@ -370,7 +370,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             ))}
                         </div>
                     ) : (
-                        <span className="text-[11px] text-text-muted/60 italic">{t('machine.connectedMachines.noIdesConnected')}</span>
+                        <span className="text-2xs text-text-muted/60 italic">{t('machine.connectedMachines.noIdesConnected')}</span>
                     )}
                 </div>
 

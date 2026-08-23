@@ -215,7 +215,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
             </div>
 
             {items.length === 0 ? (
-                <div className="text-[11px] opacity-70">{t('meshGraph.approvals.empty')}</div>
+                <div className="text-2xs opacity-70">{t('meshGraph.approvals.empty')}</div>
             ) : (
                 <ul className="flex flex-col gap-2">
                     {items.map(item => {
@@ -236,7 +236,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                         )}
                                         {waitLabel && (
                                             <span
-                                                className="ml-2 font-bold text-[10px]"
+                                                className="ml-2 font-bold text-3xs"
                                                 style={{ color: 'var(--status-warning)' }}
                                                 title={t('meshGraph.approvals.waitingFor', { duration: waitLabel })}
                                             >
@@ -244,7 +244,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                             </span>
                                         )}
                                     </div>
-                                    <div className="text-[10px] opacity-60 truncate">
+                                    <div className="text-3xs opacity-60 truncate">
                                         {item.detail
                                             ? item.detail.replace(/[\n\r]+/g, ' ').slice(0, 120)
                                             : t('meshGraph.approvals.sessionFallback', { id: item.sessionId })}
@@ -254,7 +254,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                             {item.options.slice(0, 4).map((option, i) => (
                                                 <span
                                                     key={`${option}-${i}`}
-                                                    className="text-[9px] px-1.5 py-0.5 rounded opacity-70"
+                                                    className="text-4xs px-1.5 py-0.5 rounded opacity-70"
                                                     style={{ background: 'color-mix(in srgb, var(--text-muted) 15%, transparent)' }}
                                                 >
                                                     {option.replace(/[⌥⏎⇧⌫⌘⌃]/g, '').trim().slice(0, 32)}
