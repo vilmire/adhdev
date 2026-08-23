@@ -317,7 +317,7 @@ export function MeshDetailView({
                  that surface is reserved for DashboardMeshGraphDialog, which this button
                  launches. The dialog owns its own mesh_status loader + live-session overlay. */}
             <Section title={t('repoMesh.detail.observabilityTitle')} description={t('repoMesh.detail.observabilityDescription')}>
-                {graphError && <div className="mb-3 text-[12px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{graphError}</div>}
+                {graphError && <div className="mb-3 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{graphError}</div>}
                 <div className="flex flex-wrap items-center gap-3">
                     <button
                         type="button"
@@ -328,7 +328,7 @@ export function MeshDetailView({
                     >
                         <IconMesh size={14} />{t('repoMesh.detail.observabilityOpen')}
                     </button>
-                    <span className="text-[12px] text-text-muted">
+                    <span className="text-xs text-text-muted">
                         {t('repoMesh.detail.observabilityHint')}
                     </span>
                 </div>
@@ -405,14 +405,14 @@ export function MeshDetailView({
                                                 <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">{t('repoMesh.detail.recommended')}</span>
                                             )}
                                         </span>
-                                        <span className="block text-[12px] text-text-muted">{t(opt.descriptionKey)}</span>
+                                        <span className="block text-xs text-text-muted">{t(opt.descriptionKey)}</span>
                                     </span>
                                 </label>
                             )
                         })}
                     </div>
                 </fieldset>
-                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">{t('repoMesh.detail.saving')}</div>}
+                {savingPolicy && <div className="mt-3 text-xs text-text-muted">{t('repoMesh.detail.saving')}</div>}
 
                 {/* Per-node scheduling knobs (priority + per-provider max-parallel) were
                     removed: capability slots absorb both — slot order = preference and
@@ -510,7 +510,7 @@ export function MeshDetailView({
 
                     <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
                         <div className="text-[13px] font-semibold mb-1">{t('repoMesh.detail.thisMesh')}</div>
-                        <p className="text-[12px] text-text-muted mb-3">{t('repoMesh.detail.thisMeshHint', { name: selectedMesh.name })}</p>
+                        <p className="text-xs text-text-muted mb-3">{t('repoMesh.detail.thisMeshHint', { name: selectedMesh.name })}</p>
 
                         <CoordinatorPromptDefaultPreview
                             daemonId={activeDaemonId}
@@ -541,7 +541,7 @@ export function MeshDetailView({
                                 onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
                                 disabled={savingCoordinatorPrompt} placeholder={t('repoMesh.detail.appendPlaceholder')} />
                         </FormField>
-                        <details className="mt-2 text-[12px] text-text-muted">
+                        <details className="mt-2 text-xs text-text-muted">
                             <summary className="cursor-pointer select-none">{t('repoMesh.detail.availablePlaceholders')}</summary>
                             <p className="mt-1">{t('repoMesh.detail.placeholdersIntro')}</p>
                             <div className="mt-2 overflow-x-auto">
@@ -646,11 +646,11 @@ export function MeshDetailView({
                             {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
                     </FormField>
-                    <div className="mt-2 text-[12px] text-text-muted">
+                    <div className="mt-2 text-xs text-text-muted">
                         {SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove)?.description || SESSION_CLEANUP_MODE_OPTIONS[0].description}
                     </div>
                 </div>
-                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">{t('repoMesh.detail.saving')}</div>}
+                {savingPolicy && <div className="mt-3 text-xs text-text-muted">{t('repoMesh.detail.saving')}</div>}
             </Section>
             </>
             )

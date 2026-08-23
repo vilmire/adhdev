@@ -38,7 +38,7 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
     const meshTheme = useContext(MeshGraphThemeContext)
     if (!scheduling) {
         return (
-            <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-[12px] ${meshTheme.textSecondary}`}>
+            <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-xs ${meshTheme.textSecondary}`}>
                 {t('mesh.status.schedulingNotReported')}
             </div>
         )
@@ -52,7 +52,7 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
     return (
         <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.schedulingTitle')}</span>
+                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.schedulingTitle')}</span>
                 <Badge label={SCHEDULING_STRATEGY_LABELS[scheduling.strategy] ?? scheduling.strategy} tone="info" />
                 {hasGlobalCaps && (
                     <Badge
@@ -124,7 +124,7 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{machine.label}</span>
+                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{machine.label}</span>
                 {machine.daemonBuildVersion && (
                     <Badge label={machine.daemonBuildVersion} tone="default" title="Daemon build version running on this machine" />
                 )}
@@ -292,7 +292,7 @@ function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{node.machineLabel || node.nodeId}</span>
+                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{node.machineLabel || node.nodeId}</span>
                 <Badge label={node.health} tone={healthTone(node.health)} />
                 {isWorktree && <Badge label={t('mesh.status.badgeWorktree')} tone="info" title={node.worktreeBranch ? t('mesh.status.badgeWorktreeBranchTitle', { branch: node.worktreeBranch }) : t('mesh.status.badgeWorktreeTitle')} />}
                 {bootstrap?.status && bootstrap.status !== 'ready' && (
@@ -340,7 +340,7 @@ function MeshProtocolVisibilityCard({ status }: { status: RepoMeshStatus }) {
     return (
         <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-[12px] font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.protocolTitle')}</span>
+                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{t('mesh.status.protocolTitle')}</span>
                 {metrics && (
                     <Badge
                         label={`v2 ${Math.round(metrics.v2Ratio * 100)}% (${metrics.v2}/${metrics.total})`}
@@ -403,7 +403,7 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
                     {t('mesh.status.nodesRuntime')}
                 </span>
                 {canonicalStatus.nodes.length === 0 ? (
-                    <div className={`rounded-xl border p-3 text-[12px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                    <div className={`rounded-xl border p-3 text-xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
                         {t('mesh.status.noNodesReporting')}
                     </div>
                 ) : (

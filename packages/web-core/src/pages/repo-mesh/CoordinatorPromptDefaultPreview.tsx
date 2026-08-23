@@ -77,7 +77,7 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
             <button
                 type="button"
                 onClick={toggle}
-                className="inline-flex items-center gap-1 text-[12px] text-accent-primary bg-transparent border-none cursor-pointer p-0"
+                className="inline-flex items-center gap-1 text-xs text-accent-primary bg-transparent border-none cursor-pointer p-0"
             >
                 <span className={`transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden>▸</span>
                 {open ? t('repoMesh.promptPreview.hide') : t('repoMesh.promptPreview.view')}
@@ -86,9 +86,9 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
 
             {open && (
                 <div className="mt-2">
-                    {loading && <div className="text-[12px] text-text-muted">{t('repoMesh.promptPreview.rendering')}</div>}
+                    {loading && <div className="text-xs text-text-muted">{t('repoMesh.promptPreview.rendering')}</div>}
                     {error && (
-                        <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
+                        <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                             {error}
                             <button type="button" onClick={() => void load()} className="ml-2 underline bg-transparent border-none cursor-pointer text-amber-300">{t('repoMesh.promptPreview.retry')}</button>
                         </div>
@@ -103,7 +103,7 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
                                 readOnly
                                 value={prompt}
                                 rows={14}
-                                className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-[12px] text-text-secondary font-mono"
+                                className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-xs text-text-secondary font-mono"
                                 onFocus={e => e.currentTarget.select()}
                             />
                         </>

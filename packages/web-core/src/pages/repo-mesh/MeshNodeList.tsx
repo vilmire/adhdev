@@ -265,14 +265,14 @@ export function MeshNodeList({
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="min-w-0">
                             <div className="text-sm font-semibold text-text-primary">{t('repoMesh.nodeList.daemonCandidates')}</div>
-                            <div className="text-[12px] text-text-muted">{t('repoMesh.nodeList.daemonCandidatesHint')}</div>
+                            <div className="text-xs text-text-muted">{t('repoMesh.nodeList.daemonCandidatesHint')}</div>
                         </div>
                         <span className="text-[11px] text-text-muted shrink-0">{t('repoMesh.nodeList.available', { count: attachableDaemons.length })}</span>
                     </div>
                     {daemons.length === 0 ? (
-                        <div className="text-[12px] text-text-muted">{t('repoMesh.nodeList.noDaemonsAvailable')}</div>
+                        <div className="text-xs text-text-muted">{t('repoMesh.nodeList.noDaemonsAvailable')}</div>
                     ) : attachableDaemons.length === 0 ? (
-                        <div className="text-[12px] text-text-muted">{t('repoMesh.nodeList.allDaemonsAttached')}</div>
+                        <div className="text-xs text-text-muted">{t('repoMesh.nodeList.allDaemonsAttached')}</div>
                     ) : (
                         <div className="grid gap-2 md:grid-cols-2">
                             {attachableDaemons.map(d => (

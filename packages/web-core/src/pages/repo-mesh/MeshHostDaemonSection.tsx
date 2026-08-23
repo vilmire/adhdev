@@ -85,7 +85,7 @@ export function MeshHostDaemonSection({
                         <span className={hostOnline ? 'text-text-muted' : 'text-amber-400'}>· {hostOnline ? t('repoMesh.host.online') : t('repoMesh.host.offline')}</span>
                     </span>
                     {selectedHostNode?.workspace && (
-                        <span className="text-[12px] text-text-muted">
+                        <span className="text-xs text-text-muted">
                             {t('repoMesh.host.hostNode')} <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span>
                         </span>
                     )}
@@ -109,7 +109,7 @@ export function MeshHostDaemonSection({
                                 </select>
                             </FormField>
                         ) : (
-                            <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
+                            <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-muted">
                                 {t('repoMesh.host.noDaemonsToRoute')}
                             </div>
                         )}
@@ -145,7 +145,7 @@ export function MeshHostDaemonSection({
                     {coordinatorDaemonId ? (
                         // Authoritative host signal resolved (pin / role:'host' node) — the
                         // seed named a specific daemon. Show it as the host-to-be.
-                        <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
+                        <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-muted">
                             {isHostNodeAttached
                                 ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. {t('repoMesh.host.confirmSetsHost')}</>
                                 : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. {t('repoMesh.host.attachNodeThenSetHost')}</>}
@@ -170,12 +170,12 @@ export function MeshHostDaemonSection({
                     {setHostButton && (
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                             {setHostButton}
-                            <span className="text-[12px] text-text-muted">{t('repoMesh.host.setHostActionHint')}</span>
+                            <span className="text-xs text-text-muted">{t('repoMesh.host.setHostActionHint')}</span>
                         </div>
                     )}
                 </>
             ) : (
-                <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-muted">
+                <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-muted">
                     {t('repoMesh.host.noDaemonsToHost')}
                 </div>
             )}
