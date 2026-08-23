@@ -1076,7 +1076,13 @@
             "sessionCleanupLabel": "When removing a node, its sessions…",
             "sessionCleanupHint": "Separate transcript cleanup from runtime/process cleanup.",
             "mcpMode": "MCP Mode:",
-            "mcpDescription": "· The mesh MCP server can be used directly from your CLI agent."
+            "mcpDescription": "· The mesh MCP server can be used directly from your CLI agent.",
+            "repoMeshJsonTitle": "From this repo (.adhdev/mesh.json)",
+            "repoMeshJsonReadOnly": "Read-only",
+            "repoMeshJsonHint": "This repo commits coordinator prompt text that stacks with the fields above. Edit it in the repo file, not here:",
+            "repoMeshJsonOverrideLabel": "Repo override",
+            "repoMeshJsonAppendLabel": "Repo append",
+            "repoMeshJsonInvalid": "This repo's .adhdev/mesh.json could not be parsed, so its prompt layer is ignored."
         },
         "nodeList": {
             "title": "Nodes & Providers ({{count}})",
@@ -1249,7 +1255,8 @@
             "view": "View the default prompt",
             "rendering": "Rendering…",
             "retry": "Retry",
-            "info": "This is what a coordinator session gets when Override is empty."
+            "info": "This is what a coordinator session gets when Override is empty.",
+            "launchScopeNote": "Mission, recent activity and operating notes are added at launch and are not shown here."
         },
         "hermesMcp": {
             "title": "Hermes MCP Config",
@@ -3055,7 +3062,9 @@
             "overrideDesc": "<strong>Override</strong> replaces the daemon's built-in base prompt for that CLI.",
             "appendDesc": "<strong>Append</strong> stacks after whichever base wins.",
             "overrideLabel": "Override",
-            "appendLabel": "Append"
+            "appendLabel": "Append",
+            "sectionTitle": "Coordinator prompts",
+            "sectionDescription": "Per-CLI base prompt for mesh coordinator sessions on this machine. Mesh-level prompts live on the Repo Mesh page."
         },
         "appearance": {
             "modeLabel": "Mode",

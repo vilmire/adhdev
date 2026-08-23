@@ -1076,7 +1076,13 @@
             "sessionCleanupLabel": "ノードを削除するとき、そのセッションは…",
             "sessionCleanupHint": "トランスクリプトのクリーンアップをランタイム／プロセスのクリーンアップと分離します。",
             "mcpMode": "MCP モード：",
-            "mcpDescription": "· メッシュ MCP サーバーは CLI エージェントから直接使用できます。"
+            "mcpDescription": "· メッシュ MCP サーバーは CLI エージェントから直接使用できます。",
+            "repoMeshJsonTitle": "このリポジトリから (.adhdev/mesh.json)",
+            "repoMeshJsonReadOnly": "読み取り専用",
+            "repoMeshJsonHint": "このリポジトリがコミットしたコーディネータープロンプトで、上のフィールドと重なって適用されます。ここではなくリポジトリのファイルで編集してください:",
+            "repoMeshJsonOverrideLabel": "リポジトリ override",
+            "repoMeshJsonAppendLabel": "リポジトリ append",
+            "repoMeshJsonInvalid": "このリポジトリの .adhdev/mesh.json を解析できないため、そのプロンプトレイヤーは無視されます。"
         },
         "nodeList": {
             "title": "ノードとプロバイダー（{{count}}）",
@@ -1249,7 +1255,8 @@
             "view": "デフォルトプロンプトを表示",
             "rendering": "レンダリング中…",
             "retry": "再試行",
-            "info": "これは、Override が空のときにコーディネーターセッションに渡される内容です。"
+            "info": "これは、Override が空のときにコーディネーターセッションに渡される内容です。",
+            "launchScopeNote": "ミッション・最近のアクティビティ・運用ノートは起動時に追加され、ここには表示されません。"
         },
         "hermesMcp": {
             "title": "Hermes MCP 設定",
@@ -3055,7 +3062,9 @@
             "overrideDesc": "<strong>Override</strong> は、その CLI のデーモン組み込みベースプロンプトを置き換えます。",
             "appendDesc": "<strong>Append</strong> は、いずれかのベースが選ばれた後に積み重ねられます。",
             "overrideLabel": "Override",
-            "appendLabel": "Append"
+            "appendLabel": "Append",
+            "sectionTitle": "コーディネータープロンプト",
+            "sectionDescription": "このマシンのメッシュコーディネーターセッションに適用される CLI ごとの基本プロンプトです。メッシュ単位のプロンプトは Repo Mesh ページにあります。"
         },
         "appearance": {
             "modeLabel": "モード",

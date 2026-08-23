@@ -14,6 +14,7 @@ import {
     Input,
     BrowserNotificationSettings,
     ConnectedMachinesSection,
+    CoordinatorPromptsSection,
     AppearanceSettingsSection,
     ToggleRow,
     useBaseDaemons,
@@ -426,6 +427,16 @@ export default function StandaloneSettings() {
                     ides={ides}
                     emptyMessage={t('standalone.settings.daemonNotConnected')}
                 />
+            </Section>
+
+            {/* ═══ Coordinator prompts ═══
+                 Edits ~/.adhdev/coordinator-prompts/<cli>.{md,append.md} on this
+                 daemon. Mounted here because those files are per-machine config,
+                 like the machine section above — mesh-level prompts stay on the
+                 Repo Mesh page. This is also the only UI for the layer that the
+                 mesh_coordinator_prompt_append_set MCP tool writes. */}
+            <Section title={t('settings.coordinatorPrompts.sectionTitle')} description={t('settings.coordinatorPrompts.sectionDescription')}>
+                <CoordinatorPromptsSection daemonId={daemonEntry?.id} />
             </Section>
 
             {/* ═══ Theme ═══ */}

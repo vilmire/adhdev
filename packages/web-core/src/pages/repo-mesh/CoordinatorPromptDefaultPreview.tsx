@@ -99,6 +99,14 @@ export default function CoordinatorPromptDefaultPreview({ daemonId, meshId, cliT
                                 <span>{t('repoMesh.promptPreview.info')}</span>
                                 {bytes !== null && <span>{(bytes / 1024).toFixed(1)} KB</span>}
                             </div>
+                            {/* The preview deliberately omits the launch-scope sections
+                                (mission / recent activity / operating notes) — see the
+                                coordinator_prompt_preview handler. Say so, otherwise the
+                                operator reads this as the complete prompt and wonders why
+                                the live coordinator got more than what is shown here. */}
+                            <div className="mb-1 text-2xs text-text-muted/80">
+                                {t('repoMesh.promptPreview.launchScopeNote')}
+                            </div>
                             <textarea
                                 readOnly
                                 value={prompt}
