@@ -29,6 +29,10 @@ export type WebConnectionRuntimeEvent =
     | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean; cols?: number; rows?: number; force?: boolean }
     | { type: 'session_output'; sessionId: string; seq?: number; data: string }
     | { type: 'session_cleared'; sessionId: string }
+    // Cloud-only emission today (P2P subscription error path) — part of the
+    // shared union so a standalone consumer handles it instead of never
+    // learning it exists (the seam's 4th caught divergence).
+    | { type: 'session_io_error'; sessionId: string; reason: string; error?: string }
 
 /**
  * The per-daemon connection object `get()` hands back. Both hosts return an
@@ -62,10 +66,11 @@ export interface WebConnectionManager {
 }
 
 export interface WebDashboardWS {
-    send(data: unknown): void
+    /** Cloud's real signature: (type, payload) → delivered. The stub no-ops false. */
+    send(type: string, payload?: unknown): boolean | void
     isConnected(): boolean
     on(event: string, callback: EventCallback): () => void
-    emit?(event: string, ...args: any[]): void
+    // No `emit` in the contract: web-core never calls it (cloud's is private).
 }
 
 /**
@@ -75,7 +80,7 @@ export interface WebDashboardWS {
 class DashboardWSStub {
     private listeners = new Map<string, Set<EventCallback>>()
 
-    send(_data: any) { /* no-op in core */ }
+    send(_type: string, _payload?: unknown): boolean { return false /* no-op in core */ }
     isConnected() { return false }
 
     on(event: string, callback: EventCallback): () => void {
