@@ -563,6 +563,11 @@ export class CliProviderInstance implements ProviderInstance {
              *  provider's thinkingControlId (runtime-control providers like hermes).
              *  Providers using thinkingLaunchArgs get it at spawn instead and ignore this. */
             initialThinkingLevel?: string;
+            /** PERMISSION-MODE-DUPLICATE: the selected auto-approve mode's `removeArgs`.
+             *  cli-manager already filtered the provider MANIFEST's spawn.args with these;
+             *  the list itself travels on so the spec path can filter the SPEC's spawn_args,
+             *  which declare the same flag with a possibly different value. */
+            removeSpawnArgs?: string[];
             onProviderSessionResolved?: (info: {
                 instanceId: string;
                 providerType: string;
@@ -582,7 +587,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
         // FSMLOG-SESSION-ATTRIBUTION (D3): hand the resolved session id (assigned just above) to
         // the adapter so a spec-driven FSM tags its log lines with the owning session.
-        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId) as CliInstanceAdapter;
+        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs) as CliInstanceAdapter;
         if (this.providerSessionId) {
             this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
         }

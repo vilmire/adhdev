@@ -13,6 +13,7 @@ import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 import { createCliAdapter } from '../providers/spec/route.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
+import { stripRemovedSpawnArgs } from '../cli-adapters/provider-cli-runtime.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
@@ -519,20 +520,22 @@ export function expandThinkingLaunchArgs(
     return template.map((part) => part.includes('{{level}}') ? part.replace('{{level}}', mapped) : part);
 }
 
-function matchesRemovedLaunchArg(arg: string, removeArg: string): boolean {
-    return arg === removeArg || (removeArg.startsWith('--') && arg.startsWith(`${removeArg}=`));
-}
-
 /**
  * Apply a selected launch-args auto-approve mode without mutating provider metadata.
  * removeArgs only targets provider-owned base spawn.args; launchArgs are prepended to
  * per-launch args beside model/thinking args, making conflict removal order-independent.
+ *
+ * PERMISSION-MODE-DUPLICATE: the resolved `removeArgs` are also RETURNED, because
+ * filtering the manifest here only covers half the launch. Spec-backed CLIs (every
+ * builtin since 48e5ed1a) spawn from the SPEC's `spawn_args`, a second base-arg source
+ * this function cannot reach — see route.ts's `removeArgs` parameter, which carries the
+ * list the rest of the way down to FsmDriver.
  */
 export function applyAutoApproveModeLaunchArgs(
     provider: ProviderModule | undefined,
     cliArgs: string[] | undefined,
     settings: Record<string, unknown> | undefined,
-): { provider: ProviderModule | undefined; cliArgs: string[] | undefined } {
+): { provider: ProviderModule | undefined; cliArgs: string[] | undefined; removeArgs?: string[] } {
     if (!provider) return { provider, cliArgs };
     const resolved = resolveProviderAutoApproveMode(provider, settings);
     if (!resolved.active || resolved.strategy !== 'launch-args') return { provider, cliArgs };
@@ -541,15 +544,20 @@ export function applyAutoApproveModeLaunchArgs(
 
     const removeArgs = Array.isArray(mode.removeArgs) ? mode.removeArgs : [];
     const baseArgs = provider.spawn?.args;
-    const filteredBaseArgs = Array.isArray(baseArgs) && removeArgs.length > 0
-        ? baseArgs.filter((arg) => !removeArgs.some((removeArg) => matchesRemovedLaunchArg(arg, removeArg)))
-        : baseArgs;
+    let filteredBaseArgs = baseArgs;
+    if (Array.isArray(baseArgs) && removeArgs.length > 0) {
+        const stripped = stripRemovedSpawnArgs(baseArgs, removeArgs);
+        // Keep the array identity when nothing matched, so the provider object is
+        // only cloned on a real change (the check below reads as a no-op guard).
+        if (stripped.length !== baseArgs.length) filteredBaseArgs = stripped;
+    }
     const launchProvider = filteredBaseArgs === baseArgs
         ? provider
         : { ...provider, spawn: { ...provider.spawn!, args: filteredBaseArgs } };
     return {
         provider: launchProvider,
         cliArgs: [...mode.launchArgs, ...(cliArgs || [])],
+        removeArgs,
     };
 }
 
@@ -804,6 +812,8 @@ export class DaemonCliManager {
         providerSessionId?: string,
         attachExisting = false,
         extraEnv?: Record<string, string>,
+        /** PERMISSION-MODE-DUPLICATE: see registerCliInstance's option of the same name. */
+        removeSpawnArgs?: string[],
     ): CliAdapter {
  // cliType normalize (Resolve alias)
         const normalizedType = this.providerLoader.resolveAlias(cliType);
@@ -821,7 +831,7 @@ export class DaemonCliManager {
                 providerSessionId,
                 attachExisting,
             );
-            const adapter = createCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs || [], extraEnv || {}, transportFactory);
+            const adapter = createCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs || [], extraEnv || {}, transportFactory, undefined, removeSpawnArgs);
             if (providerSessionId) adapter.updateRuntimeMeta?.({ providerSessionId });
             return adapter;
         }
@@ -889,6 +899,10 @@ export class DaemonCliManager {
             /** BRAIN-ROUTING: post-launch thinking level for runtime-control providers
              *  (e.g. hermes reasoning). Passed through to the instance. */
             initialThinkingLevel?: string;
+            /** PERMISSION-MODE-DUPLICATE: the selected auto-approve mode's removeArgs,
+             *  threaded to the instance so the SPEC's spawn_args are filtered too — the
+             *  manifest filtering in applyAutoApproveModeLaunchArgs does not reach them. */
+            removeSpawnArgs?: string[];
             /**
              * On an attach (attachExisting=true), the real spawn time (ms epoch) of the
              * session-host runtime being restored — a PAST timestamp. Used to restore the
@@ -1243,6 +1257,9 @@ export class DaemonCliManager {
                     providerSessionId: sessionBinding.providerSessionId,
                     launchMode: sessionBinding.launchMode,
                     extraEnv: options?.extraEnv,
+                    // PERMISSION-MODE-DUPLICATE: the mode's launchArgs are already in
+                    // resolvedCliArgs; the spec's own base args still need stripping.
+                    ...(autoApproveLaunch.removeArgs?.length ? { removeSpawnArgs: autoApproveLaunch.removeArgs } : {}),
                     // BRAIN-ROUTING: for a provider with no thinkingLaunchArgs but a
                     // runtime reasoning control (hermes), apply the level post-launch.
                     // The launch-arg providers (claude/codex) already consumed it at spawn.
@@ -1270,6 +1287,7 @@ export class DaemonCliManager {
                 sessionBinding.providerSessionId,
                 false,
                 options?.extraEnv,
+                autoApproveLaunch.removeArgs,
             );
             try {
                 await adapter.spawn();

@@ -202,7 +202,13 @@ export class SpecCliAdapter implements CliAdapter {
         /** MANIFEST-SEND-DELAY: submit tuning declared by the provider MANIFEST (as opposed to
          *  the spec). Optional so the many test call sites and out-of-tree embedders that build
          *  an adapter without a manifest keep their existing behaviour unchanged. */
-        manifestTuning?: { sendDelayMs?: number },
+        manifestTuning?: {
+            sendDelayMs?: number;
+            /** PERMISSION-MODE-DUPLICATE: base-arg flags the selected auto-approve mode
+             *  replaces, relayed to the driver so they are stripped from the SPEC's
+             *  `spawn_args` too — see route.ts's `removeArgs` parameter. */
+            removeArgs?: string[];
+        },
     ) {
         const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
         this.spec = {
@@ -234,6 +240,7 @@ export class SpecCliAdapter implements CliAdapter {
             extraCliArgs: cliArgs,
             sessionId,
             manifestSendDelayMs: manifestTuning?.sendDelayMs,
+            removeSpawnArgs: manifestTuning?.removeArgs,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
     }
