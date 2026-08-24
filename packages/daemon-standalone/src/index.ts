@@ -53,32 +53,23 @@ import {
   type AgentEntry,
   type SessionChatTailSubscriptionParams,
   type SessionChatTailUpdate,
-  type MachineRuntimeSubscriptionParams,
-  type MachineRuntimeUpdate,
   type SessionHostDiagnosticsSnapshot,
-  type SessionHostDiagnosticsSubscriptionParams,
-  type SessionHostDiagnosticsUpdate,
-  type SessionModalSubscriptionParams,
   type SessionModalUpdate,
   type DaemonMetadataSubscriptionParams,
-  type DaemonMetadataUpdate,
-  type WorkspaceGitSubscriptionParams,
+  type DaemonMetadataUpdateBody,
   type SubscribeRequest,
   type TopicUpdateEnvelope,
   type UnsubscribeRequest,
   buildMachineInfo,
   commandInvalidations,
+  createInteractionId,
+  recordDebugTrace,
   createGitWorkspaceMonitor,
   TopicSubscriptionRegistry,
-  prepareSessionChatTailUpdate,
-  prepareSessionModalUpdate,
   runAsyncBatch,
   startLocalIpcServer,
   withRawTerminalAttachment,
   decideMissingSessionAttempt,
-  isMissingLiveSessionResult,
-  recordMissingSessionAttempt,
-  shouldWarnForMissingSession,
   type ChatTailMissingSessionState,
   type NamedKey,
   type LocalIpcServerHandle,
@@ -110,15 +101,8 @@ import {
 import {
   classifyHotChatSessionsForSubscriptionFlush,
   detectNewlySettledCompletedSessions,
-  DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
 } from '@adhdev/daemon-core';
-import {
-  DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
-  MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
-  DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
-  MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
-  STANDALONE_CDP_SCAN_INTERVAL_MS,
-} from '../../daemon-core/src/runtime-defaults.js';
+import { STANDALONE_CDP_SCAN_INTERVAL_MS } from '../../daemon-core/src/runtime-defaults.js';
 import type { SessionModalState } from '../../daemon-core/src/providers/provider-instance.js';
 import {
   handleRawTerminalHttpRequest,
@@ -134,7 +118,6 @@ import {
 // ─── Constants ───
 const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
 const STATUS_INTERVAL = 2000;
-const CHAT_OUTPUT_ACTIVITY_HOT_MS = DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS;
 const CHAT_OUTPUT_FLUSH_DEBOUNCE_MS = 700;
 const STANDALONE_AUTH_SESSION_COOKIE = 'adhdev_standalone_session';
 const STANDALONE_PASSWORD_CONFIG_FILE = 'standalone-auth.json';
@@ -378,31 +361,6 @@ interface ChatTailSubscriptionState {
   missingSession?: ChatTailMissingSessionState;
 }
 
-interface MachineRuntimeSubscriptionState {
-  request: SubscribeRequest & { topic: 'machine.runtime'; params: MachineRuntimeSubscriptionParams };
-  seq: number;
-  lastSentAt: number;
-}
-
-interface SessionHostDiagnosticsSubscriptionState {
-  request: SubscribeRequest & { topic: 'session_host.diagnostics'; params: SessionHostDiagnosticsSubscriptionParams };
-  seq: number;
-  lastSentAt: number;
-}
-
-interface SessionModalSubscriptionState {
-  request: SubscribeRequest & { topic: 'session.modal'; params: SessionModalSubscriptionParams };
-  seq: number;
-  lastSentAt: number;
-  lastDeliveredSignature: string;
-}
-
-interface DaemonMetadataSubscriptionState {
-  request: SubscribeRequest & { topic: 'daemon.metadata'; params: DaemonMetadataSubscriptionParams };
-  seq: number;
-  lastSentAt: number;
-}
-
 const SESSION_TARGET_COMMANDS = new Set([
   'send_chat',
   'read_chat',
@@ -433,20 +391,24 @@ class StandaloneServer {
   private ipcServer: LocalIpcServerHandle | null = null;
   private clients = new Set<WebSocket>();
   private wsSubscriptions = new Map<WebSocket, Map<string, ChatTailSubscriptionState>>();
-  private wsMachineRuntimeSubscriptions = new Map<WebSocket, Map<string, MachineRuntimeSubscriptionState>>();
-  private wsSessionHostDiagnosticsSubscriptions = new Map<WebSocket, Map<string, SessionHostDiagnosticsSubscriptionState>>();
-  private wsSessionModalSubscriptions = new Map<WebSocket, Map<string, SessionModalSubscriptionState>>();
-  private wsDaemonMetadataSubscriptions = new Map<WebSocket, Map<string, DaemonMetadataSubscriptionState>>();
   private gitWorkspaceMonitor = createGitWorkspaceMonitor();
   /** Stable id per WS client so the core topic registry can address a connection. */
   private wsConnectionIds = new WeakMap<WebSocket, string>();
   private wsByConnectionId = new Map<string, WebSocket>();
   private wsConnectionSeq = 0;
   /**
+   * S4: recent interaction id per session — provider for the registry's
+   * interactionId hook (cloud parity: recentInteractionIdsBySession).
+   */
+  private recentInteractionIdsBySession = new Map<string, string>();
+  /**
    * Core-owned dashboard subscription topic engine (daemon-core
-   * TopicSubscriptionRegistry). Owns normalize/throttle/seq/refresh-concurrency
-   * for the migrated topic cohorts (currently workspace.git); this class keeps
-   * only the WS transport sink below.
+   * TopicSubscriptionRegistry). Owns storage + normalize/throttle/seq/dedup/
+   * refresh-concurrency for the migrated topic cohorts (workspace.git,
+   * daemon.metadata, session.modal, machine.runtime, session_host.diagnostics)
+   * plus the session.chat_tail build/debounce engine (chat subscription storage
+   * + fan-out stay in this class); this class keeps only the WS transport sink
+   * and payload sources below.
    */
   private topicRegistry = new TopicSubscriptionRegistry({
     send: (connectionId, _topic, update) => {
@@ -462,6 +424,51 @@ class StandaloneServer {
     isAlive: (connectionId) => this.wsByConnectionId.has(connectionId),
   }, {
     gitMonitor: this.gitWorkspaceMonitor,
+    // S4: standalone gains cloud's interactionId/debug-trace stamping via the
+    // registry hooks (chat_tail + modal publish stages).
+    interactionId: (sessionId) => this.getSessionInteractionId(sessionId),
+    recordTrace: (event) => { recordDebugTrace(event); },
+    sources: {
+      daemonMetadataBody: (params) => this.buildDaemonMetadataBody(params),
+      sessionModalState: (sessionId) => this.findSessionModalStateBySessionId(sessionId),
+      sessionHostDiagnostics: (opts) => (this.sessionHostControl
+        ? this.sessionHostControl.getDiagnostics(opts) as Promise<SessionHostDiagnosticsSnapshot>
+        : null),
+      // Route through executeCommand (not the router directly) so read_chat
+      // keeps driving the invalidation gate exactly as before.
+      readChatTail: (args) => this.executeCommand('read_chat', {
+        targetSessionId: args.targetSessionId,
+        ...(args.historySessionId ? { historySessionId: args.historySessionId } : {}),
+        ...(args.tailLimit ? { tailLimit: args.tailLimit } : {}),
+      }),
+    },
+    chatTail: {
+      // Union decision #5: the debounce stays a per-daemon constant.
+      flushDebounceMs: CHAT_OUTPUT_FLUSH_DEBOUNCE_MS,
+      isCliSession: (sessionId) => this.isCliSession(sessionId),
+      scheduleGate: () => this.clients.size > 0,
+      onDebouncedFlush: () => { void this.flushWsChatSubscriptions(undefined, { onlyActive: true }); },
+      onMissingSession: ({ sessionId, consecutiveMisses, warnNow }) => {
+        // One warn per streak — repeating it many times a second adds no
+        // information. Later misses stay at debug so the cause stays traceable.
+        const message = `[chat_tail] session ${sessionId} is not in the live registry`;
+        if (warnNow) {
+          LOG.warn('Standalone', `${message} — backing off, and dropping the subscription if it stays absent`);
+        } else {
+          LOG.debug('Standalone', `${message} (miss #${consecutiveMisses})`);
+        }
+      },
+      // (D8) Record the session's current authoritative tail signature so the
+      // per-subscription ACK gate can tell whether OTHER subscribers to the
+      // same session still lack it. Only record a signature that corresponds
+      // to a real (non-empty) tail, so an empty transient read_chat does not
+      // become the "delivered" target and suppress a later real tail.
+      onPrepared: ({ sessionId, lastDeliveredSignature, update, result }) => {
+        if (lastDeliveredSignature && this.chatTailUpdateHasMessages(update, result)) {
+          this.lastFlushedTailSignatureBySession.set(sessionId, lastDeliveredSignature);
+        }
+      },
+    },
     onFlushError: (topic, error, ctx) => {
       LOG.warn('Standalone', `[${topic}] skipped workspace=${ctx.detail || ''} key=${ctx.key} error=${(error as any)?.message || error}`);
     },
@@ -494,8 +501,6 @@ class StandaloneServer {
   // transition so we can guarantee a targeted completion-tail flush for the
   // just-finalized session even when its tail lands outside the hot set.
   private lastObservedSessionStatus = new Map<string, string>();
-  private wsChatOutputActiveAt = new Map<string, number>();
-  private wsChatOutputFlushTimer: NodeJS.Timeout | null = null;
   private running = false;
   private components: DaemonComponents | null = null;
   private devServer: Awaited<ReturnType<typeof startDaemonDevSupport>> | null = null;
@@ -622,28 +627,6 @@ class StandaloneServer {
   private isCliSession(sessionId: string): boolean {
     const mode = this.getCliPresentationMode(sessionId);
     return mode === 'chat' || mode === 'terminal';
-  }
-
-  private getRecentlyOutputActiveChatSessionIds(now: number): Set<string> {
-    const active = new Set<string>();
-    for (const [sessionId, lastOutputAt] of this.wsChatOutputActiveAt) {
-      if (now - lastOutputAt <= CHAT_OUTPUT_ACTIVITY_HOT_MS) {
-        active.add(sessionId);
-      } else {
-        this.wsChatOutputActiveAt.delete(sessionId);
-      }
-    }
-    return active;
-  }
-
-  private markWsChatOutputActivity(sessionId: string): void {
-    if (!sessionId || !this.isCliSession(sessionId)) return;
-    this.wsChatOutputActiveAt.set(sessionId, Date.now());
-    if (this.wsChatOutputFlushTimer || this.clients.size === 0) return;
-    this.wsChatOutputFlushTimer = setTimeout(() => {
-      this.wsChatOutputFlushTimer = null;
-      void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
-    }, CHAT_OUTPUT_FLUSH_DEBOUNCE_MS);
   }
 
   private hasPasswordAuth(): boolean {
@@ -797,7 +780,7 @@ class StandaloneServer {
         getP2p: () => ({
           broadcastSessionOutput: (key: string, data: string) => {
             if (this.clients.size === 0 || !this.isCliSession(key)) return;
-            this.markWsChatOutputActivity(key);
+            this.topicRegistry.markChatOutputActivity(key);
             const msg = JSON.stringify({ type: 'session_output', sessionId: key, data });
             for (const client of this.clients) {
               if (client.readyState === 1) { // OPEN
@@ -810,7 +793,7 @@ class StandaloneServer {
           this.scheduleBroadcastStatus();
           void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
           this.flushCompletedChatTailsOnStatusChange();
-          void this.flushWsSessionModalSubscriptions();
+          if (this.topicRegistry.hasSubscriptions('session.modal')) void this.topicRegistry.flushNow('session.modal');
         },
         removeAgentTracking: () => {},
         hostedRuntimeManagerTag: 'adhdev-standalone',
@@ -848,7 +831,7 @@ class StandaloneServer {
         // Guarantee the just-finalized session's completion tail reaches the
         // browser once, even if its native tail lands outside the 8s hot window.
         this.flushCompletedChatTailsOnStatusChange();
-        void this.flushWsSessionModalSubscriptions();
+        if (this.topicRegistry.hasSubscriptions('session.modal')) void this.topicRegistry.flushNow('session.modal');
       },
       sessionHostControl,
       onStreamsUpdated: (ideType: string, streams: any[]) => {
@@ -909,9 +892,9 @@ class StandaloneServer {
     this.statusTimer = setInterval(() => {
       this.scheduleBroadcastStatus();
       void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
-      void this.flushWsMachineRuntimeSubscriptions();
-      void this.flushWsSessionHostDiagnosticsSubscriptions();
-      void this.flushWsSessionModalSubscriptions();
+      if (this.topicRegistry.hasSubscriptions('machine.runtime')) void this.topicRegistry.flushNow('machine.runtime');
+      if (this.topicRegistry.hasSubscriptions('session_host.diagnostics')) void this.topicRegistry.flushNow('session_host.diagnostics');
+      if (this.topicRegistry.hasSubscriptions('session.modal')) void this.topicRegistry.flushNow('session.modal');
       if (this.topicRegistry.hasSubscriptions('workspace.git')) void this.topicRegistry.flushNow('workspace.git');
     }, STATUS_INTERVAL);
 
@@ -1651,10 +1634,6 @@ class StandaloneServer {
     }
     this.clients.add(ws);
     this.wsSubscriptions.set(ws, new Map());
-    this.wsMachineRuntimeSubscriptions.set(ws, new Map());
-    this.wsSessionHostDiagnosticsSubscriptions.set(ws, new Map());
-    this.wsSessionModalSubscriptions.set(ws, new Map());
-    this.wsDaemonMetadataSubscriptions.set(ws, new Map());
     this.registerWsConnection(ws);
     console.log(`[WS] Client connected (total: ${this.clients.size})`);
 
@@ -1697,10 +1676,6 @@ class StandaloneServer {
     ws.on('close', () => {
       this.clients.delete(ws);
       this.wsSubscriptions.delete(ws);
-      this.wsMachineRuntimeSubscriptions.delete(ws);
-      this.wsSessionHostDiagnosticsSubscriptions.delete(ws);
-      this.wsSessionModalSubscriptions.delete(ws);
-      this.wsDaemonMetadataSubscriptions.delete(ws);
       this.releaseWsConnection(ws);
       console.log(`[WS] Client disconnected (total: ${this.clients.size})`);
     });
@@ -1708,10 +1683,6 @@ class StandaloneServer {
     ws.on('error', () => {
       this.clients.delete(ws);
       this.wsSubscriptions.delete(ws);
-      this.wsMachineRuntimeSubscriptions.delete(ws);
-      this.wsSessionHostDiagnosticsSubscriptions.delete(ws);
-      this.wsSessionModalSubscriptions.delete(ws);
-      this.wsDaemonMetadataSubscriptions.delete(ws);
       this.releaseWsConnection(ws);
     });
   }
@@ -1757,85 +1728,17 @@ class StandaloneServer {
       // subscribes. Keep a fresh subscription hot briefly so an initial empty
       // read is retried by the normal chat-tail flush path instead of waiting
       // for a UI mode toggle or another incidental status change.
-      this.markWsChatOutputActivity(params.targetSessionId);
+      this.topicRegistry.markChatOutputActivity(params.targetSessionId);
       await this.flushWsChatSubscriptions(ws);
       return;
     }
-    if (msg.topic === 'machine.runtime') {
-      const params = msg.params as MachineRuntimeSubscriptionParams;
-      const subs = this.wsMachineRuntimeSubscriptions.get(ws) || new Map<string, MachineRuntimeSubscriptionState>();
-      this.wsMachineRuntimeSubscriptions.set(ws, subs);
-      subs.set(msg.key, {
-        request: {
-          ...msg,
-          topic: 'machine.runtime',
-          params,
-        },
-        seq: 0,
-        lastSentAt: 0,
-      });
-      await this.flushWsMachineRuntimeSubscriptions(ws);
-      return;
-    }
-    if (msg.topic === 'session_host.diagnostics') {
-      const params = msg.params as SessionHostDiagnosticsSubscriptionParams;
-      const subs = this.wsSessionHostDiagnosticsSubscriptions.get(ws) || new Map<string, SessionHostDiagnosticsSubscriptionState>();
-      this.wsSessionHostDiagnosticsSubscriptions.set(ws, subs);
-      subs.set(msg.key, {
-        request: {
-          ...msg,
-          topic: 'session_host.diagnostics',
-          params,
-        },
-        seq: 0,
-        lastSentAt: 0,
-      });
-      await this.flushWsSessionHostDiagnosticsSubscriptions(ws);
-      return;
-    }
-    if (msg.topic === 'session.modal') {
-      const params = msg.params as SessionModalSubscriptionParams;
-      if (!params?.targetSessionId) return;
-      const subs = this.wsSessionModalSubscriptions.get(ws) || new Map<string, SessionModalSubscriptionState>();
-      this.wsSessionModalSubscriptions.set(ws, subs);
-      subs.set(msg.key, {
-        request: {
-          ...msg,
-          topic: 'session.modal',
-          params,
-        },
-        seq: 0,
-        lastSentAt: 0,
-        lastDeliveredSignature: '',
-      });
-      await this.flushWsSessionModalSubscriptions(ws);
-      return;
-    }
-    if (msg.topic === 'daemon.metadata') {
-      const params = msg.params as DaemonMetadataSubscriptionParams;
-      const subs = this.wsDaemonMetadataSubscriptions.get(ws) || new Map<string, DaemonMetadataSubscriptionState>();
-      this.wsDaemonMetadataSubscriptions.set(ws, subs);
-      subs.set(msg.key, {
-        request: {
-          ...msg,
-          topic: 'daemon.metadata',
-          params,
-        },
-        seq: 0,
-        lastSentAt: 0,
-      });
-      await this.flushWsDaemonMetadataSubscriptions(ws);
-      return;
-    }
-    if (msg.topic === 'workspace.git') {
-      // Engine (normalize/throttle/seq/refresh-concurrency) is core-owned:
-      // daemon-core TopicSubscriptionRegistry. Standalone keeps only the WS
-      // transport sink and the targeted first flush below.
-      const params = msg.params as WorkspaceGitSubscriptionParams;
-      if (!params?.workspace) return;
+    if (this.topicRegistry.handlesTopic(msg.topic)) {
+      // Engine (storage/normalize/throttle/seq/dedup/refresh-concurrency) is
+      // core-owned: daemon-core TopicSubscriptionRegistry. Standalone keeps
+      // only the WS transport sink and the targeted first flush below.
       const connectionId = this.registerWsConnection(ws);
-      if (!this.topicRegistry.subscribe(connectionId, { ...msg, topic: 'workspace.git', params })) return;
-      await this.topicRegistry.flushNow('workspace.git', connectionId);
+      if (!this.topicRegistry.subscribe(connectionId, msg)) return;
+      await this.topicRegistry.flushNow(msg.topic, connectionId);
     }
   }
 
@@ -1844,85 +1747,10 @@ class StandaloneServer {
       this.wsSubscriptions.get(ws)?.delete(msg.key);
       return;
     }
-    if (msg.topic === 'machine.runtime') {
-      this.wsMachineRuntimeSubscriptions.get(ws)?.delete(msg.key);
-      return;
-    }
-    if (msg.topic === 'session_host.diagnostics') {
-      this.wsSessionHostDiagnosticsSubscriptions.get(ws)?.delete(msg.key);
-      return;
-    }
-    if (msg.topic === 'session.modal') {
-      this.wsSessionModalSubscriptions.get(ws)?.delete(msg.key);
-      return;
-    }
-    if (msg.topic === 'daemon.metadata') {
-      this.wsDaemonMetadataSubscriptions.get(ws)?.delete(msg.key);
-      return;
-    }
-    if (msg.topic === 'workspace.git') {
+    if (this.topicRegistry.handlesTopic(msg.topic)) {
       const connectionId = this.wsConnectionIds.get(ws);
       if (connectionId) this.topicRegistry.unsubscribe(connectionId, msg);
     }
-  }
-
-  private async buildChatTailUpdate(
-    request: SessionChatTailSubscriptionParams,
-    state: ChatTailSubscriptionState,
-    key: string,
-  ): Promise<SessionChatTailUpdate | null> {
-    const result = await this.executeCommand('read_chat', {
-      targetSessionId: request.targetSessionId,
-      ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
-      ...(state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}),
-    });
-
-    // The session vanished from the live registry (stopped agent, reclaimed
-    // worker). The subscription itself survives — only an explicit client
-    // unsubscribe removes one — so record the miss and let flushWsChatSubscriptions'
-    // backoff pace (and eventually drop) it. Publishing nothing here is
-    // deliberate: the pane keeps its last rendered transcript rather than being
-    // blanked by a transient miss during session startup.
-    if (isMissingLiveSessionResult(result)) {
-      const now = Date.now();
-      const missing = recordMissingSessionAttempt(state.missingSession, now);
-      state.missingSession = missing;
-      // One warn per streak — repeating it many times a second adds no
-      // information. Later misses stay at debug so the cause stays traceable.
-      const message = `[chat_tail] session ${request.targetSessionId} is not in the live registry`;
-      if (shouldWarnForMissingSession(missing)) {
-        missing.warned = true;
-        LOG.warn('Standalone', `${message} — backing off, and dropping the subscription if it stays absent`);
-      } else {
-        LOG.debug('Standalone', `${message} (miss #${missing.consecutiveMisses})`);
-      }
-      return null;
-    }
-    // A successful read clears the streak so a session that recovers (or was
-    // merely slow to attach) immediately returns to the normal flush cadence.
-    if (state.missingSession) state.missingSession = undefined;
-    const prepared = prepareSessionChatTailUpdate({
-      key,
-      sessionId: request.targetSessionId,
-      ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
-      seq: state.seq,
-      timestamp: Date.now(),
-      cursor: state.cursor,
-      lastDeliveredSignature: state.lastDeliveredSignature,
-      result,
-    });
-    state.cursor = prepared.cursor;
-    state.seq = prepared.seq;
-    state.lastDeliveredSignature = prepared.lastDeliveredSignature;
-    // (D8) Record the session's current authoritative tail signature so the
-    // per-subscription ACK gate can tell whether OTHER subscribers to the same
-    // session still lack it. Only record a signature that corresponds to a
-    // real (non-empty) tail, so an empty transient read_chat does not become the
-    // "delivered" target and suppress a later real tail.
-    if (prepared.lastDeliveredSignature && this.chatTailUpdateHasMessages(prepared.update, result)) {
-      this.lastFlushedTailSignatureBySession.set(request.targetSessionId, prepared.lastDeliveredSignature);
-    }
-    return prepared.update;
   }
 
   /**
@@ -1986,7 +1814,7 @@ class StandaloneServer {
       this.hotWsChatSessionIds,
       {
         now,
-        activeSessionIds: this.getRecentlyOutputActiveChatSessionIds(now),
+        activeSessionIds: this.topicRegistry.getRecentlyOutputActiveChatSessionIds(now),
         deliveredCompletionTailAt: this.deliveredCompletionTailAt,
         underDeliveredSessionIds,
       },
@@ -2138,7 +1966,11 @@ class StandaloneServer {
 
       await runAsyncBatch(tasks, async ({ ws, key, sub }) => {
         try {
-          const update = await this.buildChatTailUpdate(sub.request.params, sub, key);
+          const update = await this.topicRegistry.buildChatTailUpdate({
+            key,
+            params: sub.request.params,
+            state: sub,
+          });
           if (!update || ws.readyState !== WebSocket.OPEN) return;
           ws.send(JSON.stringify({ type: 'topic_update', update }));
         } catch (error: any) {
@@ -2158,85 +1990,6 @@ class StandaloneServer {
     }
   }
 
-  private buildMachineRuntimeUpdate(
-    state: MachineRuntimeSubscriptionState,
-    key: string,
-  ): MachineRuntimeUpdate | null {
-    const intervalMs = Math.max(
-      MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
-      Number(state.request.params.intervalMs || DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS),
-    );
-    const now = Date.now();
-    if (state.lastSentAt > 0 && (now - state.lastSentAt) < intervalMs) {
-      return null;
-    }
-    state.seq += 1;
-    state.lastSentAt = now;
-    return {
-      topic: 'machine.runtime',
-      key,
-      machine: buildMachineInfo('full'),
-      seq: state.seq,
-      timestamp: now,
-    };
-  }
-
-  private async flushWsMachineRuntimeSubscriptions(targetWs?: WebSocket): Promise<void> {
-    const targets = targetWs ? [targetWs] : Array.from(this.clients);
-    for (const ws of targets) {
-      if (ws.readyState !== WebSocket.OPEN) continue;
-      const subs = this.wsMachineRuntimeSubscriptions.get(ws);
-      if (!subs || subs.size === 0) continue;
-      for (const [key, sub] of subs.entries()) {
-        const update = this.buildMachineRuntimeUpdate(sub, key);
-        if (!update || ws.readyState !== WebSocket.OPEN) continue;
-        ws.send(JSON.stringify({ type: 'topic_update', update }));
-      }
-    }
-  }
-
-  private async buildSessionHostDiagnosticsUpdate(
-    state: SessionHostDiagnosticsSubscriptionState,
-    key: string,
-  ): Promise<SessionHostDiagnosticsUpdate | null> {
-    if (!this.sessionHostControl) return null;
-    const intervalMs = Math.max(
-      MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
-      Number(state.request.params.intervalMs || DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS),
-    );
-    const now = Date.now();
-    if (state.lastSentAt > 0 && (now - state.lastSentAt) < intervalMs) {
-      return null;
-    }
-    const diagnostics = await this.sessionHostControl.getDiagnostics({
-      includeSessions: state.request.params.includeSessions !== false,
-      limit: Number(state.request.params.limit) || undefined,
-    }) as SessionHostDiagnosticsSnapshot;
-    state.seq += 1;
-    state.lastSentAt = now;
-    return {
-      topic: 'session_host.diagnostics',
-      key,
-      diagnostics,
-      seq: state.seq,
-      timestamp: now,
-    };
-  }
-
-  private async flushWsSessionHostDiagnosticsSubscriptions(targetWs?: WebSocket): Promise<void> {
-    const targets = targetWs ? [targetWs] : Array.from(this.clients);
-    for (const ws of targets) {
-      if (ws.readyState !== WebSocket.OPEN) continue;
-      const subs = this.wsSessionHostDiagnosticsSubscriptions.get(ws);
-      if (!subs || subs.size === 0) continue;
-      for (const [key, sub] of subs.entries()) {
-        const update = await this.buildSessionHostDiagnosticsUpdate(sub, key);
-        if (!update || ws.readyState !== WebSocket.OPEN) continue;
-        ws.send(JSON.stringify({ type: 'topic_update', update }));
-      }
-    }
-  }
-
   private findSessionModalStateBySessionId(sessionId: string): SessionModalState | null {
     if (!this.components || !sessionId) return null;
     const target = this.components.sessionRegistry.get(sessionId);
@@ -2245,59 +1998,15 @@ class StandaloneServer {
     });
   }
 
-  private buildSessionModalUpdate(
-    state: SessionModalSubscriptionState,
-    key: string,
-  ): SessionModalUpdate | null {
-    const modalState = this.findSessionModalStateBySessionId(state.request.params.targetSessionId);
-    if (!modalState) return null;
-    const now = Date.now();
-    const activeModal = modalState.activeModal;
-    const status = String(modalState.status || 'idle');
-    const title = typeof modalState.title === 'string' ? modalState.title : undefined;
-    const prepared = prepareSessionModalUpdate({
-      key,
-      sessionId: state.request.params.targetSessionId,
-      status,
-      title,
-      activeModal,
-      seq: state.seq,
-      timestamp: now,
-      lastDeliveredSignature: state.lastDeliveredSignature,
-    });
-    state.seq = prepared.seq;
-    state.lastDeliveredSignature = prepared.lastDeliveredSignature;
-    if (!prepared.update) {
-      return null;
-    }
-    state.lastSentAt = now;
-    return prepared.update;
-  }
-
-  private async flushWsSessionModalSubscriptions(targetWs?: WebSocket): Promise<void> {
-    const targets = targetWs ? [targetWs] : Array.from(this.clients);
-    for (const ws of targets) {
-      if (ws.readyState !== WebSocket.OPEN) continue;
-      const subs = this.wsSessionModalSubscriptions.get(ws);
-      if (!subs || subs.size === 0) continue;
-      for (const [key, sub] of subs.entries()) {
-        const update = this.buildSessionModalUpdate(sub, key);
-        if (!update || ws.readyState !== WebSocket.OPEN) continue;
-        ws.send(JSON.stringify({ type: 'topic_update', update }));
-      }
-    }
-  }
-
-  private buildDaemonMetadataUpdate(
-    state: DaemonMetadataSubscriptionState,
-    key: string,
-  ): DaemonMetadataUpdate {
-    const now = Date.now();
-    state.seq += 1;
-    state.lastSentAt = now;
+  /**
+   * daemon.metadata payload body — injected into the core topic registry
+   * (which owns subscription storage/seq/envelope). Standalone-specific parts:
+   * `standalone_` id prefix, cached inline-mesh session append, userName.
+   */
+  private buildDaemonMetadataBody(params?: DaemonMetadataSubscriptionParams): DaemonMetadataUpdateBody {
     const cfgSnap = loadConfig();
     const status = this.buildSharedSnapshot('metadata');
-    const includeSessions = state.request.params.includeSessions === true;
+    const includeSessions = params?.includeSessions === true;
 
     if (includeSessions) {
       if (this.components?.router) {
@@ -2312,28 +2021,10 @@ class StandaloneServer {
     }
 
     return {
-      topic: 'daemon.metadata',
-      key,
       daemonId: `standalone_${cfgSnap.machineId || 'standalone'}`,
       status,
       userName: cfgSnap.userName || undefined,
-      seq: state.seq,
-      timestamp: now,
     };
-  }
-
-  private async flushWsDaemonMetadataSubscriptions(targetWs?: WebSocket): Promise<void> {
-    const targets = targetWs ? [targetWs] : Array.from(this.clients);
-    for (const ws of targets) {
-      if (ws.readyState !== WebSocket.OPEN) continue;
-      const subs = this.wsDaemonMetadataSubscriptions.get(ws);
-      if (!subs || subs.size === 0) continue;
-      for (const [key, sub] of subs.entries()) {
-        const update = this.buildDaemonMetadataUpdate(sub, key);
-        if (ws.readyState !== WebSocket.OPEN) continue;
-        ws.send(JSON.stringify({ type: 'topic_update', update }));
-      }
-    }
   }
 
   // ─── Core Logic ───
@@ -2518,6 +2209,30 @@ class StandaloneServer {
     return { type, payload };
   }
 
+  /**
+   * S4: interaction-context stamping, mirrored from cloud's
+   * ensureInteractionContext (adhdev-daemon.ts) so the registry's
+   * interactionId hook can correlate topic publishes with the command that
+   * caused them — standalone GAINS the debug-trace stamping cloud has.
+   */
+  private ensureInteractionContext(args: any): Record<string, unknown> {
+    const normalized = args && typeof args === 'object' ? { ...args } : {};
+    if (typeof normalized._interactionId !== 'string' || !String(normalized._interactionId).trim()) {
+      normalized._interactionId = createInteractionId();
+    }
+    const interactionId = String(normalized._interactionId);
+    const targetSessionId = typeof normalized.targetSessionId === 'string' ? normalized.targetSessionId : '';
+    if (targetSessionId) {
+      this.recentInteractionIdsBySession.set(targetSessionId, interactionId);
+    }
+    return normalized;
+  }
+
+  private getSessionInteractionId(sessionId?: string): string | undefined {
+    if (!sessionId) return undefined;
+    return this.recentInteractionIdsBySession.get(sessionId);
+  }
+
   private async executeCommand(type: string, args: any): Promise<any> {
     if (!this.components) {
       return { success: false, error: 'Components not initialized' };
@@ -2525,21 +2240,20 @@ class StandaloneServer {
     if (typeof type !== 'string' || !type.trim()) {
       return { success: false, error: 'command type required' };
     }
-    const result = await this.components.router.execute(type, args, 'standalone');
+    const normalizedArgs = this.ensureInteractionContext(args);
+    const result = await this.components.router.execute(type, normalizedArgs, 'standalone');
     // Which commands invalidate which dashboard topics is core-owned knowledge
     // (commandInvalidations in daemon-core) shared with daemon-cloud; only the
     // flush mechanism below (local WS broadcast + topic flushes) is standalone's.
     const invalidated = commandInvalidations(type);
     if (invalidated.has('daemon.metadata')) {
       // Legacy `type: 'status'` snapshot broadcast — throttled (500ms) and
-      // signature-deduped, so eager triggering here is cheap.
+      // signature-deduped, so eager triggering here is cheap. The topic flush
+      // itself rides this.topicRegistry.invalidate below.
       this.scheduleBroadcastStatus();
-      void this.flushWsDaemonMetadataSubscriptions();
     }
-    if (invalidated.has('session_host.diagnostics')) void this.flushWsSessionHostDiagnosticsSubscriptions();
-    if (invalidated.has('session.modal')) void this.flushWsSessionModalSubscriptions();
-    // Registry-migrated cohorts (workspace.git): the registry consumes the
-    // invalidation set itself and runs a (still throttle-gated) flush pass.
+    // Registry-migrated cohorts: the registry consumes the invalidation set
+    // itself and runs (still throttle-gated) flush passes.
     void this.topicRegistry.invalidate(invalidated);
     return result;
   }
@@ -2587,7 +2301,7 @@ class StandaloneServer {
     //   "탭하고 채팅안에 제너레이팅하고 채팅입력창하고 다 같은 소스를 보는게
     //    아닌거같은데 ... 출력이 완료되었음에도 Agent generating... 로
     //    보여지는중."
-    void this.flushWsDaemonMetadataSubscriptions();
+    if (this.topicRegistry.hasSubscriptions('daemon.metadata')) void this.topicRegistry.flushNow('daemon.metadata');
   }
 
   // ─── Network ───
@@ -2625,10 +2339,6 @@ class StandaloneServer {
     }
     this.clients.clear();
     this.wsSubscriptions.clear();
-    this.wsMachineRuntimeSubscriptions.clear();
-    this.wsSessionHostDiagnosticsSubscriptions.clear();
-    this.wsSessionModalSubscriptions.clear();
-    this.wsDaemonMetadataSubscriptions.clear();
     this.lastWsStatusSignature = null;
 
     // Close WSS

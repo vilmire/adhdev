@@ -18,10 +18,10 @@ test('standalone websocket serves workspace.git through the core topic registry 
   assert.match(text, /TopicSubscriptionRegistry,/)
   assert.match(text, /new TopicSubscriptionRegistry\(\{/)
   assert.match(text, /gitMonitor: this\.gitWorkspaceMonitor/)
-  assert.match(text, /if \(msg\.topic === 'workspace\.git'\)/)
-  assert.match(text, /this\.topicRegistry\.subscribe\(connectionId, \{ \.\.\.msg, topic: 'workspace\.git', params \}\)/)
+  assert.match(text, /if \(this\.topicRegistry\.handlesTopic\(msg\.topic\)\)/)
+  assert.match(text, /this\.topicRegistry\.subscribe\(connectionId, msg\)/)
   // Targeted first flush right after subscribe, scoped to the new connection.
-  assert.match(text, /await this\.topicRegistry\.flushNow\('workspace\.git', connectionId\)/)
+  assert.match(text, /await this\.topicRegistry\.flushNow\(msg\.topic, connectionId\)/)
   // The WS transport framing stays standalone's.
   assert.match(text, /ws\.send\(JSON\.stringify\(\{ type: 'topic_update', update \}\)\)/)
   // The old daemon-local engine must stay deleted.
@@ -38,7 +38,7 @@ test('standalone workspace.git subscriptions are dropped on cleanup and unsubscr
   const releaseCalls = text.match(/this\.releaseWsConnection\(ws\)/g) || []
   assert.ok(releaseCalls.length >= 2, `expected releaseWsConnection wired on close and error handlers, saw ${releaseCalls.length}`)
   // Explicit unsubscribe routes into the registry.
-  assert.match(text, /if \(msg\.topic === 'workspace\.git'\) \{[\s\S]*?this\.topicRegistry\.unsubscribe\(connectionId, msg\)/)
+  assert.match(text, /if \(this\.topicRegistry\.handlesTopic\(msg\.topic\)\) \{[\s\S]*?this\.topicRegistry\.unsubscribe\(connectionId, msg\)/)
 })
 
 test('standalone workspace.git subscriptions only flush while subscribers exist', () => {
@@ -54,9 +54,15 @@ test('standalone command flush gate consumes the core-owned invalidation table',
   // commandInvalidations) — standalone must not re-hardcode the list.
   assert.match(text, /commandInvalidations,/)
   assert.match(text, /const invalidated = commandInvalidations\(type\)/)
-  assert.match(text, /invalidated\.has\('daemon\.metadata'\)\) \{[\s\S]*?this\.scheduleBroadcastStatus\(\)[\s\S]*?void this\.flushWsDaemonMetadataSubscriptions\(\)/)
-  assert.match(text, /if \(invalidated\.has\('session_host\.diagnostics'\)\) void this\.flushWsSessionHostDiagnosticsSubscriptions\(\)/)
-  assert.match(text, /if \(invalidated\.has\('session\.modal'\)\) void this\.flushWsSessionModalSubscriptions\(\)/)
+  // Metadata topic flush now rides the registry's invalidate consumption; only
+  // the standalone-specific legacy `type:'status'` broadcast stays local.
+  assert.match(text, /invalidated\.has\('daemon\.metadata'\)\) \{[\s\S]*?this\.scheduleBroadcastStatus\(\)/)
+  assert.doesNotMatch(text, /flushWsDaemonMetadataSubscriptions/)
+  // session.modal / session_host.diagnostics invalidation flushes now ride the
+  // registry's invalidate consumption — no daemon-local flush branches remain.
+  assert.doesNotMatch(text, /flushWsSessionModalSubscriptions/)
+  assert.doesNotMatch(text, /flushWsSessionHostDiagnosticsSubscriptions/)
+  assert.doesNotMatch(text, /flushWsMachineRuntimeSubscriptions/)
   // Registry-migrated cohorts (workspace.git) consume the set via the registry.
   assert.match(text, /void this\.topicRegistry\.invalidate\(invalidated\)/)
   // The old local predicate must stay deleted (it diverged from cloud once already).

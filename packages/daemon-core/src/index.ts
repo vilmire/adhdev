@@ -579,8 +579,15 @@ export { commandInvalidations, commandMayAffectMeshGraphStatus } from './command
 export type { CommandInvalidationTopic } from './commands/command-invalidations.js';
 
 // ── Dashboard subscription topic engine (shared cloud/standalone) ──
-export { TopicSubscriptionRegistry, DEFAULT_GIT_REFRESH_CONCURRENCY } from './subscriptions/topic-registry.js';
-export type { TopicSink, TopicEngineOptions } from './subscriptions/topic-registry.js';
+export { TopicSubscriptionRegistry, DEFAULT_GIT_REFRESH_CONCURRENCY, DEFAULT_CHAT_TAIL_FLUSH_DEBOUNCE_MS } from './subscriptions/topic-registry.js';
+export type {
+    TopicSink,
+    TopicEngineOptions,
+    TopicEngineSources,
+    ChatTailEngineOptions,
+    ChatTailEngineState,
+    DaemonMetadataUpdateBody,
+} from './subscriptions/topic-registry.js';
 export {
   maybeRunDaemonUpgradeHelperFromEnv,
   spawnDetachedDaemonUpgradeHelper,
