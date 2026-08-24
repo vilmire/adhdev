@@ -348,7 +348,17 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             worktreeBranch: node.worktreeBranch,
                             role: normalizeMeshDaemonRole(node.role) || (meshHost.hostNodeId && nodeId === meshHost.hostNodeId ? 'host' : undefined),
                             daemonId,
-                            machineId: nodeMachineId || node.machineId,
+                            // A node hosted by THIS machine (the self/base node or a local
+                            // worktree) must carry the local machine identity even when the
+                            // config record never stored one (standalone nodes are added
+                            // without daemonId/machineId). Without it, the dashboard's
+                            // per-machine grouping falls back to nodeId and one machine's
+                            // plan quota renders once per worktree as if each worktree had
+                            // its own quota.
+                            machineId: nodeMachineId || node.machineId
+                                || ((isSelfNode || node.isLocalWorktree === true)
+                                    ? (localMachineId || ctx.deps.statusInstanceId || undefined)
+                                    : undefined),
                             machine: machineIdentity,
                             machineStatus: node.machineStatus,
                             health: 'unknown',
