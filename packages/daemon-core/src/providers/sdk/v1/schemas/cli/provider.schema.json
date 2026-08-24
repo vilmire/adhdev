@@ -1,37 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "adhdev:cli/provider@1",
+  "$id": "https://registry.adhf.dev/schemas/v1/cli/provider.schema.json",
   "title": "CLI provider.json — v1",
   "description": "Schema for CLI provider manifests. Validates the contract documented in docs/provider-contract/cli/v1.md. All 4 production CLI providers (codex, claude, hermes, antigravity) pass this schema without modification.",
   "type": "object",
-  "required": ["type", "name", "category", "binary", "spawn"],
+  "required": [
+    "type",
+    "name",
+    "category",
+    "binary",
+    "spawn"
+  ],
   "additionalProperties": false,
   "properties": {
     "$schema": {
       "type": "string",
-      "description": "Schema URL. Hint for editor tooling; not consumed by the daemon."
-    },
-    "links": {
-      "type": "object",
-      "additionalProperties": { "type": "string" },
-      "description": "Documentation URLs. Surfaced in marketplace UI."
-    },
-    "install": {
-      "type": "object",
-      "additionalProperties": { "type": "string" },
-      "description": "Install instructions by channel (npm/pip/manual/brew). UI-only."
-    },
-    "source": {
-      "type": "object",
-      "description": "GitHub source descriptor. Daemon uses this to fetch script files on install.",
-      "additionalProperties": false,
-      "properties": {
-        "type": { "const": "github" },
-        "repo": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
-        "ref":  { "type": "string" },
-        "subdir": { "type": "string" }
-      },
-      "required": ["type", "repo", "ref"]
+      "description": "JSON Schema URL — optional, lets editors validate the file. Conventionally https://registry.adhf.dev/schemas/v1/cli/provider.schema.json."
     },
     "type": {
       "type": "string",
@@ -58,7 +42,9 @@
     },
     "aliases": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Alternative identifiers accepted at launch."
     },
     "engines": {
@@ -77,15 +63,87 @@
       "description": "Provider package SemVer."
     },
     "contractVersion": {
-      "type": ["number", "string"],
+      "type": [
+        "number",
+        "string"
+      ],
       "description": "Legacy contract version. Reserved."
     },
     "status": {
-      "enum": ["Stable", "Beta", "Experimental", "Deprecated"]
+      "enum": [
+        "Stable",
+        "Beta",
+        "Experimental",
+        "Deprecated"
+      ]
     },
     "details": {
       "type": "string",
       "description": "Short blurb shown in marketplace."
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "format": "uri"
+      },
+      "description": "External links shown in the marketplace detail view. Known keys are documented; additional URI-valued keys are allowed.",
+      "properties": {
+        "homepage": {
+          "type": "string",
+          "format": "uri",
+          "description": "Provider home page."
+        },
+        "repo": {
+          "type": "string",
+          "format": "uri",
+          "description": "Source repository (typically GitHub)."
+        },
+        "docs": {
+          "type": "string",
+          "format": "uri",
+          "description": "Documentation root."
+        },
+        "install": {
+          "type": "string",
+          "format": "uri",
+          "description": "Install guide page."
+        },
+        "issues": {
+          "type": "string",
+          "format": "uri",
+          "description": "Issue tracker."
+        }
+      }
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Install hints displayed in the marketplace. Known keys (npm/pip/homebrew/curl/manual) carry per-manager CLI commands; additional string keys are allowed for new channels.",
+      "properties": {
+        "homebrew": {
+          "type": "string",
+          "description": "Homebrew install command, e.g. \"brew install foo\"."
+        },
+        "npm": {
+          "type": "string",
+          "description": "npm install command, e.g. \"npm i -g foo\"."
+        },
+        "pip": {
+          "type": "string",
+          "description": "pip install command."
+        },
+        "curl": {
+          "type": "string",
+          "description": "curl/wget install one-liner."
+        },
+        "manual": {
+          "type": "string",
+          "description": "Free-form install note when no package manager applies."
+        }
+      }
     },
     "disableUpstream": {
       "type": "boolean",
@@ -102,19 +160,31 @@
     },
     "spawn": {
       "type": "object",
-      "required": ["command"],
+      "required": [
+        "command"
+      ],
       "additionalProperties": false,
       "properties": {
-        "command": { "type": "string", "minLength": 1 },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
         "args": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": []
         },
-        "shell": { "type": "boolean", "default": false },
+        "shell": {
+          "type": "boolean",
+          "default": false
+        },
         "env": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "default": {}
         }
       }
@@ -122,55 +192,77 @@
     "autoApproveModes": {
       "type": "object",
       "description": "Provider-specific auto-approve choices and their launch/runtime strategy.",
-      "required": ["default", "modes"],
+      "required": [
+        "default",
+        "modes"
+      ],
       "additionalProperties": false,
       "properties": {
-        "default": { "type": "string", "minLength": 1 },
+        "default": {
+          "type": "string",
+          "minLength": 1
+        },
         "modes": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/autoApproveMode" }
+          "items": {
+            "$ref": "#/$defs/autoApproveMode"
+          }
         }
       }
     },
-    "sendDelayMs": {
-      "type": "number",
-      "minimum": 0,
-      "description": "Delay between pasting prompt text and pressing Enter."
-    },
     "modelLaunchArgs": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Template for expanding an initialModel selection into launch args. '{{model}}' is substituted with the model string (e.g. ['--model', '{{model}}'] → --model opus). Applied at launch when a model is requested for this CLI provider (MAGI kind-panel model axis). Absent → no launch-time model selection."
     },
     "modelOptions": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Suggested model values shown as dropdown options in the new-session dialog (brain-routing model axis), e.g. ['opus','sonnet','haiku']. Advisory — the UI still accepts free text, so a stale list never blocks an accepted model."
     },
     "thinkingLaunchArgs": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Template for expanding an initialThinkingLevel selection into launch args (brain-routing thinking axis, parallel to modelLaunchArgs). '{{level}}' is substituted with the provider-mapped reasoning-effort value (e.g. ['--effort', '{{level}}'] → --effort high; ['-c', 'model_reasoning_effort={{level}}']). Applied at launch when a thinking level is requested. Absent → no launch-time thinking selection."
     },
     "thinkingLevelMap": {
       "type": "object",
       "properties": {
-        "low": { "type": "string" },
-        "medium": { "type": "string" },
-        "high": { "type": "string" }
+        "low": {
+          "type": "string"
+        },
+        "medium": {
+          "type": "string"
+        },
+        "high": {
+          "type": "string"
+        }
       },
       "additionalProperties": false,
       "description": "Optional map from the standard thinking levels (low/medium/high) to this provider's own reasoning-effort vocabulary, used to fill {{level}} in thinkingLaunchArgs. A level absent from the map passes through unchanged."
     },
     "thinkingLevelOptions": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Reasoning-effort values this provider accepts, shown as the thinking-level dropdown in the new-session dialog (e.g. ['low','medium','high','max']). Absent → the UI falls back to standard low/medium/high. Provider's own vocabulary, passed through verbatim."
     },
     "thinkingControlId": {
       "type": "string",
       "description": "For a provider with no thinkingLaunchArgs but a runtime reasoning-effort control (e.g. hermes 'reasoning'), the controls[].id to drive at launch for the thinking level. The control's setScript is invoked with { value: <mapped level> }."
+    },
+    "sendDelayMs": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Delay between pasting prompt text and pressing Enter."
     },
     "scriptCallBudgetMs": {
       "type": "integer",
@@ -185,7 +277,10 @@
       "description": "Character sent to submit a prompt. Default carriage return."
     },
     "submitStrategy": {
-      "enum": ["wait_for_echo", "immediate"],
+      "enum": [
+        "wait_for_echo",
+        "immediate"
+      ],
       "default": "immediate"
     },
     "requirePromptEchoBeforeSubmit": {
@@ -213,11 +308,17 @@
       "description": "Reserved for future use."
     },
     "transcriptAuthority": {
-      "enum": ["provider", "daemon"],
+      "enum": [
+        "provider",
+        "daemon"
+      ],
       "description": "When 'provider', daemon treats parsed output as canonical and suppresses fallback parsing."
     },
     "transcriptContext": {
-      "enum": ["full", "tail"],
+      "enum": [
+        "full",
+        "tail"
+      ],
       "description": "When 'full', provider-owned parser receives the entire accumulated transcript context."
     },
     "patterns": {
@@ -225,63 +326,134 @@
       "additionalProperties": false,
       "description": "Optional regex hints for the legacy fallback detector. Modern providers express these via primitives.",
       "properties": {
-        "prompt":     { "$ref": "#/$defs/patternList" },
-        "generating": { "$ref": "#/$defs/patternList" },
-        "approval":   { "$ref": "#/$defs/patternList" },
-        "ready":      { "$ref": "#/$defs/patternList" },
-        "dialog":     { "$ref": "#/$defs/patternList" }
+        "prompt": {
+          "$ref": "#/$defs/patternList"
+        },
+        "generating": {
+          "$ref": "#/$defs/patternList"
+        },
+        "approval": {
+          "$ref": "#/$defs/patternList"
+        },
+        "ready": {
+          "$ref": "#/$defs/patternList"
+        },
+        "dialog": {
+          "$ref": "#/$defs/patternList"
+        }
       }
     },
     "approvalKeys": {
       "type": "object",
       "patternProperties": {
-        "^[0-9]+$": { "type": "string" }
+        "^[0-9]+$": {
+          "type": "string"
+        }
       },
       "additionalProperties": false,
       "description": "Map of button index → key sequence to send."
     },
     "approvalPositiveHints": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Lowercase substrings considered \"positive\" (accept). Auto-approve picks the matching button."
     },
     "timeouts": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "ptyFlush":           { "type": "number", "minimum": 0 },
-        "dialogAccept":       { "type": "number", "minimum": 0 },
-        "approvalCooldown":   { "type": "number", "minimum": 0 },
-        "generatingIdle":     { "type": "number", "minimum": 0 },
-        "idleFinish":         { "type": "number", "minimum": 0 },
-        "idleFinishConfirm":  { "type": "number", "minimum": 0 },
-        "statusActivityHold": { "type": "number", "minimum": 0 },
-        "maxResponse":        { "type": "number", "minimum": 0 },
-        "shutdownGrace":      { "type": "number", "minimum": 0 },
-        "outputSettle":       { "type": "number", "minimum": 0 }
+        "ptyFlush": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dialogAccept": {
+          "type": "number",
+          "minimum": 0
+        },
+        "approvalCooldown": {
+          "type": "number",
+          "minimum": 0
+        },
+        "generatingIdle": {
+          "type": "number",
+          "minimum": 0
+        },
+        "idleFinish": {
+          "type": "number",
+          "minimum": 0
+        },
+        "idleFinishConfirm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "statusActivityHold": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxResponse": {
+          "type": "number",
+          "minimum": 0
+        },
+        "shutdownGrace": {
+          "type": "number",
+          "minimum": 0
+        },
+        "outputSettle": {
+          "type": "number",
+          "minimum": 0
+        }
       }
     },
     "resume": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["supported"],
+      "required": [
+        "supported"
+      ],
       "properties": {
-        "supported": { "type": "boolean" },
-        "stopStrategy": { "enum": ["command", "ctrl_c", "signal"] },
-        "stopCommand": { "type": "string" },
-        "shutdownGraceMs": { "type": "number", "minimum": 0 },
-        "sessionIdFormat": { "enum": ["uuid", "free", "string"] },
+        "supported": {
+          "type": "boolean"
+        },
+        "stopStrategy": {
+          "enum": [
+            "command",
+            "ctrl_c",
+            "signal"
+          ]
+        },
+        "stopCommand": {
+          "type": "string"
+        },
+        "shutdownGraceMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "sessionIdFormat": {
+          "enum": [
+            "uuid",
+            "free",
+            "string"
+          ]
+        },
         "newSessionArgs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "resumeSessionArgs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "resumeArgs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -290,12 +462,24 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["ideVersion"],
+        "required": [
+          "ideVersion"
+        ],
         "additionalProperties": false,
         "properties": {
-          "ideVersion": { "type": "string", "description": "SemVer range." },
-          "scriptDir":  { "type": "string", "pattern": "^scripts/[^/]+$" },
-          "spec":       { "type": "string", "pattern": "^specs/[^/]+\\.json$", "description": "Path to declarative spec.json driving SpecCliAdapter for this version range." }
+          "ideVersion": {
+            "type": "string",
+            "description": "SemVer range."
+          },
+          "scriptDir": {
+            "type": "string",
+            "pattern": "^scripts/[^/]+$"
+          },
+          "spec": {
+            "type": "string",
+            "pattern": "^specs/[^/]+\\.json$",
+            "description": "Path to declarative spec.json driving SpecCliAdapter for this version range."
+          }
         }
       },
       "description": "Maps installed agent versions to script subdirectories and/or declarative specs."
@@ -305,6 +489,36 @@
       "pattern": "^scripts/[^/]+$",
       "description": "Fallback when no compatibility[] entry matches."
     },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional code source pointer. When present, the daemon fetches script files (the `defaultScriptDir` + any `compatibility[].scriptDir`) from this GitHub repository on install so extended-tier providers can ship without bundling all bytes into the manifest. Verified / declarative-only providers can omit this entirely.",
+      "properties": {
+        "type": {
+          "const": "github",
+          "description": "Currently only `github` is supported."
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$",
+          "description": "GitHub repo as `owner/name`."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Branch, tag, or — strongly recommended — a 40-char commit SHA so the package is reproducible."
+        },
+        "subdir": {
+          "type": "string",
+          "description": "Optional subdirectory inside the repo that contains this provider's tree (e.g. \"cli/claude-cli\"). When omitted the daemon uses `{category}/{type}` (current adhdev-providers layout)."
+        }
+      },
+      "required": [
+        "type",
+        "repo",
+        "ref"
+      ]
+    },
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
@@ -313,22 +527,32 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "multipart": { "type": "boolean" },
+            "multipart": {
+              "type": "boolean"
+            },
             "mediaTypes": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             },
-            "strategies": { "type": "array" }
+            "strategies": {
+              "type": "array"
+            }
           }
         },
         "output": {
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "richContent": { "type": "boolean" },
+            "richContent": {
+              "type": "boolean"
+            },
             "mediaTypes": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             }
           }
         },
@@ -336,7 +560,9 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "typedResults": { "type": "boolean" }
+            "typedResults": {
+              "type": "boolean"
+            }
           }
         }
       }
@@ -344,42 +570,151 @@
     "meshCoordinator": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["supported"],
+      "required": [
+        "supported"
+      ],
       "properties": {
-        "supported": { "type": "boolean" },
+        "supported": {
+          "type": "boolean"
+        },
         "mcpConfig": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "mode":                { "enum": ["manual", "auto_import"] },
-            "format":              { "type": "string" },
-            "path":                { "type": "string" },
-            "configPathCommand":   { "type": "string" },
-            "serverName":          { "type": "string" },
-            "requiresRestart":     { "type": "boolean" },
-            "instructions":        { "type": "string" },
-            "template":            { "type": "string" }
+            "mode": {
+              "enum": [
+                "manual",
+                "auto_import"
+              ]
+            },
+            "format": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "configPathCommand": {
+              "type": "string"
+            },
+            "serverName": {
+              "type": "string"
+            },
+            "requiresRestart": {
+              "type": "boolean"
+            },
+            "instructions": {
+              "type": "string"
+            },
+            "template": {
+              "type": "string"
+            }
           }
         },
         "systemPromptInjection": {
           "description": "How the coordinator system prompt reaches the launched CLI. Replaces hard-coded router branches per CLI type; users may override the prompt body or the injection mechanism here.",
           "oneOf": [
-            { "type": "object", "additionalProperties": false, "required": ["mode", "flag"],
-              "properties": { "mode": { "const": "cli_arg" }, "flag": { "type": "string" } } },
-            { "type": "object", "additionalProperties": false, "required": ["mode", "flag", "template"],
-              "properties": { "mode": { "const": "config_override" }, "flag": { "type": "string" }, "template": { "type": "string" } } },
-            { "type": "object", "additionalProperties": false, "required": ["mode", "path"],
-              "properties": { "mode": { "const": "context_file" }, "path": { "type": "string" }, "wrapper": { "type": "string" }, "owned": { "type": "boolean" } } },
-            { "type": "object", "additionalProperties": false, "required": ["mode", "name"],
-              "properties": { "mode": { "const": "env_var" }, "name": { "type": "string" } } },
-            { "type": "object", "additionalProperties": false, "required": ["mode", "flag"],
-              "properties": { "mode": { "const": "agent_file" }, "flag": { "type": "string" }, "template": { "type": "string" } } }
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "flag"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "cli_arg"
+                },
+                "flag": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "flag",
+                "template"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "config_override"
+                },
+                "flag": {
+                  "type": "string"
+                },
+                "template": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "path"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "context_file"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "wrapper": {
+                  "type": "string"
+                },
+                "owned": {
+                  "type": "boolean"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "name"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "env_var"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "flag"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "agent_file"
+                },
+                "flag": {
+                  "type": "string"
+                },
+                "template": {
+                  "type": "string"
+                }
+              }
+            }
           ]
         },
         "launchArgs": {
           "description": "Extra spawn args appended ONLY for coordinator launches (e.g. cursor-agent's --approve-mcps accepts the daemon-written .cursor/mcp.json without parking on the MCP-approval modal).",
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "delegatedWorkerIsolation": {
           "description": "Provider-declared launch isolation for coordinator-spawned worker sessions. Keeps worker-only sessions from inheriting coordinator MCP/tools/config.",
@@ -392,7 +727,10 @@
               "properties": {
                 "unset": {
                   "type": "array",
-                  "items": { "type": "string", "minLength": 1 }
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
                 }
               }
             },
@@ -403,23 +741,53 @@
                   {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["mode", "flag"],
+                    "required": [
+                      "mode",
+                      "flag"
+                    ],
                     "properties": {
-                      "mode": { "const": "empty_mcp_config" },
-                      "flag": { "type": "string", "minLength": 1 },
-                      "strictFlag": { "type": "string", "minLength": 1 }
+                      "mode": {
+                        "const": "empty_mcp_config"
+                      },
+                      "flag": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "strictFlag": {
+                        "type": "string",
+                        "minLength": 1
+                      }
                     }
                   },
                   {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["mode", "flag", "key", "value"],
+                    "required": [
+                      "mode",
+                      "flag",
+                      "key",
+                      "value"
+                    ],
                     "properties": {
-                      "mode": { "const": "config_override" },
-                      "flag": { "type": "string", "minLength": 1 },
-                      "key": { "type": "string", "minLength": 1 },
-                      "value": { "type": "string", "minLength": 1 },
-                      "dedupeKey": { "type": "string", "minLength": 1 }
+                      "mode": {
+                        "const": "config_override"
+                      },
+                      "flag": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "value": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "dedupeKey": {
+                        "type": "string",
+                        "minLength": 1
+                      }
                     }
                   }
                 ]
@@ -429,72 +797,123 @@
         }
       }
     },
-    "nativeHistory": {
-      "type": "object",
-      "description": "Native transcript adapter declaration. v1 canonical field name. Daemon reads/lists provider-native history files via the named scripts (or the built-in adapter identified by $schema).",
-      "additionalProperties": true,
-      "properties": {
-        "$schema":          { "type": "string" },
-        "format":           { "type": "string" },
-        "watchPath":        { "type": "string" },
-        "mode":             { "enum": ["native-source", "materialized-mirror", "disabled", "daemon-mirror"] },
-        "contractVersion":  { "type": "string" },
-        "scripts": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "readSession":  { "type": "string" },
-            "listSessions": { "type": "string" }
-          }
-        }
-      }
-    },
     "canonicalHistory": {
       "type": "object",
       "description": "Deprecated v0 alias for `nativeHistory`. The loader copies this block into `nativeHistory` at load time. New manifests should use `nativeHistory` directly.",
       "additionalProperties": true,
       "properties": {
-        "format":           { "type": "string" },
-        "watchPath":        { "type": "string" },
-        "mode":             { "enum": ["native-source", "materialized-mirror", "disabled", "daemon-mirror"] },
-        "contractVersion":  { "type": "string" },
+        "format": {
+          "type": "string"
+        },
+        "watchPath": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "native-source",
+            "materialized-mirror",
+            "disabled",
+            "daemon-mirror"
+          ]
+        },
+        "contractVersion": {
+          "type": "string"
+        },
         "scripts": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "readSession":  { "type": "string" },
-            "listSessions": { "type": "string" }
+            "readSession": {
+              "type": "string"
+            },
+            "listSessions": {
+              "type": "string"
+            }
           }
         }
       }
     },
     "settings": {
       "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/settingDef" }
+      "additionalProperties": {
+        "$ref": "#/$defs/settingDef"
+      }
     },
     "controls": {
       "type": "array",
-      "items": { "$ref": "#/$defs/controlDef" }
+      "items": {
+        "$ref": "#/$defs/controlDef"
+      }
     },
     "tui": {
       "type": "object",
       "description": "Declarative TUI parsing primitives. When present, daemon's builder synthesises detectStatus / parseApproval / parseSession from these blocks. Each block is identified by its $schema.",
       "additionalProperties": true
     },
+    "nativeHistory": {
+      "type": "object",
+      "description": "Native transcript adapter declaration. v1 canonical field name. Daemon reads/lists provider-native history files via the named scripts (or the built-in adapter identified by $schema).",
+      "additionalProperties": true,
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "watchPath": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "native-source",
+            "materialized-mirror",
+            "disabled",
+            "daemon-mirror"
+          ]
+        },
+        "contractVersion": {
+          "type": "string"
+        },
+        "scripts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "readSession": {
+              "type": "string"
+            },
+            "listSessions": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
     "overrides": {
       "type": "object",
       "description": "Optional JS override pointers. Presence promotes the provider tier to `extended`. Each value identifies the handler being overridden and the relative path to the JS file implementing it.",
       "additionalProperties": {
         "oneOf": [
-          { "type": "string", "description": "Relative path to the override JS file." },
+          {
+            "type": "string",
+            "description": "Relative path to the override JS file."
+          },
           {
             "type": "object",
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "additionalProperties": false,
             "properties": {
-              "$schema": { "type": "string" },
-              "path":    { "type": "string" },
-              "reason":  { "type": "string" }
+              "$schema": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         ]
@@ -504,31 +923,94 @@
   "$defs": {
     "autoApproveMode": {
       "type": "object",
-      "required": ["id", "label", "strategy", "risk"],
+      "required": [
+        "id",
+        "label",
+        "strategy",
+        "risk"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "label": { "type": "string", "minLength": 1 },
-        "strategy": { "enum": ["pty-parse-default", "launch-args", "post-boot-command"] },
-        "risk": { "enum": ["safe", "caution", "dangerous"] },
-        "warning": { "type": "string", "minLength": 1 },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strategy": {
+          "enum": [
+            "pty-parse-default",
+            "launch-args",
+            "post-boot-command"
+          ]
+        },
+        "risk": {
+          "enum": [
+            "safe",
+            "caution",
+            "dangerous"
+          ]
+        },
+        "warning": {
+          "type": "string",
+          "minLength": 1
+        },
         "launchArgs": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "removeArgs": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "allOf": [
         {
-          "if": { "properties": { "strategy": { "const": "launch-args" } }, "required": ["strategy"] },
-          "then": { "required": ["launchArgs"], "properties": { "launchArgs": { "minItems": 1 } } }
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "launch-args"
+              }
+            },
+            "required": [
+              "strategy"
+            ]
+          },
+          "then": {
+            "required": [
+              "launchArgs"
+            ],
+            "properties": {
+              "launchArgs": {
+                "minItems": 1
+              }
+            }
+          }
         },
         {
-          "if": { "properties": { "risk": { "const": "dangerous" } }, "required": ["risk"] },
-          "then": { "required": ["warning"] }
+          "if": {
+            "properties": {
+              "risk": {
+                "const": "dangerous"
+              }
+            },
+            "required": [
+              "risk"
+            ]
+          },
+          "then": {
+            "required": [
+              "warning"
+            ]
+          }
         }
       ]
     },
@@ -536,58 +1018,140 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["source"],
+        "required": [
+          "source"
+        ],
         "additionalProperties": false,
         "properties": {
-          "source": { "type": "string", "description": "Regex source." },
-          "flags":  { "type": "string", "pattern": "^[gimsuy]*$" }
+          "source": {
+            "type": "string",
+            "description": "Regex source."
+          },
+          "flags": {
+            "type": "string",
+            "pattern": "^[gimsuy]*$"
+          }
         }
       }
     },
     "settingDef": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type":        { "enum": ["boolean", "number", "string", "select"] },
-        "default":     {},
-        "public":      { "type": "boolean" },
-        "label":       { "type": "string" },
-        "description": { "type": "string" },
-        "options":     { "type": "array" },
-        "min":         { "type": "number" },
-        "max":         { "type": "number" }
+        "type": {
+          "enum": [
+            "boolean",
+            "number",
+            "string",
+            "select"
+          ]
+        },
+        "default": {},
+        "public": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array"
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
       },
       "allOf": [
         {
-          "if": { "properties": { "type": { "const": "select" } } },
-          "then": { "required": ["options"] }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "select"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "options"
+            ]
+          }
         }
       ]
     },
     "controlDef": {
       "type": "object",
-      "required": ["id", "type", "label"],
+      "required": [
+        "id",
+        "type",
+        "label"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id":              { "type": "string" },
-        "type":            { "enum": ["select", "action", "toggle"] },
-        "label":           { "type": "string" },
-        "icon":            { "type": "string" },
-        "placement":       { "type": "string" },
-        "order":           { "type": "number" },
-        "dynamic":         { "type": "boolean" },
-        "hidden":          { "type": "boolean", "description": "When true, dashboard does not render the control directly. Used for commands triggered by other UI (slash menu, etc.)." },
-        "options":         { "type": "array" },
-        "listScript":      { "type": "string" },
-        "setScript":       { "type": "string" },
-        "invokeScript":    { "type": "string" },
-        "readFrom":        { "type": "string" },
-        "resultDisplay":   { "type": "string" },
-        "defaultValue":    {},
-        "confirmTitle":    { "type": "string" },
-        "confirmMessage":  { "type": "string" },
-        "confirmLabel":    { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "select",
+            "action",
+            "toggle"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "placement": {
+          "type": "string"
+        },
+        "order": {
+          "type": "number"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "When true, dashboard does not render the control directly. Used for commands triggered by other UI (slash menu, etc.)."
+        },
+        "options": {
+          "type": "array"
+        },
+        "listScript": {
+          "type": "string"
+        },
+        "setScript": {
+          "type": "string"
+        },
+        "invokeScript": {
+          "type": "string"
+        },
+        "readFrom": {
+          "type": "string"
+        },
+        "resultDisplay": {
+          "type": "string"
+        },
+        "defaultValue": {},
+        "confirmTitle": {
+          "type": "string"
+        },
+        "confirmMessage": {
+          "type": "string"
+        },
+        "confirmLabel": {
+          "type": "string"
+        }
       }
     }
   }

@@ -2740,11 +2740,13 @@ export class ProviderLoader {
           // so manifest authors don't need to guess which field is wrong.
           // Loading still proceeds — bricking the daemon on a single
           // bad field would be worse than running with a known warning.
-          if (hasV1 && mod?.category === 'cli') {
+          if (hasV1 && (mod?.category === 'cli' || mod?.category === 'acp')) {
             try {
-              const { validateCliProviderManifest, formatManifestValidationIssues } =
+              const { validateCliProviderManifest, validateAcpProviderManifest, formatManifestValidationIssues } =
                 require('./sdk/v1/validators/manifest.js') as typeof import('./sdk/v1/validators/manifest.js');
-              const validation = validateCliProviderManifest(mod);
+              const validation = mod.category === 'acp'
+                ? validateAcpProviderManifest(mod)
+                : validateCliProviderManifest(mod);
               if (!validation.ok) {
                 this.log(`⚠ ${jsonPath}: schema validation failed:\n${formatManifestValidationIssues(validation.issues)}`);
               }

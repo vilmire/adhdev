@@ -240,6 +240,17 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     }
 
     // 2. ProviderLoader (provider source mode + channel from config.json)
+    // One-shot migration first: record the effective provider channel as an
+    // explicit config.providerChannel so the legacy updateChannel fallback
+    // (resolveProviderChannel priority 4) can eventually be removed without
+    // silently flipping any machine's channel. Best-effort — never block boot.
+    try {
+        const { migrateProviderChannelConfig } = await import('../providers/channel/channel-migration.js');
+        const migration = migrateProviderChannelConfig();
+        if (migration.migrated) {
+            LOG.info('Providers', `Recorded explicit providerChannel=${migration.channel} in config (migrated from build-track/updateChannel derivation)`);
+        }
+    } catch { /* best-effort — the resolver's fallback chain still applies */ }
     const appConfig = loadConfig();
     const providerSourceMode = appConfig.providerSourceMode || 'normal';
     const disableUpstream = providerSourceMode === 'no-upstream';

@@ -69,6 +69,7 @@ import {
   type TopicUpdateEnvelope,
   type UnsubscribeRequest,
   buildMachineInfo,
+  commandInvalidations,
   createGitWorkspaceMonitor,
   normalizeGitWorkspaceSubscriptionParams,
   prepareSessionChatTailUpdate,
@@ -421,19 +422,6 @@ const SESSION_TARGET_COMMANDS = new Set([
   'restart_session',
   'agent_command',
 ]);
-
-function commandMayAffectMeshGraphStatus(type: string): boolean {
-  return type.startsWith('mesh_')
-    || type === 'add_mesh_node'
-    || type === 'update_mesh_node'
-    || type === 'remove_mesh_node'
-    || type === 'clone_mesh_node'
-    || type === 'trigger_mesh_queue'
-    || type === 'get_mesh_queue'
-    || type === 'launch_cli'
-    || type === 'stop_cli'
-    || type === 'restart_session';
-}
 
 function standaloneIpcEnabled(): boolean {
   const value = String(process.env.ADHDEV_STANDALONE_ENABLE_IPC || '').trim().toLowerCase();
@@ -2562,24 +2550,19 @@ class StandaloneServer {
       return { success: false, error: 'command type required' };
     }
     const result = await this.components.router.execute(type, args, 'standalone');
-    const affectsMeshGraphStatus = commandMayAffectMeshGraphStatus(type);
-    if (type === 'invoke_provider_script' || type === 'set_conversation_prefs' || type.startsWith('workspace_') || type.startsWith('session_host_') || affectsMeshGraphStatus) {
+    // Which commands invalidate which dashboard topics is core-owned knowledge
+    // (commandInvalidations in daemon-core) shared with daemon-cloud; only the
+    // flush mechanism below (local WS broadcast + topic flushes) is standalone's.
+    const invalidated = commandInvalidations(type);
+    if (invalidated.has('daemon.metadata')) {
+      // Legacy `type: 'status'` snapshot broadcast — throttled (500ms) and
+      // signature-deduped, so eager triggering here is cheap.
       this.scheduleBroadcastStatus();
-    }
-    if (
-      type === 'invoke_provider_script'
-      || type === 'get_status_metadata'
-      || type === 'set_user_name'
-      || type === 'set_machine_nickname'
-      || type.startsWith('workspace_')
-      || type.startsWith('session_host_')
-      || affectsMeshGraphStatus
-    ) {
       void this.flushWsDaemonMetadataSubscriptions();
     }
-    if (type.startsWith('session_host_')) void this.flushWsSessionHostDiagnosticsSubscriptions();
-    if (type === 'resolve_action' || type === 'send_chat' || type === 'read_chat') void this.flushWsSessionModalSubscriptions();
-    if (type.startsWith('git_') && this.hasWsGitSubscriptions()) void this.flushWsGitSubscriptions();
+    if (invalidated.has('session_host.diagnostics')) void this.flushWsSessionHostDiagnosticsSubscriptions();
+    if (invalidated.has('session.modal')) void this.flushWsSessionModalSubscriptions();
+    if (invalidated.has('workspace.git') && this.hasWsGitSubscriptions()) void this.flushWsGitSubscriptions();
     return result;
   }
 

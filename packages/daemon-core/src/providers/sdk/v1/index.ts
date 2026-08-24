@@ -69,6 +69,7 @@ export {
   type TaintFinding,
   type TaintResult,
   validateCliProviderManifest,
+  validateAcpProviderManifest,
   formatManifestValidationIssues,
   type ManifestValidationIssue,
   type ManifestValidationResult,

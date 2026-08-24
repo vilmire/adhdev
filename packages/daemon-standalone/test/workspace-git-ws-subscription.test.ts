@@ -38,14 +38,17 @@ test('standalone workspace.git subscriptions only flush while subscribers exist'
   assert.match(text, /if \(!this\.hasWsGitSubscriptions\(targetWs\)\) return/)
 })
 
-test('standalone mesh and session commands flush daemon metadata subscriptions for graph refresh', () => {
+test('standalone command flush gate consumes the core-owned invalidation table', () => {
   const text = source()
 
-  assert.match(text, /function commandMayAffectMeshGraphStatus\(type: string\): boolean/)
-  assert.match(text, /type\.startsWith\('mesh_'\)/)
-  assert.match(text, /type === 'launch_cli'/)
-  assert.match(text, /type === 'stop_cli'/)
-  assert.match(text, /const affectsMeshGraphStatus = commandMayAffectMeshGraphStatus\(type\)/)
-  assert.match(text, /type\.startsWith\('session_host_'\) \|\| affectsMeshGraphStatus\) \{[\s\S]*?this\.scheduleBroadcastStatus\(\)/)
-  assert.match(text, /type\.startsWith\('session_host_'\)[\s\S]*?\|\| affectsMeshGraphStatus[\s\S]*?\) \{[\s\S]*?void this\.flushWsDaemonMetadataSubscriptions\(\)/)
+  // Which commands invalidate which topics is core-owned (daemon-core
+  // commandInvalidations) — standalone must not re-hardcode the list.
+  assert.match(text, /commandInvalidations,/)
+  assert.match(text, /const invalidated = commandInvalidations\(type\)/)
+  assert.match(text, /invalidated\.has\('daemon\.metadata'\)\) \{[\s\S]*?this\.scheduleBroadcastStatus\(\)[\s\S]*?void this\.flushWsDaemonMetadataSubscriptions\(\)/)
+  assert.match(text, /if \(invalidated\.has\('session_host\.diagnostics'\)\) void this\.flushWsSessionHostDiagnosticsSubscriptions\(\)/)
+  assert.match(text, /if \(invalidated\.has\('session\.modal'\)\) void this\.flushWsSessionModalSubscriptions\(\)/)
+  assert.match(text, /if \(invalidated\.has\('workspace\.git'\) && this\.hasWsGitSubscriptions\(\)\) void this\.flushWsGitSubscriptions\(\)/)
+  // The old local predicate must stay deleted (it diverged from cloud once already).
+  assert.doesNotMatch(text, /function commandMayAffectMeshGraphStatus/)
 })

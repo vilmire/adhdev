@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.adhf.dev/schemas/v1/acp/provider.schema.json",
+  "title": "ADHDev ACP Provider Manifest (v1)",
+  "description": "Contract for acp/<name>/provider.v1.json manifests. ACP providers are declarative-only: the daemon spawns the agent binary over stdio (Agent Client Protocol) and drives session state from the declared patterns. Enum domains with a fixed owner (capability media types \u2014 daemon-enforced; tier \u2014 registry TIER_MAP) are enums here; advisory vocabularies (promptStyle, error verdicts) stay strings so a daemon upgrade can introduce values without a lockstep schema release.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "name",
+    "category",
+    "spawn"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema URL — optional, lets editors validate the file. Conventionally https://registry.adhf.dev/schemas/v1/acp/provider.schema.json."
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Unique provider id, kebab-case (conventionally suffixed -acp, e.g. gemini-acp)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short internal name."
+    },
+    "category": {
+      "const": "acp",
+      "description": "Always \"acp\" for this schema."
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Human-readable name shown in dashboards and the marketplace."
+    },
+    "icon": {
+      "type": "string",
+      "description": "Icon identifier or emoji shown next to the provider."
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Alternative ids that resolve to this provider."
+    },
+    "install": {
+      "type": "string",
+      "description": "Install command or short instruction shown when the agent binary is missing. Note: unlike the CLI schema this is a single string, not a per-channel map."
+    },
+    "spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "description": "How the daemon starts the ACP agent process (stdio transport).",
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Executable to spawn."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments passed to the executable."
+        },
+        "shell": {
+          "type": "boolean",
+          "description": "Spawn through a shell. Registry manifests keep this false."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra environment variables set for the agent process."
+        }
+      }
+    },
+    "auth": {
+      "type": "array",
+      "description": "Authentication methods the agent supports. ADHDev never stores these credentials — this block only drives setup UI and missing-auth diagnostics.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Auth mechanism. Known values: agent (the agent handles its own auth flow), env_var (API key via environment variables), terminal (interactive login command)."
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string",
+            "format": "uri",
+            "description": "Where to obtain credentials (e.g. an API-key console)."
+          },
+          "vars": {
+            "type": "array",
+            "description": "For env_var auth: the environment variables involved.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For terminal auth: the login command arguments."
+          }
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "description": "Per-provider settings surfaced in the dashboard. Keys are setting ids; values describe the control.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "default",
+          "public",
+          "label"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "boolean",
+              "number",
+              "string"
+            ]
+          },
+          "default": {
+            "type": [
+              "boolean",
+              "number",
+              "string"
+            ]
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "providerVersion": {
+      "type": "string",
+      "description": "Manifest version (semver), bumped on every published change."
+    },
+    "contractVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "ACP manifest contract generation understood by the daemon. Current manifests use 2."
+    },
+    "tier": {
+      "enum": [
+        "declarative-only",
+        "extended-legacy",
+        "extended",
+        "verified"
+      ],
+      "description": "Trust tier (registry TIER_MAP domain). All current registry ACP providers are declarative-only (no provider-shipped code executes)."
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the agent's ACP implementation supports. Media-type values are the daemon-enforced enum.",
+      "properties": {
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "multipart": {
+              "type": "boolean"
+            },
+            "mediaTypes": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "text",
+                  "image",
+                  "audio",
+                  "video",
+                  "resource"
+                ]
+              }
+            }
+          }
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "richContent": {
+              "type": "boolean"
+            },
+            "mediaTypes": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "text",
+                  "image",
+                  "audio",
+                  "video",
+                  "resource"
+                ]
+              }
+            }
+          }
+        },
+        "controls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "typedResults": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Declarative session-state protocol: regexes matched against the agent's ACP notification stream.",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "description": "Session-protocol contract id, e.g. adhdev:acp/session-protocol@1."
+        },
+        "promptStyle": {
+          "type": "string",
+          "description": "How prompts are delivered. Known value: mcp."
+        },
+        "idlePattern": {
+          "$ref": "#/$defs/sessionPattern"
+        },
+        "generatingPattern": {
+          "$ref": "#/$defs/sessionPattern"
+        },
+        "errorPatterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "regex",
+              "verdict"
+            ],
+            "properties": {
+              "regex": {
+                "type": "string"
+              },
+              "flags": {
+                "type": "string"
+              },
+              "verdict": {
+                "type": "string",
+                "description": "Session state to enter on match. Known value: waiting_approval."
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "staticConfigOptions": {
+      "type": "array",
+      "description": "Launch-time config axes (model / mode pickers) rendered in the new-session dialog.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "category",
+          "configId",
+          "options"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "configId": {
+            "type": "string"
+          },
+          "defaultValue": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value",
+                "name"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "group": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sessionPattern": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "regex"
+      ],
+      "properties": {
+        "regex": {
+          "type": "string"
+        },
+        "flags": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

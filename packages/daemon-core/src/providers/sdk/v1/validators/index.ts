@@ -13,6 +13,7 @@ export {
 
 export {
   validateCliProviderManifest,
+  validateAcpProviderManifest,
   formatManifestValidationIssues,
   type ManifestValidationIssue,
   type ManifestValidationResult,

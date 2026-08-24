@@ -575,6 +575,8 @@ export { DaemonCommandHandler } from './commands/handler.js';
 export type { CommandResult, CommandContext } from './commands/handler.js';
 export { DaemonCommandRouter, readCachedInlineMeshActiveSessionDetails, resolveMeshNodeAttribution, buildMeshNodeDataFreshness, buildMeshNodeProbeFreshness, MESH_NODE_LIVE_TRUTH_MARKER } from './commands/router.js';
 export type { CommandRouterDeps, CommandRouterResult } from './commands/router.js';
+export { commandInvalidations, commandMayAffectMeshGraphStatus } from './commands/command-invalidations.js';
+export type { CommandInvalidationTopic } from './commands/command-invalidations.js';
 export {
   maybeRunDaemonUpgradeHelperFromEnv,
   spawnDetachedDaemonUpgradeHelper,
@@ -897,6 +899,7 @@ export type { TerminalAdapterOpts, TerminalAdapterHandlers } from './providers/s
 // sdk/v1 subpath.
 export {
   validateCliProviderManifest,
+  validateAcpProviderManifest,
   formatManifestValidationIssues,
   type ManifestValidationIssue,
   type ManifestValidationResult,

@@ -5,7 +5,11 @@ import { providerHasOpenPanelSupport } from './open-panel-support.js'
 const VALID_CAPABILITY_MEDIA_TYPES = new Set(['text', 'image', 'audio', 'video', 'resource'])
 const VALID_INPUT_STRATEGIES = new Set(['native', 'native_acp', 'resource_link', 'text_fallback', 'paste', 'upload'])
 
-const KNOWN_PROVIDER_FIELDS = new Set<string>([
+// Every property allowed by the v1 JSON schemas (sdk/v1/schemas/*/provider.schema.json)
+// must be listed here, or the loader warns "Unknown provider field" on
+// schema-valid manifests. The schema-fields conformance test
+// (test/providers/schema-known-fields.test.ts) enforces the subset relation.
+export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'type',
   'name',
   'category',
@@ -83,6 +87,18 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'augmentStaleSnapshot',
   'timeouts',
   'disableUpstream',
+  // Marketplace/registry metadata blocks from the v1 CLI schema. UI-only —
+  // the daemon never executes anything from these, but they are valid
+  // manifest fields and must not trip the unknown-key warning.
+  'links',
+  'engines',
+  'source',
+  'tui',
+  'scriptCallBudgetMs',
+  // ACP manifest fields (v1 ACP schema): declarative session-state
+  // protocol and trust tier. Every registry ACP manifest carries both.
+  'session',
+  'tier',
 ])
 
 const VALUE_CONTROL_TYPES = new Set<ProviderControlType>(['select', 'toggle', 'cycle', 'slider'])

@@ -16,6 +16,7 @@
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import cliProviderSchema from '../schemas/cli/provider.schema.json';
+import acpProviderSchema from '../schemas/acp/provider.schema.json';
 
 export interface ManifestValidationIssue {
     /** JSON Pointer-style path into the manifest. Empty string for the root. */
@@ -35,6 +36,7 @@ export interface ManifestValidationResult {
 
 let _ajv: Ajv2020 | null = null;
 let _cliValidator: ValidateFunction | null = null;
+let _acpValidator: ValidateFunction | null = null;
 
 function getAjv(): Ajv2020 {
     if (_ajv) return _ajv;
@@ -56,6 +58,12 @@ function getCliValidator(): ValidateFunction {
     if (_cliValidator) return _cliValidator;
     _cliValidator = getAjv().compile(cliProviderSchema as unknown as object);
     return _cliValidator;
+}
+
+function getAcpValidator(): ValidateFunction {
+    if (_acpValidator) return _acpValidator;
+    _acpValidator = getAjv().compile(acpProviderSchema as unknown as object);
+    return _acpValidator;
 }
 
 function formatIssue(err: ErrorObject): ManifestValidationIssue {
@@ -89,7 +97,18 @@ function formatIssue(err: ErrorObject): ManifestValidationIssue {
  * should be caught by the caller before this is called.
  */
 export function validateCliProviderManifest(manifest: unknown): ManifestValidationResult {
-    const validator = getCliValidator();
+    return runValidator(getCliValidator(), manifest);
+}
+
+/**
+ * Validate an ACP provider.v1.json manifest. Same contract as
+ * `validateCliProviderManifest` — never throws, structured issues.
+ */
+export function validateAcpProviderManifest(manifest: unknown): ManifestValidationResult {
+    return runValidator(getAcpValidator(), manifest);
+}
+
+function runValidator(validator: ValidateFunction, manifest: unknown): ManifestValidationResult {
     const ok = validator(manifest) as boolean;
     if (ok) return { ok: true, issues: [] };
     const issues = (validator.errors || []).map(formatIssue);
