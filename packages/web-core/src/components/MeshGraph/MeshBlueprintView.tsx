@@ -111,8 +111,14 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     const nodeLabelById = useMemo(() => {
         const map = new Map<string, string>()
         for (const node of status.nodes ?? []) {
-            const label = node.machineLabel || (node as any).worktreeBranch
-                || (typeof node.workspace === 'string' ? node.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '')
+            // A worktree node is NOT a machine — the daemon bakes the branch into
+            // machineLabel, which made worktrees read as separate machines. Show
+            // worktrees as `⎇ branch` so the identity is unmistakable.
+            const worktreeBranch = (node as { worktreeBranch?: string }).worktreeBranch
+            const label = worktreeBranch
+                ? `⎇ ${worktreeBranch}`
+                : node.machineLabel
+                    || (typeof node.workspace === 'string' ? node.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '')
             map.set(node.nodeId, label || node.nodeId.slice(0, 12))
         }
         return map
