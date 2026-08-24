@@ -38,6 +38,15 @@ interface MeshTaskDagViewProps {
     tasks: RepoMeshQueueTask[]
     emptyMessage?: string
     /**
+     * Scheduling forecast (mesh_route_preview): difficulty → label of the slot
+     * that would take the NEXT task of that difficulty. Rendered as a "→ slot"
+     * chip on pending cards so routing is visible on the blueprint itself.
+     */
+    predictedSlots?: Record<string, string>
+    /** Initial cap on terminal (completed/failed/cancelled) cards — the blueprint
+     *  tab passes a tight cap so history doesn't drown the active plan. */
+    initialTerminalLimit?: number
+    /**
      * Embedded mode (per-mission drill-down inside MeshTasksView): the caller
      * already scoped the task set, so the history cap, stats overlay and
      * load-more chrome are dropped — just the graph + edge legend render.
@@ -49,6 +58,7 @@ type TaskFlowNodeData = Record<string, unknown> & {
     dagNode: TaskDagNode
     theme: MeshGraphTheme
     selected: boolean
+    predictedSlot?: string
 }
 
 type TaskFlowNode = Node<TaskFlowNodeData, 'taskNode'>
@@ -107,7 +117,7 @@ const messageClampStyle: CSSProperties = {
 
 function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     const { t } = useTranslation('common')
-    const { dagNode, theme, selected } = data
+    const { dagNode, theme, selected, predictedSlot } = data
     const task = dagNode.task
     const style = STATUS_STYLES[task.status] ?? STATUS_STYLES.pending
     const statusClass = theme.isDark ? style.dark : style.light
@@ -139,6 +149,16 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
                 {task.difficulty && <span className={chipClass}>{task.difficulty}</span>}
+                {predictedSlot && task.status === 'pending' && (
+                    <span
+                        className={theme.isDark
+                            ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-px text-4xs text-emerald-200'
+                            : 'rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-px text-4xs text-emerald-700'}
+                        title={t('meshGraph.taskDag.predictedSlot')}
+                    >
+                        → {predictedSlot}
+                    </span>
+                )}
                 {task.priority && task.priority !== 'normal' && <span className={chipClass}>{task.priority}</span>}
                 {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={chipClass}>read-only</span>}
                 {task.missionId && (
@@ -211,7 +231,7 @@ async function layoutTaskDag(dag: TaskDagData): Promise<Map<string, { x: number;
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -220,7 +240,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }
     // long-lived mesh accumulates hundreds of terminal rows, and laying ALL of
     // them out took tens of seconds while rendering an unreadable wall.
     // Compact (embedded) mode trusts the caller's scoping and renders everything.
-    const [terminalLimit, setTerminalLimit] = useState(TASK_DAG_RECENT_TERMINAL_LIMIT)
+    const [terminalLimit, setTerminalLimit] = useState(initialTerminalLimit ?? TASK_DAG_RECENT_TERMINAL_LIMIT)
     const scoped = useMemo(
         () => scopeTaskDagTasks(tasks, compact ? Number.POSITIVE_INFINITY : terminalLimit),
         [tasks, terminalLimit, compact],
@@ -256,11 +276,16 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false }
                 id: node.id,
                 type: 'taskNode' as const,
                 position: positions.get(node.id)!,
-                data: { dagNode: node, theme: meshTheme, selected: selectedTaskId === node.id },
+                data: {
+                    dagNode: node,
+                    theme: meshTheme,
+                    selected: selectedTaskId === node.id,
+                    ...(predictedSlots ? { predictedSlot: predictedSlots[node.task.difficulty ?? 'medium'] } : {}),
+                },
                 draggable: false,
                 selectable: true,
             }))
-    }, [dag, meshTheme, positions, selectedTaskId])
+    }, [dag, meshTheme, positions, selectedTaskId, predictedSlots])
 
     const flowEdges = useMemo<Edge[]>(() => {
         if (!positions) return []

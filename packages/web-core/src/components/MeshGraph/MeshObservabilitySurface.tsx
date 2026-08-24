@@ -4,7 +4,7 @@ import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import MeshGraphView from './MeshGraphView'
-import MeshTasksView from './MeshTasksView'
+import MeshBlueprintView from './MeshBlueprintView'
 import MeshOverviewCards from './MeshOverviewCards'
 import { MeshHelpPanel, MeshHelpToggle } from './MeshHelpPanel'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
@@ -168,7 +168,6 @@ export default function MeshObservabilitySurface({
     helpOpen: controlledHelpOpen,
     onHelpOpenChange,
     hideControls = false,
-    onRequestRefresh,
 }: MeshObservabilitySurfaceProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -512,21 +511,12 @@ export default function MeshObservabilitySurface({
                         // absolute-fill so the embedded per-mission React Flow gets a
                         // CONCRETE height — a percentage height through the flex chain
                         // resolves to 0 when the card only has a min-height.
-                        <div className="absolute inset-0">
-                            <MeshTasksView
+                        <div className="absolute inset-0 flex flex-col">
+                            <MeshBlueprintView
                                 tasks={queueTasks}
                                 status={canonicalStatus}
                                 daemonId={daemonId}
                                 sendDaemonCommand={sendDaemonCommand}
-                                onQueueMutated={onRequestRefresh}
-                                onFocusNode={nodeId => {
-                                    // Jump to the node's detail on the graph tab — the graph
-                                    // node id IS the mesh nodeId (mesh-visualization).
-                                    setActiveTab('graph')
-                                    setSelectedNodeId(nodeId)
-                                    setSelectedEdgeId(null)
-                                    setDetailSelection({ kind: 'node', nodeId })
-                                }}
                             />
                         </div>
                     ) : (

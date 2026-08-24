@@ -766,13 +766,15 @@
             "hiddenTasks_one": "이전 태스크 {{count}}개 숨김",
             "hiddenTasks_other": "이전 태스크 {{count}}개 숨김",
             "loadMore_one": "{{count}}개 더 불러오기",
-            "loadMore_other": "{{count}}개 더 불러오기"
+            "loadMore_other": "{{count}}개 더 불러오기",
+            "predictedSlot": "다음 라우팅 예측 슬롯"
         },
         "obs": {
             "tabOverview": "개요",
-            "tabTasks": "태스크",
+            "tabTasks": "설계도면",
             "tabStatus": "상태",
-            "tabGraph": "그래프",
+            "tabGraph": "구성",
+            "planeNeedsDaemon": "그래프와 게이트를 보려면 데몬 연결이 필요합니다.",
             "panHint": "드래그하거나 스크롤해 이동",
             "headlineFollowUp_one": "{{count}}개 후속 조치 필요",
             "headlineFollowUp_other": "{{count}}개 후속 조치 필요",
@@ -957,6 +959,28 @@
             "routingReason": "사유",
             "routingLosers": "슬롯 경쟁 탈락 {{count}}건",
             "routingSkipped": "건너뛴 노드 {{count}}개"
+        },
+        "blueprint": {
+            "liveQueue": "라이브 큐",
+            "scheduling": "스케줄링 미리보기",
+            "schedObservedAt": "{{time}} 기준",
+            "schedNoNodes": "라우팅 가능한 노드가 없습니다.",
+            "schedNoWinner": "적합한 슬롯 없음",
+            "leaseExpired": "리스 만료",
+            "emptyGraph": "이 그래프에는 노드가 없습니다.",
+            "gateActsViaCoordinator": "코디네이터가 처리합니다 — 코디에게 이 게이트의 처리(클레임/릴리즈)를 지시하세요.",
+            "schedNext": "다음",
+            "schedWaiting": "대기",
+            "schedFull": "정원 참",
+            "schedFloorExcluded": "난이도 미달",
+            "schedQuotaGated": "쿼터 차단",
+            "schedCapFree": "여유",
+            "schedColNode": "노드",
+            "schedColSlot": "슬롯",
+            "schedColScore": "점수",
+            "schedColQuota": "쿼터",
+            "schedColParallel": "병렬",
+            "schedColStatus": "상태"
         }
     },
     "repoMesh": {
@@ -1088,8 +1112,7 @@
             "repoMeshJsonHint": "이 저장소가 커밋한 코디네이터 프롬프트 텍스트로, 위 필드와 함께 쌓입니다. 여기가 아니라 저장소 파일에서 수정하세요:",
             "repoMeshJsonOverrideLabel": "저장소 override",
             "repoMeshJsonAppendLabel": "저장소 append",
-            "repoMeshJsonInvalid": "이 저장소의 .adhdev/mesh.json 을 파싱할 수 없어 해당 프롬프트 레이어가 무시됩니다.",
-            "tabGraphs": "그래프"
+            "repoMeshJsonInvalid": "이 저장소의 .adhdev/mesh.json 을 파싱할 수 없어 해당 프롬프트 레이어가 무시됩니다."
         },
         "nodeList": {
             "title": "노드 & 프로바이더 ({{count}})",
@@ -1324,24 +1347,9 @@
             "saveError": "프로바이더 기본값 저장에 실패했습니다."
         },
         "graphs": {
-            "title": "오케스트레이션 그래프",
-            "description": "영속 태스크 그래프와 코디네이터 게이트. 게이트를 클레임하고 작업을 확인한 뒤(대상 커밋이 이미 main에 도달했으면 수렴 증거가 함께 표시됩니다) 결과와 함께 릴리즈하거나, 죽은 작업의 게이트는 어밴던하세요.",
-            "subtitle": "이 메시의 그래프와 결정을 기다리는 게이트.",
             "includeTerminal": "종료된 것 포함",
             "refresh": "새로고침",
-            "loading": "그래프 불러오는 중…",
-            "empty": "아직 이 메시에 그래프가 없습니다. 그래프는 그래프 기능을 쓰는 mesh_enqueue_batch 요청으로 생성됩니다.",
-            "stale": "{{age}} 정체",
-            "counts": "태스크 {{tasks}} · 게이트 {{gates}}",
-            "claim": "클레임",
-            "release": "릴리즈",
-            "abandon": "어밴던",
-            "outcome": "결과",
-            "evidencePlaceholder": "증거 (커밋 SHA, 링크, 메모)",
-            "released": "게이트를 릴리즈했습니다.",
-            "abandoned": "게이트를 어밴던했습니다 — 다운스트림 작업이 취소되었습니다.",
-            "abandonConfirmTitle": "게이트 어밴던",
-            "abandonConfirmDescription": "\"{{gate}}\" 게이트를 어밴던할까요? 통과를 영구히 차단하며, 게이트가 막고 있던 다운스트림 태스크가 취소됩니다. 릴리즈가 아닙니다."
+            "loading": "그래프 불러오는 중…"
         }
     },
     "chat": {

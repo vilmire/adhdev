@@ -14,11 +14,19 @@
  *                          force-release — see mesh-tools-graph.ts header)
  *
  * No auto-release exists here either; the deadline sweep still owns timeouts.
+ *
+ * UI exposure (owner decision 2026-08-24): the dashboard blueprint tab is
+ * OBSERVE-ONLY — it calls mesh_graph_overview / mesh_route_preview but does
+ * not render gate-verb controls. Acting on a gate is done by instructing the
+ * coordinator (its MCP tools are the acting surface). The gate-verb commands
+ * below stay registered for ops/automation callers, not for dashboard UI.
  */
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { buildMeshGraphViews } from '../../mesh/mesh-graph-view.js';
 import { claimMeshGraphGate, releaseMeshGraphGate, abandonMeshGraphGate } from '../../mesh/mesh-graph-gates.js';
 import { collectGateConvergenceEvidence } from '../../mesh/mesh-graph-gate-evidence.js';
+import { buildMeshRoutePreview } from '../../mesh/mesh-route-preview.js';
+import { getMesh } from '../../config/mesh-config.js';
 
 function readString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
@@ -31,6 +39,29 @@ function extractErrorCode(message: string): string {
 }
 
 export const meshGraphCommandHandlers: Record<string, MedFamilyHandler> = {
+    // Dashboard twin of the coordinator's mesh_route_preview MCP tool — the
+    // scheduling "what would routing do" projection (per-node predicted winner
+    // + slot admission stages), surfaced in the blueprint tab's scheduling
+    // panel. Read-only: it never assigns or launches anything.
+    mesh_route_preview: async (_ctx: MedFamilyContext, args: any) => {
+        const meshId = readString(args?.meshId);
+        if (!meshId) return { success: false, error: 'meshId is required' };
+        const mesh = getMesh(meshId);
+        if (!mesh) return { success: false, error: `unknown mesh: ${meshId}` };
+        try {
+            const preview = buildMeshRoutePreview({
+                mesh,
+                difficulty: readString(args?.difficulty) ?? 'medium',
+                requiredTags: Array.isArray(args?.requiredTags) ? args.requiredTags : [],
+                readonly: args?.readonly === true,
+                ...(readString(args?.targetNodeId) ? { targetNodeId: readString(args?.targetNodeId) } : {}),
+            });
+            return { success: true, meshId, preview };
+        } catch (e: any) {
+            return { success: false, error: `route preview failed: ${e?.message || e}` };
+        }
+    },
+
     mesh_graph_overview: async (_ctx: MedFamilyContext, args: any) => {
         const meshId = readString(args?.meshId);
         if (!meshId) return { success: false, error: 'meshId is required' };

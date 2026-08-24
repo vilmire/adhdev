@@ -766,13 +766,15 @@
             "hiddenTasks_one": "{{count}} older task hidden",
             "hiddenTasks_other": "{{count}} older tasks hidden",
             "loadMore_one": "Load {{count}} more",
-            "loadMore_other": "Load {{count}} more"
+            "loadMore_other": "Load {{count}} more",
+            "predictedSlot": "Predicted next routing slot"
         },
         "obs": {
             "tabOverview": "Overview",
-            "tabTasks": "Tasks",
+            "tabTasks": "Blueprint",
             "tabStatus": "Status",
-            "tabGraph": "Graph",
+            "tabGraph": "Topology",
+            "planeNeedsDaemon": "Connect to the daemon to view graphs and gates.",
             "panHint": "drag or scroll to pan",
             "headlineFollowUp_one": "{{count}} needs follow-up",
             "headlineFollowUp_other": "{{count}} need follow-up",
@@ -957,6 +959,28 @@
             "routingReason": "Reason",
             "routingLosers": "{{count}} slot candidate(s) lost the race",
             "routingSkipped": "{{count}} node(s) skipped"
+        },
+        "blueprint": {
+            "liveQueue": "Live queue",
+            "scheduling": "Scheduling preview",
+            "schedObservedAt": "as of {{time}}",
+            "schedNoNodes": "No routable nodes.",
+            "schedNoWinner": "no eligible slot",
+            "leaseExpired": "lease expired",
+            "emptyGraph": "This graph has no nodes.",
+            "gateActsViaCoordinator": "Handled by the coordinator — ask it to claim/release this gate.",
+            "schedNext": "Next",
+            "schedWaiting": "Ready",
+            "schedFull": "At capacity",
+            "schedFloorExcluded": "Below difficulty",
+            "schedQuotaGated": "Quota-gated",
+            "schedCapFree": "Free",
+            "schedColNode": "Node",
+            "schedColSlot": "Slot",
+            "schedColScore": "Score",
+            "schedColQuota": "Quota",
+            "schedColParallel": "Parallel",
+            "schedColStatus": "Status"
         }
     },
     "repoMesh": {
@@ -1088,8 +1112,7 @@
             "repoMeshJsonHint": "This repo commits coordinator prompt text that stacks with the fields above. Edit it in the repo file, not here:",
             "repoMeshJsonOverrideLabel": "Repo override",
             "repoMeshJsonAppendLabel": "Repo append",
-            "repoMeshJsonInvalid": "This repo's .adhdev/mesh.json could not be parsed, so its prompt layer is ignored.",
-            "tabGraphs": "Graphs"
+            "repoMeshJsonInvalid": "This repo's .adhdev/mesh.json could not be parsed, so its prompt layer is ignored."
         },
         "nodeList": {
             "title": "Nodes & Providers ({{count}})",
@@ -1324,24 +1347,9 @@
             "saveError": "Failed to save provider defaults."
         },
         "graphs": {
-            "title": "Orchestration graphs",
-            "description": "Persistent task graphs and their coordinator gates. Claim a gate, verify the work (the panel attaches convergence evidence when the guarded commits already reached main), then release with an outcome — or abandon a gate whose work is dead.",
-            "subtitle": "Graphs on this mesh, with the gates waiting for a decision.",
             "includeTerminal": "Include finished",
             "refresh": "Refresh",
-            "loading": "Loading graphs…",
-            "empty": "No graphs on this mesh yet. Graphs are created by mesh_enqueue_batch requests that use graph features.",
-            "stale": "stale {{age}}",
-            "counts": "{{tasks}} tasks · {{gates}} gates",
-            "claim": "Claim",
-            "release": "Release",
-            "abandon": "Abandon",
-            "outcome": "Outcome",
-            "evidencePlaceholder": "Evidence (commit SHAs, links, notes)",
-            "released": "Gate released.",
-            "abandoned": "Gate abandoned — downstream work was cancelled.",
-            "abandonConfirmTitle": "Abandon gate",
-            "abandonConfirmDescription": "Abandon \"{{gate}}\"? This permanently DENIES passage: downstream tasks the gate was holding are cancelled. It is not a release."
+            "loading": "Loading graphs…"
         }
     },
     "chat": {

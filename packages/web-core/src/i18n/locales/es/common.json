@@ -766,13 +766,15 @@
             "hiddenTasks_one": "{{count}} tarea anterior oculta",
             "hiddenTasks_other": "{{count}} tareas anteriores ocultas",
             "loadMore_one": "Cargar {{count}} más",
-            "loadMore_other": "Cargar {{count}} más"
+            "loadMore_other": "Cargar {{count}} más",
+            "predictedSlot": "Slot de enrutamiento previsto"
         },
         "obs": {
             "tabOverview": "Resumen",
-            "tabTasks": "Tareas",
+            "tabTasks": "Plano",
             "tabStatus": "Estado",
-            "tabGraph": "Grafo",
+            "tabGraph": "Topología",
+            "planeNeedsDaemon": "Conéctate al daemon para ver grafos y gates.",
             "panHint": "arrastra o desplázate para mover",
             "headlineFollowUp_one": "{{count}} requiere seguimiento",
             "headlineFollowUp_other": "{{count}} requieren seguimiento",
@@ -962,6 +964,28 @@
             "routingReason": "Motivo",
             "routingLosers": "{{count}} candidato(s) de slot descartado(s)",
             "routingSkipped": "{{count}} nodo(s) omitido(s)"
+        },
+        "blueprint": {
+            "liveQueue": "Cola en vivo",
+            "scheduling": "Vista previa de scheduling",
+            "schedObservedAt": "a las {{time}}",
+            "schedNoNodes": "No hay nodos enrutables.",
+            "schedNoWinner": "sin slot elegible",
+            "leaseExpired": "lease vencido",
+            "emptyGraph": "Este grafo no tiene nodos.",
+            "gateActsViaCoordinator": "Lo gestiona el coordinador: pídele que procese este gate.",
+            "schedNext": "Siguiente",
+            "schedWaiting": "Listo",
+            "schedFull": "Sin capacidad",
+            "schedFloorExcluded": "Bajo dificultad",
+            "schedQuotaGated": "Cuota bloqueada",
+            "schedCapFree": "Libre",
+            "schedColNode": "Nodo",
+            "schedColSlot": "Slot",
+            "schedColScore": "Puntaje",
+            "schedColQuota": "Cuota",
+            "schedColParallel": "Paralelo",
+            "schedColStatus": "Estado"
         }
     },
     "repoMesh": {
@@ -1093,8 +1117,7 @@
             "repoMeshJsonHint": "Este repositorio incluye texto del prompt del coordinador que se suma a los campos de arriba. Edítalo en el archivo del repositorio, no aquí:",
             "repoMeshJsonOverrideLabel": "Override del repositorio",
             "repoMeshJsonAppendLabel": "Append del repositorio",
-            "repoMeshJsonInvalid": "No se pudo analizar el .adhdev/mesh.json de este repositorio, por lo que su capa de prompt se ignora.",
-            "tabGraphs": "Grafos"
+            "repoMeshJsonInvalid": "No se pudo analizar el .adhdev/mesh.json de este repositorio, por lo que su capa de prompt se ignora."
         },
         "nodeList": {
             "title": "Nodos y proveedores ({{count}})",
@@ -1329,24 +1352,9 @@
             "saveError": "Failed to save provider defaults."
         },
         "graphs": {
-            "title": "Grafos de orquestación",
-            "description": "Grafos de tareas persistentes y sus puertas de coordinador. Reclama una puerta, verifica el trabajo (se adjunta evidencia de convergencia si los commits ya llegaron a main) y libérala con un resultado, o abandona una puerta cuyo trabajo esté muerto.",
-            "subtitle": "Grafos de este mesh, con las puertas que esperan una decisión.",
             "includeTerminal": "Incluir terminados",
             "refresh": "Actualizar",
-            "loading": "Cargando grafos…",
-            "empty": "Aún no hay grafos en este mesh. Los grafos se crean con solicitudes mesh_enqueue_batch que usan funciones de grafo.",
-            "stale": "estancado {{age}}",
-            "counts": "{{tasks}} tareas · {{gates}} puertas",
-            "claim": "Reclamar",
-            "release": "Liberar",
-            "abandon": "Abandonar",
-            "outcome": "Resultado",
-            "evidencePlaceholder": "Evidencia (SHAs, enlaces, notas)",
-            "released": "Puerta liberada.",
-            "abandoned": "Puerta abandonada — el trabajo descendente fue cancelado.",
-            "abandonConfirmTitle": "Abandonar puerta",
-            "abandonConfirmDescription": "¿Abandonar \"{{gate}}\"? Esto DENIEGA el paso permanentemente: las tareas descendentes retenidas se cancelan. No es una liberación."
+            "loading": "Cargando grafos…"
         }
     },
     "chat": {

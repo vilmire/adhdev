@@ -766,13 +766,15 @@
             "hiddenTasks_one": "過去のタスク {{count}}件を非表示",
             "hiddenTasks_other": "過去のタスク {{count}}件を非表示",
             "loadMore_one": "さらに{{count}}件読み込む",
-            "loadMore_other": "さらに{{count}}件読み込む"
+            "loadMore_other": "さらに{{count}}件読み込む",
+            "predictedSlot": "次のルーティング予測スロット"
         },
         "obs": {
             "tabOverview": "概要",
-            "tabTasks": "タスク",
+            "tabTasks": "設計図",
             "tabStatus": "ステータス",
-            "tabGraph": "グラフ",
+            "tabGraph": "構成",
+            "planeNeedsDaemon": "グラフとゲートを表示するにはデーモン接続が必要です。",
             "panHint": "ドラッグ／スクロールで移動",
             "headlineFollowUp_one": "{{count}}件フォローアップ必要",
             "headlineFollowUp_other": "{{count}}件フォローアップ必要",
@@ -957,6 +959,28 @@
             "routingReason": "理由",
             "routingLosers": "スロット競合で外れた候補 {{count}} 件",
             "routingSkipped": "スキップしたノード {{count}} 件"
+        },
+        "blueprint": {
+            "liveQueue": "ライブキュー",
+            "scheduling": "スケジューリングプレビュー",
+            "schedObservedAt": "{{time}} 時点",
+            "schedNoNodes": "ルーティング可能なノードがありません。",
+            "schedNoWinner": "適合スロットなし",
+            "leaseExpired": "リース期限切れ",
+            "emptyGraph": "このグラフにはノードがありません。",
+            "gateActsViaCoordinator": "コーディネーターが処理します — このゲートの処理はコーディネーターに指示してください。",
+            "schedNext": "次",
+            "schedWaiting": "待機",
+            "schedFull": "定員超過",
+            "schedFloorExcluded": "難易度未満",
+            "schedQuotaGated": "クォータ制限",
+            "schedCapFree": "空き",
+            "schedColNode": "ノード",
+            "schedColSlot": "スロット",
+            "schedColScore": "スコア",
+            "schedColQuota": "クォータ",
+            "schedColParallel": "並列",
+            "schedColStatus": "状態"
         }
     },
     "repoMesh": {
@@ -1088,8 +1112,7 @@
             "repoMeshJsonHint": "このリポジトリがコミットしたコーディネータープロンプトで、上のフィールドと重なって適用されます。ここではなくリポジトリのファイルで編集してください:",
             "repoMeshJsonOverrideLabel": "リポジトリ override",
             "repoMeshJsonAppendLabel": "リポジトリ append",
-            "repoMeshJsonInvalid": "このリポジトリの .adhdev/mesh.json を解析できないため、そのプロンプトレイヤーは無視されます。",
-            "tabGraphs": "グラフ"
+            "repoMeshJsonInvalid": "このリポジトリの .adhdev/mesh.json を解析できないため、そのプロンプトレイヤーは無視されます。"
         },
         "nodeList": {
             "title": "ノードとプロバイダー（{{count}}）",
@@ -1324,24 +1347,9 @@
             "saveError": "Failed to save provider defaults."
         },
         "graphs": {
-            "title": "オーケストレーショングラフ",
-            "description": "永続タスクグラフとコーディネーターゲート。ゲートをクレームして作業を確認し（対象コミットが main に到達済みなら収束エビデンスが表示されます）、結果とともにリリースするか、不要になったゲートは破棄してください。",
-            "subtitle": "このメッシュのグラフと、判断待ちのゲート。",
             "includeTerminal": "終了済みを含む",
             "refresh": "更新",
-            "loading": "グラフを読み込み中…",
-            "empty": "このメッシュにはまだグラフがありません。グラフはグラフ機能を使う mesh_enqueue_batch リクエストで作成されます。",
-            "stale": "{{age}} 停滞",
-            "counts": "タスク {{tasks}} · ゲート {{gates}}",
-            "claim": "クレーム",
-            "release": "リリース",
-            "abandon": "破棄",
-            "outcome": "結果",
-            "evidencePlaceholder": "エビデンス（コミットSHA、リンク、メモ）",
-            "released": "ゲートをリリースしました。",
-            "abandoned": "ゲートを破棄しました — 下流の作業はキャンセルされました。",
-            "abandonConfirmTitle": "ゲートを破棄",
-            "abandonConfirmDescription": "\"{{gate}}\" を破棄しますか？通過を恒久的に拒否し、ゲートが保持していた下流タスクはキャンセルされます。リリースではありません。"
+            "loading": "グラフを読み込み中…"
         }
     },
     "chat": {

@@ -766,13 +766,15 @@
             "hiddenTasks_one": "已隐藏 {{count}} 个较早任务",
             "hiddenTasks_other": "已隐藏 {{count}} 个较早任务",
             "loadMore_one": "再加载 {{count}} 个",
-            "loadMore_other": "再加载 {{count}} 个"
+            "loadMore_other": "再加载 {{count}} 个",
+            "predictedSlot": "下一个路由预测槽位"
         },
         "obs": {
             "tabOverview": "概览",
-            "tabTasks": "任务",
+            "tabTasks": "蓝图",
             "tabStatus": "状态",
-            "tabGraph": "图谱",
+            "tabGraph": "构成",
+            "planeNeedsDaemon": "需要连接守护进程才能查看图与闸门。",
             "panHint": "拖拽或滚动进行平移",
             "headlineFollowUp_one": "{{count}} 个需要跟进",
             "headlineFollowUp_other": "{{count}} 个需要跟进",
@@ -957,6 +959,28 @@
             "routingReason": "原因",
             "routingLosers": "{{count}} 个槽位候选未被选中",
             "routingSkipped": "跳过 {{count}} 个节点"
+        },
+        "blueprint": {
+            "liveQueue": "实时队列",
+            "scheduling": "调度预览",
+            "schedObservedAt": "截至 {{time}}",
+            "schedNoNodes": "没有可路由的节点。",
+            "schedNoWinner": "无合适槽位",
+            "leaseExpired": "租约已过期",
+            "emptyGraph": "该图没有节点。",
+            "gateActsViaCoordinator": "由协调器处理 — 请指示协调器处理此闸门。",
+            "schedNext": "下一个",
+            "schedWaiting": "待命",
+            "schedFull": "容量已满",
+            "schedFloorExcluded": "低于难度",
+            "schedQuotaGated": "配额受限",
+            "schedCapFree": "空闲",
+            "schedColNode": "节点",
+            "schedColSlot": "槽位",
+            "schedColScore": "分数",
+            "schedColQuota": "配额",
+            "schedColParallel": "并行",
+            "schedColStatus": "状态"
         }
     },
     "repoMesh": {
@@ -1088,8 +1112,7 @@
             "repoMeshJsonHint": "此仓库提交的协调器提示词文本，会与上方字段叠加生效。请在仓库文件中修改，而不是在这里:",
             "repoMeshJsonOverrideLabel": "仓库 override",
             "repoMeshJsonAppendLabel": "仓库 append",
-            "repoMeshJsonInvalid": "无法解析此仓库的 .adhdev/mesh.json，因此其提示词层被忽略。",
-            "tabGraphs": "图"
+            "repoMeshJsonInvalid": "无法解析此仓库的 .adhdev/mesh.json，因此其提示词层被忽略。"
         },
         "nodeList": {
             "title": "节点与提供方（{{count}}）",
@@ -1324,24 +1347,9 @@
             "saveError": "Failed to save provider defaults."
         },
         "graphs": {
-            "title": "编排图",
-            "description": "持久任务图及其协调器闸门。认领闸门并核实工作（若目标提交已到达 main，会附带收敛证据），然后带结果释放；工作已失效的闸门可以废弃。",
-            "subtitle": "此网格上的图，以及等待决定的闸门。",
             "includeTerminal": "包含已结束",
             "refresh": "刷新",
-            "loading": "正在加载图…",
-            "empty": "此网格上还没有图。图由使用图功能的 mesh_enqueue_batch 请求创建。",
-            "stale": "停滞 {{age}}",
-            "counts": "任务 {{tasks}} · 闸门 {{gates}}",
-            "claim": "认领",
-            "release": "释放",
-            "abandon": "废弃",
-            "outcome": "结果",
-            "evidencePlaceholder": "证据（提交 SHA、链接、备注）",
-            "released": "闸门已释放。",
-            "abandoned": "闸门已废弃 — 下游任务已取消。",
-            "abandonConfirmTitle": "废弃闸门",
-            "abandonConfirmDescription": "废弃 \"{{gate}}\" 吗？这将永久拒绝通过，闸门阻塞的下游任务会被取消。这不是释放。"
+            "loading": "正在加载图…"
         }
     },
     "chat": {

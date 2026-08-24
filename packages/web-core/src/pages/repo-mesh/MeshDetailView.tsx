@@ -14,7 +14,6 @@ import QuotaPolicyStep from '../../components/setup-wizard/QuotaPolicyStep'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import RepoMeshJsonAppendNotice from './RepoMeshJsonAppendNotice'
 import DashboardMeshGraphDialog from '../../components/dashboard/DashboardMeshGraphDialog'
-import MeshGraphPlanePanel from './MeshGraphPlanePanel'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
@@ -693,14 +692,10 @@ export function MeshDetailView({
 
             const tabs: SettingsTab[] = [
                 { key: 'nodes', label: t('repoMesh.detail.tabNodes'), content: nodesTabContent },
-                // G5: the persistent graph control plane (graphs + coordinator
-                // gates), previously visible only to the coordinator LLM via
-                // the mesh_graph_view MCP tool.
-                { key: 'graphs', label: t('repoMesh.detail.tabGraphs'), content: (
-                    <Section title={t('repoMesh.graphs.title')} description={t('repoMesh.graphs.description')}>
-                        <MeshGraphPlanePanel meshId={selectedMesh.id} daemonId={activeDaemonId} sendCommand={sendCommand} />
-                    </Section>
-                ) },
+                // The persistent graph control plane (graphs + gates) moved to the
+                // dashboard observability surface's blueprint tab — this page is
+                // de-facto settings, and observation/gate decisions happen on the
+                // dashboard (owner decision 2026-08-24).
                 { key: 'scheduling', label: t('repoMesh.detail.tabScheduling'), content: schedulingTabContent },
                 { key: 'prompts', label: t('repoMesh.detail.tabPrompts'), content: (
                     <>
