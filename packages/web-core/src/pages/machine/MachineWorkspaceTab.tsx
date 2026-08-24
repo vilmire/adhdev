@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import ManagedWorkspacesSection from './ManagedWorkspacesSection'
 import type { useMachineActions } from './useMachineActions'
 import type {
@@ -26,13 +27,11 @@ export default function MachineWorkspaceTab({
     actions,
     sendDaemonCommand,
 }: MachineWorkspaceTabProps) {
+    const { t } = useTranslation('common')
     return (
         <div className="flex flex-col flex-1 min-w-0 h-full">
             <div className="flex flex-col gap-1 pb-4 border-b border-border-subtle mb-4">
-                <div className="text-lg font-semibold text-text-primary">Workspaces</div>
-                <div className="text-sm text-text-secondary">
-                    Save folders as workspaces on this machine. Use the dashboard "+" button to launch a session.
-                </div>
+                <div className="text-lg font-semibold text-text-primary">{t('machine.managedWorkspaces.title')}</div>
             </div>
 
             {sendDaemonCommand && (

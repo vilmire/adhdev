@@ -88,6 +88,17 @@ interface DashboardNewSessionDialogProps {
         },
     ) => Promise<LaunchResult>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
+    // Preselect target when the dialog is opened from somewhere that already
+    // knows the machine/workspace (e.g. the machine page's workspace list).
+    // The workspace id is applied once, as soon as the machine's workspace rows
+    // are available — manual machine switches afterwards drop it.
+    initialMachineId?: string | null
+    initialWorkspaceId?: string | null
+    // 'mesh' opens the dialog in coordinator mode; initialMeshWorkspacePath is
+    // then matched (once, by normalized path) against the loaded mesh options
+    // to preselect the mesh rooted at that workspace.
+    initialLaunchMode?: WorkspaceLaunchMode | null
+    initialMeshWorkspacePath?: string | null
 }
 
 interface LaunchCategorySelectorProps {
@@ -165,6 +176,10 @@ export default function DashboardNewSessionDialog({
     onListMeshes,
     onLaunchMeshCoordinator,
     onListSavedSessions,
+    initialMachineId,
+    initialWorkspaceId,
+    initialLaunchMode,
+    initialMeshWorkspacePath,
 }: DashboardNewSessionDialogProps) {
     const { t } = useTranslation()
     const loadDaemonMetadata = useDaemonMetadataLoader()
@@ -172,7 +187,10 @@ export default function DashboardNewSessionDialog({
         () => [...machines].sort(compareMachineEntries),
         [machines],
     )
-    const [selectedMachineId, setSelectedMachineId] = useState(sortedMachines[0]?.id || '')
+    const [selectedMachineId, setSelectedMachineId] = useState(() => {
+        if (initialMachineId && machines.some(machine => machine.id === initialMachineId)) return initialMachineId
+        return [...machines].sort(compareMachineEntries)[0]?.id || ''
+    })
     const selectedMachine = useMemo(
         () => sortedMachines.find(machine => machine.id === selectedMachineId) || sortedMachines[0],
         [selectedMachineId, sortedMachines],
@@ -225,13 +243,23 @@ export default function DashboardNewSessionDialog({
     const [browseError, setBrowseError] = useState('')
     const [savingWorkspace, setSavingWorkspace] = useState(false)
     const initializedMachineIdRef = useRef<string | null>(null)
+    // One-shot preselect target: consumed as soon as the requested workspace id
+    // shows up in the selected machine's rows, dropped on a manual machine switch.
+    const pendingInitialWorkspaceIdRef = useRef<string | null>(initialWorkspaceId || null)
+    // One-shot mesh-mode preselect: mode applied on first init, mesh matched by
+    // workspace path once the machine's mesh options load.
+    const pendingInitialLaunchModeRef = useRef<WorkspaceLaunchMode | null>(initialLaunchMode || null)
+    const pendingInitialMeshWorkspaceRef = useRef<string | null>(initialMeshWorkspacePath || null)
     const savedSessionsRequestSeqRef = useRef(0)
 
     useEffect(() => {
         if (!selectedMachineId && sortedMachines[0]?.id) {
-            setSelectedMachineId(sortedMachines[0].id)
+            const preferred = initialMachineId && sortedMachines.some(machine => machine.id === initialMachineId)
+                ? initialMachineId
+                : sortedMachines[0].id
+            setSelectedMachineId(preferred)
         }
-    }, [selectedMachineId, sortedMachines])
+    }, [initialMachineId, selectedMachineId, sortedMachines])
 
     useEffect(() => {
         if (!selectedMachine) return
@@ -347,9 +375,24 @@ export default function DashboardNewSessionDialog({
 
         const machineChanged = initializedMachineIdRef.current !== selectedMachine.id
         if (machineChanged) {
+            // A machine switch after the first init means the user navigated away
+            // from the preselected machine — the pending preselects no longer apply.
+            if (initializedMachineIdRef.current !== null) {
+                pendingInitialWorkspaceIdRef.current = null
+                pendingInitialLaunchModeRef.current = null
+                pendingInitialMeshWorkspaceRef.current = null
+            }
             initializedMachineIdRef.current = selectedMachine.id
-            setWorkspaceMode('workspace')
-            setWorkspaceChoice(defaultWorkspaceId || workspaceRows[0]?.id || '__home__')
+            const pendingLaunchMode = pendingInitialLaunchModeRef.current
+            pendingInitialLaunchModeRef.current = null
+            setWorkspaceMode(pendingLaunchMode || 'workspace')
+            const pendingWorkspaceId = pendingInitialWorkspaceIdRef.current
+            if (pendingWorkspaceId && workspaceRows.some(workspace => workspace.id === pendingWorkspaceId)) {
+                pendingInitialWorkspaceIdRef.current = null
+                setWorkspaceChoice(pendingWorkspaceId)
+            } else {
+                setWorkspaceChoice(defaultWorkspaceId || workspaceRows[0]?.id || '__home__')
+            }
             setCustomWorkspacePath('')
             setMeshOptions([])
             setSelectedMeshId('')
@@ -374,11 +417,19 @@ export default function DashboardNewSessionDialog({
             return
         }
 
-        setWorkspaceChoice(prev => {
-            if (prev === '__custom__' || prev === '__home__') return prev
-            if (workspaceRows.some(workspace => workspace.id === prev)) return prev
-            return defaultWorkspaceId || workspaceRows[0]?.id || '__home__'
-        })
+        // Workspace rows can arrive after the first init (metadata load) — apply
+        // the pending preselect the moment its row exists.
+        const pendingWorkspaceId = pendingInitialWorkspaceIdRef.current
+        if (pendingWorkspaceId && workspaceRows.some(workspace => workspace.id === pendingWorkspaceId)) {
+            pendingInitialWorkspaceIdRef.current = null
+            setWorkspaceChoice(pendingWorkspaceId)
+        } else {
+            setWorkspaceChoice(prev => {
+                if (prev === '__custom__' || prev === '__home__') return prev
+                if (workspaceRows.some(workspace => workspace.id === prev)) return prev
+                return defaultWorkspaceId || workspaceRows[0]?.id || '__home__'
+            })
+        }
 
         setActiveKind(prev => {
             if (prev === 'ide' && ideTargets.length > 0) return prev
@@ -393,6 +444,16 @@ export default function DashboardNewSessionDialog({
         if (meshLoadedMachineId === selectedMachine.id || meshLoading) return
         void loadMeshes(selectedMachine.id)
     }, [loadMeshes, meshLoadedMachineId, meshLoading, selectedMachine, workspaceMode])
+
+    // Apply the one-shot mesh preselect as soon as the options are in: the
+    // machine page hands us the workspace path, so match the mesh rooted there.
+    useEffect(() => {
+        const pendingMeshWorkspace = pendingInitialMeshWorkspaceRef.current
+        if (!pendingMeshWorkspace || meshOptions.length === 0) return
+        pendingInitialMeshWorkspaceRef.current = null
+        const matchedMesh = meshOptions.find(mesh => normalizePath(mesh.workspace) === normalizePath(pendingMeshWorkspace))
+        if (matchedMesh) setSelectedMeshId(matchedMesh.id)
+    }, [meshOptions])
 
     useEffect(() => {
         if (workspaceMode !== 'mesh') return

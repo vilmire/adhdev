@@ -4,7 +4,9 @@
         "select": "言語を選択"
     },
     "common": {
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "confirm": "確認",
+        "confirmTitle": "続行しますか？"
     },
     "connection": {
         "loadingDashboard": "ダッシュボードを読み込んでいます...",
@@ -3005,10 +3007,26 @@
             "daemonUpdate": "デーモンの更新"
         },
         "workspaceBrowse": {
-            "currentFolder": "現在のフォルダー"
+            "currentFolder": "現在のフォルダー",
+            "parent": "上へ",
+            "go": "移動",
+            "pathPlaceholder": "フォルダーパスを入力",
+            "loading": "フォルダーを読み込み中…",
+            "noSubfolders": "サブフォルダーがありません。",
+            "useThisFolder": "このフォルダーを使用"
         },
         "managedWorkspaces": {
-            "remove": "削除"
+            "title": "ワークスペース",
+            "addWorkspace": "ワークスペースを追加",
+            "empty": "保存されたワークスペースはまだありません。\"{{button}}\" でフォルダーを選択してください。",
+            "addDialogDescription": "通常のエクスプローラーのようにマシンを閲覧し、現在のフォルダーをワークスペースとして追加します。",
+            "remove": "削除",
+            "newSession": "このワークスペースで新しいセッションを開始",
+            "newSessionShort": "セッション",
+            "newMeshSession": "このワークスペースでメッシュコーディネーターセッションを開始",
+            "newMeshSessionShort": "メッシュ",
+            "removeConfirmTitle": "ワークスペースを削除",
+            "removeConfirmDescription": "\"{{label}}\" をリストから削除しますか？フォルダー自体は削除されません。"
         },
         "quota": {
             "title": "プラン使用量",

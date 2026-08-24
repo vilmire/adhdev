@@ -4,7 +4,9 @@
         "select": "Select language"
     },
     "common": {
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "confirm": "Confirm",
+        "confirmTitle": "Are you sure?"
     },
     "connection": {
         "loadingDashboard": "Loading your dashboard...",
@@ -3005,10 +3007,26 @@
             "daemonUpdate": "Daemon Update"
         },
         "workspaceBrowse": {
-            "currentFolder": "Current folder"
+            "currentFolder": "Current folder",
+            "parent": "Parent",
+            "go": "Go",
+            "pathPlaceholder": "Type a folder path",
+            "loading": "Loading folders…",
+            "noSubfolders": "No subfolders here.",
+            "useThisFolder": "Use this folder"
         },
         "managedWorkspaces": {
-            "remove": "Remove"
+            "title": "Workspaces",
+            "addWorkspace": "Add workspace",
+            "empty": "No saved workspaces yet. Click \"{{button}}\" to pick a folder.",
+            "addDialogDescription": "Browse the machine like a normal explorer, then add the current folder as a saved workspace.",
+            "remove": "Remove",
+            "newSession": "Start a new session in this workspace",
+            "newSessionShort": "Session",
+            "newMeshSession": "Start a mesh coordinator session in this workspace",
+            "newMeshSessionShort": "Mesh",
+            "removeConfirmTitle": "Remove workspace",
+            "removeConfirmDescription": "Remove \"{{label}}\" from the list? The folder itself is not deleted."
         },
         "quota": {
             "title": "Plan quota",

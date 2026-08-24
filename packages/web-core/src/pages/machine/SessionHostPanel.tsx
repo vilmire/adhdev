@@ -16,6 +16,7 @@ import {
 } from '../../utils/daemon-timing'
 import { eventManager } from '../../managers/EventManager'
 import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHostDiagnosticsSubscription'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import type { CliSessionEntry } from './types'
 
 interface SessionHostAttachedClient {
@@ -170,6 +171,7 @@ export default function SessionHostPanel({
 }: SessionHostPanelProps) {
     const [error, setError] = useState('')
     const [busyActionKey, setBusyActionKey] = useState<string | null>(null)
+    const { confirm, confirmDialog } = useConfirmDialog()
     const [refreshing, setRefreshing] = useState(false)
     const sessionHostSubscription = useSessionHostDiagnosticsSubscription(machineId, {
         enabled: !!machineId,
@@ -222,7 +224,12 @@ export default function SessionHostPanel({
     ) => {
         const actionKey = `${action}:${session.sessionId}`
         if (action === 'session_host_stop_session') {
-            const confirmed = window.confirm(`Stop ${session.displayName}?\nThis will terminate the hosted runtime.`)
+            const confirmed = await confirm({
+                title: `Stop ${session.displayName}?`,
+                description: 'This will terminate the hosted runtime.',
+                confirmLabel: 'Stop',
+                tone: 'danger',
+            })
             if (!confirmed) return
         }
 
@@ -247,10 +254,15 @@ export default function SessionHostPanel({
         } finally {
             setBusyActionKey((current) => (current === actionKey ? null : current))
         }
-    }, [machineId, refreshDiagnostics, sendDaemonCommand])
+    }, [confirm, machineId, refreshDiagnostics, sendDaemonCommand])
 
     const runPruneDuplicates = useCallback(async () => {
-        const confirmed = window.confirm('Prune duplicate hosted runtimes?\nThe newest runtime for each provider session will be kept and older duplicates will be stopped and removed.')
+        const confirmed = await confirm({
+            title: 'Prune duplicate hosted runtimes?',
+            description: 'The newest runtime for each provider session will be kept and older duplicates will be stopped and removed.',
+            confirmLabel: 'Prune',
+            tone: 'danger',
+        })
         if (!confirmed) return
 
         setBusyActionKey('session_host_prune_duplicate_sessions')
@@ -272,7 +284,7 @@ export default function SessionHostPanel({
         } finally {
             setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
         }
-    }, [machineId, refreshDiagnostics, sendDaemonCommand])
+    }, [confirm, machineId, refreshDiagnostics, sendDaemonCommand])
 
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
@@ -574,6 +586,7 @@ export default function SessionHostPanel({
                     </div>
                 </>
             )}
+            {confirmDialog}
         </Card>
     )
 }

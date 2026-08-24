@@ -9,6 +9,7 @@ import {
 import type { DaemonData } from '../../types'
 import { eventManager } from '../../managers/EventManager'
 import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHostDiagnosticsSubscription'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning, IconX } from '../Icons'
 import type { MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -166,6 +167,7 @@ export default function DashboardMobileSessionHostSheet({
     const [activeMachineId, setActiveMachineId] = useState<string | null>(initialMachineId || machineCards[0]?.id || null)
     const [error, setError] = useState('')
     const [busyActionKey, setBusyActionKey] = useState<string | null>(null)
+    const { confirm, confirmDialog } = useConfirmDialog()
     const [refreshing, setRefreshing] = useState(false)
 
     useEffect(() => {
@@ -240,7 +242,12 @@ export default function DashboardMobileSessionHostSheet({
     ) => {
         if (!activeMachine?.id) return
         if (action === 'session_host_stop_session') {
-            const confirmed = window.confirm(`Stop ${session.displayName}?\nThis will terminate the hosted runtime.`)
+            const confirmed = await confirm({
+                title: `Stop ${session.displayName}?`,
+                description: 'This will terminate the hosted runtime.',
+                confirmLabel: 'Stop',
+                tone: 'danger',
+            })
             if (!confirmed) return
         }
 
@@ -264,11 +271,16 @@ export default function DashboardMobileSessionHostSheet({
         } finally {
             setBusyActionKey((current) => (current === actionKey ? null : current))
         }
-    }, [activeMachine?.id, refreshDiagnostics, sendDaemonCommand])
+    }, [activeMachine?.id, confirm, refreshDiagnostics, sendDaemonCommand])
 
     const runPruneDuplicates = useCallback(async () => {
         if (!activeMachine?.id) return
-        const confirmed = window.confirm('Prune duplicate hosted runtimes?\nThe newest runtime for each provider session will be kept and older duplicates will be stopped and removed.')
+        const confirmed = await confirm({
+            title: 'Prune duplicate hosted runtimes?',
+            description: 'The newest runtime for each provider session will be kept and older duplicates will be stopped and removed.',
+            confirmLabel: 'Prune',
+            tone: 'danger',
+        })
         if (!confirmed) return
 
         setBusyActionKey('session_host_prune_duplicate_sessions')
@@ -288,7 +300,7 @@ export default function DashboardMobileSessionHostSheet({
         } finally {
             setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
         }
-    }, [activeMachine?.id, refreshDiagnostics, sendDaemonCommand])
+    }, [activeMachine?.id, confirm, refreshDiagnostics, sendDaemonCommand])
 
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
@@ -632,6 +644,7 @@ export default function DashboardMobileSessionHostSheet({
                 </div>
             </div>
         </div>
+        {confirmDialog}
         </ModalPortal>
     )
 }

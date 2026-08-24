@@ -9,6 +9,7 @@ import { formatIdeType } from '../../utils/daemon-utils'
 import { eventManager } from '../../managers/EventManager'
 import type { LogEntry, IdeSessionEntry } from './types'
 import { useLaunchCli } from '../../context/LaunchCliContext'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 
 export interface LaunchPickState {
     cliType: string
@@ -40,6 +41,9 @@ interface UseMachineActionsOpts {
 
 export function useMachineActions({ machineId, registeredMachineId, sendDaemonCommand, onNicknameSynced, logsEndRef }: UseMachineActionsOpts) {
     const { launchCli } = useLaunchCli()
+    // In-app confirm (window.confirm is auto-dismissed in embedded browsers).
+    // The consuming page must render `confirmDialog` once in its JSX.
+    const { confirm, confirmDialog } = useConfirmDialog()
     const [logs, setLogs] = useState<LogEntry[]>([])
     const [launchingIde, setLaunchingIde] = useState<string | null>(null)
     const [launchingAgentType, setLaunchingAgentType] = useState<string | null>(null)
@@ -148,13 +152,18 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
 
     const handleStopCli = useCallback(async (cliType: string, dir: string, entryId?: string) => {
         if (!machineId) return
-        if (!window.confirm(`Stop ${cliType}?\nThis will terminate the process.`)) return
+        if (!(await confirm({
+            title: `Stop ${cliType}?`,
+            description: 'This will terminate the process.',
+            confirmLabel: 'Stop',
+            tone: 'danger',
+        }))) return
         try {
             const res: any = await sendDaemonCommand(machineId, 'stop_cli', { cliType, dir, targetSessionId: entryId })
             if (res?.success) addLog('info', `${cliType} stopped`, true)
             else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`, true)
         } catch (e: any) { addLog('error', `Stop failed: ${e.message}`, true) }
-    }, [machineId, addLog, sendDaemonCommand])
+    }, [machineId, addLog, confirm, sendDaemonCommand])
 
     const handleRestartIde = useCallback(async (ide: IdeSessionEntry) => {
         try {
@@ -164,13 +173,18 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     }, [addLog, sendDaemonCommand])
 
     const handleStopIde = useCallback(async (ide: IdeSessionEntry) => {
-        if (!window.confirm(`Stop ${formatIdeType(ide.type)}?\nThis will disconnect CDP and optionally kill the process.`)) return
+        if (!(await confirm({
+            title: `Stop ${formatIdeType(ide.type)}?`,
+            description: 'This will disconnect CDP and optionally kill the process.',
+            confirmLabel: 'Stop',
+            tone: 'danger',
+        }))) return
         try {
             const res: any = await sendDaemonCommand(ide.daemonId, 'stop_ide', { ideType: ide.type, killProcess: true })
             if (res?.success) addLog('info', `${formatIdeType(ide.type)} stopped`, true)
             else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`, true)
         } catch (e: any) { addLog('error', `Stop failed: ${e.message}`, true) }
-    }, [addLog, sendDaemonCommand])
+    }, [addLog, confirm, sendDaemonCommand])
 
     const handleDetectIdes = useCallback(async () => {
         if (!machineId) return
@@ -198,8 +212,11 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         finally { setWorkspaceBusy(false) }
     }, [machineId, addLog, sendDaemonCommand])
 
+    // Confirmation is the caller's job (inline two-step button in
+    // ManagedWorkspacesSection) — window.confirm is silently auto-dismissed in
+    // embedded/webview browsers, which made this a no-op there.
     const handleWorkspaceRemove = useCallback(async (id: string) => {
-        if (!machineId || !window.confirm('Remove this workspace from the list?')) return
+        if (!machineId) return
         setWorkspaceBusy(true)
         try {
             const res: any = await sendDaemonCommand(machineId, 'workspace_remove', { id })
@@ -273,6 +290,8 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         handleWorkspaceAdd, handleWorkspaceRemove,
         handleWorkspaceSetDefault, handleWorkspaceResumePath,
         handleSaveNickname,
+        // Must be rendered once by the consuming page for confirm() to show.
+        confirmDialog,
         setOnDefaultWorkspaceChanged,
     }
 }

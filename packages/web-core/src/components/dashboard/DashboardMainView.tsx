@@ -20,6 +20,7 @@ import ModalPortal from '../ui/ModalPortal'
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications'
 import type { DashboardLayoutProfile } from '../../utils/dashboardLayoutStorage'
 import { useDashboardMainViewUiState, type DashboardMainViewShortcutSectionId } from '../../hooks/useDashboardMainViewUiState'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { conversationMatchesTarget } from './conversation-identity'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
@@ -86,6 +87,17 @@ interface DashboardMainViewProps {
     onRequestedMobileTabConsumed: () => void
     requestedMachineId: string | null
     onRequestedMachineConsumed: () => void
+    // Route-level request to open the new-session dialog preselected on a
+    // machine (and optionally one of its saved workspaces) — e.g. the launch
+    // shortcut on the machine page's workspace list. mode 'mesh' opens the
+    // coordinator flow with the mesh rooted at meshWorkspacePath preselected.
+    requestedNewSessionLaunch?: {
+        machineId: string
+        workspaceId?: string | null
+        mode?: 'workspace' | 'mesh'
+        meshWorkspacePath?: string | null
+    } | null
+    onRequestedNewSessionLaunchConsumed?: () => void
     requestedMobileSection: DashboardMobileSection | null
     onRequestedMobileSectionConsumed: () => void
     containerRef: React.RefObject<HTMLDivElement>
@@ -191,6 +203,8 @@ export default function DashboardMainView({
     onRequestedMobileTabConsumed,
     requestedMachineId,
     onRequestedMachineConsumed,
+    requestedNewSessionLaunch,
+    onRequestedNewSessionLaunchConsumed,
     requestedMobileSection,
     onRequestedMobileSectionConsumed,
     containerRef,
@@ -280,6 +294,34 @@ export default function DashboardMainView({
         visibleConversationCount: visibleConversations.length,
     })
 
+    // Preselect target for the new-session dialog (machine-page launch shortcut).
+    // Copied out of the route request before it is consumed/cleared, dropped when
+    // the dialog closes so the plain header "+" opens with defaults again.
+    const [newSessionInitialTarget, setNewSessionInitialTarget] = React.useState<{
+        machineId: string
+        workspaceId?: string | null
+        mode?: 'workspace' | 'mesh'
+        meshWorkspacePath?: string | null
+    } | null>(null)
+    React.useEffect(() => {
+        if (!requestedNewSessionLaunch) return
+        setNewSessionInitialTarget({
+            machineId: requestedNewSessionLaunch.machineId,
+            workspaceId: requestedNewSessionLaunch.workspaceId ?? null,
+            mode: requestedNewSessionLaunch.mode || 'workspace',
+            meshWorkspacePath: requestedNewSessionLaunch.meshWorkspacePath ?? null,
+        })
+        openNewSession()
+        onRequestedNewSessionLaunchConsumed?.()
+    }, [requestedNewSessionLaunch, openNewSession, onRequestedNewSessionLaunchConsumed])
+    const handleCloseNewSession = React.useCallback(() => {
+        setNewSessionInitialTarget(null)
+        closeNewSession()
+    }, [closeNewSession])
+
+    // In-app confirm (window.confirm is auto-dismissed in embedded browsers).
+    const { confirm: confirmAction, confirmDialog: actionConfirmDialog } = useConfirmDialog()
+
     const [gitDialogTarget, setGitDialogTarget] = React.useState<{ daemonId: string; workspace: string } | null>(null)
     const [meshGraphConversation, setMeshGraphConversation] = React.useState<ActiveConversation | null>(null)
     const handleOpenGitDialog = React.useCallback((daemonId: string, workspace: string) => {
@@ -318,12 +360,16 @@ export default function DashboardMainView({
         onMarkNotificationRead,
         onRequestScrollToBottom,
     ])
-    const handleResetAllPanelsToMain = React.useCallback(() => {
-        const confirmed = window.confirm('Move every floating or popout panel back into the main dashboard grid?')
+    const handleResetAllPanelsToMain = React.useCallback(async () => {
+        const confirmed = await confirmAction({
+            title: t('common.confirmTitle'),
+            description: 'Move every floating or popout panel back into the main dashboard grid?',
+            confirmLabel: t('common.confirm'),
+        })
         if (!confirmed) return
         dockviewActionHandlersRef.current?.resetAllPanelsToMain()
         handleHiddenOpenChange(false)
-    }, [handleHiddenOpenChange])
+    }, [confirmAction, handleHiddenOpenChange, t])
 
     const handleApprovalShortcut = React.useCallback(async (buttonIndex: number) => {
         if (!activeConv) return
@@ -502,16 +548,18 @@ export default function DashboardMainView({
         saveShortcuts(next)
     }, [actionDefinitions, saveShortcuts])
 
-    const handleResetShortcutsToDefaults = React.useCallback(() => {
-        if (typeof window !== 'undefined') {
-            const confirmed = window.confirm(t('dashboard.guide.shortcuts.resetConfirm'))
-            if (!confirmed) return
-        }
+    const handleResetShortcutsToDefaults = React.useCallback(async () => {
+        const confirmed = await confirmAction({
+            title: t('common.confirmTitle'),
+            description: t('dashboard.guide.shortcuts.resetConfirm'),
+            confirmLabel: t('common.confirm'),
+        })
+        if (!confirmed) return
         const next = Object.fromEntries(
             actionDefinitions.map(action => [action.id, action.defaultShortcut]),
         ) as Record<(typeof actionDefinitions)[number]['id'], string>
         saveShortcuts(next)
-    }, [actionDefinitions, saveShortcuts, t])
+    }, [actionDefinitions, confirmAction, saveShortcuts, t])
 
     React.useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -670,9 +718,14 @@ export default function DashboardMainView({
             )}
             {newSessionOpen && (
                 <DashboardNewSessionDialog
+                    key={newSessionInitialTarget ? `${newSessionInitialTarget.machineId}:${newSessionInitialTarget.workspaceId || ''}:${newSessionInitialTarget.mode || ''}:${newSessionInitialTarget.meshWorkspacePath || ''}` : 'default'}
                     machines={machineEntries}
                     ides={ides}
-                    onClose={closeNewSession}
+                    initialMachineId={newSessionInitialTarget?.machineId || null}
+                    initialWorkspaceId={newSessionInitialTarget?.workspaceId || null}
+                    initialLaunchMode={newSessionInitialTarget?.mode || null}
+                    initialMeshWorkspacePath={newSessionInitialTarget?.meshWorkspacePath || null}
+                    onClose={handleCloseNewSession}
                     onBrowseDirectory={onBrowseMachineDirectory}
                     onSaveWorkspace={onSaveMachineWorkspace}
                     onLaunchIde={onLaunchMachineIde}
@@ -689,6 +742,7 @@ export default function DashboardMainView({
                     onClose={() => setMeshGraphConversation(null)}
                 />
             )}
+            {actionConfirmDialog}
             {gitDialogTarget && (
                 <GitStatusDialog
                     daemonId={gitDialogTarget.daemonId}

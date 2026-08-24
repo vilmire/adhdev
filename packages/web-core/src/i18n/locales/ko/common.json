@@ -4,7 +4,9 @@
         "select": "언어 선택"
     },
     "common": {
-        "cancel": "취소"
+        "cancel": "취소",
+        "confirm": "확인",
+        "confirmTitle": "계속할까요?"
     },
     "connection": {
         "loadingDashboard": "대시보드를 불러오는 중...",
@@ -3005,10 +3007,26 @@
             "daemonUpdate": "데몬 업데이트"
         },
         "workspaceBrowse": {
-            "currentFolder": "현재 폴더"
+            "currentFolder": "현재 폴더",
+            "parent": "상위 폴더",
+            "go": "이동",
+            "pathPlaceholder": "폴더 경로 입력",
+            "loading": "폴더 불러오는 중…",
+            "noSubfolders": "하위 폴더가 없습니다.",
+            "useThisFolder": "이 폴더 사용"
         },
         "managedWorkspaces": {
-            "remove": "제거"
+            "title": "워크스페이스",
+            "addWorkspace": "워크스페이스 추가",
+            "empty": "저장된 워크스페이스가 없습니다. \"{{button}}\" 버튼으로 폴더를 선택하세요.",
+            "addDialogDescription": "일반 탐색기처럼 머신을 둘러본 뒤, 현재 폴더를 워크스페이스로 추가하세요.",
+            "remove": "제거",
+            "newSession": "이 워크스페이스에서 새 세션 시작",
+            "newSessionShort": "세션",
+            "newMeshSession": "이 워크스페이스에서 메시 코디네이터 세션 시작",
+            "newMeshSessionShort": "메시",
+            "removeConfirmTitle": "워크스페이스 제거",
+            "removeConfirmDescription": "\"{{label}}\"을(를) 목록에서 제거할까요? 폴더 자체는 삭제되지 않습니다."
         },
         "quota": {
             "title": "플랜 사용량",

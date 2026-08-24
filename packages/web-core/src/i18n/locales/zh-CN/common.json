@@ -4,7 +4,9 @@
         "select": "选择语言"
     },
     "common": {
-        "cancel": "取消"
+        "cancel": "取消",
+        "confirm": "确认",
+        "confirmTitle": "确定继续吗？"
     },
     "connection": {
         "loadingDashboard": "正在加载仪表板...",
@@ -3005,10 +3007,26 @@
             "daemonUpdate": "守护进程更新"
         },
         "workspaceBrowse": {
-            "currentFolder": "当前文件夹"
+            "currentFolder": "当前文件夹",
+            "parent": "上级",
+            "go": "前往",
+            "pathPlaceholder": "输入文件夹路径",
+            "loading": "正在加载文件夹…",
+            "noSubfolders": "没有子文件夹。",
+            "useThisFolder": "使用此文件夹"
         },
         "managedWorkspaces": {
-            "remove": "移除"
+            "title": "工作区",
+            "addWorkspace": "添加工作区",
+            "empty": "还没有保存的工作区。点击 \"{{button}}\" 选择文件夹。",
+            "addDialogDescription": "像普通文件管理器一样浏览机器，然后将当前文件夹添加为工作区。",
+            "remove": "移除",
+            "newSession": "在此工作区启动新会话",
+            "newSessionShort": "会话",
+            "newMeshSession": "在此工作区启动网格协调器会话",
+            "newMeshSessionShort": "网格",
+            "removeConfirmTitle": "移除工作区",
+            "removeConfirmDescription": "从列表中移除 \"{{label}}\" 吗？文件夹本身不会被删除。"
         },
         "quota": {
             "title": "套餐用量",

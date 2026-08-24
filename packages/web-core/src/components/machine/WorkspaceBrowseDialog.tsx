@@ -25,7 +25,7 @@ export default function WorkspaceBrowseDialog({
     directories,
     busy = false,
     error = '',
-    confirmLabel = 'Use this folder',
+    confirmLabel,
     onClose,
     onNavigate,
     onConfirm,
@@ -33,6 +33,7 @@ export default function WorkspaceBrowseDialog({
     const [pathInput, setPathInput] = useState(currentPath)
 
     const { t } = useTranslation('common')
+    const resolvedConfirmLabel = confirmLabel ?? t('machine.workspaceBrowse.useThisFolder')
     useEffect(() => {
         setPathInput(currentPath)
     }, [currentPath])
@@ -79,7 +80,7 @@ export default function WorkspaceBrowseDialog({
                         disabled={!parentPath || busy}
                     >
                         <IconChevronLeft size={15} />
-                        Parent
+                        {t('machine.workspaceBrowse.parent')}
                     </button>
                     <div className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2">
                         <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-1">{t('machine.workspaceBrowse.currentFolder')}</div>
@@ -93,7 +94,7 @@ export default function WorkspaceBrowseDialog({
                                     event.preventDefault()
                                     onNavigate(trimmedPathInput)
                                 }}
-                                placeholder="Type a folder path"
+                                placeholder={t('machine.workspaceBrowse.pathPlaceholder')}
                                 className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
                             />
                             <button
@@ -105,7 +106,7 @@ export default function WorkspaceBrowseDialog({
                                 }}
                                 disabled={!trimmedPathInput || busy}
                             >
-                                Go
+                                {t('machine.workspaceBrowse.go')}
                             </button>
                         </div>
                     </div>
@@ -113,11 +114,11 @@ export default function WorkspaceBrowseDialog({
 
                 <div className="flex-1 min-h-0 overflow-y-auto bg-bg-primary/40">
                     {busy ? (
-                        <div className="px-5 py-5 text-sm text-text-secondary">Loading folders…</div>
+                        <div className="px-5 py-5 text-sm text-text-secondary">{t('machine.workspaceBrowse.loading')}</div>
                     ) : error ? (
                         <div className="px-5 py-5 text-sm text-status-error">{error}</div>
                     ) : directories.length === 0 ? (
-                        <div className="px-5 py-5 text-sm text-text-secondary">No subfolders here.</div>
+                        <div className="px-5 py-5 text-sm text-text-secondary">{t('machine.workspaceBrowse.noSubfolders')}</div>
                     ) : (
                         <div className="p-3">
                             {directories.map((directory) => (
@@ -143,10 +144,10 @@ export default function WorkspaceBrowseDialog({
                 <div className="flex items-center justify-end gap-2 px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))] sm:px-5 sm:py-4 border-t border-border-subtle bg-bg-secondary shrink-0">
                     <button
                         type="button"
-                        className="machine-btn text-xs"
+                        className="btn btn-secondary h-9 px-4 text-sm"
                         onClick={onClose}
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         type="button"
@@ -154,7 +155,7 @@ export default function WorkspaceBrowseDialog({
                         onClick={() => onConfirm(trimmedPathInput || currentPath)}
                         disabled={(!trimmedPathInput && !currentPath) || busy}
                     >
-                        {confirmLabel}
+                        {resolvedConfirmLabel}
                     </button>
                 </div>
             </div>

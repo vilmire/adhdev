@@ -55,6 +55,9 @@ export default function Dashboard() {
     const urlActiveTab = searchParams.get('activeTab')
     const requestedRemoteTabTarget = (location.state as { openRemoteForTabKey?: string } | null)?.openRemoteForTabKey || null
     const requestedMachineId = (location.state as { openMachineId?: string } | null)?.openMachineId || null
+    const requestedNewSessionLaunch = (location.state as {
+        openNewSession?: { machineId: string; workspaceId?: string | null; mode?: 'workspace' | 'mesh'; meshWorkspacePath?: string | null }
+    } | null)?.openNewSession || null
     const requestedMobileSection = (location.state as { mobileSection?: DashboardMobileSection } | null)?.mobileSection || null
 
     const daemonCtx = useDaemons()
@@ -474,6 +477,10 @@ export default function Dashboard() {
                 onRequestedMobileTabConsumed={consumeRequestedActiveTab}
                 requestedMachineId={requestedMachineId}
                 onRequestedMachineConsumed={() => {
+                    navigate(location.pathname + location.search, { replace: true, state: null })
+                }}
+                requestedNewSessionLaunch={requestedNewSessionLaunch}
+                onRequestedNewSessionLaunchConsumed={() => {
                     navigate(location.pathname + location.search, { replace: true, state: null })
                 }}
                 requestedMobileSection={requestedMobileSection}

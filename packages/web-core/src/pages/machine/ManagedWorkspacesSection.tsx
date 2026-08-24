@@ -10,11 +10,14 @@
  *   - Open the folder browser dialog to add a new workspace
  *   - Remove a saved workspace
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
 import { getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import Card from '../../components/Card'
-import { IconFolder } from '../../components/Icons'
+import ConfirmDialog from '../../components/ConfirmDialog'
+import { IconFolder, IconPlus, IconTrash } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
@@ -24,6 +27,10 @@ import {
     getDefaultBrowseStartPath,
     type BrowseDirectoryEntry,
 } from '../../components/machine/workspaceBrowse'
+
+function normalizeWorkspacePath(path: string): string {
+    return path.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
 
 interface ManagedWorkspacesSectionProps {
     machineId: string
@@ -50,7 +57,55 @@ export default function ManagedWorkspacesSection({
     } = actions
 
     const { t } = useTranslation('common')
+    const navigate = useNavigate()
+    const meshOverrides = useDashboardMeshOverrides()
     const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
+    // Normalized workspace paths that are the root of a repo mesh on this
+    // machine — those rows additionally offer a "+ mesh" coordinator launch.
+    const [meshWorkspacePaths, setMeshWorkspacePaths] = useState<Set<string>>(() => new Set())
+    // In-app remove confirmation (window.confirm is auto-dismissed in embedded
+    // browsers, which made the old confirm-gated remove a silent no-op there).
+    const [removeTarget, setRemoveTarget] = useState<{ id: string; label: string } | null>(null)
+
+    useEffect(() => {
+        let cancelled = false
+        void (async () => {
+            try {
+                let workspaces: Array<string | null | undefined> = []
+                if (meshOverrides?.listMeshes) {
+                    workspaces = (await meshOverrides.listMeshes(machineId)).map(mesh => mesh.workspace)
+                } else {
+                    const raw: any = await sendDaemonCommand(machineId, 'list_meshes', {})
+                    const result = raw?.result ?? raw
+                    const meshes = Array.isArray(result?.meshes) ? result.meshes : []
+                    workspaces = meshes.map((mesh: any) => (
+                        Array.isArray(mesh?.nodes) && mesh.nodes.length > 0 ? String(mesh.nodes[0]?.workspace || '') : null
+                    ))
+                }
+                if (cancelled) return
+                setMeshWorkspacePaths(new Set(
+                    workspaces.filter((path): path is string => !!path).map(normalizeWorkspacePath),
+                ))
+            } catch {
+                // Mesh list is an enhancement — rows just won't show the mesh shortcut.
+            }
+        })()
+        return () => { cancelled = true }
+    }, [machineId, meshOverrides, sendDaemonCommand])
+
+    // Same effect as the dashboard header "+" button, but preselected on this
+    // machine + workspace. The dialog lives on the dashboard route (that's where
+    // the launch handlers and the resulting session tab are), so we navigate
+    // there with a one-shot open request instead of duplicating the launch stack.
+    const openNewSessionForWorkspace = useCallback((workspaceId: string) => {
+        navigate('/dashboard', { state: { openNewSession: { machineId, workspaceId } } })
+    }, [machineId, navigate])
+
+    const openNewMeshSessionForWorkspace = useCallback((workspaceId: string, workspacePath: string) => {
+        navigate('/dashboard', {
+            state: { openNewSession: { machineId, workspaceId, mode: 'mesh', meshWorkspacePath: workspacePath } },
+        })
+    }, [machineId, navigate])
     const [browseCurrentPath, setBrowseCurrentPath] = useState('')
     const [browseDirectories, setBrowseDirectories] = useState<BrowseDirectoryEntry[]>([])
     const [browseBusy, setBrowseBusy] = useState(false)
@@ -93,19 +148,19 @@ export default function ManagedWorkspacesSection({
             <Card padding="lg" className="mb-4">
                 <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="text-2xs text-text-muted font-semibold uppercase tracking-wider flex items-center gap-1.5">
-                        <IconFolder size={14} /> Workspaces
+                        <IconFolder size={14} /> {t('machine.managedWorkspaces.title')}
                     </div>
                     <button
                         type="button"
                         className="btn bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary px-3 py-1 rounded transition-colors text-xs"
                         disabled={workspaceBusy}
                         onClick={openBrowseDialog}
-                    >+ Add workspace</button>
+                    >+ {t('machine.managedWorkspaces.addWorkspace')}</button>
                 </div>
 
                 {(machine.workspaces || []).length === 0 ? (
                     <div className="text-2xs text-text-muted py-4 text-center">
-                        No saved workspaces yet. Click <span className="text-text-secondary">+ Add workspace</span> to pick a folder.
+                        {t('machine.managedWorkspaces.empty', { button: t('machine.managedWorkspaces.addWorkspace') })}
                     </div>
                 ) : (
                     <ul className="space-y-1.5 max-h-72 overflow-y-auto">
@@ -139,10 +194,28 @@ export default function ManagedWorkspacesSection({
                                     </div>
                                     <button
                                         type="button"
-                                        className="text-3xs text-red-400/90 hover:underline shrink-0"
+                                        title={t('machine.managedWorkspaces.newSession')}
+                                        className="btn shrink-0 flex items-center gap-1 bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary px-2 py-1 rounded transition-colors text-3xs"
                                         disabled={workspaceBusy}
-                                        onClick={() => void handleWorkspaceRemove(w.id)}
-                                    >{t('machine.managedWorkspaces.remove')}</button>
+                                        onClick={() => openNewSessionForWorkspace(w.id)}
+                                    ><IconPlus size={11} />{t('machine.managedWorkspaces.newSessionShort')}</button>
+                                    {meshWorkspacePaths.has(normalizeWorkspacePath(w.path)) && (
+                                        <button
+                                            type="button"
+                                            title={t('machine.managedWorkspaces.newMeshSession')}
+                                            className="btn shrink-0 flex items-center gap-1 bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary px-2 py-1 rounded transition-colors text-3xs"
+                                            disabled={workspaceBusy}
+                                            onClick={() => openNewMeshSessionForWorkspace(w.id, w.path)}
+                                        ><IconPlus size={11} />{t('machine.managedWorkspaces.newMeshSessionShort')}</button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        title={t('machine.managedWorkspaces.remove')}
+                                        aria-label={t('machine.managedWorkspaces.remove')}
+                                        className="shrink-0 p-1 rounded text-text-muted/60 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                        disabled={workspaceBusy}
+                                        onClick={() => setRemoveTarget({ id: w.id, label: getWorkspaceDisplayLabel(w.path, w.label) })}
+                                    ><IconTrash size={13} /></button>
                                 </li>
                             )
                         })}
@@ -152,13 +225,13 @@ export default function ManagedWorkspacesSection({
 
             {browseDialogOpen && (
                 <WorkspaceBrowseDialog
-                    title="Add workspace"
-                    description="Browse the machine like a normal explorer, then add the current folder as a saved workspace."
+                    title={t('machine.managedWorkspaces.addWorkspace')}
+                    description={t('machine.managedWorkspaces.addDialogDescription')}
                     currentPath={browseCurrentPath}
                     directories={browseDirectories}
                     busy={browseBusy}
                     error={browseError}
-                    confirmLabel="Add workspace"
+                    confirmLabel={t('machine.managedWorkspaces.addWorkspace')}
                     onClose={() => setBrowseDialogOpen(false)}
                     onNavigate={(path) => { void loadBrowsePath(path) }}
                     onConfirm={(path) => {
@@ -167,6 +240,22 @@ export default function ManagedWorkspacesSection({
                             const added = await handleWorkspaceAdd(path)
                             if (added) setBrowseDialogOpen(false)
                         })()
+                    }}
+                />
+            )}
+
+            {removeTarget && (
+                <ConfirmDialog
+                    title={t('machine.managedWorkspaces.removeConfirmTitle')}
+                    description={t('machine.managedWorkspaces.removeConfirmDescription', { label: removeTarget.label })}
+                    confirmLabel={t('machine.managedWorkspaces.remove')}
+                    tone="danger"
+                    busy={workspaceBusy}
+                    onCancel={() => setRemoveTarget(null)}
+                    onConfirm={() => {
+                        const target = removeTarget
+                        setRemoveTarget(null)
+                        if (target) void handleWorkspaceRemove(target.id)
                     }}
                 />
             )}

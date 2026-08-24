@@ -15,6 +15,7 @@ import type {
 } from '@adhdev/daemon-core';
 import { useTransport } from '../../context/TransportContext';
 import { eventManager } from '../../managers/EventManager';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 
 // Module-level cache for dynamic options (persists across tab switches)
 const _optionsCache = new Map<string, Record<string, ControlOption[]>>();
@@ -298,6 +299,7 @@ export default function ControlsBar({
     controls, controlValues, currentStatus, coordinatorHint,
 }: ControlsBarProps) {
     const { sendCommand } = useTransport();
+    const { confirm, confirmDialog } = useConfirmDialog();
     const cacheKey = `${routeId}:${sessionId || providerType}`;
     const accent = AGENT_COLORS[providerType] || '#94a3b8';
 
@@ -527,9 +529,11 @@ export default function ControlsBar({
     const handleActionClick = async (ctrl: ProviderControlSchema) => {
         if (!ctrl.invokeScript) return;
         if (ctrl.confirmMessage) {
-            const confirmLines = [ctrl.confirmTitle, ctrl.confirmMessage, ctrl.confirmLabel]
-                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
-            const confirmed = window.confirm(confirmLines.join('\n\n'));
+            const confirmed = await confirm({
+                title: ctrl.confirmTitle?.trim() || ctrl.confirmMessage,
+                description: ctrl.confirmTitle?.trim() ? ctrl.confirmMessage : undefined,
+                confirmLabel: ctrl.confirmLabel?.trim() || 'Confirm',
+            });
             if (!confirmed) return;
         }
         const previousValue = controlValues?.[ctrl.id] ?? defaultValues[ctrl.id];
@@ -706,6 +710,7 @@ export default function ControlsBar({
                     }
                 })}
             </div>
+            {confirmDialog}
         </div>
     );
 }

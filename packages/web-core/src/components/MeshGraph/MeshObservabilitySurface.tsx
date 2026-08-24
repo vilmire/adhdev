@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { useTheme } from '../../hooks/useTheme'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import MeshGraphView from './MeshGraphView'
 import MeshTasksView from './MeshTasksView'
 import MeshOverviewCards from './MeshOverviewCards'
@@ -225,6 +226,7 @@ export default function MeshObservabilitySurface({
     const [detailSelection, setDetailSelection] = useState<DetailSelection | null>(null)
     const [gitHistoryByWorkspace, setGitHistoryByWorkspace] = useState<Record<string, GitHistoryState>>({})
     const [healPreview, setHealPreview] = useState<HealPreviewState | null>(null)
+    const { confirm, confirmDialog } = useConfirmDialog()
     const [healingNodeId, setHealingNodeId] = useState<string | null>(null)
 
     const nodeStatusById = useMemo(() => new Map(canonicalStatus.nodes.map(node => [node.nodeId, node])), [canonicalStatus.nodes])
@@ -354,7 +356,10 @@ export default function MeshObservabilitySurface({
                 executed: dryRun?.executed === true,
             })
             if (!dryRun?.success || dryRun.code !== 'fast_forward_available') return
-            const ok = window.confirm(`Apply fast-forward for ${selectedGraphNode.label}?`)
+            const ok = await confirm({
+                title: `Apply fast-forward for ${selectedGraphNode.label}?`,
+                confirmLabel: 'Fast-forward',
+            })
             if (!ok) return
             const executedRaw = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
                 meshId: canonicalStatus.meshId,
@@ -379,7 +384,7 @@ export default function MeshObservabilitySurface({
         } finally {
             setHealingNodeId(null)
         }
-    }, [canHealSelectedNode, canonicalStatus.meshId, selectedGraphNode, selectedHealDaemonId, sendDaemonCommand])
+    }, [canHealSelectedNode, canonicalStatus.meshId, confirm, selectedGraphNode, selectedHealDaemonId, sendDaemonCommand])
 
     useEffect(() => {
         if (!selectedGraphNode && !selectedGraphEdge) return
@@ -931,6 +936,7 @@ export default function MeshObservabilitySurface({
             </div>
             </div>
 
+            {confirmDialog}
         </div>
         </MeshGraphThemeContext.Provider>
     )

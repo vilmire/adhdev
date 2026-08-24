@@ -758,6 +758,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                     onClose={() => setGitDialogTarget(null)}
                 />
             )}
+            {actions.confirmDialog}
             {/* Toast Notifications */}
             <ToastContainer
                 toasts={daemonCtx.toasts || []}

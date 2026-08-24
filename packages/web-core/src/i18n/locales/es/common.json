@@ -4,7 +4,9 @@
         "select": "Seleccionar idioma"
     },
     "common": {
-        "cancel": "Cancelar"
+        "cancel": "Cancelar",
+        "confirm": "Confirmar",
+        "confirmTitle": "¿Estás seguro?"
     },
     "connection": {
         "loadingDashboard": "Cargando tu panel...",
@@ -3010,10 +3012,26 @@
             "daemonUpdate": "Actualización del daemon"
         },
         "workspaceBrowse": {
-            "currentFolder": "Carpeta actual"
+            "currentFolder": "Carpeta actual",
+            "parent": "Superior",
+            "go": "Ir",
+            "pathPlaceholder": "Escribe la ruta de una carpeta",
+            "loading": "Cargando carpetas…",
+            "noSubfolders": "No hay subcarpetas.",
+            "useThisFolder": "Usar esta carpeta"
         },
         "managedWorkspaces": {
-            "remove": "Eliminar"
+            "title": "Workspaces",
+            "addWorkspace": "Añadir workspace",
+            "empty": "Aún no hay workspaces guardados. Pulsa \"{{button}}\" para elegir una carpeta.",
+            "addDialogDescription": "Explora la máquina como en un explorador normal y añade la carpeta actual como workspace.",
+            "remove": "Eliminar",
+            "newSession": "Iniciar una nueva sesión en este workspace",
+            "newSessionShort": "Sesión",
+            "newMeshSession": "Iniciar una sesión de coordinador de mesh en este workspace",
+            "newMeshSessionShort": "Mesh",
+            "removeConfirmTitle": "Eliminar workspace",
+            "removeConfirmDescription": "¿Eliminar \"{{label}}\" de la lista? La carpeta en sí no se elimina."
         },
         "quota": {
             "title": "Cuota del plan",
