@@ -324,7 +324,7 @@ import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
 const DEFAULT_BASE_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal';
 
 /**
- * Pinned from `agy --version` on the development machine (2026-08-20).
+ * Pinned from `agy --version` on Jupiter(linux) (2026-08-24); confirmed 1.1.19 returns 200.
  *
  * HARDCODED, deliberately. Reading it from the binary at runtime would mean
  * locating and spawning `agy`, which this fetcher must not do (PATH on win32
@@ -334,7 +334,7 @@ const DEFAULT_BASE_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal';
  * not a silent 429. Update the pin when someone next confirms a new `agy
  * --version` still 200s — do not invent a version probe to "fix" it.
  */
-const ANTIGRAVITY_USER_AGENT_VERSION = '1.1.16';
+const ANTIGRAVITY_USER_AGENT_VERSION = '1.1.19';
 
 /**
  * Client identity Cloud Code expects. OS/arch follow the Go convention the

@@ -781,7 +781,7 @@ describe('fetchAntigravityQuota', () => {
         // fetcher obtained.
         expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
         // Cloud Code 403s a Node/undici default UA on the daily host.
-        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(/^antigravity\/1\.1\.16 /);
+        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(/^antigravity\/1\.1\.19 /);
     });
 
     it('sends no grant/client credentials in any request body it makes', async () => {
