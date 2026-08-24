@@ -98,10 +98,14 @@ describe('machine detail — Overview tab', () => {
     expect(overviewSource).toMatch(/collectQuotaEntries\(machine\.quota\)[\s\S]{0,120}entries\.length === 0\) return null/)
   })
 
-  it('shows both windows tinted, and the failure text when there are none', () => {
-    expect(overviewSource).toContain('quotaUsageTone(quota.session?.usedPercent ?? NaN)')
-    expect(overviewSource).toContain('quotaUsageTone(quota.weekly?.usedPercent ?? NaN)')
-    expect(overviewSource).toContain('describeQuotaFailure(quota)')
+  it('shows tinted window chips, and the failure text when there are none', () => {
+    // Content assembly (windows, tones, failure text) comes from the shared
+    // view-model — the card only styles the kinds. The per-surface copies of
+    // this logic are what drifted before; quota-display-model.test.ts guards
+    // the full consumer set.
+    expect(overviewSource).toContain('buildQuotaDisplayModel(quota)')
+    expect(overviewSource).toContain("model.kind === 'chips'")
+    expect(overviewSource).toContain("model.kind === 'failure'")
   })
 
   it('imports quota helpers only from utils/quota-format', () => {
@@ -120,9 +124,11 @@ describe('session info dialog — compact form', () => {
     // joined only when there is something to join — see formatQuotaAccount.
     expect(dialogSource).toMatch(/<Row\s+key=\{provider\}/)
     expect(dialogSource).toContain("k={[quotaProviderLabel(provider), formatQuotaAccount(quota)].filter(Boolean).join(' · ')}")
-    expect(dialogSource).toContain('<QuotaChip label={`5h ${session}`}')
-    expect(dialogSource).toContain('<QuotaChip label={`7d ${weekly}`}')
-    expect(dialogSource).toContain('describeQuotaFailure(quota)')
+    // Chip content (window labels, tones, failure text) comes from the shared
+    // view-model; the dialog only picks the compact Row styling.
+    expect(dialogSource).toContain('buildQuotaDisplayModel(quota)')
+    expect(dialogSource).toMatch(/model\.chips\.map\(chip => \(\s*<QuotaChip/)
+    expect(dialogSource).toContain("model.kind === 'usage'")
   })
 
   it('OMITS the freshness stamp and the card chrome the mesh tab uses', () => {

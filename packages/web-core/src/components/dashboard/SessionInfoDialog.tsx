@@ -25,16 +25,10 @@ import {
 import Dialog from '../ui/Dialog'
 import { requestOpenSessionChat } from '../../utils/session-nav'
 import {
+    buildQuotaDisplayModel,
     collectQuotaEntries,
-    collectQuotaBucketChips,
-    describeQuotaFailure,
-    describeQuotaOkWithoutWindows,
     formatQuotaAccount,
-    formatQuotaUsage,
-    formatQuotaWindow,
     quotaProviderLabel,
-    quotaUsageTone,
-    quotaWindowCue,
 } from '../../utils/quota-format'
 // Type-only, from the dependency-free mesh-shared leaf.
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
@@ -253,42 +247,28 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 meaning when comparing machines side by side, and this
                                 dialog is a label/value list about one session. */}
                             {collectQuotaEntries(data.quota).map(({ provider, quota }) => {
-                                const cue = quotaWindowCue(quota)
-                                const session = formatQuotaWindow(quota.session, undefined, cue)
-                                const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
-                                const monthly = formatQuotaWindow(quota.monthly, undefined, cue)
-                                // Multi-pool providers (antigravity): per-pool buckets
-                                // replace the collapsed worst-of-pools axes.
-                                const bucketChips = collectQuotaBucketChips(quota)
-                                // Usage-shaped provider (opencode): absolute
-                                // tokens/cost, no percent windows to chip.
-                                const usage = formatQuotaUsage(quota)
-                                // 'ok' with no windows = successful reading with no
-                                // percentage axis (cursor included-usage) — show the
-                                // provider's own message, never the failure line.
-                                const okSummary = !session && !weekly && !monthly && bucketChips.length === 0 && !usage
-                                    ? (describeQuotaOkWithoutWindows(quota) ?? (quota.status === 'ok' ? t('sessionInfo.quotaOkNoWindows') : null))
-                                    : null
+                                // Content assembly (cue, buckets-replace-axes,
+                                // monthly, usage fallback, ok-without-windows vs
+                                // failure) is the shared view-model's job; this
+                                // dialog only picks the compact Row styling.
+                                const model = buildQuotaDisplayModel(quota)
                                 return (
                                     <Row
                                         key={provider}
                                         k={[quotaProviderLabel(provider), formatQuotaAccount(quota)].filter(Boolean).join(' · ')}
                                         v={
-                                            session || weekly || monthly || bucketChips.length > 0 ? (
+                                            model.kind === 'chips' ? (
                                                 <span className="inline-flex flex-wrap items-center gap-1.5">
-                                                    {bucketChips.map(chip => (
-                                                        <QuotaChip key={chip.label} label={`${chip.label} ${formatQuotaWindow(chip.window, undefined, cue)}`} tone={quotaUsageTone(chip.usedPercent)} />
+                                                    {model.chips.map(chip => (
+                                                        <QuotaChip key={chip.key} label={chip.label} tone={chip.tone} />
                                                     ))}
-                                                    {bucketChips.length === 0 && session && <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} />}
-                                                    {bucketChips.length === 0 && weekly && <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} />}
-                                                    {bucketChips.length === 0 && monthly && <QuotaChip label={`30d ${monthly}`} tone={quotaUsageTone(quota.monthly?.usedPercent ?? NaN)} />}
                                                 </span>
-                                            ) : usage ? (
-                                                <QuotaChip label={usage} tone="info" />
-                                            ) : okSummary ? (
-                                                <span className="text-text-secondary">{okSummary}</span>
+                                            ) : model.kind === 'usage' ? (
+                                                <QuotaChip label={model.usageLabel!} tone="info" />
+                                            ) : model.kind === 'okNoWindows' ? (
+                                                <span className="text-text-secondary">{model.message ?? t('sessionInfo.quotaOkNoWindows')}</span>
                                             ) : (
-                                                <span className="text-text-secondary">{describeQuotaFailure(quota)}</span>
+                                                <span className="text-text-secondary">{model.message}</span>
                                             )
                                         }
                                     />

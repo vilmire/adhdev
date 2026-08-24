@@ -399,11 +399,14 @@ describe('provider quota helpers', () => {
       /machine\.hasReported\s*\?\s*t\('mesh\.status\.quotaNotCollected'\)\s*:\s*t\('mesh\.status\.machineNotReporting'\)/,
     )
     expect(source).toMatch(/machineNotReporting'\)\}\s*<\/div>/)
-    // Failing -> the failureKind-bearing description.
-    expect(source).toContain('describeQuotaFailure(quota)')
-    // Normal -> both windows, tinted by usage.
-    expect(source).toContain('quotaUsageTone(quota.session?.usedPercent ?? NaN)')
-    expect(source).toContain('quotaUsageTone(quota.weekly?.usedPercent ?? NaN)')
+    // Failing -> the failureKind-bearing description. It arrives as the
+    // 'failure' kind of the shared view-model (whose message IS
+    // describeQuotaFailure — content assembly moved into buildQuotaDisplayModel
+    // so the four quota surfaces cannot drift apart again).
+    expect(source).toContain("model.kind === 'failure'")
+    // Normal -> tinted window chips, straight off the same view-model.
+    expect(source).toContain('buildQuotaDisplayModel(quota)')
+    expect(source).toContain("model.kind === 'chips'")
   })
 
   it('groups on the canonical daemon id helper rather than raw string equality', () => {
@@ -496,8 +499,8 @@ describe('claude-only quota setup hint', () => {
     expect(source).toContain('shouldShowClaudeSetupHint(provider, quota)')
     expect(source).toContain("t('mesh.status.quotaClaudeSetupHint')")
     // The three-state branches are untouched: the hint sits alongside the
-    // failure text, inside the same !hasWindows provider row.
-    expect(source).toContain('describeQuotaFailure(quota)')
+    // failure text (the view-model's 'failure' kind), in the same provider row.
+    expect(source).toContain("model.kind === 'failure'")
     expect(source).toContain("t('mesh.status.quotaNotCollected')")
     expect(source).toContain("t('mesh.status.machineNotReporting')")
   })

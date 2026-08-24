@@ -235,6 +235,113 @@ export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota): string 
     return quota.status === 'unavailable' ? 'not available on this node' : 'could not read quota'
 }
 
+export type QuotaTone = 'default' | 'good' | 'warn' | 'danger' | 'info'
+
+/** Which reading a display chip carries — callers map this to their own hover title. */
+export type QuotaChipHint = 'session' | 'weekly' | 'monthly' | 'bucket' | 'usage'
+
+export interface QuotaDisplayChip {
+    /** Stable render key ('session' / 'weekly' / 'monthly' or the bucket label). */
+    key: string
+    /** Full chip text — "5h 26.0% used · resets in 2h 14m", "Gemini 7d 9.0% used". */
+    label: string
+    /** Finite for window/bucket chips; null for the usage chip (no percent axis). */
+    usedPercent: number | null
+    hint: QuotaChipHint
+    /** Same 70/90 thresholds as the `adhdev quota` CLI ('info' for usage chips). */
+    tone: QuotaTone
+}
+
+export interface QuotaDisplayModel {
+    /**
+     * chips       — percentage windows exist (per-pool buckets, or the 5h/7d/30d axes)
+     * usage       — no windows; a usage-shaped reading (opencode: tokens/cost over a trailing window)
+     * okNoWindows — successful reading with no axis at all (cursor included-usage);
+     *               `message` is the provider's own line, or null → caller renders its neutral i18n line
+     * failure     — the machine looked and could not read it; `message` is always set
+     */
+    kind: 'chips' | 'usage' | 'okNoWindows' | 'failure'
+    /** Freshness cue the chips already carry in their labels — exposed for callers that need it. */
+    cue: QuotaWindowCue | undefined
+    /** Non-empty exactly when kind === 'chips'. */
+    chips: QuotaDisplayChip[]
+    /** Set exactly when kind === 'usage'. */
+    usageLabel: string | null
+    /** okNoWindows: provider message or null; failure: never null. */
+    message: string | null
+    /**
+     * The single "smallest useful reading" for tight surfaces (the provider-row
+     * header chip): the 5h axis, else the 7d axis, else the usage summary, else
+     * null. Deliberately built from the collapsed AXES even when per-pool
+     * buckets replace them in `chips` — a one-chip surface wants the worst-of-
+     * pools headline, not one arbitrary pool. Never a monthly-only reading:
+     * a 30d billing axis alone is not a "how am I doing right now" number.
+     */
+    compactChip: QuotaDisplayChip | null
+}
+
+/**
+ * THE single content-assembly step for every quota display surface.
+ *
+ * Four dashboards render the same MeshNodeFactsProviderQuota snapshot (mesh
+ * Status tab, machine Overview card, session-info dialog, installed-provider
+ * row). Each used to re-derive cue/buckets/axes/usage/ok-without-windows/
+ * failure on its own, and the rules drifted apart repeatedly (monthly axis,
+ * neutral ok-line, bucket replacement, cue threading — all re-aligned by hand
+ * on 2026-08-24). Styles may differ per surface; the CONTENT decisions all
+ * live here. Consumers must not reassemble axes from the raw snapshot — the
+ * drift-guard test (test/utils/quota-display-model.test.ts) pins that.
+ */
+export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now: number = Date.now()): QuotaDisplayModel {
+    const cue = quotaWindowCue(quota)
+    const axisChip = (window: MeshNodeFactsQuotaWindow | null | undefined, hint: 'session' | 'weekly' | 'monthly', prefix: string): QuotaDisplayChip | null => {
+        const text = formatQuotaWindow(window, now, cue)
+        if (!text) return null
+        const usedPercent = window!.usedPercent
+        return { key: hint, label: `${prefix} ${text}`, usedPercent, hint, tone: quotaUsageTone(usedPercent) }
+    }
+    const session = axisChip(quota.session, 'session', '5h')
+    const weekly = axisChip(quota.weekly, 'weekly', '7d')
+    const monthly = axisChip(quota.monthly, 'monthly', '30d')
+
+    // Multi-pool providers (antigravity): the per-pool buckets REPLACE the
+    // collapsed worst-of-pools axes — showing both would render the same
+    // numbers twice.
+    const bucketChips: QuotaDisplayChip[] = collectQuotaBucketChips(quota).map(chip => ({
+        key: chip.label,
+        label: `${chip.label} ${formatQuotaWindow(chip.window, now, cue)}`,
+        usedPercent: chip.usedPercent,
+        hint: 'bucket' as const,
+        tone: quotaUsageTone(chip.usedPercent),
+    }))
+    const chips = bucketChips.length > 0
+        ? bucketChips
+        : [session, weekly, monthly].filter((c): c is QuotaDisplayChip => c !== null)
+
+    // Usage-shaped provider (opencode): absolute tokens/cost, no percent
+    // windows to chip. Only reached when no window rendered.
+    const usageLabel = formatQuotaUsage(quota)
+    const usageChip: QuotaDisplayChip | null = usageLabel
+        ? { key: 'usage', label: usageLabel, usedPercent: null, hint: 'usage', tone: 'info' }
+        : null
+
+    const compactChip = session ?? weekly ?? usageChip
+
+    if (chips.length > 0) {
+        return { kind: 'chips', cue, chips, usageLabel: null, message: null, compactChip }
+    }
+    if (usageChip) {
+        return { kind: 'usage', cue, chips: [], usageLabel, message: null, compactChip }
+    }
+    if (quota.status === 'ok') {
+        // 'ok' with no windows at all = a SUCCESSFUL reading whose provider has
+        // no percentage axis (cursor included-usage) — its own message when it
+        // has one, NEVER the failure line. null → caller's neutral i18n line.
+        return { kind: 'okNoWindows', cue, chips: [], usageLabel: null, message: describeQuotaOkWithoutWindows(quota), compactChip: null }
+    }
+    return { kind: 'failure', cue, chips: [], usageLabel: null, message: describeQuotaFailure(quota), compactChip: null }
+}
+
 /**
  * Should we explain, next to this provider's failure line, WHY Claude alone
  * needs a setup step?

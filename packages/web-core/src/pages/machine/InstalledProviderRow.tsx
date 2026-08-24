@@ -15,7 +15,7 @@ import Card from '../../components/Card'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
-import { formatQuotaUsage, formatQuotaWindow, quotaUsageTone, quotaWindowCue } from '../../utils/quota-format'
+import { buildQuotaDisplayModel, type QuotaChipHint } from '../../utils/quota-format'
 import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
 import { ProviderLogo } from '../../components/ProviderLogo'
 
@@ -42,6 +42,15 @@ const STATUS_CLASS: Record<string, string> = {
     not_detected: 'bg-red-500/[0.10] border-red-500/25 text-red-400',
     enabled_unchecked: 'bg-yellow-500/[0.10] border-yellow-500/25 text-yellow-400',
     disabled: 'bg-white/[0.04] border-white/[0.10] text-text-muted',
+}
+
+/** Hover-title i18n key per chip kind — the compactChip only ever carries session/weekly/usage. */
+const QUOTA_CHIP_TITLE_KEYS: Record<QuotaChipHint, string> = {
+    bucket: 'machine.quota.bucketHint',
+    session: 'machine.quota.sessionHint',
+    weekly: 'machine.quota.weeklyHint',
+    monthly: 'machine.quota.monthlyHint',
+    usage: 'machine.quota.usageHint',
 }
 
 /** Quota chip tones — same palette as the Overview quota chips. */
@@ -210,25 +219,15 @@ export default function InstalledProviderRow({
             : (rawStatus || (enabled ? 'enabled_unchecked' : 'disabled'))
     const isRuntime = isMachineRuntimeProvider(prov.category)
     // Inline plan-quota chip (owner feedback 2026-08-10): the smallest useful
-    // reading — the session window when present, else the weekly window, else
-    // the usage summary (opencode). Tone follows the same 70/90 thresholds as
-    // every other quota surface.
+    // reading — the shared view-model's compactChip (session window, else
+    // weekly, else the usage summary). Content selection lives in
+    // buildQuotaDisplayModel; only the tone classes and hover titles are this
+    // row's styling.
     const quotaChip = (() => {
         if (!quota) return null
-        const cue = quotaWindowCue(quota)
-        const session = formatQuotaWindow(quota.session, undefined, cue)
-        if (session) {
-            const tone = quotaUsageTone(quota.session?.usedPercent ?? NaN)
-            return { label: `5h ${session}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.sessionHint') }
-        }
-        const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
-        if (weekly) {
-            const tone = quotaUsageTone(quota.weekly?.usedPercent ?? NaN)
-            return { label: `7d ${weekly}`, tone: QUOTA_CHIP_TONE[tone], title: t('machine.quota.weeklyHint') }
-        }
-        const usage = formatQuotaUsage(quota)
-        if (usage) return { label: usage, tone: QUOTA_CHIP_TONE.info, title: t('machine.quota.usageHint') }
-        return null
+        const chip = buildQuotaDisplayModel(quota).compactChip
+        if (!chip) return null
+        return { label: chip.label, tone: QUOTA_CHIP_TONE[chip.tone], title: t(QUOTA_CHIP_TITLE_KEYS[chip.hint]) }
     })()
 
     return (

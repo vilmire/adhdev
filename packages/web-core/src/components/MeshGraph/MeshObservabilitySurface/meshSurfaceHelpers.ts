@@ -22,6 +22,7 @@ import {
     quotaUsageTone,
     formatQuotaReset,
     formatQuotaWindow,
+    buildQuotaDisplayModel,
     collectQuotaBucketChips,
     describeQuotaFailure,
     describeQuotaOkWithoutWindows,
@@ -29,6 +30,8 @@ import {
     formatQuotaAccount,
     shouldShowClaudeSetupHint,
     quotaWindowCue,
+    type QuotaChipHint,
+    type QuotaDisplayModel,
 } from '../../../utils/quota-format'
 export {
     quotaProviderLabel,
@@ -37,11 +40,14 @@ export {
     shouldShowClaudeSetupHint,
     formatQuotaReset,
     formatQuotaWindow,
+    buildQuotaDisplayModel,
     collectQuotaBucketChips,
     describeQuotaFailure,
     describeQuotaOkWithoutWindows,
     formatQuotaFreshness,
     quotaWindowCue,
+    type QuotaChipHint,
+    type QuotaDisplayModel,
 }
 
 export type SessionListEntry = {

@@ -12,21 +12,17 @@ import {
     SCHEDULING_STRATEGY_LABELS,
     collectMachineQuotaGroups,
     machineKeyForMeshNode,
-    collectQuotaBucketChips,
-    describeQuotaFailure,
-    describeQuotaOkWithoutWindows,
+    buildQuotaDisplayModel,
     formatQuotaAccount,
     formatQuotaFreshness,
-    formatQuotaWindow,
     healthTone,
     quotaProviderLabel,
-    quotaUsageTone,
-    quotaWindowCue,
     schedulingReasonLabel,
     shouldShowClaudeSetupHint,
     shortCommit,
     summarizeNodeDrift,
     type MachineQuotaGroup,
+    type QuotaChipHint,
 } from './meshSurfaceHelpers'
 
 // ─── Status / Runtime tab ───────────────────────────────────────────────────
@@ -120,7 +116,16 @@ function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSch
 //     shown, because that is what tells "not installed" from "channel broken".
 //   - ok: the 5h / 7d windows, tinted at the same 70/90% thresholds the
 //     `adhdev quota` CLI uses.
-function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQuotaGroup; providerVersions?: Array<[string, string]> }) {
+/** Hover titles per chip kind — mesh-card styling; the chip CONTENT comes from the shared model. */
+const QUOTA_CHIP_TITLES: Record<QuotaChipHint, string> = {
+    bucket: 'Per-pool quota bucket reported by this machine — pools on one plan reset independently',
+    session: 'Rolling 5-hour plan window reported by this machine',
+    weekly: 'Rolling 7-day plan window reported by this machine',
+    monthly: 'Rolling 30-day billing window reported by this machine',
+    usage: 'Usage totals reported by this machine — this provider reports spend, not a percentage window',
+}
+
+export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQuotaGroup; providerVersions?: Array<[string, string]> }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const freshness = formatQuotaFreshness(machine.reportedAt)
@@ -157,19 +162,11 @@ function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQ
             ) : (
                 <div className="mt-2 flex flex-col gap-1.5">
                     {machine.quota.map(({ provider, quota }) => {
-                        const cue = quotaWindowCue(quota)
-                        const session = formatQuotaWindow(quota.session, undefined, cue)
-                        const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
-                        const monthly = formatQuotaWindow(quota.monthly, undefined, cue)
-                        // Multi-pool providers (antigravity): the per-pool buckets
-                        // REPLACE the collapsed worst-of-pools axes — showing both
-                        // would render the same numbers twice.
-                        const bucketChips = collectQuotaBucketChips(quota)
-                        const hasWindows = !!(session || weekly || monthly || bucketChips.length > 0)
-                        // 'ok' with no windows is a SUCCESSFUL reading whose
-                        // provider has no percentage axis to chart (cursor
-                        // included-usage accounts) — never a failure line.
-                        const okSummary = !hasWindows ? describeQuotaOkWithoutWindows(quota) : null
+                        // ALL content decisions (cue, bucket-replaces-axes,
+                        // monthly axis, usage fallback, ok-without-windows vs
+                        // failure) live in the shared view-model — this card
+                        // only chooses HOW each kind looks (Badge styling).
+                        const model = buildQuotaDisplayModel(quota)
                         return (
                             <div key={provider} className="flex flex-wrap items-center gap-1.5">
                                 <span className={`text-2xs ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
@@ -181,43 +178,29 @@ function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQ
                                         {formatQuotaAccount(quota)}
                                     </span>
                                 )}
-                                {bucketChips.map(chip => (
+                                {model.kind === 'chips' && model.chips.map(chip => (
                                     <Badge
-                                        key={chip.label}
-                                        label={`${chip.label} ${formatQuotaWindow(chip.window, undefined, cue)}`}
-                                        tone={quotaUsageTone(chip.usedPercent)}
-                                        title="Per-pool quota bucket reported by this machine — pools on one plan reset independently"
+                                        key={chip.key}
+                                        label={chip.label}
+                                        tone={chip.tone}
+                                        title={QUOTA_CHIP_TITLES[chip.hint]}
                                     />
                                 ))}
-                                {bucketChips.length === 0 && session && (
+                                {model.kind === 'usage' && (
                                     <Badge
-                                        label={`5h ${session}`}
-                                        tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)}
-                                        title="Rolling 5-hour plan window reported by this machine"
+                                        label={model.usageLabel!}
+                                        tone="info"
+                                        title={QUOTA_CHIP_TITLES.usage}
                                     />
                                 )}
-                                {bucketChips.length === 0 && weekly && (
-                                    <Badge
-                                        label={`7d ${weekly}`}
-                                        tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)}
-                                        title="Rolling 7-day plan window reported by this machine"
-                                    />
-                                )}
-                                {bucketChips.length === 0 && monthly && (
-                                    <Badge
-                                        label={`30d ${monthly}`}
-                                        tone={quotaUsageTone(quota.monthly?.usedPercent ?? NaN)}
-                                        title="Rolling 30-day billing window reported by this machine"
-                                    />
-                                )}
-                                {!hasWindows && quota.status === 'ok' && (
+                                {model.kind === 'okNoWindows' && (
                                     <span className={`text-2xs ${meshTheme.textSecondary}`} title="Read successfully — this provider reports no percentage window">
-                                        {okSummary ?? t('mesh.status.quotaOkNoWindows')}
+                                        {model.message ?? t('mesh.status.quotaOkNoWindows')}
                                     </span>
                                 )}
-                                {!hasWindows && quota.status !== 'ok' && (
+                                {model.kind === 'failure' && (
                                     <span className={`text-2xs ${meshTheme.textSecondary}`} title="This machine reported that it could not read this provider's quota">
-                                        {describeQuotaFailure(quota)}
+                                        {model.message}
                                     </span>
                                 )}
                                 {/* Claude-only: the daemon's message already names the

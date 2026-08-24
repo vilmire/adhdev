@@ -84,7 +84,12 @@ describe('formatQuotaWindow — no-data stale marker', () => {
     } as never)).toBeUndefined()
   })
 
-  it('every dashboard surface that formats a window passes quotaWindowCue', () => {
+  it('every dashboard surface gets the cue via the shared view-model', () => {
+    // Surfaces no longer thread the cue themselves: buildQuotaDisplayModel
+    // computes it once and bakes it into every chip label, so a surface cannot
+    // forget it (the pre-consolidation drift). The builder is the single place
+    // allowed to call quotaWindowCue; quota-display-model.test.ts pins the
+    // full forbidden-symbol set per surface.
     const files = [
       '../../src/pages/machine/OverviewTab.tsx',
       '../../src/pages/machine/InstalledProviderRow.tsx',
@@ -93,9 +98,11 @@ describe('formatQuotaWindow — no-data stale marker', () => {
     ]
     for (const rel of files) {
       const source = fs.readFileSync(path.join(import.meta.dirname, rel), 'utf8')
-      expect(source, rel).toContain('quotaWindowCue(quota)')
+      expect(source, rel).toContain('buildQuotaDisplayModel(quota)')
       expect(source, rel).not.toContain('lastGoodWindows === true')
     }
+    const model = fs.readFileSync(path.join(import.meta.dirname, '../../src/utils/quota-format.ts'), 'utf8')
+    expect(model).toMatch(/buildQuotaDisplayModel[\s\S]{0,200}quotaWindowCue\(quota\)/)
   })
 })
 

@@ -11,16 +11,11 @@ import StatCard from '../../components/StatCard'
 import Card from '../../components/Card'
 import { IconClock, IconMonitor, IconTerminal, IconBot } from '../../components/Icons'
 import {
+    buildQuotaDisplayModel,
     collectQuotaEntries,
-    collectQuotaBucketChips,
-    describeQuotaFailure,
-    describeQuotaOkWithoutWindows,
     formatQuotaAccount,
-    formatQuotaUsage,
-    formatQuotaWindow,
     quotaProviderLabel,
-    quotaUsageTone,
-    quotaWindowCue,
+    type QuotaChipHint,
 } from '../../utils/quota-format'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 
@@ -31,6 +26,15 @@ const QUOTA_TONE_CLASS: Record<string, string> = {
     danger: 'bg-red-500/10 text-red-500',
     default: 'bg-white/5 text-text-secondary',
     info: 'bg-blue-500/10 text-blue-500',
+}
+
+/** Hover-title i18n key per chip kind — page styling; chip CONTENT comes from the shared model. */
+const QUOTA_CHIP_TITLE_KEYS: Record<QuotaChipHint, string> = {
+    bucket: 'machine.quota.bucketHint',
+    session: 'machine.quota.sessionHint',
+    weekly: 'machine.quota.weeklyHint',
+    monthly: 'machine.quota.monthlyHint',
+    usage: 'machine.quota.usageHint',
 }
 
 function QuotaChip({ label, tone, title }: { label: string; tone: string; title?: string }) {
@@ -62,16 +66,10 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
             </div>
             <div className="flex flex-col gap-2">
                 {entries.map(({ provider, quota }) => {
-                    const cue = quotaWindowCue(quota)
-                    const session = formatQuotaWindow(quota.session, undefined, cue)
-                    const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
-                    const monthly = formatQuotaWindow(quota.monthly, undefined, cue)
-                    const usage = formatQuotaUsage(quota)
-                    // Multi-pool providers (antigravity): per-pool buckets replace
-                    // the collapsed worst-of-pools axes.
-                    const bucketChips = collectQuotaBucketChips(quota)
-                    const hasWindows = !!(session || weekly || monthly || bucketChips.length > 0)
-                    const okSummary = !hasWindows && !usage ? describeQuotaOkWithoutWindows(quota) : null
+                    // Content assembly (cue, buckets-replace-axes, monthly,
+                    // usage fallback, ok-without-windows vs failure) is the
+                    // shared view-model's job; this card only styles it.
+                    const model = buildQuotaDisplayModel(quota)
                     return (
                         <div key={provider} className="flex flex-wrap items-center gap-2">
                             <span className="text-[12px] text-text-primary min-w-[92px]">{quotaProviderLabel(provider)}</span>
@@ -82,34 +80,25 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                                     {formatQuotaAccount(quota)}
                                 </span>
                             )}
-                            {bucketChips.map(chip => (
-                                <QuotaChip key={chip.label} label={`${chip.label} ${formatQuotaWindow(chip.window, undefined, cue)}`} tone={quotaUsageTone(chip.usedPercent)} title={t('machine.quota.bucketHint')} />
+                            {model.kind === 'chips' && model.chips.map(chip => (
+                                <QuotaChip key={chip.key} label={chip.label} tone={chip.tone} title={t(QUOTA_CHIP_TITLE_KEYS[chip.hint])} />
                             ))}
-                            {bucketChips.length === 0 && session && (
-                                <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} title={t('machine.quota.sessionHint')} />
-                            )}
-                            {bucketChips.length === 0 && weekly && (
-                                <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} title={t('machine.quota.weeklyHint')} />
-                            )}
-                            {bucketChips.length === 0 && monthly && (
-                                <QuotaChip label={`30d ${monthly}`} tone={quotaUsageTone(quota.monthly?.usedPercent ?? NaN)} title={t('machine.quota.monthlyHint')} />
-                            )}
                             {/* Usage-shaped provider (opencode): absolute tokens/cost,
                                 no percent windows to chip. */}
-                            {!hasWindows && usage && (
-                                <QuotaChip label={usage} tone="info" title={t('machine.quota.usageHint')} />
+                            {model.kind === 'usage' && (
+                                <QuotaChip label={model.usageLabel!} tone="info" title={t('machine.quota.usageHint')} />
                             )}
                             {/* 'ok' with no windows at all = a successful reading whose
                                 provider has no percentage axis (cursor included-usage) —
                                 its own message, never the failure line. */}
-                            {!hasWindows && !usage && quota.status === 'ok' && (
+                            {model.kind === 'okNoWindows' && (
                                 <span className="text-2xs text-text-secondary" title={t('machine.quota.okNoWindowsHint')}>
-                                    {okSummary ?? t('machine.quota.okNoWindows')}
+                                    {model.message ?? t('machine.quota.okNoWindows')}
                                 </span>
                             )}
-                            {!hasWindows && !usage && quota.status !== 'ok' && (
+                            {model.kind === 'failure' && (
                                 <span className="text-2xs text-text-secondary" title={t('machine.quota.failureHint')}>
-                                    {describeQuotaFailure(quota)}
+                                    {model.message}
                                 </span>
                             )}
                         </div>
