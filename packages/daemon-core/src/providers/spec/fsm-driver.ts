@@ -22,7 +22,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { TerminalAdapter, type TerminalAdapterOpts, type SpecPtyEvent } from './adapter.js';
-import { resolveCliSpawnPlanFromParts } from '../../cli-adapters/provider-cli-runtime.js';
+import { resolveCliSpawnPlanFromParts, stripRemovedSpawnArgs } from '../../cli-adapters/provider-cli-runtime.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import {
@@ -194,6 +194,19 @@ export interface SpecDriverOpts {
      * cannot weaken the echo-gate that d7332b84 put in front of the submit key.
      */
     manifestSendDelayMs?: number;
+    /**
+     * PERMISSION-MODE-DUPLICATE: the selected auto-approve mode's `removeArgs` — base-arg
+     * flags that this launch's `extraCliArgs` replace. `applyAutoApproveModeLaunchArgs`
+     * filters them out of the provider MANIFEST's `spawn.args`, but this path spawns from
+     * the SPEC's `spawn_args`, so without threading the list here the two collide: grok-cli
+     * in `auto` mode spawned `--permission-mode acceptEdits --permission-mode auto`, which
+     * its clap-based CLI rejects.
+     *
+     * The LIST is threaded rather than a pre-filtered array because the manifest and the
+     * spec legitimately declare different values for the same flag (claude-cli: manifest
+     * `acceptEdits`, specs/4.0.json `default`).
+     */
+    removeSpawnArgs?: string[];
 }
 
 function countNewlines(s: string): number {
@@ -873,9 +886,17 @@ export class FsmDriver implements ISpecDriver {
         // `this.spec.binary` straight to the PTY.
         const cols = this.opts.cols ?? DEFAULT_SESSION_HOST_COLS;
         const rows = this.opts.rows ?? DEFAULT_SESSION_HOST_ROWS;
+        // PERMISSION-MODE-DUPLICATE: the spec's own base args are subject to the
+        // selected auto-approve mode's removeArgs, exactly as the manifest's
+        // spawn.args are in applyAutoApproveModeLaunchArgs. Without this the two
+        // sources both contribute a `--permission-mode`.
+        const specSpawnArgs = stripRemovedSpawnArgs(
+            this.spec.spawn_args ?? [],
+            this.opts.removeSpawnArgs ?? [],
+        );
         const plan = resolveCliSpawnPlanFromParts({
             command: this.spec.binary,
-            baseArgs: this.spec.spawn_args ?? [],
+            baseArgs: specSpawnArgs,
             baseEnv: this.spec.env ?? {},
             workingDir: this.opts.workingDir,
             extraArgs: this.opts.extraCliArgs ?? [],

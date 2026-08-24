@@ -57,6 +57,110 @@ export interface CliSpawnGeometry {
     rows?: number;
 }
 
+/** A `--flag` / `-f` token, as opposed to a positional or a flag's value. */
+function isFlagToken(arg: unknown): arg is string {
+    return typeof arg === 'string' && arg.startsWith('-') && arg !== '-' && arg !== '--';
+}
+
+/**
+ * Flags declared by `extraArgs`, normalized to their bare form so both the
+ * `--flag value` and `--flag=value` spellings collapse to `--flag`.
+ */
+function collectDeclaredFlags(extraArgs: readonly string[]): Set<string> {
+    const flags = new Set<string>();
+    for (const arg of extraArgs) {
+        if (!isFlagToken(arg)) continue;
+        const eq = arg.indexOf('=');
+        flags.add(eq > 0 ? arg.slice(0, eq) : arg);
+    }
+    return flags;
+}
+
+/**
+ * Strip an auto-approve mode's `removeArgs` from a set of base spawn args.
+ *
+ * `removeArgs` names the FLAGS a mode replaces (manifests also tend to list the
+ * provider's default VALUE as a second entry, e.g. grok-cli declares
+ * `['--permission-mode', 'acceptEdits']`), but the value a given base-arg source
+ * actually carries is not knowable from the list: claude-cli's manifest says
+ * `--permission-mode acceptEdits` while its specs/4.0.json says
+ * `--permission-mode default`. So a removed flag also consumes its following
+ * token when that token is a value rather than another flag — matching by
+ * position instead of by the listed value. A bare value entry in `removeArgs`
+ * still matches a standalone token, preserving the manifest-path behaviour.
+ */
+export function stripRemovedSpawnArgs(
+    baseArgs: readonly string[],
+    removeArgs: readonly string[],
+): string[] {
+    if (removeArgs.length === 0) return [...baseArgs];
+    const kept: string[] = [];
+    for (let i = 0; i < baseArgs.length; i += 1) {
+        const arg = baseArgs[i];
+        const matched = removeArgs.some((removeArg) =>
+            arg === removeArg || (removeArg.startsWith('--') && arg.startsWith(`${removeArg}=`)));
+        if (!matched) {
+            kept.push(arg);
+            continue;
+        }
+        // A removed `--flag` in the space-separated form takes its value with it;
+        // leaving the value behind would turn it into a stray positional.
+        if (isFlagToken(arg) && arg.indexOf('=') < 0 && i + 1 < baseArgs.length && !isFlagToken(baseArgs[i + 1])) {
+            i += 1;
+        }
+    }
+    return kept;
+}
+
+/**
+ * LAST-WINS ARG DEDUPE — the single chokepoint that keeps a per-launch arg from
+ * colliding with the base args the spec/manifest already declared.
+ *
+ * The auto-approve `launch-args` strategy prepends a mode's `launchArgs` to the
+ * per-launch args while the provider's own base args still carry the provider
+ * default for the same flag, so grok-cli launched in `auto` mode produced
+ * `--permission-mode acceptEdits --permission-mode auto`. grok's CLI is Rust/clap,
+ * which rejects a repeated flag outright and the launch died; claude-cli is
+ * commander.js, which silently takes the last one — same defect, no error, and so
+ * it went unnoticed. Deduping here covers every provider on both spawn paths
+ * rather than one manifest at a time.
+ *
+ * Value pairing matters: dropping only the `--permission-mode` token would leave
+ * its value `acceptEdits` behind as a stray positional, which is a worse failure
+ * than the duplicate. Base args are space-separated `--flag value` pairs (specs
+ * and manifests both spell them that way), so a removed flag also consumes the
+ * following token when that token is not itself a flag. The `--flag=value` form
+ * is self-contained and consumes nothing extra.
+ *
+ * Only flags that `extraArgs` actually declares are removed; everything else in
+ * `baseArgs` is preserved in order.
+ */
+export function dedupeBaseArgsAgainstExtraArgs(
+    baseArgs: readonly string[],
+    extraArgs: readonly string[],
+): string[] {
+    const declared = collectDeclaredFlags(extraArgs);
+    if (declared.size === 0) return [...baseArgs];
+
+    const kept: string[] = [];
+    for (let i = 0; i < baseArgs.length; i += 1) {
+        const arg = baseArgs[i];
+        if (!isFlagToken(arg)) {
+            kept.push(arg);
+            continue;
+        }
+        const eq = arg.indexOf('=');
+        const bare = eq > 0 ? arg.slice(0, eq) : arg;
+        if (!declared.has(bare)) {
+            kept.push(arg);
+            continue;
+        }
+        // Drop the flag, and its value too when it is a separate token.
+        if (eq < 0 && i + 1 < baseArgs.length && !isFlagToken(baseArgs[i + 1])) i += 1;
+    }
+    return kept;
+}
+
 /**
  * Core spawn-plan resolution from already-flattened spawn parts — the single
  * source of truth for binary resolution (findBinary: PATH + npm-global / Node
@@ -91,7 +195,10 @@ export function resolveCliSpawnPlanFromParts(options: {
     const { command, baseArgs, shell, baseEnv, workingDir, extraArgs, extraEnv, geometry, diagnosticCliType, diagnosticProviderVersion } = options;
     const binaryPath = findBinary(command);
     const isWin = os.platform() === 'win32';
-    const allArgs = [...(baseArgs ?? []), ...(extraArgs ?? [])].map((arg) =>
+    // LAST-WINS ARG DEDUPE: a per-launch flag overrides the base args' spelling of
+    // the same flag instead of appearing twice. See dedupeBaseArgsAgainstExtraArgs.
+    const dedupedBaseArgs = dedupeBaseArgsAgainstExtraArgs(baseArgs ?? [], extraArgs ?? []);
+    const allArgs = [...dedupedBaseArgs, ...(extraArgs ?? [])].map((arg) =>
         typeof arg === 'string' ? arg.replace(/\{\{workingDir\}\}/g, workingDir) : arg,
     );
 

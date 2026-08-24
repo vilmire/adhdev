@@ -53,6 +53,18 @@ export function createCliAdapter(
      *  the legacy ProviderCliAdapter's `session_stopped` ledger attribution — that engine
      *  was deleted in 48e5ed1a.) */
     sessionId?: string,
+    /** PERMISSION-MODE-DUPLICATE: the selected auto-approve mode's `removeArgs`, i.e. the
+     *  base-arg flags this launch's `cliArgs` are replacing. applyAutoApproveModeLaunchArgs
+     *  applies them to the MANIFEST's `spawn.args`, but the spec path spawns from the SPEC's
+     *  `spawn_args` and never saw the list — so grok-cli launched in `auto` mode reached the
+     *  PTY as `--permission-mode acceptEdits --permission-mode auto` and its clap parser
+     *  rejected it outright.
+     *
+     *  This is deliberately the removeArgs LIST and not the already-filtered manifest array:
+     *  the two sources disagree in practice (claude-cli's manifest says `acceptEdits` where
+     *  its specs/4.0.json says `default`), so handing over a filtered manifest array would
+     *  overwrite the spec's own base args with a different provider's-eye-view of them. */
+    removeArgs?: string[],
 ): CliAdapter {
     // Prefer the path provider-loader already resolved (it walks the
     // compatibility[i].spec → specs/default.json → spec.json chain).
@@ -77,5 +89,6 @@ export function createCliAdapter(
     // silently run at 200ms. The driver treats it as a floor, never a reduction.
     return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
         sendDelayMs: provider.sendDelayMs,
+        removeArgs,
     });
 }
