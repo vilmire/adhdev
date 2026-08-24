@@ -1755,6 +1755,18 @@ export interface RepoMeshNodeStatus {
     machineId?: string;
     role?: RepoMeshDaemonRole;
     machineStatus?: string;
+    /**
+     * Machine identity projection (buildMeshNodeMachineIdentity): locality vs
+     * the coordinator plus the evidence used to decide it. UIs use it to name
+     * the MACHINE (hostname) independently of the derived node label.
+     */
+    machine?: {
+        sameMachine?: boolean;
+        locality?: string;
+        localityReason?: string;
+        coordinatorHostname?: string;
+        identityEvidence?: Array<{ label?: string; value?: string }>;
+    };
     isLocalWorktree?: boolean;
     worktreeBranch?: string;
     /** Mirrored from LocalMeshNodeEntry.systemPrompt for coordinator-prompt rendering. */

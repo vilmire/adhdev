@@ -378,11 +378,12 @@ describe('provider quota helpers', () => {
       path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface/MeshStatusTab.tsx'),
       'utf8',
     )
-    // Mounted as its own machine section, ABOVE the node list.
-    expect(source).toContain('<MeshMachinesQuotaSection status={canonicalStatus} />')
-    expect(source).toContain("t('mesh.status.machinesQuota')")
-    expect(source.indexOf('<MeshMachinesQuotaSection'))
-      .toBeLessThan(source.indexOf("t('mesh.status.nodesRuntime')"))
+    // Mounted as the machine ⊃ nodes hierarchy section: the machine card
+    // (quota + version consensus) renders first, its node rows nest under it.
+    expect(source).toContain('<MeshMachinesSection')
+    expect(source).toContain("t('mesh.status.machinesSection')")
+    expect(source.indexOf('<MeshMachineQuotaCard'))
+      .toBeLessThan(source.indexOf('<MeshNodeRuntimeRow'))
     // Quota must NOT render per node any more — that was the duplication bug.
     expect(source).not.toContain('<MeshNodeQuotaRows')
     expect(source).not.toContain('collectNodeQuotaEntries')

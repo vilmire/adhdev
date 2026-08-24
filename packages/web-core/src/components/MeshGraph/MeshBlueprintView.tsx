@@ -23,6 +23,7 @@ import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
 import { IconRefresh } from '../Icons'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
+import { machineKeyForMeshNode, resolveMachineLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import MeshTaskDagView from './MeshTaskDagView'
 import MeshBlueprintDagView from './MeshBlueprintDagView'
 
@@ -108,21 +109,24 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     const nowMs = useMemo(() => Date.now(), [graphs])
     const canCommand = Boolean(daemonId && sendDaemonCommand)
 
-    const nodeLabelById = useMemo(() => {
-        const map = new Map<string, string>()
+    // Machine ⊃ nodes: a node's display name is its checkout identity
+    // (⎇ branch for worktrees, base otherwise); the MACHINE is a separate
+    // grouping axis (machineKeyForMeshNode) used to dedupe slot/quota views.
+    const nodeMetaById = useMemo(() => {
+        const map = new Map<string, { nodeLabel: string; machineKey: string; machineLabel: string; isWorktree: boolean }>()
         for (const node of status.nodes ?? []) {
-            // A worktree node is NOT a machine — the daemon bakes the branch into
-            // machineLabel, which made worktrees read as separate machines. Show
-            // worktrees as `⎇ branch` so the identity is unmistakable.
             const worktreeBranch = (node as { worktreeBranch?: string }).worktreeBranch
-            const label = worktreeBranch
-                ? `⎇ ${worktreeBranch}`
-                : node.machineLabel
-                    || (typeof node.workspace === 'string' ? node.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '')
-            map.set(node.nodeId, label || node.nodeId.slice(0, 12))
+            const basename = typeof node.workspace === 'string' ? node.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : ''
+            const machineKey = machineKeyForMeshNode(node)
+            map.set(node.nodeId, {
+                nodeLabel: worktreeBranch ? `⎇ ${worktreeBranch}` : (basename || node.machineLabel || node.nodeId.slice(0, 12)),
+                machineKey,
+                machineLabel: resolveMachineLabel(status, machineKey),
+                isWorktree: !!worktreeBranch,
+            })
         }
         return map
-    }, [status.nodes])
+    }, [status])
 
     const refreshGraphs = useCallback(async () => {
         if (!canCommand) return
@@ -204,11 +208,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
             const first = nodes[0]
             const slot = first?.stages?.fitness?.[0] ?? first?.predictedWinner
             if (!first || !slot) continue
-            const nodeLabel = nodes.length > 1 ? `${nodeLabelById.get(first.nodeId) ?? first.nodeId.slice(0, 8)}/` : ''
-            out[difficulty] = `${nodeLabel}${slotLabel(slot)}`
+            const meta = nodeMetaById.get(first.nodeId)
+            const target = meta?.isWorktree ? ` @ ${meta.nodeLabel}` : ''
+            out[difficulty] = `${slotLabel(slot)}${target}`
         }
         return out
-    }, [schedMatrix, nodeLabelById])
+    }, [schedMatrix, nodeMetaById])
 
     const chipBase = 'shrink-0 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs transition-colors'
     const chipIdle = meshTheme.isDark
@@ -344,7 +349,27 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                 </div>
                                 {schedError && <div className="text-3xs text-red-400">{schedError}</div>}
                                 {(() => {
-                                    const nodes = schedMatrix[schedDetailDifficulty] ?? []
+                                    const previewNodes = schedMatrix[schedDetailDifficulty] ?? []
+                                    // Slots/capacity/quota are MACHINE properties — a machine's
+                                    // worktrees share one slot set, so listing every worktree
+                                    // repeated identical rows. One representative per machine
+                                    // (scheduler order); the winner row is annotated with the
+                                    // TARGET checkout (⎇ branch / base) the task would land on.
+                                    interface MachineGroup { machineKey: string; machineLabel: string; representative: RoutePreviewNode; targetNodeLabel: string }
+                                    const machineGroups: MachineGroup[] = []
+                                    const seenMachines = new Set<string>()
+                                    for (const previewNode of previewNodes) {
+                                        const meta = nodeMetaById.get(previewNode.nodeId)
+                                        const machineKey = meta?.machineKey ?? previewNode.nodeId
+                                        if (seenMachines.has(machineKey)) continue
+                                        seenMachines.add(machineKey)
+                                        machineGroups.push({
+                                            machineKey,
+                                            machineLabel: meta?.machineLabel ?? previewNode.nodeId.slice(0, 12),
+                                            representative: previewNode,
+                                            targetNodeLabel: meta?.isWorktree ? (meta.nodeLabel) : t('mesh.status.badgeBaseNode'),
+                                        })
+                                    }
                                     interface DetailRow {
                                         nodeLabel: string
                                         slot: { providerType: string; model?: string }
@@ -352,26 +377,29 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                         quotaOutcome?: string
                                         quotaBonus?: number
                                         status: 'next' | 'waiting' | 'full' | 'floor'
+                                        target?: string
                                     }
                                     const rows: DetailRow[] = []
-                                    nodes.forEach((node, nodeIndex) => {
-                                        const nodeLabel = nodeLabelById.get(node.nodeId) ?? node.nodeId.slice(0, 12)
+                                    machineGroups.forEach((group, machineIndex) => {
+                                        const node = group.representative
                                         const quotaByProvider = new Map((node.quotaDiagnostics ?? []).map(q => [q.providerType, q]))
                                         const ranked = node.stages?.fitness ?? []
                                         ranked.forEach((score, slotIndex) => {
                                             const quota = quotaByProvider.get(score.providerType)
+                                            const isNext = machineIndex === 0 && slotIndex === 0
                                             rows.push({
-                                                nodeLabel,
+                                                nodeLabel: group.machineLabel,
                                                 slot: score,
                                                 score,
                                                 quotaOutcome: quota?.gate?.outcome,
                                                 quotaBonus: score.quotaBonus ?? quota?.bonus?.value,
-                                                status: nodeIndex === 0 && slotIndex === 0 ? 'next'
+                                                status: isNext ? 'next'
                                                     : score.capacityAvailable === false ? 'full' : 'waiting',
+                                                ...(isNext ? { target: group.targetNodeLabel } : {}),
                                             })
                                         })
                                         for (const slot of node.stages?.difficultyFloor?.excludedSlots ?? []) {
-                                            rows.push({ nodeLabel, slot, status: 'floor' })
+                                            rows.push({ nodeLabel: group.machineLabel, slot, status: 'floor' })
                                         }
                                     })
                                     const statusBadge = (row: DetailRow) => {
@@ -390,12 +418,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                         return cap != null ? `${t('meshGraph.blueprint.schedFull')} (${cap})` : t('meshGraph.blueprint.schedFull')
                                     }
                                     if (rows.length === 0) return <div className="py-2 text-3xs text-text-muted">{t('meshGraph.blueprint.schedNoNodes')}</div>
-                                    const showNodeCol = nodes.length > 1
+                                    const showNodeCol = machineGroups.length > 1
                                     return (
                                         <table className="w-full border-collapse text-left">
                                             <thead>
                                                 <tr className="text-4xs uppercase tracking-wide text-text-muted">
-                                                    {showNodeCol && <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColNode')}</th>}
+                                                    {showNodeCol && <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColMachine')}</th>}
                                                     <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColSlot')}</th>
                                                     <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColScore')}</th>
                                                     <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColQuota')}</th>
@@ -417,7 +445,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                                                 : <span className="text-text-secondary">{row.quotaBonus != null ? `+${row.quotaBonus}` : '—'}</span>}
                                                         </td>
                                                         <td className="py-1 pr-2 text-3xs text-text-secondary">{capacityLabel(row)}</td>
-                                                        <td className="py-1">{statusBadge(row)}</td>
+                                                        <td className="py-1">
+                                                            <span className="flex items-center gap-1">
+                                                                {statusBadge(row)}
+                                                                {row.target && <span className="text-3xs text-text-muted">{row.target}</span>}
+                                                            </span>
+                                                        </td>
                                                     </tr>
                                                 ))}
                                             </tbody>

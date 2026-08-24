@@ -975,12 +975,12 @@
             "schedFloorExcluded": "難易度未満",
             "schedQuotaGated": "クォータ制限",
             "schedCapFree": "空き",
-            "schedColNode": "ノード",
             "schedColSlot": "スロット",
             "schedColScore": "スコア",
             "schedColQuota": "クォータ",
             "schedColParallel": "並列",
-            "schedColStatus": "状態"
+            "schedColStatus": "状態",
+            "schedColMachine": "マシン"
         }
     },
     "repoMesh": {
@@ -2646,11 +2646,9 @@
             "schedulingTitle": "スケジューリング",
             "distributionTitle": "分散は、ターゲット未指定の作業を対象ノード間にどう振り分けるかのみを制御します。ノードごとの負荷、優先度、プロバイダー上限は以下のとおりです。",
             "protocolTitle": "プロトコルとプロバイダーのバージョン",
-            "nodesRuntime": "ノード — ランタイム",
             "noNodesReporting": "ランタイムを報告しているノードはまだありません。",
             "quotaNotCollected": "プラン使用量はまだ収集されていません — マシンは最初の更新（約15分）以降、エージェントが動作していた場合にのみ報告します。",
             "quotaFreshnessHint": "この使用量が含まれていたランタイム facts バンドルの経過時間",
-            "machinesQuota": "マシン — プラン使用量",
             "machineNotReporting": "このマシンはまだランタイム情報を報告していません — オフラインまたは接続不可のため、プラン使用量は不明です。",
             "quotaClaudeSetupHint": "Claude Code には使用量 API がないため、ADHDev は statusLine から読み取ります。`adhdev quota claude:install` は既存の statusline をラップして動作を維持し、claude:uninstall で復元できます。",
             "quotaAccountHint": "この使用量が属するログイン中のアカウント（プロバイダー CLI の報告値）",
@@ -2671,7 +2669,12 @@
             "badgeStaleBuildTitle": "ライブデーモンがワークスペース HEAD より古いビルド",
             "badgeDeployLagTitle": "実行中デーモンのビルドが origin/main と異なる — デプロイ+再起動待ち",
             "machinesNotReporting_one": "未報告マシン {{count}} 台: {{machines}}",
-            "machinesNotReporting_other": "未報告マシン {{count}} 台: {{machines}}"
+            "machinesNotReporting_other": "未報告マシン {{count}} 台: {{machines}}",
+            "machinesSection": "マシン — プラン · ノード",
+            "badgeBaseNode": "ベース",
+            "badgeBaseNodeTitle": "このマシンのベースチェックアウト — マシンごとに1つ",
+            "versionSkewTitle": "マシンのコンセンサスと異なるバージョン",
+            "machineVersionsTitle": "このマシンにインストールされたプロバイダCLIバージョン — 全ノード共有"
         },
         "overview": {
             "missionCard": "ミッション",

@@ -975,12 +975,12 @@
             "schedFloorExcluded": "난이도 미달",
             "schedQuotaGated": "쿼터 차단",
             "schedCapFree": "여유",
-            "schedColNode": "노드",
             "schedColSlot": "슬롯",
             "schedColScore": "점수",
             "schedColQuota": "쿼터",
             "schedColParallel": "병렬",
-            "schedColStatus": "상태"
+            "schedColStatus": "상태",
+            "schedColMachine": "머신"
         }
     },
     "repoMesh": {
@@ -2646,11 +2646,9 @@
             "schedulingTitle": "스케줄링",
             "distributionTitle": "분배는 미대상 작업이 적격 노드에 분산되는 방식만 관리합니다. 노드별 부하, 우선순위, 프로바이더 제한은 아래에 있습니다.",
             "protocolTitle": "프로토콜 및 프로바이더 버전",
-            "nodesRuntime": "노드 — 런타임",
             "noNodesReporting": "아직 런타임을 보고하는 노드가 없습니다.",
             "quotaNotCollected": "아직 플랜 사용량을 수집하지 않았습니다 — 첫 갱신(약 15분) 이후, 그리고 에이전트가 활동한 경우에만 머신이 보고합니다.",
             "quotaFreshnessHint": "이 사용량이 실려 온 런타임 facts 번들의 경과 시간",
-            "machinesQuota": "머신 — 플랜 사용량",
             "machineNotReporting": "이 머신은 아직 런타임 정보를 보고하지 않았습니다 — 오프라인이거나 연결되지 않아 플랜 사용량을 알 수 없습니다.",
             "quotaClaudeSetupHint": "Claude Code 에는 사용량 API 가 없어 ADHDev 가 statusLine 에서 읽습니다. `adhdev quota claude:install` 이 기존 statusline 을 감싸 그대로 유지하며, claude:uninstall 로 복원합니다.",
             "quotaAccountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값",
@@ -2671,7 +2669,12 @@
             "badgeStaleBuildTitle": "라이브 데몬이 워크스페이스 HEAD 이전 빌드 — 머지된 수정이 반영 안 됐을 수 있음",
             "badgeDeployLagTitle": "실행 중 데몬 빌드가 origin/main과 다름 — 이 노드는 배포+재시작 대기",
             "machinesNotReporting_one": "미보고 머신 {{count}}대: {{machines}}",
-            "machinesNotReporting_other": "미보고 머신 {{count}}대: {{machines}}"
+            "machinesNotReporting_other": "미보고 머신 {{count}}대: {{machines}}",
+            "machinesSection": "머신 — 플랜 · 노드",
+            "badgeBaseNode": "베이스",
+            "badgeBaseNodeTitle": "이 머신의 베이스 체크아웃 — 머신당 1개, 워크트리들이 여기서 분기합니다",
+            "versionSkewTitle": "머신 컨센서스와 다른 버전 (stale 보고 또는 부분 설치)",
+            "machineVersionsTitle": "이 머신에 설치된 프로바이더 CLI 버전 — 소속 노드 전체가 공유"
         },
         "overview": {
             "missionCard": "미션",

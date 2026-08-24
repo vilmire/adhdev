@@ -775,7 +775,9 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             id: nodeStatus.nodeId,
             type: orphanReasons.length > 0 ? 'orphanNode' : 'worktreeNode',
             label: isWorktreeCheckout
-                ? (workspaceBasename(nodeStatus.workspace) || nodeStatus.machineLabel || nodeStatus.nodeId.slice(0, 8))
+                ? (nodeStatus.worktreeBranch
+                    ? `⎇ ${nodeStatus.worktreeBranch}`
+                    : (workspaceBasename(nodeStatus.workspace) || nodeStatus.machineLabel || nodeStatus.nodeId.slice(0, 8)))
                 : (nodeStatus.machineLabel || workspaceBasename(nodeStatus.workspace) || nodeStatus.nodeId.slice(0, 8)),
             workspace: nodeStatus.workspace,
             branch,

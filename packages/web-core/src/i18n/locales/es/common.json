@@ -980,12 +980,12 @@
             "schedFloorExcluded": "Bajo dificultad",
             "schedQuotaGated": "Cuota bloqueada",
             "schedCapFree": "Libre",
-            "schedColNode": "Nodo",
             "schedColSlot": "Slot",
             "schedColScore": "Puntaje",
             "schedColQuota": "Cuota",
             "schedColParallel": "Paralelo",
-            "schedColStatus": "Estado"
+            "schedColStatus": "Estado",
+            "schedColMachine": "Máquina"
         }
     },
     "repoMesh": {
@@ -2651,11 +2651,9 @@
             "schedulingTitle": "Planificación",
             "distributionTitle": "La distribución solo determina cómo se reparte el trabajo sin destino entre los nodos elegibles. La carga por nodo, la prioridad y los límites de proveedores aparecen a continuación.",
             "protocolTitle": "Versiones de protocolo y proveedores",
-            "nodesRuntime": "Nodos — runtime",
             "noNodesReporting": "Todavía no hay nodos que reporten el runtime.",
             "quotaNotCollected": "Aún no se ha recopilado la cuota del plan: una máquina la reporta tras su primera actualización (~15 min) y solo si un agente ha estado activo.",
             "quotaFreshnessHint": "Antigüedad del paquete de datos de runtime en el que llegó esta cuota",
-            "machinesQuota": "Máquinas — cuota del plan",
             "machineNotReporting": "Esta máquina aún no ha reportado datos de runtime: está desconectada o inaccesible, así que se desconoce su cuota del plan.",
             "quotaClaudeSetupHint": "Claude Code no tiene API de cuota: ADHDev la lee de tu statusLine. `adhdev quota claude:install` envuelve la que ya tienes (sigue funcionando) y claude:uninstall la restaura.",
             "quotaAccountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor",
@@ -2676,7 +2674,12 @@
             "badgeStaleBuildTitle": "El daemon en vivo se compiló antes del HEAD del workspace",
             "badgeDeployLagTitle": "El build del daemon difiere de origin/main — pendiente de deploy + reinicio",
             "machinesNotReporting_one": "{{count}} máquina sin reportar: {{machines}}",
-            "machinesNotReporting_other": "{{count}} máquinas sin reportar: {{machines}}"
+            "machinesNotReporting_other": "{{count}} máquinas sin reportar: {{machines}}",
+            "machinesSection": "Máquinas — plan · nodos",
+            "badgeBaseNode": "base",
+            "badgeBaseNodeTitle": "Checkout base de esta máquina — uno por máquina",
+            "versionSkewTitle": "Versión distinta del consenso de la máquina",
+            "machineVersionsTitle": "Versiones de CLI instaladas en esta máquina — compartidas por sus nodos"
         },
         "overview": {
             "missionCard": "Misiones",

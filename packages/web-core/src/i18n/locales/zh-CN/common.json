@@ -975,12 +975,12 @@
             "schedFloorExcluded": "低于难度",
             "schedQuotaGated": "配额受限",
             "schedCapFree": "空闲",
-            "schedColNode": "节点",
             "schedColSlot": "槽位",
             "schedColScore": "分数",
             "schedColQuota": "配额",
             "schedColParallel": "并行",
-            "schedColStatus": "状态"
+            "schedColStatus": "状态",
+            "schedColMachine": "机器"
         }
     },
     "repoMesh": {
@@ -2646,11 +2646,9 @@
             "schedulingTitle": "调度",
             "distributionTitle": "分配仅决定未指定目标的工作如何在符合条件的节点间分散。各节点的负载、优先级和提供程序上限见下方。",
             "protocolTitle": "协议与提供程序版本",
-            "nodesRuntime": "节点 — 运行时",
             "noNodesReporting": "尚无节点上报运行时。",
             "quotaNotCollected": "尚未采集套餐用量 — 机器会在首次刷新（约 15 分钟）之后、且有代理活动时才上报。",
             "quotaFreshnessHint": "该用量所在运行时 facts 数据包的时间",
-            "machinesQuota": "机器 — 套餐用量",
             "machineNotReporting": "该机器尚未上报运行时信息 — 处于离线或无法连接状态，因此套餐用量未知。",
             "quotaClaudeSetupHint": "Claude Code 没有用量 API，ADHDev 从 statusLine 读取。`adhdev quota claude:install` 会包装你现有的 statusline（继续正常工作），claude:uninstall 可还原。",
             "quotaAccountHint": "该用量所属的登录账号（由提供程序 CLI 上报）",
@@ -2671,7 +2669,12 @@
             "badgeStaleBuildTitle": "运行中的守护进程构建早于工作区 HEAD",
             "badgeDeployLagTitle": "守护进程构建与 origin/main 不同 — 等待部署+重启",
             "machinesNotReporting_one": "{{count}} 台机器未报告: {{machines}}",
-            "machinesNotReporting_other": "{{count}} 台机器未报告: {{machines}}"
+            "machinesNotReporting_other": "{{count}} 台机器未报告: {{machines}}",
+            "machinesSection": "机器 — 计划 · 节点",
+            "badgeBaseNode": "基础",
+            "badgeBaseNodeTitle": "该机器的基础检出 — 每台机器一个",
+            "versionSkewTitle": "与机器共识不同的版本",
+            "machineVersionsTitle": "该机器安装的提供方 CLI 版本 — 由其所有节点共享"
         },
         "overview": {
             "missionCard": "任务",

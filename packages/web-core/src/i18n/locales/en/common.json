@@ -975,12 +975,12 @@
             "schedFloorExcluded": "Below difficulty",
             "schedQuotaGated": "Quota-gated",
             "schedCapFree": "Free",
-            "schedColNode": "Node",
             "schedColSlot": "Slot",
             "schedColScore": "Score",
             "schedColQuota": "Quota",
             "schedColParallel": "Parallel",
-            "schedColStatus": "Status"
+            "schedColStatus": "Status",
+            "schedColMachine": "Machine"
         }
     },
     "repoMesh": {
@@ -2646,11 +2646,9 @@
             "schedulingTitle": "Scheduling",
             "distributionTitle": "Distribution only governs how untargeted work is spread across eligible nodes. Per-node load, priority, and provider caps are below.",
             "protocolTitle": "Protocol & provider versions",
-            "nodesRuntime": "Nodes — runtime",
             "noNodesReporting": "No nodes reporting runtime yet.",
             "quotaNotCollected": "Plan quota not collected yet — a machine reports it after its first refresh (~15 min) and only while an agent has been active.",
             "quotaFreshnessHint": "Age of the runtime facts bundle this quota rode in on",
-            "machinesQuota": "Machines — plan quota",
             "machineNotReporting": "This machine has not reported runtime facts yet — it is offline or unreachable, so its plan quota is unknown.",
             "quotaClaudeSetupHint": "Claude Code has no quota API — ADHDev reads it from your statusLine. `adhdev quota claude:install` wraps your existing one (it keeps working) and claude:uninstall restores it.",
             "quotaAccountHint": "The signed-in account this quota belongs to, as reported by the provider CLI",
@@ -2671,7 +2669,12 @@
             "badgeStaleBuildTitle": "Live daemon was built behind workspace HEAD — merged fixes may not be live",
             "badgeDeployLagTitle": "Running daemon build commit differs from origin/main — deploy + restart pending for this node",
             "machinesNotReporting_one": "{{count}} machine not reporting yet: {{machines}}",
-            "machinesNotReporting_other": "{{count}} machines not reporting yet: {{machines}}"
+            "machinesNotReporting_other": "{{count}} machines not reporting yet: {{machines}}",
+            "machinesSection": "Machines — plan · nodes",
+            "badgeBaseNode": "base",
+            "badgeBaseNodeTitle": "This machine's base checkout — one per machine; worktrees branch off it",
+            "versionSkewTitle": "Version differs from this machine’s consensus (stale report or partial install)",
+            "machineVersionsTitle": "Provider CLI versions installed on this machine — shared by all its nodes"
         },
         "overview": {
             "missionCard": "Missions",

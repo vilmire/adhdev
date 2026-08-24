@@ -11,6 +11,7 @@ import { Badge } from './meshSurfacePrimitives'
 import {
     SCHEDULING_STRATEGY_LABELS,
     collectMachineQuotaGroups,
+    machineKeyForMeshNode,
     describeQuotaFailure,
     formatQuotaAccount,
     formatQuotaFreshness,
@@ -117,7 +118,7 @@ function MeshNodeSchedulingBadges({ scheduling }: { scheduling?: RepoMeshNodeSch
 //     shown, because that is what tells "not installed" from "channel broken".
 //   - ok: the 5h / 7d windows, tinted at the same 70/90% thresholds the
 //     `adhdev quota` CLI uses.
-function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
+function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQuotaGroup; providerVersions?: Array<[string, string]> }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const freshness = formatQuotaFreshness(machine.reportedAt)
@@ -202,28 +203,72 @@ function MeshMachineQuotaCard({ machine }: { machine: MachineQuotaGroup }) {
                     })}
                 </div>
             )}
+            {providerVersions && providerVersions.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {providerVersions.map(([provider, version]) => (
+                        <Badge key={provider} label={`${provider}@${version}`} tone="info" title={t('mesh.status.machineVersionsTitle')} />
+                    ))}
+                </div>
+            )}
         </div>
     )
 }
 
-function MeshMachinesQuotaSection({ status }: { status: RepoMeshStatus }) {
+function MeshMachinesSection({ status, previewVersion }: { status: RepoMeshStatus; previewVersion?: string }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const machines = collectMachineQuotaGroups(status)
-    // Empty only when the mesh has no nodes at all — a machine with nodes always
-    // gets a card now, reporting or not. Nothing to head when there is nothing.
     if (machines.length === 0) return null
-    // Machines that have never reported runtime facts fold into ONE summary line:
-    // several offline machines each rendered a full card saying only "has not
-    // reported", burying the machines with actual quota numbers.
+    // The machine ⊃ nodes hierarchy, rendered literally: one section per
+    // machine (plan quota + provider-version consensus on the machine card),
+    // its base node first, then its worktrees as ⎇ branch rows underneath.
+    const nodesByMachine = new Map<string, RepoMeshNodeStatus[]>()
+    for (const node of status.nodes) {
+        const key = machineKeyForMeshNode(node)
+        const list = nodesByMachine.get(key)
+        if (list) list.push(node)
+        else nodesByMachine.set(key, [node])
+    }
+    const sortNodes = (nodes: RepoMeshNodeStatus[]) => [...nodes].sort((a, b) => {
+        const aWorktree = a.isLocalWorktree === true || !!a.worktreeBranch
+        const bWorktree = b.isLocalWorktree === true || !!b.worktreeBranch
+        if (aWorktree !== bWorktree) return aWorktree ? 1 : -1
+        return (a.worktreeBranch || a.nodeId).localeCompare(b.worktreeBranch || b.nodeId)
+    })
+    const machineVersionsFor = (nodes: RepoMeshNodeStatus[]): Record<string, string> | undefined => {
+        // Consensus = the base node's report, else the first node reporting any.
+        for (const node of nodes) {
+            const versions = node.providerVersions
+            if (versions && typeof versions === 'object' && Object.keys(versions).length > 0) return versions
+        }
+        return undefined
+    }
     const reported = machines.filter(machine => machine.hasReported)
     const unreported = machines.filter(machine => !machine.hasReported)
     return (
         <div className="flex flex-col gap-2">
             <span className={`px-1 text-2xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
-                {t('mesh.status.machinesQuota')}
+                {t('mesh.status.machinesSection')}
             </span>
-            {reported.map(machine => <MeshMachineQuotaCard key={machine.machineKey} machine={machine} />)}
+            {reported.map(machine => {
+                const nodes = sortNodes(nodesByMachine.get(machine.machineKey) ?? [])
+                const machineVersions = machineVersionsFor(nodes)
+                return (
+                    <div key={machine.machineKey} className="flex flex-col gap-1.5">
+                        <MeshMachineQuotaCard
+                            machine={machine}
+                            providerVersions={machineVersions ? Object.entries(machineVersions).filter(([, v]) => typeof v === 'string' && v) : undefined}
+                        />
+                        {nodes.length > 0 && (
+                            <div className={`ml-3 flex flex-col gap-1.5 border-l pl-3 ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                                {nodes.map(node => (
+                                    <MeshNodeRuntimeRow key={node.nodeId} node={node} previewVersion={previewVersion} machineVersions={machineVersions} />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )
+            })}
             {unreported.length > 0 && (
                 <div className={`rounded-xl border px-3 py-2 text-2xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
                     {t('mesh.status.machinesNotReporting', {
@@ -241,6 +286,13 @@ function MeshMachinesQuotaSection({ status }: { status: RepoMeshStatus }) {
  * fields the wire already carries — the daemon does not send an explicit
  * healthReason, and "DEGRADED" alone forces the operator to guess.
  */
+function nodeWorkspaceBasename(workspace: string | null | undefined): string | null {
+    if (!workspace) return null
+    const trimmed = workspace.replace(/[\\/]+$/, '')
+    const segments = trimmed.split(/[\\/]/)
+    return segments[segments.length - 1] || null
+}
+
 function describeNodeHealthIssue(node: RepoMeshNodeStatus, t: (key: string, opts?: Record<string, unknown>) => string): string | null {
     if (node.health !== 'degraded' && node.health !== 'unknown') return null
     if (typeof node.error === 'string' && node.error) return node.error
@@ -254,7 +306,7 @@ function describeNodeHealthIssue(node: RepoMeshNodeStatus, t: (key: string, opts
     return t('mesh.status.healthNoLiveReport')
 }
 
-function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus; previewVersion?: string }) {
+function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: RepoMeshNodeStatus; previewVersion?: string; machineVersions?: Record<string, string> }) {
     const { t } = useTranslation('common')
     const meshTheme = useContext(MeshGraphThemeContext)
     const healthIssue = describeNodeHealthIssue(node, t)
@@ -268,8 +320,15 @@ function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus
     const providerVersions = node.providerVersions && typeof node.providerVersions === 'object'
         ? node.providerVersions
         : undefined
+    // Machine ⊃ nodes: versions are a machine property rendered once on the
+    // machine card. A node row only surfaces SKEW — a provider whose reported
+    // version differs from the machine consensus (stale report / partial env).
     const providerVersionEntries = providerVersions
-        ? Object.entries(providerVersions).filter(([, v]) => typeof v === 'string' && v)
+        ? Object.entries(providerVersions).filter(([provider, version]) =>
+            typeof version === 'string' && version
+            && machineVersions !== undefined
+            && machineVersions[provider] !== undefined
+            && machineVersions[provider] !== version)
         : []
     const daemonBuildVersion = typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion
         ? node.daemonBuildVersion
@@ -292,8 +351,13 @@ function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus
     return (
         <div className={`rounded-xl border p-3 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
             <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{node.machineLabel || node.nodeId}</span>
+                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>
+                    {isWorktree
+                        ? `⎇ ${node.worktreeBranch || nodeWorkspaceBasename(node.workspace) || node.nodeId.slice(0, 8)}`
+                        : (nodeWorkspaceBasename(node.workspace) || node.machineLabel || node.nodeId)}
+                </span>
                 <Badge label={node.health} tone={healthTone(node.health)} />
+                {!isWorktree && <Badge label={t('mesh.status.badgeBaseNode')} tone="default" title={t('mesh.status.badgeBaseNodeTitle')} />}
                 {isWorktree && <Badge label={t('mesh.status.badgeWorktree')} tone="info" title={node.worktreeBranch ? t('mesh.status.badgeWorktreeBranchTitle', { branch: node.worktreeBranch }) : t('mesh.status.badgeWorktreeTitle')} />}
                 {bootstrap?.status && bootstrap.status !== 'ready' && (
                     <Badge label={`bootstrap ${bootstrap.status}`} tone="warn" title={t('mesh.status.badgeBootstrapTitle')} />
@@ -316,7 +380,7 @@ function MeshNodeRuntimeRow({ node, previewVersion }: { node: RepoMeshNodeStatus
             {providerVersionEntries.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {providerVersionEntries.map(([provider, version]) => (
-                        <Badge key={provider} label={`${provider}@${version}`} tone="info" title="Detected provider version on this node" />
+                        <Badge key={provider} label={`${provider}@${version}`} tone="warn" title={t('mesh.status.versionSkewTitle')} />
                     ))}
                 </div>
             )}
@@ -397,19 +461,15 @@ export function MeshStatusTab({ canonicalStatus }: { canonicalStatus: RepoMeshSt
                 nodes can share one machine. Grouping it here keeps each plan
                 reading in exactly one place instead of repeating it on every
                 worktree card below. */}
-            <MeshMachinesQuotaSection status={canonicalStatus} />
-            <div className="flex flex-col gap-2">
-                <span className={`px-1 text-2xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textSecondary}`}>
-                    {t('mesh.status.nodesRuntime')}
-                </span>
-                {canonicalStatus.nodes.length === 0 ? (
-                    <div className={`rounded-xl border p-3 text-xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
-                        {t('mesh.status.noNodesReporting')}
-                    </div>
-                ) : (
-                    canonicalStatus.nodes.map(node => <MeshNodeRuntimeRow key={node.nodeId} node={node} previewVersion={typeof canonicalStatus.previewFreshness?.previewVersion === 'string' ? canonicalStatus.previewFreshness.previewVersion : undefined} />)
-                )}
-            </div>
+            <MeshMachinesSection
+                status={canonicalStatus}
+                previewVersion={typeof canonicalStatus.previewFreshness?.previewVersion === 'string' ? canonicalStatus.previewFreshness.previewVersion : undefined}
+            />
+            {canonicalStatus.nodes.length === 0 && (
+                <div className={`rounded-xl border p-3 text-xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                    {t('mesh.status.noNodesReporting')}
+                </div>
+            )}
         </div>
     )
 }

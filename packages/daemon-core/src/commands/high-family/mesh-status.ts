@@ -625,6 +625,40 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         finalizeMeshNodeStatus({ status: fallback, node, daemonId, isSelfNode: false, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                         return fallback;
                     });
+                    // A worktree node is NOT a machine. Its derived display label used
+                    // to be the worktree DIRECTORY basename + provider ("fix-permission-
+                    // mode-duplicate-args · claude-cli"), which made every worktree read
+                    // as a separate machine across the dashboard. machineLabel now means
+                    // the HOST machine's label for worktree nodes too — the branch
+                    // identity travels separately in worktreeBranch, and UIs render it
+                    // as `⎇ branch`. Resolution: clonedFromNodeId's rendered label
+                    // first, then any same-machineId node without a worktreeBranch.
+                    {
+                        const labelByNodeId = new Map<string, string>();
+                        const baseLabelByMachineId = new Map<string, string>();
+                        for (const status of nodeStatuses as Array<Record<string, unknown>>) {
+                            const id = readStringValue(status.nodeId);
+                            const label = readStringValue(status.machineLabel);
+                            if (id && label) labelByNodeId.set(id, label);
+                            const machineId = readStringValue(status.machineId);
+                            if (machineId && label && !readStringValue(status.worktreeBranch) && !baseLabelByMachineId.has(machineId)) {
+                                baseLabelByMachineId.set(machineId, label);
+                            }
+                        }
+                        for (const [i, status] of (nodeStatuses as Array<Record<string, unknown>>).entries()) {
+                            if (!readStringValue(status.worktreeBranch)) continue;
+                            const configNode = meshNodeEntries[i]?.[1] as Record<string, unknown> | undefined;
+                            const clonedFrom = readStringValue(configNode?.clonedFromNodeId, configNode?.cloned_from_node_id);
+                            const machineId = readStringValue(status.machineId);
+                            const hostLabel = (clonedFrom ? labelByNodeId.get(clonedFrom) : undefined)
+                                ?? (machineId ? baseLabelByMachineId.get(machineId) : undefined);
+                            if (hostLabel) {
+                                status.machineLabel = hostLabel;
+                                status.labelSource = 'host_machine';
+                            }
+                        }
+                    }
+
                     const cachedProjectionNodeIds = nodeStatuses
                         .filter((status: any) => status?.dataFreshness?.projection === 'cached'
                             && status?.dataFreshness?.directPeerTruthSatisfied === false)

@@ -291,11 +291,20 @@ export type MachineQuotaGroup = {
  * instead of a number. No quota value is ever synthesised for such a machine —
  * `quota` stays empty, exactly as before.
  */
+/**
+ * The canonical "which machine hosts this node" key — shared by the quota
+ * grouping, the node→machine section grouping, and the scheduling views, so
+ * every surface agrees on the machine ⊃ nodes hierarchy.
+ */
+export function machineKeyForMeshNode(node: Pick<RepoMeshNodeStatus, 'daemonId' | 'machineId' | 'nodeId'>): string {
+    return canonicalDaemonId(node.daemonId) || node.machineId || node.nodeId
+}
+
 export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaGroup[] {
     const groups = new Map<string, MachineQuotaGroup>()
     for (const node of status.nodes) {
         const facts = node.nodeFacts
-        const machineKey = canonicalDaemonId(node.daemonId) || node.machineId || node.nodeId
+        const machineKey = machineKeyForMeshNode(node)
         if (!machineKey) continue
         let group = groups.get(machineKey)
         if (!group) {
@@ -345,12 +354,20 @@ export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaG
  */
 export function resolveMachineLabel(status: RepoMeshStatus, machineKey: string): string {
     const nicknames: string[] = []
+    const hostnames: string[] = []
     const nodeLabels: string[] = []
     for (const node of status.nodes) {
-        const key = canonicalDaemonId(node.daemonId) || node.machineId || node.nodeId
+        const key = machineKeyForMeshNode(node)
         if (key !== machineKey) continue
         const nickname = node.nodeFacts?.machineNickname
         if (typeof nickname === 'string' && nickname.trim()) nicknames.push(nickname.trim())
+        // Hostname beats the derived node label: "vilmire-MacBookAir" names the
+        // MACHINE, while the derived label ("adhdev · claude-cli") is really
+        // checkout+provider context wearing a machine costume.
+        const machine = node.machine
+        const hostname = (machine?.sameMachine ? machine.coordinatorHostname : undefined)
+            ?? machine?.identityEvidence?.find(e => (e?.label === 'hostname' || e?.label === 'machineName') && typeof e.value === 'string' && e.value.trim())?.value
+        if (typeof hostname === 'string' && hostname.trim()) hostnames.push(hostname.trim().replace(/\.local$/i, ''))
         const label = typeof node.machineLabel === 'string' ? node.machineLabel.trim() : ''
         // A machineLabel that is just the raw id carries no more information than
         // the fallback, so it is not treated as a name.
@@ -358,7 +375,7 @@ export function resolveMachineLabel(status: RepoMeshStatus, machineKey: string):
     }
     const pick = (values: string[]): string | undefined =>
         values.length === 0 ? undefined : [...values].sort((a, b) => a.localeCompare(b))[0]
-    return pick(nicknames) ?? pick(nodeLabels) ?? shortMachineKey(machineKey)
+    return pick(nicknames) ?? pick(hostnames) ?? pick(nodeLabels) ?? shortMachineKey(machineKey)
 }
 
 /** `daemon_mach_1b46842a…` → `mach_1b46842a` — readable without inventing a name. */
