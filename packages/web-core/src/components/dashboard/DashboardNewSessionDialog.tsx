@@ -7,6 +7,7 @@ import { IconFolder, IconPlay, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
+import { readRememberedChoice, writeRememberedChoice } from '../../utils/remembered-choice'
 import HistoryModal from './HistoryModal'
 import type { ActiveConversation } from './types'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
@@ -18,7 +19,7 @@ import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils
 import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 import MeshCoordinatorManualSetupPanel from '../MeshCoordinatorManualSetupPanel'
 import { buildManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../../utils/mesh-coordinator-setup'
-import ModalPortal from '../ui/ModalPortal'
+import { DialogShell } from '../ui/Dialog'
 import { LAUNCH_CATEGORY_LABELS } from './launch-category-labels'
 import {
     AutoApproveModeSelector,
@@ -147,14 +148,29 @@ export function LaunchCategorySelector({
     )
 }
 
+function isLaunchKindAvailable(machine: DaemonData | undefined, kind: LaunchKind): boolean {
+    if (!machine) return false
+    if (kind === 'ide') return (machine.detectedIdes?.length || 0) > 0
+    return (machine.availableProviders || []).some(provider => isLaunchableMachineProvider(provider, kind))
+}
+
 function getDefaultLaunchKind(machine: DaemonData | undefined) {
     if (!machine) return null
-    const providers = machine.availableProviders || []
-    if (providers.some(provider => isLaunchableMachineProvider(provider, 'cli'))) return 'cli' as const
-    const hasIde = (machine.detectedIdes?.length || 0) > 0
-    if (hasIde) return 'ide' as const
-    if (providers.some(provider => isLaunchableMachineProvider(provider, 'acp'))) return 'acp' as const
+    if (isLaunchKindAvailable(machine, 'cli')) return 'cli' as const
+    if (isLaunchKindAvailable(machine, 'ide')) return 'ide' as const
+    if (isLaunchKindAvailable(machine, 'acp')) return 'acp' as const
     return null
+}
+
+// Remembered-choice scopes (localStorage, see utils/remembered-choice.ts).
+// Written on a successful launch; read once per dialog open and applied only
+// where the stored value still exists in the current option lists (fail-open).
+const REMEMBER_SCOPE_DIALOG = 'new-session-dialog'
+const REMEMBER_SCOPE_WORKSPACE = 'new-session-workspace'
+const REMEMBER_SCOPE_MESH = 'new-session-mesh'
+
+function isRememberedLaunchKind(value: string | undefined): value is LaunchKind {
+    return value === 'cli' || value === 'ide' || value === 'acp'
 }
 
 function normalizePath(path: string | null | undefined) {
@@ -187,8 +203,18 @@ export default function DashboardNewSessionDialog({
         () => [...machines].sort(compareMachineEntries),
         [machines],
     )
+    // Snapshot of the remembered (last successfully launched) choices, read once
+    // per dialog open. Explicit initial* props always outrank these; every apply
+    // below is one-shot and validated against the live option lists (fail-open).
+    const [remembered] = useState(() => ({
+        dialog: readRememberedChoice(REMEMBER_SCOPE_DIALOG),
+        workspace: readRememberedChoice(REMEMBER_SCOPE_WORKSPACE),
+        mesh: readRememberedChoice(REMEMBER_SCOPE_MESH),
+    }))
     const [selectedMachineId, setSelectedMachineId] = useState(() => {
         if (initialMachineId && machines.some(machine => machine.id === initialMachineId)) return initialMachineId
+        const rememberedMachineId = remembered.dialog?.machineId
+        if (rememberedMachineId && machines.some(machine => machine.id === rememberedMachineId)) return rememberedMachineId
         return [...machines].sort(compareMachineEntries)[0]?.id || ''
     })
     const selectedMachine = useMemo(
@@ -247,19 +273,43 @@ export default function DashboardNewSessionDialog({
     // shows up in the selected machine's rows, dropped on a manual machine switch.
     const pendingInitialWorkspaceIdRef = useRef<string | null>(initialWorkspaceId || null)
     // One-shot mesh-mode preselect: mode applied on first init, mesh matched by
-    // workspace path once the machine's mesh options load.
-    const pendingInitialLaunchModeRef = useRef<WorkspaceLaunchMode | null>(initialLaunchMode || null)
+    // workspace path once the machine's mesh options load. The explicit prop
+    // outranks the remembered last-used mode.
+    const pendingInitialLaunchModeRef = useRef<WorkspaceLaunchMode | null>(
+        initialLaunchMode
+        || (remembered.dialog?.mode === 'mesh' || remembered.dialog?.mode === 'workspace' ? remembered.dialog.mode : null),
+    )
     const pendingInitialMeshWorkspaceRef = useRef<string | null>(initialMeshWorkspacePath || null)
+    // One-shot remembered preselects (utils/remembered-choice.ts). Each ref is
+    // consumed on its first apply attempt once the relevant options exist, and
+    // cleared on the matching manual interaction (or a manual machine switch) so
+    // a late-arriving option list never overwrites what the user picked by hand.
+    const pendingRememberedWorkspaceChoiceRef = useRef<string | null>(
+        initialWorkspaceId ? null : (remembered.workspace?.workspaceChoice || null),
+    )
+    const rememberedWorkspaceKind = remembered.workspace?.kind
+    const pendingRememberedKindRef = useRef<LaunchKind | null>(
+        isRememberedLaunchKind(rememberedWorkspaceKind) ? rememberedWorkspaceKind : null,
+    )
+    const pendingRememberedTargetRef = useRef<string | null>(remembered.workspace?.target || null)
+    const pendingRememberedMeshIdRef = useRef<string | null>(remembered.mesh?.meshId || null)
+    const pendingRememberedMeshCliTypeRef = useRef<string | null>(remembered.mesh?.cliType || null)
+    // Per-flow one-shot for the tuning block (model / thinking / auto-approve).
+    const pendingRememberedWorkspaceTuningRef = useRef(true)
+    const pendingRememberedMeshTuningRef = useRef(true)
     const savedSessionsRequestSeqRef = useRef(0)
 
     useEffect(() => {
         if (!selectedMachineId && sortedMachines[0]?.id) {
+            const rememberedMachineId = remembered.dialog?.machineId
             const preferred = initialMachineId && sortedMachines.some(machine => machine.id === initialMachineId)
                 ? initialMachineId
-                : sortedMachines[0].id
+                : rememberedMachineId && sortedMachines.some(machine => machine.id === rememberedMachineId)
+                    ? rememberedMachineId
+                    : sortedMachines[0].id
             setSelectedMachineId(preferred)
         }
-    }, [initialMachineId, selectedMachineId, sortedMachines])
+    }, [initialMachineId, remembered, selectedMachineId, sortedMachines])
 
     useEffect(() => {
         if (!selectedMachine) return
@@ -381,24 +431,50 @@ export default function DashboardNewSessionDialog({
                 pendingInitialWorkspaceIdRef.current = null
                 pendingInitialLaunchModeRef.current = null
                 pendingInitialMeshWorkspaceRef.current = null
+                // A manual machine switch also invalidates the remembered
+                // preselects — they described the previously selected machine.
+                pendingRememberedWorkspaceChoiceRef.current = null
+                pendingRememberedKindRef.current = null
+                pendingRememberedTargetRef.current = null
+                pendingRememberedMeshIdRef.current = null
+                pendingRememberedMeshCliTypeRef.current = null
+                pendingRememberedWorkspaceTuningRef.current = false
+                pendingRememberedMeshTuningRef.current = false
             }
             initializedMachineIdRef.current = selectedMachine.id
             const pendingLaunchMode = pendingInitialLaunchModeRef.current
             pendingInitialLaunchModeRef.current = null
             setWorkspaceMode(pendingLaunchMode || 'workspace')
             const pendingWorkspaceId = pendingInitialWorkspaceIdRef.current
+            const pendingRememberedChoice = pendingRememberedWorkspaceChoiceRef.current
+            setCustomWorkspacePath('')
             if (pendingWorkspaceId && workspaceRows.some(workspace => workspace.id === pendingWorkspaceId)) {
                 pendingInitialWorkspaceIdRef.current = null
                 setWorkspaceChoice(pendingWorkspaceId)
+            } else if (pendingRememberedChoice === '__home__') {
+                pendingRememberedWorkspaceChoiceRef.current = null
+                setWorkspaceChoice('__home__')
+            } else if (pendingRememberedChoice === '__custom__' && remembered.workspace?.customWorkspacePath) {
+                pendingRememberedWorkspaceChoiceRef.current = null
+                setWorkspaceChoice('__custom__')
+                setCustomWorkspacePath(remembered.workspace.customWorkspacePath)
+            } else if (pendingRememberedChoice && workspaceRows.some(workspace => workspace.id === pendingRememberedChoice)) {
+                pendingRememberedWorkspaceChoiceRef.current = null
+                setWorkspaceChoice(pendingRememberedChoice)
             } else {
                 setWorkspaceChoice(defaultWorkspaceId || workspaceRows[0]?.id || '__home__')
             }
-            setCustomWorkspacePath('')
             setMeshOptions([])
             setSelectedMeshId('')
             setMeshLoadedMachineId(null)
             setMeshError('')
-            setActiveKind(getDefaultLaunchKind(selectedMachine))
+            const rememberedKind = pendingRememberedKindRef.current
+            if (rememberedKind && isLaunchKindAvailable(selectedMachine, rememberedKind)) {
+                pendingRememberedKindRef.current = null
+                setActiveKind(rememberedKind)
+            } else {
+                setActiveKind(getDefaultLaunchKind(selectedMachine))
+            }
             setSelectedTarget('')
             setLaunchArgs('')
             setLegacyAutoApprove(false)
@@ -418,11 +494,16 @@ export default function DashboardNewSessionDialog({
         }
 
         // Workspace rows can arrive after the first init (metadata load) — apply
-        // the pending preselect the moment its row exists.
+        // the pending preselect the moment its row exists. The explicit prop
+        // preselect outranks the remembered one; both are one-shot.
         const pendingWorkspaceId = pendingInitialWorkspaceIdRef.current
+        const pendingRememberedChoice = pendingRememberedWorkspaceChoiceRef.current
         if (pendingWorkspaceId && workspaceRows.some(workspace => workspace.id === pendingWorkspaceId)) {
             pendingInitialWorkspaceIdRef.current = null
             setWorkspaceChoice(pendingWorkspaceId)
+        } else if (pendingRememberedChoice && workspaceRows.some(workspace => workspace.id === pendingRememberedChoice)) {
+            pendingRememberedWorkspaceChoiceRef.current = null
+            setWorkspaceChoice(pendingRememberedChoice)
         } else {
             setWorkspaceChoice(prev => {
                 if (prev === '__custom__' || prev === '__home__') return prev
@@ -431,13 +512,22 @@ export default function DashboardNewSessionDialog({
             })
         }
 
-        setActiveKind(prev => {
-            if (prev === 'ide' && ideTargets.length > 0) return prev
-            if (prev === 'cli' && cliProviders.length > 0) return prev
-            if (prev === 'acp' && acpProviders.length > 0) return prev
-            return getDefaultLaunchKind(selectedMachine)
-        })
-    }, [acpProviders.length, cliProviders.length, defaultWorkspaceId, ideTargets.length, selectedMachine, workspaceRows])
+        // Remembered launch kind may only become launchable once the provider
+        // metadata arrives — apply it then, unless the user already picked one
+        // by hand (manual picks clear the pending ref).
+        const rememberedKind = pendingRememberedKindRef.current
+        if (rememberedKind && isLaunchKindAvailable(selectedMachine, rememberedKind)) {
+            pendingRememberedKindRef.current = null
+            setActiveKind(rememberedKind)
+        } else {
+            setActiveKind(prev => {
+                if (prev === 'ide' && ideTargets.length > 0) return prev
+                if (prev === 'cli' && cliProviders.length > 0) return prev
+                if (prev === 'acp' && acpProviders.length > 0) return prev
+                return getDefaultLaunchKind(selectedMachine)
+            })
+        }
+    }, [acpProviders.length, cliProviders.length, defaultWorkspaceId, ideTargets.length, remembered, selectedMachine, workspaceRows])
 
     useEffect(() => {
         if (!selectedMachine || workspaceMode !== 'mesh') return
@@ -447,12 +537,22 @@ export default function DashboardNewSessionDialog({
 
     // Apply the one-shot mesh preselect as soon as the options are in: the
     // machine page hands us the workspace path, so match the mesh rooted there.
+    // Without that explicit prop, fall back to the remembered last-launched
+    // mesh — applied only when it still exists in the loaded options.
     useEffect(() => {
+        if (meshOptions.length === 0) return
         const pendingMeshWorkspace = pendingInitialMeshWorkspaceRef.current
-        if (!pendingMeshWorkspace || meshOptions.length === 0) return
-        pendingInitialMeshWorkspaceRef.current = null
-        const matchedMesh = meshOptions.find(mesh => normalizePath(mesh.workspace) === normalizePath(pendingMeshWorkspace))
-        if (matchedMesh) setSelectedMeshId(matchedMesh.id)
+        if (pendingMeshWorkspace) {
+            pendingInitialMeshWorkspaceRef.current = null
+            pendingRememberedMeshIdRef.current = null
+            const matchedMesh = meshOptions.find(mesh => normalizePath(mesh.workspace) === normalizePath(pendingMeshWorkspace))
+            if (matchedMesh) setSelectedMeshId(matchedMesh.id)
+            return
+        }
+        const rememberedMeshId = pendingRememberedMeshIdRef.current
+        if (!rememberedMeshId) return
+        pendingRememberedMeshIdRef.current = null
+        if (meshOptions.some(mesh => mesh.id === rememberedMeshId)) setSelectedMeshId(rememberedMeshId)
     }, [meshOptions])
 
     useEffect(() => {
@@ -465,8 +565,28 @@ export default function DashboardNewSessionDialog({
     useEffect(() => {
         if (!activeKind) return
         if (providerTargets.some(target => target.id === selectedTarget)) return
-        setSelectedTarget(providerTargets[0]?.id || '')
-    }, [activeKind, providerTargets, selectedTarget])
+        // Default-fill moment: no valid manual selection exists, so the
+        // remembered target may take the slot — but only when it belongs to the
+        // remembered kind and is actually in the current list (fail-open).
+        let nextTarget = providerTargets[0]?.id || ''
+        const rememberedTarget = pendingRememberedTargetRef.current
+        if (workspaceMode !== 'mesh' && rememberedTarget && providerTargets.length > 0 && activeKind === rememberedWorkspaceKind) {
+            pendingRememberedTargetRef.current = null
+            if (providerTargets.some(target => target.id === rememberedTarget)) nextTarget = rememberedTarget
+        }
+        setSelectedTarget(nextTarget)
+    }, [activeKind, providerTargets, rememberedWorkspaceKind, selectedTarget, workspaceMode])
+
+    // Mesh flow keeps its own remembered CLI type: the coordinator CLI choice
+    // is independent from the workspace flow's provider pick. Applied once when
+    // the dialog is (or switches into) mesh mode and the CLI list is known.
+    useEffect(() => {
+        if (workspaceMode !== 'mesh') return
+        const rememberedCliType = pendingRememberedMeshCliTypeRef.current
+        if (!rememberedCliType || cliProviders.length === 0) return
+        pendingRememberedMeshCliTypeRef.current = null
+        if (cliProviders.some(provider => provider.type === rememberedCliType)) setSelectedTarget(rememberedCliType)
+    }, [cliProviders, workspaceMode])
 
     useEffect(() => {
         setMeshManualSetup(null)
@@ -488,6 +608,45 @@ export default function DashboardNewSessionDialog({
         setLegacyAutoApprove(false)
         setPendingDangerousMode(null)
     }, [autoApproveModesFingerprint, initialAutoApproveModeId, selectedMachine?.id, selectedTarget])
+
+    // One-shot restore of the remembered tuning (model / thinking level /
+    // auto-approve mode) for the provider that was last launched in this flow.
+    // Declared AFTER the reset effects above so the restore survives the
+    // provider-change reset on the initial preselect; consumed per flow, so any
+    // later manual provider switch gets the normal clean-reset behavior. Every
+    // value is validated against the current option lists (fail-open), and a
+    // remembered dangerous auto-approve mode is never restored silently — those
+    // stay click-and-confirm only, exactly like a manifest default.
+    useEffect(() => {
+        if (!selectedTarget) return
+        const isMeshFlow = workspaceMode === 'mesh'
+        const pendingTuningRef = isMeshFlow ? pendingRememberedMeshTuningRef : pendingRememberedWorkspaceTuningRef
+        if (!pendingTuningRef.current) return
+        const values = isMeshFlow ? remembered.mesh : remembered.workspace
+        const valuesTarget = isMeshFlow ? values?.cliType : values?.target
+        if (!values || valuesTarget !== selectedTarget) return
+        pendingTuningRef.current = false
+        const rememberedModel = values.model || ''
+        if (rememberedModel) {
+            // A model outside the advisory list is shown in the free-text input
+            // (never hidden behind an empty select while still being sent).
+            if (modelOptionsForTarget.length > 0 && !modelOptionsForTarget.includes(rememberedModel)) {
+                setModelIsCustom(true)
+            }
+            setInitialModel(rememberedModel)
+        }
+        const rememberedThinking = values.thinkingLevel || ''
+        if (rememberedThinking && thinkingLevelOptionsForTarget.includes(rememberedThinking)) {
+            setInitialThinkingLevel(rememberedThinking)
+        }
+        const rememberedAutoApproveModeId = values.autoApproveModeId || ''
+        if (rememberedAutoApproveModeId && autoApproveModes) {
+            const rememberedMode = autoApproveModes.modes.find((mode: AutoApproveMode) => mode.id === rememberedAutoApproveModeId)
+            if (rememberedMode && deriveAutoApproveModeRisk(rememberedMode) !== 'dangerous') {
+                setSelectedAutoApproveModeId(rememberedMode.id)
+            }
+        }
+    }, [autoApproveModes, autoApproveModesFingerprint, modelOptionsForTarget, remembered, selectedTarget, thinkingLevelOptionsForTarget, workspaceMode])
 
     const requestAutoApproveMode = useCallback((mode: AutoApproveMode) => {
         if (deriveAutoApproveModeRisk(mode) === 'dangerous') {
@@ -729,6 +888,15 @@ export default function DashboardNewSessionDialog({
                 setMessage(result.error || t('newSession.errorStartMeshCoordinator'))
                 return
             }
+            // Launch succeeded — remember the committed choices for the next open.
+            writeRememberedChoice(REMEMBER_SCOPE_DIALOG, { machineId: selectedMachine.id, mode: 'mesh' })
+            writeRememberedChoice(REMEMBER_SCOPE_MESH, {
+                meshId: selectedMeshId,
+                cliType: selectedTarget,
+                model: initialModel.trim(),
+                thinkingLevel: initialThinkingLevel.trim(),
+                autoApproveModeId: selectedAutoApproveModeId,
+            })
             onClose()
             return
         }
@@ -766,6 +934,18 @@ export default function DashboardNewSessionDialog({
             pushRecentLaunchArgs(selectedMachine.id, selectedTarget, launchArgs)
             loadRecentArgs(selectedMachine.id, selectedTarget)
         }
+        // Launch succeeded — remember the committed choices for the next open.
+        // (Empty values are pruned by writeRememberedChoice.)
+        writeRememberedChoice(REMEMBER_SCOPE_DIALOG, { machineId: selectedMachine.id, mode: 'workspace' })
+        writeRememberedChoice(REMEMBER_SCOPE_WORKSPACE, {
+            workspaceChoice,
+            customWorkspacePath: workspaceChoice === '__custom__' ? resolvedWorkspacePath : '',
+            kind: activeKind,
+            target: selectedTarget,
+            model: activeKind === 'ide' ? '' : initialModel.trim(),
+            thinkingLevel: activeKind === 'ide' ? '' : initialThinkingLevel.trim(),
+            autoApproveModeId: activeKind === 'cli' ? selectedAutoApproveModeId : '',
+        })
         onClose()
     }, [
         activeKind,
@@ -779,6 +959,7 @@ export default function DashboardNewSessionDialog({
         onLaunchMeshCoordinator,
         onLaunchProvider,
         resolvedWorkspacePath,
+        selectedAutoApproveModeId,
         selectedMachine,
         selectedMeshId,
         selectedResumeSessionId,
@@ -815,14 +996,20 @@ export default function DashboardNewSessionDialog({
 
     return (
         <>
-            <ModalPortal>
-            <div
-                className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="dashboard-new-title"
+            {/* Shared shell (portal + stacking); bespoke sheet visuals kept
+                verbatim via chrome={false}. Backdrop-click/Escape close stay
+                intentionally OFF: mid-form dismissal would drop launch input,
+                and Escape must not cascade under the nested browse/history/
+                dangerous-mode dialogs rendered above this one. */}
+            <DialogShell
+                chrome={false}
+                onClose={onClose}
+                closeOnBackdrop={false}
+                closeOnEsc={false}
+                ariaLabelledBy="dashboard-new-title"
+                overlayClassName="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
+                surfaceClassName="w-full max-w-3xl max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[min(88vh,860px)] rounded-[24px] sm:rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col"
             >
-                <div className="w-full max-w-3xl max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[min(88vh,860px)] rounded-[24px] sm:rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
                     <div className="flex items-start justify-between gap-3 px-4 py-4 sm:px-5 border-b border-border-subtle shrink-0">
                         <div className="min-w-0">
                             <h2 id="dashboard-new-title" className="m-0 text-base font-semibold text-text-primary">
@@ -931,6 +1118,8 @@ export default function DashboardNewSessionDialog({
                                         value={workspaceChoice}
                                         onChange={(event) => {
                                             const next = event.target.value
+                                            // Manual pick wins over any not-yet-applied remembered choice.
+                                            pendingRememberedWorkspaceChoiceRef.current = null
                                             setWorkspaceChoice(next)
                                             if (next === '__custom__') {
                                                 openBrowseDialog()
@@ -1000,7 +1189,11 @@ export default function DashboardNewSessionDialog({
                                                     role="radio"
                                                     aria-checked={selectedMeshId === mesh.id}
                                                     className={`w-full rounded-xl border px-3.5 py-3 text-left transition-colors ${selectedMeshId === mesh.id ? 'border-accent bg-accent/10' : 'border-border-subtle bg-bg-secondary/40 hover:bg-bg-secondary/70'}`}
-                                                    onClick={() => setSelectedMeshId(mesh.id)}
+                                                    onClick={() => {
+                                                        // Manual pick wins over any not-yet-applied remembered mesh.
+                                                        pendingRememberedMeshIdRef.current = null
+                                                        setSelectedMeshId(mesh.id)
+                                                    }}
                                                     disabled={busy}
                                                 >
                                                     <div className="text-sm font-semibold text-text-primary">{mesh.name}</div>
@@ -1025,7 +1218,12 @@ export default function DashboardNewSessionDialog({
                             ideEnabled={ideTargets.length > 0}
                             acpEnabled={acpProviders.length > 0}
                             busy={busy}
-                            onSelect={setActiveKind}
+                            onSelect={(kind) => {
+                                // Manual pick wins over any not-yet-applied remembered kind/target.
+                                pendingRememberedKindRef.current = null
+                                pendingRememberedTargetRef.current = null
+                                setActiveKind(kind)
+                            }}
                         />
 
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
@@ -1038,7 +1236,12 @@ export default function DashboardNewSessionDialog({
                                         key={target.id}
                                         type="button"
                                         className={`w-full rounded-xl border px-3.5 py-3 text-left transition-colors ${selectedTarget === target.id ? 'border-accent bg-accent/10' : 'border-border-subtle bg-bg-secondary/40 hover:bg-bg-secondary/70'}`}
-                                        onClick={() => setSelectedTarget(target.id)}
+                                        onClick={() => {
+                                            // Manual pick wins over any not-yet-applied remembered target.
+                                            pendingRememberedTargetRef.current = null
+                                            pendingRememberedMeshCliTypeRef.current = null
+                                            setSelectedTarget(target.id)
+                                        }}
                                         disabled={busy}
                                     >
                                         <div className="text-sm font-semibold text-text-primary">{target.label}</div>
@@ -1224,9 +1427,7 @@ export default function DashboardNewSessionDialog({
                             {busy ? primaryBusyLabel : primaryActionLabel}
                         </button>
                     </div>
-                </div>
-            </div>
-            </ModalPortal>
+            </DialogShell>
 
             {browseDialogOpen && (
                 <WorkspaceBrowseDialog
