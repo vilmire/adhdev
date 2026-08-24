@@ -169,6 +169,13 @@ export function meshesEqual(a: MeshEntry[], b: MeshEntry[]): boolean {
 }
 
 interface UseMeshListOptions {
+    /**
+     * Modal confirm injected by the page (useConfirmDialog.confirm). The
+     * window.confirm this replaces (CONFIRM-MIGRATION leftover, owner repro
+     * 2026-08-24: browsers that suppress native dialogs made Delete a silent
+     * no-op) stays as the fallback for callers that don't inject one.
+     */
+    confirmAction?: (request: { title: string; description?: string; confirmLabel: string; cancelLabel?: string; tone?: 'default' | 'danger' }) => Promise<boolean>
     daemons: RepoMeshDaemonEntry[]
     primaryDaemonId: string
     sendCommand: RepoMeshContextValue['sendCommand']
@@ -195,6 +202,7 @@ export function useMeshList({
     normalizeMesh,
     features,
     loadDaemonMetadata,
+    confirmAction,
 }: UseMeshListOptions) {
     // Cache key = the daemon set this list is scoped to. Computed eagerly so the
     // useState initializers can seed from the module cache on the very first render
@@ -413,7 +421,16 @@ export function useMeshList({
     }
 
     async function handleDelete(meshId: string) {
-        if (!confirm('Delete this mesh? This cannot be undone.')) return
+        const meshName = meshes.find(m => m.id === meshId)?.name || meshId
+        const confirmed = confirmAction
+            ? await confirmAction({
+                title: 'Delete this mesh?',
+                description: `"${meshName}" will be removed from this daemon. This cannot be undone.`,
+                confirmLabel: 'Delete',
+                tone: 'danger',
+            })
+            : confirm('Delete this mesh? This cannot be undone.')
+        if (!confirmed) return
         const targetDaemonId = (meshes.find(m => m.id === meshId) as any)?.__sourceDaemonId || primaryDaemonId
         try {
             const raw = await sendCommand(targetDaemonId, 'delete_mesh', { meshId })

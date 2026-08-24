@@ -37,6 +37,7 @@ import {
     resolvePollIntervalMs,
 } from './repo-mesh/graph-poll-backoff'
 import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
+import { useConfirmDialog } from '../hooks/useConfirmDialog'
 
 // Re-export types that cloud/standalone wrappers may reference
 export type { MeshNode, MeshQueueEntry, AvailableCliAgent }
@@ -70,6 +71,12 @@ const GRAPH_PUSH_FALLBACK_INTERVAL_MS = 45000
 
 export default function RepoMesh() {
     const ctx = useRepoMeshContext()
+    // Modal confirm for destructive mesh actions (delete mesh / remove node).
+    // Replaces the two window.confirm leftovers from the CONFIRM-MIGRATION
+    // sweep: a browser suppressing native dialogs turned Delete into a silent
+    // no-op (owner repro 2026-08-24).
+    const { confirm: confirmAction, confirmDialog: meshConfirmDialog } = useConfirmDialog()
+
     const {
         sendCommand, sendData, daemons, userName,
         loadMeshStatus, launchCoordinator, loadLiveMesh,
@@ -127,6 +134,7 @@ export default function RepoMesh() {
         creating, createWarning, setCreateWarning,
         loadMeshes, handleCreate, handleDelete, cancelCreate,
     } = useMeshList({
+        confirmAction,
         daemons,
         primaryDaemonId,
         sendCommand,
@@ -217,6 +225,7 @@ export default function RepoMesh() {
         handleSaveCoordinatorPrompt, handleSaveNodeSystemPrompt,
         settingMeshHost, handleSetMeshHost,
     } = useMeshNodeActions({
+        confirmAction,
         selectedMesh,
         selectedMeshId,
         primaryDaemonId,
@@ -675,6 +684,8 @@ export default function RepoMesh() {
 
     if (!selectedMesh) {
         return (
+            <>
+            {meshConfirmDialog}
             <MeshListView
                 meshes={meshes}
                 loading={loading}
@@ -704,10 +715,13 @@ export default function RepoMesh() {
                 onCreate={handleCreate}
                 onCancelCreate={cancelCreate}
             />
+            </>
         )
     }
 
     return (
+        <>
+        {meshConfirmDialog}
         <MeshDetailView
             selectedMesh={selectedMesh}
             error={error}
@@ -783,6 +797,7 @@ export default function RepoMesh() {
             }}
             sendCommand={sendCommand}
         />
+        </>
     )
 }
 

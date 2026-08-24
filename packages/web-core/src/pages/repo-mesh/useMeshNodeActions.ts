@@ -14,6 +14,9 @@ import type { MeshEntry, MeshNode, NodeCapabilitySlot } from './types'
 import { readMeshPolicy } from './types'
 
 interface UseMeshNodeActionsOptions {
+    /** Modal confirm injected by the page (useConfirmDialog.confirm);
+     *  window.confirm remains the fallback (CONFIRM-MIGRATION leftover). */
+    confirmAction?: (request: { title: string; description?: string; confirmLabel: string; cancelLabel?: string; tone?: 'default' | 'danger' }) => Promise<boolean>
     selectedMesh: MeshEntry | null
     selectedMeshId: string | null
     primaryDaemonId: string
@@ -50,6 +53,7 @@ export function useMeshNodeActions({
     loadQueue,
     queueSection,
     setError,
+    confirmAction,
 }: UseMeshNodeActionsOptions) {
     // Selected node in the node list
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -187,7 +191,15 @@ export function useMeshNodeActions({
                 { value: 'stop_and_delete', label: 'Stop and delete sessions' },
             ] as const
         ).find(o => o.value === policy.sessionCleanupOnNodeRemove)?.label || 'Preserve history and runtimes'
-        if (!confirm(`Remove this node?\n\nNode removal cleanup policy: ${cleanupLabel}`)) return
+        const confirmed = confirmAction
+            ? await confirmAction({
+                title: 'Remove this node?',
+                description: `Node removal cleanup policy: ${cleanupLabel}`,
+                confirmLabel: 'Remove',
+                tone: 'danger',
+            })
+            : confirm(`Remove this node?\n\nNode removal cleanup policy: ${cleanupLabel}`)
+        if (!confirmed) return
         const targetDaemonId = (selectedMesh as any).__sourceDaemonId || primaryDaemonId
         try {
             const raw = await sendCommand(targetDaemonId, 'remove_mesh_node', { meshId: selectedMesh.id, nodeId })
