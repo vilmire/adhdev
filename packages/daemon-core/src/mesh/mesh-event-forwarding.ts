@@ -26,7 +26,7 @@ import {
     hasUnterminalDirectDispatchLedgerEntry,
 } from './mesh-events-stale.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { registerMeshGraphQueueWakeHandler } from './mesh-graph-transition-runner.js';
+import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler } from './mesh-graph-transition-runner.js';
 import {
     buildMeshSystemMessage,
     readNonEmptyString,
@@ -1891,6 +1891,47 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                 LOG.warn('MeshQueue', `Graph queue-wake trigger failed (mesh ${wakeMeshId}): ${e?.message || e}`);
             });
         });
+    });
+    // GRAPH-GATE-NOTIFY: an opened (or lease-lapsed) coordinator gate previously
+    // produced only a durable outbox row with no consumer — the coordinator could
+    // learn about it solely by polling mesh_graph_view, which the Monitor rules
+    // forbid. Page it through the same pendingCoordinatorEvents channel task
+    // completions use; the idle auto-flush below delivers it on the next idle edge.
+    // gateId anchors the dedup fingerprint (metadataEvent.taskId), so each gate
+    // pages at most once while undrained instead of collapsing per-mesh.
+    registerMeshGraphGateNotifyHandler((notification) => {
+        const gateLabel = notification.ref || notification.gateId;
+        const actionLabel = notification.action ? ` (${notification.action})` : '';
+        const coordinatorMessage = notification.kind === 'graph_gate_awaiting'
+            ? `Coordinator gate '${gateLabel}'${actionLabel} is awaiting you (graph ${notification.graphId}). `
+              + `${notification.instructions ? `Instructions: ${notification.instructions} ` : ''}`
+              + `Claim it with mesh_graph_gate_claim (gateId: ${notification.gateId}), perform the action, then release or abandon it. `
+              + 'Downstream tasks stay blocked until the gate is released.'
+            : `Coordinator gate '${gateLabel}'${actionLabel} lease expired without release (graph ${notification.graphId}, gateId: ${notification.gateId}). `
+              + 'If the external action already happened, reconcile its evidence and release; otherwise reclaim the gate before retrying.';
+        try {
+            queuePendingMeshCoordinatorEvent({
+                event: `mesh:${notification.kind}`,
+                meshId: notification.meshId,
+                nodeLabel: gateLabel,
+                metadataEvent: {
+                    source: 'mesh_graph_outbox',
+                    // gateId anchors the pending-event fingerprint so alerts dedup
+                    // per gate, not per mesh (see buildPendingEventFingerprint).
+                    taskId: notification.gateId,
+                    gateId: notification.gateId,
+                    graphId: notification.graphId,
+                    ...(notification.ref ? { ref: notification.ref } : {}),
+                    ...(notification.action ? { action: notification.action } : {}),
+                    ...(notification.deadlineAt ? { deadlineAt: notification.deadlineAt } : {}),
+                    coordinatorMessage,
+                },
+                coordinatorMessage,
+                queuedAt: Date.now(),
+            });
+        } catch (e: any) {
+            LOG.warn('MeshGraph', `Gate notify enqueue failed (mesh ${notification.meshId}, gate ${notification.gateId}): ${e?.message || e}`);
+        }
     });
     components.instanceManager.onEvent((event) => {
         // --- Coordinator idle auto-flush (fast path) ---

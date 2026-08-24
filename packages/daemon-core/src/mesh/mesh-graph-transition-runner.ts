@@ -186,16 +186,72 @@ export function registerMeshGraphQueueWakeHandler(handler: (meshId: string) => v
     queueWakeHandler = handler;
 }
 
+/**
+ * Coordinator-facing gate notification, drained from the graph outbox.
+ * `graph_gate_awaiting` fires when upstream completion opens a gate;
+ * `graph_gate_lease_expired` when a claimed gate's lease lapses without release.
+ * Payload fields come straight from the outbox row's JSON payload.
+ */
+export interface MeshGraphGateNotification {
+    kind: 'graph_gate_awaiting' | 'graph_gate_lease_expired';
+    meshId: string;
+    graphId: string;
+    gateId: string;
+    ref?: string;
+    action?: string;
+    instructions?: string;
+    deadlineAt?: string;
+}
+
+// Same seam as the queue-wake handler: an opened/lapsed gate previously wrote a
+// durable outbox row that NOTHING consumed — the coordinator could only learn
+// about it by polling mesh_graph_view, which the Monitor rules forbid. Measured
+// live 2026-08-24: 7 gates sat awaiting_coordinator for 3 days, two of them for
+// work that had already landed on main. setupMeshEventForwarding registers a
+// handler that pages the coordinator through pendingCoordinatorEvents.
+let gateNotifyHandler: ((notification: MeshGraphGateNotification) => void) | undefined;
+
+export function registerMeshGraphGateNotifyHandler(handler: (notification: MeshGraphGateNotification) => void): void {
+    gateNotifyHandler = handler;
+}
+
 export function __resetMeshGraphTransitionRunnerForTests(): void {
     queueWakeHandler = undefined;
+    gateNotifyHandler = undefined;
+}
+
+const GATE_NOTIFY_OUTBOX_KINDS = new Set(['graph_gate_awaiting', 'graph_gate_lease_expired']);
+
+function toGateNotification(kind: string, meshId: string, rawPayload: string | null | undefined): MeshGraphGateNotification | null {
+    if (!GATE_NOTIFY_OUTBOX_KINDS.has(kind)) return null;
+    let payload: Record<string, unknown> = {};
+    try {
+        const parsed = rawPayload ? JSON.parse(rawPayload) : {};
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
+    } catch { /* malformed payload → notify with ids we have */ }
+    const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim().length > 0 ? v : undefined);
+    const gateId = str(payload.gateId);
+    const graphId = str(payload.graphId);
+    if (!gateId || !graphId) return null;
+    return {
+        kind: kind as MeshGraphGateNotification['kind'],
+        meshId,
+        graphId,
+        gateId,
+        ref: str(payload.ref),
+        action: str(payload.action),
+        instructions: str(payload.instructions),
+        deadlineAt: str(payload.deadlineAt),
+    };
 }
 
 /**
  * Step 9 — drain pending graph outbox rows AFTER the state-change transaction
- * committed. `queue_wake` events invoke the registered wake handler; every other
- * kind is a durable notification record whose consumers arrive with later phases
- * (gate events are drained by phase C2's gate engine; views arrive with E) —
- * draining marks it delivered so it is never double-fired.
+ * committed. `queue_wake` events invoke the registered wake handler; gate
+ * awaiting/lease-expired events page the coordinator through the registered
+ * gate-notify handler (→ pendingCoordinatorEvents). Every other kind is a
+ * durable notification record consumed by pull surfaces (mesh_graph_view,
+ * ledger) — draining marks it delivered so it is never double-fired.
  * Best-effort per row: a failing wake leaves the row pending with a retry stamp.
  */
 export function drainMeshGraphOutbox(meshId: string): number {
@@ -211,6 +267,12 @@ export function drainMeshGraphOutbox(meshId: string): number {
                 // No handler registered (e.g. a daemon without event forwarding): the
                 // reconcile loop's periodic triggerMeshQueue covers the wake — the row
                 // is still marked delivered so it cannot accumulate forever.
+            } else if (GATE_NOTIFY_OUTBOX_KINDS.has(event.kind)) {
+                const notification = toGateNotification(event.kind, event.meshId, event.payload);
+                if (notification && gateNotifyHandler) gateNotifyHandler(notification);
+                // No handler / unparsable payload: mark delivered anyway — the gate
+                // remains visible in mesh_graph_view (nextCoordinatorAction) and the
+                // reconcile deadline sweep still governs its timeout policy.
             }
             graphStore.markOutboxEventStatus(event.id, 'delivered', nowIso);
             drained += 1;
