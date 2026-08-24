@@ -33,6 +33,23 @@ import {
     type MeshCoordinatorConfigFormat,
 } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
+import { resolveCoordinatorRules, type CoordinatorRulesResolution } from '../../mesh/coordinator-rules.js';
+
+/**
+ * Resolve the repo-read coordinator rules layer for this mesh (best-effort —
+ * the resolver is fail-open, so this never throws). Logs the source once per
+ * launch so a repo whose rules diverge from the bundled default is visible.
+ */
+function resolveRepoRulesBestEffort(mesh: { nodes?: Array<{ workspace?: unknown }> }): CoordinatorRulesResolution {
+    const workspace = mesh.nodes?.[0]?.workspace;
+    const rules = resolveCoordinatorRules(typeof workspace === 'string' ? workspace : undefined);
+    if (rules.source === 'repo') {
+        LOG.info('MeshCoordinator', `Coordinator rules: repo file ${rules.path}${rules.differsFromBundled ? ' (differs from bundled default)' : ' (matches bundled default)'}`);
+    } else {
+        LOG.info('MeshCoordinator', 'Coordinator rules: bundled default (no repo .adhdev/coordinator-rules.md)');
+    }
+    return rules;
+}
 
 /**
  * HOST-PIN-WRITER — idempotent launch-time backfill of the mesh host pin.
@@ -401,7 +418,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';
                         try {
-                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId) });
+                            cliCmdSystemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId), repoRules: resolveRepoRulesBestEffort(effectiveMesh) });
                         } catch (error: any) {
                             const message = error?.message || String(error);
                             LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
@@ -677,7 +694,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // broken mesh state is visible instead of silently launching with weaker rules.
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId) });
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh: effectiveMesh, coordinatorCliType: cliType, userInstruction: extraSystemPrompt || undefined, missionSection: buildMissionSectionBestEffort(mesh.id), recentActivity: await buildRecentActivityBestEffort(mesh.id), operatingNotes: await buildEffectiveOperatingNotes(mesh.id), magiKindPanels: await loadMagiKindPanelsBestEffort(meshId), repoRules: resolveRepoRulesBestEffort(effectiveMesh) });
                     } catch (error: any) {
                         const message = error?.message || String(error);
                         LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
