@@ -487,9 +487,17 @@ export default function RepoMesh() {
         }
     }, [daemons, newMeshDaemonId, features.createDaemonPicker])
 
-    // Cloud: auto-select first workspace when daemon changes in create form
+    // Cloud: auto-select first workspace when daemon changes in create form.
+    // STANDALONE MUST NO-OP (create-hang, owner report 2026-08-24): with no
+    // daemon picker this effect used to fall into the clear branch on every
+    // run — and since newMeshWorkspace is a dependency, the user's selection
+    // itself re-fired it, wiping the select right back to empty. That wipe
+    // then re-ran the plan effect, whose empty-workspace early-return leaves
+    // planLoading stuck true, so the form sat on "Checking the workspace…"
+    // forever with nothing selected.
     useEffect(() => {
-        if (!features.createDaemonPicker || !newMeshDaemonId) { setNewMeshWorkspace(''); return }
+        if (!features.createDaemonPicker) return
+        if (!newMeshDaemonId) { setNewMeshWorkspace(''); return }
         if (!createPickerWorkspaces.length) { setNewMeshWorkspace(''); return }
         if (!createPickerWorkspaces.some(w => w.path === newMeshWorkspace)) {
             setNewMeshWorkspace(createPickerWorkspaces[0]?.path || '')

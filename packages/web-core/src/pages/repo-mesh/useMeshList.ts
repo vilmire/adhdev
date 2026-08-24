@@ -262,6 +262,12 @@ export function useMeshList({
     useEffect(() => {
         if (!showCreate || !createTargetDaemonId || !newMeshWorkspace) {
             setCreateOnboardingPlan(null)
+            // Also drop the loading flag: when the workspace empties while a
+            // probe is in flight, the in-flight run's finally is skipped by
+            // its `cancelled` guard and THIS branch is the only writer left —
+            // without it the form strands on "Checking the workspace…" with
+            // Create disabled (planLoading gates isMeshCreateDisabled).
+            setCreatePlanLoading(false)
             return
         }
         let cancelled = false
