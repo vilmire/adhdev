@@ -767,7 +767,10 @@
             "hiddenTasks_other": "{{count}} tareas anteriores ocultas",
             "loadMore_one": "Cargar {{count}} más",
             "loadMore_other": "Cargar {{count}} más",
-            "predictedSlot": "Slot de enrutamiento previsto"
+            "predictedSlot": "Slot de enrutamiento previsto",
+            "statsPending": "{{count}} en cola",
+            "statsAssigned": "{{count}} asignadas",
+            "hiddenLoadMore": "+{{count}} anteriores"
         },
         "obs": {
             "tabOverview": "Resumen",
@@ -896,7 +899,6 @@
             "pinned": "fijada"
         },
         "dialog": {
-            "kicker": "Observabilidad de la malla",
             "showDetails": "Mostrar detalles de la malla",
             "hideDetails": "Ocultar detalles de la malla",
             "refreshedAt": "Actualizado {{time}}",
@@ -974,7 +976,7 @@
             "leaseExpired": "lease vencido",
             "emptyGraph": "Este grafo no tiene nodos.",
             "gateActsViaCoordinator": "Lo gestiona el coordinador: pídele que procese este gate.",
-            "schedNext": "Siguiente",
+            "schedNext": "Siguiente asignación",
             "schedWaiting": "Listo",
             "schedFull": "Sin capacidad",
             "schedFloorExcluded": "Bajo dificultad",
@@ -985,7 +987,10 @@
             "schedColQuota": "Cuota",
             "schedColParallel": "Paralelo",
             "schedColStatus": "Estado",
-            "schedColMachine": "Máquina"
+            "schedColMachine": "Máquina",
+            "schedNextTitle": "Si envías una tarea de esta dificultad ahora, este slot la toma",
+            "schedTargetWorktreeTitle": "La tarea se ejecutaría en este worktree",
+            "schedulingShort": "Scheduling"
         }
     },
     "repoMesh": {
@@ -2676,8 +2681,6 @@
             "machinesNotReporting_one": "{{count}} máquina sin reportar: {{machines}}",
             "machinesNotReporting_other": "{{count}} máquinas sin reportar: {{machines}}",
             "machinesSection": "Máquinas — plan · nodos",
-            "badgeBaseNode": "base",
-            "badgeBaseNodeTitle": "Checkout base de esta máquina — uno por máquina",
             "versionSkewTitle": "Versión distinta del consenso de la máquina",
             "machineVersionsTitle": "Versiones de CLI instaladas en esta máquina — compartidas por sus nodos"
         },

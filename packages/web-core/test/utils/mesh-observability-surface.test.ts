@@ -48,7 +48,7 @@ describe('MeshObservabilitySurface', () => {
       'utf8',
     )
 
-    expect(source).toContain('relative flex min-h-0 flex-1 flex-col rounded-[28px]')
+    expect(source).toContain('relative flex min-h-0 flex-1 flex-col" style=')
     // The header must NOT float as an absolute overlay on mobile — that overlay
     // both clipped the canvas top and created a touch dead-zone over the graph.
     expect(source).not.toContain('absolute inset-x-4 top-4 z-30')

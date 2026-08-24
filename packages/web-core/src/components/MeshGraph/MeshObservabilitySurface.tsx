@@ -98,19 +98,22 @@ export function MeshSurfaceTabControls({
     onActiveTabChange,
     helpOpen,
     onHelpOpenChange,
+    hideHelpToggle = false,
 }: {
     meshTheme: MeshGraphTheme
     activeTab: MeshSurfaceTab
     onActiveTabChange: (tab: MeshSurfaceTab) => void
     helpOpen: boolean
     onHelpOpenChange: (open: boolean) => void
+    /** The dialog hosts its own corner-strip help button — skip the inline one. */
+    hideHelpToggle?: boolean
 }) {
     const { t } = useTranslation('common')
     const tabButtonClass = (active: boolean) => active
         ? (meshTheme.isDark
-            ? 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-100 bg-white/[0.08] border border-white/12'
-            : 'rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-300 shadow-sm')
-        : `rounded-lg px-3.5 py-1.5 text-xs font-medium ${meshTheme.textSecondary} border border-transparent hover:bg-white/[0.04]`
+            ? 'whitespace-nowrap rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-100 bg-white/[0.08] border border-white/12'
+            : 'whitespace-nowrap rounded-lg px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-300 shadow-sm')
+        : `whitespace-nowrap rounded-lg px-3.5 py-1.5 text-xs font-medium ${meshTheme.textSecondary} border border-transparent hover:bg-white/[0.04]`
     return (
         <div className="flex items-center gap-2">
             <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
@@ -152,7 +155,7 @@ export function MeshSurfaceTabControls({
                     {t('meshGraph.obs.tabGraph')}
                 </button>
             </div>
-            <MeshHelpToggle meshTheme={meshTheme} open={helpOpen} onToggle={() => onHelpOpenChange(!helpOpen)} />
+            {!hideHelpToggle && <MeshHelpToggle meshTheme={meshTheme} open={helpOpen} onToggle={() => onHelpOpenChange(!helpOpen)} />}
         </div>
     )
 }
@@ -506,7 +509,7 @@ export default function MeshObservabilitySurface({
 
             {/* ── Tasks tab: work-queue dependency DAG (lazily mounted) ── */}
             <div className={`${activeTab === 'tasks' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col`}>
-                <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px]`} style={{ minHeight: 420 }}>
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" style={{ minHeight: 320 }}>
                     {taskDagMounted ? (
                         // absolute-fill so the embedded per-mission React Flow gets a
                         // CONCRETE height — a percentage height through the flex chain
@@ -544,12 +547,12 @@ export default function MeshObservabilitySurface({
             {/* ── Graph tab: existing topology card (lazily mounted) ── */}
             <div className={`${activeTab === 'graph' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-4`}>
             {/* ── Card: header + graph + detail panel ── */}
-            <div className={`${meshTheme.cardClass} relative flex min-h-0 flex-1 flex-col rounded-[28px]`} style={{ minHeight: 480 }}>
+            <div className="relative flex min-h-0 flex-1 flex-col" style={{ minHeight: 320 }}>
 
                 {/* Header — stays in normal flow on every breakpoint so the badge
                     column pushes the canvas down instead of floating over it (and
                     intercepting the top band of graph touches on mobile). */}
-                <div className={`relative z-30 max-h-[42dvh] overflow-y-auto sm:max-h-none sm:mb-3 sm:overflow-visible shrink-0 flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2.5 border-b ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                <div className={`relative z-30 max-h-[42dvh] overflow-y-auto sm:max-h-none sm:mb-3 sm:overflow-visible shrink-0 flex flex-wrap items-start justify-between gap-2 px-1 pt-1 pb-2`}>
                     {/* Mobile: take a full row (basis-full) and WRAP. Previously this was
                         `flex-1 flex-nowrap overflow-x-auto`, which shared the row with the
                         shrink-0 controls block on the right — the controls claimed ~380px of

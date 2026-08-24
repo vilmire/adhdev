@@ -767,7 +767,10 @@
             "hiddenTasks_other": "{{count}} older tasks hidden",
             "loadMore_one": "Load {{count}} more",
             "loadMore_other": "Load {{count}} more",
-            "predictedSlot": "Predicted next routing slot"
+            "predictedSlot": "Predicted next routing slot",
+            "statsPending": "{{count}} queued",
+            "statsAssigned": "{{count}} assigned",
+            "hiddenLoadMore": "+{{count}} earlier"
         },
         "obs": {
             "tabOverview": "Overview",
@@ -891,7 +894,6 @@
             "pinned": "pinned"
         },
         "dialog": {
-            "kicker": "Mesh observability",
             "showDetails": "Show mesh details",
             "hideDetails": "Hide mesh details",
             "refreshedAt": "Refreshed {{time}}",
@@ -969,7 +971,7 @@
             "leaseExpired": "lease expired",
             "emptyGraph": "This graph has no nodes.",
             "gateActsViaCoordinator": "Handled by the coordinator — ask it to claim/release this gate.",
-            "schedNext": "Next",
+            "schedNext": "Next up",
             "schedWaiting": "Ready",
             "schedFull": "At capacity",
             "schedFloorExcluded": "Below difficulty",
@@ -980,7 +982,10 @@
             "schedColQuota": "Quota",
             "schedColParallel": "Parallel",
             "schedColStatus": "Status",
-            "schedColMachine": "Machine"
+            "schedColMachine": "Machine",
+            "schedNextTitle": "Dispatch a task of this difficulty now and this slot takes it",
+            "schedTargetWorktreeTitle": "The task would run in this worktree checkout",
+            "schedulingShort": "Scheduling"
         }
     },
     "repoMesh": {
@@ -2671,8 +2676,6 @@
             "machinesNotReporting_one": "{{count}} machine not reporting yet: {{machines}}",
             "machinesNotReporting_other": "{{count}} machines not reporting yet: {{machines}}",
             "machinesSection": "Machines — plan · nodes",
-            "badgeBaseNode": "base",
-            "badgeBaseNodeTitle": "This machine's base checkout — one per machine; worktrees branch off it",
             "versionSkewTitle": "Version differs from this machine’s consensus (stale report or partial install)",
             "machineVersionsTitle": "Provider CLI versions installed on this machine — shared by all its nodes"
         },

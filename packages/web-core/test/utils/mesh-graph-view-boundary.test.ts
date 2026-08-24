@@ -49,7 +49,7 @@ describe('mesh graph view interaction boundaries', () => {
 
         expect(source).toContain('meshTheme.graphShellClass')
         // Dynamic min-height class based on node count — base case 460px min, grows for dense graphs
-        expect(source).toContain('min-h-[460px]')
+        expect(source).toContain('min-h-[min(460px,52dvh)]')
         expect(source).toContain('className="h-full w-full"')
     })
 
@@ -128,8 +128,8 @@ describe('mesh graph view interaction boundaries', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(source).toContain('getGraphMinHeightClass(data.nodes.length)')
-        expect(source).toContain('min-h-[580px]')
-        expect(source).toContain('min-h-[720px]')
+        expect(source).toContain('min-h-[min(580px,58dvh)]')
+        expect(source).toContain('min-h-[min(720px,62dvh)]')
     })
 
     it('bounds long card and edge label text so rendered labels cannot escape the measured node geometry', () => {

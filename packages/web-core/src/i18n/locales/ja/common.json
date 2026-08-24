@@ -767,7 +767,10 @@
             "hiddenTasks_other": "過去のタスク {{count}}件を非表示",
             "loadMore_one": "さらに{{count}}件読み込む",
             "loadMore_other": "さらに{{count}}件読み込む",
-            "predictedSlot": "次のルーティング予測スロット"
+            "predictedSlot": "次のルーティング予測スロット",
+            "statsPending": "待機 {{count}}",
+            "statsAssigned": "割当 {{count}}",
+            "hiddenLoadMore": "+過去 {{count}}件"
         },
         "obs": {
             "tabOverview": "概要",
@@ -891,7 +894,6 @@
             "pinned": "固定"
         },
         "dialog": {
-            "kicker": "メッシュの可観測性",
             "showDetails": "メッシュの詳細を表示",
             "hideDetails": "メッシュの詳細を非表示",
             "refreshedAt": "{{time}} に更新",
@@ -969,7 +971,7 @@
             "leaseExpired": "リース期限切れ",
             "emptyGraph": "このグラフにはノードがありません。",
             "gateActsViaCoordinator": "コーディネーターが処理します — このゲートの処理はコーディネーターに指示してください。",
-            "schedNext": "次",
+            "schedNext": "次に割当",
             "schedWaiting": "待機",
             "schedFull": "定員超過",
             "schedFloorExcluded": "難易度未満",
@@ -980,7 +982,10 @@
             "schedColQuota": "クォータ",
             "schedColParallel": "並列",
             "schedColStatus": "状態",
-            "schedColMachine": "マシン"
+            "schedColMachine": "マシン",
+            "schedNextTitle": "今この難易度のタスクを送るとこのスロットに割り当てられます",
+            "schedTargetWorktreeTitle": "このワークツリーで実行されます",
+            "schedulingShort": "スケジュール"
         }
     },
     "repoMesh": {
@@ -2671,8 +2676,6 @@
             "machinesNotReporting_one": "未報告マシン {{count}} 台: {{machines}}",
             "machinesNotReporting_other": "未報告マシン {{count}} 台: {{machines}}",
             "machinesSection": "マシン — プラン · ノード",
-            "badgeBaseNode": "ベース",
-            "badgeBaseNodeTitle": "このマシンのベースチェックアウト — マシンごとに1つ",
             "versionSkewTitle": "マシンのコンセンサスと異なるバージョン",
             "machineVersionsTitle": "このマシンにインストールされたプロバイダCLIバージョン — 全ノード共有"
         },

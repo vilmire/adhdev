@@ -767,7 +767,10 @@
             "hiddenTasks_other": "已隐藏 {{count}} 个较早任务",
             "loadMore_one": "再加载 {{count}} 个",
             "loadMore_other": "再加载 {{count}} 个",
-            "predictedSlot": "下一个路由预测槽位"
+            "predictedSlot": "下一个路由预测槽位",
+            "statsPending": "排队 {{count}}",
+            "statsAssigned": "已分配 {{count}}",
+            "hiddenLoadMore": "+早前 {{count}}"
         },
         "obs": {
             "tabOverview": "概览",
@@ -891,7 +894,6 @@
             "pinned": "置顶"
         },
         "dialog": {
-            "kicker": "网格可观测性",
             "showDetails": "显示网格详情",
             "hideDetails": "隐藏网格详情",
             "refreshedAt": "已于 {{time}} 刷新",
@@ -969,7 +971,7 @@
             "leaseExpired": "租约已过期",
             "emptyGraph": "该图没有节点。",
             "gateActsViaCoordinator": "由协调器处理 — 请指示协调器处理此闸门。",
-            "schedNext": "下一个",
+            "schedNext": "下一个分配",
             "schedWaiting": "待命",
             "schedFull": "容量已满",
             "schedFloorExcluded": "低于难度",
@@ -980,7 +982,10 @@
             "schedColQuota": "配额",
             "schedColParallel": "并行",
             "schedColStatus": "状态",
-            "schedColMachine": "机器"
+            "schedColMachine": "机器",
+            "schedNextTitle": "现在派发该难度的任务将由此槽位接收",
+            "schedTargetWorktreeTitle": "任务将在此工作树中运行",
+            "schedulingShort": "调度"
         }
     },
     "repoMesh": {
@@ -2671,8 +2676,6 @@
             "machinesNotReporting_one": "{{count}} 台机器未报告: {{machines}}",
             "machinesNotReporting_other": "{{count}} 台机器未报告: {{machines}}",
             "machinesSection": "机器 — 计划 · 节点",
-            "badgeBaseNode": "基础",
-            "badgeBaseNodeTitle": "该机器的基础检出 — 每台机器一个",
             "versionSkewTitle": "与机器共识不同的版本",
             "machineVersionsTitle": "该机器安装的提供方 CLI 版本 — 由其所有节点共享"
         },

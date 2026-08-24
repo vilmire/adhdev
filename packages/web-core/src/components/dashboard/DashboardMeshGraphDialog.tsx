@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
-import { IconInfo, IconMesh, IconX } from '../Icons'
+import { IconHelp, IconInfo, IconMesh, IconRefresh, IconX } from '../Icons'
 import { MeshObservabilitySurface, MeshSurfaceTabControls, type MeshSurfaceTab } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import { useTransport } from '../../context/TransportContext'
@@ -291,15 +291,45 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                     {/* Close — anchored to the header's top-right corner so it never
                         wraps below the chip row on mobile (where the row flex-wraps).
                         On desktop it sits at the far-right, vertically centered. */}
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className={`absolute right-4 top-[calc(16px+env(safe-area-inset-top,0px))] z-10 md:right-5 md:top-1/2 md:-translate-y-1/2 ${meshTheme.dialogCloseButtonClass}`}
-                        aria-label="Close mesh graph"
-                    >
-                        <IconX size={16} />
-                    </button>
-                    <div className="min-w-0 flex-1 pr-12 md:pr-0">
+                    {/* Refresh (icon) + Close — one compact corner strip. The old
+                        full-width "새로 고침" text button ate a whole row on mobile
+                        for a single action; an icon beside the close keeps the
+                        header to one visual line. */}
+                    <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5 md:right-5 md:top-1/2 md:-translate-y-1/2">
+                        <button
+                            type="button"
+                            onClick={() => setHelpOpen(prev => !prev)}
+                            aria-expanded={helpOpen}
+                            aria-label={t('meshGraph.help.toggleAria')}
+                            title={t('meshGraph.help.toggleTitle')}
+                            className={helpOpen
+                                ? (meshTheme.isDark
+                                    ? 'inline-flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400/40 bg-sky-500/15 text-sky-100 transition'
+                                    : 'inline-flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400 bg-sky-100 text-sky-800 transition')
+                                : meshTheme.dialogCloseButtonClass}
+                        >
+                            <IconHelp size={15} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { void loadGraph(true) }}
+                            disabled={loading || refreshing}
+                            className={meshTheme.dialogCloseButtonClass}
+                            aria-label={t('meshGraph.dialog.refreshTitle')}
+                            title={t('meshGraph.dialog.refreshTitle')}
+                        >
+                            <IconRefresh size={15} className={loading || refreshing ? 'animate-spin' : undefined} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className={meshTheme.dialogCloseButtonClass}
+                            aria-label="Close mesh graph"
+                        >
+                            <IconX size={16} />
+                        </button>
+                    </div>
+                    <div className="min-w-0 flex-1 pr-32 md:pr-0">
                         <div className="flex items-center gap-3">
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-500/12 text-sky-200 shadow-[0_12px_30px_rgba(14,165,233,0.18)]">
                                 <IconMesh size={18} />
@@ -307,9 +337,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
                                     <h2 className={meshTheme.dialogTitleClass}>{detailLabel}</h2>
-                                    <span className={meshTheme.dialogKickerClass}>
-                                        {t('meshGraph.dialog.kicker')}
-                                    </span>
                                     {/* Mobile-only disclosure toggle for the secondary
                                         metadata (repo path + status chips). Sits right
                                         beside the observability badge; hidden on desktop
@@ -344,27 +371,19 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             </div>
                         </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 md:justify-end md:pr-12">
+                    <div className="flex min-w-0 items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:justify-end md:pr-36">
                         {/* Core actions — always pinned in the sticky shrink-0 header so
-                            they stay reachable no matter how long the body content is. */}
+                            they stay reachable no matter how long the body content is.
+                            The row scrolls horizontally instead of wrapping tab labels
+                            onto two lines on narrow screens. */}
                         <MeshSurfaceTabControls
                             meshTheme={meshTheme}
                             activeTab={activeTab}
                             onActiveTabChange={setActiveTab}
                             helpOpen={helpOpen}
                             onHelpOpenChange={setHelpOpen}
+                            hideHelpToggle
                         />
-                        <button
-                            type="button"
-                            onClick={() => {
-                                void loadGraph(true)
-                            }}
-                            disabled={loading || refreshing}
-                            className="btn btn-secondary btn-sm rounded-xl px-3.5"
-                            title={t('meshGraph.dialog.refreshTitle')}
-                        >
-                            {loading || refreshing ? t('meshGraph.dialog.refreshing') : t('meshGraph.dialog.refresh')}
-                        </button>
                     </div>
                 </div>
 

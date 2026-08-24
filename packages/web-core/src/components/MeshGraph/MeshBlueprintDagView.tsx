@@ -253,11 +253,20 @@ export default function MeshBlueprintDagView({ graph, selectedNodeId, onSelectNo
                 onNodeClick={handleNodeClick}
                 onPaneClick={() => onSelectNode(null)}
                 fitView
-                fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
-                minZoom={0.2}
-                maxZoom={1.6}
+                fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
+                minZoom={0.18}
+                maxZoom={1.35}
                 nodesConnectable={false}
                 nodesDraggable={false}
+                // Interaction contract mirrors the topology tab (MeshGraphView):
+                // wheel/trackpad pans, pinch zooms, wheel-zoom and double-click
+                // zoom stay off, drag pans — one mouse vocabulary across tabs.
+                panOnDrag
+                panOnScroll
+                zoomOnScroll={false}
+                zoomOnPinch
+                zoomOnDoubleClick={false}
+                selectionOnDrag={false}
                 proOptions={{ hideAttribution: true }}
                 colorMode={meshTheme.isDark ? 'dark' : 'light'}
             >

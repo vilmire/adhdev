@@ -1224,9 +1224,12 @@ const LEGEND_EDGE_DASH: Partial<Record<MeshGraphEdge['type'], string>> = {
 }
 
 function getGraphMinHeightClass(nodeCount: number): string {
-    if (nodeCount >= 16) return 'min-h-[720px]'
-    if (nodeCount >= 10) return 'min-h-[580px]'
-    return 'min-h-[460px]'
+    // Height floors are capped by viewport height: the canvas is pan/zoomable,
+    // so on a short window a smaller canvas beats forcing the dialog body to
+    // scroll (the graph tab should never scroll — the graph pans instead).
+    if (nodeCount >= 16) return 'min-h-[min(720px,62dvh)]'
+    if (nodeCount >= 10) return 'min-h-[min(580px,58dvh)]'
+    return 'min-h-[min(460px,52dvh)]'
 }
 
 export default function MeshGraphView({

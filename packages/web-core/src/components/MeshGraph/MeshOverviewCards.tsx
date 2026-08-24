@@ -243,7 +243,7 @@ function payloadSummary(payload: Record<string, unknown> | undefined): string | 
 
 // ── detail modal selection ───────────────────────────────────────────────────
 
-type DetailSelection =
+export type DetailSelection =
     | { kind: 'mission'; mission: MeshMissionDisplay }
     | { kind: 'ledger'; entry: RepoMeshLedgerEntryStatus }
     | { kind: 'queue'; task: RepoMeshQueueTask }

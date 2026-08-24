@@ -357,7 +357,6 @@ function MeshNodeRuntimeRow({ node, previewVersion, machineVersions }: { node: R
                         : (nodeWorkspaceBasename(node.workspace) || node.machineLabel || node.nodeId)}
                 </span>
                 <Badge label={node.health} tone={healthTone(node.health)} />
-                {!isWorktree && <Badge label={t('mesh.status.badgeBaseNode')} tone="default" title={t('mesh.status.badgeBaseNodeTitle')} />}
                 {isWorktree && <Badge label={t('mesh.status.badgeWorktree')} tone="info" title={node.worktreeBranch ? t('mesh.status.badgeWorktreeBranchTitle', { branch: node.worktreeBranch }) : t('mesh.status.badgeWorktreeTitle')} />}
                 {bootstrap?.status && bootstrap.status !== 'ready' && (
                     <Badge label={`bootstrap ${bootstrap.status}`} tone="warn" title={t('mesh.status.badgeBootstrapTitle')} />

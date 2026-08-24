@@ -767,7 +767,10 @@
             "hiddenTasks_other": "이전 태스크 {{count}}개 숨김",
             "loadMore_one": "{{count}}개 더 불러오기",
             "loadMore_other": "{{count}}개 더 불러오기",
-            "predictedSlot": "다음 라우팅 예측 슬롯"
+            "predictedSlot": "다음 라우팅 예측 슬롯",
+            "statsPending": "대기 {{count}}",
+            "statsAssigned": "할당 {{count}}",
+            "hiddenLoadMore": "+이전 {{count}}개"
         },
         "obs": {
             "tabOverview": "개요",
@@ -891,7 +894,6 @@
             "pinned": "고정됨"
         },
         "dialog": {
-            "kicker": "Mesh 관측",
             "showDetails": "메시 세부 정보 표시",
             "hideDetails": "메시 세부 정보 숨기기",
             "refreshedAt": "{{time}} 갱신됨",
@@ -969,7 +971,7 @@
             "leaseExpired": "리스 만료",
             "emptyGraph": "이 그래프에는 노드가 없습니다.",
             "gateActsViaCoordinator": "코디네이터가 처리합니다 — 코디에게 이 게이트의 처리(클레임/릴리즈)를 지시하세요.",
-            "schedNext": "다음",
+            "schedNext": "다음 배정",
             "schedWaiting": "대기",
             "schedFull": "정원 참",
             "schedFloorExcluded": "난이도 미달",
@@ -980,7 +982,10 @@
             "schedColQuota": "쿼터",
             "schedColParallel": "병렬",
             "schedColStatus": "상태",
-            "schedColMachine": "머신"
+            "schedColMachine": "머신",
+            "schedNextTitle": "지금 이 난이도의 작업을 보내면 이 슬롯이 배정됩니다",
+            "schedTargetWorktreeTitle": "이 워크트리 체크아웃에서 실행됩니다",
+            "schedulingShort": "스케줄링"
         }
     },
     "repoMesh": {
@@ -2671,8 +2676,6 @@
             "machinesNotReporting_one": "미보고 머신 {{count}}대: {{machines}}",
             "machinesNotReporting_other": "미보고 머신 {{count}}대: {{machines}}",
             "machinesSection": "머신 — 플랜 · 노드",
-            "badgeBaseNode": "베이스",
-            "badgeBaseNodeTitle": "이 머신의 베이스 체크아웃 — 머신당 1개, 워크트리들이 여기서 분기합니다",
             "versionSkewTitle": "머신 컨센서스와 다른 버전 (stale 보고 또는 부분 설치)",
             "machineVersionsTitle": "이 머신에 설치된 프로바이더 CLI 버전 — 소속 노드 전체가 공유"
         },

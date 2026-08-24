@@ -46,6 +46,9 @@ interface MeshTaskDagViewProps {
     /** Initial cap on terminal (completed/failed/cancelled) cards — the blueprint
      *  tab passes a tight cap so history doesn't drown the active plan. */
     initialTerminalLimit?: number
+    /** When provided, clicking a task opens the caller's detail surface (the
+     *  shared MeshOverviewDetailModal) instead of the built-in side panel. */
+    onTaskOpen?: (task: RepoMeshQueueTask) => void
     /**
      * Embedded mode (per-mission drill-down inside MeshTasksView): the caller
      * already scoped the task set, so the history cap, stats overlay and
@@ -231,7 +234,7 @@ async function layoutTaskDag(dag: TaskDagData): Promise<Map<string, { x: number;
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -307,8 +310,12 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     const selectedNode = selectedTaskId ? dag.nodes.find(node => node.id === selectedTaskId) ?? null : null
 
     const handleNodeClick = useCallback((_event: unknown, node: TaskFlowNode) => {
+        if (onTaskOpen) {
+            onTaskOpen(node.data.dagNode.task)
+            return
+        }
         setSelectedTaskId(current => (current === node.id ? null : node.id))
-    }, [])
+    }, [onTaskOpen])
 
     if (dag.nodes.length === 0) {
         return (
@@ -330,7 +337,31 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     }
 
     return (
-        <div className="relative h-full min-h-[320px] w-full" style={{ minHeight: 320 }}>
+        <div className="flex h-full min-h-[320px] w-full flex-col" style={{ minHeight: 320 }}>
+            {/* Stats row — in normal flow ABOVE the canvas so it never covers cards. */}
+            {/* Stats row — deliberately terse: total, live states worth acting
+                on (pending/assigned/waiting/blocked), and ONE combined chip for
+                hidden history that is itself the load-more action. */}
+            {!compact && <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1">
+                {statBadge(t('meshGraph.taskDag.statsTasks', { count: dag.stats.total }))}
+                {dag.stats.pending > 0 && statBadge(t('meshGraph.taskDag.statsPending', { count: dag.stats.pending }))}
+                {dag.stats.assigned > 0 && statBadge(t('meshGraph.taskDag.statsAssigned', { count: dag.stats.assigned }), 'info')}
+                {dag.stats.waiting > 0 && statBadge(t('meshGraph.taskDag.statsWaiting', { count: dag.stats.waiting }), 'warn')}
+                {dag.stats.blocked > 0 && statBadge(t('meshGraph.taskDag.statsBlocked', { count: dag.stats.blocked }), 'danger')}
+                {scoped.hiddenCount > 0 && (
+                    <button
+                        type="button"
+                        onClick={() => setTerminalLimit(limit => limit + TASK_DAG_LOAD_MORE_STEP)}
+                        title={t('meshGraph.taskDag.hiddenTasks', { count: scoped.hiddenCount })}
+                        className={`rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${meshTheme.isDark
+                            ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
+                            : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
+                    >
+                        {t('meshGraph.taskDag.hiddenLoadMore', { count: scoped.hiddenCount })}
+                    </button>
+                )}
+            </div>}
+            <div className="relative min-h-0 flex-1">
             <ReactFlow
                 className="h-full w-full"
                 nodes={flowNodes}
@@ -339,11 +370,20 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 onNodeClick={handleNodeClick}
                 onPaneClick={() => setSelectedTaskId(null)}
                 fitView
-                fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
-                minZoom={0.2}
-                maxZoom={1.6}
+                fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
+                minZoom={0.18}
+                maxZoom={1.35}
                 nodesConnectable={false}
                 nodesDraggable={false}
+                // Interaction contract mirrors the topology tab (MeshGraphView):
+                // wheel/trackpad pans, pinch zooms, wheel-zoom and double-click
+                // zoom stay off, drag pans — one mouse vocabulary across tabs.
+                panOnDrag
+                panOnScroll
+                zoomOnScroll={false}
+                zoomOnPinch
+                zoomOnDoubleClick={false}
+                selectionOnDrag={false}
                 proOptions={{ hideAttribution: true }}
                 colorMode={meshTheme.isDark ? 'dark' : 'light'}
             >
@@ -351,28 +391,6 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 <Controls showInteractive={false} position="bottom-left" />
             </ReactFlow>
 
-            {/* Stats overlay — the "this is a graph of your work" headline row. */}
-            {!compact && <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap items-center gap-1.5">
-                {scoped.hiddenCount > 0 && (
-                    <>
-                        {statBadge(t('meshGraph.taskDag.hiddenTasks', { count: scoped.hiddenCount }))}
-                        <button
-                            type="button"
-                            onClick={() => setTerminalLimit(limit => limit + TASK_DAG_LOAD_MORE_STEP)}
-                            className={`pointer-events-auto rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${meshTheme.isDark
-                                ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
-                                : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
-                        >
-                            {t('meshGraph.taskDag.loadMore', { count: Math.min(TASK_DAG_LOAD_MORE_STEP, scoped.hiddenCount) })}
-                        </button>
-                    </>
-                )}
-                {statBadge(t('meshGraph.taskDag.statsTasks', { count: dag.stats.total }))}
-                {dag.stats.edges > 0 && statBadge(t('meshGraph.taskDag.statsEdges', { count: dag.stats.edges }), 'info')}
-                {dag.stats.missions > 0 && statBadge(t('meshGraph.taskDag.statsMissions', { count: dag.stats.missions }), 'info')}
-                {dag.stats.waiting > 0 && statBadge(t('meshGraph.taskDag.statsWaiting', { count: dag.stats.waiting }), 'warn')}
-                {dag.stats.blocked > 0 && statBadge(t('meshGraph.taskDag.statsBlocked', { count: dag.stats.blocked }), 'danger')}
-            </div>}
 
             {/* Edge-state legend */}
             <div className={`pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-3xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/80 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
@@ -423,6 +441,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     )}
                 </div>
             )}
+            </div>
         </div>
     )
 }
