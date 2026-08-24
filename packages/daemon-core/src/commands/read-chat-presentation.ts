@@ -11,7 +11,7 @@
  */
 
 import type { CommandResult, CommandHelpers } from './handler.js';
-import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
+import { isValidReadChatStatus, validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import type { ChatMessage } from '../types.js';
 import { filterUserFacingChatMessages, isActivityChatMessage, isUserFacingChatMessage } from '../providers/chat-message-normalization.js';
@@ -81,6 +81,17 @@ export function normalizeReadChatCommandStatus(status: unknown, activeModal: unk
             // emitted it.
             return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'generating';
         default:
+            // Contract clamp (owner-visible failure 2026-08-24: a worker
+            // session's turn projection surfaced raw 'stopped' and every
+            // read_chat failed validation in a 2s loop — the reader lost the
+            // ENTIRE transcript over one unknown status token). An unknown
+            // status maps to the closest honest contract value instead of
+            // failing the read: modal staged → waiting_approval, else
+            // no_progress ("cannot prove progress"), which no consumer treats
+            // as terminal or as completion evidence.
+            if (!isValidReadChatStatus(raw)) {
+                return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'no_progress';
+            }
             return raw;
     }
 }
@@ -187,7 +198,11 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
     });
     let effectiveStatus = legacyStatus;
     if (turnPresentation.authority === 'turn_reducer') {
-        effectiveStatus = turnPresentation.status;
+        // The reducer projection is the status AUTHORITY, but not a contract
+        // bypass: its raw vocabulary ('stopped', …) must pass through the same
+        // normalizer as the legacy sample, or one out-of-contract token fails
+        // the whole read (the 2026-08-24 loop failure above).
+        effectiveStatus = normalizeReadChatCommandStatus(turnPresentation.status, payload?.activeModal);
         // Contract safety: waiting_approval requires activeModal buttons. If the
         // reducer parked the attempt but the modal is not staged on THIS read yet,
         // present generating rather than failing the read (the next poll surfaces

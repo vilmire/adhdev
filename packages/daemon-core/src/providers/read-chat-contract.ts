@@ -12,6 +12,12 @@ import {
 } from './transcript-v2.js'
 
 const VALID_STATUSES = ['idle', 'generating', 'waiting_approval', 'waiting_choice', 'finalizing', 'error', 'panel_hidden', 'starting', 'streaming', 'no_progress', 'long_generating'] as const
+
+/** Contract membership check, exported so presentation-layer normalizers can
+ *  clamp BEFORE validation instead of failing the whole read. */
+export function isValidReadChatStatus(status: unknown): boolean {
+  return typeof status === 'string' && (VALID_STATUSES as readonly string[]).includes(status)
+}
 const VALID_ROLES = ['user', 'assistant', 'system', 'human'] as const
 const VALID_BUBBLE_STATES = ['draft', 'streaming', 'final', 'removed'] as const
 const VALID_TURN_STATUSES = ['open', 'waiting_approval', 'complete', 'error'] as const
@@ -30,7 +36,10 @@ function isFiniteNumber(value: unknown): value is number {
 
 function validateStatus(status: unknown, source: string): ValidStatus {
   if (typeof status !== 'string' || !VALID_STATUSES.includes(status as ValidStatus)) {
-    throw new Error(`${source}: status must be one of ${VALID_STATUSES.join(', ')}`)
+    // Name the offender: this error spent a day in the logs without saying
+    // WHICH status a session actually reported (owner-visible read_chat loop
+    // failure, 2026-08-24) — undiagnosable without a live probe.
+    throw new Error(`${source}: status must be one of ${VALID_STATUSES.join(', ')} (received ${JSON.stringify(status)})`)
   }
   return status as ValidStatus
 }
@@ -51,7 +60,7 @@ function validateBubbleState(state: unknown, source: string, index: number): Cha
 
 function validateTurnStatus(turnStatus: unknown, source: string): ValidTurnStatus {
   if (typeof turnStatus !== 'string' || !VALID_TURN_STATUSES.includes(turnStatus as ValidTurnStatus)) {
-    throw new Error(`${source}: turnStatus must be one of ${VALID_TURN_STATUSES.join(', ')}`)
+    throw new Error(`${source}: turnStatus must be one of ${VALID_TURN_STATUSES.join(', ')} (received ${JSON.stringify(turnStatus)})`)
   }
   return turnStatus as ValidTurnStatus
 }
