@@ -1,4 +1,4 @@
-import type { ConnectionStatus } from '@adhdev/web-core'
+import type { ConnectionStatus, WebConnectionRuntimeEvent } from '@adhdev/web-core'
 import { standaloneFetch } from './standalone-auth-client'
 
 export interface StandaloneConnectionAdapter {
@@ -12,10 +12,9 @@ export interface StandaloneConnectionAdapter {
 
 type ScreenshotCallback = (sourceDaemonId: string, blob: Blob) => void
 type StatusCallback = (sourceDaemonId: string, payload: any) => void
-type RuntimeEvent =
-    | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean; cols?: number; rows?: number; force?: boolean }
-    | { type: 'session_output'; sessionId: string; seq?: number; data: string }
-    | { type: 'session_cleared'; sessionId: string }
+// Shared with web-core's WebConnectionManager contract — the local copy this
+// replaced had a twin in cloud's p2p-manager, the drift class the typed seam kills.
+type RuntimeEvent = WebConnectionRuntimeEvent
 
 class StandaloneConnectionManager {
     private adapters = new Map<string, StandaloneConnectionAdapter>()

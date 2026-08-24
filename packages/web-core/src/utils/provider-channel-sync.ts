@@ -17,15 +17,12 @@ export type ProviderChannelSyncOutcome =
  * Accept both transport shapes:
  *   standalone — raw daemon body
  *   cloud P2P  — `{ success: true, result: <daemon body> }`
+ *
+ * Canonical implementation moved to utils/daemon-command-envelope.ts
+ * (fragmentation audit); re-exported here so existing imports keep working.
  */
-export function unwrapDaemonCommandBody<T extends Record<string, unknown>>(raw: unknown): T | undefined {
-    if (!raw || typeof raw !== 'object') return undefined
-    const obj = raw as Record<string, unknown>
-    if ('result' in obj && obj.result && typeof obj.result === 'object') {
-        return obj.result as T
-    }
-    return obj as T
-}
+import { unwrapDaemonCommandBody } from './daemon-command-envelope'
+export { unwrapDaemonCommandBody }
 
 type ActivateProviderUpdatesBody = {
     success?: boolean

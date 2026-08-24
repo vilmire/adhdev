@@ -16,6 +16,59 @@ export function useDaemons() {
 type EventCallback = (...args: any[]) => void
 
 /**
+ * The typed contract for both injection seams below (fragmentation audit).
+ * These used to be `any`, so the two hosts' real implementations drifted
+ * silently: `requestRuntimeSnapshot` existed only on standalone (cloud
+ * `?.`-calls no-oped), `sendData` was a hardcoded `false` on standalone, and
+ * `onRuntimeEvent` grew a third `daemonId` argument only on cloud — all
+ * invisible to the typechecker. Members genuinely absent on one host today
+ * are OPTIONAL; call them with `?.` and handle absence. Growing a required
+ * member means implementing it on BOTH hosts first.
+ */
+export type WebConnectionRuntimeEvent =
+    | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean; cols?: number; rows?: number; force?: boolean }
+    | { type: 'session_output'; sessionId: string; seq?: number; data: string }
+    | { type: 'session_cleared'; sessionId: string }
+
+/**
+ * The per-daemon connection object `get()` hands back. Both hosts return an
+ * adapter with this shape (standalone: StandaloneConnectionAdapter; cloud: the
+ * P2P connection wrapper); members a host may lack are optional.
+ */
+export interface WebConnectionAdapter {
+    hasCommandChannel?: boolean
+    connectionState?: string
+    sendCommand?(cmd: string, data: unknown): Promise<unknown>
+    sendInput(action: string, params: unknown, targetSessionId?: string): Promise<unknown>
+    startScreenshots(ideTypeOrSessionId?: string): void
+    stopScreenshots(ideTypeOrSessionId?: string): void
+}
+
+export interface WebConnectionManager {
+    /** Connection adapter for a daemon (undefined when not connected). */
+    get(daemonId: string): WebConnectionAdapter | undefined | null
+    getState(daemonId: string): string
+    retryConnection(daemonId: string): void
+    sendPtyInput(daemonId: string, sessionId: string, data: string): boolean
+    onScreenshot(key: string, callback: (sourceDaemonId: string, blob: Blob) => void): () => void
+    /** Cloud sends over the DataChannel; standalone has no equivalent (hardcoded false today). */
+    sendData?(daemonId: string, data: unknown): boolean
+    onStatus?(callback: (sourceDaemonId: string, payload: unknown) => void): () => void
+    onStateChange?(callback: (daemonId: string, state: string) => void): () => void
+    /** Cloud threads `daemonId` for its subscription manager; standalone ignores it. */
+    onRuntimeEvent?(sessionId: string, callback: (event: WebConnectionRuntimeEvent) => void, daemonId?: string): () => void
+    /** Standalone-only today (HTTP snapshot fetch); cloud has no implementation. */
+    requestRuntimeSnapshot?(daemonId: string, sessionId: string, options?: { sinceSeq?: number; force?: boolean }): Promise<{ success: true } | { success: false; error: string }>
+}
+
+export interface WebDashboardWS {
+    send(data: unknown): void
+    isConnected(): boolean
+    on(event: string, callback: EventCallback): () => void
+    emit?(event: string, ...args: any[]): void
+}
+
+/**
  * dashboardWS stub — no-op in standalone,
  * host app can inject the real WS instance.
  */
@@ -36,7 +89,7 @@ class DashboardWSStub {
     }
 }
 
-export let dashboardWS: any = new DashboardWSStub()
+export let dashboardWS: WebDashboardWS = new DashboardWSStub()
 
 /**
  * ConnectionManager stub — abstract connection interface.
@@ -49,7 +102,7 @@ class ConnectionManagerStub {
     sendData(_daemonId: string, _data: any) { return false }
 
     /** Get connection instance for a daemon (undefined when not connected) */
-    get(_daemonId: string): any { return undefined }
+    get(_daemonId: string): WebConnectionAdapter | undefined { return undefined }
 
     /** Screenshot callback */
     onScreenshot(_key: string, _callback: (sourceDaemonId: string, blob: Blob) => void): () => void {
@@ -58,7 +111,7 @@ class ConnectionManagerStub {
 
     onRuntimeEvent(
         _sessionId: string,
-        _callback: (event: { type: string; sessionId: string; seq?: number; text?: string; data?: string; truncated?: boolean; cols?: number; rows?: number; force?: boolean }) => void,
+        _callback: (event: WebConnectionRuntimeEvent) => void,
         _daemonId?: string,
     ): () => void {
         return () => {}
@@ -73,10 +126,10 @@ class ConnectionManagerStub {
     }
 }
 
-export let connectionManager: any = new ConnectionManagerStub()
+export let connectionManager: WebConnectionManager = new ConnectionManagerStub()
 
 /** Inject real implementations from the host app */
-export function setupCompat(deps: { dashboardWS?: any; connectionManager?: any; useDaemonsHook?: () => BaseDaemonContextValue }) {
+export function setupCompat(deps: { dashboardWS?: WebDashboardWS; connectionManager?: WebConnectionManager; useDaemonsHook?: () => BaseDaemonContextValue }) {
     if (deps.dashboardWS) dashboardWS = deps.dashboardWS
     if (deps.connectionManager) connectionManager = deps.connectionManager
     if (deps.useDaemonsHook) _useDaemonsHook = deps.useDaemonsHook

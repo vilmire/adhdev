@@ -73,6 +73,7 @@ export { default as StatCard } from './components/StatCard'
 export { default as Card } from './components/Card'
 export type { CardProps, CardPadding, CardRadius } from './components/Card'
 export { default as ConfirmDialog } from './components/ConfirmDialog'
+export { unwrapDaemonCommandBody } from './utils/daemon-command-envelope'
 export { useConfirmDialog } from './hooks/useConfirmDialog'
 export type { ConfirmDialogRequest } from './hooks/useConfirmDialog'
 export { default as ProgressBar } from './components/ProgressBar'
@@ -259,6 +260,7 @@ export { useInteractivePrompt } from './hooks/useInteractivePrompt'
 
 // ── Compat layer (gradual migration) ──
 export { useDaemons, dashboardWS, connectionManager, setupCompat } from './compat'
+export type { WebConnectionManager, WebConnectionAdapter, WebDashboardWS, WebConnectionRuntimeEvent } from './compat'
 
 // ── Pages ──
 export { default as Dashboard } from './pages/Dashboard'

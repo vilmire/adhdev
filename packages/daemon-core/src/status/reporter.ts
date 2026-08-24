@@ -16,6 +16,10 @@ import type { MachineInfo } from '../shared-types.js';
 import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
+// Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
+// `type: string`, leaving the primary status_report producer outside the only
+// typed protocol surface (which lived in the proprietary consumer package).
+import type { DaemonToServerWsMsg } from '@adhdev/mesh-shared';
 import type {
     ProviderState,
     IdeProviderState,
@@ -115,7 +119,7 @@ export interface StatusReporterDeps {
     // when serialization throws — it never throws. The status dedup below must
     // honor that, or a dropped frame is recorded as delivered. Typed as
     // `void | boolean` so implementations that return nothing still satisfy it.
-    serverConn: { isConnected(): boolean; sendMessage(type: string, data: any): void | boolean; getUserPlan(): string } | null;
+    serverConn: { isConnected(): boolean; sendMessage(type: DaemonToServerWsMsg, data: any): void | boolean; getUserPlan(): string } | null;
     cdpManagers: Map<string, DaemonCdpManager>;
     p2p: {
         isConnected: boolean;

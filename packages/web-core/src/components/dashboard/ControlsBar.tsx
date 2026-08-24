@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { useTransport } from '../../context/TransportContext';
 import { eventManager } from '../../managers/EventManager';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
+import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope';
 
 // Module-level cache for dynamic options (persists across tab switches)
 const _optionsCache = new Map<string, Record<string, ControlOption[]>>();
@@ -42,12 +43,11 @@ function isControlScalarValue(value: unknown): value is ControlScalarValue {
 // Standalone resolves the daemon's raw response (e.g. { success, controlResult, ... }).
 // Cloud (sendDaemonCommand in packages/web-cloud/src/api.ts) wraps it once:
 //   { success: true, result: <daemon response> }
-// Every helper that reads fields from a command response MUST accept both shapes,
-// or the Cloud dashboard will silently see `undefined` where Standalone works.
+// Delegates to the canonical unwrap (utils/daemon-command-envelope) — this
+// file used to carry its own copy, the drift class that produced the silent
+// model-selector bug this note commemorates.
 function getCommandBody(response: unknown): Record<string, unknown> | null {
-    if (!isRecord(response)) return null;
-    if (isRecord(response.result)) return response.result;
-    return response;
+    return unwrapDaemonCommandBody(response) ?? null;
 }
 
 export function extractControlListResult(response: unknown): ControlListResult | null {
