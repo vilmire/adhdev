@@ -968,6 +968,8 @@
             "scheduling": "Scheduling preview",
             "schedObservedAt": "as of {{time}}",
             "schedNoNodes": "No routable nodes.",
+            "schedQuotaButton": "Quota",
+            "schedQuotaButtonTitle": "Per-machine plan quota at a glance",
             "schedNoWinner": "no eligible slot",
             "leaseExpired": "lease expired",
             "emptyGraph": "This graph has no nodes.",

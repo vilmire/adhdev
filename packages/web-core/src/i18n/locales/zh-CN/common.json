@@ -968,6 +968,8 @@
             "scheduling": "调度预览",
             "schedObservedAt": "截至 {{time}}",
             "schedNoNodes": "没有可路由的节点。",
+            "schedQuotaButton": "配额",
+            "schedQuotaButtonTitle": "按机器一览套餐配额",
             "schedNoWinner": "无合适槽位",
             "leaseExpired": "租约已过期",
             "emptyGraph": "该图没有节点。",

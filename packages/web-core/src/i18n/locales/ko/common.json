@@ -968,6 +968,8 @@
             "scheduling": "스케줄링 미리보기",
             "schedObservedAt": "{{time}} 기준",
             "schedNoNodes": "라우팅 가능한 노드가 없습니다.",
+            "schedQuotaButton": "쿼터",
+            "schedQuotaButtonTitle": "기기별 플랜 쿼터 한눈에 보기",
             "schedNoWinner": "적합한 슬롯 없음",
             "leaseExpired": "리스 만료",
             "emptyGraph": "이 그래프에는 노드가 없습니다.",

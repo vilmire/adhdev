@@ -23,7 +23,8 @@ import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
 import { IconRefresh } from '../Icons'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme } from './meshGraphTheme'
-import { machineKeyForMeshNode, resolveMachineLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { collectMachineQuotaGroups, machineKeyForMeshNode, resolveMachineLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { MeshMachineQuotaCard } from './MeshObservabilitySurface/MeshStatusTab'
 import MeshTaskDagView from './MeshTaskDagView'
 import { MeshOverviewDetailModal } from './MeshOverviewCards'
 import MeshBlueprintDagView from './MeshBlueprintDagView'
@@ -108,6 +109,14 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     /** difficulty → ranked node previews (scheduler order: index 0 = next match). */
     const [schedMatrix, setSchedMatrix] = useState<Record<string, RoutePreviewNode[]> | null>(null)
     const [schedObservedAt, setSchedObservedAt] = useState('')
+    /** Per-machine quota view inside the scheduling popover (owner request
+     *  2026-08-24): one click answers "how much plan headroom does each
+     *  machine actually have" next to the routing forecast. */
+    const [schedQuotaOpen, setSchedQuotaOpen] = useState(false)
+    /** Picker-row host for the live queue's stats chips — MeshTaskDagView
+     *  portals them here so they share the row with the graph picker instead
+     *  of floating over the canvas's top edge. */
+    const [statsHost, setStatsHost] = useState<HTMLDivElement | null>(null)
 
     // Escape closes the transient scheduling popover FIRST — capture phase so
     // the dialog's own Escape handler doesn't tear down the whole surface.
@@ -274,6 +283,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             </button>
                         )
                     })}
+                    {selected === 'live' && <div ref={setStatsHost} className="flex min-w-0 items-center gap-1.5" />}
                 </div>
                 <label className="hidden sm:flex shrink-0 items-center gap-1.5 text-2xs text-text-muted cursor-pointer">
                     <input type="checkbox" checked={includeTerminal} onChange={e => setIncludeTerminal(e.target.checked)} />
@@ -297,7 +307,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     // DAG — the task list already lives on the overview tab, so a
                     // list here would be a duplicate, not a blueprint.
                     <div className="absolute inset-0">
-                        <MeshTaskDagView tasks={tasks} emptyMessage={emptyMessage} predictedSlots={predictedSlots} initialTerminalLimit={8} onTaskOpen={setDetailTask} />
+                        <MeshTaskDagView tasks={tasks} emptyMessage={emptyMessage} predictedSlots={predictedSlots} initialTerminalLimit={8} onTaskOpen={setDetailTask} statsContainer={statsHost} />
                     </div>
                 ) : selectedGraph ? (
                     <div className="absolute inset-0 flex flex-col">
@@ -338,7 +348,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     Clicking a difficulty opens the per-machine detail right below.
                     Offset below the live queue's in-flow stats row. ── */}
                 {predictedSlots && (
-                    <div className={`pointer-events-none absolute left-2 z-10 flex max-h-[calc(100%-3rem)] flex-col items-start gap-1 ${selected === 'live' ? 'top-9' : 'top-2'}`}>
+                    <div className="pointer-events-none absolute left-2 top-2 z-10 flex max-h-[calc(100%-3rem)] flex-col items-start gap-1">
                         <div className={`pointer-events-auto flex flex-col rounded-md border text-3xs leading-4 ${meshTheme.isDark
                             ? 'border-white/10 bg-slate-950/85 text-slate-300'
                             : 'border-slate-200 bg-white/95 text-slate-600'}`}
@@ -367,10 +377,18 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                             className={`rounded-md px-2 py-0.5 text-3xs font-semibold uppercase tracking-wide ${schedDetailDifficulty === difficulty
                                                 ? (meshTheme.isDark ? 'bg-white/10 text-slate-100' : 'bg-slate-200 text-slate-800')
                                                 : 'text-text-muted hover:bg-bg-glass'}`}
-                                            onClick={() => setSchedDetailDifficulty(difficulty)}>
+                                            onClick={() => { setSchedDetailDifficulty(difficulty); setSchedQuotaOpen(false) }}>
                                             {difficulty}
                                         </button>
                                     ))}
+                                    <button type="button"
+                                        className={`rounded-md px-2 py-0.5 text-3xs font-semibold uppercase tracking-wide ${schedQuotaOpen
+                                            ? (meshTheme.isDark ? 'bg-white/10 text-slate-100' : 'bg-slate-200 text-slate-800')
+                                            : 'text-text-muted hover:bg-bg-glass'}`}
+                                        title={t('meshGraph.blueprint.schedQuotaButtonTitle')}
+                                        onClick={() => setSchedQuotaOpen(open => !open)}>
+                                        {t('meshGraph.blueprint.schedQuotaButton')}
+                                    </button>
                                     {schedObservedAt && <span className="ml-auto text-4xs text-text-muted">{t('meshGraph.blueprint.schedObservedAt', { time: schedObservedAt.slice(11, 19) })}</span>}
                                     <label className="flex items-center gap-1 text-3xs text-text-muted cursor-pointer">
                                         <input type="checkbox" checked={schedReadonly} onChange={e => setSchedReadonly(e.target.checked)} />
@@ -384,7 +402,19 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                     </button>
                                 </div>
                                 {schedError && <div className="text-3xs text-red-400">{schedError}</div>}
-                                {(() => {
+                                {/* Per-machine plan quota at a glance — the same card the
+                                    Status tab renders, so the two surfaces cannot drift. */}
+                                {schedQuotaOpen && (
+                                    <div className="flex flex-col gap-2">
+                                        {collectMachineQuotaGroups(status).map(machine => (
+                                            <MeshMachineQuotaCard key={machine.machineKey} machine={machine} />
+                                        ))}
+                                        {collectMachineQuotaGroups(status).length === 0 && (
+                                            <div className="py-2 text-3xs text-text-muted">{t('meshGraph.blueprint.schedNoNodes')}</div>
+                                        )}
+                                    </div>
+                                )}
+                                {!schedQuotaOpen && (() => {
                                     const previewNodes = schedMatrix[schedDetailDifficulty] ?? []
                                     // Slots/capacity/quota are MACHINE properties — a machine's
                                     // worktrees share one slot set, so listing every worktree

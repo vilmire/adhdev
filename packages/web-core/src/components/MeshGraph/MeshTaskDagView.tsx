@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
     Background,
@@ -56,6 +57,13 @@ interface MeshTaskDagViewProps {
      * load-more chrome are dropped — just the graph + edge legend render.
      */
     compact?: boolean
+    /**
+     * When set, the stats/load-more chips render into this element (via
+     * portal) instead of in-flow above the canvas — the blueprint tab hosts
+     * them on its picker row so the canvas top edge stays clean (the floating
+     * chip strip over empty canvas read as clutter).
+     */
+    statsContainer?: HTMLElement | null
 }
 
 type TaskFlowNodeData = Record<string, unknown> & {
@@ -242,7 +250,7 @@ async function layoutTaskDag(dag: TaskDagData): Promise<Map<string, { x: number;
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -405,7 +413,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             {/* Stats row — deliberately terse: total, live states worth acting
                 on (pending/assigned/waiting/blocked), and ONE combined chip for
                 hidden history that is itself the load-more action. */}
-            {!compact && <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1">
+            {!compact && (() => {
+                const statsRow = <div className={statsContainer ? 'flex min-w-0 items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : 'flex flex-wrap items-center gap-1.5 px-1 pb-1'}>
                 {statBadge(t('meshGraph.taskDag.statsTasks', { count: dag.stats.total }))}
                 {dag.stats.pending > 0 && statBadge(t('meshGraph.taskDag.statsPending', { count: dag.stats.pending }), 'default', () => jumpToState('pending'))}
                 {dag.stats.assigned > 0 && statBadge(t('meshGraph.taskDag.statsAssigned', { count: dag.stats.assigned }), 'info', () => jumpToState('assigned'))}
@@ -423,7 +432,9 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                         {t('meshGraph.taskDag.hiddenLoadMore', { count: scoped.hiddenCount })}
                     </button>
                 )}
-            </div>}
+            </div>
+                return statsContainer ? createPortal(statsRow, statsContainer) : statsRow
+            })()}
             <div className="relative min-h-0 flex-1">
             <ReactFlow
                 className="h-full w-full"

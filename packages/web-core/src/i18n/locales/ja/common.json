@@ -968,6 +968,8 @@
             "scheduling": "スケジューリングプレビュー",
             "schedObservedAt": "{{time}} 時点",
             "schedNoNodes": "ルーティング可能なノードがありません。",
+            "schedQuotaButton": "クォータ",
+            "schedQuotaButtonTitle": "マシン別プランクォータを一目で確認",
             "schedNoWinner": "適合スロットなし",
             "leaseExpired": "リース期限切れ",
             "emptyGraph": "このグラフにはノードがありません。",

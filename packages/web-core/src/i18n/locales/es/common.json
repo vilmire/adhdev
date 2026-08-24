@@ -973,6 +973,8 @@
             "scheduling": "Vista previa de scheduling",
             "schedObservedAt": "a las {{time}}",
             "schedNoNodes": "No hay nodos enrutables.",
+            "schedQuotaButton": "Cuota",
+            "schedQuotaButtonTitle": "Cuota del plan por máquina de un vistazo",
             "schedNoWinner": "sin slot elegible",
             "leaseExpired": "lease vencido",
             "emptyGraph": "Este grafo no tiene nodos.",
