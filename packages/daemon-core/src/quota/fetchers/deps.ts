@@ -12,6 +12,7 @@
 
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import { readFile as fsReadFile } from 'node:fs/promises';
 import { isTestRuntimeEnv } from '../../config/config-dir.js';
 import { loadConfig } from '../../config/config.js';
 
@@ -55,6 +56,13 @@ export type QuotaSpawn = (
     options: { env: NodeJS.ProcessEnv },
 ) => QuotaChildProcess;
 
+/**
+ * Disk read for fetchers that load a credential from a file. Injectable so
+ * tests never open a live token path (the same isolation spawn/fetch already
+ * have for keychain and network).
+ */
+export type QuotaReadFile = (filePath: string) => Promise<string>;
+
 export interface QuotaFetchDeps {
     /** Defaults to global `fetch`. */
     fetch?: QuotaFetch;
@@ -64,6 +72,8 @@ export interface QuotaFetchDeps {
     env?: NodeJS.ProcessEnv;
     /** Defaults to `child_process.spawn` with piped stdio. */
     spawn?: QuotaSpawn;
+    /** Defaults to `fs.promises.readFile(..., 'utf-8')`. */
+    readFile?: QuotaReadFile;
     /** Deferred callback, injectable so tests can drive timeouts deterministically. */
     setTimeout?: (handler: () => void, ms: number) => { unref?: () => void };
     clearTimeout?: (handle: unknown) => void;
@@ -112,6 +122,7 @@ export function resolveDeps(overrides: QuotaFetchDeps = {}): Required<QuotaFetch
                     env: options.env,
                     stdio: ['pipe', 'pipe', 'pipe'],
                 }) as ChildProcessWithoutNullStreams as unknown as QuotaChildProcess),
+        readFile: overrides.readFile ?? ((filePath) => fsReadFile(filePath, 'utf-8')),
         setTimeout: overrides.setTimeout ?? ((handler, ms) => setTimeout(handler, ms)),
         clearTimeout: overrides.clearTimeout ?? ((handle) => clearTimeout(handle as NodeJS.Timeout)),
         // Fail CLOSED: if the config cannot be read for any reason, treat the

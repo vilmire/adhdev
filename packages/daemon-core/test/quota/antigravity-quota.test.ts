@@ -8,6 +8,7 @@ import type {
     QuotaChildProcess,
     QuotaFetch,
     QuotaFetchResponse,
+    QuotaReadFile,
     QuotaSpawn,
 } from '../../src/quota/fetchers/deps';
 import {
@@ -210,16 +211,61 @@ function stubFetch(response: QuotaFetchResponse | Error): FetchStub {
 // absence is itself a small guard against casually reintroducing a two-call
 // flow.
 
-function deps(spawnStub: SpawnStub, fetchStub: FetchStub, env: Record<string, string> = {}) {
+/** Sentinel home — never the live host home, never created on disk. */
+const LINUX_FIXTURE_HOME = '/tmp/adhdev-antigravity-linux-fixture-home-do-not-create';
+const LINUX_TOKEN_PATH = join(
+    LINUX_FIXTURE_HOME,
+    '.gemini',
+    'antigravity-cli',
+    'antigravity-oauth-token',
+);
+
+function errno(code: string, message = code): NodeJS.ErrnoException {
+    const err = new Error(message) as NodeJS.ErrnoException;
+    err.code = code;
+    return err;
+}
+
+interface ReadFileStub {
+    readFile: QuotaReadFile;
+    paths: string[];
+}
+
+/**
+ * Injected disk read. `contents === null` is ENOENT (ordinary "not signed
+ * in"). `throwCode` is any other errno — permission/IO — which must NOT
+ * collapse into missing-credentials.
+ */
+function stubReadFile(
+    contents: string | null,
+    options: { throwCode?: string } = {},
+): ReadFileStub {
+    const paths: string[] = [];
+    const readFile: QuotaReadFile = async (filePath) => {
+        paths.push(filePath);
+        if (options.throwCode) throw errno(options.throwCode);
+        if (contents === null) throw errno('ENOENT', 'ENOENT: no such file');
+        return contents;
+    };
+    return { readFile, paths };
+}
+
+function deps(
+    spawnStub: SpawnStub,
+    fetchStub: FetchStub,
+    env: Record<string, string> = {},
+    readFile?: QuotaReadFile,
+) {
     return {
         spawn: spawnStub.spawn,
         fetch: fetchStub.fetch,
         now: () => NOW,
-        // Pin the platform to darwin unless a test overrides it: the fetcher is
-        // darwin-only by design (non-darwin short-circuits to 'unavailable'
-        // before any spawn/fetch), so without this pin every keychain/endpoint
-        // test inherited the HOST platform — green on a Mac, red on linux CI.
+        // Pin the platform to darwin unless a test overrides it: without this
+        // pin every keychain/endpoint test inherited the HOST platform — green
+        // on a Mac, red on linux CI. linux tests set ADHDEV_ANTIGRAVITY_PLATFORM
+        // AND HOME so they never resolve to the live token file.
         env: { ADHDEV_ANTIGRAVITY_PLATFORM: 'darwin', ...env } as NodeJS.ProcessEnv,
+        ...(readFile ? { readFile } : {}),
     };
 }
 
@@ -422,11 +468,14 @@ describe('fetchAntigravityQuota', () => {
 
         expect(quota.status).toBe('unavailable');
         expect(quota.metadata?.failureKind).toBe('missing-credentials');
+        expect(quota.metadata?.source).toBe('keychain');
         expect(fetch.calls).toEqual([]);
     });
 
-    it('reports unsupported on linux WITHOUT touching any credential store', async () => {
-        for (const platform of ['linux', 'freebsd']) {
+    it('reports unsupported on unrecognized platforms WITHOUT touching any credential store', async () => {
+        // linux moved to the file-source tests below (Jupiter survey
+        // f24cc9bb). freebsd stays the honest "not this OS" case.
+        for (const platform of ['freebsd', 'android']) {
             const spawn = stubSpawn(keyringBlob(credentialPayload()));
             const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
 
@@ -441,23 +490,156 @@ describe('fetchAntigravityQuota', () => {
         }
     });
 
-    it('explains WHY per platform, since the reasons differ', async () => {
-        // linux: Secret Service structurally unavailable on a headless host,
-        // so no implementation would help. An unknown platform still gets an
-        // honest, non-misleading answer. (win32 used to sit in this test as
-        // "backend unidentified" — the 2026-08-20 survey resolved it and
-        // win32 is now SUPPORTED; see the wincred tests below.)
-        const linux = await fetchAntigravityQuota(
-            deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'linux' }),
-        );
-        expect(linux.error).toMatch(/Linux/);
-        expect(linux.error).toMatch(/headless/);
-
+    it('names the unrecognized platform in the unsupported message', async () => {
         const other = await fetchAntigravityQuota(
             deps(stubSpawn(null), stubFetch(jsonResponse({})), { ADHDEV_ANTIGRAVITY_PLATFORM: 'freebsd' }),
         );
-        expect(other.error).toMatch(/only supported on macOS/);
+        expect(other.error).toMatch(/only supported on macOS, Windows, and Linux/);
         expect(other.error).toMatch(/freebsd/);
+    });
+
+    // ── linux file source (Jupiter survey f24cc9bb) ──────────────────────
+    // Injection tests: reverting the linux branch of readCredentials to
+    // `unsupported-platform` turns these red. HOME is a sentinel path and
+    // the bytes come from deps.readFile — never the live token file.
+
+    it('reads plaintext JSON from the linux token file and maps quota', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        // ★Plaintext JSON, no go-keyring-base64 prefix — the surveyed file
+        // starts with `{`. decodeKeyringSecret is a no-op on this blob.
+        const file = stubReadFile(JSON.stringify(credentialPayload()));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'linux',
+                HOME: LINUX_FIXTURE_HOME,
+            }, file.readFile),
+        );
+
+        expect(quota.status).toBe('ok');
+        // Success reports the quota endpoint, not the credential store —
+        // same as darwin/win32. The store label is on failure paths below.
+        expect(quota.metadata?.source).toBe('oauth');
+        expect(quota.weekly?.windowMinutes).toBe(WEEKLY_WINDOW_MINUTES);
+        expect(quota.session?.windowMinutes).toBe(SESSION_WINDOW_MINUTES);
+        expect(quota.weekly?.usedPercent).toBeCloseTo(2.354, 2);
+        expect(file.paths).toEqual([LINUX_TOKEN_PATH]);
+        expect(spawn.calls).toEqual([]);
+        expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
+    });
+
+    it('does not spawn a keyring helper on linux', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const file = stubReadFile(JSON.stringify(credentialPayload()));
+
+        await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'linux',
+                HOME: LINUX_FIXTURE_HOME,
+            }, file.readFile),
+        );
+
+        expect(spawn.calls).toEqual([]);
+        expect(file.paths).toHaveLength(1);
+    });
+
+    it('reports missing-credentials on linux when the token file is absent', async () => {
+        // ENOENT is "not signed in" — the same mapping as keychain/wincred
+        // not-found. Must NOT be folded into unsupported.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const file = stubReadFile(null);
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'linux',
+                HOME: LINUX_FIXTURE_HOME,
+            }, file.readFile),
+        );
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('missing-credentials');
+        expect(quota.metadata?.source).toBe('file');
+        expect(file.paths).toEqual([LINUX_TOKEN_PATH]);
+        expect(fetch.calls).toEqual([]);
+        expect(spawn.calls).toEqual([]);
+    });
+
+    it('does not fold a linux permission error into missing-credentials', async () => {
+        // EACCES is "could not read", not "not signed in". Collapsing the
+        // two is this repo's recurring defect class.
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const file = stubReadFile('ignored', { throwCode: 'EACCES' });
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'linux',
+                HOME: LINUX_FIXTURE_HOME,
+            }, file.readFile),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('parse');
+        expect(quota.metadata?.source).toBe('file');
+        expect(quota.error).toMatch(/EACCES|permission|Unable to read/i);
+        expect(quota.metadata?.failureKind).not.toBe('missing-credentials');
+        expect(fetch.calls).toEqual([]);
+    });
+
+    it('reports parse failure on linux when the token file is not JSON', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const file = stubReadFile('{not json');
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'linux',
+                HOME: LINUX_FIXTURE_HOME,
+            }, file.readFile),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('parse');
+        expect(quota.metadata?.source).toBe('file');
+        expect(quota.error).toMatch(/not valid JSON/);
+        expect(fetch.calls).toEqual([]);
+    });
+
+    it('still decodes a go-keyring-prefixed linux blob through the shared decoder', async () => {
+        // Production files have no prefix, but decodeKeyringSecret is reused
+        // unchanged so a future prefixed write still parses.
+        const spawn = stubSpawn('should-not-run');
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const file = stubReadFile(keyringBlob(credentialPayload()));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'linux',
+                HOME: LINUX_FIXTURE_HOME,
+            }, file.readFile),
+        );
+
+        expect(quota.status).toBe('ok');
+        expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
+    });
+
+    it('refuses to resolve the live host home when linux tests omit HOME', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const file = stubReadFile(JSON.stringify(credentialPayload()));
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_PLATFORM: 'linux' }, file.readFile),
+        );
+
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.failureKind).toBe('parse');
+        expect(quota.error).toMatch(/without HOME/);
+        expect(file.paths).toEqual([]);
+        expect(fetch.calls).toEqual([]);
     });
 
     it('reads the credential from the Windows Credential Manager on win32', async () => {
@@ -472,6 +654,7 @@ describe('fetchAntigravityQuota', () => {
         );
 
         expect(quota.status).toBe('ok');
+        expect(quota.metadata?.source).toBe('oauth');
         expect(spawn.calls).toHaveLength(1);
         expect(spawn.calls[0].command).toBe('powershell.exe');
         expect(spawn.calls[0].args).toContain('-EncodedCommand');

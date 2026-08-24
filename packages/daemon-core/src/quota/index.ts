@@ -47,6 +47,7 @@ export {
     type QuotaFetch,
     type QuotaFetchDeps,
     type QuotaFetchResponse,
+    type QuotaReadFile,
     type QuotaSpawn,
 } from './fetchers/deps.js';
 

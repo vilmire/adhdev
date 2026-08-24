@@ -41,18 +41,22 @@
  *     them — see the LAST-GOOD note below.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * ★CREDENTIAL SOURCE — the macOS Keychain, NOT a file.
+ * ★CREDENTIAL SOURCE — platform-specific. Darwin/win32 are NOT the file.
  *
  * An earlier version of this fetcher read
- * `~/.gemini/antigravity-cli/antigravity-oauth-token` and was PERMANENTLY
- * BROKEN in the field: it reported `expired-token` on every tick while the
- * CLI itself was happily authenticated. That file is a DEAD FALLBACK. Across
- * every `agy` session log on the development machine the CLI authenticated
- * 15/15 times via the keyring (`ChainedAuth: authenticated via keyring
- * (effective: keyring)`), the file-based path was taken 0 times, and the
- * file's mtime stayed frozen weeks in the past while the keychain item was
- * rewritten on every login. `agy` only falls back to the file when a keyring
- * timeout was recorded or the caller explicitly asks for it.
+ * `~/.gemini/antigravity-cli/antigravity-oauth-token` on macOS and was
+ * PERMANENTLY BROKEN in the field: it reported `expired-token` on every tick
+ * while the CLI itself was happily authenticated. On darwin that file is a
+ * DEAD FALLBACK. Across every `agy` session log on the development machine
+ * the CLI authenticated 15/15 times via the keyring (`ChainedAuth:
+ * authenticated via keyring (effective: keyring)`), the file-based path was
+ * taken 0 times, and the file's mtime stayed frozen weeks in the past while
+ * the keychain item was rewritten on every login. `agy` only falls back to
+ * the file when a keyring timeout was recorded or the caller explicitly asks
+ * for it. Do not reintroduce a darwin file read.
+ *
+ * ★linux is the exception — see PLATFORM SCOPE. Headless linux has no Secret
+ * Service, so the CLI writes the same JSON schema straight to that path.
  *
  * The item is a go-keyring generic password:
  *     service = "gemini", account = "antigravity"
@@ -67,8 +71,8 @@
  * to have: `{ token: { access_token, token_type, refresh_token, expiry },
  * auth_method }`, where `expiry` is RFC3339 with an offset (Go time.Time).
  *
- * ★PLATFORM SCOPE — darwin and win32. Both were surveyed on real machines;
- * linux is the one platform that stays unsupported:
+ * ★PLATFORM SCOPE — darwin, win32, and linux. All three were surveyed on
+ * real machines; unrecognized platforms stay `unsupported`:
  *
  *   win32 — RESOLVED 2026-08-20 by a machine survey (recon ddd6f3df) that
  *     DISPROVED an earlier version of this note, which claimed "cmdkey /list
@@ -104,18 +108,31 @@
  *         in which case quota is never even asked for. A genuine detection
  *         gap, deliberately not fixed here.
  *
- *   linux — the surveyed host is a headless SSH server, and there the Secret
- *     Service is not merely absent but STRUCTURALLY unavailable:
- *     `org.freedesktop.secrets` is not registered on the session bus, there is
- *     no keyring-unlock history, and the first unlock would require the
- *     `gcr-prompter` GUI dialog, which cannot be satisfied over SSH. So even a
- *     correct libsecret implementation would not work on this class of machine
- *     — which is precisely the class ADHDev daemons run on.
+ *   linux — RESOLVED 2026-08-24 by a machine survey on Jupiter (recon
+ *     f24cc9bb). That host is a headless SSH server (`XDG_SESSION_TYPE=tty`)
+ *     where Secret Service is STRUCTURALLY unavailable: `org.freedesktop.secrets`
+ *     is not registered on the session bus, gnome-keyring is UID 120 gdm-only,
+ *     and libsecret is installed but has no session service. The CLI never
+ *     logged `authenticated via keyring` and wrote the OAuth blob as plaintext
+ *     JSON at `~/.gemini/antigravity-cli/antigravity-oauth-token` (mode 0600,
+ *     raw starts with `{`, no `go-keyring-base64:` prefix). Schema is the
+ *     same `{ token: { access_token, token_type, refresh_token, expiry },
+ *     auth_method }` payload `parseCredentials` already accepts, so this
+ *     path is `fs.readFile` plus the existing decoder/parser — not a
+ *     libsecret binding.
  *
- * Rather than guess at a backend and ship code that fails silently or, worse,
- * reports a wrong number, this fetcher returns an explicit `unsupported` on
- * platforms other than darwin/win32. A wrong number is far worse than an
- * honest "not supported".
+ *     ★KNOWN LIMIT — the survey is ONE tty/headless machine. A GUI linux
+ *     session (Wayland/X11) can have Secret Service actually running, and
+ *     then this file may become the same frozen dead fallback darwin already
+ *     has (keyring is live, file mtime stays stale). If quota on a GUI linux
+ *     host looks expired while `agy` itself is authenticated, that is the
+ *     first place to look — do not "fix" it by teaching this fetcher to
+ *     prefer the file harder; the darwin lesson is that the file is the
+ *     stale one. Stale-token defence is OUT OF SCOPE here (owner decision
+ *     pending).
+ *
+ * Unrecognized platforms still return an explicit `unsupported`. A wrong
+ * number is far worse than an honest "not supported".
  *
  * ─────────────────────────────────────────────────────────────────────────
  * ★ENDPOINT PROVENANCE — established by RUNTIME OBSERVATION, not symbols.
@@ -281,6 +298,10 @@
  */
 'use strict';
 
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { isTestRuntimeEnv } from '../../config/config-dir.js';
 import {
     SESSION_WINDOW_MINUTES,
     WEEKLY_WINDOW_MINUTES,
@@ -441,22 +462,25 @@ type CredentialsResult =
     | { kind: 'unsupported-platform'; platform: string }
     | { kind: 'invalid'; platform: string; reason: string };
 
-/** metadata.source label for the platform's credential store. */
+/**
+ * metadata.source label for the platform's credential store.
+ * Used on credential-read failure paths. A successful quota POST still
+ * reports `oauth` (the numbers came from the API).
+ */
 function storeSource(platform: string): string {
-    return platform === 'win32' ? 'wincred' : 'keychain';
+    if (platform === 'win32') return 'wincred';
+    if (platform === 'linux') return 'file';
+    return 'keychain';
 }
 
 /**
- * Why this platform is not supported, in the user's words. Only linux (and
- * unrecognized platforms) land here: win32 moved to SUPPORTED after the
- * 2026-08-20 survey found the credential in the legacy wincred store — see
- * the PLATFORM SCOPE note in the header.
+ * Why this platform is not supported, in the user's words. Only unrecognized
+ * platforms land here: linux moved to SUPPORTED after the 2026-08-24
+ * Jupiter survey found the credential as a plaintext JSON file — see the
+ * PLATFORM SCOPE note in the header. darwin/win32 never reach this.
  */
 function unsupportedPlatformReason(platform: string): string {
-    if (platform === 'linux') {
-        return 'Antigravity quota is not supported on Linux: the CLI credential lives in the freedesktop Secret Service, which is unavailable on a headless host (no session-bus service, and the first unlock needs a GUI prompt). Quota is currently supported on macOS and Windows.';
-    }
-    return `Antigravity quota is only supported on macOS and Windows (this machine reports platform "${platform}").`;
+    return `Antigravity quota is only supported on macOS, Windows, and Linux (this machine reports platform "${platform}").`;
 }
 
 interface ChildResult {
@@ -573,6 +597,65 @@ async function readWinCredBlob(deps: Required<QuotaFetchDeps>): Promise<string |
     throw new Error(res.stderr !== '' ? res.stderr : `CredRead exited with code ${res.code}`);
 }
 
+/** Relative path under $HOME the CLI writes on headless linux. */
+const LINUX_TOKEN_RELATIVE = path.join('.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+
+/**
+ * Home directory for the linux file path. Tests MUST inject `env.HOME` so
+ * this never resolves to the live host home (which may hold a real token).
+ */
+function linuxHome(env: NodeJS.ProcessEnv): string | null {
+    const injected = env.HOME?.trim();
+    if (injected) return injected;
+    // A test runtime that forgot HOME would otherwise fall through to
+    // os.homedir() and open the live token file — the same live-resource
+    // class this suite forbids. Fail closed instead of guessing.
+    if (isTestRuntimeEnv()) {
+        throw new Error(
+            'Antigravity linux credential read in a test runtime without HOME: '
+            + 'this would hit the live token file. Inject env.HOME (and preferably deps.readFile).',
+        );
+    }
+    try {
+        const fallback = os.homedir().trim();
+        return fallback === '' ? null : fallback;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Read the CLI's linux token file via `deps.readFile` (real fs in production,
+ * injected in tests). ENOENT is the ordinary "not signed in" state and maps
+ * to null like keychain/wincred not-found; any OTHER failure (EACCES, EISDIR,
+ * missing HOME) throws so the outer catch reports `invalid` instead of
+ * folding "could not read" into "not signed in".
+ *
+ * The bytes go through `decodeKeyringSecret` unchanged: the surveyed file
+ * has no `go-keyring-base64:` prefix (raw starts with `{`), so the decoder
+ * is a no-op today and still accepts a prefixed blob if a future CLI build
+ * starts writing one.
+ *
+ * ★KNOWN LIMIT — surveyed only on a tty/headless host. On GUI linux
+ * (Wayland/X11) Secret Service may actually be up, and then this file can
+ * become darwin's frozen dead fallback. See PLATFORM SCOPE.
+ */
+async function readLinuxTokenFile(deps: Required<QuotaFetchDeps>): Promise<string | null> {
+    const home = linuxHome(deps.env);
+    if (home === null) {
+        throw new Error('HOME is unset; cannot locate the Antigravity credential file');
+    }
+    const filePath = path.join(home, LINUX_TOKEN_RELATIVE);
+    try {
+        const raw = await deps.readFile(filePath);
+        return raw.trim() === '' ? null : raw;
+    } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code === 'ENOENT') return null;
+        throw err;
+    }
+}
+
 /**
  * Decode a go-keyring secret. The `go-keyring-base64:` prefix is present
  * whenever the stored value was not clean UTF-8 — which is the case for this
@@ -641,17 +724,22 @@ function parseCredentials(
 }
 
 async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<CredentialsResult> {
-    // `ADHDEV_ANTIGRAVITY_PLATFORM` is a test seam so the win32 and
+    // `ADHDEV_ANTIGRAVITY_PLATFORM` is a test seam so the win32, linux and
     // unsupported-platform branches are exercisable from a macOS test run;
     // it is never set in production.
     const platform = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
-    if (platform !== 'darwin' && platform !== 'win32') {
+    if (platform !== 'darwin' && platform !== 'win32' && platform !== 'linux') {
         return { kind: 'unsupported-platform', platform };
     }
 
     let raw: string | null;
     try {
-        raw = platform === 'darwin' ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
+        if (platform === 'linux') {
+            raw = await readLinuxTokenFile(deps);
+        } else {
+            // darwin / win32 — leave this ternary alone; both paths are live.
+            raw = platform === 'darwin' ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
+        }
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { kind: 'invalid', platform, reason: `Unable to read the Antigravity credential: ${message}` };
