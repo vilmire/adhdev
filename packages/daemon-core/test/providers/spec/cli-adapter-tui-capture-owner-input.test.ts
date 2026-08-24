@@ -31,6 +31,13 @@ import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 //   3. A capture that fails to parse is retried at most once per prompt (nav
 //      line identity), so an unparseable picker cannot become a key-injection
 //      storm.
+//   4. (latch-gap follow-up) The latch from (2) used to clear on ONE frame
+//      without the picker footer — but claude repaints the picker in chunks,
+//      so a mid-repaint frame re-armed capture and restarted injection while
+//      the owner was mid-answer. The latch now re-arms only after the footer
+//      has stayed absent for the repaint-grace window, and writeRaw treats a
+//      held prompt / in-flight capture as picker-on-screen evidence so a
+//      keystroke landing on a footer-less repaint frame still sets it.
 //
 // These tests drive the REAL SpecCliAdapter against a scripted driver, so a
 // revert of the fix turns them red.
@@ -108,6 +115,7 @@ function makeAdapter(currentScreen: () => string): ScriptedAdapter {
         claudeTuiPromptCaptureInFlight: false,
         claudeTuiCaptureSuppressed: false,
         claudeTuiCaptureFailures: null,
+        claudeTuiCaptureFooterAbsentAt: null,
         statusCallback: vi.fn(),
         driver: {
             snapshot: currentScreen,
@@ -202,6 +210,124 @@ describe('claude TUI capture — owner-in-terminal interference', () => {
         expect(injected.length).toBeLessThanOrEqual(4);
         expect(adapter.activeInteractivePrompt).toBeNull();
     }, 20000);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// LATCH RE-ARM RACE (rc.9 residual, owner-reported 2026-08-24): with the
+// owner-input latch already in place, a 3-question picker STILL tangled at
+// Submit. Root cause: the latch cleared on ONE frame without the "Enter to
+// select" footer, but claude repaints the picker in chunks — a mid-repaint
+// frame re-armed capture, and the next footer frame restarted Tab/Shift-Tab
+// injection into the stream the owner was typing in. These tests pin the
+// frame ORDER deterministically with fake timers (no wall-clock races).
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('claude TUI capture — latch repaint hysteresis (deterministic race repro)', () => {
+    // Footer-less frame DURING a chunked repaint: nav + question still on
+    // screen, only the footer chunk has not arrived yet.
+    const midRepaintFrame = [nav3, '', '아침 반찬으로 무엇을 드시겠어요?', ''].join('\n');
+
+    it('a mid-repaint footer-less frame must NOT re-arm capture while the owner is answering', async () => {
+        vi.useFakeTimers();
+        try {
+            let focused = 0;
+            let screen: string = threeQuestionPages[0];
+            const { adapter, injected } = makeAdapter(() => screen);
+            adapter.driver.dispatch = (event: any) => {
+                if (event?.kind !== 'pty_write') return;
+                injected.push(event.data);
+                if (event.data === '\t') focused = Math.min(focused + 1, 2);
+                if (event.data === '\x1b[Z') focused = Math.max(focused - 1, 0);
+            };
+            const navKeys = () => injected.filter(k => k === '\t' || k === '\x1b[Z');
+
+            // Frame 1: picker detected; capture starts and injects Tab #1
+            // synchronously (before any human could react — by design).
+            adapter.maybeCaptureClaudeTuiPrompt();
+            expect(navKeys()).toHaveLength(1);
+
+            // The owner starts answering in the terminal → latch set; the
+            // in-flight capture bails at its next key boundary.
+            adapter.writeRaw(' ');
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(navKeys()).toHaveLength(1);
+            expect(adapter.activeInteractivePrompt).toBeNull();
+
+            // The owner's own keystroke makes claude redraw the picker in
+            // chunks: a frame WITHOUT the footer, then one WITH it again.
+            screen = midRepaintFrame;
+            adapter.maybeCaptureClaudeTuiPrompt(); // mid-repaint frame
+            screen = threeQuestionPages[focused];
+            adapter.maybeCaptureClaudeTuiPrompt(); // footer restored
+
+            // Pre-fix: the footer-less frame cleared the latch instantly, so
+            // the restored-footer frame restarted capture and injected
+            // another Tab — into the stream the owner is typing in.
+            // Post-fix: the latch survives the transient frame.
+            expect(navKeys()).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(2000);
+            expect(navKeys()).toHaveLength(1);
+            expect(adapter.activeInteractivePrompt).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('an owner keystroke landing on a footer-less mid-repaint frame still sets the latch', async () => {
+        vi.useFakeTimers();
+        try {
+            let screen: string = midRepaintFrame; // footer chunk not yet arrived
+            const { adapter, injected } = makeAdapter(() => screen);
+            const navKeys = () => injected.filter(k => k === '\t' || k === '\x1b[Z');
+
+            // A prompt is held from an earlier capture — the picker is alive,
+            // only the footer chunk is missing from this frame.
+            adapter.activeInteractivePrompt = { promptId: 'held-prompt' };
+            adapter.writeRaw('2'); // owner answers mid-repaint
+            adapter.activeInteractivePrompt = null; // then resolved/cleared
+
+            // Footer restored. Pre-fix: the mid-repaint keystroke never set
+            // the latch (footer absent in that instant's snapshot), so this
+            // frame starts injecting. Post-fix: held-prompt evidence set the
+            // latch, capture stays suppressed.
+            screen = threeQuestionPages[0];
+            adapter.maybeCaptureClaudeTuiPrompt();
+            await vi.advanceTimersByTimeAsync(2000);
+            expect(navKeys()).toHaveLength(0);
+            expect(adapter.activeInteractivePrompt).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('the latch still re-arms once the picker is genuinely gone (grace window elapsed)', async () => {
+        vi.useFakeTimers();
+        try {
+            let screen: string = threeQuestionPages[0];
+            const { adapter, injected } = makeAdapter(() => screen);
+            const injectedTabs = () => injected.filter(k => k === '\t');
+
+            adapter.writeRaw('1'); // owner keystroke with picker on screen
+            expect(adapter.claudeTuiCaptureSuppressed).toBe(true);
+            adapter.maybeCaptureClaudeTuiPrompt();
+            expect(injectedTabs()).toHaveLength(0);
+
+            // Picker closes: footer absent, but only past the grace window.
+            screen = '';
+            adapter.maybeCaptureClaudeTuiPrompt(); // grace starts
+            expect(adapter.claudeTuiCaptureSuppressed).toBe(true);
+            await vi.advanceTimersByTimeAsync(2000); // > INTERACTIVE_PROMPT_LOST_GRACE_MS
+            adapter.maybeCaptureClaudeTuiPrompt(); // grace elapsed → re-armed
+            expect(adapter.claudeTuiCaptureSuppressed).toBe(false);
+
+            // A NEW picker must be able to capture again (dashboard value).
+            screen = threeQuestionPages[0];
+            adapter.maybeCaptureClaudeTuiPrompt();
+            expect(injectedTabs().length).toBeGreaterThan(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });
 
 // ────────────────────────────────────────────────────────────────────────────

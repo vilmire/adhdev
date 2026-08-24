@@ -130,8 +130,10 @@ export class SpecCliAdapter implements CliAdapter {
      * which is exactly the reported "1개일 때는 항상 동작, 2~3개일 때 꼬인다"
      * split. Set by writeRaw() when a keystroke arrives while the picker footer
      * is on screen; while set, no capture starts and any in-flight capture
-     * bails before its next injected key. Cleared once the picker footer leaves
-     * the screen (the next prompt may capture again).
+     * bails before its next injected key. Cleared once the picker footer has
+     * stayed off the screen across the repaint-grace window — a single
+     * footer-less frame is claude mid-repaint, not a closed picker (the next
+     * prompt may capture again after the grace elapses).
      */
     private claudeTuiCaptureSuppressed = false;
     /**
@@ -143,6 +145,19 @@ export class SpecCliAdapter implements CliAdapter {
      * the count resets when the picker leaves the screen.
      */
     private claudeTuiCaptureFailures: { key: string; count: number } | null = null;
+    /**
+     * Wall clock of the first consecutive frame on which the picker footer was
+     * absent. claude-cli repaints the picker across several PTY chunks (see
+     * interactivePromptLostAt), so ONE footer-less frame is not proof the
+     * picker left — clearing the owner-input latch on such a frame re-armed
+     * capture mid-repaint and restarted Tab/Shift-Tab injection while the
+     * owner was typing (the residual of the submit-tangle bug with the latch
+     * already in place). The latch and the failure budget therefore re-arm
+     * only after the footer has stayed absent for
+     * INTERACTIVE_PROMPT_LOST_GRACE_MS — the same hysteresis the prompt-lost
+     * path already uses.
+     */
+    private claudeTuiCaptureFooterAbsentAt: number | null = null;
     /** Max capture attempts per prompt identity before giving up (one retry). */
     private static readonly CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS = 2;
     /**
@@ -597,7 +612,15 @@ export class SpecCliAdapter implements CliAdapter {
         try {
             if (!this.claudeTuiCaptureSuppressed
                 && this.interactivePromptScheme() === 'claude_tui'
-                && this.driver.snapshot().includes('Enter to select')) {
+                && (this.driver.snapshot().includes('Enter to select')
+                    // Mid-repaint frames transiently hide the footer (the
+                    // picker redraws in chunks), so a held prompt or an
+                    // in-flight capture also counts as picker-on-screen
+                    // evidence — otherwise a keystroke landing on such a
+                    // frame never sets the latch and the next footer frame
+                    // starts injecting into the owner's stream.
+                    || this.activeInteractivePrompt !== null
+                    || this.claudeTuiPromptCaptureInFlight)) {
                 this.claudeTuiCaptureSuppressed = true;
             }
         } catch { /* snapshot best-effort */ }
@@ -1288,11 +1311,21 @@ export class SpecCliAdapter implements CliAdapter {
             || this.claudeTuiPromptCaptureInFlight) return;
         const screenText = this.driver.snapshot();
         if (!screenText.includes('Enter to select')) {
-            // Picker gone — re-arm capture for the next prompt.
-            this.claudeTuiCaptureSuppressed = false;
-            this.claudeTuiCaptureFailures = null;
+            // Picker gone — re-arm capture for the next prompt, but only once
+            // the footer has STAYED absent across the repaint-grace window.
+            // A single footer-less frame is claude mid-repaint (chunked
+            // redraw), not a closed picker: clearing the latch here on one
+            // frame is how capture re-armed and restarted key injection
+            // while the owner was mid-answer.
+            const now = Date.now();
+            if (this.claudeTuiCaptureFooterAbsentAt === null) this.claudeTuiCaptureFooterAbsentAt = now;
+            if (now - this.claudeTuiCaptureFooterAbsentAt >= SpecCliAdapter.INTERACTIVE_PROMPT_LOST_GRACE_MS) {
+                this.claudeTuiCaptureSuppressed = false;
+                this.claudeTuiCaptureFailures = null;
+            }
             return;
         }
+        this.claudeTuiCaptureFooterAbsentAt = null;
         const headers = this.readClaudeTuiHeaders(screenText);
         if (headers.length === 0) {
             // Headerless (single-question) capture parses the CURRENT screen
