@@ -1,9 +1,10 @@
 /**
  * StandaloneSettings — Settings page for self-hosted ADHDev.
  *
- * Uses shared components from web-core (ConnectedMachinesSection etc.) plus
+ * Uses shared components from web-core (CoordinatorPromptsSection etc.) plus
  * standalone-specific sections. Notification/sound settings live on the
- * dedicated /notifications page, not here.
+ * dedicated /notifications page, not here. Standalone is single-machine, so
+ * there is deliberately no per-machine section (cloud keeps its own).
  */
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -13,7 +14,6 @@ import {
     AlertBanner,
     Button,
     Input,
-    ConnectedMachinesSection,
     CoordinatorPromptsSection,
     AppearanceSettingsSection,
     useBaseDaemons,
@@ -409,19 +409,17 @@ export default function StandaloneSettings() {
                 )}
             </Section>
 
-            {/* ═══ Connected Machine ═══ */}
-            <Section title={t('standalone.settings.machineSection')} description={t('standalone.settings.machineDescription')}>
-                <ConnectedMachinesSection
-                    ides={ides}
-                    emptyMessage={t('standalone.settings.daemonNotConnected')}
-                />
-            </Section>
+            {/* No "Connected Machine" section here: standalone is single-machine
+                by construction (this page only renders in standalone mode), so a
+                separate machine card is redundant — the Daemon Info section above
+                already carries version/status. Cloud keeps its own machine UI
+                (multi-machine) untouched. Removed 2026-08-24 (owner decision). */}
 
             {/* ═══ Coordinator prompts ═══
                  Edits ~/.adhdev/coordinator-prompts/<cli>.{md,append.md} on this
-                 daemon. Mounted here because those files are per-machine config,
-                 like the machine section above — mesh-level prompts stay on the
-                 Repo Mesh page. This is also the only UI for the layer that the
+                 daemon. Mounted here because those files are per-machine config —
+                 mesh-level prompts stay on the Repo Mesh page. This is also the
+                 only UI for the layer that the
                  mesh_coordinator_prompt_append_set MCP tool writes. */}
             <Section title={t('settings.coordinatorPrompts.sectionTitle')} description={t('settings.coordinatorPrompts.sectionDescription')}>
                 <CoordinatorPromptsSection daemonId={daemonEntry?.id} />

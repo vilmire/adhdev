@@ -30,6 +30,15 @@ const REPO_MESH_JSON_KEYS = [
 /** Keys naming the Settings section that mounts CoordinatorPromptsSection. */
 const SECTION_KEYS = ['sectionTitle', 'sectionDescription']
 
+/** Keys for the collapsed-by-default + provider-tabs restructure (2026-08-24). */
+const COLLAPSED_TABS_KEYS = [
+    'expandLabel',
+    'collapseLabel',
+    'customizedBadge',
+    'collapsedNone',
+    'tabsAriaLabel',
+]
+
 describe('coordinator prompt layer i18n', () => {
     for (const [name, bundle] of Object.entries(LOCALES)) {
         describe(name, () => {
@@ -50,6 +59,14 @@ describe('coordinator prompt layer i18n', () => {
             it('defines the coordinator prompts settings section keys', () => {
                 const group = bundle?.settings?.coordinatorPrompts ?? {}
                 for (const key of SECTION_KEYS) {
+                    expect(typeof group[key], `settings.coordinatorPrompts.${key}`).toBe('string')
+                    expect(group[key].trim().length, `settings.coordinatorPrompts.${key}`).toBeGreaterThan(0)
+                }
+            })
+
+            it('defines the collapsed-summary and provider-tab keys', () => {
+                const group = bundle?.settings?.coordinatorPrompts ?? {}
+                for (const key of COLLAPSED_TABS_KEYS) {
                     expect(typeof group[key], `settings.coordinatorPrompts.${key}`).toBe('string')
                     expect(group[key].trim().length, `settings.coordinatorPrompts.${key}`).toBeGreaterThan(0)
                 }

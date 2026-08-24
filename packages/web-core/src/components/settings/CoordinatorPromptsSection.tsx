@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import { useTransport } from '../../context/TransportContext'
+import { SettingsTabs } from '../ui/SettingsTabs'
 
 interface PromptEntry {
     override: string
@@ -51,6 +52,12 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [dir, setDir] = useState<string>('')
+    // Display-only state: the section is collapsed by default (the editor list
+    // used to render every provider's textareas stacked vertically, which made
+    // the settings page very long), and expanded content shows one provider at
+    // a time via tabs. Draft/save state above is untouched by either toggle.
+    const [expanded, setExpanded] = useState(false)
+    const [activeKey, setActiveKey] = useState<string | null>(null)
 
     const load = useCallback(async () => {
         if (!daemonId) return
@@ -108,6 +115,18 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
         return (drafts[key]?.[kind] || '') !== (savedSnapshot[key]?.[kind] || '')
     }, [drafts, savedSnapshot])
 
+    /** A provider counts as customized when either file exists on disk (saved
+     *  content), not merely when a draft is typed — the badge answers "does
+     *  this machine deviate from the daemon default?". */
+    const isCustomized = useCallback((key: string): boolean => {
+        const saved = savedSnapshot[key]
+        return Boolean(saved && ((saved.override || '').trim() || (saved.append || '').trim()))
+    }, [savedSnapshot])
+
+    const providerKeys = Object.keys(drafts)
+    const customizedKeys = providerKeys.filter(isCustomized)
+    const effectiveActiveKey = (activeKey && drafts[activeKey]) ? activeKey : providerKeys[0]
+
     if (!daemonId) {
         return (
             <div className="text-xs text-text-muted">
@@ -116,72 +135,149 @@ export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DE
         )
     }
 
+    // Collapsed (default): a single fixed-height summary row. Badges show which
+    // providers carry a custom prompt so the answer is visible without expanding.
+    if (!expanded) {
+        return (
+            <div className="flex flex-col gap-3">
+                {error && <div className="text-xs text-status-error bg-status-error/10 border border-status-error/40 rounded px-3 py-2">{error}</div>}
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2.5">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-text-muted">
+                        {loading ? (
+                            <span>Loading…</span>
+                        ) : customizedKeys.length === 0 ? (
+                            <span>{t('settings.coordinatorPrompts.collapsedNone')}</span>
+                        ) : (
+                            <>
+                                <span>{t('settings.coordinatorPrompts.customizedBadge')}:</span>
+                                {customizedKeys.map(key => (
+                                    <span
+                                        key={key}
+                                        className="inline-flex items-center gap-1 rounded bg-accent-primary/10 px-1.5 py-0.5 font-mono text-2xs text-accent-primary"
+                                    >
+                                        <span className="h-1.5 w-1.5 rounded-full bg-accent-primary" aria-hidden />
+                                        {key}
+                                    </span>
+                                ))}
+                            </>
+                        )}
+                    </div>
+                    <button
+                        type="button"
+                        className="btn btn-secondary btn-sm shrink-0"
+                        onClick={() => setExpanded(true)}
+                    >
+                        {t('settings.coordinatorPrompts.expandLabel')}
+                    </button>
+                </div>
+            </div>
+        )
+    }
+
     return (
         <div className="flex flex-col gap-4">
-            <div className="text-xs text-text-muted">
-                <p>
-                    Customize the coordinator prompt this daemon's mesh coordinator
-                    sessions get. <span className="font-mono text-2xs">{dir || '~/.adhdev/coordinator-prompts/'}</span>
-                </p>
-                <p className="mt-1">
-                    <Trans i18nKey="settings.coordinatorPrompts.overrideDesc" ns="common" components={{ strong: <strong /> }} />
-                    {' '}
-                    <Trans i18nKey="settings.coordinatorPrompts.appendDesc" ns="common" components={{ strong: <strong /> }} />
-                    Leave a field empty + Save to remove it (reset to default).
-                    Supports placeholders: {'{{meshName}}'}, {'{{repo}}'}, {'{{nodes}}'}, {'{{rules}}'}, etc.
-                </p>
+            <div className="flex items-start justify-between gap-3">
+                <div className="text-xs text-text-muted">
+                    <p>
+                        Customize the coordinator prompt this daemon's mesh coordinator
+                        sessions get. <span className="font-mono text-2xs">{dir || '~/.adhdev/coordinator-prompts/'}</span>
+                    </p>
+                    <p className="mt-1">
+                        <Trans i18nKey="settings.coordinatorPrompts.overrideDesc" ns="common" components={{ strong: <strong /> }} />
+                        {' '}
+                        <Trans i18nKey="settings.coordinatorPrompts.appendDesc" ns="common" components={{ strong: <strong /> }} />
+                        Leave a field empty + Save to remove it (reset to default).
+                        Supports placeholders: {'{{meshName}}'}, {'{{repo}}'}, {'{{nodes}}'}, {'{{rules}}'}, etc.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    className="btn btn-secondary btn-sm shrink-0"
+                    onClick={() => setExpanded(false)}
+                >
+                    {t('settings.coordinatorPrompts.collapseLabel')}
+                </button>
             </div>
 
             {error && <div className="text-xs text-status-error bg-status-error/10 border border-status-error/40 rounded px-3 py-2">{error}</div>}
             {loading && <div className="text-xs text-text-muted">Loading…</div>}
 
-            <div className="flex flex-col gap-6">
-                {Object.entries(drafts).map(([key, entry]) => (
-                    <div key={key} className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
-                        <div className="text-[13px] font-semibold mb-2">{key}</div>
+            {providerKeys.length > 0 && (
+                <SettingsTabs
+                    activeKey={effectiveActiveKey}
+                    onTabChange={setActiveKey}
+                    ariaLabel={t('settings.coordinatorPrompts.tabsAriaLabel')}
+                    tabIdPrefix="coordinator-prompt-tab"
+                    tabs={providerKeys.map(key => {
+                        const entry = drafts[key]
+                        const keyDirty = dirtyOf(key, 'override') || dirtyOf(key, 'append')
+                        return {
+                            key,
+                            label: (
+                                <span className="flex items-center gap-1.5 font-mono text-xs">
+                                    {key}
+                                    {isCustomized(key) && (
+                                        <span
+                                            className="h-1.5 w-1.5 rounded-full bg-accent-primary"
+                                            title={t('settings.coordinatorPrompts.customizedBadge')}
+                                        />
+                                    )}
+                                    {keyDirty && (
+                                        <span
+                                            className="h-1.5 w-1.5 rounded-full"
+                                            style={{ background: 'var(--status-warning)' }}
+                                            aria-hidden
+                                        />
+                                    )}
+                                </span>
+                            ),
+                            content: (
+                                <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
+                                    <label className="block text-2xs uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.overrideLabel')}</label>
+                                    <textarea
+                                        className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
+                                        rows={4}
+                                        value={entry.override}
+                                        onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], override: e.target.value } }))}
+                                        placeholder="(empty — use daemon default base prompt)"
+                                        disabled={savingKey === `${key}:override`}
+                                    />
+                                    <div className="mt-1 mb-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => void save(key, 'override')}
+                                            disabled={savingKey === `${key}:override` || !dirtyOf(key, 'override')}
+                                        >
+                                            {savingKey === `${key}:override` ? 'Saving…' : dirtyOf(key, 'override') ? 'Save override' : 'Saved'}
+                                        </button>
+                                    </div>
 
-                        <label className="block text-2xs uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.overrideLabel')}</label>
-                        <textarea
-                            className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
-                            rows={4}
-                            value={entry.override}
-                            onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], override: e.target.value } }))}
-                            placeholder="(empty — use daemon default base prompt)"
-                            disabled={savingKey === `${key}:override`}
-                        />
-                        <div className="mt-1 mb-3 flex justify-end">
-                            <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => void save(key, 'override')}
-                                disabled={savingKey === `${key}:override` || !dirtyOf(key, 'override')}
-                            >
-                                {savingKey === `${key}:override` ? 'Saving…' : dirtyOf(key, 'override') ? 'Save override' : 'Saved'}
-                            </button>
-                        </div>
-
-                        <label className="block text-2xs uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.appendLabel')}</label>
-                        <textarea
-                            className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
-                            rows={3}
-                            value={entry.append}
-                            onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], append: e.target.value } }))}
-                            placeholder="(empty — nothing appended at this layer)"
-                            disabled={savingKey === `${key}:append`}
-                        />
-                        <div className="mt-1 flex justify-end">
-                            <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => void save(key, 'append')}
-                                disabled={savingKey === `${key}:append` || !dirtyOf(key, 'append')}
-                            >
-                                {savingKey === `${key}:append` ? 'Saving…' : dirtyOf(key, 'append') ? 'Save append' : 'Saved'}
-                            </button>
-                        </div>
-                    </div>
-                ))}
-            </div>
+                                    <label className="block text-2xs uppercase tracking-wide text-text-muted mb-1">{t('settings.coordinatorPrompts.appendLabel')}</label>
+                                    <textarea
+                                        className="w-full px-3 py-2 rounded bg-bg-secondary border border-border-subtle text-xs font-mono text-text-primary"
+                                        rows={3}
+                                        value={entry.append}
+                                        onChange={e => setDrafts(prev => ({ ...prev, [key]: { ...prev[key], append: e.target.value } }))}
+                                        placeholder="(empty — nothing appended at this layer)"
+                                        disabled={savingKey === `${key}:append`}
+                                    />
+                                    <div className="mt-1 flex justify-end">
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => void save(key, 'append')}
+                                            disabled={savingKey === `${key}:append` || !dirtyOf(key, 'append')}
+                                        >
+                                            {savingKey === `${key}:append` ? 'Saving…' : dirtyOf(key, 'append') ? 'Save append' : 'Saved'}
+                                        </button>
+                                    </div>
+                                </div>
+                            ),
+                        }
+                    })}
+                />
+            )}
         </div>
     )
 }
