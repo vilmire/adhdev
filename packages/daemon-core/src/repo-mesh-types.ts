@@ -489,6 +489,34 @@ export interface RepoMeshQuotaRoutingPolicy {
      * candidate only just above the gate is protected, not harvested.
      */
     sessionAxisWeeklyHeadroomPercent?: number;
+    /**
+     * When the quota-ranked FIRST-CHOICE provider is quota-clear but every slot
+     * declaring the requested model is at its maxParallel cap, continue down the
+     * SAME node's quota ranking to the next clear candidate instead of leaving
+     * the task queued. Defaults to true.
+     *
+     * WHY THIS EXISTS: quota ranking is recomputed from scratch on every
+     * reconcile tick, and nothing remembers that a provider was busy on the
+     * previous tick. So the same saturated first choice was re-elected tick
+     * after tick while a genuinely idle sibling slot was never tried. Observed
+     * in production: three `difficult` tasks serialized onto one codex slot for
+     * 20 minutes, repeatedly emitting `slot_for_model_busy`, while an idle
+     * `claude-cli/opus maxParallel:2` was never attempted once.
+     *
+     * SCOPE — deliberately narrow, and the narrowness is what makes this safe:
+     * it applies ONLY to the capacity-driven 'wait' outcome. A quota-GATED
+     * provider never enters the ranking's `clear` list in the first place
+     * (rankProvidersByQuotaGate), so this can never route a task onto a
+     * provider that is low on quota; and the 'notify' outcome (no slot declares
+     * the model — a permanent configuration fact) is untouched, so a real
+     * misconfiguration still pages the coordinator instead of being silently
+     * absorbed. Fallback stays WITHIN the node: it never redirects to a
+     * different node.
+     *
+     * Set false to restore the previous behaviour exactly — a busy first choice
+     * leaves the task queued for the next tick.
+     */
+    quotaBusyFallback?: boolean;
 }
 
 export interface RepoMeshRelatedRepo {
@@ -658,6 +686,10 @@ export const DEFAULT_QUOTA_ROUTING_POLICY: Required<RepoMeshQuotaRoutingPolicy> 
     weeklyMinRemainingPercent: 15,
     spreadBonusMax: 30,
     sessionAxisWeeklyHeadroomPercent: 40,
+    // ON by default (owner decision): the failure it prevents — an idle sibling
+    // slot never being tried while tasks serialize behind a saturated first
+    // choice — is silent and costs wall-clock on every tick it recurs.
+    quotaBusyFallback: true,
 };
 
 /**
@@ -690,6 +722,12 @@ export function resolveQuotaRoutingPolicy(
             ? spreadMax
             : DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax,
         sessionAxisWeeklyHeadroomPercent: clampPercentField(sessionAxisHeadroom, DEFAULT_QUOTA_ROUTING_POLICY.sessionAxisWeeklyHeadroomPercent),
+        // Boolean, not numeric: only an explicit `false` disables it. A missing
+        // or non-boolean value resolves to the default (true), matching how the
+        // numeric fields fall back rather than fail.
+        quotaBusyFallback: typeof value?.quotaBusyFallback === 'boolean'
+            ? value.quotaBusyFallback
+            : DEFAULT_QUOTA_ROUTING_POLICY.quotaBusyFallback,
     };
 }
 
@@ -722,6 +760,9 @@ export function normalizeQuotaRoutingPolicy(value: unknown): RepoMeshQuotaRoutin
     }
     if (record.sessionAxisWeeklyHeadroomPercent !== undefined && resolved.sessionAxisWeeklyHeadroomPercent !== DEFAULT_QUOTA_ROUTING_POLICY.sessionAxisWeeklyHeadroomPercent) {
         out.sessionAxisWeeklyHeadroomPercent = resolved.sessionAxisWeeklyHeadroomPercent;
+    }
+    if (record.quotaBusyFallback !== undefined && resolved.quotaBusyFallback !== DEFAULT_QUOTA_ROUTING_POLICY.quotaBusyFallback) {
+        out.quotaBusyFallback = resolved.quotaBusyFallback;
     }
     return Object.keys(out).length ? out : undefined;
 }

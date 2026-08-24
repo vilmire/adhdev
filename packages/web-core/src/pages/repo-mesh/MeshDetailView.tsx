@@ -413,6 +413,28 @@ export function MeshDetailView({
                         })}
                     </div>
                 </fieldset>
+                {(() => {
+                    // QUOTA-BUSY FALLBACK. quotaRouting is a NESTED policy object, so this
+                    // patches the whole sub-object (spread current + the changed field),
+                    // matching the autoFastForward idiom below. Default is ON, so only an
+                    // explicit `false` reads as off — mirroring the daemon's resolver.
+                    const qr = (policy.quotaRouting && typeof policy.quotaRouting === 'object' ? policy.quotaRouting : {}) as RepoMeshQuotaRoutingPolicy
+                    const fallbackOn = qr.quotaBusyFallback !== false
+                    return (
+                        <div className="mt-4">
+                            <FormField label={t('repoMesh.detail.quotaBusyFallback')}
+                                hint={t('repoMesh.detail.quotaBusyFallbackHint')}>
+                                <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                                    value={fallbackOn ? 'on' : 'off'}
+                                    onChange={e => onUpdatePolicy({ quotaRouting: { ...qr, quotaBusyFallback: e.target.value === 'on' } })}
+                                    disabled={savingPolicy}>
+                                    <option value="on">{t('repoMesh.detail.quotaBusyFallbackOn')}</option>
+                                    <option value="off">{t('repoMesh.detail.quotaBusyFallbackOff')}</option>
+                                </select>
+                            </FormField>
+                        </div>
+                    )
+                })()}
                 {savingPolicy && <div className="mt-3 text-xs text-text-muted">{t('repoMesh.detail.saving')}</div>}
 
                 {/* Per-node scheduling knobs (priority + per-provider max-parallel) were

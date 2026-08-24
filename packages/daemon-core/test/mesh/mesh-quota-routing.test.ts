@@ -89,6 +89,10 @@ describe('quota routing policy — resolution & persistence economy', () => {
             weeklyMinRemainingPercent: 15,
             spreadBonusMax: 30,
             sessionAxisWeeklyHeadroomPercent: 40,
+            // ON by default (owner decision): a saturated first choice falls
+            // through to the next quota-clear candidate on the SAME node rather
+            // than re-electing the busy one on every reconcile tick.
+            quotaBusyFallback: true,
         });
         expect(resolveQuotaRoutingPolicy(null)).toEqual(DEFAULT_QUOTA_ROUTING_POLICY);
     });

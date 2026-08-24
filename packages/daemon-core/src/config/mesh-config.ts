@@ -1521,9 +1521,11 @@ function setDifficultyBrainsUnlocked(map: unknown, meshId?: string): DifficultyB
 // clamped percent is bounded 0..100 and stale/missing data still fails open).
 
 /** quotaRouting fields expressed as percentages (0..100). */
-const QUOTA_ROUTING_PERCENT_FIELDS = new Set(['sessionMinRemainingPercent', 'weeklyMinRemainingPercent']);
+const QUOTA_ROUTING_PERCENT_FIELDS = new Set(['sessionMinRemainingPercent', 'weeklyMinRemainingPercent', 'sessionAxisWeeklyHeadroomPercent']);
 /** quotaRouting fields that just need to be finite, non-negative numbers. */
 const QUOTA_ROUTING_NONNEGATIVE_FIELDS = new Set(['staleAfterMs', 'sessionResetImminentMs', 'spreadBonusMax']);
+/** quotaRouting fields that are booleans, not numbers. */
+const QUOTA_ROUTING_BOOLEAN_FIELDS = new Set(['quotaBusyFallback']);
 
 /**
  * Strictly validate a quotaRouting overrides object from an external caller
@@ -1540,11 +1542,21 @@ function validateQuotaRoutingOverrides(input: unknown): RepoMeshQuotaRoutingPoli
     const out: RepoMeshQuotaRoutingPolicy = {};
     for (const [key, raw] of Object.entries(input as Record<string, unknown>)) {
         const isPercent = QUOTA_ROUTING_PERCENT_FIELDS.has(key);
-        if (!isPercent && !QUOTA_ROUTING_NONNEGATIVE_FIELDS.has(key)) {
+        const isBoolean = QUOTA_ROUTING_BOOLEAN_FIELDS.has(key);
+        if (!isPercent && !isBoolean && !QUOTA_ROUTING_NONNEGATIVE_FIELDS.has(key)) {
             throw new Error(
                 `invalid_quota_routing: unknown field '${key}' (known fields: `
-                + [...QUOTA_ROUTING_PERCENT_FIELDS, ...QUOTA_ROUTING_NONNEGATIVE_FIELDS].join(', ') + ')',
+                + [...QUOTA_ROUTING_PERCENT_FIELDS, ...QUOTA_ROUTING_NONNEGATIVE_FIELDS, ...QUOTA_ROUTING_BOOLEAN_FIELDS].join(', ') + ')',
             );
+        }
+        // Booleans validate on type alone — the numeric range checks below are
+        // meaningless for an on/off switch, and `false` must survive them.
+        if (isBoolean) {
+            if (typeof raw !== 'boolean') {
+                throw new Error(`invalid_quota_routing: ${key} must be a boolean (got ${JSON.stringify(raw)})`);
+            }
+            (out as Record<string, boolean>)[key] = raw;
+            continue;
         }
         if (typeof raw !== 'number' || !Number.isFinite(raw)) {
             throw new Error(`invalid_quota_routing: ${key} must be a finite number (got ${JSON.stringify(raw)})`);

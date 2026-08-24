@@ -20,7 +20,7 @@ import {
 } from './mesh-claim-refusal.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
+import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy, resolveQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
@@ -45,6 +45,7 @@ import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIs
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearQuotaClaimBlockState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
+import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quota-fallback.js';
 import {
     sweepAutoLaunchOrphanSessions,
     autoLaunchWriteWouldClobberWinner,
@@ -1558,7 +1559,11 @@ async function resolveUsableProvider(
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
     quotaFactsContext?: QuotaFactsContext | null,
     taskId?: string,
-): Promise<ResolvedProviderSelection & { quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }> }> {
+): Promise<ResolvedProviderSelection & {
+    quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
+    quotaClearOrder?: readonly string[];
+    quotaCandidates?: readonly QuotaFallbackCandidate[];
+}> {
     const providerLoader = components.providerLoader;
     if (!providerLoader) return { reason: 'provider_loader_unavailable' };
 
@@ -1695,6 +1700,14 @@ async function resolveUsableProvider(
     return {
         providerType: selectedWinner.providerType,
         ...(ranked.gated.length ? { quotaGated: ranked.gated } : {}),
+        // QUOTA-BUSY FALLBACK inputs: the risk-ordered clear ranking and the
+        // de-duplicated candidates it was drawn from, so a caller that finds the
+        // winner saturated can walk to the next clear candidate WITHOUT re-running
+        // selection (re-ranking would just re-elect the same busy winner — that
+        // recomputation is the defect). Only `clear` is exposed: gated providers
+        // must stay unreachable from the fallback path. See mesh-quota-fallback.ts.
+        quotaClearOrder: ranked.clear,
+        quotaCandidates: selection.candidates,
         ...(selectedWinner.slot.model ? { model: selectedWinner.slot.model } : {}),
         ...(selectedWinner.slot.thinkingLevel ? { thinkingLevel: selectedWinner.slot.thinkingLevel } : {}),
         // The slot that won selection. Returned so the caller can enforce
@@ -2143,29 +2156,88 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // the pair. See slot-model-enforcement.ts "PROVIDER PAIRING" for the full
                     // mechanism and the downstream damage (ledger resolvedModel → claim
                     // assignedModel → empty difficulty allowance → dropped per-slot cap).
-                    const slotDecision = decideSlotForModel({
+                    const nodeSlotAvailability = () => resolveNodeCapabilitySlots(node, meshId).map(slot => ({
+                        slot,
+                        available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
+                    }));
+                    let effectiveProviderType = resolved.providerType;
+                    let effectiveRequestedModel = requestedModel;
+                    let effectiveWinningSlot = resolved.slot;
+                    let slotDecision = decideSlotForModel({
                         requestedModel,
-                        providerType: resolved.providerType,
-                        slots: resolveNodeCapabilitySlots(node, meshId).map(slot => ({
-                            slot,
-                            available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
-                        })),
+                        providerType: effectiveProviderType,
+                        slots: nodeSlotAvailability(),
                     });
                     if (slotDecision.outcome === 'wait') {
-                        LOG.info('MeshQueue', `SLOT MODEL GUARD: model '${requestedModel}' is declared on node ${nodeId} for provider '${resolved.providerType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
-                        markSkip(nodeId, slotDecision.reason, { providerType: resolved.providerType });
+                        // QUOTA-BUSY FALLBACK: the winner is quota-CLEAR but saturated.
+                        // Ranking is recomputed from scratch every tick with no memory of
+                        // "this was busy last tick", so without this the same saturated
+                        // provider is re-elected indefinitely while an idle sibling slot on
+                        // this very node is never tried. Walk the already-computed clear
+                        // ranking instead of re-ranking (re-ranking reproduces the defect).
+                        //
+                        // Confined to 'wait' by construction: gated providers are absent from
+                        // quotaClearOrder, and 'notify' is handled below, untouched. When the
+                        // toggle is off — or no later candidate can run — this falls through
+                        // to the original markSkip, byte-identical to the previous behaviour.
+                        const fallback = resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback
+                            ? selectQuotaBusyFallback({
+                                clearOrder: resolved.quotaClearOrder ?? [],
+                                candidates: resolved.quotaCandidates ?? [],
+                                busyProviderType: resolved.providerType,
+                                probe: candidate => decideSlotForModel({
+                                    // Re-resolve the model against the CANDIDATE's own slot: the
+                                    // requested model was derived from the busy winner's slot, and
+                                    // carrying it over would ask the fallback provider to honour a
+                                    // model it may never declare — the exact (provider, model)
+                                    // pair-splitting slot-model-enforcement.ts forbids.
+                                    requestedModel: resolveLaunchAxis(
+                                        task.model,
+                                        (task as any).modelSource,
+                                        candidate.slot.model,
+                                        slotCoversTaskDifficulty(candidate.slot, (task as any).difficulty),
+                                    ),
+                                    providerType: candidate.providerType,
+                                    slots: nodeSlotAvailability(),
+                                }).outcome === 'run',
+                            })
+                            : { outcome: 'exhausted' as const, skipped: [] };
+                        if (fallback.outcome === 'fallback') {
+                            const { candidate } = fallback;
+                            LOG.info('MeshQueue', `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but saturated for model '${requestedModel}' (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also busy: ${fallback.skipped.join(', ')})` : ''}`);
+                            effectiveProviderType = candidate.providerType;
+                            effectiveWinningSlot = candidate.slot;
+                            effectiveRequestedModel = resolveLaunchAxis(
+                                task.model,
+                                (task as any).modelSource,
+                                candidate.slot.model,
+                                slotCoversTaskDifficulty(candidate.slot, (task as any).difficulty),
+                            );
+                            slotDecision = decideSlotForModel({
+                                requestedModel: effectiveRequestedModel,
+                                providerType: effectiveProviderType,
+                                slots: nodeSlotAvailability(),
+                            });
+                        }
+                    }
+                    if (slotDecision.outcome === 'wait') {
+                        LOG.info('MeshQueue', `SLOT MODEL GUARD: model '${effectiveRequestedModel}' is declared on node ${nodeId} for provider '${effectiveProviderType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
+                        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
                         continue;
                     }
                     if (slotDecision.outcome === 'notify') {
-                        LOG.warn('MeshQueue', `SLOT MODEL GUARD: no '${resolved.providerType}' slot on node ${nodeId} declares model '${requestedModel}' (declared: ${slotDecision.declaredModels.join(', ') || 'none'}) for task ${task.id}; not launching — surfacing to the coordinator to re-drive`);
-                        markSkip(nodeId, slotDecision.reason, { providerType: resolved.providerType });
+                        LOG.warn('MeshQueue', `SLOT MODEL GUARD: no '${effectiveProviderType}' slot on node ${nodeId} declares model '${effectiveRequestedModel}' (declared: ${slotDecision.declaredModels.join(', ') || 'none'}) for task ${task.id}; not launching — surfacing to the coordinator to re-drive`);
+                        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
                         continue;
                     }
                     const finalization = finalizeSlotSelection({
-                        winningSlot: resolved.slot,
+                        // The fallback-adjusted winning slot: when the quota-busy fallback
+                        // moved the launch to a later candidate, the demotion bookkeeping
+                        // must compare against THAT slot, not the abandoned busy one.
+                        winningSlot: effectiveWinningSlot,
                         decidedSlot: slotDecision.slot,
                         decidedModel: slotDecision.model,
-                        winningSlotHasCapacity: slotHasCapacity(meshId, nodeId, node, resolved.slot!, mesh?.nodes, isReadonly),
+                        winningSlotHasCapacity: !!effectiveWinningSlot && slotHasCapacity(meshId, nodeId, node, effectiveWinningSlot, mesh?.nodes, isReadonly),
                     });
                     const rawEffectiveModel = finalization.model;
                     const demotionReason = finalization.demotionReason;
@@ -2181,11 +2253,11 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // thinkingLevel axis is preserved. This is the single authoritative point
                     // that enforces the invariant across every model source (preset, slot,
                     // explicit) because both remote and local launch consume effectiveModel below.
-                    const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, resolved.providerType)
+                    const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType)
                         ? rawEffectiveModel
                         : undefined;
                     if (rawEffectiveModel && effectiveModel === undefined) {
-                        LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${resolved.providerType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
+                        LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
                     }
 
                     // Don't spawn a session for a (daemon, provider) already at its declared
@@ -2194,7 +2266,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // Counted over the daemon machine (sibling worktrees included), matching
                     // the claim-side scope so the two layers cannot disagree.
                     const providerCap = effectiveSlotCap(
-                        resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), resolved.providerType),
+                        resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), effectiveProviderType),
                         isReadonly,
                     );
                     if (
@@ -2202,11 +2274,11 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         && activeProviderAssignedCount(
                             meshId,
                             nodeId,
-                            resolved.providerType,
+                            effectiveProviderType,
                             resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes),
                         ) >= providerCap
                     ) {
-                        markSkip(nodeId, 'max_provider_parallel_reached', { providerType: resolved.providerType });
+                        markSkip(nodeId, 'max_provider_parallel_reached', { providerType: effectiveProviderType });
                         continue;
                     }
 
@@ -2226,8 +2298,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         ...delegatedWorkerAutoApproveSettingsForNode(
                             mesh,
                             node,
-                            components.providerLoader?.getMeta(resolved.providerType),
-                            resolved.providerType,
+                            components.providerLoader?.getMeta(effectiveProviderType),
+                            effectiveProviderType,
                         ),
                         launchedByCoordinator: true,
                         autoLaunchedForQueueTaskId: task.id,
@@ -2241,7 +2313,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
                             meshCoordinatorNodeId: nodeId,
                         };
-                        markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                        markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                         let launchResult: any;
                         try {
                             // OFFLINE-NODE-BLOCKING: no peer-connected pre-check before this remote
@@ -2253,7 +2325,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             // the loop moves on. The marker only affects the connect wait and is
                             // stripped before launch_cli executes, so a live node spawns identically.
                             launchResult = await components.dispatchMeshCommand!(launchTarget.daemonId!, 'launch_cli', withStatusProbeMarker({
-                                cliType: resolved.providerType,
+                                cliType: effectiveProviderType,
                                 dir: node.workspace,
                                 settings: remoteSettings,
                                 // MAGI-KIND-PANEL model axis: forward the task's model override so the
@@ -2264,7 +2336,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                                 ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
                             }));
                         } catch (e: any) {
-                            markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: resolved.providerType });
+                            markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType });
                             autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                             return false;
                         }
@@ -2273,7 +2345,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             : launchResult;
                         if (!payload?.success) {
                             const reason = readNonEmptyString(payload?.error) || 'remote_launch_cli_failed';
-                            markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: resolved.providerType });
+                            markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });
                             autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                             return false;
                         }
@@ -2281,15 +2353,15 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         // which (forwarded back here) drives the claim via the normal event path / PHASE 1
                         // reconcile. Set a cooldown so the 4s loop doesn't re-launch before that lands.
                         const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
-                        markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                        markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                         logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined);
                         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                         return true;
                     }
 
-                    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                     const launchResult: any = await components.cliManager.handleCliCommand('launch_cli', {
-                        cliType: resolved.providerType,
+                        cliType: effectiveProviderType,
                         dir: node.workspace,
                         settings: launchSettings,
                         // MAGI-KIND-PANEL model axis: local launch forwards the effective model
@@ -2300,17 +2372,17 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     });
                     if (!launchResult?.success) {
                         const reason = launchResult?.error || 'launch_cli_failed';
-                        markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: resolved.providerType });
+                        markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });
                         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                         return false;
                     }
                     const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
                     if (!sessionId) {
-                        markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: resolved.providerType });
+                        markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: effectiveProviderType });
                         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                         return false;
                     }
-                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                     logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
                     // Readiness barrier: a freshly-spawned local CLI session is NOT yet
                     // interactive — its PTY prints the input prompt (and the adapter flips
@@ -2337,15 +2409,15 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         skippedCandidates,
                         requiredTagsResult: {
                             required: requiredTags,
-                            satisfied: !requiredTags.length || nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, resolved.providerType)),
-                            missing: requiredTags.filter(t => !buildMeshNodeCapabilityTags(node, resolved.providerType).includes(t)),
+                            satisfied: !requiredTags.length || nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, effectiveProviderType)),
+                            missing: requiredTags.filter(t => !buildMeshNodeCapabilityTags(node, effectiveProviderType).includes(t)),
                         },
                         effectiveModel,
                         effectiveThinkingLevel,
                         executedSlot: slotDecision.slot,
                         demotionReason,
                     });
-                    tryAssignQueueTask(components, meshId, nodeId, sessionId, resolved.providerType, routingDecision);
+                    tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision);
                     return true;
                 } catch (e: any) {
                     markAutoLaunch(meshId, task.id, { status: 'failed', error: e?.message || String(e), nodeId });
