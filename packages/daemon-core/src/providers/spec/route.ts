@@ -48,9 +48,10 @@ export function createCliAdapter(
     extraEnv: Record<string, string>,
     transportFactory?: PtyTransportFactory,
     /** FSMLOG-SESSION-ATTRIBUTION (D3): owning session id, threaded to SpecCliAdapter so the
-     *  FSM driver's log lines carry a session segment.
-     *  TOMBSTONE-LEDGER-BRIDGE: also threaded to ProviderCliAdapter, which needs the
-     *  owning session id to attribute a mesh `session_stopped` ledger entry on exit. */
+     *  FSM driver's log lines carry a session segment. The adapter also uses it as the
+     *  sidecar-claim owner token when resolving kimi pending questions. (It formerly fed
+     *  the legacy ProviderCliAdapter's `session_stopped` ledger attribution — that engine
+     *  was deleted in 48e5ed1a.) */
     sessionId?: string,
 ): CliAdapter {
     // Prefer the path provider-loader already resolved (it walks the

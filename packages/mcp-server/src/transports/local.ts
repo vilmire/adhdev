@@ -2,7 +2,9 @@
  * LocalTransport — HTTP client for standalone daemon at localhost:3847
  */
 
-const DEFAULT_PORT = 3847;
+import { DEFAULT_STANDALONE_PORT } from '@adhdev/daemon-core';
+
+const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
 
 export interface LocalTransportOptions {
   port?: number;

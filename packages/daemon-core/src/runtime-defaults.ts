@@ -15,6 +15,11 @@ export const DEFAULT_SESSION_HOST_READY_TIMEOUT_MS = 15_000;
 
 export const STANDALONE_CDP_SCAN_INTERVAL_MS = 15_000;
 
+// Default HTTP/WS port of the standalone daemon (localhost:3847). Single source
+// of truth for every client that dials the standalone surface (daemon-standalone
+// itself, the MCP server's local transport, dashboards).
+export const DEFAULT_STANDALONE_PORT = 3847;
+
 // ---------------------------------------------------------------------------
 // Mesh P2P timeout windows (env-overridable)
 // ---------------------------------------------------------------------------
