@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import {
     getSessionHostNextActionLabel,
@@ -164,6 +165,7 @@ export default function DashboardMobileSessionHostSheet({
     onOpenConversation,
     onClose,
 }: DashboardMobileSessionHostSheetProps) {
+    const { t } = useTranslation('common')
     const [activeMachineId, setActiveMachineId] = useState<string | null>(initialMachineId || machineCards[0]?.id || null)
     const [error, setError] = useState('')
     const [busyActionKey, setBusyActionKey] = useState<string | null>(null)
@@ -220,16 +222,16 @@ export default function DashboardMobileSessionHostSheet({
                 limit: 6,
             })
             const envelope = unwrapCommandEnvelope(raw)
-            if (!envelope?.success) throw new Error(envelope?.error || 'Could not load hosted runtime diagnostics')
+            if (!envelope?.success) throw new Error(envelope?.error || t('sessionHost.diagnosticsFailed'))
             applyDiagnostics((envelope.diagnostics || envelope.result || null) as SessionHostDiagnosticsSnapshot | null)
             setError('')
         } catch (cause) {
-            const message = cause instanceof Error ? cause.message : 'Could not load hosted runtime diagnostics'
+            const message = cause instanceof Error ? cause.message : t('sessionHost.diagnosticsFailed')
             setError(message)
         } finally {
             setRefreshing(false)
         }
-    }, [activeMachine?.id, applyDiagnostics, sendDaemonCommand])
+    }, [activeMachine?.id, applyDiagnostics, sendDaemonCommand, t])
 
     useEffect(() => {
         if (!activeMachine?.id || diagnostics || loading || refreshing) return
@@ -243,9 +245,9 @@ export default function DashboardMobileSessionHostSheet({
         if (!activeMachine?.id) return
         if (action === 'session_host_stop_session') {
             const confirmed = await confirm({
-                title: `Stop ${session.displayName}?`,
-                description: 'This will terminate the hosted runtime.',
-                confirmLabel: 'Stop',
+                title: t('sessionHost.stopConfirmTitle', { name: session.displayName }),
+                description: t('sessionHost.stopConfirmDescription'),
+                confirmLabel: t('sessionHost.stop'),
                 tone: 'danger',
             })
             if (!confirmed) return
@@ -256,29 +258,29 @@ export default function DashboardMobileSessionHostSheet({
         try {
             const raw = await sendDaemonCommand(activeMachine.id, action, { sessionId: session.sessionId })
             const envelope = unwrapCommandEnvelope(raw)
-            if (!envelope?.success) throw new Error(envelope?.error || 'Session host action failed')
-            const verb = action === 'session_host_resume_session'
-                ? 'resumed'
+            if (!envelope?.success) throw new Error(envelope?.error || t('sessionHost.actionFailed'))
+            const toastKey = action === 'session_host_resume_session'
+                ? 'sessionHost.toastResumed'
                 : action === 'session_host_restart_session'
-                    ? 'restarted'
-                    : 'stopped'
-            eventManager.showToast(`Session host ${verb}: ${session.displayName}`, 'success')
+                    ? 'sessionHost.toastRestarted'
+                    : 'sessionHost.toastStopped'
+            eventManager.showToast(t(toastKey, { name: session.displayName }), 'success')
             await refreshDiagnostics()
         } catch (cause) {
-            const message = cause instanceof Error ? cause.message : 'Session host action failed'
+            const message = cause instanceof Error ? cause.message : t('sessionHost.actionFailed')
             setError(message)
             eventManager.showToast(message, 'warning')
         } finally {
             setBusyActionKey((current) => (current === actionKey ? null : current))
         }
-    }, [activeMachine?.id, confirm, refreshDiagnostics, sendDaemonCommand])
+    }, [activeMachine?.id, confirm, refreshDiagnostics, sendDaemonCommand, t])
 
     const runPruneDuplicates = useCallback(async () => {
         if (!activeMachine?.id) return
         const confirmed = await confirm({
-            title: 'Prune duplicate hosted runtimes?',
-            description: 'The newest runtime for each provider session will be kept and older duplicates will be stopped and removed.',
-            confirmLabel: 'Prune',
+            title: t('sessionHost.pruneConfirmTitle'),
+            description: t('sessionHost.pruneConfirmDescription'),
+            confirmLabel: t('sessionHost.prune'),
             tone: 'danger',
         })
         if (!confirmed) return
@@ -287,20 +289,20 @@ export default function DashboardMobileSessionHostSheet({
         try {
             const raw = await sendDaemonCommand(activeMachine.id, 'session_host_prune_duplicate_sessions', {})
             const envelope = unwrapCommandEnvelope(raw)
-            if (!envelope?.success) throw new Error(envelope?.error || 'Duplicate prune failed')
+            if (!envelope?.success) throw new Error(envelope?.error || t('sessionHost.pruneFailed'))
             const result = envelope.result || {}
             const prunedCount = Array.isArray(result.prunedSessionIds) ? result.prunedSessionIds.length : 0
             const groupCount = typeof result.duplicateGroupCount === 'number' ? result.duplicateGroupCount : 0
-            eventManager.showToast(`Pruned ${prunedCount} duplicate runtime(s) across ${groupCount} group(s)`, 'success')
+            eventManager.showToast(t('sessionHost.toastPruned', { pruned: prunedCount, groups: groupCount }), 'success')
             await refreshDiagnostics()
         } catch (cause) {
-            const message = cause instanceof Error ? cause.message : 'Duplicate prune failed'
+            const message = cause instanceof Error ? cause.message : t('sessionHost.pruneFailed')
             setError(message)
             eventManager.showToast(message, 'warning')
         } finally {
             setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
         }
-    }, [activeMachine?.id, confirm, refreshDiagnostics, sendDaemonCommand])
+    }, [activeMachine?.id, confirm, refreshDiagnostics, sendDaemonCommand, t])
 
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
@@ -348,7 +350,8 @@ export default function DashboardMobileSessionHostSheet({
         const recoveryError = typeof session.meta?.runtimeRecoveryError === 'string'
             ? String(session.meta.runtimeRecoveryError)
             : ''
-        const recoveryActionLabel = section === 'recovery' ? 'Recover' : 'Resume'
+        const recoveryActionLabel = section === 'recovery' ? t('sessionHost.recover') : t('sessionHost.resume')
+        const recoveryActionBusyLabel = section === 'recovery' ? t('sessionHost.recovering') : t('sessionHost.resuming')
         const nextActionLabel = getSessionHostNextActionLabel(section)
         return (
             <div key={session.sessionId} className="rounded-2xl border border-border-subtle bg-bg-secondary px-4 py-3.5">
@@ -368,7 +371,7 @@ export default function DashboardMobileSessionHostSheet({
                             )}
                         </div>
                         <div className="mt-1 text-[12px] text-text-secondary">
-                            {session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || 'No workspace'}
+                            {session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || t('sessionHost.noWorkspace')}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-text-secondary">
                             <span className="font-mono text-text-primary">{session.runtimeKey}</span>
@@ -403,7 +406,7 @@ export default function DashboardMobileSessionHostSheet({
                                 onClose()
                             }}
                         >
-                            Open chat
+                            {t('sessionHost.openChat')}
                         </button>
                     )}
                     {section === 'recovery' && (session.lifecycle === 'interrupted' || session.lifecycle === 'failed' || session.lifecycle === 'stopped') && (
@@ -413,7 +416,7 @@ export default function DashboardMobileSessionHostSheet({
                             disabled={!!busyActionKey}
                             onClick={() => { void runSessionAction('session_host_resume_session', session) }}
                         >
-                            {busyResume ? `${recoveryActionLabel}ing…` : recoveryActionLabel}
+                            {busyResume ? recoveryActionBusyLabel : recoveryActionLabel}
                         </button>
                     )}
                     <button
@@ -422,7 +425,7 @@ export default function DashboardMobileSessionHostSheet({
                         disabled={!!busyActionKey}
                         onClick={() => { void runSessionAction('session_host_restart_session', session) }}
                     >
-                        {busyRestart ? 'Restarting…' : 'Restart'}
+                        {busyRestart ? t('sessionHost.restarting') : t('sessionHost.restart')}
                     </button>
                     {section === 'live' && (session.lifecycle === 'running' || session.lifecycle === 'starting' || session.lifecycle === 'interrupted') && (
                         <button
@@ -431,7 +434,7 @@ export default function DashboardMobileSessionHostSheet({
                             disabled={!!busyActionKey}
                             onClick={() => { void runSessionAction('session_host_stop_session', session) }}
                         >
-                            {busyStop ? 'Stopping…' : 'Stop'}
+                            {busyStop ? t('sessionHost.stopping') : t('sessionHost.stop')}
                         </button>
                     )}
                 </div>
@@ -453,13 +456,13 @@ export default function DashboardMobileSessionHostSheet({
                 <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
                     <div className="min-w-0">
                         <div className="flex items-center gap-2 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                            <IconServer size={14} /> Hosted Runtime Recovery
+                            <IconServer size={14} /> {t('sessionHost.title')}
                         </div>
                         <div className="mt-1 text-[18px] font-black tracking-tight text-text-primary">
-                            {activeMachine?.label || 'No machine selected'}
+                            {activeMachine?.label || t('sessionHost.noMachine')}
                         </div>
                         <div className="mt-1 text-[12px] text-text-secondary">
-                            Live runtime status, next actions, and explicit recover/restart controls.
+                            {t('sessionHost.mobileDescription')}
                         </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -468,7 +471,7 @@ export default function DashboardMobileSessionHostSheet({
                             className="flex h-9 w-9 items-center justify-center rounded-full border border-border-subtle bg-bg-secondary text-text-secondary"
                             onClick={() => { void refreshDiagnostics() }}
                             disabled={loading || refreshing}
-                            aria-label="Refresh hosted runtime recovery"
+                            aria-label={t('sessionHost.refreshAria')}
                         >
                             <IconRefresh size={16} />
                         </button>
@@ -476,7 +479,7 @@ export default function DashboardMobileSessionHostSheet({
                             type="button"
                             className="flex h-9 w-9 items-center justify-center rounded-full border border-border-subtle bg-bg-secondary text-text-secondary"
                             onClick={onClose}
-                            aria-label="Close hosted runtime recovery"
+                            aria-label={t('sessionHost.closeAria')}
                         >
                             <IconX size={16} />
                         </button>
@@ -508,7 +511,7 @@ export default function DashboardMobileSessionHostSheet({
                             <div className="flex items-start gap-2">
                                 <IconWarning size={14} className="mt-0.5 shrink-0 text-amber-300" />
                                 <div>
-                                    <div className="font-medium">Hosted runtime diagnostics need attention</div>
+                                    <div className="font-medium">{t('sessionHost.diagnosticsAttention')}</div>
                                     <div className="mt-1 text-amber-200/90">{error}</div>
                                 </div>
                             </div>
@@ -519,15 +522,15 @@ export default function DashboardMobileSessionHostSheet({
                         <>
                             <div className="grid grid-cols-3 gap-2">
                                 <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-3 py-3">
-                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">Live</div>
+                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">{t('sessionHost.statLiveShort')}</div>
                                     <div className="mt-1 text-[18px] font-bold text-text-primary">{diagnostics.runtimeCount}</div>
                                 </div>
                                 <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-3 py-3">
-                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">Recovery</div>
+                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">{t('sessionHost.statRecovery')}</div>
                                     <div className="mt-1 text-[18px] font-bold text-text-primary">{recoverySessions.length}</div>
                                 </div>
                                 <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-3 py-3">
-                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">Started</div>
+                                    <div className="text-3xs uppercase tracking-[0.16em] text-text-secondary">{t('sessionHost.statStarted')}</div>
                                     <div className="mt-1 text-[12px] font-semibold text-text-primary">{formatRelativeTime(diagnostics.hostStartedAt)}</div>
                                     <div className="mt-0.5 text-3xs text-text-secondary">{formatClock(diagnostics.hostStartedAt)}</div>
                                 </div>
@@ -536,7 +539,7 @@ export default function DashboardMobileSessionHostSheet({
                             {latestWarnOrError && (
                                 <div className="rounded-2xl border border-amber-500/[0.16] bg-amber-500/[0.07] px-4 py-3">
                                     <div className="mb-1 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.16em] text-amber-200">
-                                        <IconWarning size={13} /> Latest warning
+                                        <IconWarning size={13} /> {t('sessionHost.latestWarning')}
                                     </div>
                                     <div className="text-[13px] leading-relaxed text-text-primary">{latestWarnOrError.message}</div>
                                 </div>
@@ -544,7 +547,7 @@ export default function DashboardMobileSessionHostSheet({
 
                             <div className="flex items-center justify-between gap-3 pt-1">
                                 <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                                    <IconTerminal size={14} /> Live hosted runtimes
+                                    <IconTerminal size={14} /> {t('sessionHost.liveTitle')}
                                 </div>
                                 <div className="flex items-center gap-2">
                                     {duplicateGroupCount > 0 && (
@@ -555,11 +558,11 @@ export default function DashboardMobileSessionHostSheet({
                                             onClick={() => { void runPruneDuplicates() }}
                                         >
                                             {busyActionKey === 'session_host_prune_duplicate_sessions'
-                                                ? 'Pruning…'
-                                                : `Prune ${duplicateGroupCount}`}
+                                                ? t('sessionHost.pruning')
+                                                : t('sessionHost.pruneCount', { count: duplicateGroupCount })}
                                         </button>
                                     )}
-                                    <div className="text-2xs text-text-secondary">{activeCliEntries.length} dashboard session{activeCliEntries.length === 1 ? '' : 's'}</div>
+                                    <div className="text-2xs text-text-secondary">{t('sessionHost.dashboardSessions', { count: activeCliEntries.length })}</div>
                                 </div>
                             </div>
 
@@ -569,7 +572,7 @@ export default function DashboardMobileSessionHostSheet({
 
                             {liveSessions.length === 0 ? (
                                 <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-4 py-4 text-[13px] text-text-secondary">
-                                    No live hosted CLI runtimes on this machine right now.
+                                    {t('sessionHost.liveEmpty')}
                                 </div>
                             ) : (
                                 <div className="space-y-2">
@@ -579,14 +582,14 @@ export default function DashboardMobileSessionHostSheet({
 
                             <div className="pb-1">
                                 <div className="mb-2 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                                    Recovery snapshots
+                                    {t('sessionHost.recoveryTitle')}
                                 </div>
                                 <div className="mb-2 text-2xs text-text-secondary leading-relaxed">
                                     {getSessionHostSectionHint('recovery')}
                                 </div>
                                 {recoverySessions.length === 0 ? (
                                     <div className="rounded-2xl border border-border-subtle bg-bg-secondary px-4 py-4 text-[13px] text-text-secondary">
-                                        No recovery snapshots need attention.
+                                        {t('sessionHost.recoveryEmpty')}
                                     </div>
                                 ) : (
                                     <div className="space-y-2">
@@ -598,7 +601,7 @@ export default function DashboardMobileSessionHostSheet({
                             {inactiveSessions.length > 0 && (
                                 <div className="pb-1">
                                     <div className="mb-2 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                                        Inactive records
+                                        {t('sessionHost.inactiveTitle')}
                                     </div>
                                     <div className="mb-2 text-2xs text-text-secondary leading-relaxed">
                                         {getSessionHostSectionHint('inactive')}
@@ -612,7 +615,7 @@ export default function DashboardMobileSessionHostSheet({
                             {recentTransitions.length > 0 && (
                                 <div className="pb-1">
                                     <div className="mb-2 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
-                                        Recent activity
+                                        {t('sessionHost.recentActivity')}
                                     </div>
                                     <div className="rounded-2xl border border-border-subtle bg-bg-secondary divide-y divide-border-subtle">
                                         {recentTransitions.map((transition) => {

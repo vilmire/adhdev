@@ -357,8 +357,8 @@ export default function MeshObservabilitySurface({
             })
             if (!dryRun?.success || dryRun.code !== 'fast_forward_available') return
             const ok = await confirm({
-                title: `Apply fast-forward for ${selectedGraphNode.label}?`,
-                confirmLabel: 'Fast-forward',
+                title: t('meshGraph.obs.fastForwardConfirmTitle', { label: selectedGraphNode.label }),
+                confirmLabel: t('meshGraph.obs.fastForwardConfirmLabel'),
             })
             if (!ok) return
             const executedRaw = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
@@ -384,7 +384,7 @@ export default function MeshObservabilitySurface({
         } finally {
             setHealingNodeId(null)
         }
-    }, [canHealSelectedNode, canonicalStatus.meshId, confirm, selectedGraphNode, selectedHealDaemonId, sendDaemonCommand])
+    }, [canHealSelectedNode, canonicalStatus.meshId, confirm, selectedGraphNode, selectedHealDaemonId, sendDaemonCommand, t])
 
     useEffect(() => {
         if (!selectedGraphNode && !selectedGraphEdge) return

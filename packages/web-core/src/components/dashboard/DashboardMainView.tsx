@@ -363,7 +363,7 @@ export default function DashboardMainView({
     const handleResetAllPanelsToMain = React.useCallback(async () => {
         const confirmed = await confirmAction({
             title: t('common.confirmTitle'),
-            description: 'Move every floating or popout panel back into the main dashboard grid?',
+            description: t('dashboard.hidden.resetPanelsConfirm'),
             confirmLabel: t('common.confirm'),
         })
         if (!confirmed) return
