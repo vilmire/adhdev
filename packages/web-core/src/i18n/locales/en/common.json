@@ -1549,7 +1549,7 @@
             "subtitle": "Self-hosted ADHDev overview, built-in surfaces, and what changes in Cloud",
             "selfHostedEdition": "Self-hosted edition",
             "headline": "Keep the same dashboard experience, with the runtime fully on-device.",
-            "description": "Standalone keeps the browser, daemon, screenshots, and control path on your own machine. It is the same core product shape as cloud, just without the remote networking and team layers.",
+            "description": "Standalone keeps the browser, daemon, screenshots, and control path entirely on your own machine. Aside from multi-machine connectivity and mobile notifications, it is the same core product experience as Cloud.",
             "docs": "Docs ↗",
             "github": "GitHub ↗",
             "tryCloud": "Try Cloud ↗",
@@ -2596,8 +2596,19 @@
             "turnRelayActive": "TURN relay active"
         }
     },
+    "sessionNav": {
+        "openChat": "Open chat",
+        "openCoordinatorChat": "Open coordinator chat",
+        "coordinatorGone": "coordinator session ended",
+        "chatNotFound": "No chat tab for this session on this dashboard — it may be running on another machine.",
+        "openChatHint": "Click to open this session’s chat"
+    },
     "sessionInfo": {
         "quotaOkNoWindows": "Read OK — no percentage window",
+        "sectionMeshWorker": "Spawned by coordinator",
+        "rowMeshId": "Mesh",
+        "rowTaskId": "Task",
+        "rowCoordinator": "Coordinator",
         "title": "Session info",
         "loading": "Loading…",
         "refresh": "Refresh",
@@ -3196,6 +3207,11 @@
             "appendDesc": "<strong>Append</strong> stacks after whichever base wins.",
             "overrideLabel": "Override",
             "appendLabel": "Append",
+            "expandLabel": "Edit prompts",
+            "collapseLabel": "Collapse",
+            "customizedBadge": "Customized",
+            "collapsedNone": "No custom prompts — using daemon defaults.",
+            "tabsAriaLabel": "Coordinator prompt provider",
             "sectionTitle": "Coordinator prompts",
             "sectionDescription": "Per-CLI base prompt for mesh coordinator sessions on this machine. Mesh-level prompts live on the Repo Mesh page."
         },

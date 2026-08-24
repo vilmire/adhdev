@@ -1549,7 +1549,7 @@
             "subtitle": "셀프호스트 ADHDev 개요, 내장 서피스, Cloud와의 차이점",
             "selfHostedEdition": "셀프호스트 에디션",
             "headline": "런타임을 온디바이스에서 완전히 실행하면서 동일한 대시보드 경험을 유지하세요.",
-            "description": "Standalone은 브라우저, 데몬, 스크린샷, 제어 경로를 모두 본인 머신에 유지합니다. 원격 네트워킹과 팀 레이어 없이 Cloud와 동일한 핵심 제품 형태입니다.",
+            "description": "Standalone은 브라우저, 데몬, 스크린샷, 제어 경로를 모두 본인 머신에 유지합니다. 멀티머신 연결과 모바일 알림을 제외하면 Cloud와 동일한 핵심 제품 경험입니다.",
             "docs": "문서 ↗",
             "github": "GitHub ↗",
             "tryCloud": "Cloud 체험 ↗",
@@ -2596,8 +2596,19 @@
             "turnRelayActive": "TURN 릴레이 활성"
         }
     },
+    "sessionNav": {
+        "openChat": "채팅 열기",
+        "openCoordinatorChat": "코디네이터 채팅 열기",
+        "coordinatorGone": "코디네이터 세션 종료됨",
+        "chatNotFound": "이 대시보드에 해당 세션의 채팅 탭이 없습니다 — 다른 머신에서 실행 중일 수 있습니다.",
+        "openChatHint": "클릭하면 이 세션의 채팅을 엽니다"
+    },
     "sessionInfo": {
         "quotaOkNoWindows": "조회 성공 — 퍼센트 윈도우 없음",
+        "sectionMeshWorker": "코디네이터가 스폰한 세션",
+        "rowMeshId": "메시",
+        "rowTaskId": "태스크",
+        "rowCoordinator": "코디네이터",
         "title": "세션 정보",
         "loading": "불러오는 중…",
         "refresh": "새로고침",
@@ -3196,6 +3207,11 @@
             "appendDesc": "<strong>Append</strong>는 선택된 기본 프롬프트 뒤에 추가됩니다.",
             "overrideLabel": "Override",
             "appendLabel": "Append",
+            "expandLabel": "프롬프트 편집",
+            "collapseLabel": "접기",
+            "customizedBadge": "커스텀",
+            "collapsedNone": "커스텀 프롬프트 없음 — 데몬 기본값 사용 중.",
+            "tabsAriaLabel": "코디네이터 프롬프트 프로바이더",
             "sectionTitle": "코디네이터 프롬프트",
             "sectionDescription": "이 머신의 메시 코디네이터 세션에 적용되는 CLI별 기본 프롬프트입니다. 메시 단위 프롬프트는 Repo Mesh 페이지에 있습니다."
         },

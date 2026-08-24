@@ -1549,7 +1549,7 @@
             "subtitle": "セルフホスト版 ADHDev の概要、組み込み機能、Cloud での違い",
             "selfHostedEdition": "セルフホスト版",
             "headline": "同じダッシュボード体験のまま、ランタイムを完全にデバイス上で実行できます。",
-            "description": "Standalone は、ブラウザ、デーモン、スクリーンショット、制御経路をご自身のマシン上に保持します。リモートネットワークやチームレイヤーがないだけで、Cloud と同じコア製品の形をしています。",
+            "description": "Standalone は、ブラウザ、デーモン、スクリーンショット、制御経路をご自身のマシン上に保持します。マルチマシン接続とモバイル通知を除けば、Cloud と同じコア製品体験です。",
             "docs": "Docs ↗",
             "github": "GitHub ↗",
             "tryCloud": "Cloud を試す ↗",
@@ -2596,8 +2596,19 @@
             "turnRelayActive": "TURN リレー有効"
         }
     },
+    "sessionNav": {
+        "openChat": "チャットを開く",
+        "openCoordinatorChat": "コーディネーターのチャットを開く",
+        "coordinatorGone": "コーディネーターセッションは終了しました",
+        "chatNotFound": "このダッシュボードに該当セッションのチャットタブがありません — 別のマシンで実行中の可能性があります。",
+        "openChatHint": "クリックでこのセッションのチャットを開く"
+    },
     "sessionInfo": {
         "quotaOkNoWindows": "取得成功 — パーセント枠なし",
+        "sectionMeshWorker": "コーディネーターが起動したセッション",
+        "rowMeshId": "メッシュ",
+        "rowTaskId": "タスク",
+        "rowCoordinator": "コーディネーター",
         "title": "セッション情報",
         "loading": "読み込み中…",
         "refresh": "更新",
@@ -3196,6 +3207,11 @@
             "appendDesc": "<strong>Append</strong> は、いずれかのベースが選ばれた後に積み重ねられます。",
             "overrideLabel": "Override",
             "appendLabel": "Append",
+            "expandLabel": "プロンプトを編集",
+            "collapseLabel": "折りたたむ",
+            "customizedBadge": "カスタム",
+            "collapsedNone": "カスタムプロンプトなし — デーモンのデフォルトを使用中。",
+            "tabsAriaLabel": "コーディネータープロンプトのプロバイダー",
             "sectionTitle": "コーディネータープロンプト",
             "sectionDescription": "このマシンのメッシュコーディネーターセッションに適用される CLI ごとの基本プロンプトです。メッシュ単位のプロンプトは Repo Mesh ページにあります。"
         },

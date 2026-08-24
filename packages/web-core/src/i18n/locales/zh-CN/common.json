@@ -1549,7 +1549,7 @@
             "subtitle": "自托管 ADHDev 概览、内置功能，以及切换到 Cloud 后的变化",
             "selfHostedEdition": "自托管版",
             "headline": "保持相同的仪表盘体验，同时让运行时完全运行在本地设备上。",
-            "description": "Standalone 将浏览器、守护进程、截图和控制路径都保留在你自己的机器上。它与 Cloud 是相同的核心产品形态，只是没有远程网络和团队层。",
+            "description": "Standalone 将浏览器、守护进程、截图和控制路径都保留在你自己的机器上。除多机连接和移动端通知外，它与 Cloud 是相同的核心产品体验。",
             "docs": "Docs ↗",
             "github": "GitHub ↗",
             "tryCloud": "试用 Cloud ↗",
@@ -2596,8 +2596,19 @@
             "turnRelayActive": "TURN 中继已启用"
         }
     },
+    "sessionNav": {
+        "openChat": "打开聊天",
+        "openCoordinatorChat": "打开协调器聊天",
+        "coordinatorGone": "协调器会话已结束",
+        "chatNotFound": "此仪表板上没有该会话的聊天标签 — 它可能运行在另一台机器上。",
+        "openChatHint": "点击打开此会话的聊天"
+    },
     "sessionInfo": {
         "quotaOkNoWindows": "读取成功 — 无百分比窗口",
+        "sectionMeshWorker": "由协调器派生的会话",
+        "rowMeshId": "网格",
+        "rowTaskId": "任务",
+        "rowCoordinator": "协调器",
         "title": "会话信息",
         "loading": "加载中…",
         "refresh": "刷新",
@@ -3196,6 +3207,11 @@
             "appendDesc": "<strong>Append</strong> 会在胜出的基础提示词之后追加。",
             "overrideLabel": "Override",
             "appendLabel": "Append",
+            "expandLabel": "编辑提示词",
+            "collapseLabel": "收起",
+            "customizedBadge": "自定义",
+            "collapsedNone": "无自定义提示词 — 正在使用守护进程默认值。",
+            "tabsAriaLabel": "协调器提示词提供方",
             "sectionTitle": "协调器提示词",
             "sectionDescription": "本机网格协调器会话按 CLI 划分的基础提示词。网格级提示词位于 Repo Mesh 页面。"
         },

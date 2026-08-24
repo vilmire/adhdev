@@ -1554,7 +1554,7 @@
             "subtitle": "Resumen de ADHDev autoalojado, funciones integradas y qué cambia en Cloud",
             "selfHostedEdition": "Edición autoalojada",
             "headline": "Mantén la misma experiencia del panel, con el runtime totalmente en el dispositivo.",
-            "description": "Standalone mantiene el navegador, el daemon, las capturas de pantalla y la ruta de control en tu propia máquina. Es la misma forma de producto central que Cloud, solo que sin las capas de red remota ni de equipo.",
+            "description": "Standalone mantiene el navegador, el daemon, las capturas de pantalla y la ruta de control en tu propia máquina. Aparte de la conectividad multimáquina y las notificaciones móviles, es la misma experiencia de producto central que Cloud.",
             "docs": "Docs ↗",
             "github": "GitHub ↗",
             "tryCloud": "Probar Cloud ↗",
@@ -2601,8 +2601,19 @@
             "turnRelayActive": "Relé TURN activo"
         }
     },
+    "sessionNav": {
+        "openChat": "Abrir chat",
+        "openCoordinatorChat": "Abrir chat del coordinador",
+        "coordinatorGone": "la sesión del coordinador terminó",
+        "chatNotFound": "No hay pestaña de chat para esta sesión en este panel — puede estar ejecutándose en otra máquina.",
+        "openChatHint": "Clic para abrir el chat de esta sesión"
+    },
     "sessionInfo": {
         "quotaOkNoWindows": "Lectura correcta — sin ventana porcentual",
+        "sectionMeshWorker": "Generada por el coordinador",
+        "rowMeshId": "Malla",
+        "rowTaskId": "Tarea",
+        "rowCoordinator": "Coordinador",
         "title": "Información de la sesión",
         "loading": "Cargando…",
         "refresh": "Actualizar",
@@ -3201,6 +3212,11 @@
             "appendDesc": "<strong>Append</strong> se apila después de la base que prevalezca.",
             "overrideLabel": "Override",
             "appendLabel": "Append",
+            "expandLabel": "Editar prompts",
+            "collapseLabel": "Contraer",
+            "customizedBadge": "Personalizado",
+            "collapsedNone": "Sin prompts personalizados — se usan los valores por defecto del daemon.",
+            "tabsAriaLabel": "Proveedor de prompts del coordinador",
             "sectionTitle": "Prompts del coordinador",
             "sectionDescription": "Prompt base por CLI para las sesiones del coordinador de malla en esta máquina. Los prompts a nivel de malla están en la página Repo Mesh."
         },
