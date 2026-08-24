@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, ApprovalsPage, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input, getMachineNickname, getMachineHostnameLabel } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input, getMachineNickname, getMachineHostnameLabel } from '@adhdev/web-core'
 import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
 import SetupWizardPage from './SetupWizardPage'
@@ -290,10 +290,10 @@ export default function App() {
                                     <Route path="/machine" element={<SingleMachineRedirect />} />
                                     <Route path="/machines/:id" element={<MachineDetail />} />
                                     <Route path="/machines" element={<SingleMachineRedirect />} />
-                                    {/* Platform-neutral web-core pages (fragmentation audit: the
-                                        daemon fully supports both over the standalone WS, the UI
-                                        existed, only the routes were missing). */}
-                                    <Route path="/approvals" element={<ApprovalsPage />} />
+                                    {/* Platform-neutral notifications page (fragmentation audit).
+                                        No /approvals route — owner decision (re-confirmed
+                                        2026-08-24): pending approvals surface inline on the
+                                        dashboard inbox; a dedicated page duplicates it. */}
                                     <Route path="/notifications" element={<StandaloneNotificationsPage />} />
                                     <Route path="/about" element={<StandaloneAbout />} />
                                     <Route path="/settings" element={<StandaloneSettings />} />

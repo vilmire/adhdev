@@ -1,8 +1,9 @@
 /**
  * StandaloneSettings — Settings page for self-hosted ADHDev.
  *
- * Uses shared components from web-core (ToggleRow, BrowserNotificationSettings,
- * ConnectedMachinesSection) plus standalone-specific sections.
+ * Uses shared components from web-core (ConnectedMachinesSection etc.) plus
+ * standalone-specific sections. Notification/sound settings live on the
+ * dedicated /notifications page, not here.
  */
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -12,15 +13,12 @@ import {
     AlertBanner,
     Button,
     Input,
-    BrowserNotificationSettings,
     ConnectedMachinesSection,
     CoordinatorPromptsSection,
     AppearanceSettingsSection,
-    ToggleRow,
     useBaseDaemons,
     useTransport,
     IconSettings,
-    IconVolume,
     IconUser,
 } from '@adhdev/web-core'
 import {
@@ -104,16 +102,6 @@ export default function StandaloneSettings() {
         if (daemonEntry?.id && val !== userName) {
             sendCommand(daemonEntry.id, 'set_user_name', { userName: val }).catch(console.error)
         }
-    }
-
-    // Theme preference (read from localStorage)
-    const [soundEnabled, setSoundEnabled] = useState(() => {
-        try { return localStorage.getItem('adhdev_sound') !== '0' } catch { return true }
-    })
-
-    const handleSoundToggle = (v: boolean) => {
-        setSoundEnabled(v)
-        try { localStorage.setItem('adhdev_sound', v ? '1' : '0') } catch {}
     }
 
     const handleSaveFontPreferences = async () => {
@@ -464,18 +452,9 @@ export default function StandaloneSettings() {
                 />
             </Section>
 
-            {/* ═══ Notifications ═══ */}
-            <Section title={t('standalone.settings.notificationsSection')} description={t('standalone.settings.notificationsDescription')}>
-                <div className="flex flex-col gap-3">
-                    <BrowserNotificationSettings />
-                    <ToggleRow
-                        label={<span className="flex items-center gap-1.5"><IconVolume size={15} /> {t('standalone.settings.soundEffectsLabel')}</span>}
-                        description={t('standalone.settings.soundEffectsDescription')}
-                        checked={soundEnabled}
-                        onChange={handleSoundToggle}
-                    />
-                </div>
-            </Section>
+            {/* Notifications live on the dedicated /notifications page (sidebar) —
+                the settings-page duplicate section was removed (owner decision
+                2026-08-24) when that page gained a standalone route. */}
 
             {/* ═══ Preferences ═══ */}
             <Section title={t('standalone.settings.profileSection')} description={t('standalone.settings.profileDescription')}>
