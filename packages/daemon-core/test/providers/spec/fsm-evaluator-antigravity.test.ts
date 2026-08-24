@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
-import { resolveSections, sectionText, extractButtonsFromRule } from '../../../src/providers/spec/evaluator.js';
+import { resolveSections, sectionText, extractButtonsFromRule, extractTitle } from '../../../src/providers/spec/evaluator.js';
 import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 
 function resolveSpecPath(): string {
@@ -94,6 +94,18 @@ const approvalScreen = makeScreenWithModal(
     '  ? for shortcuts'
 );
 
+// Live agy 1.1.19 PTY capture (2026-08-24). This approval shape has no
+// `Requesting permission for:` / `Do you want to proceed?` preamble, so the
+// modal must self-anchor on the file-edit question itself.
+const fileEditApprovalScreen = [
+    'Accept this file edit?',
+    '> 1. Yes, accept this change',
+    '  2. No, reject this change',
+    '  ↑/↓ Navigate · tab Amend · f full diff',
+].join('\n');
+
+const preFileEditModalAnchor = 'Do you trust the files in this folder\\?|Do you trust the contents of this project\\?|Requesting permission for:|Do you want to proceed\\?';
+
 // Trust screen: folder trust dialog in modal zone
 const trustScreen = makeScreenWithModal(
     ['  /home/user/projects/sensitive'],
@@ -160,6 +172,41 @@ describe('antigravity-cli v4 FSM', () => {
     it('→approval fires from busy when approval modal appears', () => {
         const ev = evaluateFsm(spec, 'busy', approvalScreen, { row: 39, col: 4 }, undefined, clk(10000, 0));
         expect(ev.fired?.to).toBe('approval');
+    });
+
+    it('recognizes the live `Accept this file edit?` approval through the real section path', () => {
+        expect(new RegExp(preFileEditModalAnchor).test(fileEditApprovalScreen)).toBe(false);
+        expect(new RegExp(spec.sections!.modal.anchor as string).test(fileEditApprovalScreen)).toBe(true);
+
+        const lines = fileEditApprovalScreen.split('\n');
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        expect(sectionText(sections, 'modal', fileEditApprovalScreen)).toBe(fileEditApprovalScreen);
+
+        const ev = evaluateFsm(spec, 'busy', fileEditApprovalScreen, { row: 3, col: 45 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('approval');
+
+        const approval = spec.states.find(state => state.id === 'approval')!;
+        const modalText = sectionText(sections, 'modal', fileEditApprovalScreen);
+        expect(extractTitle(approval.extract!.title!, sections, fileEditApprovalScreen)).toBe('Accept this file edit?');
+        const buttons = extractButtonsFromRule(approval.extract!.buttons!, modalText);
+        expect(buttons).toHaveLength(2);
+        expect(buttons.map(button => button.key)).toEqual(['1\r', '2\r']);
+        expect(buttons[0].label).toBe('Yes, accept this change');
+        expect(buttons[1].label).toContain('No, reject this change');
+    });
+
+    it('keeps confirmed agy 1.1.19 approval prompts aligned between the modal anchor and transition', () => {
+        const approvalPattern = (spec.transitions.find(transition => transition.label === '→approval')!.when as any).matches;
+        const prompts = [
+            'Accept this file edit?',
+            'Allow access to this file?',
+            'Allow creation of this file?',
+            'Allow sandbox bypass for command execution?',
+        ];
+        for (const prompt of prompts) {
+            expect(new RegExp(spec.sections!.modal.anchor as string).test(prompt)).toBe(true);
+            expect(new RegExp(approvalPattern).test(prompt)).toBe(true);
+        }
     });
 
     it('busy stays until spinner gone + footer present + stable', () => {
