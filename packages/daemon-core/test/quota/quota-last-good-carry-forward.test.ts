@@ -139,4 +139,23 @@ describe('carryForwardLastGoodWindows', () => {
         expect(afterAnotherTransient.session).toBeNull();
         expect(afterAnotherTransient.metadata?.lastGoodWindows).toBeUndefined();
     });
+it('carries the provider-specific axes too — monthly and per-pool buckets survive a transient failure', () => {
+        // antigravity's per-pool buckets and cursor's monthly window belong to
+        // the same reading as session/weekly; dropping them on carry-forward
+        // blanked the per-pool chips on every token blip (owner request
+        // 2026-08-24: both antigravity pools must stay visible).
+        const prev = {
+            ...okReading(),
+            provider: 'antigravity-cli',
+            monthly: { usedPercent: 12, windowMinutes: 43200, resetsAt: null },
+            buckets: [
+                { name: 'Gemini Models · Weekly', usedPercent: 9, windowMinutes: 10080, resetsAt: null },
+                { name: 'Claude/GPT · Weekly', usedPercent: 3, windowMinutes: 10080, resetsAt: null },
+            ],
+        };
+        const merged = carryForwardLastGoodWindows(prev, { ...failure('expired-token'), provider: 'antigravity-cli' });
+        expect(merged.metadata?.lastGoodWindows).toBe(true);
+        expect(merged.monthly).toEqual(prev.monthly);
+        expect(merged.buckets).toEqual(prev.buckets);
+    });
 });

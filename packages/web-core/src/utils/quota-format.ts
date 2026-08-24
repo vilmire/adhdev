@@ -23,9 +23,11 @@ const QUOTA_PROVIDER_LABELS: Record<string, string> = {
     'antigravity-cli': 'Antigravity CLI',
     'claude-cli': 'Claude Code',
     'codex-cli': 'Codex CLI',
+    'cursor-cli': 'Cursor CLI',
     'grok-cli': 'Grok CLI',
+    'hermes-cli': 'Hermes CLI',
     kimi: 'Kimi Code',
-    opencode: 'opencode',
+    opencode: 'opencode', // the project's own lowercase brand spelling
 }
 
 /** "184230" → "184.2K"; small counts stay exact. */
@@ -104,10 +106,14 @@ function hasUsableQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefine
  * tell a coordinator a 20-hour-old reading is about to update itself.
  */
 export function quotaWindowCue(quota: MeshNodeFactsProviderQuota): QuotaWindowCue | undefined {
-    if (quota.metadata?.lastGoodWindows === true) return 'refreshing'
+    // Order matters: the Claude aged-out shape now ALSO marks lastGoodWindows
+    // (mesh routing trusts the retained windows until their reset), but its
+    // cue must stay 'stale' — nothing is retrying. 'no-data' is not a
+    // transient kind, so carry-forward can never wear it.
     if (quota.metadata?.failureKind === 'no-data' && (hasUsableQuotaWindow(quota.session) || hasUsableQuotaWindow(quota.weekly))) {
         return 'stale'
     }
+    if (quota.metadata?.lastGoodWindows === true) return 'refreshing'
     return undefined
 }
 
@@ -132,6 +138,82 @@ export function formatQuotaWindow(
     const base = resets ? `${used} · ${resets}` : used
     const marker = cue === true || cue === 'refreshing' ? 'refreshing' : cue === 'stale' ? 'stale' : null
     return marker ? `${base} · ${marker}` : base
+}
+
+/** One renderable per-pool quota bucket (antigravity's Gemini vs Claude/GPT). */
+export interface QuotaBucketChip {
+    /** `<pool> <window>` — e.g. "Gemini 7d". */
+    label: string
+    usedPercent: number
+    window: MeshNodeFactsQuotaWindow
+}
+
+/** "5h" / "7d" / "30d" for the well-known window sizes, else a rounded hour/day count. */
+function shortWindowLabel(windowMinutes: number): string {
+    const near = (target: number) => Math.abs(windowMinutes - target) <= target * 0.1
+    if (near(300)) return '5h'
+    if (near(10080)) return '7d'
+    if (near(43200)) return '30d'
+    return windowMinutes >= 24 * 60 ? `${Math.round(windowMinutes / (24 * 60))}d` : `${Math.round(windowMinutes / 60)}h`
+}
+
+/**
+ * Per-pool bucket chips for a provider whose plan has several quota pools —
+ * antigravity's live shape is two groups (Gemini Models, Claude/GPT bundled
+ * models) × two windows (5h, weekly). The snapshot's `session`/`weekly` axes
+ * collapse those to the worst bucket per window (the routing headline), which
+ * hid the healthier pool entirely; these chips carry the per-pool truth
+ * (owner request 2026-08-24). Bucket names arrive as "<group> · <bucket>" —
+ * the group segment becomes the pool label, with the noise words the live
+ * responses append ("Models", "Limit Remaining") trimmed for chip width.
+ * Returns [] when the provider reports fewer than two buckets — a single
+ * bucket says nothing the axes do not.
+ */
+export function collectQuotaBucketChips(quota: MeshNodeFactsProviderQuota): QuotaBucketChip[] {
+    const raw = quota.buckets
+    if (!Array.isArray(raw) || raw.length < 2) return []
+    const chips: QuotaBucketChip[] = []
+    for (const bucket of raw) {
+        if (!bucket || typeof bucket !== 'object') continue
+        const usedPercent = Number(bucket.usedPercent)
+        const windowMinutes = Number(bucket.windowMinutes)
+        if (!Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes) || windowMinutes <= 0) continue
+        const name = typeof bucket.name === 'string' ? bucket.name : ''
+        const pool = name.split('·')[0]?.trim().replace(/\s+(Models?|Bundled Models?)$/i, '').trim()
+        chips.push({
+            label: `${pool || 'pool'} ${shortWindowLabel(windowMinutes)}`,
+            usedPercent,
+            window: {
+                usedPercent,
+                windowMinutes,
+                resetsAt: typeof bucket.resetsAt === 'number' ? bucket.resetsAt : null,
+            },
+        })
+    }
+    // Stable order: by pool label, then shorter window first — pools stay
+    // visually grouped between refreshes.
+    return chips.sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/**
+ * Summary line for an 'ok' snapshot that carries NO usage windows at all —
+ * cursor-cli's included-usage accounts are the canonical case: the fetch
+ * succeeded and the account state is real, there is just no percentage window
+ * to chart. Prefers the provider's own display message (cursor's
+ * metadata.cursorUsage.displayMessage, e.g. "You've used 0% of your included
+ * usage"); returns null when there is nothing usable, so the caller can fall
+ * back to a neutral i18n line. Rendering describeQuotaFailure here — "could
+ * not read quota" — misreported a healthy reading as a failure (owner-visible
+ * 2026-08-24).
+ */
+export function describeQuotaOkWithoutWindows(quota: MeshNodeFactsProviderQuota): string | null {
+    if (quota.status !== 'ok') return null
+    const usage = (quota.metadata as Record<string, unknown> | undefined)?.cursorUsage
+    if (usage && typeof usage === 'object') {
+        const message = (usage as Record<string, unknown>).displayMessage
+        if (typeof message === 'string' && message.trim() !== '') return message.trim()
+    }
+    return null
 }
 
 /**

@@ -136,13 +136,23 @@ function readCredentialFile(env: NodeJS.ProcessEnv): CredentialsResult {
     }
 }
 
-function runKeychainRead(deps: Required<QuotaFetchDeps>): Promise<string | null> {
+/**
+ * Keychain service names cursor-agent has used, newest first: 2026-08 builds
+ * store the raw access token under 'cursor-access-token' (account
+ * 'cursor-user', with a sibling 'cursor-refresh-token' this fetcher never
+ * touches); earlier builds used 'cursor'. Verified against a live logged-in
+ * login.keychain on 2026-08-24 — metadata inspection only — after the
+ * single-name lookup reported missing-credentials on a signed-in machine.
+ */
+const KEYCHAIN_SERVICE_CANDIDATES = ['cursor-access-token', 'cursor'] as const;
+
+function runKeychainRead(deps: Required<QuotaFetchDeps>, service: string): Promise<string | null> {
     return new Promise((resolve) => {
         let child: QuotaChildProcess;
         try {
             child = deps.spawn(
                 '/usr/bin/security',
-                ['find-generic-password', '-s', 'cursor', '-w'],
+                ['find-generic-password', '-s', service, '-w'],
                 { env: deps.env },
             );
         } catch {
@@ -183,8 +193,13 @@ async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<Credenti
     }
 
     // A missing/locked keychain is an ordinary signed-out state, not an error.
-    const raw = await runKeychainRead(deps);
-    return raw === null ? { kind: 'missing' } : parseStoredCredential(raw);
+    // Each miss returns in milliseconds, so probing the historical service
+    // names in order costs nothing on the signed-out path.
+    for (const service of KEYCHAIN_SERVICE_CANDIDATES) {
+        const raw = await runKeychainRead(deps, service);
+        if (raw !== null) return parseStoredCredential(raw);
+    }
+    return { kind: 'missing' };
 }
 
 function rpcUrl(env: NodeJS.ProcessEnv, method: string): string {
@@ -331,14 +346,27 @@ function mapUsageResponse(
 
     const resetRaw = toNumber(field(current, 'billing_cycle_end', 'billingCycleEnd'));
     const resetAt = resetRaw !== null && resetRaw > 0 ? resetRaw : null;
-    const monthly = cursorUsage.kind === 'fixed'
+    // Two distinct spend axes (live shape verified 2026-08-24):
+    //   1. ON-DEMAND (spend_limit_usage / hard limit) — cursorUsage above,
+    //      charted only for kind 'fixed'.
+    //   2. INCLUDED PLAN (plan_usage.total_spend / .limit) — what "You've
+    //      used N% of your included usage" is about. Accounts with on-demand
+    //      disabled (limitType 'user', noUsageBasedAllowed) still have THIS
+    //      axis, and dropping it rendered a real reading as no-usage-at-all.
+    const monthly = (cursorUsage.kind === 'fixed'
         ? windowFromUsage(
             cursorUsage.usedDollars,
             cursorUsage.limitDollars ?? null,
             MONTHLY_WINDOW_MINUTES,
             resetAt,
         )
-        : null;
+        : null)
+        ?? windowFromUsage(
+            toNumber(field(planUsage, 'total_spend', 'totalSpend')),
+            toNumber(field(planUsage, 'limit', 'limit')),
+            MONTHLY_WINDOW_MINUTES,
+            resetAt,
+        );
 
     return {
         provider: 'cursor-cli',

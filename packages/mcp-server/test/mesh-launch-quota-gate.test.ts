@@ -211,21 +211,14 @@ test('fail-open: an opted-out provider alone on the node still launches', async 
   assert.equal(launchedType(launchCalls), 'kimi');
 });
 
-test('fail-open: STALE exhausted snapshot → not blocked', async () => {
-  // Routing on an old reading would exclude a node on data that no longer
-  // describes it. Default staleAfterMs is 30 min; this snapshot is ~3h old.
-  //
-  // ★The assertion changed 2026-08-20 (was: launched 'kimi'). The CONTRACT
-  // under test — a stale exhausted reading must not BLOCK — is unchanged and
-  // still asserted below. What changed is which provider wins the RANKING,
-  // and the old expectation was an artifact of the unconditional unknown-last
-  // partition rather than a property anyone wanted: kimi ranked first only
-  // because staleness made it unrankable, not because it was the better
-  // choice. It holds 1% weekly remaining (weeklyExhausted) against a healthy,
-  // currently-measured claude-cli, so preferring claude-cli is the correct
-  // answer on the expiry-risk axis — and kimi remains gate-CLEAR, which is
-  // what "fails open" actually means. See the RETAINED READINGS section of
-  // rankProvidersByQuotaGate.
+test('STALE exhausted snapshot with a healthy peer → the node still launches', async () => {
+  // ★History: 2026-08-20 changed which provider WINS (claude-cli out-ranks a
+  // near-exhausted stale kimi); 2026-08-24 window-boundary validity then made
+  // kimi outright GATED (its 3h-old weekly reading is still within its reset
+  // boundary, so the 1% remaining is a measured fact, not noise). The
+  // node-level contract this test pins is unchanged throughout: a stale
+  // near-exhausted provider must never take the whole NODE down while a
+  // usable peer exists — claude-cli launches.
   const now = Date.now();
   const stale = weeklyExhausted('kimi', now - 3 * HOUR);
   const { ctx, launchCalls } = makeCtx(
@@ -237,18 +230,41 @@ test('fail-open: STALE exhausted snapshot → not blocked', async () => {
   assert.equal(launchedType(launchCalls), 'claude-cli', 'a healthy current reading out-ranks a near-exhausted stale one');
 });
 
-test('fail-open: a STALE exhausted provider ALONE on the node still launches', async () => {
-  // The stranding half of the contract above, isolated: with no healthy peer
-  // to out-rank it, the stale near-exhausted provider must still be selected.
-  // This is what makes the reordering above safe — kimi lost a comparison,
-  // it was not excluded.
+test('a STALE-but-within-window exhausted provider ALONE on the node now gates as a WAIT (2026-08-24)', async () => {
+  // ★The assertion changed 2026-08-24 (was: launched anyway — the stale
+  // fail-open stranding guard). Window-boundary validity inverted it: this
+  // 3h-old reading's weekly window still runs for days, usage within a
+  // window is monotonic, so "≤1% weekly remaining" is a measured fact, and
+  // launching would burn the last of the window — exactly what the owner's
+  // floor exists to prevent. The launch fails as a WAIT
+  // (all_providers_quota_gated), pointing the caller at the queue. The
+  // anti-stranding property is preserved in its window-shaped form by the
+  // next test: once the measured window RESETS, the gate stands down.
   const now = Date.now();
   const { ctx, launchCalls } = makeCtx(
     { slots: [{ provider: 'kimi' }] },
     quotaFacts({ kimi: weeklyExhausted('kimi', now - 3 * HOUR) }, { reportedAt: now - 3 * HOUR }),
   );
   const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-a' }));
-  assert.equal(result.success !== false, true, `stale sole provider must launch: ${JSON.stringify(result)}`);
+  assert.equal(result.success, false, `within-window exhaustion must gate: ${JSON.stringify(result)}`);
+  assert.equal(result.code, 'mesh_all_providers_quota_gated');
+  assert.equal(launchCalls.length, 0);
+});
+
+test('fail-open: a stale reading whose window has RESET launches — the anti-stranding guard, window-shaped', async () => {
+  // The reading predates its own weekly reset, so it describes a DEAD window
+  // — gating on it would be the permanent-misexclusion trap the fail-open
+  // contract exists to prevent. The gate stands down and the sole provider
+  // launches; the next successful refresh re-measures the live window.
+  const now = Date.now();
+  const elapsed = weeklyExhausted('kimi', now - 3 * HOUR);
+  elapsed.weekly = { ...elapsed.weekly, resetsAt: now - HOUR };
+  const { ctx, launchCalls } = makeCtx(
+    { slots: [{ provider: 'kimi' }] },
+    quotaFacts({ kimi: elapsed }, { reportedAt: now - 3 * HOUR }),
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-a' }));
+  assert.equal(result.success !== false, true, `reset-elapsed reading must fail open: ${JSON.stringify(result)}`);
   assert.equal(launchedType(launchCalls), 'kimi');
 });
 

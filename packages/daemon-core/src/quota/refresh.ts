@@ -301,6 +301,12 @@ export function carryForwardLastGoodWindows(
         ...fresh,
         session: prev!.session,
         weekly: prev!.weekly,
+        // The provider-specific axes ride along with the windows they belong
+        // to: monthly (cursor) and per-pool buckets (antigravity). Dropping
+        // them here blanked the per-pool chips on every transient failure —
+        // exactly the flicker this carry-forward exists to prevent.
+        ...(prev!.monthly !== undefined ? { monthly: prev!.monthly } : {}),
+        ...(prev!.buckets !== undefined ? { buckets: prev!.buckets } : {}),
         updatedAt: prev!.updatedAt,
         metadata: {
             ...fresh.metadata,

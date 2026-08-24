@@ -124,6 +124,11 @@ describe('fetchClaudeQuota', () => {
         // The last known values stay visible — they are better than nothing,
         // as long as they are not labelled current.
         expect(quota.session?.usedPercent).toBe(23.5);
+        // …and they carry retained-last-good provenance, so mesh routing keeps
+        // gating/bonusing on them until each window's own resetsAt (owner
+        // decision 2026-08-24). Without this mark the routing layer discarded
+        // the retained measurement wholesale.
+        expect(quota.metadata?.lastGoodWindows).toBe(true);
     });
 
     it('treats a reading just inside the stale threshold as current', async () => {

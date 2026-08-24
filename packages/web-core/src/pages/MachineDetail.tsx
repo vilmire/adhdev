@@ -198,11 +198,16 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         // user happened to visit Overview first.
         if (!machineId || !machineEntry || (activeTab !== 'overview' && activeTab !== 'providers')) return
         const info = machineEntry.machine
+        // Quota absence forces the load on BOTH tabs (owner catch 2026-08-24):
+        // the Overview/System tab renders PlanQuotaCard too, and a machine
+        // entry that already carried cpu/mem basics from the status payload
+        // skipped this load entirely — so the plan-quota card never appeared
+        // unless the user visited the Providers tab first.
         const needsRuntime = typeof info?.cpus !== 'number'
             || typeof info?.totalMem !== 'number'
             || typeof info?.arch !== 'string'
             || typeof info?.release !== 'string'
-            || (activeTab === 'providers' && !info?.quota)
+            || !info?.quota
         if (!needsRuntime) return
         void loadMachineRuntime(machineId, { minFreshMs: 30_000 }).catch(() => {})
     }, [activeTab, loadMachineRuntime, machineEntry, machineId])

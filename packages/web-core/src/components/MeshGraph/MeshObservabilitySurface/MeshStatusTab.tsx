@@ -12,7 +12,9 @@ import {
     SCHEDULING_STRATEGY_LABELS,
     collectMachineQuotaGroups,
     machineKeyForMeshNode,
+    collectQuotaBucketChips,
     describeQuotaFailure,
+    describeQuotaOkWithoutWindows,
     formatQuotaAccount,
     formatQuotaFreshness,
     formatQuotaWindow,
@@ -158,7 +160,16 @@ function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQ
                         const cue = quotaWindowCue(quota)
                         const session = formatQuotaWindow(quota.session, undefined, cue)
                         const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
-                        const hasWindows = !!(session || weekly)
+                        const monthly = formatQuotaWindow(quota.monthly, undefined, cue)
+                        // Multi-pool providers (antigravity): the per-pool buckets
+                        // REPLACE the collapsed worst-of-pools axes — showing both
+                        // would render the same numbers twice.
+                        const bucketChips = collectQuotaBucketChips(quota)
+                        const hasWindows = !!(session || weekly || monthly || bucketChips.length > 0)
+                        // 'ok' with no windows is a SUCCESSFUL reading whose
+                        // provider has no percentage axis to chart (cursor
+                        // included-usage accounts) — never a failure line.
+                        const okSummary = !hasWindows ? describeQuotaOkWithoutWindows(quota) : null
                         return (
                             <div key={provider} className="flex flex-wrap items-center gap-1.5">
                                 <span className={`text-2xs ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
@@ -170,21 +181,41 @@ function MeshMachineQuotaCard({ machine, providerVersions }: { machine: MachineQ
                                         {formatQuotaAccount(quota)}
                                     </span>
                                 )}
-                                {session && (
+                                {bucketChips.map(chip => (
+                                    <Badge
+                                        key={chip.label}
+                                        label={`${chip.label} ${formatQuotaWindow(chip.window, undefined, cue)}`}
+                                        tone={quotaUsageTone(chip.usedPercent)}
+                                        title="Per-pool quota bucket reported by this machine — pools on one plan reset independently"
+                                    />
+                                ))}
+                                {bucketChips.length === 0 && session && (
                                     <Badge
                                         label={`5h ${session}`}
                                         tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)}
                                         title="Rolling 5-hour plan window reported by this machine"
                                     />
                                 )}
-                                {weekly && (
+                                {bucketChips.length === 0 && weekly && (
                                     <Badge
                                         label={`7d ${weekly}`}
                                         tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)}
                                         title="Rolling 7-day plan window reported by this machine"
                                     />
                                 )}
-                                {!hasWindows && (
+                                {bucketChips.length === 0 && monthly && (
+                                    <Badge
+                                        label={`30d ${monthly}`}
+                                        tone={quotaUsageTone(quota.monthly?.usedPercent ?? NaN)}
+                                        title="Rolling 30-day billing window reported by this machine"
+                                    />
+                                )}
+                                {!hasWindows && quota.status === 'ok' && (
+                                    <span className={`text-2xs ${meshTheme.textSecondary}`} title="Read successfully — this provider reports no percentage window">
+                                        {okSummary ?? t('mesh.status.quotaOkNoWindows')}
+                                    </span>
+                                )}
+                                {!hasWindows && quota.status !== 'ok' && (
                                     <span className={`text-2xs ${meshTheme.textSecondary}`} title="This machine reported that it could not read this provider's quota">
                                         {describeQuotaFailure(quota)}
                                     </span>

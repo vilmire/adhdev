@@ -30,8 +30,12 @@ const CLAUDE_WRAP_NOT_REPLACE_LINE = 'Install wraps (not replaces) your statusli
  *    statusline aged out). Distinct from refreshing: nothing is retrying.
  */
 function windowCue(quota: ProviderQuota): 'refreshing' | 'stale' | undefined {
-    if (quota.metadata?.lastGoodWindows === true) return 'refreshing';
+    // Order matters: the Claude aged-out shape now ALSO marks lastGoodWindows
+    // (so mesh routing keeps trusting the retained windows until reset), but
+    // its cue must stay 'stale' — nothing is retrying, a session must run.
+    // 'no-data' is not a transient kind, so carry-forward can never wear it.
     if (quota.metadata?.failureKind === 'no-data' && (quota.session || quota.weekly)) return 'stale';
+    if (quota.metadata?.lastGoodWindows === true) return 'refreshing';
     return undefined;
 }
 

@@ -2,19 +2,20 @@
  * The OWNER-VISIBLE symptom of the 2026-08-15 defect, pinned at the routing
  * layer: `weeklyMinRemainingPercent: 80` was configured to steer work OFF
  * claude-cli (68% weekly left) and ONTO codex-cli (91% left), and it did
- * nothing — every task still went to claude-cli.
+ * nothing — every task still went to claude-cli, because every snapshot was
+ * older than staleAfterMs and a stale snapshot failed OPEN wholesale.
  *
- * This file demonstrates WHY, using the owner's real numbers. The gate itself
- * is correct; it was being fed snapshots older than staleAfterMs, and a stale
- * snapshot fails OPEN by design. With every candidate stale the threshold
- * applies to nobody, so selection silently falls back to slot order — which
- * lists claude-cli/opus before codex-cli for `difficult` tasks.
- *
- * The FIX is in quota/refresh.ts (the idle machine now re-fetches a snapshot
- * that has aged past the routing horizon, so the fresh branch below is the one
- * that occurs in practice). These cases guard the routing half of the contract:
- * fresh readings must gate, and the stale fail-open must stay fail-open — it is
- * a deliberate safety property, NOT the thing to "fix" by gating on old data.
+ * 2026-08-24 owner decision — window-boundary validity: a measured window now
+ * keeps gating until ITS OWN resetsAt passes, regardless of wall-clock age.
+ * Usage within a window is monotonic, so an old low-headroom reading is a
+ * LOWER bound on usage now — exactly the safe direction for a gate. That
+ * makes the owner's original expectation hold even on old readings: the
+ * STALE-BUT-WITHIN-WINDOW block below shows the 80% floor working where it
+ * used to be silently inert. The safety property the old fail-open protected
+ * (never exclude a node on data that no longer describes it) survives as the
+ * RESET-ELAPSED branch: once a window's reset passes, the reading describes a
+ * previous window and drops out — self-healing, no permanent exclusion. A
+ * window with no reset stamp keeps the wall-clock staleAfterMs fallback.
  */
 import { describe, expect, it } from 'vitest'
 import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '../../src/mesh/mesh-quota-routing.js'
@@ -26,11 +27,12 @@ const NOW = 1_800_000_000_000
 const POLICY = { weeklyMinRemainingPercent: 80 }
 
 /**
- * A node carrying the owner's observed readings. `ageMinutes` sets how old each
- * snapshot is at report time — the single variable that decides whether the
- * gate acts or fails open.
+ * A node carrying the owner's observed readings. `ageMinutes` sets how old
+ * each snapshot is at report time; `resetsInMinutes` places the weekly reset
+ * relative to NOW (negative = already reset) — under window-boundary validity
+ * the reset boundary, not the age, decides whether the gate acts.
  */
-function nodeWithQuota(ageMinutes: number) {
+function nodeWithQuota(ageMinutes: number, resetsInMinutes = 4000) {
     const updatedAt = NOW - ageMinutes * MINUTE
     return {
         id: 'node_owner',
@@ -42,7 +44,7 @@ function nodeWithQuota(ageMinutes: number) {
                     provider: 'claude-cli',
                     status: 'ok',
                     session: { usedPercent: 5, windowMinutes: 300, resetsAt: NOW + 60 * MINUTE },
-                    weekly: { usedPercent: 32, windowMinutes: 10080, resetsAt: NOW + 4000 * MINUTE },
+                    weekly: { usedPercent: 32, windowMinutes: 10080, resetsAt: NOW + resetsInMinutes * MINUTE },
                     updatedAt,
                     error: null,
                     metadata: {},
@@ -52,7 +54,7 @@ function nodeWithQuota(ageMinutes: number) {
                     provider: 'codex-cli',
                     status: 'ok',
                     session: null,
-                    weekly: { usedPercent: 9, windowMinutes: 10080, resetsAt: NOW + 4000 * MINUTE },
+                    weekly: { usedPercent: 9, windowMinutes: 10080, resetsAt: NOW + resetsInMinutes * MINUTE },
                     updatedAt,
                     error: null,
                     metadata: {},
@@ -63,7 +65,7 @@ function nodeWithQuota(ageMinutes: number) {
 }
 
 describe('quota gate with FRESH snapshots — the configured threshold is honoured', () => {
-    const node = nodeWithQuota(5) // well inside staleAfterMs (30 min)
+    const node = nodeWithQuota(5) // well inside staleAfterMs
 
     it('gates claude-cli at 68% weekly against an 80% floor', () => {
         const block = evaluateProviderQuotaGate(node, 'claude-cli', POLICY, NOW)
@@ -86,20 +88,63 @@ describe('quota gate with FRESH snapshots — the configured threshold is honour
     })
 })
 
-describe('quota gate with STALE snapshots — the defect, and why it was invisible', () => {
-    // The owner's live readings were ~160 and ~187 minutes old.
+describe('quota gate with STALE-BUT-WITHIN-WINDOW snapshots — measured values keep governing', () => {
+    // The owner's live readings were ~160 and ~187 minutes old — far past
+    // staleAfterMs, but the weekly window they measured had NOT reset yet.
     const node = nodeWithQuota(180)
 
-    it('fails OPEN on claude-cli despite it being under the floor', () => {
+    it('still gates claude-cli under the floor — the old reading is a lower bound on usage', () => {
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', POLICY, NOW)).toMatchObject({
+            reason: 'provider_quota_weekly_low',
+            window: 'weekly',
+            remainingPercent: 68,
+            thresholdPercent: 80,
+        })
+    })
+
+    it('so the 80% setting steers work onto codex-cli exactly as configured', () => {
+        const ranked = rankProvidersByQuotaGate(node, ['claude-cli', 'codex-cli'], POLICY, NOW)
+        expect(ranked.clear).toEqual(['codex-cli'])
+        expect(ranked.gated.map(g => g.providerType)).toEqual(['claude-cli'])
+    })
+})
+
+describe('quota gate after the window RESET — the reading no longer describes anything', () => {
+    // Same stale readings, but the weekly reset has PASSED: the measured
+    // window is a previous one. Gating on it would be the misexclusion trap
+    // the fail-open contract exists to prevent — and it self-heals here.
+    const node = nodeWithQuota(180, -10)
+
+    it('fails OPEN on claude-cli — no permanent exclusion from a dead window', () => {
+        // (The 5%-used session window is still within ITS boundary and above
+        // any session floor, so only the weekly axis is in play.)
         expect(evaluateProviderQuotaGate(node, 'claude-cli', POLICY, NOW)).toBeNull()
     })
 
-    it('gates NOBODY, so the 80% setting has no effect at all', () => {
+    it('gates nobody, restoring the pre-quota slot-order fallback', () => {
         const ranked = rankProvidersByQuotaGate(node, ['claude-cli', 'codex-cli'], POLICY, NOW)
         expect(ranked.gated).toEqual([])
-        // Both survive, and with no quota signal to reorder them the caller's
-        // order (slot order — claude-cli first) decides. That is how every task
-        // kept landing on claude-cli while the owner's threshold said otherwise.
         expect(ranked.clear).toEqual(['claude-cli', 'codex-cli'])
+    })
+})
+
+describe('quota gate with NO reset stamp — the wall-clock fallback remains', () => {
+    function nodeWithoutResetStamp(ageMinutes: number) {
+        const node = nodeWithQuota(ageMinutes)
+        for (const entry of Object.values(node.nodeFacts.quota)) {
+            if (entry.weekly) (entry.weekly as { resetsAt?: number | null }).resetsAt = null
+            if (entry.session) (entry.session as { resetsAt?: number | null }).resetsAt = null
+        }
+        return node
+    }
+
+    it('a fresh unstamped reading still gates', () => {
+        expect(evaluateProviderQuotaGate(nodeWithoutResetStamp(5), 'claude-cli', POLICY, NOW)).toMatchObject({
+            reason: 'provider_quota_weekly_low',
+        })
+    })
+
+    it('a stale unstamped reading fails open — nothing bounds its validity', () => {
+        expect(evaluateProviderQuotaGate(nodeWithoutResetStamp(180), 'claude-cli', POLICY, NOW)).toBeNull()
     })
 })

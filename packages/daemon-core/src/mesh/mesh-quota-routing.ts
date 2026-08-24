@@ -29,14 +29,20 @@
  *      (+100), so quota expresses a PREFERENCE among equally-fit slots and can
  *      never overturn a difficulty match.
  *
- * FAIL-OPEN contract: a missing entry, an unmeasurable non-'ok' status, or a
- * STALE snapshot yields "no gate, no bonus" — routing on an old reading would
- * exclude nodes on data that no longer describes them (the stale-quota
- * misexclusion failure mode). A non-'ok' entry may gate from retained windows
- * only when metadata.lastGoodWindows proves their provenance and each low
- * window has not reset yet. A missing/unparseable reset stamp falls back to
- * the ORIGINAL updatedAt freshness check. Observation without confidence is
- * inert.
+ * FAIL-OPEN contract (owner decision 2026-08-24 — window-boundary validity):
+ * a measured window keeps gating and bonusing until ITS OWN resetsAt passes,
+ * regardless of wall-clock age. Usage within a window is monotonic, so a
+ * reading taken earlier in the same window is a LOWER bound on usage now — a
+ * low-headroom reading can only be lower, which is exactly the safe direction
+ * for a gate, and discarding it on wall-clock staleness threw away a valid
+ * measurement (the all-zero "Quota +0" screen this decision reversed). What
+ * still fails open: a missing entry, an unmeasurable non-'ok' status without
+ * retained windows, a window whose reset has PASSED (the reading describes a
+ * previous window — this is the self-healing edge that prevents a
+ * permanently-stale machine from being permanently excluded), and a window
+ * with no reset stamp once it ages beyond staleAfterMs (the wall-clock check
+ * is the FALLBACK, not the primary rule). A non-'ok' entry participates only
+ * when metadata.lastGoodWindows proves the retained windows' provenance.
  *
  * ★"Inert" is about GATING and BONUSING, not about ORDERING. An old reading
  * still may not exclude anyone and still contributes no fitness bonus — that
@@ -531,17 +537,20 @@ function isSessionResetImminent(
 }
 
 /**
- * A retained last-good window remains authoritative until that SAME window
- * resets. This is deliberately per-window: session and weekly reset on
- * different schedules. A valid reset stamp supersedes snapshot age in both
- * directions — future means the observed low-water mark still applies, past
- * means the old window is gone. If the reset stamp cannot be read, preserve
- * the existing staleAfterMs fail-open fallback.
+ * A measured window remains authoritative until that SAME window resets —
+ * for 'ok' snapshots and retained last-good windows alike (owner decision
+ * 2026-08-24; previously only the retained path used this rule and 'ok'
+ * snapshots were discarded wholesale at staleAfterMs). This is deliberately
+ * per-window: session and weekly reset on different schedules. A valid reset
+ * stamp supersedes snapshot age in both directions — future means the
+ * observed low-water mark still applies, past means the old window is gone.
+ * If the reset stamp cannot be read, preserve the existing staleAfterMs
+ * fail-open fallback.
  *
  * resetsAt and updatedAt are reporter-clock stamps, so compare resetsAt with
  * the same skew-safe reporter-now estimate used by the reset-imminent logic.
  */
-function isRetainedWindowTrustworthy(
+function isWindowTrustworthy(
     window: { resetsAt?: number | null } | null | undefined,
     facts: { reportedAt: number },
     quota: { updatedAt: number },
@@ -562,18 +571,20 @@ function isRetainedWindowTrustworthy(
 /**
  * The launch GATE: should this (node, provider) pair be skipped because the
  * provider's reported quota is nearly exhausted? Returns null (launch may
- * proceed) when the quota is unknown, unmeasurable, stale, or above every
- * threshold. The gate blocks in exactly three situations, all on FRESH
- * snapshots only:
- *   1. an 'ok' snapshot with a window below its threshold, and
- *   2. an 'error' snapshot with failureKind 'quota-exhausted' — the provider's
- *      own exhaustion verdict (no window breakdown, so window is 'unknown'),
+ * proceed) when the quota is unknown, unmeasurable, past every window's reset
+ * boundary, or above every threshold. The gate blocks in exactly three
+ * situations:
+ *   1. an 'ok' snapshot with a trustworthy window below its threshold, and
+ *   2. a FRESH 'error' snapshot with failureKind 'quota-exhausted' — the
+ *      provider's own exhaustion verdict (no window breakdown, so window is
+ *      'unknown'; the one remaining wall-clock-fresh-only block),
  *   3. a non-'ok' snapshot marked lastGoodWindows whose retained window is
  *      below its threshold.
- * Every other non-'ok' reading fails open. Each retained window remains
- * trustworthy until its own resetsAt; a missing/unparseable resetsAt uses the
- * existing staleAfterMs fallback because carry-forward preserves the ORIGINAL
- * updatedAt.
+ * Every other non-'ok' reading fails open. Trust is per window
+ * (isWindowTrustworthy): a measured window governs until its own resetsAt —
+ * wall-clock staleness alone no longer discards it (owner decision
+ * 2026-08-24) — and a missing/unparseable resetsAt uses the staleAfterMs
+ * fallback because carry-forward preserves the ORIGINAL updatedAt.
  *
  * Thresholds are judged per window against the node's session/weekly axes —
  * the provider-agnostic vocabulary every fetcher normalizes into, so no
@@ -623,11 +634,24 @@ export function evaluateProviderQuotaGate(
         // by that window's own reset boundary. Missing reset stamps retain the
         // prior updatedAt freshness fallback.
         if ((quota as any).metadata?.lastGoodWindows !== true) return null;
-        sessionTrustworthy = isRetainedWindowTrustworthy(quota.session, facts, quota, policy, now);
-        weeklyTrustworthy = isRetainedWindowTrustworthy(quota.weekly, facts, quota, policy, now);
-    } else if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
-        logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);
-        return null; // fail-open on stale
+        sessionTrustworthy = isWindowTrustworthy(quota.session, facts, quota, policy, now);
+        weeklyTrustworthy = isWindowTrustworthy(quota.weekly, facts, quota, policy, now);
+    } else {
+        // 'ok' snapshots: each window keeps gating until its own resetsAt
+        // (owner decision 2026-08-24) — a wall-clock-stale reading still
+        // describes the CURRENT window while its reset lies ahead, and usage
+        // is monotonic within a window, so a low reading can only be lower
+        // now. A window whose reset has passed, or that carries no reset
+        // stamp once the snapshot ages beyond staleAfterMs, drops out; when
+        // BOTH drop out the snapshot fails open exactly as before.
+        sessionTrustworthy = isWindowTrustworthy(quota.session, facts, quota, policy, now);
+        weeklyTrustworthy = isWindowTrustworthy(quota.weekly, facts, quota, policy, now);
+        if (!sessionTrustworthy && !weeklyTrustworthy) {
+            if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
+                logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);
+            }
+            return null; // no window survives its own boundary → fail open
+        }
     }
     const resolved = resolveQuotaRoutingPolicy(policy);
     const session = remainingPercent(quota.session);
@@ -1334,9 +1358,22 @@ export function quotaSpreadBonusByProvider(
         if (!entry) continue;
         const { facts, quota: snapshot } = entry;
         let bonus = 0;
-        if (snapshot && typeof snapshot === 'object' && snapshot.status === 'ok'
-            && isQuotaSnapshotFresh(facts, snapshot, policy, now)) {
-            const ratios = [remainingPercent(snapshot.session), remainingPercent(snapshot.weekly)]
+        // Same window-boundary validity as the gate (owner decision
+        // 2026-08-24): a measured window expresses the spread preference
+        // until its own resetsAt, wall-clock age notwithstanding. The stale
+        // reading's headroom is an UPPER bound (usage only grew since), so
+        // it can overstate a preference but never manufacture one — an
+        // acceptable trade for a bounded tie-breaker axis, versus the
+        // previous behaviour where intermittent refresh zeroed the whole
+        // axis. Windows still need provenance: an 'ok' reading or retained
+        // lastGoodWindows; other failures carry no usable windows.
+        const windowsEligible = snapshot && typeof snapshot === 'object'
+            && (snapshot.status === 'ok' || (snapshot as any).metadata?.lastGoodWindows === true);
+        if (windowsEligible) {
+            const ratios = [
+                isWindowTrustworthy(snapshot.session, facts, snapshot, policy, now) ? remainingPercent(snapshot.session) : undefined,
+                isWindowTrustworthy(snapshot.weekly, facts, snapshot, policy, now) ? remainingPercent(snapshot.weekly) : undefined,
+            ]
                 .filter((r): r is number => r !== undefined)
                 .map(r => r / 100);
             if (ratios.length) {
@@ -1399,11 +1436,22 @@ export function quotaSpreadBonusDiagnosticsByProvider(
             : undefined;
         let zeroReason: QuotaSpreadBonusZeroReason | undefined;
         if (value === 0) {
-            if (!isQuotaSnapshotFresh(facts, quota, policy, now)) zeroReason = 'stale';
-            else if (failureKind === 'no-data') zeroReason = 'no-data';
-            else if (quota.status !== 'ok') zeroReason = 'snapshot-error';
-            else if (!quota.session && !quota.weekly) zeroReason = 'no-data';
-            else zeroReason = 'zero-headroom';
+            // Mirrors the calculator's eligibility order: provenance first
+            // (windows only count from 'ok' or retained-last-good snapshots),
+            // then per-window reset-boundary trust — 'stale' now means "every
+            // measured window is past its own reset (or unverifiable)", not
+            // mere wall-clock age.
+            const windowsEligible = quota.status === 'ok' || (quota as any).metadata?.lastGoodWindows === true;
+            if (!windowsEligible) {
+                zeroReason = failureKind === 'no-data' ? 'no-data' : 'snapshot-error';
+            } else if (!quota.session && !quota.weekly) {
+                zeroReason = 'no-data';
+            } else if (!isWindowTrustworthy(quota.session, facts, quota, policy, now)
+                && !isWindowTrustworthy(quota.weekly, facts, quota, policy, now)) {
+                zeroReason = 'stale';
+            } else {
+                zeroReason = 'zero-headroom';
+            }
         }
         return {
             providerType,

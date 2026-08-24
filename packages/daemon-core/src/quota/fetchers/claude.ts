@@ -124,7 +124,13 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
             // 'no-data' (not 'unsupported'): the channel works, the reading
             // just aged out — same ordinary wait-for-a-session state as the
             // never-captured case above.
-            metadata: { source: SOURCE, failureKind: 'no-data' },
+            // lastGoodWindows: these ARE genuinely measured windows with their
+            // original capture time — the same trust class as refresh.ts's
+            // carry-forward — so mesh quota routing may keep gating/bonusing
+            // on them until each window's own resetsAt (owner decision
+            // 2026-08-24). Without the mark, routing discarded the retained
+            // measurement wholesale.
+            metadata: { source: SOURCE, failureKind: 'no-data', lastGoodWindows: true },
         };
     }
 

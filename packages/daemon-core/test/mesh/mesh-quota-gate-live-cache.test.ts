@@ -230,13 +230,24 @@ describe('remote preservation — remote nodes keep reading nodeFacts', () => {
 })
 
 describe('fail-open preservation — the fix changes the SOURCE, never the contract', () => {
-    it('a live cache entry that is itself STALE still fails open', () => {
+    it('a wall-clock-stale live entry whose window has NOT reset now gates (2026-08-24 window-boundary validity)', () => {
         const node: any = { id: 'node_local' }
         const context = liveContext(
             { 'claude-cli': okEntry('claude-cli', 91, NOW - 120 * MINUTE) },
             () => true,
             [node],
         )
+        // okEntry's weekly reset lies ahead, so the measured 9% headroom is
+        // still a valid (upper) bound — the gate acts on it despite the age.
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', POLICY, NOW, context))
+            .toMatchObject({ reason: 'provider_quota_weekly_low', window: 'weekly' })
+    })
+
+    it('a stale live entry whose window has RESET fails open — self-healing boundary', () => {
+        const node: any = { id: 'node_local' }
+        const elapsed = okEntry('claude-cli', 91, NOW - 120 * MINUTE)
+        elapsed.weekly = { ...elapsed.weekly, resetsAt: NOW - 10 * MINUTE }
+        const context = liveContext({ 'claude-cli': elapsed }, () => true, [node])
         expect(evaluateProviderQuotaGate(node, 'claude-cli', POLICY, NOW, context)).toBeNull()
     })
 

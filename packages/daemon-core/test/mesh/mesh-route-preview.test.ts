@@ -169,7 +169,15 @@ describe('mesh route preview', () => {
             { provider: 'no-data', difficulty: ['difficult'] },
             { provider: 'opted-out', difficulty: ['difficult'] },
         ], {
-            stale: quota('stale', { updatedAt: NOW - 2 * 60 * MIN }),
+            // 'stale' now means "every measured window is past its OWN reset"
+            // (2026-08-24 window-boundary validity) — a merely wall-clock-old
+            // reading whose windows are still running keeps its bonus, so the
+            // stale fixture must place the reset boundaries in the past.
+            stale: {
+                ...quota('stale', { updatedAt: NOW - 2 * 60 * MIN }),
+                session: { usedPercent: 50, windowMinutes: 300, resetsAt: NOW - 30 * MIN },
+                weekly: { usedPercent: 50, windowMinutes: 10080, resetsAt: NOW - 10 * MIN },
+            },
             'no-data': quota('no-data', { status: 'unavailable', failureKind: 'no-data' }),
         }, {
             stale: { enabled: true, quotaEnabled: true },

@@ -1239,11 +1239,19 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
         expect(ranked.gated).toEqual([]);
     });
 
-    it('the spread bonus is UNCHANGED — a retained reading still scores 0', () => {
-        // Stage 1's fail-open contract is deliberately untouched: only the
-        // stage-2 ORDERING learned to use retained readings.
-        const node = nodeWithQuota({ 'claude-cli': claudeStructural(15, NOW + DAY) });
-        expect(quotaSpreadBonusByProvider(node, null, NOW)['claude-cli']).toBe(0);
+    it('the spread bonus follows window provenance — unmarked retained shapes score 0, marked ones score by headroom', () => {
+        // claudeStructural models the PRE-2026-08-24 claude fetcher shape:
+        // retained windows WITHOUT the lastGoodWindows provenance mark. That
+        // shape keeps scoring 0 (windows of unproven provenance stay inert)…
+        const unmarked = nodeWithQuota({ 'claude-cli': claudeStructural(15, NOW + DAY) });
+        expect(quotaSpreadBonusByProvider(unmarked, null, NOW)['claude-cli']).toBe(0);
+        // …while the CURRENT fetcher shape (same reading, lastGoodWindows
+        // marked) expresses the preference until the window resets — the
+        // owner's 2026-08-24 window-boundary-validity decision.
+        const markedEntry = claudeStructural(15, NOW + DAY);
+        markedEntry.metadata = { ...markedEntry.metadata, lastGoodWindows: true };
+        const marked = nodeWithQuota({ 'claude-cli': markedEntry });
+        expect(quotaSpreadBonusByProvider(marked, null, NOW)['claude-cli']).toBe(26); // 30 * 0.85
     });
 
     describe('quotaRiskSnapshotForCandidates — the reading is self-describing', () => {
@@ -1361,13 +1369,41 @@ describe('quotaSpreadBonusByProvider — bounded headroom preference', () => {
         expect(quotaSpreadBonusByProvider(full, { spreadBonusMax: 10 }, NOW)['claude-cli']).toBe(10);
     });
 
-    it('yields 0 for stale, failed, or absent readings — identical to pre-feature scoring', () => {
-        const stale = nodeWithQuota({ 'claude-cli': okQuota({ updatedAt: NOW - STALE_AGE }) }, NOW);
-        expect(quotaSpreadBonusByProvider(stale, null, NOW)['claude-cli']).toBe(0);
+    it('yields 0 for boundary-expired, failed, or absent readings — identical to pre-feature scoring', () => {
+        // okQuota's default windows carry NO resetsAt, so an aged reading has
+        // nothing bounding its validity and falls back to the wall-clock
+        // staleAfterMs check (2026-08-24: the fallback, no longer the rule).
+        const unstampedStale = nodeWithQuota({ 'claude-cli': okQuota({ updatedAt: NOW - STALE_AGE }) }, NOW);
+        expect(quotaSpreadBonusByProvider(unstampedStale, null, NOW)['claude-cli']).toBe(0);
         const errored = nodeWithQuota({ 'claude-cli': okQuota({ status: 'unavailable', session: null, weekly: null }) });
         expect(quotaSpreadBonusByProvider(errored, null, NOW)['claude-cli']).toBe(0);
         expect(quotaSpreadBonusByProvider(nodeWithQuota(undefined), null, NOW)).toEqual({});
         expect(quotaSpreadBonusByProvider({ id: 'bare' }, null, NOW)).toEqual({});
+    });
+
+    it('a wall-clock-stale reading whose windows have NOT reset keeps its bonus (2026-08-24 window-boundary validity)', () => {
+        const node = nodeWithQuota({
+            'claude-cli': okQuota({
+                session: { usedPercent: 50, windowMinutes: 300, resetsAt: NOW + 60 * MIN },
+                weekly: { usedPercent: 50, windowMinutes: 10080, resetsAt: NOW + 24 * 60 * MIN },
+                updatedAt: NOW - STALE_AGE,
+            }),
+        }, NOW);
+        expect(quotaSpreadBonusByProvider(node, null, NOW)['claude-cli']).toBe(15);
+    });
+
+    it('only the window past its OWN reset drops out — the surviving window still expresses the preference', () => {
+        const node = nodeWithQuota({
+            'claude-cli': okQuota({
+                // Session reset already passed → its 90%-used reading is a dead
+                // window's and must not drag the bonus down…
+                session: { usedPercent: 90, windowMinutes: 300, resetsAt: NOW - 10 * MIN },
+                // …while the weekly window is still running and governs alone.
+                weekly: { usedPercent: 50, windowMinutes: 10080, resetsAt: NOW + 24 * 60 * MIN },
+                updatedAt: NOW - STALE_AGE,
+            }),
+        }, NOW);
+        expect(quotaSpreadBonusByProvider(node, null, NOW)['claude-cli']).toBe(15);
     });
 });
 

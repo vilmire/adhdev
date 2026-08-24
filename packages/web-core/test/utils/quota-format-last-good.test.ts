@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { formatQuotaWindow, quotaWindowCue } from '../../src/utils/quota-format'
+import { collectQuotaBucketChips, formatQuotaWindow, quotaWindowCue } from '../../src/utils/quota-format'
 
 // Companion to daemon-core's carryForwardLastGoodWindows (oss/packages/daemon-core/src/quota/refresh.ts):
 // once a snapshot carries metadata.lastGoodWindows, the reader must be able to
@@ -58,12 +58,18 @@ describe('formatQuotaWindow — no-data stale marker', () => {
     expect(formatQuotaWindow(win(11), undefined, true)).toBe('11.0% used · refreshing')
   })
 
-  it('lastGoodWindows wins over no-data when both are present', () => {
+  it('no-data wins over lastGoodWindows when both are present — the Claude aged-out shape', () => {
+    // Since 2026-08-24 the Claude statusline aged-out snapshot marks
+    // lastGoodWindows too (so mesh routing keeps trusting the retained
+    // windows until their reset), but its cue must stay 'stale': nothing is
+    // retrying — a Claude session has to run. 'no-data' is not a transient
+    // kind, so a genuine carry-forward can never wear it and the no-data
+    // check can safely take priority.
     const both = {
       ...claudeStale,
       metadata: { source: 'statusline', failureKind: 'no-data', lastGoodWindows: true },
     }
-    expect(quotaWindowCue(both as never)).toBe('refreshing')
+    expect(quotaWindowCue(both as never)).toBe('stale')
   })
 
   it('no-data without windows has no cue', () => {
@@ -90,5 +96,35 @@ describe('formatQuotaWindow — no-data stale marker', () => {
       expect(source, rel).toContain('quotaWindowCue(quota)')
       expect(source, rel).not.toContain('lastGoodWindows === true')
     }
+  })
+})
+
+describe('collectQuotaBucketChips — antigravity per-pool buckets', () => {
+  const antigravity = {
+    provider: 'antigravity-cli',
+    status: 'ok',
+    session: { usedPercent: 44.5, windowMinutes: 300, resetsAt: null },
+    weekly: { usedPercent: 9, windowMinutes: 10080, resetsAt: null },
+    buckets: [
+      { name: 'Gemini Models · 5h Limit Remaining', usedPercent: 44.5, windowMinutes: 300, resetsAt: null },
+      { name: 'Gemini Models · Weekly Limit Remaining', usedPercent: 9, windowMinutes: 10080, resetsAt: null },
+      { name: 'Claude/GPT Bundled Models · 5h Limit Remaining', usedPercent: 12, windowMinutes: 300, resetsAt: null },
+      { name: 'Claude/GPT Bundled Models · Weekly Limit Remaining', usedPercent: 3, windowMinutes: 10080, resetsAt: null },
+    ],
+    updatedAt: 1,
+    error: null,
+  }
+
+  it('yields one chip per pool×window with the pool label trimmed', () => {
+    const chips = collectQuotaBucketChips(antigravity as never)
+    expect(chips.map(c => c.label).sort()).toEqual(['Claude/GPT 5h', 'Claude/GPT 7d', 'Gemini 5h', 'Gemini 7d'])
+    const gemini7d = chips.find(c => c.label === 'Gemini 7d')
+    expect(gemini7d?.usedPercent).toBe(9)
+    expect(gemini7d?.window.windowMinutes).toBe(10080)
+  })
+
+  it('returns [] for single-bucket or bucket-less providers — the axes already say it', () => {
+    expect(collectQuotaBucketChips({ ...antigravity, buckets: antigravity.buckets.slice(0, 1) } as never)).toEqual([])
+    expect(collectQuotaBucketChips({ ...antigravity, buckets: undefined } as never)).toEqual([])
   })
 })

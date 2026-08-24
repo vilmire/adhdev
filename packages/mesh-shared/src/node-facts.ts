@@ -54,6 +54,25 @@ export interface MeshNodeFactsProviderQuota {
     status: string
     session: MeshNodeFactsQuotaWindow | null
     weekly: MeshNodeFactsQuotaWindow | null
+    /** 30-day billing-style window, only for providers that report one
+     *  (cursor-cli). Promoted from the index signature 2026-08-24 so readers
+     *  can render it typed — an 'ok' cursor snapshot often carries ONLY this
+     *  axis, and a reader that looks at session/weekly alone misreads a
+     *  healthy reading as a failure. */
+    monthly?: MeshNodeFactsQuotaWindow | null
+    /** Per-pool quota buckets, only for providers whose plan has more than one
+     *  pool (antigravity-cli: Gemini vs Claude/GPT groups, each with a 5h and
+     *  a weekly bucket). `session`/`weekly` above collapse these to the WORST
+     *  bucket per window (the routing-safe headline); the buckets carry the
+     *  per-pool detail a reader should surface. Promoted from the index
+     *  signature 2026-08-24, same reasoning as `monthly`. */
+    buckets?: Array<{
+        name?: string
+        usedPercent?: number
+        windowMinutes?: number
+        resetsAt?: number | null
+        [extra: string]: unknown
+    }> | null
     /** Unix ms of the snapshot itself — older than the bundle's reportedAt. */
     updatedAt: number
     error: string | null

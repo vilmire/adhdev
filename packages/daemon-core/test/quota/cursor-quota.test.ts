@@ -85,6 +85,31 @@ function keychainMissingSpawn(): QuotaSpawn {
     };
 }
 
+/** Keychain stub answering `security find-generic-password -s <service> -w`
+ *  from the given service→token map, recording each probed service name.
+ *  Data fires before exit, mirroring the real child-process ordering. */
+function keychainSpawnFor(services: Record<string, string>, seen: string[]): QuotaSpawn {
+    return (_cmd, args) => {
+        const service = String(args[2])
+        seen.push(service)
+        const token = services[service]
+        const child: QuotaChildProcess = {
+            stdin: { write: () => {}, end: () => {} },
+            stdout: {
+                on: (event, listener) => {
+                    if (event === 'data' && token) queueMicrotask(() => listener(Buffer.from(`${token}\n`)))
+                },
+            },
+            stderr: { on: () => {} },
+            on: (event, listener) => {
+                if (event === 'exit') queueMicrotask(() => queueMicrotask(() => listener(token ? 0 : 44)))
+            },
+            kill: () => {},
+        }
+        return child
+    }
+}
+
 function fixedUsage() {
     return {
         billing_cycle_start: String(Date.UTC(2026, 7, 1)),
@@ -182,7 +207,11 @@ describe('fetchCursorQuota', () => {
             const quota = await fetchCursorQuota(deps(config, stub.fetch));
 
             expect(quota.status).toBe('ok');
-            expect(quota.monthly).toBeNull();
+            // Since 2026-08-24 the monthly window falls back to the INCLUDED
+            // plan axis (plan_usage.total_spend/limit = 1200/2000) when the
+            // on-demand kind provides no window — an unlimited/disabled
+            // on-demand budget does not erase the included-plan usage.
+            expect(quota.monthly?.usedPercent).toBeCloseTo(60);
             expect(quota.metadata?.cursorUsage?.kind).toBe(expected);
         }
     });
@@ -230,6 +259,69 @@ describe('fetchCursorQuota', () => {
         expect(quota.status).toBe('ok');
         expect(stub.calls[0]?.init?.headers).toMatchObject({ authorization: 'Bearer windows-token' });
     });
+
+    it('charts the INCLUDED-plan axis when on-demand spend is disabled (live shape 2026-08-24)', async () => {
+        // A real signed-in account: spendLimitUsage carries only limitType
+        // 'user' (no individual limit) and GetHardLimit says
+        // noUsageBasedAllowed — the ON-DEMAND axis is genuinely disabled. But
+        // planUsage still reports the included-plan spend, which is what
+        // "You've used N% of your included usage" describes. Dropping it
+        // rendered an active account as having no usage at all.
+        const config = makeConfig({ accessToken: 'cursor-access-token' })
+        const stub = stubFetch([
+            jsonResponse({
+                billingCycleStart: String(Date.UTC(2026, 7, 1)),
+                billingCycleEnd: String(RESET_AT),
+                planUsage: { totalSpend: 7, includedSpend: 7, remaining: 1993, limit: 2000, totalPercentUsed: 0.02 },
+                spendLimitUsage: { limitType: 'user' },
+                enabled: true,
+                displayMessage: "You've used 0% of your included usage",
+            }),
+            jsonResponse({ noUsageBasedAllowed: true }),
+        ])
+
+        const quota = await fetchCursorQuota(deps(config, stub.fetch))
+
+        expect(quota.status).toBe('ok')
+        expect(quota.monthly?.usedPercent).toBeCloseTo(0.35) // 7 / 2000
+        expect(quota.monthly?.windowMinutes).toBe(MONTHLY_WINDOW_MINUTES)
+        expect(quota.monthly?.resetsAt).toBe(RESET_AT)
+        expect(quota.metadata?.cursorUsage).toMatchObject({ kind: 'disabled', displayMessage: "You've used 0% of your included usage" })
+    })
+
+    it('probes keychain service names newest-first and stops at the first hit', async () => {
+        // 2026-08 cursor-agent builds store the token under
+        // 'cursor-access-token' (found by live keychain metadata inspection
+        // on a signed-in machine the single-name lookup reported as
+        // signed-out, 2026-08-24).
+        const home = makeConfig(null)
+        const seen: string[] = []
+        const stub = stubFetch([jsonResponse(fixedUsage())])
+
+        const quota = await fetchCursorQuota(deps(home, stub.fetch, {
+            ADHDEV_CURSOR_PLATFORM: 'darwin',
+            HOME: home,
+        }, keychainSpawnFor({ 'cursor-access-token': 'kc-token' }, seen)))
+
+        expect(quota.status).toBe('ok')
+        expect(seen).toEqual(['cursor-access-token'])
+        expect(stub.calls[0]?.init?.headers).toMatchObject({ authorization: 'Bearer kc-token' })
+    })
+
+    it('falls back to the legacy "cursor" keychain service name', async () => {
+        const home = makeConfig(null)
+        const seen: string[] = []
+        const stub = stubFetch([jsonResponse(fixedUsage())])
+
+        const quota = await fetchCursorQuota(deps(home, stub.fetch, {
+            ADHDEV_CURSOR_PLATFORM: 'darwin',
+            HOME: home,
+        }, keychainSpawnFor({ cursor: 'legacy-token' }, seen)))
+
+        expect(quota.status).toBe('ok')
+        expect(seen).toEqual(['cursor-access-token', 'cursor'])
+        expect(stub.calls[0]?.init?.headers).toMatchObject({ authorization: 'Bearer legacy-token' })
+    })
 
     it('treats an absent or locked macOS keychain item as missing-credentials', async () => {
         const home = makeConfig(null);

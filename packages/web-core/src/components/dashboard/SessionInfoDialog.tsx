@@ -25,7 +25,9 @@ import {
 import Dialog from '../ui/Dialog'
 import {
     collectQuotaEntries,
+    collectQuotaBucketChips,
     describeQuotaFailure,
+    describeQuotaOkWithoutWindows,
     formatQuotaAccount,
     formatQuotaUsage,
     formatQuotaWindow,
@@ -240,21 +242,37 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                 const cue = quotaWindowCue(quota)
                                 const session = formatQuotaWindow(quota.session, undefined, cue)
                                 const weekly = formatQuotaWindow(quota.weekly, undefined, cue)
+                                const monthly = formatQuotaWindow(quota.monthly, undefined, cue)
+                                // Multi-pool providers (antigravity): per-pool buckets
+                                // replace the collapsed worst-of-pools axes.
+                                const bucketChips = collectQuotaBucketChips(quota)
                                 // Usage-shaped provider (opencode): absolute
                                 // tokens/cost, no percent windows to chip.
                                 const usage = formatQuotaUsage(quota)
+                                // 'ok' with no windows = successful reading with no
+                                // percentage axis (cursor included-usage) — show the
+                                // provider's own message, never the failure line.
+                                const okSummary = !session && !weekly && !monthly && bucketChips.length === 0 && !usage
+                                    ? (describeQuotaOkWithoutWindows(quota) ?? (quota.status === 'ok' ? t('sessionInfo.quotaOkNoWindows') : null))
+                                    : null
                                 return (
                                     <Row
                                         key={provider}
                                         k={[quotaProviderLabel(provider), formatQuotaAccount(quota)].filter(Boolean).join(' · ')}
                                         v={
-                                            session || weekly ? (
+                                            session || weekly || monthly || bucketChips.length > 0 ? (
                                                 <span className="inline-flex flex-wrap items-center gap-1.5">
-                                                    {session && <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} />}
-                                                    {weekly && <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} />}
+                                                    {bucketChips.map(chip => (
+                                                        <QuotaChip key={chip.label} label={`${chip.label} ${formatQuotaWindow(chip.window, undefined, cue)}`} tone={quotaUsageTone(chip.usedPercent)} />
+                                                    ))}
+                                                    {bucketChips.length === 0 && session && <QuotaChip label={`5h ${session}`} tone={quotaUsageTone(quota.session?.usedPercent ?? NaN)} />}
+                                                    {bucketChips.length === 0 && weekly && <QuotaChip label={`7d ${weekly}`} tone={quotaUsageTone(quota.weekly?.usedPercent ?? NaN)} />}
+                                                    {bucketChips.length === 0 && monthly && <QuotaChip label={`30d ${monthly}`} tone={quotaUsageTone(quota.monthly?.usedPercent ?? NaN)} />}
                                                 </span>
                                             ) : usage ? (
                                                 <QuotaChip label={usage} tone="info" />
+                                            ) : okSummary ? (
+                                                <span className="text-text-secondary">{okSummary}</span>
                                             ) : (
                                                 <span className="text-text-secondary">{describeQuotaFailure(quota)}</span>
                                             )
