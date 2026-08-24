@@ -232,6 +232,13 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         return out
     }, [schedMatrix, nodeMetaById])
 
+    // Owner call 2026-08-24: the blueprint canvas renders as LARGE as the
+    // dialog allows — no content-count tiers (unlike topology's
+    // getGraphMinHeightClass). flex-1 already claims the free space; this
+    // floor keeps it generous even when sibling rows would squeeze it, capped
+    // by viewport height so the dialog itself never scrolls.
+    const bodyMinHeightClass = 'min-h-[min(760px,66dvh)]'
+
     const chipBase = 'shrink-0 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs transition-colors'
     const chipIdle = meshTheme.isDark
         ? 'border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
@@ -279,32 +286,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
 
             {graphsError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">{graphsError}</div>}
 
-            {/* ── Scheduling forecast — IN FLOW above the canvas, never occluding a
-                card. One wrapping line: difficulty → next slot; clicking an item
-                opens the per-machine detail with that difficulty pre-selected. ── */}
-            {predictedSlots && (
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-3xs">
-                    <span className="uppercase tracking-wide text-4xs text-text-muted">{t('meshGraph.blueprint.schedulingShort')}</span>
-                    {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
-                        <button
-                            key={difficulty}
-                            type="button"
-                            className="group inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-bg-glass"
-                            onClick={() => {
-                                setSchedDetailDifficulty(difficulty)
-                                setSchedDetailOpen(open => !open || schedDetailDifficulty !== difficulty)
-                            }}
-                            title={t('meshGraph.blueprint.scheduling')}
-                        >
-                            <span className="uppercase tracking-wide text-4xs text-text-muted group-hover:text-text-secondary">{difficulty}</span>
-                            <span className="text-green-500">→ {predictedSlots[difficulty] ?? '—'}</span>
-                        </button>
-                    ))}
-                </div>
-            )}
-
-            {/* ── Body ── */}
-            <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg">
+            {/* ── Body — same height floors as the topology canvas (its
+                getGraphMinHeightClass tiers): the blueprint pane used to sit
+                visibly shorter than 구성, and both are pan/zoom canvases so
+                they share the "grow with content, cap by viewport, never
+                scroll the dialog" rule. ── */}
+            <div className={`${meshTheme.graphShellClass} ${bodyMinHeightClass}`}>
                 {selected === 'live' ? (
                     // The blueprint reading of the live queue is the FULL dependency
                     // DAG — the task list already lives on the overview tab, so a
@@ -345,12 +332,35 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     </div>
                 )}
 
-                {/* ── Scheduling detail popover — transient overlay anchored to the
-                    canvas top; the always-visible forecast lives in flow above. ── */}
+                {/* ── Scheduling forecast — a vertical 4-row overlay on the LEFT of
+                    the canvas (owner call 2026-08-24: overlaying expresses more than
+                    an in-flow row, and it returns that row's height to the graph).
+                    Clicking a difficulty opens the per-machine detail right below.
+                    Offset below the live queue's in-flow stats row. ── */}
                 {predictedSlots && (
-                    <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex flex-col items-end gap-1">
+                    <div className={`pointer-events-none absolute left-2 z-10 flex max-h-[calc(100%-3rem)] flex-col items-start gap-1 ${selected === 'live' ? 'top-9' : 'top-2'}`}>
+                        <div className={`pointer-events-auto flex flex-col rounded-md border text-3xs leading-4 ${meshTheme.isDark
+                            ? 'border-white/10 bg-slate-950/85 text-slate-300'
+                            : 'border-slate-200 bg-white/95 text-slate-600'}`}
+                        >
+                            {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
+                                <button
+                                    key={difficulty}
+                                    type="button"
+                                    onClick={() => {
+                                        setSchedDetailDifficulty(difficulty)
+                                        setSchedDetailOpen(open => !open || schedDetailDifficulty !== difficulty)
+                                    }}
+                                    className={`flex items-center gap-1.5 px-2 py-0.5 text-left transition-colors ${meshTheme.isDark ? 'hover:bg-slate-900' : 'hover:bg-slate-50'} ${schedDetailOpen && schedDetailDifficulty === difficulty ? (meshTheme.isDark ? 'bg-white/[0.06]' : 'bg-slate-100') : ''}`}
+                                    title={t('meshGraph.blueprint.scheduling')}
+                                >
+                                    <span className="w-14 uppercase tracking-wide text-4xs opacity-60">{difficulty}</span>
+                                    <span className="text-green-500">→ {predictedSlots[difficulty] ?? '—'}</span>
+                                </button>
+                            ))}
+                        </div>
                         {schedDetailOpen && schedMatrix && (
-                            <div className={`pointer-events-auto max-h-[45dvh] w-full max-w-[620px] overflow-y-auto rounded-lg border p-2.5 text-2xs shadow-md ${meshTheme.isDark ? 'border-white/10 bg-slate-950/98' : 'border-slate-300 bg-white'}`}>
+                            <div className={`pointer-events-auto max-h-[45dvh] w-[min(620px,80vw)] overflow-y-auto rounded-lg border p-2.5 text-2xs shadow-md ${meshTheme.isDark ? 'border-white/10 bg-slate-950/98' : 'border-slate-300 bg-white'}`}>
                                 <div className="mb-2 flex flex-wrap items-center gap-1.5">
                                     {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
                                         <button key={difficulty} type="button"

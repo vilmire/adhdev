@@ -451,7 +451,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 proOptions={{ hideAttribution: true }}
                 colorMode={meshTheme.isDark ? 'dark' : 'light'}
             >
-                <Background variant={BackgroundVariant.Dots} gap={22} size={1} />
+                <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color={meshTheme.graphBackgroundDotColor} />
                 <Controls showInteractive={false} position="bottom-left" />
             </ReactFlow>
 
