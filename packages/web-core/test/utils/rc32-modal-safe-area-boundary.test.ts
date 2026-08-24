@@ -75,6 +75,19 @@ describe('RC32 modal safe-area hardening (audited peers)', () => {
     expect(source).toContain('aria-label="Close onboarding"')
   })
 
+  it('keeps the mesh observability dialog inside both PWA safe-area edges without forcing empty mobile height', () => {
+    const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
+    const themeSource = readSource('components/MeshGraph/meshGraphTheme.ts')
+
+    expect(dialogSource).toContain('<DialogShell')
+    expect(dialogSource).toContain('overlayClassName={meshTheme.dialogOverlayClass}')
+    expect(themeSource.match(/pt-\[calc\(16px\+env\(safe-area-inset-top,0px\)\)\]/g)).toHaveLength(2)
+    expect(themeSource.match(/pb-\[calc\(16px\+env\(safe-area-inset-bottom,0px\)\)\]/g)).toHaveLength(2)
+    expect(themeSource.match(/max-h-\[calc\(100dvh-env\(safe-area-inset-top,0px\)-env\(safe-area-inset-bottom,0px\)-2rem\)\]/g)).toHaveLength(2)
+    expect(themeSource).not.toContain('pt-[max(8px,env(safe-area-inset-top,0px))]')
+    expect(themeSource).not.toContain('flex h-full max-h-full w-full')
+  })
+
   it('the mesh DetailModal uses the capture-phase single-level Escape handler', () => {
     const overviewSource = readSource('components/MeshGraph/MeshOverviewCards.tsx')
     const parentSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
