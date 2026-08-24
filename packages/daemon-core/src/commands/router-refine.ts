@@ -1567,10 +1567,10 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             //
             // ★TRI-STATE and fail-CLOSED; see ./mesh/mesh-refine-base-cas.ts for why an
             // unobtained verdict must not read as "unmoved". This is the only
-            // time-of-check guard in front of the merge and the push below.
+            // guard before the merge/push, and it also checks repoRoot's LOCAL base.
             const casStarted = Date.now();
             const cas = await probeRefineBaseCas({
-                execFileAsync, repoRoot, baseBranch, pinnedBaseHead: baseHead, env: gitChildEnv(),
+                execFileAsync, repoRoot, baseBranch, pinnedBaseHead: baseHead, branchHead: ctx.branchHead, env: gitChildEnv(),
             });
             const casStage = describeRefineBaseCasStage(cas, baseHead);
             recordMeshRefineStage(refineStages, 'base_cas', casStage.status, casStarted, casStage.detail);

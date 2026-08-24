@@ -296,3 +296,246 @@ describe('base_cas: over-correction guards — the real verdicts still behave ex
     expect(originHead).toBe(git(fx.repoRoot, ['rev-parse', 'HEAD']))
   })
 })
+
+/**
+ * ★R3: the pin is REMOTE, the merge is LOCAL, and until this check nothing
+ * compared the two.
+ *
+ *   resolve_refs pins baseHead to origin/<base>        (router-refine.ts)
+ *   the merge runs `git merge <branch>` in repoRoot    → against LOCAL HEAD
+ *
+ * The Refinery merges locally and pushes later — and under
+ * `requireApprovalForPush` never pushes at all — so a local base ahead of the pin
+ * is the NORMAL steady state. The two stages that could have caught the gap both
+ * looked at the wrong SHA: sync_base measures divergence against the PIN, so a
+ * branch behind the local base still reported `behind === 0` /
+ * `branch_up_to_date_with_base` and skipped its rebase; then base_cas compared
+ * pin↔origin, found them equal because BOTH were stale, and returned 'unmoved'.
+ * The merge then ran against a base the branch had never absorbed.
+ *
+ * Observed: pin 74820488 vs local 7df78f1a (9 commits ahead) → rebase skipped →
+ * merge_failed, conflicts in `oss`.
+ */
+describe('base_cas: a LOCAL base ahead of the pin is movement too', () => {
+  /**
+   * Advances repoRoot's local base past the pin WITHOUT touching origin — the
+   * unpushed-local-merge shape. `conflicting` decides whether those local commits
+   * touch the same file the branch does; the branch is never rebased onto them
+   * either way, which is the actual defect.
+   */
+  function advanceLocalBaseOnly(fx: ReturnType<typeof buildFixture>, opts: { conflicting?: boolean } = {}) {
+    const before = git(fx.repoRoot, ['rev-parse', 'HEAD'])
+    commitFile(
+      fx.repoRoot,
+      opts.conflicting ? 'feature.txt' : 'local.txt',
+      opts.conflicting ? 'base-side edit\n' : 'local\n',
+      'local: unpushed base commit',
+    )
+    const after = git(fx.repoRoot, ['rev-parse', 'HEAD'])
+    // The premise of the whole scenario: origin did NOT move, only local did.
+    expect(after).not.toBe(before)
+    expect(git(fx.repoRoot, ['rev-parse', 'origin/main'])).toBe(fx.baseHead)
+    return after
+  }
+
+  it('★THE FIX: pin stale + local HEAD ahead → moved, and NO merge (pre-fix: unmoved → merge)', async () => {
+    const fx = buildFixture()
+    const localHead = advanceLocalBaseOnly(fx)
+
+    const { outcome, stages, mergeRan, pushRan } = await runStage(fx)
+    const result = (outcome as any).result
+
+    // ★THE REGRESSION: pre-fix origin === pin → 'unmoved' → base_cas passed → merge ran.
+    expect(outcome.kind).toBe('terminal')
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('base_moved')
+    expect(result.retryable).toBe(true)
+    expect(result.convergenceStatus).toBe('blocked_review')
+    expect(mergeRan).toBe(false)
+    expect(pushRan).toBe(false)
+
+    const cas = stages.find(s => s.stage === 'base_cas')
+    expect(cas?.status).toBe('failed')
+    expect(cas?.undeterminable).toBeUndefined()
+    // The record must name WHICH base moved — origin never did.
+    expect(cas?.localBaseHead).toBe(localHead)
+    expect(cas?.movedAxis).toBe('local')
+    expect(cas?.liveBaseHead).toBe(fx.baseHead)
+  })
+
+  it('★names the local axis — it must not claim origin "advanced" when origin never moved', async () => {
+    const fx = buildFixture()
+    const localHead = advanceLocalBaseOnly(fx)
+    const { outcome } = await runStage(fx)
+    const result = (outcome as any).result
+
+    expect(result.localBaseHead).toBe(localHead)
+    expect(String(result.error)).toMatch(/Local base main .* is ahead of the pinned/)
+    expect(String(result.error)).toMatch(/still matches the pin/)
+    // Reporting a peer push that never happened sends a coordinator hunting a ghost.
+    expect(String(result.error)).not.toMatch(/advanced from/)
+  })
+
+  it('★this is the merge_failed that R3 actually hit — blocked BEFORE the conflict, not after', async () => {
+    const fx = buildFixture()
+    advanceLocalBaseOnly(fx, { conflicting: true })
+
+    const { outcome, stages, mergeRan } = await runStage(fx)
+    const result = (outcome as any).result
+
+    // Pre-fix the CAS passed and `git merge` then failed on the unabsorbed local
+    // commits. The gate now catches it one stage earlier, with a retryable
+    // prescription instead of not_mergeable.
+    expect(result.code).toBe('base_moved')
+    expect(result.code).not.toBe('merge_failed')
+    expect(result.convergenceStatus).not.toBe('not_mergeable')
+    expect(mergeRan).toBe(false)
+    expect(stages.find(s => s.stage === 'merge')).toBeUndefined()
+  })
+})
+
+describe('base_cas: over-correction guards for the local-ahead check', () => {
+  it('★the fully-aligned case (pin === local === origin) is byte-for-byte unchanged', async () => {
+    const fx = buildFixture()
+    // The steady state of every healthy refine. If the new check fires here, EVERY
+    // refine blocks — so this is the guard that matters most.
+    expect(git(fx.repoRoot, ['rev-parse', 'HEAD'])).toBe(fx.baseHead)
+    expect(git(fx.repoRoot, ['rev-parse', 'origin/main'])).toBe(fx.baseHead)
+
+    const { stages, mergeRan } = await runStage(fx, { requireApprovalForPush: true })
+    const cas = stages.find(s => s.stage === 'base_cas')
+    expect(cas?.status).toBe('passed')
+    // No local-ahead metadata may appear on a passing record.
+    expect(cas?.localBaseHead).toBeUndefined()
+    expect(cas?.movedAxis).toBeUndefined()
+    expect(cas?.liveBaseHead).toBe(fx.baseHead)
+    expect(mergeRan).toBe(true)
+  })
+
+  it('★a local base BEHIND the pin still passes — merging into an older base loses nothing', async () => {
+    const fx = buildFixture()
+    // A peer pushed and this checkout has not fast-forwarded: pin/origin are the
+    // NEW commit, local HEAD is the old one. Inequality alone would wrongly block
+    // here, which is why the check is ancestry-gated in the local→pin direction.
+    const peer = join(fx.root, 'peer')
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'clone', '-q', fx.originPath, peer], { encoding: 'utf-8' })
+    git(peer, ['config', 'user.email', 'test@example.com'])
+    git(peer, ['config', 'user.name', 'Test User'])
+    const advanced = commitFile(peer, 'peer.txt', 'peer\n', 'peer: advance base')
+    git(peer, ['push', '-q', 'origin', 'main'])
+    git(fx.repoRoot, ['fetch', '-q', 'origin', 'main'])
+
+    // Pin at the NEW origin SHA; local HEAD deliberately left behind it.
+    expect(git(fx.repoRoot, ['rev-parse', 'HEAD'])).toBe(fx.baseHead)
+    const { stages, mergeRan } = await runStage(fx, {
+      baseHeadOverride: advanced,
+      requireApprovalForPush: true,
+    })
+
+    const cas = stages.find(s => s.stage === 'base_cas')
+    expect(cas?.status).toBe('passed')
+    expect(cas?.localBaseHead).toBeUndefined()
+    expect(mergeRan).toBe(true)
+  })
+
+  it('★an unrelated local base (no shared history with the pin) does not read as ahead', async () => {
+    const fx = buildFixture()
+    // Ancestry, not mere inequality: an orphan local HEAD is not a descendant of
+    // the pin, so the local-ahead branch must not claim it advanced past it.
+    git(fx.repoRoot, ['checkout', '-q', '--orphan', 'main-orphan'])
+    commitFile(fx.repoRoot, 'orphan.txt', 'orphan\n', 'orphan: unrelated root')
+    const orphanHead = git(fx.repoRoot, ['rev-parse', 'HEAD'])
+
+    const { stages } = await runStage(fx, { requireApprovalForPush: true })
+    const cas = stages.find(s => s.stage === 'base_cas')
+    // origin === pin and the orphan is not a descendant → the pre-existing
+    // 'unmoved' verdict stands untouched.
+    expect(cas?.status).toBe('passed')
+    expect(cas?.localBaseHead).toBeUndefined()
+    expect(orphanHead).not.toBe(fx.baseHead)
+
+    // ★Scope note: the merge that follows then fails on "unrelated histories".
+    // That is the PRE-EXISTING behaviour for an orphan base and is deliberately
+    // left alone — this test asserts only that the CAS verdict is unchanged, not
+    // that the merge succeeds. Pinning it here keeps a later reader from
+    // mistaking the failure for fallout of this fix.
+    const merge = stages.find(s => s.stage === 'merge')
+    expect(merge?.status).toBe('failed')
+  })
+
+  it('★local ahead of the pin but ALREADY IN the branch still passes — the ordinary worktree shape', async () => {
+    // A worktree cut from the local base inherits its commits, so "local ahead of
+    // the pin" is the NORMAL state, not a fault. Order matters: commit on the base
+    // FIRST, then branch, so the branch contains it — buildFixture() branches before
+    // any local commit, so this case needs its own fixture.
+    const root2 = makeTmp()
+    const originPath = join(root2, 'origin.git')
+    const seed = join(root2, 'seed')
+    const repoRoot = join(root2, 'base')
+    const workspace = join(root2, 'wt')
+
+    initRepo(seed)
+    commitFile(seed, 'README.md', 'seed\n', 'seed')
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', originPath], { encoding: 'utf-8' })
+    git(seed, ['remote', 'add', 'origin', originPath])
+    git(seed, ['push', '-q', 'origin', 'main'])
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'clone', '-q', originPath, repoRoot], { encoding: 'utf-8' })
+    git(repoRoot, ['config', 'user.email', 'test@example.com'])
+    git(repoRoot, ['config', 'user.name', 'Test User'])
+    const pin = git(repoRoot, ['rev-parse', 'origin/main'])
+    // Unpushed local base commit, THEN the branch off it.
+    const localHead = commitFile(repoRoot, 'local.txt', 'local\n', 'local: unpushed')
+    git(repoRoot, ['worktree', 'add', '-q', '-b', 'feature/x', workspace, 'main'])
+    git(workspace, ['config', 'user.email', 'test@example.com'])
+    git(workspace, ['config', 'user.name', 'Test User'])
+    const branchHead = commitFile(workspace, 'feature.txt', 'work\n', 'feat: work')
+    expect(localHead).not.toBe(pin)
+
+    const { stages, mergeRan } = await runStage(
+      { root: root2, originPath, repoRoot, workspace, baseHead: pin, branchHead },
+      { requireApprovalForPush: true },
+    )
+    const cas = stages.find(s => s.stage === 'base_cas')
+    // The branch already contains the local base → nothing to conflict over.
+    expect(cas?.status).toBe('passed')
+    expect(cas?.localBaseHead).toBeUndefined()
+    expect(mergeRan).toBe(true)
+  })
+
+  it('★an ALREADY-MERGED branch still passes — a push-failure retry must stay push_failed', async () => {
+    const fx = buildFixture()
+    // The auto-retry shape: attempt 1 merged locally and only the PUSH failed, so
+    // attempt 2 finds the local base ahead of the pin — with the branch already
+    // absorbed into it. Blocking here would mask a real push_failed as base_moved,
+    // swapping a true blocker for a misleading one.
+    git(fx.repoRoot, ['merge', '--no-ff', '-q', 'feature/x', '-m', 'Auto-merge branch feature/x via Refinery'])
+    const localHead = git(fx.repoRoot, ['rev-parse', 'HEAD'])
+    expect(localHead).not.toBe(fx.baseHead)
+    // Branch ⊆ local base — the containment that makes a re-merge a no-op.
+    expect(() => git(fx.repoRoot, ['merge-base', '--is-ancestor', fx.branchHead, localHead])).not.toThrow()
+
+    const { stages } = await runStage(fx, { requireApprovalForPush: true })
+    const cas = stages.find(s => s.stage === 'base_cas')
+    expect(cas?.status).toBe('passed')
+    expect(cas?.localBaseHead).toBeUndefined()
+  })
+
+  it('★a REMOTE advance is still reported as a remote advance, not relabelled local', async () => {
+    const fx = buildFixture()
+    const peer = join(fx.root, 'peer')
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'clone', '-q', fx.originPath, peer], { encoding: 'utf-8' })
+    git(peer, ['config', 'user.email', 'test@example.com'])
+    git(peer, ['config', 'user.name', 'Test User'])
+    commitFile(peer, 'peer.txt', 'peer\n', 'peer: advance base')
+    git(peer, ['push', '-q', 'origin', 'main'])
+
+    const { outcome, stages } = await runStage(fx)
+    const result = (outcome as any).result
+    expect(result.code).toBe('base_moved')
+    // The remote branch returns BEFORE the local probe, so no local metadata.
+    expect(result.localBaseHead).toBeUndefined()
+    expect(String(result.error)).toMatch(/advanced from/)
+    const cas = stages.find(s => s.stage === 'base_cas')
+    expect(cas?.movedAxis).toBeUndefined()
+  })
+})

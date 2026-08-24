@@ -35,8 +35,13 @@ import type { RefineExecFileAsync } from './mesh-refine-gates.js';
 /**
  * The outcome of the base CAS.
  *
- *   moved           — the remote answered, and origin/<base> is not the pinned SHA.
- *   unmoved         — the remote answered, and it still is. Safe to merge/push.
+ *   moved           — the base is not where resolve_refs pinned it. EITHER
+ *                     origin/<base> advanced (a peer pushed), OR origin still
+ *                     matches the pin but repoRoot's LOCAL base — the commit the
+ *                     merge actually applies onto — has moved past it. Both mean
+ *                     "re-pin and re-validate", so both share one state.
+ *   unmoved         — the remote answered, it still matches the pin, and the local
+ *                     base has not outrun it either. Safe to merge/push.
  *   undeterminable  — we never got an answer (fetch failed, ref would not resolve).
  *                     Fail-closed: the caller must NOT merge or push.
  *   no_origin       — there is no `origin` remote configured at all. This is a
@@ -50,6 +55,13 @@ export type RefineBaseCasVerdict = {
     state: RefineBaseCasState;
     /** The live origin/<base> SHA. Only set for 'moved' / 'unmoved'. */
     liveBaseHead?: string;
+    /**
+     * The LOCAL base HEAD in repoRoot, set only when it is what made the verdict
+     * 'moved' (it advanced past the pin while origin/<base> did not). Lets the
+     * caller's stage record and error message name the axis that actually moved
+     * instead of reporting a remote advance that never happened.
+     */
+    localBaseHead?: string;
     /** Human-readable cause. Only set for 'undeterminable'. */
     reason?: string;
     /**
@@ -84,8 +96,10 @@ async function hasOriginRemote(
 }
 
 /**
- * Re-fetch origin/<baseBranch> and compare it against the SHA pinned back in
- * resolve_refs.
+ * Compare the SHA pinned back in resolve_refs against BOTH bases it has to agree
+ * with: the re-fetched origin/<baseBranch>, and repoRoot's local base HEAD (the
+ * commit `git merge` will actually apply onto). Either one disagreeing means the
+ * pin no longer describes reality and the node must be re-validated.
  *
  * Never throws: every failure mode is reported as a state, so the caller's
  * control flow is a switch rather than a try/catch that could re-introduce the
@@ -96,9 +110,16 @@ export async function probeRefineBaseCas(params: {
     repoRoot: string;
     baseBranch: string;
     pinnedBaseHead: string;
+    /**
+     * The branch being merged. Used only to tell an already-absorbed local base
+     * (benign) from one the branch never rebased onto (the R3 defect). Optional:
+     * omitting it skips the local-ahead check entirely rather than guessing, which
+     * degrades to the pre-existing remote-only CAS.
+     */
+    branchHead?: string;
     env?: NodeJS.ProcessEnv;
 }): Promise<RefineBaseCasVerdict> {
-    const { execFileAsync, repoRoot, baseBranch, pinnedBaseHead, env } = params;
+    const { execFileAsync, repoRoot, baseBranch, pinnedBaseHead, branchHead, env } = params;
 
     if (!(await hasOriginRemote(execFileAsync, repoRoot, env))) {
         return { state: 'no_origin' };
@@ -127,7 +148,108 @@ export async function probeRefineBaseCas(params: {
         return { state: 'undeterminable', reason: `git rev-parse origin/${baseBranch} produced no SHA` };
     }
 
-    return { state: liveBaseHead === pinnedBaseHead ? 'unmoved' : 'moved', liveBaseHead };
+    if (liveBaseHead !== pinnedBaseHead) {
+        return { state: 'moved', liveBaseHead };
+    }
+
+    // ★The remote agrees with the pin — but the pin is not what we are about to
+    // merge INTO. The pin is `origin/<base>` (resolve_refs); the merge runs
+    // `git merge <branch>` in repoRoot, against its LOCAL HEAD. The Refinery
+    // merges locally and pushes later — and under `requireApprovalForPush` it
+    // does not push at all — so the local base routinely accumulates commits the
+    // pin has never seen. That gap is the NORMAL steady state, not a fault.
+    //
+    // Nothing compared those two SHAs before this check existed. sync_base
+    // computes divergence against the PIN (router-refine.ts), so a branch behind
+    // the local base still measured `behind === 0` and recorded
+    // `branch_up_to_date_with_base`, skipping the rebase; then the CAS compared
+    // pin↔origin — both stale, both equal — and returned 'unmoved', letting the
+    // merge run against a base the branch had never absorbed. Observed: pin
+    // 74820488 vs local 7df78f1a (9 commits ahead) → rebase skipped → merge_failed
+    // with conflicts in `oss`.
+    //
+    // Reusing 'moved' is deliberate: it already means "the base is not where you
+    // pinned it — re-run and re-validate against where it actually is", and a
+    // re-run re-pins and rebases. A new state would need parallel handling in
+    // every caller for an identical remedy.
+    const localBaseHead = branchHead ? await resolveLocalBaseHead(execFileAsync, repoRoot, env) : undefined;
+    if (localBaseHead && branchHead && localBaseHead !== pinnedBaseHead
+        // Ancestry-gated, not plain inequality: a local base BEHIND the pin (a peer
+        // pushed, this checkout has not fast-forwarded) is harmless — merging into
+        // an older base loses nothing and the push then fast-forwards. Only a local
+        // base PAST the pin can hold commits the branch never absorbed.
+        && await isAncestor(execFileAsync, repoRoot, pinnedBaseHead, localBaseHead, env)
+        // ★And only when branch and local base have genuinely DIVERGED. Local-ahead-of-pin
+        // on its own is the ordinary case, in two distinct shapes that are both safe:
+        //
+        //   local base ⊆ branch — a worktree cut from the local base inherits those
+        //     commits, so it is ahead of the local base and merges cleanly. (Blocking
+        //     on the raw gap failed 7 existing fixtures.)
+        //   branch ⊆ local base — the branch is ALREADY merged into the local base,
+        //     which is what an auto-retry sees after a push failure: attempt 1 merged
+        //     locally, so attempt 2 finds local ahead of the pin. Re-merging is a
+        //     no-op. (Blocking here masked a real `push_failed` as `base_moved` —
+        //     the 8th fixture, and the more dangerous miss, since it would have
+        //     replaced a true blocker with a misleading one.)
+        //
+        // Neither direction can conflict, so the test is symmetric containment. What
+        // actually broke R3 is neither: the branch was cut before the local commits
+        // (or from origin), sync_base measured it against the stale pin and skipped
+        // the rebase, and the two sides diverged.
+        && !(await isAncestor(execFileAsync, repoRoot, localBaseHead, branchHead, env))
+        && !(await isAncestor(execFileAsync, repoRoot, branchHead, localBaseHead, env))) {
+        return { state: 'moved', liveBaseHead, localBaseHead };
+    }
+
+    return { state: 'unmoved', liveBaseHead };
+}
+
+/**
+ * The local base HEAD in repoRoot — literally the commit `git merge` will apply
+ * onto, so this reads `HEAD` rather than `refs/heads/<baseBranch>`. They are the
+ * same ref by construction (resolve_refs DEFINES baseBranch as repoRoot's
+ * checked-out branch), and reading the one the merge actually uses keeps this
+ * honest if that ever stops holding.
+ *
+ * Best-effort: an unreadable local HEAD returns undefined and the CAS falls
+ * through to its pre-existing verdict. That is NOT the fail-closed compromise it
+ * looks like — the fail-closed property protects the REMOTE comparison, which has
+ * already succeeded by this point. This check only ever converts 'unmoved' into
+ * 'moved'; failing to run it restores exactly the prior behaviour rather than
+ * authorizing anything new.
+ */
+async function resolveLocalBaseHead(
+    execFileAsync: RefineExecFileAsync,
+    repoRoot: string,
+    env: NodeJS.ProcessEnv | undefined,
+): Promise<string | undefined> {
+    try {
+        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', env });
+        return stdout.trim() || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * `git merge-base --is-ancestor` as a boolean: exit 0 = ancestor, exit 1 = not.
+ * Any other failure (unknown SHA, corrupt repo) also lands in the catch and
+ * reads as "not an ancestor", which is the conservative direction here — it
+ * leaves the verdict untouched instead of inventing movement.
+ */
+async function isAncestor(
+    execFileAsync: RefineExecFileAsync,
+    repoRoot: string,
+    maybeAncestor: string,
+    descendant: string,
+    env: NodeJS.ProcessEnv | undefined,
+): Promise<boolean> {
+    try {
+        await execFileAsync('git', ['merge-base', '--is-ancestor', maybeAncestor, descendant], { cwd: repoRoot, encoding: 'utf8', env });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -152,7 +274,12 @@ export function describeRefineBaseCasStage(cas: RefineBaseCasVerdict, pinnedBase
                 ...(cas.fetchError ? { fetchError: cas.fetchError } : {}),
             } };
         case 'moved':
-            return { status: 'failed', detail: { pinnedBaseHead, retryable: true, liveBaseHead: cas.liveBaseHead } };
+            return { status: 'failed', detail: {
+                pinnedBaseHead, retryable: true, liveBaseHead: cas.liveBaseHead,
+                // Present only on the local-ahead variant, so the record distinguishes
+                // "a peer pushed" from "this checkout's own base outran the pin".
+                ...(cas.localBaseHead ? { localBaseHead: cas.localBaseHead, movedAxis: 'local' } : {}),
+            } };
         default:
             return { status: 'passed', detail: { pinnedBaseHead, liveBaseHead: cas.liveBaseHead } };
     }
@@ -188,11 +315,20 @@ export function buildRefineBaseCasBlockedResult(params: {
         retryable: true,
         error: undeterminable
             ? `Could not verify whether base ${baseBranch} is still at the pinned ${pinnedBaseHead.slice(0, 7)} (${cas.reason}); refusing to merge or push onto an unverified base. Restore access to origin and re-run refine.`
-            : `Base ${baseBranch} advanced from ${pinnedBaseHead.slice(0, 7)} to ${(cas.liveBaseHead || '').slice(0, 7)} after this node was validated; re-run refine to rebase onto and re-validate the new base.`,
+            : cas.localBaseHead
+                // ★Must not say "advanced" about origin here: origin/<base> still matches
+                // the pin exactly. It is the LOCAL base — the actual merge target — that
+                // outran it, so the prescription is a rebase onto the local base, and
+                // naming the wrong axis would send a coordinator hunting a peer push that
+                // never happened.
+                ? `Local base ${baseBranch} in the source repo is ahead of the pinned ${pinnedBaseHead.slice(0, 7)} (now ${cas.localBaseHead.slice(0, 7)}) while origin/${baseBranch} still matches the pin; this branch was validated against the stale pin and never rebased onto those local commits, so merging would conflict. Re-run refine to re-pin and rebase onto the current local base.`
+                : `Base ${baseBranch} advanced from ${pinnedBaseHead.slice(0, 7)} to ${(cas.liveBaseHead || '').slice(0, 7)} after this node was validated; re-run refine to rebase onto and re-validate the new base.`,
         branch,
         into: baseBranch,
         pinnedBaseHead,
-        ...(undeterminable ? { baseCasUndeterminable: cas.reason } : { liveBaseHead: cas.liveBaseHead }),
+        ...(undeterminable
+            ? { baseCasUndeterminable: cas.reason }
+            : { liveBaseHead: cas.liveBaseHead, ...(cas.localBaseHead ? { localBaseHead: cas.localBaseHead } : {}) }),
         validationSummary,
         patchEquivalence,
         submoduleReachability,
