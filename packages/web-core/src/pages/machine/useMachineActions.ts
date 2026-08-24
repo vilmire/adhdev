@@ -5,6 +5,7 @@
  * into a single hook. Each tab can call these without managing the state themselves.
  */
 import { useState, useCallback, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { formatIdeType } from '../../utils/daemon-utils'
 import { eventManager } from '../../managers/EventManager'
 import type { LogEntry, IdeSessionEntry } from './types'
@@ -40,6 +41,7 @@ interface UseMachineActionsOpts {
 }
 
 export function useMachineActions({ machineId, registeredMachineId, sendDaemonCommand, onNicknameSynced, logsEndRef }: UseMachineActionsOpts) {
+    const { t } = useTranslation('common')
     const { launchCli } = useLaunchCli()
     // In-app confirm (window.confirm is auto-dismissed in embedded browsers).
     // The consuming page must render `confirmDialog` once in its JSX.
@@ -83,14 +85,14 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             if (opts?.workspace?.trim()) body.workspace = opts.workspace.trim()
             else if (opts?.useDefaultWorkspace) body.useDefaultWorkspace = true
             const res: any = await sendDaemonCommand(machineId, 'launch_ide', body)
-            addLog(res?.success ? 'info' : 'error', res?.success ? `${formatIdeType(ideType)} launched` : `Failed: ${res?.error}`, true)
+            addLog(res?.success ? 'info' : 'error', res?.success ? t('machine.actions.launched', { name: formatIdeType(ideType) }) : `Failed: ${res?.error}`, true)
             return !!res?.success
         } catch (e: any) {
             addLog('error', `Launch error: ${e.message}`, true)
             return false
         }
         finally { setLaunchingIde(null) }
-    }, [machineId, launchingIde, addLog, sendDaemonCommand])
+    }, [machineId, launchingIde, addLog, sendDaemonCommand, t])
 
     const runLaunchCliCore = useCallback(async (opts: {
         cliType: string; dir?: string; workspaceId?: string
@@ -99,7 +101,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         if (!machineId) return { success: false as const }
         const { cliType, dir, workspaceId, useDefaultWorkspace, useHome, argsStr, model, resumeSessionId } = opts
         if (!cliType) {
-            addLog('warn', 'Select a CLI or ACP provider first', true)
+            addLog('warn', t('machine.actions.selectProviderFirst'), true)
             return { success: false as const }
         }
         const cliArgs = argsStr ? argsStr.split(/\s+/).filter(Boolean) : undefined
@@ -116,7 +118,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             const res: any = await launchCli(machineId, body)
             const payload = res?.result || res
             if (res?.success) {
-                addLog('info', `${cliType} launched`, true)
+                addLog('info', t('machine.actions.launched', { name: cliType }), true)
                 if (payload?.launchSource === 'home') addLog('info', `📂 Running in home directory (explicit choice)`)
                 else if (payload?.launchSource === 'defaultWorkspace') addLog('info', `📂 Using default workspace (explicit choice)`)
                 return { success: true as const, sessionId: payload?.sessionId as string | undefined }
@@ -135,12 +137,12 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         } finally {
             setLaunchingAgentType(null)
         }
-    }, [machineId, addLog, isTransientLaunchTimeout, sendDaemonCommand])
+    }, [machineId, addLog, isTransientLaunchTimeout, sendDaemonCommand, t])
 
     const handleLaunchCli = useCallback(async (cliType: string, dir: string, argsStr?: string, model?: string) => {
         if (!machineId) return { success: false as const }
         if (!cliType) {
-            addLog('warn', 'Select a provider', true)
+            addLog('warn', t('machine.actions.selectProvider'), true)
             return { success: false as const }
         }
         if (!dir.trim()) {
@@ -148,51 +150,51 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             return { success: false as const }
         }
         return runLaunchCliCore({ cliType, dir, argsStr, model })
-    }, [machineId, addLog, runLaunchCliCore])
+    }, [machineId, addLog, runLaunchCliCore, t])
 
     const handleStopCli = useCallback(async (cliType: string, dir: string, entryId?: string) => {
         if (!machineId) return
         if (!(await confirm({
-            title: `Stop ${cliType}?`,
-            description: 'This will terminate the process.',
-            confirmLabel: 'Stop',
+            title: t('cliStop.title', { agent: cliType }),
+            description: t('machine.actions.stopCliConfirmDescription'),
+            confirmLabel: t('cliStop.stop'),
             tone: 'danger',
         }))) return
         try {
             const res: any = await sendDaemonCommand(machineId, 'stop_cli', { cliType, dir, targetSessionId: entryId })
-            if (res?.success) addLog('info', `${cliType} stopped`, true)
-            else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`, true)
-        } catch (e: any) { addLog('error', `Stop failed: ${e.message}`, true) }
-    }, [machineId, addLog, confirm, sendDaemonCommand])
+            if (res?.success) addLog('info', t('machine.actions.stopped', { name: cliType }), true)
+            else addLog('error', t('machine.actions.stopFailed', { error: res?.error || t('machine.actions.unknownError') }), true)
+        } catch (e: any) { addLog('error', t('machine.actions.stopFailed', { error: e.message }), true) }
+    }, [machineId, addLog, confirm, sendDaemonCommand, t])
 
     const handleRestartIde = useCallback(async (ide: IdeSessionEntry) => {
         try {
             await sendDaemonCommand(ide.daemonId, 'restart_ide', { ideType: ide.type })
-            addLog('info', `${formatIdeType(ide.type)} restart initiated`, true)
-        } catch (e: any) { addLog('error', `Restart failed: ${e.message}`, true) }
-    }, [addLog, sendDaemonCommand])
+            addLog('info', t('machine.actions.restartInitiated', { name: formatIdeType(ide.type) }), true)
+        } catch (e: any) { addLog('error', t('machine.actions.restartFailed', { error: e.message }), true) }
+    }, [addLog, sendDaemonCommand, t])
 
     const handleStopIde = useCallback(async (ide: IdeSessionEntry) => {
         if (!(await confirm({
-            title: `Stop ${formatIdeType(ide.type)}?`,
-            description: 'This will disconnect CDP and optionally kill the process.',
-            confirmLabel: 'Stop',
+            title: t('cliStop.title', { agent: formatIdeType(ide.type) }),
+            description: t('machine.actions.stopIdeConfirmDescription'),
+            confirmLabel: t('cliStop.stop'),
             tone: 'danger',
         }))) return
         try {
             const res: any = await sendDaemonCommand(ide.daemonId, 'stop_ide', { ideType: ide.type, killProcess: true })
-            if (res?.success) addLog('info', `${formatIdeType(ide.type)} stopped`, true)
-            else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`, true)
-        } catch (e: any) { addLog('error', `Stop failed: ${e.message}`, true) }
-    }, [addLog, confirm, sendDaemonCommand])
+            if (res?.success) addLog('info', t('machine.actions.stopped', { name: formatIdeType(ide.type) }), true)
+            else addLog('error', t('machine.actions.stopFailed', { error: res?.error || t('machine.actions.unknownError') }), true)
+        } catch (e: any) { addLog('error', t('machine.actions.stopFailed', { error: e.message }), true) }
+    }, [addLog, confirm, sendDaemonCommand, t])
 
     const handleDetectIdes = useCallback(async () => {
         if (!machineId) return
         try {
             const res: any = await sendDaemonCommand(machineId, 'detect_ides', {})
-            addLog('info', `Found ${(res?.result || []).length} IDE(s)`, true)
+            addLog('info', t('machine.actions.idesFound', { count: (res?.result || []).length }), true)
         } catch (e: any) { addLog('error', `Detection failed: ${e.message}`, true) }
-    }, [machineId, addLog, sendDaemonCommand])
+    }, [machineId, addLog, sendDaemonCommand, t])
 
     const handleWorkspaceAdd = useCallback(async (path: string) => {
         if (!machineId || !path.trim()) return false
@@ -220,11 +222,11 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         setWorkspaceBusy(true)
         try {
             const res: any = await sendDaemonCommand(machineId, 'workspace_remove', { id })
-            if (res?.success) addLog('info', 'Workspace removed', true)
+            if (res?.success) addLog('info', t('machine.actions.workspaceRemoved'), true)
             else addLog('error', res?.error || 'workspace_remove failed', true)
         } catch (e: any) { addLog('error', e.message, true) }
         finally { setWorkspaceBusy(false) }
-    }, [machineId, addLog, sendDaemonCommand])
+    }, [machineId, addLog, sendDaemonCommand, t])
 
     const handleWorkspaceSetDefault = useCallback(async (id: string | null) => {
         if (!machineId) return
@@ -233,14 +235,14 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             const res: any = await sendDaemonCommand(machineId, 'workspace_set_default',
                 id === null ? { clear: true } : { id })
             if (res?.success) {
-                addLog('info', id ? 'Default workspace updated' : 'Default workspace cleared', true)
+                addLog('info', id ? t('machine.actions.defaultWorkspaceUpdated') : t('machine.actions.defaultWorkspaceCleared'), true)
                 const dp = typeof res.defaultWorkspacePath === 'string' ? res.defaultWorkspacePath : ''
                 if (dp) onDefaultWorkspaceChangedRef.current?.(dp)
             }
             else addLog('error', res?.error || 'workspace_set_default failed', true)
         } catch (e: any) { addLog('error', e.message, true) }
         finally { setWorkspaceBusy(false) }
-    }, [machineId, addLog, sendDaemonCommand])
+    }, [machineId, addLog, sendDaemonCommand, t])
 
     const handleWorkspaceResumePath = useCallback(async (absPath: string) => {
         if (!machineId || !absPath.trim()) return

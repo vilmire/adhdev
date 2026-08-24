@@ -13,6 +13,7 @@ import type {
     ControlSetResult,
     ProviderControlSchema,
 } from '@adhdev/daemon-core';
+import { useTranslation } from 'react-i18next';
 import { useTransport } from '../../context/TransportContext';
 import { eventManager } from '../../managers/EventManager';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
@@ -298,6 +299,7 @@ export default function ControlsBar({
     routeId, sessionId, hostIdeType, providerType, displayLabel,
     controls, controlValues, currentStatus, coordinatorHint,
 }: ControlsBarProps) {
+    const { t } = useTranslation('common');
     const { sendCommand } = useTransport();
     const { confirm, confirmDialog } = useConfirmDialog();
     const cacheKey = `${routeId}:${sessionId || providerType}`;
@@ -532,7 +534,7 @@ export default function ControlsBar({
             const confirmed = await confirm({
                 title: ctrl.confirmTitle?.trim() || ctrl.confirmMessage,
                 description: ctrl.confirmTitle?.trim() ? ctrl.confirmMessage : undefined,
-                confirmLabel: ctrl.confirmLabel?.trim() || 'Confirm',
+                confirmLabel: ctrl.confirmLabel?.trim() || t('common.confirm'),
             });
             if (!confirmed) return;
         }

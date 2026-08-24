@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import {
     getSessionHostAvailabilityBadge,
@@ -169,6 +170,7 @@ export default function SessionHostPanel({
     cliSessions,
     sendDaemonCommand,
 }: SessionHostPanelProps) {
+    const { t } = useTranslation('common')
     const [error, setError] = useState('')
     const [busyActionKey, setBusyActionKey] = useState<string | null>(null)
     const { confirm, confirmDialog } = useConfirmDialog()
@@ -201,17 +203,17 @@ export default function SessionHostPanel({
             })
             const envelope = unwrapCommandEnvelope(raw)
             if (!envelope?.success) {
-                throw new Error(envelope?.error || 'Could not load hosted runtime diagnostics')
+                throw new Error(envelope?.error || t('sessionHost.diagnosticsFailed'))
             }
             applyDiagnostics((envelope.diagnostics || envelope.result || null) as SessionHostDiagnosticsSnapshot | null)
             setError('')
         } catch (cause) {
-            const message = cause instanceof Error ? cause.message : 'Could not load hosted runtime diagnostics'
+            const message = cause instanceof Error ? cause.message : t('sessionHost.diagnosticsFailed')
             setError(message)
         } finally {
             setRefreshing(false)
         }
-    }, [applyDiagnostics, machineId, sendDaemonCommand])
+    }, [applyDiagnostics, machineId, sendDaemonCommand, t])
 
     useEffect(() => {
         if (!machineId || diagnostics || loading || refreshing) return
@@ -225,9 +227,9 @@ export default function SessionHostPanel({
         const actionKey = `${action}:${session.sessionId}`
         if (action === 'session_host_stop_session') {
             const confirmed = await confirm({
-                title: `Stop ${session.displayName}?`,
-                description: 'This will terminate the hosted runtime.',
-                confirmLabel: 'Stop',
+                title: t('sessionHost.stopConfirmTitle', { name: session.displayName }),
+                description: t('sessionHost.stopConfirmDescription'),
+                confirmLabel: t('sessionHost.stop'),
                 tone: 'danger',
             })
             if (!confirmed) return
@@ -238,29 +240,29 @@ export default function SessionHostPanel({
             const raw = await sendDaemonCommand(machineId, action, { sessionId: session.sessionId })
             const envelope = unwrapCommandEnvelope(raw)
             if (!envelope?.success) {
-                throw new Error(envelope?.error || 'Session host action failed')
+                throw new Error(envelope?.error || t('sessionHost.actionFailed'))
             }
-            const verb = action === 'session_host_resume_session'
-                ? 'resumed'
+            const toastKey = action === 'session_host_resume_session'
+                ? 'sessionHost.toastResumed'
                 : action === 'session_host_restart_session'
-                    ? 'restarted'
-                    : 'stopped'
-            eventManager.showToast(`Session host ${verb}: ${session.displayName}`, 'success')
+                    ? 'sessionHost.toastRestarted'
+                    : 'sessionHost.toastStopped'
+            eventManager.showToast(t(toastKey, { name: session.displayName }), 'success')
             await refreshDiagnostics()
         } catch (cause) {
-            const message = cause instanceof Error ? cause.message : 'Session host action failed'
+            const message = cause instanceof Error ? cause.message : t('sessionHost.actionFailed')
             eventManager.showToast(message, 'warning')
             setError(message)
         } finally {
             setBusyActionKey((current) => (current === actionKey ? null : current))
         }
-    }, [confirm, machineId, refreshDiagnostics, sendDaemonCommand])
+    }, [confirm, machineId, refreshDiagnostics, sendDaemonCommand, t])
 
     const runPruneDuplicates = useCallback(async () => {
         const confirmed = await confirm({
-            title: 'Prune duplicate hosted runtimes?',
-            description: 'The newest runtime for each provider session will be kept and older duplicates will be stopped and removed.',
-            confirmLabel: 'Prune',
+            title: t('sessionHost.pruneConfirmTitle'),
+            description: t('sessionHost.pruneConfirmDescription'),
+            confirmLabel: t('sessionHost.prune'),
             tone: 'danger',
         })
         if (!confirmed) return
@@ -270,21 +272,21 @@ export default function SessionHostPanel({
             const raw = await sendDaemonCommand(machineId, 'session_host_prune_duplicate_sessions', {})
             const envelope = unwrapCommandEnvelope(raw)
             if (!envelope?.success) {
-                throw new Error(envelope?.error || 'Duplicate prune failed')
+                throw new Error(envelope?.error || t('sessionHost.pruneFailed'))
             }
             const result = envelope.result || {}
             const prunedCount = Array.isArray(result.prunedSessionIds) ? result.prunedSessionIds.length : 0
             const groupCount = typeof result.duplicateGroupCount === 'number' ? result.duplicateGroupCount : 0
-            eventManager.showToast(`Pruned ${prunedCount} duplicate runtime(s) across ${groupCount} group(s)`, 'success')
+            eventManager.showToast(t('sessionHost.toastPruned', { pruned: prunedCount, groups: groupCount }), 'success')
             await refreshDiagnostics()
         } catch (cause) {
-            const message = cause instanceof Error ? cause.message : 'Duplicate prune failed'
+            const message = cause instanceof Error ? cause.message : t('sessionHost.pruneFailed')
             eventManager.showToast(message, 'warning')
             setError(message)
         } finally {
             setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
         }
-    }, [confirm, machineId, refreshDiagnostics, sendDaemonCommand])
+    }, [confirm, machineId, refreshDiagnostics, sendDaemonCommand, t])
 
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
@@ -325,10 +327,9 @@ export default function SessionHostPanel({
         const busyStop = busyActionKey === `session_host_stop_session:${session.sessionId}`
         const recoveryLabel = getSessionHostRecoveryLabel(session.meta)
         const linkedCli = cliBySessionId.get(session.sessionId)
-        const clientsLabel = session.attachedClients.length === 1
-            ? '1 client'
-            : `${session.attachedClients.length} clients`
-        const recoveryActionLabel = section === 'recovery' ? 'Recover' : 'Resume'
+        const clientsLabel = t('sessionHost.clientsCount', { count: session.attachedClients.length })
+        const recoveryActionLabel = section === 'recovery' ? t('sessionHost.recover') : t('sessionHost.resume')
+        const recoveryActionBusyLabel = section === 'recovery' ? t('sessionHost.recovering') : t('sessionHost.resuming')
         const nextActionLabel = getSessionHostNextActionLabel(section)
         return (
             <div key={session.sessionId} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
@@ -348,7 +349,7 @@ export default function SessionHostPanel({
                             )}
                         </div>
                         <div className="text-2xs text-text-secondary mt-1 flex flex-wrap gap-2">
-                            <span className="text-text-primary/90">{session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || 'No workspace'}</span>
+                            <span className="text-text-primary/90">{session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || t('sessionHost.noWorkspace')}</span>
                             <span className="text-text-muted">·</span>
                             <span className="font-mono text-text-primary">{session.runtimeKey}</span>
                             {session.osPid ? (
@@ -380,7 +381,7 @@ export default function SessionHostPanel({
                                 disabled={!!busyActionKey}
                                 onClick={() => { void runSessionAction('session_host_resume_session', session) }}
                             >
-                                {busyResume ? `${recoveryActionLabel}ing…` : recoveryActionLabel}
+                                {busyResume ? recoveryActionBusyLabel : recoveryActionLabel}
                             </button>
                         )}
                         <button
@@ -389,7 +390,7 @@ export default function SessionHostPanel({
                             disabled={!!busyActionKey}
                             onClick={() => { void runSessionAction('session_host_restart_session', session) }}
                         >
-                            {busyRestart ? 'Restarting…' : 'Restart'}
+                            {busyRestart ? t('sessionHost.restarting') : t('sessionHost.restart')}
                         </button>
                         {section === 'live' && (session.lifecycle === 'running' || session.lifecycle === 'starting' || session.lifecycle === 'interrupted') && (
                             <button
@@ -398,7 +399,7 @@ export default function SessionHostPanel({
                                 disabled={!!busyActionKey}
                                 onClick={() => { void runSessionAction('session_host_stop_session', session) }}
                             >
-                                {busyStop ? 'Stopping…' : 'Stop'}
+                                {busyStop ? t('sessionHost.stopping') : t('sessionHost.stop')}
                             </button>
                         )}
                     </div>
@@ -412,7 +413,7 @@ export default function SessionHostPanel({
             <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
                     <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5">
-                        <IconServer size={14} /> Hosted Runtime Recovery
+                        <IconServer size={14} /> {t('sessionHost.title')}
                     </div>
                     <div className="text-[12px] text-text-secondary mt-1">
                         {getHostedRuntimeRecoveryDescription()}
@@ -427,8 +428,8 @@ export default function SessionHostPanel({
                             disabled={busyActionKey === 'session_host_prune_duplicate_sessions'}
                         >
                             {busyActionKey === 'session_host_prune_duplicate_sessions'
-                                ? 'Pruning…'
-                                : `Prune duplicates (${duplicateGroupCount})`}
+                                ? t('sessionHost.pruning')
+                                : t('sessionHost.pruneDuplicatesCount', { count: duplicateGroupCount })}
                         </button>
                     )}
                     <span className={`px-2 py-1 rounded-md text-3xs font-semibold ${availabilityBadge.toneClass}`}>
@@ -441,7 +442,7 @@ export default function SessionHostPanel({
                         disabled={loading || refreshing}
                     >
                         <IconRefresh size={13} />
-                        {loading || refreshing ? 'Refreshing…' : 'Refresh'}
+                        {loading || refreshing ? t('sessionHost.refreshing') : t('sessionHost.refresh')}
                     </button>
                 </div>
             </div>
@@ -451,7 +452,7 @@ export default function SessionHostPanel({
                     <div className="flex items-start gap-2">
                         <IconWarning size={14} className="mt-0.5 text-amber-300 shrink-0" />
                         <div>
-                            <div className="font-medium text-amber-100">Hosted runtime diagnostics need attention</div>
+                            <div className="font-medium text-amber-100">{t('sessionHost.diagnosticsAttention')}</div>
                             <div className="text-amber-200/90 mt-1">{error}</div>
                         </div>
                     </div>
@@ -462,19 +463,19 @@ export default function SessionHostPanel({
                 <>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-4">
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Live runtimes</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statLive')}</div>
                             <div className="text-[18px] font-semibold text-text-primary mt-1">{diagnostics.runtimeCount}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Recovery</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statRecovery')}</div>
                             <div className="text-[18px] font-semibold text-text-primary mt-1">{recoverySessions.length}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Requests</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statRequests')}</div>
                             <div className="text-[18px] font-semibold text-text-primary mt-1">{diagnostics.recentRequests.length}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-3xs uppercase tracking-wider text-text-secondary">Started</div>
+                            <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statStarted')}</div>
                             <div className="text-[12px] font-medium text-text-primary mt-1">{formatRelativeTime(diagnostics.hostStartedAt)}</div>
                             <div className="text-3xs text-text-secondary mt-0.5">{formatClock(diagnostics.hostStartedAt)}</div>
                         </div>
@@ -483,7 +484,7 @@ export default function SessionHostPanel({
                     {latestWarnOrError && (
                         <div className="rounded-xl border border-amber-500/[0.16] bg-amber-500/[0.07] px-3.5 py-3 text-2xs text-text-secondary mb-4">
                             <div className="flex items-center gap-1.5 text-amber-200 font-medium mb-1">
-                                <IconWarning size={13} /> Latest host warning
+                                <IconWarning size={13} /> {t('sessionHost.latestWarning')}
                             </div>
                             <div className="text-text-primary leading-relaxed">{latestWarnOrError.message}</div>
                             <div className="text-3xs text-text-secondary mt-1">
@@ -496,14 +497,14 @@ export default function SessionHostPanel({
                     <div className="mb-4 space-y-4">
                         <div>
                             <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
-                                <IconTerminal size={14} /> Live Hosted Runtimes
+                                <IconTerminal size={14} /> {t('sessionHost.liveTitle')}
                             </div>
                             <div className="text-2xs text-text-secondary mb-2.5">
                                 {getSessionHostSectionHint('live')}
                             </div>
                             {liveSessions.length === 0 ? (
                                 <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
-                                    No live hosted runtimes on this machine right now.
+                                    {t('sessionHost.liveEmpty')}
                                 </div>
                             ) : (
                                 <div className="space-y-2">
@@ -514,14 +515,14 @@ export default function SessionHostPanel({
 
                         <div>
                             <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
-                                <IconServer size={14} /> Recovery Snapshots
+                                <IconServer size={14} /> {t('sessionHost.recoveryTitle')}
                             </div>
                             <div className="text-2xs text-text-secondary mb-2.5">
                                 {getSessionHostSectionHint('recovery')}
                             </div>
                             {recoverySessions.length === 0 ? (
                                 <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
-                                    No recovery snapshots currently need attention.
+                                    {t('sessionHost.recoveryEmpty')}
                                 </div>
                             ) : (
                                 <div className="space-y-2">
@@ -533,7 +534,7 @@ export default function SessionHostPanel({
                         {inactiveSessions.length > 0 && (
                             <div>
                                 <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
-                                    Inactive Records
+                                    {t('sessionHost.inactiveTitle')}
                                 </div>
                                 <div className="text-2xs text-text-secondary mb-2.5">
                                     {getSessionHostSectionHint('inactive')}
@@ -547,11 +548,11 @@ export default function SessionHostPanel({
 
                     <div>
                         <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
-                            Recent Host Activity
+                            {t('sessionHost.recentActivity')}
                         </div>
                         {recentTransitions.length === 0 ? (
                             <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3 text-[12px] text-text-secondary">
-                                No recent runtime transitions yet.
+                                {t('sessionHost.transitionsEmpty')}
                             </div>
                         ) : (
                             <div className="rounded-xl border border-border-subtle bg-bg-primary divide-y divide-border-subtle">
