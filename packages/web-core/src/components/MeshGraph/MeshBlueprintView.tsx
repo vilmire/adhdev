@@ -58,7 +58,7 @@ interface RoutePreviewNode {
     }
     quotaDiagnostics?: Array<{
         providerType: string
-        bonus?: { value?: number }
+        bonus?: { value?: number; zeroReason?: string }
         gate?: { outcome?: string; reason?: string }
     }>
 }
@@ -108,6 +108,20 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     /** difficulty → ranked node previews (scheduler order: index 0 = next match). */
     const [schedMatrix, setSchedMatrix] = useState<Record<string, RoutePreviewNode[]> | null>(null)
     const [schedObservedAt, setSchedObservedAt] = useState('')
+
+    // Escape closes the transient scheduling popover FIRST — capture phase so
+    // the dialog's own Escape handler doesn't tear down the whole surface.
+    useEffect(() => {
+        if (!schedDetailOpen) return
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return
+            event.stopPropagation()
+            event.preventDefault()
+            setSchedDetailOpen(false)
+        }
+        window.addEventListener('keydown', onKeyDown, true)
+        return () => window.removeEventListener('keydown', onKeyDown, true)
+    }, [schedDetailOpen])
 
     const nowMs = useMemo(() => Date.now(), [graphs])
     const canCommand = Boolean(daemonId && sendDaemonCommand)
@@ -254,11 +268,6 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         )
                     })}
                 </div>
-                {predictedSlots && (
-                    <button type="button" className={`${chipBase} ${chipIdle} sm:hidden`} onClick={() => setSchedDetailOpen(open => !open)}>
-                        {t('meshGraph.blueprint.schedulingShort')}
-                    </button>
-                )}
                 <label className="hidden sm:flex shrink-0 items-center gap-1.5 text-2xs text-text-muted cursor-pointer">
                     <input type="checkbox" checked={includeTerminal} onChange={e => setIncludeTerminal(e.target.checked)} />
                     {t('repoMesh.graphs.includeTerminal')}
@@ -269,6 +278,30 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
             </div>
 
             {graphsError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">{graphsError}</div>}
+
+            {/* ── Scheduling forecast — IN FLOW above the canvas, never occluding a
+                card. One wrapping line: difficulty → next slot; clicking an item
+                opens the per-machine detail with that difficulty pre-selected. ── */}
+            {predictedSlots && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-3xs">
+                    <span className="uppercase tracking-wide text-4xs text-text-muted">{t('meshGraph.blueprint.schedulingShort')}</span>
+                    {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
+                        <button
+                            key={difficulty}
+                            type="button"
+                            className="group inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-bg-glass"
+                            onClick={() => {
+                                setSchedDetailDifficulty(difficulty)
+                                setSchedDetailOpen(open => !open || schedDetailDifficulty !== difficulty)
+                            }}
+                            title={t('meshGraph.blueprint.scheduling')}
+                        >
+                            <span className="uppercase tracking-wide text-4xs text-text-muted group-hover:text-text-secondary">{difficulty}</span>
+                            <span className="text-green-500">→ {predictedSlots[difficulty] ?? '—'}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
 
             {/* ── Body ── */}
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg">
@@ -312,28 +345,10 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     </div>
                 )}
 
-                {/* ── Scheduling summary — a compact in-graph badge (difficulty →
-                    next slot), click for the full per-node detail. The full matrix
-                    stays hidden by default: the blueprint is the star, the forecast
-                    is a legend. ── */}
+                {/* ── Scheduling detail popover — transient overlay anchored to the
+                    canvas top; the always-visible forecast lives in flow above. ── */}
                 {predictedSlots && (
                     <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex flex-col items-end gap-1">
-                        <button
-                            type="button"
-                            onClick={() => setSchedDetailOpen(open => !open)}
-                            className={`pointer-events-auto hidden sm:block rounded-md border px-2 py-1 text-left text-3xs leading-4 ${meshTheme.isDark
-                                ? 'border-white/10 bg-slate-950/85 text-slate-300 hover:bg-slate-900'
-                                : 'border-slate-200 bg-white/95 text-slate-600 hover:bg-slate-50'}`}
-                            title={t('meshGraph.blueprint.scheduling')}
-                        >
-                            {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
-                                <div key={difficulty} className="flex items-center gap-1.5">
-                                    <span className="w-14 uppercase tracking-wide text-4xs opacity-60">{difficulty}</span>
-                                    <span className="text-green-500">→ {predictedSlots[difficulty] ?? '—'}</span>
-                                </div>
-                            ))}
-                        </button>
-
                         {schedDetailOpen && schedMatrix && (
                             <div className={`pointer-events-auto max-h-[45dvh] w-full max-w-[620px] overflow-y-auto rounded-lg border p-2.5 text-2xs shadow-md ${meshTheme.isDark ? 'border-white/10 bg-slate-950/98' : 'border-slate-300 bg-white'}`}>
                                 <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -353,6 +368,9 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                     </label>
                                     <button type="button" className="btn btn-sm btn-secondary" disabled={schedLoading || !canCommand} onClick={() => void runRoutePreview()}>
                                         <IconRefresh size={11} />
+                                    </button>
+                                    <button type="button" className="btn btn-sm btn-secondary" aria-label="Close scheduling detail" onClick={() => setSchedDetailOpen(false)}>
+                                        ✕
                                     </button>
                                 </div>
                                 {schedError && <div className="text-3xs text-red-400">{schedError}</div>}
@@ -384,6 +402,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                         score?: RoutePreviewSlotScore
                                         quotaOutcome?: string
                                         quotaBonus?: number
+                                        quotaZeroReason?: string
                                         status: 'next' | 'waiting' | 'full' | 'floor'
                                         target?: string
                                     }
@@ -401,6 +420,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                                 score,
                                                 quotaOutcome: quota?.gate?.outcome,
                                                 quotaBonus: score.quotaBonus ?? quota?.bonus?.value,
+                                                ...(quota?.bonus?.zeroReason ? { quotaZeroReason: quota.bonus.zeroReason } : {}),
                                                 status: isNext ? 'next'
                                                     : score.capacityAvailable === false ? 'full' : 'waiting',
                                                 ...(isNext && group.targetNodeLabel ? { target: group.targetNodeLabel } : {}),
@@ -434,7 +454,9 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                             `base ${row.score.base ?? '—'}`,
                                             `difficulty ${row.score.difficulty ?? '—'}`,
                                             `tags ${row.score.tags ?? '—'}`,
-                                            `${t('meshGraph.blueprint.schedColQuota')} ${row.quotaBonus != null ? `+${row.quotaBonus}` : '—'}`,
+                                            // Zero bonus names its cause (stale / no-data / …) — an
+                                            // unexplained "+0" is exactly the question it provoked.
+                                            `${t('meshGraph.blueprint.schedColQuota')} ${row.quotaBonus != null ? `+${row.quotaBonus}` : '—'}${row.quotaBonus === 0 && row.quotaZeroReason ? ` (${row.quotaZeroReason})` : ''}`,
                                         ]
                                         return parts.join(' · ')
                                     }

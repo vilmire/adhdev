@@ -6,7 +6,7 @@
  * pipeline: dependencies on the left, dependents on the right.
  */
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
     Background,
@@ -20,6 +20,7 @@ import {
     type Node,
     type NodeProps,
     type NodeTypes,
+    type ReactFlowInstance,
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
@@ -86,9 +87,13 @@ const STATUS_STYLES: Record<string, { dark: string; light: string; dot: string; 
         dot: 'bg-sky-400',
         pulse: true,
     },
+    // Terminal-success recedes: a long-lived queue is mostly completed cards,
+    // and when they all glow emerald the live plan (pending/assigned/blocked)
+    // has no contrast left. Keep the emerald dot as the success cue, mute the
+    // surface itself.
     completed: {
-        dark: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100',
-        light: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+        dark: 'border-emerald-400/15 bg-white/[0.03] text-slate-300',
+        light: 'border-emerald-200 bg-white text-slate-500',
         dot: 'bg-emerald-400',
     },
     failed: {
@@ -124,12 +129,15 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     const task = dagNode.task
     const style = STATUS_STYLES[task.status] ?? STATUS_STYLES.pending
     const statusClass = theme.isDark ? style.dark : style.light
+    // History fades, the live plan pops: terminal-success/cancelled cards render
+    // at reduced opacity (full on hover/selection so they stay inspectable).
+    const receded = (task.status === 'completed' || task.status === 'cancelled') && !selected
     const chipClass = theme.isDark
         ? 'rounded-full border border-white/10 bg-white/[0.06] px-1.5 py-px text-4xs text-slate-300'
         : 'rounded-full border border-slate-200 bg-white/80 px-1.5 py-px text-4xs text-slate-500'
     return (
         <div
-            className={`rounded-2xl border px-3 py-2.5 shadow-sm transition-shadow ${statusClass} ${selected ? (theme.isDark ? 'ring-2 ring-cyan-300/60' : 'ring-2 ring-sky-400/70') : ''}`}
+            className={`rounded-2xl border px-3 py-2.5 shadow-sm transition-[opacity,box-shadow] ${statusClass} ${selected ? (theme.isDark ? 'ring-2 ring-cyan-300/60' : 'ring-2 ring-sky-400/70') : ''} ${receded ? 'opacity-60 hover:opacity-100' : ''}`}
             style={{ width: TASK_CARD_WIDTH }}
         >
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
@@ -256,7 +264,14 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
         [dag],
     )
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+    // Focus highlight driven by the stat-chip jump — separate from selection so
+    // jumping never opens the detail surface, it only rings + centers the card.
+    const [focusTaskId, setFocusTaskId] = useState<string | null>(null)
     const [positions, setPositions] = useState<Map<string, { x: number; y: number }> | null>(null)
+    // State (not a ref) so the live-fit effect reruns once the canvas mounts.
+    const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<TaskFlowNode, Edge> | null>(null)
+    const jumpCycleRef = useRef<Record<string, number>>({})
+    const fittedFingerprintRef = useRef('')
 
     useEffect(() => {
         let cancelled = false
@@ -282,13 +297,13 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 data: {
                     dagNode: node,
                     theme: meshTheme,
-                    selected: selectedTaskId === node.id,
+                    selected: selectedTaskId === node.id || focusTaskId === node.id,
                     ...(predictedSlots ? { predictedSlot: predictedSlots[node.task.difficulty ?? 'medium'] } : {}),
                 },
                 draggable: false,
                 selectable: true,
             }))
-    }, [dag, meshTheme, positions, selectedTaskId, predictedSlots])
+    }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots])
 
     const flowEdges = useMemo<Edge[]>(() => {
         if (!positions) return []
@@ -309,6 +324,46 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
 
     const selectedNode = selectedTaskId ? dag.nodes.find(node => node.id === selectedTaskId) ?? null : null
 
+    // Non-terminal tasks are what the blueprint is FOR — when any exist, the
+    // initial viewport frames them instead of the whole history sprawl. Runs
+    // once per layout identity so it never fights the user's panning.
+    const liveTaskIds = useMemo(
+        () => dag.nodes.filter(node => !['completed', 'failed', 'cancelled'].includes(node.task.status)).map(node => node.id),
+        [dag],
+    )
+    useEffect(() => {
+        if (!flowInstance || !positions || liveTaskIds.length === 0) return
+        if (fittedFingerprintRef.current === dagFingerprint) return
+        fittedFingerprintRef.current = dagFingerprint
+        void flowInstance.fitView({ nodes: liveTaskIds.map(id => ({ id })), padding: 0.3, maxZoom: 1 })
+    }, [dagFingerprint, flowInstance, liveTaskIds, positions])
+
+    /** Stat-chip jump: cycle through the tasks in that bucket, centering each. */
+    const jumpToState = useCallback((bucket: 'pending' | 'assigned' | 'waiting' | 'blocked') => {
+        const instance = flowInstance
+        if (!instance || !positions) return
+        const ids = dag.nodes.filter(node => {
+            switch (bucket) {
+                case 'waiting': return node.waitingOn.length > 0
+                case 'blocked': return node.blocked
+                default: return node.task.status === bucket
+            }
+        }).map(node => node.id)
+        if (ids.length === 0) return
+        const index = ((jumpCycleRef.current[bucket] ?? -1) + 1) % ids.length
+        jumpCycleRef.current[bucket] = index
+        const id = ids[index]
+        const position = positions.get(id)
+        const node = dag.nodes.find(candidate => candidate.id === id)
+        if (!position || !node) return
+        setFocusTaskId(id)
+        void instance.setCenter(
+            position.x + TASK_CARD_WIDTH / 2,
+            position.y + estimateTaskCardHeight(node) / 2,
+            { zoom: Math.max(instance.getZoom(), 0.85), duration: 350 },
+        )
+    }, [dag, flowInstance, positions])
+
     const handleNodeClick = useCallback((_event: unknown, node: TaskFlowNode) => {
         if (onTaskOpen) {
             onTaskOpen(node.data.dagNode.task)
@@ -325,7 +380,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
         )
     }
 
-    const statBadge = (label: string, tone: 'default' | 'warn' | 'danger' | 'info' = 'default') => {
+    const statBadge = (label: string, tone: 'default' | 'warn' | 'danger' | 'info' = 'default', onJump?: () => void) => {
         const toneClass = tone === 'warn'
             ? (meshTheme.isDark ? 'border-amber-400/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700')
             : tone === 'danger'
@@ -333,7 +388,15 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 : tone === 'info'
                     ? (meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
                     : (meshTheme.isDark ? 'border-white/10 bg-white/[0.05] text-slate-300' : 'border-slate-200 bg-white/85 text-slate-600')
-        return <span className={`rounded-full border px-2 py-0.5 text-3xs ${toneClass}`}>{label}</span>
+        if (!onJump) return <span className={`rounded-full border px-2 py-0.5 text-3xs ${toneClass}`}>{label}</span>
+        // State chips double as navigation: each click centers the next card in
+        // that bucket, so "1 blocked" is an entry point, not just a count.
+        return (
+            <button type="button" onClick={onJump} title={t('meshGraph.taskDag.jumpToState')}
+                className={`rounded-full border px-2 py-0.5 text-3xs transition-transform hover:scale-105 ${toneClass}`}>
+                {label}
+            </button>
+        )
     }
 
     return (
@@ -344,10 +407,10 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 hidden history that is itself the load-more action. */}
             {!compact && <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1">
                 {statBadge(t('meshGraph.taskDag.statsTasks', { count: dag.stats.total }))}
-                {dag.stats.pending > 0 && statBadge(t('meshGraph.taskDag.statsPending', { count: dag.stats.pending }))}
-                {dag.stats.assigned > 0 && statBadge(t('meshGraph.taskDag.statsAssigned', { count: dag.stats.assigned }), 'info')}
-                {dag.stats.waiting > 0 && statBadge(t('meshGraph.taskDag.statsWaiting', { count: dag.stats.waiting }), 'warn')}
-                {dag.stats.blocked > 0 && statBadge(t('meshGraph.taskDag.statsBlocked', { count: dag.stats.blocked }), 'danger')}
+                {dag.stats.pending > 0 && statBadge(t('meshGraph.taskDag.statsPending', { count: dag.stats.pending }), 'default', () => jumpToState('pending'))}
+                {dag.stats.assigned > 0 && statBadge(t('meshGraph.taskDag.statsAssigned', { count: dag.stats.assigned }), 'info', () => jumpToState('assigned'))}
+                {dag.stats.waiting > 0 && statBadge(t('meshGraph.taskDag.statsWaiting', { count: dag.stats.waiting }), 'warn', () => jumpToState('waiting'))}
+                {dag.stats.blocked > 0 && statBadge(t('meshGraph.taskDag.statsBlocked', { count: dag.stats.blocked }), 'danger', () => jumpToState('blocked'))}
                 {scoped.hiddenCount > 0 && (
                     <button
                         type="button"
@@ -367,8 +430,9 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 nodes={flowNodes}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
+                onInit={setFlowInstance}
                 onNodeClick={handleNodeClick}
-                onPaneClick={() => setSelectedTaskId(null)}
+                onPaneClick={() => { setSelectedTaskId(null); setFocusTaskId(null) }}
                 fitView
                 fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
                 minZoom={0.18}
