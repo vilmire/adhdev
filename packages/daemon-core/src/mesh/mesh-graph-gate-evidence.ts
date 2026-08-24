@@ -92,6 +92,7 @@ function collectUpstreamCommits(gate: MeshGraphGateRow): UpstreamCommitRef[] {
     const graphStore = MeshRuntimeStore.getInstance().graphStore();
     const upstreamNodeIds = new Set(
         graphStore.listEdges(gate.graphId)
+            // eslint-disable-next-line no-restricted-syntax -- GRAPH node UUIDs from the same graph store (mesh_task_graph_nodes.nodeId), single canonical form — not mesh machine/daemon ids
             .filter(edge => edge.toNodeId === gate.nodeId)
             .map(edge => edge.fromNodeId),
     );
