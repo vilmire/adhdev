@@ -255,6 +255,32 @@ describe('marketplace install / uninstall safety', () => {
         })
     })
 
+    describe('real handler dual-layer uninstall (source pin)', () => {
+        // The mirrors above deliberately re-implement the safety semantics; the
+        // dual-layer ordering defect lived only in the REAL handler: install
+        // activates via the verified CHANNEL STORE, but uninstall early-returned
+        // 'not installed' when the legacy `.upstream` dir was absent — never
+        // reaching deactivateVerifiedChannel, so a channel-activated provider
+        // survived its own uninstall. Pin the fixed ordering in the source.
+        it('deactivates the channel store before deciding not-installed', () => {
+            const source = fs.readFileSync(
+                path.resolve(__dirname, '../../src/commands/handler.ts'), 'utf-8')
+            const start = source.indexOf('private async handleUninstallProviderManifest')
+            expect(start).toBeGreaterThan(0)
+            const rest = source.slice(start)
+            const nextMethod = rest.indexOf('private async ', 'private async '.length)
+            const uninstall = nextMethod > 0 ? rest.slice(0, nextMethod) : rest
+            const deactivateAt = uninstall.indexOf('deactivateVerifiedChannel')
+            const notInstalledAt = uninstall.indexOf("error: 'not installed'")
+            expect(deactivateAt).toBeGreaterThan(0)
+            expect(notInstalledAt).toBeGreaterThan(0)
+            // Store deactivation must run BEFORE the not-installed verdict, and
+            // the verdict must require BOTH layers to be empty.
+            expect(deactivateAt).toBeLessThan(notInstalledAt)
+            expect(uninstall).toContain('!hadUpstreamDir && !channelDeactivated')
+        })
+    })
+
     describe('checksum verification helper', () => {
         it('SHA-256 matches when content unchanged', () => {
             const body = JSON.stringify({ providerVersion: '1.0.0', type: 'test-foo' })

@@ -1287,6 +1287,7 @@ class StandaloneServer {
     }
 
     // ─── Provider management REST (curl-friendly testing) ───────
+    // GET  /api/v1/providers/catalog      → registry catalog via the daemon's resolver (onboarding)
     // GET  /api/v1/providers/installed    → list installed providers + versions
     // GET  /api/v1/providers/updates      → check_provider_updates (READ-ONLY: pins vs registry)
     // POST /api/v1/providers/activate     → activate_provider_updates (moves the pointer)
@@ -1307,6 +1308,16 @@ class StandaloneServer {
           let body: Record<string, unknown> = {};
           if (subPath === '/installed' && method === 'GET') {
             cmdType = 'list_installed_providers';
+          } else if (subPath === '/catalog' && method === 'GET') {
+            // Registry catalog via the daemon's registry RESOLVER — the
+            // onboarding dialog must never call the vendor registry directly
+            // (self-hosted daemons point the resolver elsewhere).
+            cmdType = 'registry_catalog';
+            const q = parsedUrl.searchParams;
+            body = {
+              ...(q.get('sort') ? { sort: q.get('sort') } : {}),
+              ...(q.get('limit') ? { limit: Number(q.get('limit')) } : {}),
+            };
           } else if (subPath === '/updates' && method === 'GET') {
             cmdType = 'check_provider_updates';
           } else if (subPath === '/activate' && method === 'POST') {

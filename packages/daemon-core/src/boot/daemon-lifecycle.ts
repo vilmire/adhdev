@@ -20,7 +20,7 @@ import {
 } from '../commands/cli-manager.js';
 import { DaemonAgentStreamManager } from '../agent-stream/manager.js';
 import { AgentStreamPoller } from '../agent-stream/poller.js';
-import { ProviderLoader } from '../providers/provider-loader.js';
+import { ProviderLoader, providerLoaderConfigOptions } from '../providers/provider-loader.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { DevServer } from '../daemon/dev-server.js';
@@ -245,13 +245,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     const disableUpstream = providerSourceMode === 'no-upstream';
     const providerLoader = new ProviderLoader({
         logFn: config.providerLogFn,
+        // Shared config projection — keeps this site, launch.ts, and the CLI
+        // factory from drifting (the launch path once dropped userDir/sourceMode).
+        ...providerLoaderConfigOptions(appConfig),
+        // The boot path resolves sourceMode with an explicit 'normal' default
+        // for the disableUpstream derivation above — keep that authoritative.
         sourceMode: providerSourceMode,
-        userDir: appConfig.providerDir,
-        registryUrl: appConfig.registryUrl,
-        serverUrl: appConfig.serverUrl,
-        providerTarballUrl: appConfig.providerTarballUrl,
-        channel: appConfig.providerChannel,
-        updateChannel: appConfig.updateChannel,
         // Enables the daemon-update = provider-activation stamp (option C):
         // a boot on a NEW daemon version runs one verified sync; same-version
         // boots stay network-free.

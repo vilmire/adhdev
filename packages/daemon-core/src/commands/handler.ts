@@ -542,6 +542,7 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'workspace_list': return WorkspaceCmd.handleWorkspaceList();
             case 'workspace_add': return WorkspaceCmd.handleWorkspaceAdd(args);
             case 'workspace_remove': return WorkspaceCmd.handleWorkspaceRemove(args);
+            case 'registry_catalog': return this.handleRegistryCatalog(args);
             case 'workspace_set_default':
                 return WorkspaceCmd.handleWorkspaceSetDefault(args);
 
@@ -751,12 +752,13 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /**
-     * Remove a provider manifest from the upstream cache root
-     * (~/.adhdev/providers/.upstream/{category}/{type}/). Refuses to touch
-     * anything outside that root. Used by onboarding to opt out of a
-     * provider the user doesn't want; the dashboard no longer exposes a
-     * per-provider uninstall button (external sources are removed as a
-     * whole via remove_provider_source).
+     * Uninstall a provider: deactivate its verified CHANNEL-STORE pointer (the
+     * layer install_provider_manifest actually writes to) and remove any legacy
+     * `.upstream/{category}/{type}/` dir. Refuses to touch anything outside the
+     * upstream root. 'not installed' only when NEITHER layer held the provider.
+     * Used by onboarding to opt out of a provider the user doesn't want; the
+     * dashboard no longer exposes a per-provider uninstall button (external
+     * sources are removed as a whole via remove_provider_source).
      */
     private async handleUninstallProviderManifest(args: any): Promise<CommandResult> {
         const type = typeof args?.type === 'string' ? args.type : '';
@@ -780,25 +782,40 @@ export class DaemonCommandHandler implements CommandHelpers {
             if (!targetDir.startsWith(installRootResolved + path.sep)) {
                 return { success: false, error: 'refusing to delete outside upstream root' };
             }
-            if (!fs.existsSync(targetDir)) {
-                return { success: false, error: 'not installed' };
+
+            // Two install layers must BOTH be considered (fragmentation audit):
+            // install activates via the verified CHANNEL STORE, while only legacy
+            // installs materialized an `.upstream/{category}/{type}` dir. The old
+            // early-return on a missing dir made uninstall of a channel-activated
+            // provider report 'not installed' and never reach the store
+            // deactivation — success:true with the provider still active.
+            const hadUpstreamDir = fs.existsSync(targetDir);
+            if (hadUpstreamDir) {
+                fs.rmSync(targetDir, { recursive: true, force: true });
             }
 
-            fs.rmSync(targetDir, { recursive: true, force: true });
-
-            // Also drop any verified channel activation for this type so an
+            // Drop any verified channel activation for this type so an
             // uninstalled provider does not keep loading from the
             // content-addressed store. Local pointer removal — no network.
+            let channelDeactivated = false;
             try {
-                this._ctx.providerLoader?.deactivateVerifiedChannel?.(type);
-            } catch { /* best-effort — uninstall of the upstream dir already succeeded */ }
+                channelDeactivated = this._ctx.providerLoader?.deactivateVerifiedChannel?.(type) === true;
+            } catch { /* best-effort — any upstream-dir removal above already happened */ }
+
+            if (!hadUpstreamDir && !channelDeactivated) {
+                return { success: false, error: 'not installed' };
+            }
 
             if (this._ctx.providerLoader) {
                 this._ctx.providerLoader.reload();
                 this._ctx.providerLoader.registerToDetector();
             }
 
-            return { success: true, removed: { type, category, path: targetDir } };
+            return {
+                success: true,
+                removed: { type, category, ...(hadUpstreamDir ? { path: targetDir } : {}) },
+                channelDeactivated,
+            };
         } catch (e: any) {
             return { success: false, error: `uninstall failed: ${e?.message || e}` };
         }
@@ -889,6 +906,42 @@ export class DaemonCommandHandler implements CommandHelpers {
      *   upstreamVersion, latestVersion, updateAvailable, stale, digest,
      *   activatedAt, previousVersion, error? }] }
      */
+    /**
+     * Read-only registry catalog proxy for dashboard surfaces (onboarding).
+     * Routes through resolveRegistryBaseUrl so a self-hosted daemon never sends
+     * its dashboard users to the vendor registry (the whole point of the
+     * resolver — the onboarding dialog used to hardcode api.adhf.dev and
+     * defeat it on the very first screen). Channel-aware like every other
+     * registry read in this file.
+     */
+    private async handleRegistryCatalog(args: any): Promise<CommandResult> {
+        const https = require('https') as typeof import('https');
+        const cfg = loadConfig();
+        const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
+        const limit = Math.min(200, Math.max(1, Number(args?.limit) || 100));
+        const sort = typeof args?.sort === 'string' && /^[a-z_]{1,32}$/.test(args.sort) ? args.sort : 'popular';
+        const channel = this._ctx.providerLoader?.channel ?? 'stable';
+        const url = `${REGISTRY}/providers?sort=${encodeURIComponent(sort)}&limit=${limit}&channel=${encodeURIComponent(channel)}`;
+        try {
+            const data: any = await new Promise((resolve, reject) => {
+                const req = https.get(url, { headers: { 'User-Agent': 'adhdev-daemon', 'Accept': 'application/json' }, timeout: 10000 }, (res) => {
+                    if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                    const chunks: Buffer[] = [];
+                    res.on('data', (c: Buffer) => chunks.push(c));
+                    res.on('end', () => {
+                        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
+                        catch (e) { reject(e); }
+                    });
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            });
+            return { success: true, providers: Array.isArray(data?.providers) ? data.providers : [], registryBaseUrl: REGISTRY, channel };
+        } catch (e: any) {
+            return { success: false, error: `registry catalog fetch failed: ${e?.message || e}`, registryBaseUrl: REGISTRY };
+        }
+    }
+
     private async handleCheckProviderUpdates(_args: any): Promise<CommandResult> {
         const installed = this.handleListInstalledProviders({});
         if (!installed.success) return installed;

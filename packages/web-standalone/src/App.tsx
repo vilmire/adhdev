@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, ApprovalsPage, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, Button, Input, getMachineNickname, getMachineHostnameLabel } from '@adhdev/web-core'
 import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
 import SetupWizardPage from './SetupWizardPage'
@@ -161,6 +161,26 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
  * SingleMachineRedirect — standalone only has 1 machine.
  * Redirect /machines and /machine to the single machine's detail page.
  */
+/**
+ * NotificationsPage needs the connected machines (for per-provider toggles);
+ * this thin wrapper mirrors web-cloud's mapping minus the cloud-only push
+ * section. Browser-notification prefs are local, so no onBrowserPrefChange.
+ */
+function StandaloneNotificationsPage() {
+    const { ides, initialLoaded } = useBaseDaemons()
+    const machines = (ides as any[]).filter((i: any) => i.type === 'adhdev-daemon').map((d: any) => ({
+        id: d.id,
+        machineId: d.machineId || d.id,
+        nickname: getMachineNickname(d) || undefined,
+        hostname: getMachineHostnameLabel(d, { fallbackId: d.id }),
+        status: d.status,
+        providers: (d.availableProviders || []).map((p: any) => ({
+            type: p.type, displayName: p.displayName, icon: p.icon, category: p.category,
+        })),
+    }))
+    return <NotificationsPage machines={machines} initialLoaded={initialLoaded ?? true} />
+}
+
 function SingleMachineRedirect() {
     const { t } = useTranslation('common')
     const { ides, initialLoaded } = useBaseDaemons()
@@ -270,6 +290,11 @@ export default function App() {
                                     <Route path="/machine" element={<SingleMachineRedirect />} />
                                     <Route path="/machines/:id" element={<MachineDetail />} />
                                     <Route path="/machines" element={<SingleMachineRedirect />} />
+                                    {/* Platform-neutral web-core pages (fragmentation audit: the
+                                        daemon fully supports both over the standalone WS, the UI
+                                        existed, only the routes were missing). */}
+                                    <Route path="/approvals" element={<ApprovalsPage />} />
+                                    <Route path="/notifications" element={<StandaloneNotificationsPage />} />
                                     <Route path="/about" element={<StandaloneAbout />} />
                                     <Route path="/settings" element={<StandaloneSettings />} />
                                     <Route path="/mesh" element={<StandaloneRepoMeshProvider><RepoMesh /></StandaloneRepoMeshProvider>} />

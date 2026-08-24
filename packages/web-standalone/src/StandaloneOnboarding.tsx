@@ -72,16 +72,14 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
     // off by default and the user opts in.
     useEffect(() => {
         let cancelled = false
-        // The '/registry' proxy exists ONLY under the vite dev server. The
-        // daemon-served dashboard (localhost:3847) answers unknown paths with the
-        // SPA fallback — 200 text/html — so the old hostname-only check made
-        // r.json() explode there ("registry load failed" with WebKit's pattern
-        // message on Safari). The registry API sends Access-Control-Allow-Origin:*,
-        // so every non-vite origin can (and must) call it directly.
-        const REGISTRY = import.meta.env.DEV && window.location.hostname === 'localhost'
-            ? '/registry'
-            : 'https://api.adhf.dev/api/v1/registry'
-        fetch(`${REGISTRY}/providers?sort=popular&limit=100`)
+        // Same-origin daemon proxy: the daemon resolves the registry base via
+        // its resolver (config.registryUrl → env → serverUrl derivation), so a
+        // self-hosted daemon's onboarding never phones the vendor registry —
+        // the old hardcoded api.adhf.dev here defeated that on the first
+        // screen a fresh install shows. Works identically under the vite dev
+        // server (which proxies /api to the daemon) and the daemon-served
+        // dashboard on :3847.
+        fetch('/api/v1/providers/catalog?sort=popular&limit=100')
             .then(async r => {
                 if (!r.ok) throw new Error(`HTTP ${r.status}`)
                 const text = await r.text()

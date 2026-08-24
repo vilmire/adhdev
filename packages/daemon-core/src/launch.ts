@@ -31,7 +31,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { detectIDEs } from './detection/ide-detector.js';
 import { IDEInfo } from './detection/ide-detector.js';
-import { ProviderLoader } from './providers/provider-loader.js';
+import { ProviderLoader, providerLoaderConfigOptions } from './providers/provider-loader.js';
 import { loadConfig } from './config/config.js';
 import type { ProviderModule } from './providers/contracts.js';
 import { findMacAppProcessPids } from './launch/macos-app-process.js';
@@ -43,15 +43,14 @@ let _providerLoader: ProviderLoader | null = null;
 
 function getProviderLoader(): ProviderLoader {
     if (!_providerLoader) {
-        // Same channel contract as daemon boot: explicit providerChannel wins,
-        // otherwise derive from updateChannel (preview daemon → preview providers).
+        // Same CONFIG contract as daemon boot — channel, registry, AND the
+        // providerDir/sourceMode this path used to silently drop (a configured
+        // providerDir was honored at boot but ignored on IDE launch). The
+        // shared helper keeps the three construction sites from drifting again.
         const appConfig = loadConfig();
         _providerLoader = new ProviderLoader({
             logFn: () => {}, // Suppress logs during launch
-            registryUrl: appConfig.registryUrl,
-            serverUrl: appConfig.serverUrl,
-            channel: appConfig.providerChannel,
-            updateChannel: appConfig.updateChannel,
+            ...providerLoaderConfigOptions(appConfig),
         });
         _providerLoader.loadAll();
         _providerLoader.registerToDetector(); // IDE provider → detector registry

@@ -6,7 +6,7 @@
 import { useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconMesh } from '@adhdev/web-core'
+import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconMesh, IconWarning, IconBell } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -24,6 +24,8 @@ export default function StandaloneLayout({ children }: LayoutProps) {
         // to Mesh, which owns every mesh setting from then on. The /setup route stays
         // reachable for deep links and docs.
         { id: 'mesh', path: '/mesh', icon: <IconMesh />, label: t('nav.mesh'), active: location.pathname.startsWith('/mesh') || location.pathname.startsWith('/setup'), onSelect: () => navigate('/mesh') },
+        { id: 'approvals', path: '/approvals', icon: <IconWarning />, label: t('approvals.pageTitle'), active: location.pathname.startsWith('/approvals'), onSelect: () => navigate('/approvals') },
+        { id: 'notifications', path: '/notifications', icon: <IconBell />, label: t('nav.notifications'), active: location.pathname.startsWith('/notifications'), onSelect: () => navigate('/notifications') },
         { id: 'settings', path: '/settings', icon: <IconSettings />, label: t('nav.settings'), active: location.pathname.startsWith('/settings'), onSelect: () => navigate('/settings') },
     ]), [location.pathname, navigate, t])
 
