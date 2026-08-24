@@ -1,6 +1,6 @@
 /**
  * blueprintViewModel — pure derivations for the blueprint DAG
- * (MeshBlueprintDagView). Extracted from the component so the edge-state
+ * (the fused blueprint canvas (MeshTaskDagView)). Extracted from the component so the edge-state
  * vocabulary — the "what unlocks what" reading of the graph — is unit-tested
  * without rendering React Flow (same convention as taskDagViewModel).
  */

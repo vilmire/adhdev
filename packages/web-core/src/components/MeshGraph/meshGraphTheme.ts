@@ -15,6 +15,12 @@ export interface MeshGraphTheme {
     graphHintChipClass: string
     graphControlsClass: string
     graphBackgroundDotColor: string
+    /** Blueprint (설계도면) canvas: drafting-paper shell + two-tier grid. A
+     *  deliberate identity apart from the topology canvas — the plan reads as
+     *  a technical drawing, not a status board. */
+    blueprintShellClass: string
+    blueprintGridFineColor: string
+    blueprintGridAccentColor: string
     edgeLabelTextColor: string
     edgeLabelBackgroundColor: string
     edgeLabelBorderColor: string
@@ -89,6 +95,9 @@ export function getMeshGraphTheme(theme: Theme): MeshGraphTheme {
             graphHintChipClass: 'rounded-full border border-slate-300 bg-white/95 px-3 py-1 text-3xs text-slate-500 shadow-sm',
             graphControlsClass: '!bottom-4 !left-4 !shadow-md',
             graphBackgroundDotColor: 'rgba(148, 163, 184, 0.34)',
+            blueprintShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-sky-200 bg-[radial-gradient(circle_at_top,_rgba(14,116,233,0.10),_rgba(240,247,255,0.98)_46%,_rgba(248,251,255,1))]',
+            blueprintGridFineColor: 'rgba(59, 130, 246, 0.10)',
+            blueprintGridAccentColor: 'rgba(59, 130, 246, 0.20)',
             edgeLabelTextColor: '#334155',
             edgeLabelBackgroundColor: 'rgba(255, 255, 255, 0.96)',
             edgeLabelBorderColor: 'rgba(148, 163, 184, 0.45)',
@@ -134,6 +143,9 @@ export function getMeshGraphTheme(theme: Theme): MeshGraphTheme {
         graphHintChipClass: 'rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-3xs text-slate-300',
         graphControlsClass: '!bottom-4 !left-4 !shadow-lg',
         graphBackgroundDotColor: 'rgba(148, 163, 184, 0.22)',
+        blueprintShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-sky-400/15 bg-[radial-gradient(circle_at_top,_rgba(30,84,164,0.22),_rgba(6,17,38,0.99)_46%,_rgba(3,10,26,1))]',
+        blueprintGridFineColor: 'rgba(96, 165, 250, 0.10)',
+        blueprintGridAccentColor: 'rgba(96, 165, 250, 0.22)',
         edgeLabelTextColor: '#cbd5e1',
         edgeLabelBackgroundColor: 'rgba(2, 6, 23, 0.86)',
         edgeLabelBorderColor: 'rgba(148, 163, 184, 0.2)',

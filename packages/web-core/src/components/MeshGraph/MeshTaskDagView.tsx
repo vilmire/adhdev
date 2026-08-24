@@ -10,8 +10,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
-    Background,
-    BackgroundVariant,
     Controls,
     Handle,
     MarkerType,
@@ -24,7 +22,8 @@ import {
     type ReactFlowInstance,
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
-import type { RepoMeshQueueTask } from '@adhdev/daemon-core'
+import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
+import { buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, scopeTaskDagTasks, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -57,6 +56,17 @@ interface MeshTaskDagViewProps {
      * load-more chrome are dropped — just the graph + edge legend render.
      */
     compact?: boolean
+    /**
+     * Persistent orchestration graphs FUSED into this canvas (owner call
+     * 2026-08-25: gates and planned steps are part of THE blueprint, not a
+     * separate per-graph view). A graph task-node that materialized into a
+     * visible queue task fuses onto that card; coordinator gates render as ⛩
+     * nodes; unmaterialized steps render as ghost "planned" cards; the
+     * graph's edges wire them all together.
+     */
+    graphs?: MeshGraphView[]
+    /** Clicking a fused gate node opens the caller's read-only gate panel. */
+    onGateOpen?: (graph: MeshGraphView, nodeId: string, gate?: MeshGraphGateView) => void
     /**
      * When set, the stats/load-more chips render into this element (via
      * portal) instead of in-flow above the canvas — the blueprint tab hosts
@@ -213,9 +223,116 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     )
 }
 
-const nodeTypes: NodeTypes = { taskNode: TaskNodeCard }
+// ─── Graph fusion overlays (gates + planned steps) ──────────────────────────
 
-async function layoutTaskDag(dag: TaskDagData): Promise<Map<string, { x: number; y: number }>> {
+const GATE_NODE_WIDTH = 208
+const GATE_NODE_HEIGHT = 64
+const PLAN_NODE_WIDTH = 208
+const PLAN_NODE_HEIGHT = 58
+
+interface FusedOverlays {
+    gates: Array<{ id: string; graph: MeshGraphView; nodeId: string; gate?: MeshGraphGateView; ref: string; state: string }>
+    planned: Array<{ id: string; ref: string; state: string }>
+    edges: Array<{ id: string; source: string; target: string; state: import('./blueprintViewModel').BlueprintEdgeState; kind?: string }>
+}
+
+/** Gate state → visual, mirrored from the retired per-graph view. */
+const GATE_STATE_STYLES: Record<string, { dark: string; light: string; dot: string; pulse?: boolean }> = {
+    declared: { dark: 'border-slate-400/40 bg-slate-500/10 text-slate-200', light: 'border-slate-300 bg-slate-50 text-slate-700', dot: 'bg-slate-400' },
+    awaiting_coordinator: { dark: 'border-amber-400/60 bg-amber-500/15 text-amber-100', light: 'border-amber-400 bg-amber-50 text-amber-800', dot: 'bg-amber-400', pulse: true },
+    claimed: { dark: 'border-sky-400/60 bg-sky-500/15 text-sky-100', light: 'border-sky-400 bg-sky-50 text-sky-800', dot: 'bg-sky-400', pulse: true },
+    released: { dark: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100', light: 'border-emerald-300 bg-emerald-50 text-emerald-800', dot: 'bg-emerald-400' },
+    cancelled: { dark: 'border-slate-500/25 bg-slate-600/10 text-slate-400', light: 'border-slate-200 bg-slate-100 text-slate-400', dot: 'bg-slate-500' },
+    expired: { dark: 'border-rose-400/40 bg-rose-500/10 text-rose-100', light: 'border-rose-300 bg-rose-50 text-rose-800', dot: 'bg-rose-400', pulse: true },
+}
+
+/**
+ * Fuse every graph into overlay nodes/edges against the VISIBLE queue cards.
+ * A graph task-node whose task is on the canvas contributes no node of its
+ * own — its edges attach straight to the live card, which is what makes the
+ * gate read as part of the plan instead of a parallel diagram.
+ */
+function buildFusedOverlays(graphs: MeshGraphView[], visibleTaskIds: Set<string>): FusedOverlays {
+    const overlays: FusedOverlays = { gates: [], planned: [], edges: [] }
+    for (const graph of graphs) {
+        const endpointMap = buildNodeIdByEndpoint(graph)
+        const stateByNodeId = buildStateByNodeId(graph)
+        const canvasIdByGraphNode = new Map<string, string>()
+        for (const node of graph.nodes) {
+            if (node.kind === 'coordinator_gate') {
+                const id = `gate:${graph.graphId}:${node.nodeId}`
+                const gate = graph.gates.find(candidate => candidate.nodeId === node.nodeId)
+                overlays.gates.push({ id, graph, nodeId: node.nodeId, gate, ref: node.ref || node.nodeId.slice(0, 8), state: gate?.state ?? node.state })
+                canvasIdByGraphNode.set(node.nodeId, id)
+                continue
+            }
+            if (node.taskId && visibleTaskIds.has(node.taskId)) {
+                canvasIdByGraphNode.set(node.nodeId, node.taskId)
+                continue
+            }
+            const id = `plan:${graph.graphId}:${node.nodeId}`
+            overlays.planned.push({ id, ref: node.ref || node.nodeId.slice(0, 8), state: node.state })
+            canvasIdByGraphNode.set(node.nodeId, id)
+        }
+        graph.edges.forEach((edge, index) => {
+            const source = canvasIdByGraphNode.get(endpointMap.get(edge.from) ?? edge.from)
+            const target = canvasIdByGraphNode.get(endpointMap.get(edge.to) ?? edge.to)
+            if (!source || !target) return
+            overlays.edges.push({
+                id: `ge:${graph.graphId}:${index}`,
+                source,
+                target,
+                state: deriveBlueprintEdgeState(edge, stateByNodeId, endpointMap),
+                ...(edge.kind && edge.kind !== 'dependency' ? { kind: edge.kind } : {}),
+            })
+        })
+    }
+    return overlays
+}
+
+type GateFlowNode = Node<Record<string, unknown> & { overlay: FusedOverlays['gates'][number]; theme: MeshGraphTheme }, 'gateNode'>
+
+function GateNodeCard({ data }: NodeProps<GateFlowNode>) {
+    const { overlay, theme } = data
+    const style = GATE_STATE_STYLES[overlay.state] ?? GATE_STATE_STYLES.declared
+    return (
+        <div
+            className={`rounded-xl border border-dashed px-3 py-2 shadow-sm ${theme.isDark ? style.dark : style.light}`}
+            style={{ width: GATE_NODE_WIDTH, minHeight: GATE_NODE_HEIGHT }}
+        >
+            <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            <div className="flex items-center gap-1.5">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot} ${style.pulse ? 'animate-pulse' : ''}`} aria-hidden />
+                <span className="truncate text-3xs font-semibold uppercase tracking-wide opacity-85">⛩ {overlay.gate?.action ?? 'gate'}</span>
+            </div>
+            <div className="mt-1 truncate text-2xs font-medium" title={overlay.ref}>{overlay.ref}</div>
+            <div className="mt-0.5 text-4xs opacity-70">{overlay.state}{overlay.gate?.leaseExpired ? ' · lease expired' : ''}</div>
+        </div>
+    )
+}
+
+type PlanFlowNode = Node<Record<string, unknown> & { overlay: FusedOverlays['planned'][number]; theme: MeshGraphTheme }, 'planNode'>
+
+function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
+    const { overlay, theme } = data
+    const settled = overlay.state === 'completed' || overlay.state === 'skipped' || overlay.state === 'cancelled'
+    return (
+        <div
+            className={`rounded-xl border border-dashed px-3 py-2 ${settled ? 'opacity-50' : ''} ${theme.isDark ? 'border-slate-400/30 bg-white/[0.02] text-slate-300' : 'border-slate-300 bg-white/70 text-slate-600'}`}
+            style={{ width: PLAN_NODE_WIDTH, minHeight: PLAN_NODE_HEIGHT }}
+        >
+            <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            <div className="truncate text-3xs font-semibold uppercase tracking-wide opacity-70">{overlay.state}</div>
+            <div className="mt-1 truncate text-2xs font-medium" title={overlay.ref}>{overlay.ref}</div>
+        </div>
+    )
+}
+
+const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, planNode: PlanNodeCard }
+
+async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise<Map<string, { x: number; y: number }>> {
     const graph = {
         id: 'task-dag-root',
         layoutOptions: {
@@ -231,16 +348,23 @@ async function layoutTaskDag(dag: TaskDagData): Promise<Map<string, { x: number;
             'elk.layered.cycleBreaking.strategy': 'GREEDY',
             'elk.randomSeed': '1',
         },
-        children: dag.nodes.map(node => ({
-            id: node.id,
-            width: TASK_CARD_WIDTH,
-            height: estimateTaskCardHeight(node),
-        })),
-        edges: dag.edges.map(edge => ({
-            id: edge.id,
-            sources: [edge.source],
-            targets: [edge.target],
-        })),
+        children: [
+            ...dag.nodes.map(node => ({
+                id: node.id,
+                width: TASK_CARD_WIDTH,
+                height: estimateTaskCardHeight(node),
+            })),
+            ...overlays.gates.map(gate => ({ id: gate.id, width: GATE_NODE_WIDTH, height: GATE_NODE_HEIGHT })),
+            ...overlays.planned.map(plan => ({ id: plan.id, width: PLAN_NODE_WIDTH, height: PLAN_NODE_HEIGHT })),
+        ],
+        edges: [
+            ...dag.edges.map(edge => ({
+                id: edge.id,
+                sources: [edge.source],
+                targets: [edge.target],
+            })),
+            ...overlays.edges.map(edge => ({ id: edge.id, sources: [edge.source], targets: [edge.target] })),
+        ],
     }
     const result = await elk.layout(graph)
     const positions = new Map<string, { x: number; y: number }>()
@@ -250,7 +374,7 @@ async function layoutTaskDag(dag: TaskDagData): Promise<Map<string, { x: number;
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -267,9 +391,18 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     const dag = useMemo(() => buildTaskDag(scoped.tasks), [scoped.tasks])
     // Layout identity: statuses drive edge state and badge rows (card height), so
     // re-layout when any of them change — not only when the id set changes.
+    // Graph fusion: gates/planned steps of every provided graph, wired against
+    // the VISIBLE cards (a hidden terminal task degrades to a ghost node).
+    const fused = useMemo(() => {
+        const visible = new Set(dag.nodes.map(node => node.id))
+        return buildFusedOverlays(graphs ?? [], visible)
+    }, [graphs, dag])
     const dagFingerprint = useMemo(
-        () => dag.nodes.map(node => `${node.id}:${node.task.status}:${node.dependsOn.join('+')}:${node.waitingOn.length}:${node.blocked ? 1 : 0}`).join('|'),
-        [dag],
+        () => dag.nodes.map(node => `${node.id}:${node.task.status}:${node.dependsOn.join('+')}:${node.waitingOn.length}:${node.blocked ? 1 : 0}`).join('|')
+            + '||' + fused.gates.map(gate => `${gate.id}:${gate.state}`).join('|')
+            + '||' + fused.planned.map(plan => `${plan.id}:${plan.state}`).join('|')
+            + '||' + fused.edges.map(edge => `${edge.id}:${edge.state}`).join('|'),
+        [dag, fused],
     )
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
     // Focus highlight driven by the stat-chip jump — separate from selection so
@@ -283,11 +416,11 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
 
     useEffect(() => {
         let cancelled = false
-        if (dag.nodes.length === 0) {
+        if (dag.nodes.length === 0 && fused.gates.length === 0 && fused.planned.length === 0) {
             setPositions(null)
             return
         }
-        void layoutTaskDag(dag)
+        void layoutTaskDag(dag, fused)
             .then(next => { if (!cancelled) setPositions(next) })
             .catch(() => { if (!cancelled) setPositions(null) })
         return () => { cancelled = true }
@@ -313,9 +446,35 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             }))
     }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots])
 
+    const overlayFlowNodes = useMemo<Node[]>(() => {
+        if (!positions) return []
+        return [
+            ...fused.gates
+                .filter(gate => positions.has(gate.id))
+                .map(gate => ({
+                    id: gate.id,
+                    type: 'gateNode' as const,
+                    position: positions.get(gate.id)!,
+                    data: { overlay: gate, theme: meshTheme },
+                    draggable: false,
+                    selectable: true,
+                })),
+            ...fused.planned
+                .filter(plan => positions.has(plan.id))
+                .map(plan => ({
+                    id: plan.id,
+                    type: 'planNode' as const,
+                    position: positions.get(plan.id)!,
+                    data: { overlay: plan, theme: meshTheme },
+                    draggable: false,
+                    selectable: false,
+                })),
+        ]
+    }, [fused, meshTheme, positions])
+
     const flowEdges = useMemo<Edge[]>(() => {
         if (!positions) return []
-        return dag.edges.map(edge => {
+        const taskEdges = dag.edges.map(edge => {
             const palette = EDGE_COLORS[edge.state]
             const stroke = meshTheme.isDark ? palette.dark : palette.light
             return {
@@ -328,7 +487,29 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 },
             }
         })
-    }, [dag, meshTheme, positions])
+        const graphEdges = fused.edges.map(edge => {
+            const stroke = edge.state === 'inactive' || edge.state === 'idle'
+                ? (meshTheme.isDark ? '#475569' : '#94a3b8')
+                : (meshTheme.isDark ? EDGE_COLORS[edge.state].dark : EDGE_COLORS[edge.state].light)
+            return {
+                id: edge.id,
+                source: edge.source,
+                target: edge.target,
+                type: 'smoothstep' as const,
+                animated: edge.state === 'waiting',
+                style: {
+                    stroke,
+                    strokeWidth: 1.6,
+                    ...(edge.state === 'inactive'
+                        ? { strokeDasharray: '2 5', opacity: 0.5 }
+                        : edge.state === 'waiting' ? { strokeDasharray: '6 4' } : {}),
+                },
+                markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 },
+                ...(edge.kind ? { label: edge.kind, labelStyle: { fontSize: 9 } } : {}),
+            }
+        })
+        return [...taskEdges, ...graphEdges]
+    }, [dag, fused, meshTheme, positions])
 
     const selectedNode = selectedTaskId ? dag.nodes.find(node => node.id === selectedTaskId) ?? null : null
 
@@ -336,8 +517,13 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     // initial viewport frames them instead of the whole history sprawl. Runs
     // once per layout identity so it never fights the user's panning.
     const liveTaskIds = useMemo(
-        () => dag.nodes.filter(node => !['completed', 'failed', 'cancelled'].includes(node.task.status)).map(node => node.id),
-        [dag],
+        () => [
+            ...dag.nodes.filter(node => !['completed', 'failed', 'cancelled'].includes(node.task.status)).map(node => node.id),
+            // Gates awaiting a human are exactly what the blueprint exists to
+            // surface — keep them inside the initial frame.
+            ...fused.gates.filter(gate => gate.state === 'awaiting_coordinator' || gate.state === 'claimed').map(gate => gate.id),
+        ],
+        [dag, fused],
     )
     useEffect(() => {
         if (!flowInstance || !positions || liveTaskIds.length === 0) return
@@ -373,14 +559,20 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     }, [dag, flowInstance, positions])
 
     const handleNodeClick = useCallback((_event: unknown, node: TaskFlowNode) => {
+        if (node.type === 'gateNode') {
+            const overlay = (node.data as unknown as { overlay: FusedOverlays['gates'][number] }).overlay
+            onGateOpen?.(overlay.graph, overlay.nodeId, overlay.gate)
+            return
+        }
+        if (node.type !== 'taskNode') return
         if (onTaskOpen) {
             onTaskOpen(node.data.dagNode.task)
             return
         }
         setSelectedTaskId(current => (current === node.id ? null : node.id))
-    }, [onTaskOpen])
+    }, [onGateOpen, onTaskOpen])
 
-    if (dag.nodes.length === 0) {
+    if (dag.nodes.length === 0 && fused.gates.length === 0 && fused.planned.length === 0) {
         return (
             <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">
                 {emptyMessage ?? t('meshGraph.taskDag.empty')}
@@ -438,7 +630,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             <div className="relative min-h-0 flex-1">
             <ReactFlow
                 className="h-full w-full"
-                nodes={flowNodes}
+                nodes={[...flowNodes, ...overlayFlowNodes] as TaskFlowNode[]}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
                 onInit={setFlowInstance}
@@ -462,7 +654,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 proOptions={{ hideAttribution: true }}
                 colorMode={meshTheme.isDark ? 'dark' : 'light'}
             >
-                <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color={meshTheme.graphBackgroundDotColor} />
+                {/* No background pattern: the drafting-shell surface alone carries the
+                    blueprint identity (owner call 2026-08-25 — no grid, no dots). */}
                 <Controls showInteractive={false} position="bottom-left" />
             </ReactFlow>
 

@@ -7,10 +7,12 @@
  * Composition:
  *  - graph picker: the live work queue (MeshTasksView, the pre-existing
  *    dependsOn DAG) plus every persistent graph from mesh_graph_overview
- *  - blueprint DAG: MeshBlueprintDagView renders the selected persistent
- *    graph; clicking a node opens a read-only detail panel. Gate VERBS are
- *    deliberately NOT exposed here (owner decision 2026-08-24): the dashboard
- *    observes, and acting on a gate is done by instructing the coordinator,
+ *  - ONE fused canvas (owner call 2026-08-25): every persistent graph's
+ *    gates and planned steps render INSIDE the live-queue DAG — materialized
+ *    steps fuse onto their live task cards, gates sit between them as ⛩
+ *    nodes with the graph's edges. Clicking a gate opens a read-only detail
+ *    panel; gate VERBS are deliberately NOT exposed (owner decision
+ *    2026-08-24) — acting on a gate is done by instructing the coordinator,
  *    whose MCP tools (mesh_gate_claim/release/abandon) are the acting surface.
  *  - scheduling preview: mesh_route_preview (read-only) shows the per-node
  *    predicted routing winner for a hypothetical task, so slot pressure is
@@ -27,9 +29,6 @@ import { collectMachineQuotaGroups, machineKeyForMeshNode, resolveMachineLabel }
 import { MeshMachineQuotaCard } from './MeshObservabilitySurface/MeshStatusTab'
 import MeshTaskDagView from './MeshTaskDagView'
 import { MeshOverviewDetailModal } from './MeshOverviewCards'
-import MeshBlueprintDagView from './MeshBlueprintDagView'
-
-const STALE_MS = 24 * 60 * 60 * 1000
 
 interface RoutePreviewSlotScore {
     providerType: string
@@ -94,10 +93,13 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     const [graphs, setGraphs] = useState<MeshGraphView[]>([])
     const [graphsError, setGraphsError] = useState('')
     const [graphsLoading, setGraphsLoading] = useState(false)
-    const [includeTerminal, setIncludeTerminal] = useState(false)
-    const [selected, setSelected] = useState<'live' | string>('live')
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+    // Default ON (owner call 2026-08-25): finished graphs are part of the
+    // record the blueprint tells — their settled gates/steps render muted, so
+    // showing them costs little and hiding them made the canvas read empty.
+    const [includeTerminal, setIncludeTerminal] = useState(true)
     const [detailTask, setDetailTask] = useState<RepoMeshQueueTask | null>(null)
+    /** Read-only detail for a clicked ⛩ gate node on the fused canvas. */
+    const [gatePanel, setGatePanel] = useState<{ graph: MeshGraphView; nodeId: string; gate: import('@adhdev/daemon-core').MeshGraphGateView | null } | null>(null)
 
 
     const [schedDetailOpen, setSchedDetailOpen] = useState(false)
@@ -131,8 +133,6 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         window.addEventListener('keydown', onKeyDown, true)
         return () => window.removeEventListener('keydown', onKeyDown, true)
     }, [schedDetailOpen])
-
-    const nowMs = useMemo(() => Date.now(), [graphs])
     const canCommand = Boolean(daemonId && sendDaemonCommand)
 
     // Machine ⊃ nodes: a node's display name is its checkout identity
@@ -171,24 +171,10 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     }, [canCommand, daemonId, includeTerminal, meshId, sendDaemonCommand])
 
     useEffect(() => { void refreshGraphs() }, [refreshGraphs])
-
-    const selectedGraph = useMemo(
-        () => (selected === 'live' ? null : graphs.find(g => g.graphId === selected) ?? null),
-        [graphs, selected],
-    )
-    // A selected graph that disappeared from the list (e.g. terminal filter) falls back to live.
+    // Drop a gate panel whose graph left the list (e.g. terminal filter flip).
     useEffect(() => {
-        if (selected !== 'live' && !graphsLoading && !graphs.some(g => g.graphId === selected)) setSelected('live')
-    }, [graphs, graphsLoading, selected])
-
-    const selectedNode = useMemo(
-        () => selectedGraph?.nodes.find(n => n.nodeId === selectedNodeId) ?? null,
-        [selectedGraph, selectedNodeId],
-    )
-    const selectedGate = useMemo(
-        () => (selectedNode ? selectedGraph?.gates.find(g => g.nodeId === selectedNode.nodeId) ?? null : null),
-        [selectedGraph, selectedNode],
-    )
+        setGatePanel(current => current && !graphs.some(g => g.graphId === current.graph.graphId) ? null : current)
+    }, [graphs])
 
     // Load the full difficulty matrix in one sweep — the point of the panel is
     // "which slot matches next, per difficulty, at a glance", so it must not
@@ -248,42 +234,16 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     // by viewport height so the dialog itself never scrolls.
     const bodyMinHeightClass = 'min-h-[min(760px,66dvh)]'
 
-    const chipBase = 'shrink-0 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs transition-colors'
-    const chipIdle = meshTheme.isDark
-        ? 'border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
-        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-    const chipActive = meshTheme.isDark
-        ? 'border-cyan-300/50 bg-cyan-500/10 text-cyan-100'
-        : 'border-sky-400 bg-sky-50 text-sky-800'
-
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-1.5">
-            {/* ── Graph picker row ── */}
+            {/* ── Header row — ONE canvas now (owner call 2026-08-25): gates and
+                planned steps of every orchestration graph fuse INTO the live
+                queue instead of hiding behind per-graph picker chips, so the
+                row carries only the queue stats, the terminal-graph toggle and
+                refresh. ── */}
             <div className="flex items-center gap-2">
                 <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    <button type="button" className={`${chipBase} ${selected === 'live' ? chipActive : chipIdle}`} onClick={() => { setSelected('live'); setSelectedNodeId(null) }}>
-                        {t('meshGraph.blueprint.liveQueue')}
-                    </button>
-                    {graphs.map(graph => {
-                        const updatedMs = Date.parse(graph.terminalAt ?? graph.createdAt)
-                        const inFlight = graph.status === 'active' || graph.status === 'waiting_gate'
-                        const isStale = inFlight && Number.isFinite(updatedMs) && nowMs - updatedMs > STALE_MS
-                        const awaiting = graph.gates.filter(g => g.state === 'awaiting_coordinator').length
-                        return (
-                            <button
-                                key={graph.graphId}
-                                type="button"
-                                className={`${chipBase} ${selected === graph.graphId ? chipActive : chipIdle} ${isStale ? 'border-amber-500/50' : ''}`}
-                                onClick={() => { setSelected(graph.graphId); setSelectedNodeId(null) }}
-                                title={`${graph.graphId} · ${graph.status}`}
-                            >
-                                <span className="font-mono">{graph.graphId.slice(0, 8)}</span>
-                                <span className={`rounded px-1 py-px text-4xs font-semibold ${graphStatusChipClass(graph.status)}`}>{graph.status}</span>
-                                {awaiting > 0 && <span className="rounded bg-amber-500/15 px-1 py-px text-4xs font-semibold text-amber-500">⛩{awaiting}</span>}
-                            </button>
-                        )
-                    })}
-                    {selected === 'live' && <div ref={setStatsHost} className="flex min-w-0 items-center gap-1.5" />}
+                    <div ref={setStatsHost} className="flex min-w-0 items-center gap-1.5" />
                 </div>
                 <label className="hidden sm:flex shrink-0 items-center gap-1.5 text-2xs text-text-muted cursor-pointer">
                     <input type="checkbox" checked={includeTerminal} onChange={e => setIncludeTerminal(e.target.checked)} />
@@ -301,46 +261,44 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 visibly shorter than 구성, and both are pan/zoom canvases so
                 they share the "grow with content, cap by viewport, never
                 scroll the dialog" rule. ── */}
-            <div className={`${meshTheme.graphShellClass} ${bodyMinHeightClass}`}>
-                {selected === 'live' ? (
-                    // The blueprint reading of the live queue is the FULL dependency
-                    // DAG — the task list already lives on the overview tab, so a
-                    // list here would be a duplicate, not a blueprint.
-                    <div className="absolute inset-0">
-                        <MeshTaskDagView tasks={tasks} emptyMessage={emptyMessage} predictedSlots={predictedSlots} initialTerminalLimit={8} onTaskOpen={setDetailTask} statsContainer={statsHost} />
-                    </div>
-                ) : selectedGraph ? (
-                    <div className="absolute inset-0 flex flex-col">
-                        <div className="min-h-0 flex-1">
-                            <MeshBlueprintDagView graph={selectedGraph} selectedNodeId={selectedNodeId} onSelectNode={setSelectedNodeId} />
-                        </div>
+            <div className={`${meshTheme.blueprintShellClass} ${bodyMinHeightClass}`}>
+                {/* THE blueprint: live queue cards + every graph's gates and
+                    planned steps on one canvas (fusion happens inside
+                    MeshTaskDagView). Terminal graphs join via the toggle. */}
+                <div className="absolute inset-0">
+                    <MeshTaskDagView
+                        tasks={tasks}
+                        emptyMessage={emptyMessage}
+                        predictedSlots={predictedSlots}
+                        initialTerminalLimit={8}
+                        onTaskOpen={setDetailTask}
+                        statsContainer={statsHost}
+                        graphs={graphs}
+                        onGateOpen={(graph, nodeId, gate) => setGatePanel({ graph, nodeId, gate: gate ?? null })}
+                    />
+                </div>
 
-                        {/* ── Selection detail — READ-ONLY. Gate verbs are deliberately
-                            not exposed (owner decision 2026-08-24): acting on a gate
-                            is done by instructing the coordinator, not by clicking. ── */}
-                        {selectedNode && (
-                            <div className={`absolute bottom-0 left-0 right-0 z-10 rounded-xl border px-3 py-2 text-2xs shadow-lg ${meshTheme.isDark ? 'border-white/10 bg-slate-950/95' : 'border-slate-200 bg-white'}`}>
-                                <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-text-primary">
-                                        {selectedNode.kind === 'coordinator_gate' ? '⛩ ' : ''}{selectedNode.ref || selectedNode.nodeId.slice(0, 8)}
-                                    </span>
-                                    <span className="text-text-muted">{selectedGate ? `${selectedGate.action} · ${selectedGate.state}` : selectedNode.state}</span>
-                                    {selectedNode.taskId && <span className="font-mono text-4xs text-text-muted" title={selectedNode.taskId}>task {selectedNode.taskId.slice(0, 8)}</span>}
-                                    {selectedGate && selectedGate.state === 'awaiting_coordinator' && (
-                                        <span className="ml-auto text-3xs text-text-muted">{t('meshGraph.blueprint.gateActsViaCoordinator')}</span>
-                                    )}
-                                </div>
-                                {selectedGate?.instructions && <div className="mt-1.5 whitespace-pre-line text-3xs text-text-muted">{selectedGate.instructions}</div>}
-                                {selectedNode.blockedReason && !selectedGate && <div className="mt-1.5 text-3xs text-amber-500">{selectedNode.blockedReason}</div>}
-                                {selectedNode.failureReason && <div className="mt-1.5 text-3xs text-red-400">{selectedNode.failureReason}</div>}
+                {/* ── Gate detail — READ-ONLY. Gate verbs are deliberately not
+                    exposed (owner decision 2026-08-24): acting on a gate is done
+                    by instructing the coordinator, not by clicking. ── */}
+                {gatePanel && (() => {
+                    const gateNode = gatePanel.graph.nodes.find(n => n.nodeId === gatePanel.nodeId)
+                    const gate = gatePanel.gate
+                    return (
+                        <div className={`absolute bottom-0 left-0 right-0 z-10 rounded-xl border px-3 py-2 text-2xs shadow-lg ${meshTheme.isDark ? 'border-white/10 bg-slate-950/95' : 'border-slate-200 bg-white'}`}>
+                            <div className="flex items-center gap-2">
+                                <span className="font-semibold text-text-primary">⛩ {gateNode?.ref || gatePanel.nodeId.slice(0, 8)}</span>
+                                <span className="text-text-muted">{gate ? `${gate.action} · ${gate.state}` : gateNode?.state}</span>
+                                <span className={`rounded px-1 py-px text-4xs font-semibold ${graphStatusChipClass(gatePanel.graph.status)}`}>{gatePanel.graph.graphId.slice(0, 8)} · {gatePanel.graph.status}</span>
+                                {gate?.state === 'awaiting_coordinator' && (
+                                    <span className="ml-auto text-3xs text-text-muted">{t('meshGraph.blueprint.gateActsViaCoordinator')}</span>
+                                )}
+                                <button type="button" className="ml-2 shrink-0 text-text-muted hover:text-text-primary" aria-label="Close gate detail" onClick={() => setGatePanel(null)}>✕</button>
                             </div>
-                        )}
-                    </div>
-                ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                        {canCommand ? t('repoMesh.graphs.loading') : t('meshGraph.obs.planeNeedsDaemon')}
-                    </div>
-                )}
+                            {gate?.instructions && <div className="mt-1.5 whitespace-pre-line text-3xs text-text-muted">{gate.instructions}</div>}
+                        </div>
+                    )
+                })()}
 
                 {/* ── Scheduling forecast — a vertical 4-row overlay on the LEFT of
                     the canvas (owner call 2026-08-24: overlaying expresses more than
