@@ -770,6 +770,7 @@
             "predictedSlot": "다음 라우팅 예측 슬롯",
             "statsPending": "대기 {{count}}",
             "statsAssigned": "할당 {{count}}",
+            "jumpToState": "클릭하면 이 상태의 다음 카드로 이동",
             "hiddenLoadMore": "+이전 {{count}}개"
         },
         "obs": {
@@ -2596,6 +2597,7 @@
         }
     },
     "sessionInfo": {
+        "quotaOkNoWindows": "조회 성공 — 퍼센트 윈도우 없음",
         "title": "세션 정보",
         "loading": "불러오는 중…",
         "refresh": "새로고침",
@@ -2657,6 +2659,7 @@
             "machineNotReporting": "이 머신은 아직 런타임 정보를 보고하지 않았습니다 — 오프라인이거나 연결되지 않아 플랜 사용량을 알 수 없습니다.",
             "quotaClaudeSetupHint": "Claude Code 에는 사용량 API 가 없어 ADHDev 가 statusLine 에서 읽습니다. `adhdev quota claude:install` 이 기존 statusline 을 감싸 그대로 유지하며, claude:uninstall 로 복원합니다.",
             "quotaAccountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값",
+            "quotaOkNoWindows": "조회 성공 — 표시할 퍼센트 윈도우 없음",
             "healthNotGitRepo": "워크스페이스가 git 저장소가 아닙니다",
             "healthProbePending": "이 피어의 첫 git 프로브를 기다리는 중",
             "healthPeerConnection": "피어 연결 상태 {{state}} — 라이브 보고 없음",
@@ -3070,7 +3073,11 @@
             "title": "플랜 사용량",
             "sessionHint": "이 머신이 보고한 5시간 롤링 플랜 창",
             "weeklyHint": "이 머신이 보고한 7일 롤링 플랜 창",
+            "monthlyHint": "이 머신이 보고한 30일 결제 주기 윈도우",
+            "bucketHint": "이 머신이 보고한 풀별 쿼터 버킷 — 한 플랜의 풀들은 서로 독립적으로 리셋됩니다",
             "failureHint": "이 머신이 해당 프로바이더의 사용량을 읽지 못했다고 보고했습니다",
+            "okNoWindows": "조회 성공 — 표시할 퍼센트 윈도우 없음",
+            "okNoWindowsHint": "쿼터 조회는 성공했고, 이 프로바이더는 퍼센트 윈도우를 보고하지 않습니다 (예: 포함 사용량 플랜).",
             "accountHint": "이 사용량이 속한 로그인 계정 — 프로바이더 CLI 가 보고한 값",
             "usageHint": "최근 기간의 절대 사용량입니다 — 이 프로바이더는 사용자의 업스트림 계정으로 라우팅되므로 퍼센트로 표시할 플랜 한도가 없습니다."
         },
@@ -3661,7 +3668,7 @@
             "resetImminent": "리셋 유예",
             "resetImminentHint": "이 시간 안에 세션 윈도우가 리셋되면 잔량 부족을 무시합니다.",
             "staleAfter": "측정값 만료",
-            "staleAfterHint": "이보다 오래된 쿼터 측정값은 무시합니다.",
+            "staleAfterHint": "폴백 전용: 측정값은 해당 윈도우가 리셋될 때까지 유효하며, 이 나이 제한은 리셋 시각이 없는 측정값에만 적용됩니다.",
             "spreadBonus": "여유량 선호도",
             "spreadBonusHint": "잔량이 많은 쪽을 얼마나 선호할지. 작업 난이도 매칭을 뒤집지는 않습니다.",
             "sessionAxisWeeklyHeadroom": "세션 긴급도용 주간 여유량",

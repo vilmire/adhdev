@@ -770,6 +770,7 @@
             "predictedSlot": "下一个路由预测槽位",
             "statsPending": "排队 {{count}}",
             "statsAssigned": "已分配 {{count}}",
+            "jumpToState": "点击跳转到此状态的下一张卡片",
             "hiddenLoadMore": "+早前 {{count}}"
         },
         "obs": {
@@ -2596,6 +2597,7 @@
         }
     },
     "sessionInfo": {
+        "quotaOkNoWindows": "读取成功 — 无百分比窗口",
         "title": "会话信息",
         "loading": "加载中…",
         "refresh": "刷新",
@@ -2657,6 +2659,7 @@
             "machineNotReporting": "该机器尚未上报运行时信息 — 处于离线或无法连接状态，因此套餐用量未知。",
             "quotaClaudeSetupHint": "Claude Code 没有用量 API，ADHDev 从 statusLine 读取。`adhdev quota claude:install` 会包装你现有的 statusline（继续正常工作），claude:uninstall 可还原。",
             "quotaAccountHint": "该用量所属的登录账号（由提供程序 CLI 上报）",
+            "quotaOkNoWindows": "读取成功 — 无可显示的百分比窗口",
             "healthNotGitRepo": "工作区不是 git 仓库",
             "healthProbePending": "等待该节点的首次 git 探测",
             "healthPeerConnection": "节点连接状态 {{state}} — 无实时报告",
@@ -3070,7 +3073,11 @@
             "title": "套餐用量",
             "sessionHint": "该机器上报的 5 小时滚动套餐窗口",
             "weeklyHint": "该机器上报的 7 天滚动套餐窗口",
+            "monthlyHint": "此机器报告的 30 天计费周期窗口",
+            "bucketHint": "此机器报告的按池配额桶 — 同一套餐内的池各自独立重置",
             "failureHint": "该机器报告无法读取此提供程序的用量",
+            "okNoWindows": "读取成功 — 无可显示的百分比窗口",
+            "okNoWindowsHint": "配额读取成功；此提供方不报告百分比窗口（例如包含用量套餐）。",
             "accountHint": "该用量所属的登录账号（由提供程序 CLI 上报）",
             "usageHint": "最近时间窗内的绝对用量 — 该 Provider 路由到你自己的上游账户，因此没有可按百分比显示的套餐上限。"
         },
@@ -3662,7 +3669,7 @@
             "resetImminent": "重置宽限",
             "resetImminentHint": "若会话窗口将在此时间内重置，则忽略其余量不足。",
             "staleAfter": "读数有效期",
-            "staleAfterHint": "忽略早于此时长的配额读数。",
+            "staleAfterHint": "仅作回退：读数在其窗口重置前始终有效；此时限仅适用于没有重置时间的读数。",
             "spreadBonus": "余量偏好",
             "spreadBonusHint": "对剩余配额更多者的偏好强度。不会覆盖任务难度匹配。",
             "sessionAxisWeeklyHeadroom": "会话紧迫度的每周余量",

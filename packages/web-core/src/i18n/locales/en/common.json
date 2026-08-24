@@ -770,6 +770,7 @@
             "predictedSlot": "Predicted next routing slot",
             "statsPending": "{{count}} queued",
             "statsAssigned": "{{count}} assigned",
+            "jumpToState": "Click to jump to the next card in this state",
             "hiddenLoadMore": "+{{count}} earlier"
         },
         "obs": {
@@ -2596,6 +2597,7 @@
         }
     },
     "sessionInfo": {
+        "quotaOkNoWindows": "Read OK — no percentage window",
         "title": "Session info",
         "loading": "Loading…",
         "refresh": "Refresh",
@@ -2657,6 +2659,7 @@
             "machineNotReporting": "This machine has not reported runtime facts yet — it is offline or unreachable, so its plan quota is unknown.",
             "quotaClaudeSetupHint": "Claude Code has no quota API — ADHDev reads it from your statusLine. `adhdev quota claude:install` wraps your existing one (it keeps working) and claude:uninstall restores it.",
             "quotaAccountHint": "The signed-in account this quota belongs to, as reported by the provider CLI",
+            "quotaOkNoWindows": "Read OK — no percentage window to chart",
             "healthNotGitRepo": "Workspace is not a git repository",
             "healthProbePending": "Waiting for the first git probe from this peer",
             "healthPeerConnection": "Peer connection is {{state}} — no live report",
@@ -3070,7 +3073,11 @@
             "title": "Plan quota",
             "sessionHint": "Rolling 5-hour plan window reported by this machine",
             "weeklyHint": "Rolling 7-day plan window reported by this machine",
+            "monthlyHint": "Rolling 30-day billing window reported by this machine",
+            "bucketHint": "Per-pool quota bucket reported by this machine — pools on one plan reset independently",
             "failureHint": "This machine reported that it could not read this provider's quota",
+            "okNoWindows": "Read OK — no percentage window to chart",
+            "okNoWindowsHint": "The quota fetch succeeded; this provider reports no percentage window (e.g. included-usage plans).",
             "accountHint": "The signed-in account this quota belongs to, as reported by the provider CLI",
             "usageHint": "Absolute usage over the trailing window — this provider routes to your own upstream accounts, so there is no plan limit to show a percentage against."
         },
@@ -3661,7 +3668,7 @@
             "resetImminent": "Reset grace",
             "resetImminentHint": "Ignore a low session window when it resets within this long.",
             "staleAfter": "Reading expiry",
-            "staleAfterHint": "Ignore quota readings older than this.",
+            "staleAfterHint": "Fallback only: a measured window stays valid until its own reset; this age limit applies just to readings without a reset time.",
             "spreadBonus": "Headroom preference",
             "spreadBonusHint": "How strongly more remaining quota is preferred. Never overrides a task-difficulty match.",
             "sessionAxisWeeklyHeadroom": "Weekly headroom for session urgency",

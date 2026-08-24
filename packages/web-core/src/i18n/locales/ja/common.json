@@ -770,6 +770,7 @@
             "predictedSlot": "次のルーティング予測スロット",
             "statsPending": "待機 {{count}}",
             "statsAssigned": "割当 {{count}}",
+            "jumpToState": "クリックでこの状態の次のカードへ移動",
             "hiddenLoadMore": "+過去 {{count}}件"
         },
         "obs": {
@@ -2596,6 +2597,7 @@
         }
     },
     "sessionInfo": {
+        "quotaOkNoWindows": "取得成功 — パーセント枠なし",
         "title": "セッション情報",
         "loading": "読み込み中…",
         "refresh": "更新",
@@ -2657,6 +2659,7 @@
             "machineNotReporting": "このマシンはまだランタイム情報を報告していません — オフラインまたは接続不可のため、プラン使用量は不明です。",
             "quotaClaudeSetupHint": "Claude Code には使用量 API がないため、ADHDev は statusLine から読み取ります。`adhdev quota claude:install` は既存の statusline をラップして動作を維持し、claude:uninstall で復元できます。",
             "quotaAccountHint": "この使用量が属するログイン中のアカウント（プロバイダー CLI の報告値）",
+            "quotaOkNoWindows": "取得成功 — 表示するパーセント枠なし",
             "healthNotGitRepo": "ワークスペースが git リポジトリではありません",
             "healthProbePending": "このピアの最初の git プローブを待機中",
             "healthPeerConnection": "ピア接続状態 {{state}} — ライブ報告なし",
@@ -3070,7 +3073,11 @@
             "title": "プラン使用量",
             "sessionHint": "このマシンが報告した5時間ローリングのプラン枠",
             "weeklyHint": "このマシンが報告した7日間ローリングのプラン枠",
+            "monthlyHint": "このマシンが報告した30日課金サイクル枠",
+            "bucketHint": "このマシンが報告したプール別クォータバケット — 同一プラン内のプールは独立してリセットされます",
             "failureHint": "このマシンはこのプロバイダーの使用量を読み取れなかったと報告しました",
+            "okNoWindows": "取得成功 — 表示するパーセント枠なし",
+            "okNoWindowsHint": "クォータ取得は成功しており、このプロバイダはパーセント枠を報告しません（例: 含まれる使用量プラン）。",
             "accountHint": "この使用量が属するログイン中のアカウント（プロバイダー CLI の報告値）",
             "usageHint": "直近期間の絶対使用量です — このプロバイダーはユーザー自身のアップストリームアカウントにルーティングするため、割合で示すプラン上限がありません。"
         },
@@ -3662,7 +3669,7 @@
             "resetImminent": "リセット猶予",
             "resetImminentHint": "この時間内にセッションウィンドウがリセットされる場合、残量不足を無視します。",
             "staleAfter": "測定値の有効期限",
-            "staleAfterHint": "これより古いクォータ測定値は無視します。",
+            "staleAfterHint": "フォールバック専用: 測定値はそのウィンドウがリセットされるまで有効で、この期限はリセット時刻のない測定値にのみ適用されます。",
             "spreadBonus": "残量の優先度",
             "spreadBonusHint": "残量の多さをどれだけ優先するか。タスク難易度の一致を覆すことはありません。",
             "sessionAxisWeeklyHeadroom": "セッション緊急度のための週次余裕",

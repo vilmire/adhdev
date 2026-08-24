@@ -770,6 +770,7 @@
             "predictedSlot": "Slot de enrutamiento previsto",
             "statsPending": "{{count}} en cola",
             "statsAssigned": "{{count}} asignadas",
+            "jumpToState": "Clic para saltar a la siguiente tarjeta en este estado",
             "hiddenLoadMore": "+{{count}} anteriores"
         },
         "obs": {
@@ -2601,6 +2602,7 @@
         }
     },
     "sessionInfo": {
+        "quotaOkNoWindows": "Lectura correcta — sin ventana porcentual",
         "title": "Información de la sesión",
         "loading": "Cargando…",
         "refresh": "Actualizar",
@@ -2662,6 +2664,7 @@
             "machineNotReporting": "Esta máquina aún no ha reportado datos de runtime: está desconectada o inaccesible, así que se desconoce su cuota del plan.",
             "quotaClaudeSetupHint": "Claude Code no tiene API de cuota: ADHDev la lee de tu statusLine. `adhdev quota claude:install` envuelve la que ya tienes (sigue funcionando) y claude:uninstall la restaura.",
             "quotaAccountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor",
+            "quotaOkNoWindows": "Lectura correcta — sin ventana porcentual que mostrar",
             "healthNotGitRepo": "El workspace no es un repositorio git",
             "healthProbePending": "Esperando el primer sondeo git de este par",
             "healthPeerConnection": "Conexión del par: {{state}} — sin informe en vivo",
@@ -3075,7 +3078,11 @@
             "title": "Cuota del plan",
             "sessionHint": "Ventana móvil de 5 horas del plan reportada por esta máquina",
             "weeklyHint": "Ventana móvil de 7 días del plan reportada por esta máquina",
+            "monthlyHint": "Ventana de facturación de 30 días reportada por esta máquina",
+            "bucketHint": "Cubo de cuota por grupo reportado por esta máquina — los grupos de un plan se restablecen de forma independiente",
             "failureHint": "Esta máquina informó que no pudo leer la cuota de este proveedor",
+            "okNoWindows": "Lectura correcta — sin ventana porcentual que mostrar",
+            "okNoWindowsHint": "La lectura de cuota tuvo éxito; este proveedor no reporta una ventana porcentual (p. ej., planes de uso incluido).",
             "accountHint": "La cuenta con la sesión iniciada a la que pertenece esta cuota, según reporta la CLI del proveedor",
             "usageHint": "Uso absoluto en la ventana reciente: este provider enruta a tus propias cuentas upstream, así que no hay límite de plan para mostrar un porcentaje."
         },
@@ -3667,7 +3674,7 @@
             "resetImminent": "Margen de reinicio",
             "resetImminentHint": "Ignorar una ventana de sesión baja si se reinicia dentro de este tiempo.",
             "staleAfter": "Caducidad de la lectura",
-            "staleAfterHint": "Ignorar lecturas de cuota más antiguas que esto.",
+            "staleAfterHint": "Solo como respaldo: una lectura sigue siendo válida hasta que su ventana se restablezca; este límite de edad solo aplica a lecturas sin hora de restablecimiento.",
             "spreadBonus": "Preferencia por margen",
             "spreadBonusHint": "Cuánto se prefiere tener más cuota restante. Nunca anula una coincidencia de dificultad.",
             "sessionAxisWeeklyHeadroom": "Margen semanal para la urgencia de sesión",
