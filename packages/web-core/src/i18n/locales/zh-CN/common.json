@@ -2608,7 +2608,7 @@
     "sessionInfo": {
         "quotaOkNoWindows": "读取成功 — 无百分比窗口",
         "sectionMeshWorker": "由协调器派生的会话",
-        "rowMeshId": "网格",
+        "rowMeshId": "Mesh ID",
         "rowTaskId": "任务",
         "rowCoordinator": "协调器",
         "title": "会话信息",
@@ -2648,7 +2648,6 @@
         "rowGit": "Git",
         "rowProviders": "提供程序",
         "rowProviderPriority": "提供程序优先级",
-        "rowMeshId": "Mesh ID",
         "rowCoordinatorCli": "协调器 CLI",
         "rowStartedAt": "启动时间",
         "rowPromptInjection": "提示注入",
@@ -2704,6 +2703,7 @@
             "refineCard": "Refine 作业",
             "recentActivity": "最近活动",
             "recentTasks": "最近任务",
+            "missionTasksHeading": "任务清单",
             "showFewer": "收起",
             "showMore": "另有 {{count}} 项",
             "noActiveMissions": "没有活动任务。协调器会为多任务工作创建任务。",
@@ -2751,6 +2751,7 @@
             "detailLabelEntryId": "条目 ID",
             "detailLabelWhen": "时间",
             "detailLabelNode": "节点",
+            "detailLabelDependsOn": "依赖任务",
             "detailLabelSession": "会话",
             "detailLabelProvider": "提供程序",
             "detailLabelPayload": "负载",
@@ -2777,7 +2778,11 @@
             "routingSkipped": "跳过的候选",
             "routingSkippedMore": "另有 {{count}} 个",
             "pausedMissions": "已暂停的任务组",
-            "ledgerAllTime": "历史累计"
+            "ledgerAllTime": "历史累计",
+            "detailLabelGateAfter": "前置",
+            "detailLabelGateUnlocks": "解锁",
+            "sessionTasksHeading": "本会话的任务",
+            "showOnCanvas": "在画布中查看"
         }
     },
     "machine": {

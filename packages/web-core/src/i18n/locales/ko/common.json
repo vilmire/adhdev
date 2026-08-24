@@ -2608,7 +2608,7 @@
     "sessionInfo": {
         "quotaOkNoWindows": "조회 성공 — 퍼센트 윈도우 없음",
         "sectionMeshWorker": "코디네이터가 스폰한 세션",
-        "rowMeshId": "메시",
+        "rowMeshId": "Mesh ID",
         "rowTaskId": "태스크",
         "rowCoordinator": "코디네이터",
         "title": "세션 정보",
@@ -2648,7 +2648,6 @@
         "rowGit": "Git",
         "rowProviders": "프로바이더",
         "rowProviderPriority": "프로바이더 우선순위",
-        "rowMeshId": "Mesh ID",
         "rowCoordinatorCli": "코디네이터 CLI",
         "rowStartedAt": "시작 시각",
         "rowPromptInjection": "프롬프트 주입",
@@ -2704,6 +2703,7 @@
             "refineCard": "Refine 작업",
             "recentActivity": "최근 활동",
             "recentTasks": "최근 태스크",
+            "missionTasksHeading": "미션 태스크",
             "showFewer": "간략히 보기",
             "showMore": "+{{count}}개 더",
             "noActiveMissions": "활성 미션이 없습니다. 코디네이터가 여러 태스크 작업을 위해 미션을 생성합니다.",
@@ -2751,6 +2751,7 @@
             "detailLabelEntryId": "항목 ID",
             "detailLabelWhen": "시각",
             "detailLabelNode": "노드",
+            "detailLabelDependsOn": "의존 태스크",
             "detailLabelSession": "세션",
             "detailLabelProvider": "프로바이더",
             "detailLabelPayload": "페이로드",
@@ -2777,7 +2778,11 @@
             "routingSkipped": "건너뛴 후보",
             "routingSkippedMore": "외 {{count}}개",
             "pausedMissions": "일시정지된 미션",
-            "ledgerAllTime": "전체 기간 누계"
+            "ledgerAllTime": "전체 기간 누계",
+            "detailLabelGateAfter": "선행",
+            "detailLabelGateUnlocks": "해제 대상",
+            "sessionTasksHeading": "이 세션의 태스크",
+            "showOnCanvas": "캔버스에서 보기"
         }
     },
     "machine": {

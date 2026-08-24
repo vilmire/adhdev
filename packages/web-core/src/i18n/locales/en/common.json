@@ -2608,7 +2608,7 @@
     "sessionInfo": {
         "quotaOkNoWindows": "Read OK — no percentage window",
         "sectionMeshWorker": "Spawned by coordinator",
-        "rowMeshId": "Mesh",
+        "rowMeshId": "Mesh ID",
         "rowTaskId": "Task",
         "rowCoordinator": "Coordinator",
         "title": "Session info",
@@ -2648,7 +2648,6 @@
         "rowGit": "Git",
         "rowProviders": "Providers",
         "rowProviderPriority": "Provider priority",
-        "rowMeshId": "Mesh ID",
         "rowCoordinatorCli": "Coordinator CLI",
         "rowStartedAt": "Started at",
         "rowPromptInjection": "Prompt injection",
@@ -2704,6 +2703,7 @@
             "refineCard": "Refine jobs",
             "recentActivity": "Recent activity",
             "recentTasks": "Recent tasks",
+            "missionTasksHeading": "Mission tasks",
             "showFewer": "Show fewer",
             "showMore": "+{{count}} more",
             "noActiveMissions": "No active missions. The coordinator creates a mission for multi-task work.",
@@ -2751,6 +2751,7 @@
             "detailLabelEntryId": "Entry id",
             "detailLabelWhen": "When",
             "detailLabelNode": "Node",
+            "detailLabelDependsOn": "Depends on",
             "detailLabelSession": "Session",
             "detailLabelProvider": "Provider",
             "detailLabelPayload": "Payload",
@@ -2777,7 +2778,11 @@
             "routingSkipped": "Skipped candidates",
             "routingSkippedMore": "+{{count}} more",
             "pausedMissions": "Paused missions",
-            "ledgerAllTime": "all-time totals"
+            "ledgerAllTime": "all-time totals",
+            "detailLabelGateAfter": "After",
+            "detailLabelGateUnlocks": "Unlocks",
+            "sessionTasksHeading": "Tasks in this session",
+            "showOnCanvas": "Show on canvas"
         }
     },
     "machine": {

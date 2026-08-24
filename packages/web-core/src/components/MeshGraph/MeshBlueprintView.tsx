@@ -146,6 +146,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         return map
     }, [status])
 
+    const [focusMission, setFocusMission] = useState<{ missionId: string; token: number } | null>(null)
+    const openMission = useCallback((missionId: string) => {
+        const mission = ((status as RepoMeshStatus).missions ?? []).find(candidate => candidate.id === missionId)
+        if (mission) setDetail({ kind: 'mission', mission })
+    }, [status])
+
     // missionId → title, so mission chips on the canvas read as names.
     const missionTitles = useMemo(() => {
         const map: Record<string, string> = {}
@@ -277,6 +283,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         graphs={graphs}
                         onGateOpen={(graph, nodeId, gate) => setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })}
                         missionTitles={missionTitles}
+                        onMissionOpen={openMission}
+                        focusMission={focusMission}
                     />
                 </div>
 
@@ -500,6 +508,14 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     daemonId={daemonId}
                     meshId={meshId}
                     sendDaemonCommand={sendDaemonCommand}
+                    queueTasks={tasks}
+                    onOpenTask={task => setDetail({ kind: 'queue', task })}
+                    missionTitles={missionTitles}
+                    onOpenMission={openMission}
+                    onShowMission={missionId => {
+                        setDetail(null)
+                        setFocusMission({ missionId, token: Date.now() })
+                    }}
                     resolveNodeLabel={nodeId => (nodeId ? (nodeMetaById.get(nodeId)?.nodeLabel ?? nodeId) : '')}
                 />
             )}

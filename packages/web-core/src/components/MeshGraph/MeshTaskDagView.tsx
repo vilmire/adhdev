@@ -70,6 +70,11 @@ interface MeshTaskDagViewProps {
     /** missionId → human title, so the card's mission chip can name the
      *  mission instead of flashing a raw id (owner polish 2026-08-25). */
     missionTitles?: Record<string, string>
+    /** Open the mission detail (same modal as the overview page) when a card's mission bar is clicked. */
+    onMissionOpen?: (missionId: string) => void
+    /** Mission modal's "show on canvas": light the mission's thread and frame its
+     *  cards. Token distinguishes repeat requests for the same mission. */
+    focusMission?: { missionId: string; token: number } | null
     /**
      * When set, the stats/load-more chips render into this element (via
      * portal) instead of in-flow above the canvas — the blueprint tab hosts
@@ -85,6 +90,9 @@ type TaskFlowNodeData = Record<string, unknown> & {
     selected: boolean
     predictedSlot?: string
     missionTitle?: string
+    /** Pointer rests on a same-mission card — echo the lit thread with a ring. */
+    missionHighlighted?: boolean
+    onMissionOpen?: (missionId: string) => void
 }
 
 type TaskFlowNode = Node<TaskFlowNodeData, 'taskNode'>
@@ -94,7 +102,8 @@ function estimateTaskCardHeight(node: TaskDagNode): number {
     const messageLength = (node.task.message ?? '').length
     const messageLines = Math.max(1, Math.min(3, Math.ceil(messageLength / 34)))
     const extraBadgeRow = node.waitingOn.length > 0 || node.blocked || node.missingDeps.length > 0 ? 22 : 0
-    return TASK_CARD_MIN_HEIGHT + (messageLines - 1) * 15 + extraBadgeRow
+    const missionBar = node.task.missionId ? 28 : 0
+    return TASK_CARD_MIN_HEIGHT + (messageLines - 1) * 15 + extraBadgeRow + missionBar
 }
 
 const STATUS_STYLES: Record<string, { dark: string; light: string; dot: string; pulse?: boolean }> = {
@@ -147,7 +156,7 @@ const messageClampStyle: CSSProperties = {
 
 function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     const { t } = useTranslation('common')
-    const { dagNode, theme, selected, predictedSlot, missionTitle } = data
+    const { dagNode, theme, selected, predictedSlot, missionTitle, missionHighlighted, onMissionOpen } = data
     const task = dagNode.task
     const style = STATUS_STYLES[task.status] ?? STATUS_STYLES.pending
     const statusClass = theme.isDark ? style.dark : style.light
@@ -159,11 +168,26 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
         : 'rounded-full border border-slate-200 bg-white/80 px-1.5 py-px text-4xs text-slate-500'
     return (
         <div
-            className={`rounded-2xl border px-3 py-2.5 shadow-sm transition-[opacity,box-shadow] ${statusClass} ${selected ? (theme.isDark ? 'ring-2 ring-cyan-300/60' : 'ring-2 ring-sky-400/70') : ''} ${receded ? 'opacity-60 hover:opacity-100' : ''}`}
+            className={`rounded-2xl border px-3 py-2.5 shadow-sm transition-[opacity,box-shadow] ${statusClass} ${selected ? (theme.isDark ? 'ring-2 ring-cyan-300/60' : 'ring-2 ring-sky-400/70') : ''} ${!selected && missionHighlighted ? (theme.isDark ? 'outline outline-1 -outline-offset-1 outline-indigo-300/70' : 'outline outline-1 -outline-offset-1 outline-indigo-400/80') : ''} ${receded ? 'opacity-60 hover:opacity-100' : ''}`}
             style={{ width: TASK_CARD_WIDTH }}
         >
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            {task.missionId && (
+                <button
+                    type="button"
+                    onClick={onMissionOpen && missionTitle ? event => { event.stopPropagation(); onMissionOpen(task.missionId!) } : undefined}
+                    className={`mb-1.5 flex w-full min-w-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-left text-2xs font-medium ${theme.isDark
+                        ? 'border-indigo-400/25 bg-indigo-500/10 text-indigo-200'
+                        : 'border-indigo-200 bg-indigo-50/80 text-indigo-700'} ${onMissionOpen && missionTitle
+                        ? (theme.isDark ? 'cursor-pointer hover:bg-indigo-500/20' : 'cursor-pointer hover:bg-indigo-100')
+                        : 'cursor-default'}`}
+                    title={missionTitle ? `${missionTitle} (${task.missionId})` : task.missionId}
+                >
+                    <IconFlag size={10} />
+                    <span className="truncate">{missionTitle || task.missionId.slice(0, 10)}</span>
+                </button>
+            )}
             <div className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-1.5">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot} ${style.pulse ? 'animate-pulse' : ''}`} aria-hidden />
@@ -194,15 +218,6 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                 )}
                 {task.priority && task.priority !== 'normal' && <span className={chipClass}>{task.priority}</span>}
                 {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={chipClass}>read-only</span>}
-                {task.missionId && (
-                    <span
-                        className={`${chipClass} inline-flex max-w-[150px] items-center gap-1`}
-                        title={missionTitle ? `${missionTitle} (${task.missionId})` : task.missionId}
-                    >
-                        <IconFlag size={8} />
-                        <span className="truncate">{missionTitle || task.missionId.slice(0, 10)}</span>
-                    </span>
-                )}
                 {dagNode.waitingOn.length > 0 && (
                     <span
                         className={theme.isDark
@@ -527,7 +542,7 @@ async function layoutConnectedElements(connectedTasks: TaskDagNode[], taskEdges:
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles, onMissionOpen, focusMission }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -598,11 +613,13 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     selected: selectedTaskId === node.id || focusTaskId === node.id,
                     ...(predictedSlots ? { predictedSlot: predictedSlots[node.task.difficulty ?? 'medium'] } : {}),
                     ...(node.task.missionId && missionTitles?.[node.task.missionId] ? { missionTitle: missionTitles[node.task.missionId] } : {}),
+                    ...(hoveredMissionId && node.task.missionId === hoveredMissionId ? { missionHighlighted: true } : {}),
+                    ...(onMissionOpen ? { onMissionOpen } : {}),
                 },
                 draggable: false,
                 selectable: true,
             }))
-    }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots, missionTitles])
+    }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots, missionTitles, hoveredMissionId, onMissionOpen])
 
     const overlayFlowNodes = useMemo<Node[]>(() => {
         if (!positions) return []
@@ -638,6 +655,10 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 draggable: false,
                 selectable: false,
                 zIndex: -1,
+                // The WRAPPER must be pointer-transparent too: the inner div's
+                // pointer-events-none doesn't cover it, and an interactive hull
+                // wrapper swallows card hovers across the whole graph area.
+                style: { pointerEvents: 'none' as const },
             }]
         })
         return [
@@ -701,11 +722,9 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 ...(edge.kind ? { label: edge.kind, labelStyle: { fontSize: 9 } } : {}),
             }
         })
-        // Mission threads (owner ask 2026-08-25): a barely-there dotted line
-        // chaining same-mission cards in time order, so the mission reads as
-        // one thread across chains and the loose stack. Purely decorative —
-        // it never feeds ELK, so the layout is untouched; no arrowheads, no
-        // animation, indigo echoing the mission flag chip.
+        // Mission threads (owner ask 2026-08-25): a dotted line chaining
+        // same-mission cards in time order. Purely decorative — never fed to
+        // ELK, no arrowheads, no animation, indigo echoing the mission chip.
         const missionThreads: Edge[] = (() => {
             const byMission = new Map<string, TaskDagNode[]>()
             for (const node of dag.nodes) {
@@ -715,34 +734,34 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 bucket.push(node)
                 byMission.set(missionId, bucket)
             }
-            // Resting vs lit: always-on threads at full strength made the board
-            // read as clutter (owner 2026-08-25), while barely-there ones were
-            // invisible. So the thread idles as a whisper and lights up only
-            // while the pointer rests on one of the mission's cards.
+            // Owner-tuned through three rounds (2026-08-25): always-on threads
+            // were clutter, faint ones invisible, straight ones sliced across
+            // card bodies. Final shape — NO resting lines at all; hovering a
+            // mission's card draws that mission's thread as smoothstep wiring
+            // (routes around cards like every other edge) and rings its cards.
+            if (!hoveredMissionId) return []
+            const nodes = byMission.get(hoveredMissionId) ?? []
+            if (nodes.length < 2) return []
+            const stroke = meshTheme.isDark ? 'rgba(139, 148, 255, 0.85)' : 'rgba(88, 92, 235, 0.8)'
             const threads: Edge[] = []
-            for (const [missionId, nodes] of byMission) {
-                if (nodes.length < 2) continue
-                const lit = hoveredMissionId === missionId
-                const stroke = meshTheme.isDark
-                    ? `rgba(139, 148, 255, ${lit ? 0.9 : 0.22})`
-                    : `rgba(88, 92, 235, ${lit ? 0.85 : 0.25})`
-                const ordered = [...nodes].sort((a, b) => taskTimeKey(a).localeCompare(taskTimeKey(b)))
-                for (let i = 0; i < ordered.length - 1; i += 1) {
-                    threads.push({
-                        id: `mt:${missionId}:${i}`,
-                        source: ordered[i].id,
-                        target: ordered[i + 1].id,
-                        // Straight, not smoothstep: the thread must read as a
-                        // loose string laid across the board, visually distinct
-                        // from the orthogonal dependency wiring it crosses.
-                        type: 'straight' as const,
-                        animated: false,
-                        selectable: false,
-                        focusable: false,
-                        zIndex: 0,
-                        style: { stroke, strokeWidth: lit ? 2.2 : 1.3, strokeDasharray: '7 7', transition: 'stroke 150ms ease' },
-                    })
-                }
+            const ordered = [...nodes].sort((a, b) => taskTimeKey(a).localeCompare(taskTimeKey(b)))
+            for (let i = 0; i < ordered.length - 1; i += 1) {
+                threads.push({
+                    id: `mt:${hoveredMissionId}:${i}`,
+                    source: ordered[i].id,
+                    target: ordered[i + 1].id,
+                    type: 'smoothstep' as const,
+                    animated: false,
+                    selectable: false,
+                    focusable: false,
+                    zIndex: 0,
+                    // Fully pointer-transparent: an edge's invisible ~20px
+                    // interaction path would otherwise steal the pointer from
+                    // the hovered card, ending the hover that drew the thread —
+                    // an appear/disappear flicker loop.
+                    interactionWidth: 0,
+                    style: { stroke, strokeWidth: 2, strokeDasharray: '6 6', pointerEvents: 'none' as const },
+                })
             }
             return threads
         })()
@@ -796,11 +815,35 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
         )
     }, [dag, flowInstance, positions])
 
+    // Mission modal's "show on canvas": light the thread (it uses the same
+    // hovered-mission state, so the next real hover naturally takes over) and
+    // frame the mission's cards.
+    useEffect(() => {
+        if (!focusMission || !flowInstance || !positions) return
+        setHoveredMissionId(focusMission.missionId)
+        const ids = dag.nodes.filter(node => node.task.missionId === focusMission.missionId).map(node => node.id)
+        if (ids.length > 0) void flowInstance.fitView({ nodes: ids.map(id => ({ id })), padding: 0.25, maxZoom: 1, duration: 350 })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [focusMission?.token])
+
+    // The un-hover is DELAYED: crossing the gap between two cards of the same
+    // mission must not blink the thread off and on (owner: flicker, 2026-08-25).
+    // The card highlight is an outline, not a ring — ring is box-shadow, which
+    // the card transitions, so it faded in/out on every hover change (flicker).
+    const hoverClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    useEffect(() => () => { if (hoverClearTimer.current) clearTimeout(hoverClearTimer.current) }, [])
     const handleNodeHover = useCallback((_event: unknown, node: TaskFlowNode) => {
-        const missionId = node.type === 'taskNode' ? node.data.dagNode.task.missionId : undefined
+        // Entering a NON-task node (gate, ghost) must not snuff the thread
+        // instantly — treat it like leaving, so the delayed clear decides.
+        if (node.type !== 'taskNode') return
+        if (hoverClearTimer.current) { clearTimeout(hoverClearTimer.current); hoverClearTimer.current = null }
+        const missionId = node.data.dagNode.task.missionId
         setHoveredMissionId(typeof missionId === 'string' && missionId ? missionId : null)
     }, [])
-    const handleNodeHoverEnd = useCallback(() => { setHoveredMissionId(null) }, [])
+    const handleNodeHoverEnd = useCallback(() => {
+        if (hoverClearTimer.current) clearTimeout(hoverClearTimer.current)
+        hoverClearTimer.current = setTimeout(() => { setHoveredMissionId(null) }, 300)
+    }, [])
 
     const handleNodeClick = useCallback((_event: unknown, node: TaskFlowNode) => {
         if (node.type === 'gateNode') {

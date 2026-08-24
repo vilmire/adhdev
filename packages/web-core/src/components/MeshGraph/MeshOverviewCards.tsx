@@ -280,6 +280,12 @@ export default function MeshOverviewCards({
     const ledgerSummary = canonicalStatus.ledger?.summary ?? EMPTY_LEDGER_SUMMARY
     const ledgerEntries: RepoMeshLedgerEntryStatus[] = canonicalStatus.ledger?.entries ?? []
     const missions = (canonicalStatus as RepoMeshStatus).missions ?? []
+    const missionTitleById = useMemo(() => {
+        const map: Record<string, string> = {}
+        for (const mission of missions) { if (mission.id && mission.title) map[mission.id] = mission.title }
+        return map
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [canonicalStatus])
     const liveMissions = missions.filter(m => m.status === 'active' || m.status === 'paused')
     const historyMissions = missions.filter(m => m.status === 'completed' || m.status === 'abandoned')
     const asyncRefineJobs = ((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined) ?? []
@@ -388,6 +394,13 @@ export default function MeshOverviewCards({
                     meshId={meshId ?? canonicalStatus.meshId ?? null}
                     sendDaemonCommand={sendDaemonCommand}
                     resolveNodeLabel={resolveNodeLabel}
+                    queueTasks={queueTasks}
+                    onOpenTask={task => setDetail({ kind: 'queue', task })}
+                    missionTitles={missionTitleById}
+                    onOpenMission={missionId => {
+                        const mission = missions.find(candidate => candidate.id === missionId)
+                        if (mission) setDetail({ kind: 'mission', mission })
+                    }}
                 />
             )}
         </div>
@@ -537,11 +550,20 @@ function detailTitle(detail: DetailSelection, t: (key: string) => string): { kic
 
 // Exported (named) so the safe-area / close-path regression tests can render the
 // modal directly without driving the whole overview card grid.
-export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonCommand, resolveNodeLabel }: {
+export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, meshId, sendDaemonCommand, resolveNodeLabel, queueTasks, onOpenTask, missionTitles, onOpenMission, onShowMission }: {
     meshTheme: MeshGraphTheme
     detail: DetailSelection
     onClose: () => void
     resolveNodeLabel: (nodeId: string | undefined | null) => string
+    /** Mission detail's reverse wiring: the queue to list mission tasks from, and
+     *  the handler that swaps this modal to a clicked task's detail. */
+    queueTasks?: RepoMeshQueueTask[]
+    onOpenTask?: (task: RepoMeshQueueTask) => void
+    /** Task detail's reverse wiring back to its mission. */
+    missionTitles?: Record<string, string>
+    onOpenMission?: (missionId: string) => void
+    /** Blueprint only: mission detail's "show on canvas" jump. */
+    onShowMission?: (missionId: string) => void
 } & MeshCommandSeam) {
     const { t } = useTranslation('common')
     // This modal stacks ABOVE DashboardMeshGraphDialog, which has its own
@@ -598,15 +620,28 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, 
                         <MissionDetail
                             meshTheme={meshTheme}
                             mission={detail.mission}
+                            queueTasks={queueTasks}
+                            onOpenTask={onOpenTask}
+                            onShowOnCanvas={onShowMission ? () => onShowMission(detail.mission.id) : undefined}
                             daemonId={daemonId}
                             meshId={meshId}
                             sendDaemonCommand={sendDaemonCommand}
                         />
                     )}
                     {detail.kind === 'ledger' && <LedgerDetail meshTheme={meshTheme} entry={detail.entry} resolveNodeLabel={resolveNodeLabel} />}
-                    {detail.kind === 'queue' && <QueueDetail meshTheme={meshTheme} task={detail.task} />}
-                    {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} />}
-                    {detail.kind === 'gate' && <GateDetail meshTheme={meshTheme} graph={detail.graph} nodeId={detail.nodeId} gate={detail.gate} />}
+                    {detail.kind === 'queue' && (
+                        <QueueDetail
+                            meshTheme={meshTheme}
+                            task={detail.task}
+                            resolveNodeLabel={resolveNodeLabel}
+                            missionTitles={missionTitles}
+                            onOpenMission={onOpenMission}
+                            onOpenTask={onOpenTask}
+                            queueTasks={queueTasks}
+                        />
+                    )}
+                    {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} queueTasks={queueTasks} onOpenTask={onOpenTask} />}
+                    {detail.kind === 'gate' && <GateDetail meshTheme={meshTheme} graph={detail.graph} nodeId={detail.nodeId} gate={detail.gate} queueTasks={queueTasks} onOpenTask={onOpenTask} />}
                 </div>
             </div>
         </div>
@@ -623,12 +658,30 @@ function extractMeshStatus(raw: any): any {
     return body
 }
 
-function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand }: {
+function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand, queueTasks, onOpenTask, onShowOnCanvas }: {
     meshTheme: MeshGraphTheme
     mission: MeshMissionDisplay
+    /** Full queue, so the mission can list ITS tasks — the reverse wiring of the
+     *  card's mission chip (owner ask 2026-08-25): mission → member tasks. */
+    queueTasks?: RepoMeshQueueTask[]
+    /** Swap this modal to the clicked task's queue detail. */
+    onOpenTask?: (task: RepoMeshQueueTask) => void
+    /** Blueprint only: close the modal and light this mission up on the canvas. */
+    onShowOnCanvas?: () => void
 } & MeshCommandSeam) {
     const { t } = useTranslation('common')
     const t_tasks = mission.tasks
+    const missionTasks = useMemo(() => {
+        return (queueTasks ?? [])
+            .filter(task => task.missionId === mission.id)
+            .sort((a, b) => {
+                const rank = queueTaskSortRank(a.status) - queueTaskSortRank(b.status)
+                if (rank !== 0) return rank
+                return (b.updatedAt || '').localeCompare(a.updatedAt || '')
+            })
+    }, [queueTasks, mission.id])
+    const missionTaskById = useMemo(() => new Map(missionTasks.map(task => [task.id, task])), [missionTasks])
+    const taskList = useRecentList(missionTasks)
     // Compact (slim) status payloads send `goalPreview`/`goalTruncated` instead of
     // the full `goal`, so the previous `mission.goal`-only read rendered blank.
     const slimGoal = ('goal' in mission && typeof mission.goal === 'string' && mission.goal)
@@ -705,6 +758,35 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                     <StatTile meshTheme={meshTheme} label={t('mesh.overview.statRetries')} value={stats.retries} tone={stats.retries > 0 ? 'amber' : undefined} />
                 </div>
             )}
+            {onShowOnCanvas && (
+                <div>
+                    <button
+                        type="button"
+                        className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${meshTheme.isDark
+                            ? 'border-indigo-400/30 bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/20'
+                            : 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}
+                        onClick={onShowOnCanvas}
+                    >
+                        {t('mesh.overview.showOnCanvas')}
+                    </button>
+                </div>
+            )}
+            {missionTasks.length > 0 && (
+                <div>
+                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.missionTasksHeading')}</div>
+                    <div className="flex flex-col gap-0.5">
+                        {taskList.visible.map(task => (
+                            <ListRow key={task.id} meshTheme={meshTheme} onClick={onOpenTask ? () => onOpenTask(task) : undefined}>
+                                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
+                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
+                                <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
+                            </ListRow>
+                        ))}
+                        <MoreToggle meshTheme={meshTheme} expanded={taskList.expanded} hiddenCount={taskList.hiddenCount} onToggle={taskList.toggle} />
+                    </div>
+                </div>
+            )}
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelMissionId')} value={mission.id} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCreated')} value={relativeTime(mission.createdAt) ?? mission.createdAt} />
@@ -718,9 +800,16 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                             <details>
                                 <summary className="cursor-pointer select-none">{t('mesh.overview.incompleteTaskCount_other', { count: incompleteCount })}</summary>
                                 <div className="mt-1 flex flex-col gap-0.5 break-all">
-                                    {stats.incompleteTaskIds.map(id => (
-                                        <span key={id} className={`font-mono text-3xs ${meshTheme.textMuted}`}>{id}</span>
-                                    ))}
+                                    {stats.incompleteTaskIds.map(id => {
+                                        const task = missionTaskById.get(id)
+                                        return task && onOpenTask
+                                            ? (
+                                                <button key={id} type="button" onClick={() => onOpenTask(task)} className={`text-left font-mono text-3xs underline-offset-2 hover:underline ${meshTheme.textSecondary}`}>
+                                                    {id.slice(0, 8)} · {queueTaskDisplayText(task.message).slice(0, 60) || task.status}
+                                                </button>
+                                            )
+                                            : <span key={id} className={`font-mono text-3xs ${meshTheme.textMuted}`}>{id}</span>
+                                    })}
                                 </div>
                             </details>
                         }
@@ -846,8 +935,25 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
     )
 }
 
-function QueueDetail({ meshTheme, task }: { meshTheme: MeshGraphTheme; task: RepoMeshQueueTask }) {
+function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenMission, onOpenTask, queueTasks }: {
+    meshTheme: MeshGraphTheme
+    task: RepoMeshQueueTask
+    resolveNodeLabel?: (nodeId: string | undefined | null) => string
+    /** Reverse wiring (owner audit 2026-08-25): a task detail used to be a dead
+     *  end — no way back to its mission, its dependencies, or its session chat. */
+    missionTitles?: Record<string, string>
+    onOpenMission?: (missionId: string) => void
+    onOpenTask?: (task: RepoMeshQueueTask) => void
+    queueTasks?: RepoMeshQueueTask[]
+}) {
     const { t } = useTranslation('common')
+    const sessionId = task.assignedSessionId || task.targetSessionId
+    const linkClass = `text-left underline-offset-2 hover:underline ${meshTheme.textSecondary}`
+    const depTasks = (task.dependsOn ?? []).map(id => ({
+        id,
+        task: (queueTasks ?? []).find(candidate => candidate.id === id) ?? null,
+        failure: (task.dependencyFailures ?? []).find(failure => failure.taskId === id) ?? null,
+    }))
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -860,11 +966,49 @@ function QueueDetail({ meshTheme, task }: { meshTheme: MeshGraphTheme; task: Rep
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelTaskId')} value={task.id} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCreated')} value={relativeTime(task.createdAt) ?? task.createdAt} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelUpdated')} value={relativeTime(task.updatedAt) ?? task.updatedAt} />
-                {(task.assignedNodeId || task.targetNodeId) && (
-                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={task.assignedNodeId || task.targetNodeId!} />
+                {task.missionId && (
+                    <ModalRow
+                        meshTheme={meshTheme}
+                        label={t('mesh.overview.detailKickerMission')}
+                        value={onOpenMission
+                            ? (
+                                <button type="button" className={linkClass} onClick={() => onOpenMission(task.missionId!)}>
+                                    {missionTitles?.[task.missionId] || task.missionId.slice(0, 10)}
+                                </button>
+                            )
+                            : (missionTitles?.[task.missionId] || task.missionId.slice(0, 10))}
+                    />
                 )}
-                {(task.assignedSessionId || task.targetSessionId) && (
-                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelSession')} value={shortSessionId(task.assignedSessionId || task.targetSessionId!)} />
+                {(task.assignedNodeId || task.targetNodeId) && (
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={resolveNodeLabel ? resolveNodeLabel(task.assignedNodeId || task.targetNodeId) : (task.assignedNodeId || task.targetNodeId!)} />
+                )}
+                {sessionId && (
+                    <ModalRow
+                        meshTheme={meshTheme}
+                        label={t('mesh.overview.detailLabelSession')}
+                        value={
+                            <button type="button" className={linkClass} onClick={() => requestOpenSessionChat({ sessionId, source: 'mesh-overview-task-modal' })}>
+                                {shortSessionId(sessionId)} · {t('sessionNav.openChat')}
+                            </button>
+                        }
+                    />
+                )}
+                {depTasks.length > 0 && (
+                    <ModalRow
+                        meshTheme={meshTheme}
+                        label={t('mesh.overview.detailLabelDependsOn')}
+                        value={
+                            <div className="flex flex-col items-end gap-0.5">
+                                {depTasks.map(dep => dep.task && onOpenTask
+                                    ? (
+                                        <button key={dep.id} type="button" className={`${linkClass} font-mono text-3xs`} onClick={() => onOpenTask(dep.task!)}>
+                                            {dep.id.slice(0, 8)} · {dep.failure ? dep.failure.status : dep.task.status}
+                                        </button>
+                                    )
+                                    : <span key={dep.id} className={`font-mono text-3xs ${meshTheme.textMuted}`}>{dep.id.slice(0, 8)}{dep.failure ? ` · ${dep.failure.status}` : ''}</span>)}
+                            </div>
+                        }
+                    />
                 )}
                 {task.cancelReason && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCancelReason')} value={task.cancelReason} />}
                 {task.requeueReason && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeueReason')} value={task.requeueReason} />}
@@ -874,9 +1018,17 @@ function QueueDetail({ meshTheme, task }: { meshTheme: MeshGraphTheme; task: Rep
     )
 }
 
-function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }) {
+function SessionDetail({ meshTheme, node, session, queueTasks, onOpenTask }: {
+    meshTheme: MeshGraphTheme
+    node: RepoMeshNodeStatus
+    session: MeshGraphSessionDetail
+    queueTasks?: RepoMeshQueueTask[]
+    onOpenTask?: (task: RepoMeshQueueTask) => void
+}) {
     const { t } = useTranslation('common')
     const label = sessionStatusLabel(session)
+    const sessionTasks = (queueTasks ?? []).filter(task =>
+        task.assignedSessionId === session.sessionId || task.targetSessionId === session.sessionId)
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -897,6 +1049,20 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
                     <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelStarted')} value={relativeTime(session.startedAt || session.createdAt) ?? (session.startedAt || session.createdAt)!} />
                 )}
             </div>
+            {sessionTasks.length > 0 && (
+                <div>
+                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.sessionTasksHeading')}</div>
+                    <div className="flex flex-col gap-0.5">
+                        {sessionTasks.map(task => (
+                            <ListRow key={task.id} meshTheme={meshTheme} onClick={onOpenTask ? () => onOpenTask(task) : undefined}>
+                                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                                <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
+                                <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
+                            </ListRow>
+                        ))}
+                    </div>
+                </div>
+            )}
             {/* Jump straight into this session's conversation — the session-nav
                 bus resolves the chat tab and closes this dialog on its way
                 (misses toast "no local chat tab", e.g. remote-machine sessions). */}
@@ -915,16 +1081,44 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
     )
 }
 
-function GateDetail({ meshTheme, graph, nodeId, gate }: {
+function GateDetail({ meshTheme, graph, nodeId, gate, queueTasks, onOpenTask }: {
     meshTheme: MeshGraphTheme
     graph: import('@adhdev/daemon-core').MeshGraphView
     nodeId: string
     gate: import('@adhdev/daemon-core').MeshGraphGateView | null
+    /** Reverse wiring (owner audit 2026-08-25): the steps around the gate,
+     *  clickable through to their queue-task details. */
+    queueTasks?: RepoMeshQueueTask[]
+    onOpenTask?: (task: RepoMeshQueueTask) => void
 }) {
     const { t } = useTranslation('common')
     const gateNode = graph.nodes.find(n => n.nodeId === nodeId)
     const state = gate?.state ?? gateNode?.state ?? 'declared'
     const tone: Tone = state === 'released' ? 'emerald' : state === 'awaiting_coordinator' || state === 'claimed' ? 'amber' : state === 'expired' ? 'rose' : 'muted'
+    // Edge endpoints may be refs OR nodeIds (same duality the canvas resolves
+    // via buildNodeIdByEndpoint) — match both here or the lists come up empty.
+    const findNode = (endpoint: string) => graph.nodes.find(n => n.nodeId === endpoint || (!!n.ref && n.ref === endpoint))
+    const isGateEndpoint = (endpoint: string) => endpoint === nodeId || (!!gateNode?.ref && endpoint === gateNode.ref)
+    const neighborRows = (endpoints: string[]) => endpoints
+        .map(findNode)
+        .filter((n): n is NonNullable<ReturnType<typeof findNode>> => !!n && n.kind === 'worker_task')
+        .filter((n, index, nodes) => nodes.findIndex(candidate => candidate.nodeId === n.nodeId) === index)
+        .map(n => {
+            const task = n.taskId ? (queueTasks ?? []).find(candidate => candidate.id === n.taskId) ?? null : null
+            const label = `${n.ref || n.nodeId.slice(0, 8)} · ${n.taskStatus || n.state}`
+            return task && onOpenTask
+                ? (
+                    <button key={n.nodeId} type="button" className={`text-left font-mono text-3xs underline-offset-2 hover:underline ${meshTheme.textSecondary}`} onClick={() => onOpenTask(task)}>
+                        {label}
+                    </button>
+                )
+                : <span key={n.nodeId} className={`font-mono text-3xs ${meshTheme.textMuted}`}>{label}</span>
+        })
+    const upstream = neighborRows(graph.edges.filter(edge => isGateEndpoint(edge.to)).map(edge => edge.from))
+    const unlocks = neighborRows([
+        ...graph.edges.filter(edge => isGateEndpoint(edge.from)).map(edge => edge.to),
+        ...(gate?.blocking ?? []),
+    ])
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -936,6 +1130,12 @@ function GateDetail({ meshTheme, graph, nodeId, gate }: {
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGraph')} value={`${(graph as { batchId?: string }).batchId || graph.graphId.slice(0, 8)} · ${graph.status}`} />
                 {gateNode?.ref && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelRef')} value={gateNode.ref} />}
                 {gate?.releaseOutcome && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelOutcome')} value={gate.releaseOutcome} />}
+                {upstream.length > 0 && (
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGateAfter')} value={<div className="flex flex-col items-end gap-0.5">{upstream}</div>} />
+                )}
+                {unlocks.length > 0 && (
+                    <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGateUnlocks')} value={<div className="flex flex-col items-end gap-0.5">{unlocks}</div>} />
+                )}
             </div>
             {gate?.instructions && (
                 <div className={`whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>

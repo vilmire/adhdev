@@ -2608,7 +2608,7 @@
     "sessionInfo": {
         "quotaOkNoWindows": "取得成功 — パーセント枠なし",
         "sectionMeshWorker": "コーディネーターが起動したセッション",
-        "rowMeshId": "メッシュ",
+        "rowMeshId": "Mesh ID",
         "rowTaskId": "タスク",
         "rowCoordinator": "コーディネーター",
         "title": "セッション情報",
@@ -2648,7 +2648,6 @@
         "rowGit": "Git",
         "rowProviders": "プロバイダー",
         "rowProviderPriority": "プロバイダー優先度",
-        "rowMeshId": "Mesh ID",
         "rowCoordinatorCli": "コーディネーター CLI",
         "rowStartedAt": "開始時刻",
         "rowPromptInjection": "プロンプト注入",
@@ -2704,6 +2703,7 @@
             "refineCard": "Refine ジョブ",
             "recentActivity": "最近のアクティビティ",
             "recentTasks": "最近のタスク",
+            "missionTasksHeading": "ミッションのタスク",
             "showFewer": "表示を減らす",
             "showMore": "他 {{count}} 件",
             "noActiveMissions": "アクティブなミッションはありません。コーディネーターは複数タスクの作業用にミッションを作成します。",
@@ -2751,6 +2751,7 @@
             "detailLabelEntryId": "エントリID",
             "detailLabelWhen": "日時",
             "detailLabelNode": "ノード",
+            "detailLabelDependsOn": "依存タスク",
             "detailLabelSession": "セッション",
             "detailLabelProvider": "プロバイダー",
             "detailLabelPayload": "ペイロード",
@@ -2777,7 +2778,11 @@
             "routingSkipped": "スキップした候補",
             "routingSkippedMore": "他 {{count}} 件",
             "pausedMissions": "一時停止中のミッション",
-            "ledgerAllTime": "全期間の累計"
+            "ledgerAllTime": "全期間の累計",
+            "detailLabelGateAfter": "先行",
+            "detailLabelGateUnlocks": "解放対象",
+            "sessionTasksHeading": "このセッションのタスク",
+            "showOnCanvas": "キャンバスで表示"
         }
     },
     "machine": {
