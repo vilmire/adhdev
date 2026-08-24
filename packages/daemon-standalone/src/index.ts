@@ -1308,7 +1308,9 @@ class StandaloneServer {
           let body: Record<string, unknown> = {};
           if (subPath === '/installed' && method === 'GET') {
             cmdType = 'list_installed_providers';
-          } else if (subPath === '/catalog' && method === 'GET') {
+          } else if ((subPath === '/catalog' || subPath.startsWith('/catalog?')) && method === 'GET') {
+            // apiPath keeps the query string (url.slice), so a parameterized
+            // catalog call arrives as '/catalog?...' — match both forms.
             // Registry catalog via the daemon's registry RESOLVER — the
             // onboarding dialog must never call the vendor registry directly
             // (self-hosted daemons point the resolver elsewhere).
