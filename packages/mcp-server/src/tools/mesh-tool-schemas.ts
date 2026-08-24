@@ -433,6 +433,8 @@ export const MESH_GRAPH_VIEW_TOOL = {
             batchId: { type: 'string', description: 'CamelCase alias for batch_id.' },
             include_terminal: { type: 'boolean', description: 'Include completed/failed/cancelled graphs. Default false (in-flight only).' },
             includeTerminal: { type: 'boolean', description: 'CamelCase alias for include_terminal.' },
+            probe_gate_evidence: { type: 'boolean', description: 'Attach convergence evidence to waiting gates: whether each upstream commit is already reachable from the mesh base workspace\'s local origin/main. Answers "did the guarded work already land?" without claiming. Runs bounded local git probes (first 5 waiting gates, no fetch) — default false keeps the view git-free. Evidence never releases a gate.' },
+            probeGateEvidence: { type: 'boolean', description: 'CamelCase alias for probe_gate_evidence.' },
             limit: { type: 'number', description: 'Max graphs to return (default 20).' },
         },
     },

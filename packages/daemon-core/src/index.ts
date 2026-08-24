@@ -383,6 +383,10 @@ export {
     MESH_GATE_NAMED_OUTCOMES,
     MESH_GATE_RELEASE_PATCH_KEYS,
 } from './mesh/mesh-graph-gates.js';
+// G4: read-only convergence evidence attached where a coordinator meets a gate
+// (claim result; opt-in graph-view augmentation). Never releases anything.
+export { collectGateConvergenceEvidence } from './mesh/mesh-graph-gate-evidence.js';
+export type { GateConvergenceEvidence, GateCommitEvidence } from './mesh/mesh-graph-gate-evidence.js';
 export type {
     MeshGraphGateClaimInput,
     MeshGraphGateClaimResult,

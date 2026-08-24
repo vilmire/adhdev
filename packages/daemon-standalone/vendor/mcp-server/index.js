@@ -1365,6 +1365,8 @@ var MESH_GRAPH_VIEW_TOOL = {
       batchId: { type: "string", description: "CamelCase alias for batch_id." },
       include_terminal: { type: "boolean", description: "Include completed/failed/cancelled graphs. Default false (in-flight only)." },
       includeTerminal: { type: "boolean", description: "CamelCase alias for include_terminal." },
+      probe_gate_evidence: { type: "boolean", description: `Attach convergence evidence to waiting gates: whether each upstream commit is already reachable from the mesh base workspace's local origin/main. Answers "did the guarded work already land?" without claiming. Runs bounded local git probes (first 5 waiting gates, no fetch) \u2014 default false keeps the view git-free. Evidence never releases a gate.` },
+      probeGateEvidence: { type: "boolean", description: "CamelCase alias for probe_gate_evidence." },
       limit: { type: "number", description: "Max graphs to return (default 20)." }
     }
   }
@@ -5101,11 +5103,17 @@ async function meshGraphGateClaim(ctx, args) {
       ambiguousExternalOutcome: result.ambiguousExternalOutcome,
       previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId
     });
+    let convergenceEvidence = null;
+    try {
+      convergenceEvidence = (0, import_daemon_core6.collectGateConvergenceEvidence)(ctx.mesh.id, gateId);
+    } catch {
+    }
     return JSON.stringify({
       success: true,
       claimed: true,
       gateId,
       graphId: result.gate.graphId,
+      ...convergenceEvidence ? { convergenceEvidence } : {},
       ...result.gate.ref ? { ref: result.gate.ref } : {},
       action: result.gate.action,
       ...result.gate.instructions ? { instructions: result.gate.instructions } : {},
@@ -5330,12 +5338,28 @@ async function meshGraphView(ctx, args) {
     const graphId = readString(args.graph_id) || readString(args.graphId);
     const batchId = readString(args.batch_id) || readString(args.batchId);
     const includeTerminal = args.include_terminal === true || args.includeTerminal === true;
+    const probeGateEvidence = args.probe_gate_evidence === true || args.probeGateEvidence === true;
     const graphs = (0, import_daemon_core6.buildMeshGraphViews)(ctx.mesh.id, {
       ...graphId ? { graphId } : {},
       ...batchId ? { batchId } : {},
       activeOnly: !includeTerminal,
       ...readNumber(args.limit) !== void 0 ? { limit: readNumber(args.limit) } : {}
     });
+    if (probeGateEvidence) {
+      let probesLeft = 5;
+      for (const graph of graphs) {
+        for (const gate of graph.gates ?? []) {
+          if (probesLeft <= 0) break;
+          if (gate.state !== "awaiting_coordinator" && gate.state !== "expired") continue;
+          probesLeft -= 1;
+          try {
+            const evidence = (0, import_daemon_core6.collectGateConvergenceEvidence)(ctx.mesh.id, gate.gateId);
+            if (evidence) gate.convergenceEvidence = evidence;
+          } catch {
+          }
+        }
+      }
+    }
     const pendingActions = graphs.flatMap((g) => (g.nextCoordinatorAction ?? []).map((a) => ({ graphId: g.graphId, ...a })));
     return JSON.stringify({
       success: true,
