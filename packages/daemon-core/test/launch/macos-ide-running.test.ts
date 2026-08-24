@@ -48,6 +48,8 @@ vi.mock('../../src/providers/provider-loader.js', () => ({
     getMeta() { return { launch: { prefer: { darwin: 'app' }, cdpStartupTimeoutMs: 1000 } } }
     getAvailableIdeTypes() { return [] }
   },
+  // launch.ts spreads the shared config projection into the loader options.
+  providerLoaderConfigOptions: () => ({}),
 }))
 
 import { isIdeRunning, killIdeProcess, launchWithCdp } from '../../src/launch'
