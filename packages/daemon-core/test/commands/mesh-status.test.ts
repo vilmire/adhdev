@@ -436,7 +436,11 @@ describe('mesh_status', () => {
     expect(local.machine).toEqual(expect.objectContaining({
       sameMachine: true,
       locality: 'same_machine',
-      localityReason: 'selected coordinator node',
+      // Since the 2026-08-24 label-axis change, locally-hosted records get the
+      // coordinator hostname stamped BEFORE the identity probe, so the verdict
+      // upgrades from the positional 'selected coordinator node' fallback to
+      // hostname-evidence — still same_machine, now with proof.
+      localityReason: 'matched coordinator hostname',
     }))
     expect(unknown.machine).toEqual(expect.objectContaining({
       sameMachine: false,
@@ -2916,6 +2920,69 @@ describe('inline mesh node tombstone', () => {
     } finally {
       await cleanupTempDir(good.dir)
       await cleanupTempDir(alsoGood.dir)
+    }
+  })
+})
+
+describe('mesh_status machine ⊃ nodes label axes', () => {
+  it('gives every locally-hosted checkout the SAME machine label and a distinct node label', async () => {
+    // Owner axiom 2026-08-24: a machine hosts one base checkout + N worktrees.
+    // machineLabel is the MACHINE axis (identical across all three, never
+    // branch-derived — the pre-08-24 builder titled worktrees like separate
+    // machines); nodeLabel is the CHECKOUT axis (⎇ branch / basename). The
+    // labels are produced at the source now, so no relabel post-pass exists.
+    const { dir, repoRoot } = await createTempGitRepo('mesh-status-axes-')
+    try {
+      const { router } = createRouter()
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_axes',
+        refresh: true,
+        inlineMesh: {
+          id: 'mesh_axes',
+          name: 'Axes',
+          repoIdentity: 'repo',
+          defaultBranch: 'main',
+          policy: {},
+          coordinator: { preferredNodeId: 'node_base' },
+          nodes: [
+            { id: 'node_base', workspace: repoRoot, repoRoot, policy: {} },
+            {
+              id: 'node_wt_a',
+              workspace: '/missing/worktrees/adhdev/fix-a',
+              repoRoot: '/missing/worktrees/adhdev/fix-a',
+              isLocalWorktree: true,
+              worktreeBranch: 'fix/a',
+              policy: {},
+            },
+            {
+              id: 'node_wt_b',
+              workspace: '/missing/worktrees/adhdev/fix-b',
+              repoRoot: '/missing/worktrees/adhdev/fix-b',
+              isLocalWorktree: true,
+              worktreeBranch: 'fix/b',
+              policy: {},
+            },
+          ],
+        },
+      }) as any
+
+      expect(result.success).toBe(true)
+      const byId = new Map<string, any>(result.nodes.map((node: any) => [node.nodeId, node]))
+      const base = byId.get('node_base')
+      const wtA = byId.get('node_wt_a')
+      const wtB = byId.get('node_wt_b')
+      expect(base && wtA && wtB).toBeTruthy()
+      // MACHINE axis: one machine, one label — and never a branch/dir name.
+      expect(wtA.machineLabel).toBe(base.machineLabel)
+      expect(wtB.machineLabel).toBe(base.machineLabel)
+      expect(String(base.machineLabel)).not.toContain('fix-a')
+      expect(String(base.machineLabel)).not.toContain('fix/b')
+      // NODE axis: each checkout keeps its own identity.
+      expect(wtA.nodeLabel).toBe('⎇ fix/a')
+      expect(wtB.nodeLabel).toBe('⎇ fix/b')
+      expect(base.nodeLabel).toBe(repoRoot.replace(/[\\/]+$/, '').split(/[\\/]/).pop())
+    } finally {
+      await cleanupTempDir(dir)
     }
   })
 })

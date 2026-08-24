@@ -42,7 +42,8 @@ import {
     readMeshNodeHostname,
     readProviderPriorityFromPolicy,
     buildMeshNodeMachineIdentity,
-    buildMeshNodeDisplayLabel,
+    buildMeshNodeCheckoutLabel,
+    buildMeshNodeMachineLabel,
     collectLiveMeshSessionRecords,
     readLiveMeshNodeWorkspace,
     summarizeMeshSessionRecord,
@@ -322,13 +323,26 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             daemonId && (daemonIdsEquivalent(daemonId, localMachineId) || daemonIdsEquivalent(daemonId, ctx.deps.statusInstanceId)),
                         ) || Boolean(meshRecord?.inline && nodeIndex === 0)
                             || sparseConfiguredCoordinatorNode;
-                        // The self/base node's friendly label comes from THIS daemon's
+                        // A locally-hosted node's friendly label comes from THIS daemon's
                         // local config.machineNickname. Stamp it onto the node record (if
-                        // not already carried) so buildMeshNodeDisplayLabel below resolves
+                        // not already carried) so buildMeshNodeMachineLabel below resolves
                         // to the nickname and labelSource reads 'explicit_metadata' even
-                        // before addNode's persisted record has been rewritten.
-                        if (isSelfNode && localMachineNickname && !readStringValue(node.machineNickname, node.machine_nickname)) {
+                        // before addNode's persisted record has been rewritten. Worktree
+                        // nodes are included (machine ⊃ nodes, 2026-08-24): they live on
+                        // this same machine and must carry the same machine label — this
+                        // stamp replaced the old host_machine relabel post-pass.
+                        if ((isSelfNode || node.isLocalWorktree === true) && localMachineNickname
+                            && !readStringValue(node.machineNickname, node.machine_nickname)) {
                             node.machineNickname = localMachineNickname;
+                        }
+                        // Same reasoning for the hostname: locally-hosted records are
+                        // persisted with no machine evidence at all (no hostname,
+                        // often no daemonId), so without this stamp a nickname-less
+                        // machine's label would degrade to a node id. Also lets the
+                        // machine-identity probe match on hostname.
+                        if ((isSelfNode || node.isLocalWorktree === true) && coordinatorHostname
+                            && !readStringValue(node.hostname, node.host)) {
+                            node.hostname = coordinatorHostname;
                         }
                         const machineIdentity = buildMeshNodeMachineIdentity(node as Record<string, unknown>, {
                             localMachineId,
@@ -338,10 +352,14 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         });
                         const status: Record<string, unknown> = {
                             nodeId,
-                            machineLabel: buildMeshNodeDisplayLabel(node as Record<string, unknown>, nodeId, providerPriority),
+                            // machineLabel is MACHINE-axis only (owner axiom 2026-08-24):
+                            // identical across every checkout this machine hosts. The
+                            // checkout identity travels in nodeLabel/worktreeBranch.
+                            machineLabel: buildMeshNodeMachineLabel(node as Record<string, unknown>, nodeId),
+                            nodeLabel: buildMeshNodeCheckoutLabel(node as Record<string, unknown>, nodeId),
                             labelSource: readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias)
                                 ? 'explicit_metadata'
-                                : 'workspace_host_provider_context',
+                                : 'machine_identity',
                             workspace: node.workspace,
                             repoRoot: node.repoRoot,
                             isLocalWorktree: node.isLocalWorktree,
@@ -606,7 +624,11 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         const daemonId = readStringValue(node.daemonId);
                         const fallback: Record<string, unknown> = {
                             nodeId,
-                            machineLabel: buildMeshNodeDisplayLabel(node as Record<string, unknown>, nodeId, readProviderPriorityFromPolicy(node.policy)),
+                            machineLabel: buildMeshNodeMachineLabel(node as Record<string, unknown>, nodeId),
+                            nodeLabel: buildMeshNodeCheckoutLabel(node as Record<string, unknown>, nodeId),
+                            labelSource: readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias)
+                                ? 'explicit_metadata'
+                                : 'machine_identity',
                             workspace: node.workspace,
                             repoRoot: node.repoRoot,
                             isLocalWorktree: node.isLocalWorktree,
@@ -625,39 +647,12 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         finalizeMeshNodeStatus({ status: fallback, node, daemonId, isSelfNode: false, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                         return fallback;
                     });
-                    // A worktree node is NOT a machine. Its derived display label used
-                    // to be the worktree DIRECTORY basename + provider ("fix-permission-
-                    // mode-duplicate-args · claude-cli"), which made every worktree read
-                    // as a separate machine across the dashboard. machineLabel now means
-                    // the HOST machine's label for worktree nodes too — the branch
-                    // identity travels separately in worktreeBranch, and UIs render it
-                    // as `⎇ branch`. Resolution: clonedFromNodeId's rendered label
-                    // first, then any same-machineId node without a worktreeBranch.
-                    {
-                        const labelByNodeId = new Map<string, string>();
-                        const baseLabelByMachineId = new Map<string, string>();
-                        for (const status of nodeStatuses as Array<Record<string, unknown>>) {
-                            const id = readStringValue(status.nodeId);
-                            const label = readStringValue(status.machineLabel);
-                            if (id && label) labelByNodeId.set(id, label);
-                            const machineId = readStringValue(status.machineId);
-                            if (machineId && label && !readStringValue(status.worktreeBranch) && !baseLabelByMachineId.has(machineId)) {
-                                baseLabelByMachineId.set(machineId, label);
-                            }
-                        }
-                        for (const [i, status] of (nodeStatuses as Array<Record<string, unknown>>).entries()) {
-                            if (!readStringValue(status.worktreeBranch)) continue;
-                            const configNode = meshNodeEntries[i]?.[1] as Record<string, unknown> | undefined;
-                            const clonedFrom = readStringValue(configNode?.clonedFromNodeId, configNode?.cloned_from_node_id);
-                            const machineId = readStringValue(status.machineId);
-                            const hostLabel = (clonedFrom ? labelByNodeId.get(clonedFrom) : undefined)
-                                ?? (machineId ? baseLabelByMachineId.get(machineId) : undefined);
-                            if (hostLabel) {
-                                status.machineLabel = hostLabel;
-                                status.labelSource = 'host_machine';
-                            }
-                        }
-                    }
+                    // (The 08-24 host_machine relabel post-pass lived here for one
+                    // cycle. It is gone because it is no longer needed: machineLabel
+                    // is now generated machine-axis-only by buildMeshNodeMachineLabel,
+                    // with the local nickname/hostname stamped onto self AND local
+                    // worktree records above — every checkout on a machine resolves
+                    // to the same label at the source, order-independent.)
 
                     const cachedProjectionNodeIds = nodeStatuses
                         .filter((status: any) => status?.dataFreshness?.projection === 'cached'

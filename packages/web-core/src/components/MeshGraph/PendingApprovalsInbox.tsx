@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshNodeStatus, RepoMeshSessionStatus } from '@adhdev/daemon-core'
 import { IconWarning } from '../Icons'
 import { IconSpinner } from '../Icons'
+import { nodeDisplayName } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
 export type PendingApprovalAction = 'approve' | 'reject'
 
@@ -84,7 +85,7 @@ export function derivePendingApprovals(nodes: RepoMeshNodeStatus[] | undefined |
                 nodeId: node.nodeId,
                 sessionId: session.sessionId,
                 providerType: session.providerType,
-                machineLabel: node.machineLabel || node.nodeId,
+                machineLabel: nodeDisplayName(node) || node.nodeId,
                 detail: session.statusNote ?? session.title ?? null,
             })
         }

@@ -39,7 +39,10 @@ describe('derivePendingApprovals', () => {
       nodeId: 'node-a',
       sessionId: 'sess-approval',
       providerType: 'claude-cli',
-      machineLabel: 'Node A',
+      // Both axes since the 2026-08-24 label separation: an approval must name
+      // WHICH checkout is asking, not just the machine ("ws" = the fixture
+      // node's workspace basename).
+      machineLabel: 'ws · Node A',
       detail: 'Run rm -rf?',
     })
   })

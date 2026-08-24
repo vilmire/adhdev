@@ -16,7 +16,7 @@ import { Badge, Row } from './MeshObservabilitySurface/meshSurfacePrimitives'
 import { MeshStatusTab } from './MeshObservabilitySurface/MeshStatusTab'
 import { MeshNotesTab } from './MeshObservabilitySurface/MeshNotesTab'
 import { MeshHealthPanel } from './MeshObservabilitySurface/MeshHealthPanel'
-import {
+import { nodeDisplayName,
     EMPTY_LEDGER_SUMMARY,
     collectSessionEntries,
     connectionTone,
@@ -444,7 +444,7 @@ export default function MeshObservabilitySurface({
 
     const statusWarnings = [
         ...(canonicalGraph.warnings ?? []),
-        ...(canonicalStatus.nodes.filter(node => node.machineStatus && node.machineStatus !== 'online').map(node => `${node.machineLabel}: ${node.machineStatus}`)),
+        ...(canonicalStatus.nodes.filter(node => node.machineStatus && node.machineStatus !== 'online').map(node => `${nodeDisplayName(node)}: ${node.machineStatus}`)),
     ]
     const hasSnapshotGaps = canonicalGraph.stats.incompleteSnapshotNodes > 0
     const headlineLabel = canonicalGraph.stats.followUpNodes > 0

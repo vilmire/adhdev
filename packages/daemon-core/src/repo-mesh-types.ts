@@ -81,6 +81,8 @@ export interface RepoMeshNode {
     id: string;
     daemonId: string;
     machineId?: string;
+    /** MACHINE-axis label only — checkout identity lives in
+     *  worktreeBranch/nodeLabel (axis separation, 2026-08-24). */
     machineLabel: string;
     workspace: string;
     repoRoot?: string;
@@ -1488,8 +1490,9 @@ export interface LocalMeshNodeEntry {
      * config value onto its self/base node; a remote member self-reports its
      * value on the git_status envelope (reporterMachineNickname), which the
      * coordinator persists here on each direct git probe. Feeds
-     * buildMeshNodeDisplayLabel so the mesh UI renders the friendly nickname
-     * instead of a raw daemonId/nodeId. Absent until set/first-reported.
+     * buildMeshNodeMachineLabel (machine-axis-only since 2026-08-24) so the
+     * mesh UI renders the friendly nickname instead of a raw daemonId/nodeId.
+     * Absent until set/first-reported.
      */
     machineNickname?: string;
     policy: RepoMeshNodePolicy;
@@ -1748,7 +1751,18 @@ export interface RepoMeshPeerConnectionStatus {
 
 export interface RepoMeshNodeStatus {
     nodeId: string;
+    /** MACHINE-axis label (owner axiom 2026-08-24: machine ⊃ nodes) —
+     *  identical for every checkout one machine hosts. Never carries branch
+     *  or workspace identity; that is `nodeLabel`/`worktreeBranch`. */
     machineLabel: string;
+    /** NODE/CHECKOUT-axis label: `⎇ branch` for worktrees, the workspace
+     *  basename for base checkouts (buildMeshNodeCheckoutLabel). Optional —
+     *  absent from statuses rendered by pre-2026-08-24 daemons. */
+    nodeLabel?: string;
+    /** How machineLabel was resolved: 'explicit_metadata' (stored
+     *  label/nickname/alias) or 'machine_identity' (machine-name/hostname/id
+     *  evidence). Diagnostic only. */
+    labelSource?: string;
     workspace: string;
     repoRoot?: string;
     daemonId?: string;

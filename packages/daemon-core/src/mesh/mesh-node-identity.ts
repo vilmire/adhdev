@@ -17,6 +17,7 @@ import { getDaemonBuildInfo } from '../build-info.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, normalizeMeshNodeFacts, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker, deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared';
 import { buildLocalNodeFacts } from './node-facts.js';
+import { loadConfig } from '../config/config.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 import type { MeshReportedMemberState } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
@@ -148,24 +149,58 @@ export function logRepoMeshStatusDebug(event: string, fields: Record<string, unk
 // joinRepoPath + readGitSubmodules moved to @adhdev/mesh-shared (readGitSubmodules)
 // — used via sharedNormalizeGitStatus / sharedPickBestTransitGitStatus below.
 
-export function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId: string, providerPriority: string[]): string {
-    const explicit = readStringValue(node.machineLabel, node.machine_label, node.machineNickname, node.machine_nickname, node.alias);
-    if (explicit) return explicit;
-    const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-    // Use the OS-agnostic basename: a workspace reported by a Windows node
-    // (`D:\gh\adhdev-cloud`) must still collapse to its trailing segment even when
-    // this coordinator's own `path.basename` is POSIX-only and would not split `\`.
-    const workspaceName = workspace ? workingDirBasename(workspace) : undefined;
-    const host = readStringValue(node.machineName, node.machine_name, node.hostname, node.host, node.daemonId, node.daemon_id, node.machineId, node.machine_id);
-    // Re-read the node policy here instead of trusting a potentially stale raw
-    // providerPriority supplied by a caller. With slots configured, their order is
-    // authoritative; the argument remains the fallback for legacy call sites.
-    const provider = readProviderPriorityFromPolicy(node.policy)[0]
-        || providerPriority[0]
-        || (Array.isArray(node.providers) ? readStringValue(...node.providers) : undefined);
-    const parts = [workspaceName, host, provider].filter(Boolean);
-    if (parts.length > 0) return parts.join(' · ');
+/**
+ * MACHINE-axis label for a mesh node (owner axiom 2026-08-24: machine ⊃
+ * nodes). Every checkout hosted by one machine — base + all worktrees — must
+ * resolve to the SAME label, so the chain reads ONLY machine evidence:
+ * explicit label/nickname/alias → machine object names → hostname (via
+ * readMeshNodeDisplayMachineName) → a compacted daemon/machine id. The
+ * pre-2026-08-24 chain led with the WORKSPACE BASENAME and appended the top
+ * provider, which titled every worktree like a separate machine
+ * ("fix-permission-mode-duplicate-args · claude-cli") and forced a
+ * host_machine relabel post-pass in mesh-status.ts; checkout identity now
+ * travels separately (worktreeBranch / buildMeshNodeCheckoutLabel).
+ */
+export function buildMeshNodeMachineLabel(node: Record<string, unknown>, nodeId: string): string {
+    const machineName = readMeshNodeDisplayMachineName(node);
+    if (machineName) {
+        // Cosmetic only when the resolved value IS the raw hostname — an
+        // explicit nickname is never rewritten.
+        return machineName === readMeshNodeHostname(node)
+            ? machineName.replace(/\.local$/i, '')
+            : machineName;
+    }
+    const id = readStringValue(node.daemonId, node.daemon_id, node.machineId, node.machine_id);
+    if (id) return id.length > 16 ? `${id.slice(0, 12)}…` : id;
     return nodeId || 'unidentified mesh node';
+}
+
+/**
+ * NODE/CHECKOUT-axis label: which checkout on the machine this node is. The
+ * counterpart of buildMeshNodeMachineLabel — worktrees are titled by their
+ * branch (`⎇ branch`, the convention every web surface renders), the base
+ * checkout by its workspace basename.
+ */
+export function buildMeshNodeCheckoutLabel(node: Record<string, unknown>, nodeId: string): string {
+    const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
+    if (branch) return `⎇ ${branch}`;
+    const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
+    // OS-agnostic basename: a workspace reported by a Windows node
+    // (`D:\gh\adhdev-cloud`) must still collapse to its trailing segment even
+    // when this coordinator's own `path.basename` is POSIX-only.
+    const basename = workspace ? workingDirBasename(workspace) : undefined;
+    return basename || (nodeId ? nodeId.slice(0, 8) : 'node');
+}
+
+/**
+ * @deprecated 2026-08-24 — the old name built a mixed workspace·host·provider
+ * string (the two-axes-in-one-field defect). Renamed to
+ * buildMeshNodeMachineLabel when the axes were separated; kept as an alias for
+ * out-of-tree callers. The provider-priority argument is ignored — provider is
+ * not machine identity.
+ */
+export function buildMeshNodeDisplayLabel(node: Record<string, unknown>, nodeId: string, _providerPriority?: string[]): string {
+    return buildMeshNodeMachineLabel(node, nodeId);
 }
 
 function normalizeMeshHostname(value: unknown): string | undefined {
@@ -464,7 +499,18 @@ export function recordInlineMeshDirectGitTruth(
         if (remoteFacts) node.nodeFacts = remoteFacts;
     } else {
         try {
-            node.nodeFacts = buildLocalNodeFacts({ providerVersions: reporterProviderVersions ?? null });
+            // machineNickname: without it the LOCAL machine's facts bundle was
+            // the only one lacking a nickname (remote members self-report it on
+            // the envelope), so machine-label resolution worked everywhere but
+            // on the coordinator's own machine.
+            let localNickname: string | null = null;
+            try {
+                localNickname = readStringValue(loadConfig().machineNickname) ?? null;
+            } catch { /* config read is best-effort */ }
+            node.nodeFacts = buildLocalNodeFacts({
+                providerVersions: reporterProviderVersions ?? null,
+                machineNickname: localNickname,
+            });
         } catch { /* facts stamp is best-effort observability */ }
     }
     return {

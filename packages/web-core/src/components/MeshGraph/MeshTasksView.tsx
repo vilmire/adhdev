@@ -21,6 +21,7 @@ import MeshTaskDagView from './MeshTaskDagView'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
 import { formatRelativeTime } from '../../utils/time'
 import { IconFlag } from '../Icons'
+import { nodeDisplayName } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
 interface MeshTasksViewProps {
     tasks: RepoMeshQueueTask[]
@@ -71,11 +72,7 @@ function buildNodeLabels(status: RepoMeshStatus): Map<string, string> {
     const out = new Map<string, string>()
     for (const node of status.nodes ?? []) {
         if (!node?.nodeId) continue
-        const base = node.machineLabel || node.nodeId.slice(0, 12)
-        const branch = node.isLocalWorktree && typeof node.worktreeBranch === 'string' && node.worktreeBranch
-            ? ` · ${node.worktreeBranch}`
-            : ''
-        out.set(node.nodeId, `${base}${branch}`)
+        out.set(node.nodeId, nodeDisplayName(node))
     }
     return out
 }

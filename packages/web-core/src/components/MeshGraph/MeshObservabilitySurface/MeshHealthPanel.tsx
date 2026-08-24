@@ -11,6 +11,7 @@ import {
     shortSessionId,
     type AsyncRefineJob,
     type SessionListEntry,
+    nodeCheckoutLabel,
 } from './meshSurfaceHelpers'
 
 export function MeshHealthPanel({
@@ -127,7 +128,7 @@ export function MeshHealthPanel({
                             return (
                                 <div key={node.nodeId} className="flex items-center gap-2">
                                     <span className={`size-1.5 shrink-0 rounded-full ${dotClass}`} />
-                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={node.workspace}>{node.machineLabel}</span>
+                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={node.workspace}>{nodeCheckoutLabel(node)}</span>
                                     <span className={`shrink-0 font-mono text-3xs ${meshTheme.textMuted}`}>{isConnecting ? '…' : connState}</span>
                                 </div>
                             )

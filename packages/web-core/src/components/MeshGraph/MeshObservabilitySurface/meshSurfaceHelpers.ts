@@ -22,7 +22,9 @@ import {
     quotaUsageTone,
     formatQuotaReset,
     formatQuotaWindow,
+    collectQuotaBucketChips,
     describeQuotaFailure,
+    describeQuotaOkWithoutWindows,
     formatQuotaFreshness,
     formatQuotaAccount,
     shouldShowClaudeSetupHint,
@@ -35,7 +37,9 @@ export {
     shouldShowClaudeSetupHint,
     formatQuotaReset,
     formatQuotaWindow,
+    collectQuotaBucketChips,
     describeQuotaFailure,
+    describeQuotaOkWithoutWindows,
     formatQuotaFreshness,
     quotaWindowCue,
 }
@@ -335,6 +339,35 @@ export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaG
 }
 
 /**
+ * NODE/CHECKOUT-axis display label — the web mirror of daemon-core's
+ * buildMeshNodeCheckoutLabel (axis separation 2026-08-24: machineLabel names
+ * the MACHINE, this names the checkout on it). Worktrees render as
+ * `⎇ branch`; base checkouts as their workspace basename; daemon-provided
+ * `nodeLabel` is honoured when neither local derivation applies.
+ */
+export function nodeCheckoutLabel(node: Pick<RepoMeshNodeStatus, 'nodeId' | 'machineLabel' | 'workspace'> & { worktreeBranch?: string; nodeLabel?: string }): string {
+    const branch = typeof node.worktreeBranch === 'string' && node.worktreeBranch.trim() ? node.worktreeBranch.trim() : ''
+    if (branch) return `⎇ ${branch}`
+    const provided = typeof node.nodeLabel === 'string' && node.nodeLabel.trim() ? node.nodeLabel.trim() : ''
+    if (provided) return provided
+    const basename = typeof node.workspace === 'string' ? node.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : ''
+    return basename || node.machineLabel || (node.nodeId ? node.nodeId.slice(0, 12) : 'node')
+}
+
+/**
+ * Both axes in one line for pickers, task targets and inbox rows —
+ * `<checkout> · <machine>`, deduped when they resolve to the same string
+ * (base checkout named after its machine, or an old-daemon status whose
+ * machineLabel still is the workspace basename).
+ */
+export function nodeDisplayName(node: Pick<RepoMeshNodeStatus, 'nodeId' | 'machineLabel' | 'workspace'> & { worktreeBranch?: string; nodeLabel?: string }): string {
+    const checkout = nodeCheckoutLabel(node)
+    const machine = typeof node.machineLabel === 'string' ? node.machineLabel.trim() : ''
+    if (!machine || machine === checkout) return checkout
+    return `${checkout} · ${machine}`
+}
+
+/**
  * The name to show for a machine, resolved DETERMINISTICALLY from its whole
  * node set rather than from whichever node happened to be seen first.
  *
@@ -345,12 +378,13 @@ export function collectMachineQuotaGroups(status: RepoMeshStatus): MachineQuotaG
  *      machine, so the two sections agree instead of one showing a raw id.
  *   3. a short prefix of the machine key.
  *
- * `machineLabel` is step 2, never step 1, for the original reason:
- * buildMeshNodeDisplayLabel falls back to a workspace basename, so two worktrees
- * on one machine carry DIFFERENT machineLabels. That is exactly why the choice
- * among them must be deterministic — candidates are collected across all the
- * machine's nodes and the lexicographically smallest is taken, so the same mesh
- * state always yields the same name regardless of node order.
+ * `machineLabel` is step 2, never step 1, originally because the pre-2026-08-24
+ * daemon builder (old buildMeshNodeDisplayLabel) fell back to a workspace
+ * basename, so two worktrees on one machine carried DIFFERENT machineLabels.
+ * Current daemons emit a machine-axis-only label (buildMeshNodeMachineLabel) —
+ * but statuses from older daemons still arrive, so the deterministic pick
+ * (candidates collected across ALL the machine's nodes, lexicographically
+ * smallest wins) stays as the mixed-version guard.
  */
 export function resolveMachineLabel(status: RepoMeshStatus, machineKey: string): string {
     const nicknames: string[] = []

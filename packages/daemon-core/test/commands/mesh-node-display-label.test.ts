@@ -1,77 +1,79 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshNodeDisplayLabel, resolveMeshNodeAttribution } from '../../src/commands/router.js'
+import {
+    buildMeshNodeCheckoutLabel,
+    buildMeshNodeDisplayLabel,
+    buildMeshNodeMachineLabel,
+    resolveMeshNodeAttribution,
+} from '../../src/commands/router.js'
 
-describe('buildMeshNodeDisplayLabel', () => {
-    it('shortens a Windows backslash workspace to its OS-agnostic basename', () => {
-        // A Windows node reports `D:\gh\adhdev-cloud`. The coordinator building this
-        // label may be POSIX (path.basename does not split `\`), so the label must
-        // still collapse to the trailing segment.
-        const label = buildMeshNodeDisplayLabel({ workspace: 'D:\\gh\\adhdev-cloud' }, 'node_win', [])
-        expect(label).toBe('adhdev-cloud')
+// Axis separation (owner axiom 2026-08-24: machine ⊃ nodes) —
+// buildMeshNodeMachineLabel names the MACHINE and must be identical for every
+// checkout the machine hosts; buildMeshNodeCheckoutLabel names the checkout
+// (⎇ branch for worktrees, workspace basename otherwise). The old
+// buildMeshNodeDisplayLabel mixed both axes plus a provider into one string,
+// which titled every worktree like a separate machine.
+
+describe('buildMeshNodeMachineLabel — machine axis only', () => {
+    it('never derives from the workspace: two checkouts on one host share the label', () => {
+        const base = buildMeshNodeMachineLabel({ workspace: '/Users/me/Work/adhdev', hostname: 'mac-1' }, 'node_base')
+        const worktree = buildMeshNodeMachineLabel(
+            { workspace: '/Users/me/.adhdev/worktrees/adhdev/fix-thing', worktreeBranch: 'fix/thing', hostname: 'mac-1' },
+            'node_wt',
+        )
+        expect(base).toBe('mac-1')
+        expect(worktree).toBe('mac-1')
     })
 
-    it('shortens a POSIX workspace to its basename', () => {
-        const label = buildMeshNodeDisplayLabel({ workspace: '/Users/me/Work/adhdev' }, 'node_mac', [])
-        expect(label).toBe('adhdev')
-    })
-
-    it('combines the workspace basename with host and provider context', () => {
-        const label = buildMeshNodeDisplayLabel(
-            { workspace: 'D:\\gh\\adhdev-cloud', hostname: 'dst-win' },
+    it('never appends provider context', () => {
+        const label = buildMeshNodeMachineLabel(
+            { hostname: 'dst-win', policy: { slots: [{ provider: 'claude-cli' }] }, providers: ['claude-cli'] },
             'node_win',
-            ['claude-code'],
         )
-        expect(label).toBe('adhdev-cloud · dst-win · claude-code')
+        expect(label).toBe('dst-win')
     })
 
-    it('uses the slots-derived provider instead of a stale raw priority', () => {
-        const label = buildMeshNodeDisplayLabel(
-            {
-                workspace: '/Users/me/Work/adhdev',
-                hostname: 'mac-1',
-                policy: {
-                    providerPriority: ['kimi'],
-                    slots: [{ provider: 'claude-cli' }, { provider: 'codex-cli' }],
-                },
-            },
-            'node_mac',
-            ['kimi'],
-        )
-        expect(label).toBe('adhdev · mac-1 · claude-cli')
+    it('prefers an explicit machine label / nickname over host evidence', () => {
+        expect(buildMeshNodeMachineLabel({ machineLabel: 'My Windows Box', hostname: 'dst-win' }, 'node_win')).toBe('My Windows Box')
+        expect(buildMeshNodeMachineLabel({ machineNickname: 'moltbot', hostname: 'mac-1' }, 'node_a')).toBe('moltbot')
+        expect(buildMeshNodeMachineLabel({ machine_nickname: 'staging-box' }, 'node_a')).toBe('staging-box')
     })
 
-    it('prefers an explicit machine label over the workspace basename', () => {
-        const label = buildMeshNodeDisplayLabel(
-            { machineLabel: 'My Windows Box', workspace: 'D:\\gh\\adhdev-cloud' },
-            'node_win',
-            [],
-        )
-        expect(label).toBe('My Windows Box')
+    it('strips the mDNS .local suffix from a raw hostname, but never from an explicit label', () => {
+        expect(buildMeshNodeMachineLabel({ hostname: 'vilmire-MacBookAir.local' }, 'node_a')).toBe('vilmire-MacBookAir')
+        expect(buildMeshNodeMachineLabel({ machineNickname: 'box.local' }, 'node_a')).toBe('box.local')
     })
 
-    it('prefers the machineNickname over the workspace/host fallback', () => {
-        // The config.machineNickname propagated onto the node record (self node stamp
-        // or a remote member's reporterMachineNickname) must win over the raw
-        // workspace·host·provider fallback — the whole point of the propagation fix.
-        const label = buildMeshNodeDisplayLabel(
-            { machineNickname: 'moltbot', workspace: '/Users/me/Work/adhdev', hostname: 'mac-1' },
-            'node_abcdef',
-            ['claude-code'],
-        )
-        expect(label).toBe('moltbot')
+    it('falls back to a compacted daemon/machine id, then the node id', () => {
+        expect(buildMeshNodeMachineLabel({ daemonId: 'daemon_mach_0123456789abcdef0123' }, 'node_a')).toBe('daemon_mach_…')
+        expect(buildMeshNodeMachineLabel({ machineId: 'mach_short' }, 'node_a')).toBe('mach_short')
+        expect(buildMeshNodeMachineLabel({}, 'node_abcdef')).toBe('node_abcdef')
+    })
+})
+
+describe('buildMeshNodeCheckoutLabel — node/checkout axis', () => {
+    it('titles a worktree by its branch with the ⎇ glyph', () => {
+        expect(buildMeshNodeCheckoutLabel(
+            { worktreeBranch: 'fix/permission-mode-duplicate-args', workspace: '/x/worktrees/adhdev/fix-permission-mode-duplicate-args' },
+            'node_wt',
+        )).toBe('⎇ fix/permission-mode-duplicate-args')
     })
 
-    it('reads the snake_case machine_nickname form', () => {
-        const label = buildMeshNodeDisplayLabel(
-            { machine_nickname: 'staging-box', workspace: '/Users/me/Work/adhdev' },
-            'node_abcdef',
-            [],
-        )
-        expect(label).toBe('staging-box')
+    it('titles a base checkout by its OS-agnostic workspace basename', () => {
+        // A Windows node reports `D:\gh\adhdev-cloud`; the coordinator building
+        // this label may be POSIX, so `\` must still split.
+        expect(buildMeshNodeCheckoutLabel({ workspace: 'D:\\gh\\adhdev-cloud' }, 'node_win')).toBe('adhdev-cloud')
+        expect(buildMeshNodeCheckoutLabel({ workspace: '/Users/me/Work/adhdev' }, 'node_mac')).toBe('adhdev')
     })
 
-    it('falls back to the node id when no workspace/host/provider is known', () => {
-        expect(buildMeshNodeDisplayLabel({}, 'node_abcdef', [])).toBe('node_abcdef')
+    it('falls back to a short node id with no workspace evidence', () => {
+        expect(buildMeshNodeCheckoutLabel({}, 'node_abcdef123456')).toBe('node_abc')
+    })
+})
+
+describe('buildMeshNodeDisplayLabel — deprecated alias', () => {
+    it('delegates to the machine-axis builder and ignores the provider argument', () => {
+        expect(buildMeshNodeDisplayLabel({ hostname: 'mac-1', workspace: '/Users/me/Work/adhdev' }, 'node_a', ['claude-code']))
+            .toBe('mac-1')
     })
 })
 

@@ -29,6 +29,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { buildProviderOptionMap, type AvailableCliProviderOption } from '../../utils/provider-priority'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { isWorktreeNode } from '../../pages/repo-mesh/MeshNodeList'
+import { nodeDisplayName } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
 /**
  * Static provider fallback used when no live mesh node reports any provider
@@ -186,7 +187,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     // Friendly display label per nodeId (raw id stays the option value). Falls back
     // to the raw nodeId when the normalized machineLabel is unavailable.
     const nodeLabelById = useMemo(
-        () => Object.fromEntries((status?.nodes ?? []).map(n => [n.nodeId, n.machineLabel || n.nodeId])),
+        () => Object.fromEntries((status?.nodes ?? []).map(n => [n.nodeId, nodeDisplayName(n) || n.nodeId])),
         [status?.nodes],
     )
 

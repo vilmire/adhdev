@@ -31,6 +31,7 @@ import type { MagiSynthesis, MagiResponseSource } from '@adhdev/mesh-shared'
 import { useTheme } from '../../hooks/useTheme'
 import Button from '../ui/Button'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
+import { nodeDisplayName } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
 /** One folded synthesis summary as carried in status.magiActivity[]. Mirrors
  *  daemon-core's MeshMagiActivitySummary without importing the value module. */
@@ -90,7 +91,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
     const nodeLabelById = useMemo(() => {
         const map = new Map<string, string>()
         for (const node of status.nodes ?? []) {
-            if (node.nodeId && node.machineLabel) map.set(node.nodeId, node.machineLabel)
+            if (node.nodeId) map.set(node.nodeId, nodeDisplayName(node))
         }
         return map
     }, [status.nodes])

@@ -25,7 +25,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
-import { sessionElapsedLabel, sessionRoleLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { nodeCheckoutLabel, nodeDisplayName, sessionElapsedLabel, sessionRoleLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
 /**
  * MeshOverviewCards — the text/card "Overview" surface for a mesh. This is the
@@ -304,7 +304,7 @@ export default function MeshOverviewCards({
     const resolveNodeLabel = useCallback((nodeId: string | undefined | null): string => {
         if (!nodeId) return ''
         const node = canonicalStatus.nodes.find(n => n.nodeId === nodeId)
-        return node?.machineLabel || nodeId
+        return node ? nodeDisplayName(node) : nodeId
     }, [canonicalStatus.nodes])
 
     // SHOW-TASK-DIFFICULTY: sessionId -> difficulty, from queue tasks currently
@@ -877,7 +877,7 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
             {session.statusNote && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{session.statusNote}</div>}
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelSessionId')} value={session.sessionId} />
-                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={node.machineLabel} />
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={nodeDisplayName(node)} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelWorkspace')} value={session.workspace || node.workspace} />
                 {(node.git?.branch ?? node.worktreeBranch) && (
                     <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelBranch')} value={node.git?.branch ?? node.worktreeBranch!} />
@@ -1133,7 +1133,7 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                         return (
                             <div key={node.nodeId} className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden rounded-xl border px-3 py-2 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
                                 <StatusBadge meshTheme={meshTheme} label={node.health} tone={healthTone(node.health)} />
-                                <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{node.machineLabel}</span>
+                                <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{nodeCheckoutLabel(node)}</span>
                                 {branch && <span className={`max-w-full truncate font-mono text-2xs ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
                                 <span className={`max-w-full truncate font-mono text-3xs ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
                                 {sessionCount > 0 && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{sessionCount} session{sessionCount > 1 ? 's' : ''}</span>}
@@ -1170,13 +1170,12 @@ function SessionsCard({ meshTheme, entries, onSelect }: {
                         // Where + who, not a raw session id: the machine (with worktree
                         // branch when applicable), the session's mesh role, provider and
                         // age. The raw id stays available in the row tooltip / detail.
-                        const machine = node.machineLabel || node.nodeId.slice(0, 12)
-                        const branch = node.isLocalWorktree && node.worktreeBranch ? ` · ${node.worktreeBranch}` : ''
+                        const where = nodeDisplayName(node)
                         const elapsed = sessionElapsedLabel(session)
                         return (
                             <ListRow key={session.sessionId} meshTheme={meshTheme} onClick={() => onSelect(node, session)}>
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={session.sessionId}>
-                                    {machine}{branch}
+                                    {where}
                                 </span>
                                 <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{sessionRoleLabel(session)}</span>
                                 <span className={`shrink-0 ${meshTheme.textMuted}`}>{session.providerType || '?'}</span>
