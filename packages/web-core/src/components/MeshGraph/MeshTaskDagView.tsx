@@ -234,6 +234,8 @@ interface FusedOverlays {
     gates: Array<{ id: string; graph: MeshGraphView; nodeId: string; gate?: MeshGraphGateView; ref: string; state: string }>
     planned: Array<{ id: string; ref: string; state: string }>
     edges: Array<{ id: string; source: string; target: string; state: import('./blueprintViewModel').BlueprintEdgeState; kind?: string }>
+    /** One entry per graph: which canvas ids belong to it, for the cluster hull. */
+    clusters: Array<{ id: string; graphId: string; batchId?: string; status: string; memberIds: string[] }>
 }
 
 /** Gate state → visual, mirrored from the retired per-graph view. */
@@ -253,7 +255,7 @@ const GATE_STATE_STYLES: Record<string, { dark: string; light: string; dot: stri
  * gate read as part of the plan instead of a parallel diagram.
  */
 function buildFusedOverlays(graphs: MeshGraphView[], visibleTaskIds: Set<string>): FusedOverlays {
-    const overlays: FusedOverlays = { gates: [], planned: [], edges: [] }
+    const overlays: FusedOverlays = { gates: [], planned: [], edges: [], clusters: [] }
     for (const graph of graphs) {
         const endpointMap = buildNodeIdByEndpoint(graph)
         const stateByNodeId = buildStateByNodeId(graph)
@@ -285,6 +287,13 @@ function buildFusedOverlays(graphs: MeshGraphView[], visibleTaskIds: Set<string>
                 state: deriveBlueprintEdgeState(edge, stateByNodeId, endpointMap),
                 ...(edge.kind && edge.kind !== 'dependency' ? { kind: edge.kind } : {}),
             })
+        })
+        overlays.clusters.push({
+            id: `cluster:${graph.graphId}`,
+            graphId: graph.graphId,
+            ...(typeof (graph as { batchId?: string }).batchId === 'string' && (graph as { batchId?: string }).batchId ? { batchId: (graph as { batchId?: string }).batchId } : {}),
+            status: graph.status,
+            memberIds: [...canvasIdByGraphNode.values()],
         })
     }
     return overlays
@@ -330,9 +339,81 @@ function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
     )
 }
 
-const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, planNode: PlanNodeCard }
+const HULL_PADDING = 26
+const HULL_LABEL_CLEARANCE = 24
 
+type HullFlowNode = Node<Record<string, unknown> & { label: string; status: string; width: number; height: number; theme: MeshGraphTheme }, 'clusterHull'>
+
+/** Faint bounding frame + label naming which orchestration graph/batch a chain
+ *  belongs to — without it, chains from different plans float indistinguishably
+ *  on one plane. Non-interactive; sits behind every card (zIndex). */
+function ClusterHullNode({ data }: NodeProps<HullFlowNode>) {
+    const { label, status, width, height, theme } = data
+    const tone = status === 'completed'
+        ? (theme.isDark ? 'border-emerald-400/15 bg-emerald-500/[0.03]' : 'border-emerald-300/60 bg-emerald-50/40')
+        : status === 'failed' || status === 'compensation_required'
+            ? (theme.isDark ? 'border-rose-400/20 bg-rose-500/[0.03]' : 'border-rose-300/60 bg-rose-50/40')
+            : status === 'waiting_gate'
+                ? (theme.isDark ? 'border-amber-400/25 bg-amber-500/[0.04]' : 'border-amber-300/70 bg-amber-50/40')
+                : status === 'cancelled'
+                    ? (theme.isDark ? 'border-white/8 bg-white/[0.015]' : 'border-slate-200 bg-slate-50/40')
+                    : (theme.isDark ? 'border-sky-400/20 bg-sky-500/[0.03]' : 'border-sky-300/60 bg-sky-50/40')
+    return (
+        <div className={`pointer-events-none rounded-2xl border border-dashed ${tone}`} style={{ width, height }}>
+            <div className={`absolute -top-0.5 left-3 -translate-y-full pb-1 text-4xs font-semibold uppercase tracking-[0.18em] ${theme.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                {label} · {status}
+            </div>
+        </div>
+    )
+}
+
+const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, planNode: PlanNodeCard, clusterHull: ClusterHullNode }
+
+const UNLINKED_STACK_GAP_X = 170
+const UNLINKED_STACK_GAP_Y = 24
+
+/**
+ * Two-phase layout. ELK only sees the CONNECTED material — tasks touching any
+ * edge, plus every graph member (gates, ghosts, fused cards). Tasks with no
+ * edges and no graph membership used to be scattered by ELK as arbitrary
+ * disconnected components mixed into the chains; they now stack in ONE
+ * vertical column to the right of the chains, newest first (owner call
+ * 2026-08-25: time order beats a separate zone), so the loose queue reads as
+ * a timeline next to the plans instead of noise inside them.
+ */
 async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise<Map<string, { x: number; y: number }>> {
+    const clusterMemberIds = new Set(overlays.clusters.flatMap(cluster => cluster.memberIds))
+    const edgeTouchedIds = new Set<string>()
+    for (const edge of dag.edges) { edgeTouchedIds.add(edge.source); edgeTouchedIds.add(edge.target) }
+    for (const edge of overlays.edges) { edgeTouchedIds.add(edge.source); edgeTouchedIds.add(edge.target) }
+    const isConnected = (id: string) => edgeTouchedIds.has(id) || clusterMemberIds.has(id)
+    const connectedTasks = dag.nodes.filter(node => isConnected(node.id))
+    const unlinkedTasks = dag.nodes.filter(node => !isConnected(node.id))
+
+    const positions = new Map<string, { x: number; y: number }>()
+    let chainsMaxX = 0
+    if (connectedTasks.length > 0 || overlays.gates.length > 0 || overlays.planned.length > 0) {
+        const elkPositions = await layoutConnectedElements(connectedTasks, dag.edges, overlays)
+        for (const [id, position] of elkPositions) {
+            positions.set(id, position)
+            const width = id.startsWith('gate:') ? GATE_NODE_WIDTH : id.startsWith('plan:') ? PLAN_NODE_WIDTH : TASK_CARD_WIDTH
+            chainsMaxX = Math.max(chainsMaxX, position.x + width)
+        }
+    }
+    if (unlinkedTasks.length > 0) {
+        const stackX = chainsMaxX > 0 ? chainsMaxX + UNLINKED_STACK_GAP_X : 0
+        const byNewest = [...unlinkedTasks].sort((a, b) =>
+            String(b.task.updatedAt || b.task.createdAt || '').localeCompare(String(a.task.updatedAt || a.task.createdAt || '')))
+        let y = 0
+        for (const node of byNewest) {
+            positions.set(node.id, { x: stackX, y })
+            y += estimateTaskCardHeight(node) + UNLINKED_STACK_GAP_Y
+        }
+    }
+    return positions
+}
+
+async function layoutConnectedElements(connectedTasks: TaskDagNode[], taskEdges: TaskDagData['edges'], overlays: FusedOverlays): Promise<Map<string, { x: number; y: number }>> {
     const graph = {
         id: 'task-dag-root',
         layoutOptions: {
@@ -340,6 +421,10 @@ async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise
             'elk.direction': 'RIGHT',
             'elk.edgeRouting': 'SPLINES',
             'elk.spacing.nodeNode': '46',
+            // Disconnected chains each get a hull + a label ABOVE their frame —
+            // separate the components far enough that a hull's label never
+            // rides the previous hull's bottom edge.
+            'elk.spacing.componentComponent': '110',
             'elk.layered.spacing.nodeNodeBetweenLayers': '120',
             'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
             'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
@@ -349,7 +434,7 @@ async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise
             'elk.randomSeed': '1',
         },
         children: [
-            ...dag.nodes.map(node => ({
+            ...connectedTasks.map(node => ({
                 id: node.id,
                 width: TASK_CARD_WIDTH,
                 height: estimateTaskCardHeight(node),
@@ -358,11 +443,9 @@ async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise
             ...overlays.planned.map(plan => ({ id: plan.id, width: PLAN_NODE_WIDTH, height: PLAN_NODE_HEIGHT })),
         ],
         edges: [
-            ...dag.edges.map(edge => ({
-                id: edge.id,
-                sources: [edge.source],
-                targets: [edge.target],
-            })),
+            // Task dependsOn edges: both endpoints are edge-touched, hence in
+            // connectedTasks by construction.
+            ...taskEdges.map(edge => ({ id: edge.id, sources: [edge.source], targets: [edge.target] })),
             ...overlays.edges.map(edge => ({ id: edge.id, sources: [edge.source], targets: [edge.target] })),
         ],
     }
@@ -448,7 +531,42 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
 
     const overlayFlowNodes = useMemo<Node[]>(() => {
         if (!positions) return []
+        const sizeOf = (id: string): { w: number; h: number } => {
+            if (id.startsWith('gate:')) return { w: GATE_NODE_WIDTH, h: GATE_NODE_HEIGHT }
+            if (id.startsWith('plan:')) return { w: PLAN_NODE_WIDTH, h: PLAN_NODE_HEIGHT }
+            const node = dag.nodes.find(candidate => candidate.id === id)
+            return { w: TASK_CARD_WIDTH, h: node ? estimateTaskCardHeight(node) : TASK_CARD_MIN_HEIGHT }
+        }
+        const hulls = fused.clusters.flatMap(cluster => {
+            const members = cluster.memberIds.filter(id => positions.has(id))
+            if (members.length === 0) return []
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            for (const id of members) {
+                const position = positions.get(id)!
+                const size = sizeOf(id)
+                minX = Math.min(minX, position.x)
+                minY = Math.min(minY, position.y)
+                maxX = Math.max(maxX, position.x + size.w)
+                maxY = Math.max(maxY, position.y + size.h)
+            }
+            return [{
+                id: cluster.id,
+                type: 'clusterHull' as const,
+                position: { x: minX - HULL_PADDING, y: minY - HULL_PADDING - HULL_LABEL_CLEARANCE },
+                data: {
+                    label: cluster.batchId || cluster.graphId.slice(0, 8),
+                    status: cluster.status,
+                    width: (maxX - minX) + HULL_PADDING * 2,
+                    height: (maxY - minY) + HULL_PADDING * 2 + HULL_LABEL_CLEARANCE,
+                    theme: meshTheme,
+                },
+                draggable: false,
+                selectable: false,
+                zIndex: -1,
+            }]
+        })
         return [
+            ...hulls,
             ...fused.gates
                 .filter(gate => positions.has(gate.id))
                 .map(gate => ({
