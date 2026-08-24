@@ -16,7 +16,7 @@ import { useActionShortcuts, getDefaultShortcut, type DashboardActionShortcutDef
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { IconX } from '../Icons'
-import ModalPortal from '../ui/ModalPortal'
+import { DialogShell } from '../ui/Dialog'
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications'
 import type { DashboardLayoutProfile } from '../../utils/dashboardLayoutStorage'
 import { useDashboardMainViewUiState, type DashboardMainViewShortcutSectionId } from '../../hooks/useDashboardMainViewUiState'
@@ -792,16 +792,19 @@ export default function DashboardMainView({
                 />
             )}
             {shortcutHelpOpen && (
-                <ModalPortal>
-                <div
-                    className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50"
-                    style={{ backdropFilter: 'blur(2px)' }}
-                    onClick={handleCloseShortcutHelp}
+                // Shared dialog shell; the guide's compact card visuals ride
+                // through verbatim via chrome={false}. Escape stays handled by
+                // the dedicated capture-phase effect above (gated on
+                // shortcutListening so recording a shortcut never closes the
+                // guide), hence closeOnEsc={false} here.
+                <DialogShell
+                    chrome={false}
+                    onClose={handleCloseShortcutHelp}
+                    closeOnEsc={false}
+                    ariaLabel={t('dashboard.guide.title')}
+                    overlayClassName="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 backdrop-blur-[2px]"
+                    surfaceClassName="bg-bg-primary border border-border-subtle rounded-xl w-[min(560px,calc(100vw-32px))] max-h-[min(80vh,720px)] overflow-y-auto px-6 py-5 shadow-xl"
                 >
-                    <div
-                        className="bg-bg-primary border border-border-subtle rounded-xl w-[min(560px,calc(100vw-32px))] max-h-[min(80vh,720px)] overflow-y-auto px-6 py-5 shadow-xl"
-                        onClick={event => event.stopPropagation()}
-                    >
                         <div className="flex items-start justify-between gap-4 mb-5">
                             <div>
                                 <div className="text-sm font-bold text-text-primary">{t('dashboard.guide.title')}</div>
@@ -981,9 +984,7 @@ export default function DashboardMainView({
                                 </div>
                             </>
                         )}
-                    </div>
-                </div>
-                </ModalPortal>
+                </DialogShell>
             )}
         </>
     )

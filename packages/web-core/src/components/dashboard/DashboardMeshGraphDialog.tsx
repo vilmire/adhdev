@@ -4,6 +4,7 @@ import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
 import { IconHelp, IconInfo, IconMesh, IconRefresh, IconX } from '../Icons'
+import { DialogShell } from '../ui/Dialog'
 import { MeshObservabilitySurface, MeshSurfaceTabControls, type MeshSurfaceTab } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import { useTransport } from '../../context/TransportContext'
@@ -280,13 +281,19 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     )
 
     return (
-        <div className={meshTheme.dialogOverlayClass} onClick={onClose}>
-            <div
-                role="dialog"
-                aria-modal="true"
-                className={meshTheme.dialogShellClass}
-                onClick={event => event.stopPropagation()}
-            >
+        // Shared dialog shell (portal into <body> + backdrop-click close);
+        // the mesh-themed overlay/shell visuals ride through verbatim via
+        // chrome={false}. Escape stays handled by this component's own
+        // bubble-phase window listener above (closeOnEsc={false}) — the
+        // capture-phase inner layers (scheduling popover, DetailModal via
+        // installTopModalEscapeHandler) depend on that exact ordering.
+        <DialogShell
+            chrome={false}
+            onClose={onClose}
+            closeOnEsc={false}
+            overlayClassName={meshTheme.dialogOverlayClass}
+            surfaceClassName={meshTheme.dialogShellClass}
+        >
                 <div className={`relative ${meshTheme.dialogHeaderClass}`}>
                     {/* Close — anchored to the header's top-right corner so it never
                         wraps below the chip row on mobile (where the row flex-wraps).
@@ -413,7 +420,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         </div>
                     )}
                 </div>
-            </div>
-        </div>
+        </DialogShell>
     )
 }

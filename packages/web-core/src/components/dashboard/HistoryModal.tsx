@@ -9,7 +9,7 @@ import { IconCandle, IconRefresh, IconX } from '../Icons';
 import { isAcpConv, isCliConv, type ActiveConversation } from './types';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { createPortal } from 'react-dom';
+import { DialogShell } from '../ui/Dialog';
 import { getConversationHistorySubtitle } from './conversation-presenters';
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state';
 import { prepareSavedHistoryEntries } from '../../utils/saved-history-filters';
@@ -123,10 +123,20 @@ export default function HistoryModal({
         [displaySavedSessions, filters.modelQuery, filters.resumableOnly, filters.sortMode, filters.textQuery, filters.workspaceQuery],
     );
 
-    const content = (
-        <div className="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
-            <div onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-            <div className="card fade-in relative w-full sm:w-[90%] max-w-[500px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[24px] sm:rounded-[20px]">
+    return (
+        <>
+        {/* Shell behavior (portal/backdrop/Escape) is shared via DialogShell;
+            the bespoke bottom-sheet card visuals stay verbatim (chrome={false}).
+            While the switch-confirm layer is up, Escape dismisses only that
+            layer — the shell's own Escape close is gated off. */}
+        <DialogShell
+            chrome={false}
+            onClose={onClose}
+            closeOnEsc={!pendingSwitch}
+            ariaLabel={isSavedSessionMode ? getSavedHistoryModalTitle(t) : t('historyModal.chatHistory')}
+            overlayClassName="fixed inset-0 z-[var(--z-modal)] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4 bg-black/60 backdrop-blur-sm"
+            surfaceClassName="card fade-in relative w-full sm:w-[90%] max-w-[500px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[24px] sm:rounded-[20px]"
+        >
                 <div className="px-4 py-4 sm:px-6 sm:py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)] shrink-0">
                     <div>
                         <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? getSavedHistoryModalTitle(t) : t('historyModal.chatHistory')}</h3>
@@ -308,16 +318,15 @@ export default function HistoryModal({
                             : <span className="flex items-center gap-1.5"><IconRefresh size={13} /> {isSavedSessionMode ? getRefreshSavedHistoryLabel(t) : t('historyModal.refreshHistory')}</span>}
                     </button>
                 </div>
-            </div>
+        </DialogShell>
 
             {pendingSwitch && (
-                <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4">
-                    <div onClick={() => setPendingSwitch(null)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-                    <div
-                        role="dialog"
-                        aria-modal="true"
-                        className="card fade-in relative w-full sm:w-[min(92vw,420px)] max-w-[420px] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
-                    >
+                <DialogShell
+                    chrome={false}
+                    onClose={() => setPendingSwitch(null)}
+                    overlayClassName="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+                    surfaceClassName="card fade-in relative w-full sm:w-[min(92vw,420px)] max-w-[420px] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
+                >
                         <div className="px-4 py-4 md:px-6 md:py-5 border-b border-border-subtle bg-bg-primary">
                             <h3 className="m-0 text-base md:text-lg font-extrabold">{t('historyModal.confirmSwitchTitle')}</h3>
                             <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
@@ -358,12 +367,8 @@ export default function HistoryModal({
                                 {t('common.cancel')}
                             </button>
                         </div>
-                    </div>
-                </div>
+                </DialogShell>
             )}
-        </div>
+        </>
     );
-
-    if (typeof document === 'undefined') return content;
-    return createPortal(content, document.body);
 }

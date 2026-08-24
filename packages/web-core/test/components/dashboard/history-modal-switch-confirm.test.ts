@@ -67,9 +67,9 @@ describe('HistoryModal switch confirmation', () => {
 
   it('cancel clears pendingSwitch without touching switch/resume callbacks (source-level: cancel button only calls setPendingSwitch(null))', () => {
     const source = readSource()
-    const cancelButtons = [...source.matchAll(/onClick=\{\(\) => setPendingSwitch\(null\)\}/g)]
-    // Backdrop click + explicit Cancel button both just dismiss.
-    expect(cancelButtons.length).toBeGreaterThanOrEqual(2)
+    // Backdrop click (DialogShell onClose) + explicit Cancel button both just dismiss.
+    const cancelPaths = [...source.matchAll(/on(?:Click|Close)=\{\(\) => setPendingSwitch\(null\)\}/g)]
+    expect(cancelPaths.length).toBeGreaterThanOrEqual(2)
   })
 
   it('renders identifying info (title + workspace) in the confirm copy path for a saved session target', () => {
