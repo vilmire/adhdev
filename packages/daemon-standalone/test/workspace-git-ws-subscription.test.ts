@@ -9,33 +9,42 @@ function source(): string {
   return fs.readFileSync(standaloneIndexPath, 'utf8')
 }
 
-test('standalone websocket exposes workspace.git subscriptions through daemon-core git monitor', () => {
+test('standalone websocket serves workspace.git through the core topic registry engine', () => {
   const text = source()
 
+  // The engine (normalize/throttle/seq/refresh-concurrency) is core-owned
+  // (daemon-core TopicSubscriptionRegistry); standalone keeps only the WS sink.
   assert.match(text, /createGitWorkspaceMonitor/)
-  assert.match(text, /normalizeGitWorkspaceSubscriptionParams/)
-  assert.match(text, /wsGitSubscriptions = new Map<WebSocket, Map<string, GitSubscriptionState>>\(\)/)
+  assert.match(text, /TopicSubscriptionRegistry,/)
+  assert.match(text, /new TopicSubscriptionRegistry\(\{/)
+  assert.match(text, /gitMonitor: this\.gitWorkspaceMonitor/)
   assert.match(text, /if \(msg\.topic === 'workspace\.git'\)/)
-  assert.match(text, /this\.gitWorkspaceMonitor\.createSubscription\(normalized\)/)
-  assert.match(text, /await this\.flushWsGitSubscriptions\(ws\)/)
+  assert.match(text, /this\.topicRegistry\.subscribe\(connectionId, \{ \.\.\.msg, topic: 'workspace\.git', params \}\)/)
+  // Targeted first flush right after subscribe, scoped to the new connection.
+  assert.match(text, /await this\.topicRegistry\.flushNow\('workspace\.git', connectionId\)/)
+  // The WS transport framing stays standalone's.
   assert.match(text, /ws\.send\(JSON\.stringify\(\{ type: 'topic_update', update \}\)\)/)
+  // The old daemon-local engine must stay deleted.
+  assert.doesNotMatch(text, /flushWsGitSubscriptions/)
+  assert.doesNotMatch(text, /interface GitSubscriptionState/)
 })
 
-test('standalone workspace.git subscriptions are disposed on cleanup and unsubscribe', () => {
+test('standalone workspace.git subscriptions are dropped on cleanup and unsubscribe', () => {
   const text = source()
 
-  assert.match(text, /private clearWsGitSubscriptions\(ws: WebSocket\): void/)
-  assert.match(text, /sub\.subscription\.dispose\(\)/)
-  assert.match(text, /this\.clearWsGitSubscriptions\(ws\)/)
-  assert.match(text, /if \(msg\.topic === 'workspace\.git'\) \{[\s\S]*?sub\?\.subscription\.dispose\(\)[\s\S]*?this\.wsGitSubscriptions\.get\(ws\)\?\.delete\(msg\.key\)/)
+  // Connection teardown (close AND error) releases registry-owned state.
+  assert.match(text, /private releaseWsConnection\(ws: WebSocket\): void/)
+  assert.match(text, /this\.topicRegistry\.dropConnection\(id\)/)
+  const releaseCalls = text.match(/this\.releaseWsConnection\(ws\)/g) || []
+  assert.ok(releaseCalls.length >= 2, `expected releaseWsConnection wired on close and error handlers, saw ${releaseCalls.length}`)
+  // Explicit unsubscribe routes into the registry.
+  assert.match(text, /if \(msg\.topic === 'workspace\.git'\) \{[\s\S]*?this\.topicRegistry\.unsubscribe\(connectionId, msg\)/)
 })
 
 test('standalone workspace.git subscriptions only flush while subscribers exist', () => {
   const text = source()
 
-  assert.match(text, /private hasWsGitSubscriptions\(targetWs\?: WebSocket\): boolean/)
-  assert.match(text, /if \(this\.hasWsGitSubscriptions\(\)\) void this\.flushWsGitSubscriptions\(\)/)
-  assert.match(text, /if \(!this\.hasWsGitSubscriptions\(targetWs\)\) return/)
+  assert.match(text, /if \(this\.topicRegistry\.hasSubscriptions\('workspace\.git'\)\) void this\.topicRegistry\.flushNow\('workspace\.git'\)/)
 })
 
 test('standalone command flush gate consumes the core-owned invalidation table', () => {
@@ -48,7 +57,8 @@ test('standalone command flush gate consumes the core-owned invalidation table',
   assert.match(text, /invalidated\.has\('daemon\.metadata'\)\) \{[\s\S]*?this\.scheduleBroadcastStatus\(\)[\s\S]*?void this\.flushWsDaemonMetadataSubscriptions\(\)/)
   assert.match(text, /if \(invalidated\.has\('session_host\.diagnostics'\)\) void this\.flushWsSessionHostDiagnosticsSubscriptions\(\)/)
   assert.match(text, /if \(invalidated\.has\('session\.modal'\)\) void this\.flushWsSessionModalSubscriptions\(\)/)
-  assert.match(text, /if \(invalidated\.has\('workspace\.git'\) && this\.hasWsGitSubscriptions\(\)\) void this\.flushWsGitSubscriptions\(\)/)
+  // Registry-migrated cohorts (workspace.git) consume the set via the registry.
+  assert.match(text, /void this\.topicRegistry\.invalidate\(invalidated\)/)
   // The old local predicate must stay deleted (it diverged from cloud once already).
   assert.doesNotMatch(text, /function commandMayAffectMeshGraphStatus/)
 })

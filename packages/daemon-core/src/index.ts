@@ -577,6 +577,10 @@ export { DaemonCommandRouter, readCachedInlineMeshActiveSessionDetails, resolveM
 export type { CommandRouterDeps, CommandRouterResult } from './commands/router.js';
 export { commandInvalidations, commandMayAffectMeshGraphStatus } from './commands/command-invalidations.js';
 export type { CommandInvalidationTopic } from './commands/command-invalidations.js';
+
+// ── Dashboard subscription topic engine (shared cloud/standalone) ──
+export { TopicSubscriptionRegistry, DEFAULT_GIT_REFRESH_CONCURRENCY } from './subscriptions/topic-registry.js';
+export type { TopicSink, TopicEngineOptions } from './subscriptions/topic-registry.js';
 export {
   maybeRunDaemonUpgradeHelperFromEnv,
   spawnDetachedDaemonUpgradeHelper,

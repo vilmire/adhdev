@@ -62,8 +62,6 @@ import {
   type SessionModalUpdate,
   type DaemonMetadataSubscriptionParams,
   type DaemonMetadataUpdate,
-  type GitWorkspaceSubscription,
-  type GitWorkspaceUpdate,
   type WorkspaceGitSubscriptionParams,
   type SubscribeRequest,
   type TopicUpdateEnvelope,
@@ -71,7 +69,7 @@ import {
   buildMachineInfo,
   commandInvalidations,
   createGitWorkspaceMonitor,
-  normalizeGitWorkspaceSubscriptionParams,
+  TopicSubscriptionRegistry,
   prepareSessionChatTailUpdate,
   prepareSessionModalUpdate,
   runAsyncBatch,
@@ -405,12 +403,6 @@ interface DaemonMetadataSubscriptionState {
   lastSentAt: number;
 }
 
-interface GitSubscriptionState {
-  request: SubscribeRequest & { topic: 'workspace.git'; params: WorkspaceGitSubscriptionParams };
-  subscription: GitWorkspaceSubscription;
-  lastSentAt: number;
-}
-
 const SESSION_TARGET_COMMANDS = new Set([
   'send_chat',
   'read_chat',
@@ -445,8 +437,35 @@ class StandaloneServer {
   private wsSessionHostDiagnosticsSubscriptions = new Map<WebSocket, Map<string, SessionHostDiagnosticsSubscriptionState>>();
   private wsSessionModalSubscriptions = new Map<WebSocket, Map<string, SessionModalSubscriptionState>>();
   private wsDaemonMetadataSubscriptions = new Map<WebSocket, Map<string, DaemonMetadataSubscriptionState>>();
-  private wsGitSubscriptions = new Map<WebSocket, Map<string, GitSubscriptionState>>();
   private gitWorkspaceMonitor = createGitWorkspaceMonitor();
+  /** Stable id per WS client so the core topic registry can address a connection. */
+  private wsConnectionIds = new WeakMap<WebSocket, string>();
+  private wsByConnectionId = new Map<string, WebSocket>();
+  private wsConnectionSeq = 0;
+  /**
+   * Core-owned dashboard subscription topic engine (daemon-core
+   * TopicSubscriptionRegistry). Owns normalize/throttle/seq/refresh-concurrency
+   * for the migrated topic cohorts (currently workspace.git); this class keeps
+   * only the WS transport sink below.
+   */
+  private topicRegistry = new TopicSubscriptionRegistry({
+    send: (connectionId, _topic, update) => {
+      const ws = this.wsByConnectionId.get(connectionId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify({ type: 'topic_update', update }));
+      return true;
+    },
+    isDeliverable: (connectionId) => {
+      const ws = this.wsByConnectionId.get(connectionId);
+      return !!ws && ws.readyState === WebSocket.OPEN;
+    },
+    isAlive: (connectionId) => this.wsByConnectionId.has(connectionId),
+  }, {
+    gitMonitor: this.gitWorkspaceMonitor,
+    onFlushError: (topic, error, ctx) => {
+      LOG.warn('Standalone', `[${topic}] skipped workspace=${ctx.detail || ''} key=${ctx.key} error=${(error as any)?.message || error}`);
+    },
+  });
   private authToken: string | null = null;
   private passwordConfigPath = getStandalonePasswordConfigPath();
   private passwordConfig: StandalonePasswordConfig | null = null;
@@ -893,7 +912,7 @@ class StandaloneServer {
       void this.flushWsMachineRuntimeSubscriptions();
       void this.flushWsSessionHostDiagnosticsSubscriptions();
       void this.flushWsSessionModalSubscriptions();
-      if (this.hasWsGitSubscriptions()) void this.flushWsGitSubscriptions();
+      if (this.topicRegistry.hasSubscriptions('workspace.git')) void this.topicRegistry.flushNow('workspace.git');
     }, STATUS_INTERVAL);
 
     // 8. Start listening
@@ -1636,7 +1655,7 @@ class StandaloneServer {
     this.wsSessionHostDiagnosticsSubscriptions.set(ws, new Map());
     this.wsSessionModalSubscriptions.set(ws, new Map());
     this.wsDaemonMetadataSubscriptions.set(ws, new Map());
-    this.wsGitSubscriptions.set(ws, new Map());
+    this.registerWsConnection(ws);
     console.log(`[WS] Client connected (total: ${this.clients.size})`);
 
     // Send initial status immediately. Runtime terminal snapshots stay pull-based
@@ -1682,7 +1701,7 @@ class StandaloneServer {
       this.wsSessionHostDiagnosticsSubscriptions.delete(ws);
       this.wsSessionModalSubscriptions.delete(ws);
       this.wsDaemonMetadataSubscriptions.delete(ws);
-      this.clearWsGitSubscriptions(ws);
+      this.releaseWsConnection(ws);
       console.log(`[WS] Client disconnected (total: ${this.clients.size})`);
     });
 
@@ -1693,19 +1712,27 @@ class StandaloneServer {
       this.wsSessionHostDiagnosticsSubscriptions.delete(ws);
       this.wsSessionModalSubscriptions.delete(ws);
       this.wsDaemonMetadataSubscriptions.delete(ws);
-      this.clearWsGitSubscriptions(ws);
+      this.releaseWsConnection(ws);
     });
   }
 
-  private clearWsGitSubscriptions(ws: WebSocket): void {
-    const subs = this.wsGitSubscriptions.get(ws);
-    if (subs) {
-      subs.forEach((sub) => {
-        sub.subscription.dispose();
-      });
-      subs.clear();
-    }
-    this.wsGitSubscriptions.delete(ws);
+  private registerWsConnection(ws: WebSocket): string {
+    let id = this.wsConnectionIds.get(ws);
+    if (id) return id;
+    this.wsConnectionSeq += 1;
+    id = `ws_${this.wsConnectionSeq}`;
+    this.wsConnectionIds.set(ws, id);
+    this.wsByConnectionId.set(id, ws);
+    return id;
+  }
+
+  /** Dispose registry-owned subscriptions (workspace.git) for a closed client. */
+  private releaseWsConnection(ws: WebSocket): void {
+    const id = this.wsConnectionIds.get(ws);
+    if (!id) return;
+    this.topicRegistry.dropConnection(id);
+    this.wsByConnectionId.delete(id);
+    this.wsConnectionIds.delete(ws);
   }
 
   private async handleWsSubscribe(ws: WebSocket, msg: SubscribeRequest): Promise<void> {
@@ -1801,22 +1828,14 @@ class StandaloneServer {
       return;
     }
     if (msg.topic === 'workspace.git') {
+      // Engine (normalize/throttle/seq/refresh-concurrency) is core-owned:
+      // daemon-core TopicSubscriptionRegistry. Standalone keeps only the WS
+      // transport sink and the targeted first flush below.
       const params = msg.params as WorkspaceGitSubscriptionParams;
       if (!params?.workspace) return;
-      const normalized = normalizeGitWorkspaceSubscriptionParams(params);
-      const subs = this.wsGitSubscriptions.get(ws) || new Map<string, GitSubscriptionState>();
-      this.wsGitSubscriptions.set(ws, subs);
-      subs.get(msg.key)?.subscription.dispose();
-      subs.set(msg.key, {
-        request: {
-          ...msg,
-          topic: 'workspace.git',
-          params: normalized,
-        },
-        subscription: this.gitWorkspaceMonitor.createSubscription(normalized),
-        lastSentAt: 0,
-      });
-      await this.flushWsGitSubscriptions(ws);
+      const connectionId = this.registerWsConnection(ws);
+      if (!this.topicRegistry.subscribe(connectionId, { ...msg, topic: 'workspace.git', params })) return;
+      await this.topicRegistry.flushNow('workspace.git', connectionId);
     }
   }
 
@@ -1842,9 +1861,8 @@ class StandaloneServer {
       return;
     }
     if (msg.topic === 'workspace.git') {
-      const sub = this.wsGitSubscriptions.get(ws)?.get(msg.key);
-      sub?.subscription.dispose();
-      this.wsGitSubscriptions.get(ws)?.delete(msg.key);
+      const connectionId = this.wsConnectionIds.get(ws);
+      if (connectionId) this.topicRegistry.unsubscribe(connectionId, msg);
     }
   }
 
@@ -2318,48 +2336,6 @@ class StandaloneServer {
     }
   }
 
-  private hasWsGitSubscriptions(targetWs?: WebSocket): boolean {
-    const targets = targetWs ? [targetWs] : Array.from(this.clients);
-    for (const ws of targets) {
-      const subs = this.wsGitSubscriptions.get(ws);
-      if (subs && subs.size > 0) return true;
-    }
-    return false;
-  }
-
-  private async flushWsGitSubscriptions(targetWs?: WebSocket): Promise<void> {
-    if (!this.hasWsGitSubscriptions(targetWs)) return;
-    const targets = targetWs ? [targetWs] : Array.from(this.clients);
-    const now = Date.now();
-    const tasks: Array<{ ws: WebSocket; key: string; sub: GitSubscriptionState }> = [];
-    for (const ws of targets) {
-      if (ws.readyState !== WebSocket.OPEN) continue;
-      const subs = this.wsGitSubscriptions.get(ws);
-      if (!subs || subs.size === 0) continue;
-      subs.forEach((sub, key) => {
-        const intervalMs = Math.max(1, Number(sub.subscription.params.intervalMs || sub.request.params.intervalMs || 0));
-        if (sub.lastSentAt > 0 && (now - sub.lastSentAt) < intervalMs) return;
-        tasks.push({ ws, key, sub });
-      });
-    }
-
-    await runAsyncBatch(tasks, async ({ ws, key, sub }) => {
-      try {
-        const monitorUpdate = await sub.subscription.refresh();
-        const current = this.wsGitSubscriptions.get(ws)?.get(key);
-        if (current !== sub || ws.readyState !== WebSocket.OPEN) return;
-        sub.lastSentAt = monitorUpdate.timestamp;
-        const update: GitWorkspaceUpdate = {
-          ...monitorUpdate,
-          key,
-        };
-        ws.send(JSON.stringify({ type: 'topic_update', update }));
-      } catch (error: any) {
-        LOG.warn('Standalone', `[workspace.git] skipped workspace=${sub.request.params.workspace} key=${key} error=${error?.message || error}`);
-      }
-    }, { concurrency: 2 });
-  }
-
   // ─── Core Logic ───
 
   private buildSharedSnapshot(profile: 'full' | 'live' | 'metadata' = 'full') {
@@ -2562,7 +2538,9 @@ class StandaloneServer {
     }
     if (invalidated.has('session_host.diagnostics')) void this.flushWsSessionHostDiagnosticsSubscriptions();
     if (invalidated.has('session.modal')) void this.flushWsSessionModalSubscriptions();
-    if (invalidated.has('workspace.git') && this.hasWsGitSubscriptions()) void this.flushWsGitSubscriptions();
+    // Registry-migrated cohorts (workspace.git): the registry consumes the
+    // invalidation set itself and runs a (still throttle-gated) flush pass.
+    void this.topicRegistry.invalidate(invalidated);
     return result;
   }
 
