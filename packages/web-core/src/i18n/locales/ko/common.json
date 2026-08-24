@@ -1088,7 +1088,8 @@
             "repoMeshJsonHint": "이 저장소가 커밋한 코디네이터 프롬프트 텍스트로, 위 필드와 함께 쌓입니다. 여기가 아니라 저장소 파일에서 수정하세요:",
             "repoMeshJsonOverrideLabel": "저장소 override",
             "repoMeshJsonAppendLabel": "저장소 append",
-            "repoMeshJsonInvalid": "이 저장소의 .adhdev/mesh.json 을 파싱할 수 없어 해당 프롬프트 레이어가 무시됩니다."
+            "repoMeshJsonInvalid": "이 저장소의 .adhdev/mesh.json 을 파싱할 수 없어 해당 프롬프트 레이어가 무시됩니다.",
+            "tabGraphs": "그래프"
         },
         "nodeList": {
             "title": "노드 & 프로바이더 ({{count}})",
@@ -1321,6 +1322,26 @@
             "saving": "저장 중…",
             "saved": ".adhdev/mesh.json에 저장됨",
             "saveError": "프로바이더 기본값 저장에 실패했습니다."
+        },
+        "graphs": {
+            "title": "오케스트레이션 그래프",
+            "description": "영속 태스크 그래프와 코디네이터 게이트. 게이트를 클레임하고 작업을 확인한 뒤(대상 커밋이 이미 main에 도달했으면 수렴 증거가 함께 표시됩니다) 결과와 함께 릴리즈하거나, 죽은 작업의 게이트는 어밴던하세요.",
+            "subtitle": "이 메시의 그래프와 결정을 기다리는 게이트.",
+            "includeTerminal": "종료된 것 포함",
+            "refresh": "새로고침",
+            "loading": "그래프 불러오는 중…",
+            "empty": "아직 이 메시에 그래프가 없습니다. 그래프는 그래프 기능을 쓰는 mesh_enqueue_batch 요청으로 생성됩니다.",
+            "stale": "{{age}} 정체",
+            "counts": "태스크 {{tasks}} · 게이트 {{gates}}",
+            "claim": "클레임",
+            "release": "릴리즈",
+            "abandon": "어밴던",
+            "outcome": "결과",
+            "evidencePlaceholder": "증거 (커밋 SHA, 링크, 메모)",
+            "released": "게이트를 릴리즈했습니다.",
+            "abandoned": "게이트를 어밴던했습니다 — 다운스트림 작업이 취소되었습니다.",
+            "abandonConfirmTitle": "게이트 어밴던",
+            "abandonConfirmDescription": "\"{{gate}}\" 게이트를 어밴던할까요? 통과를 영구히 차단하며, 게이트가 막고 있던 다운스트림 태스크가 취소됩니다. 릴리즈가 아닙니다."
         }
     },
     "chat": {

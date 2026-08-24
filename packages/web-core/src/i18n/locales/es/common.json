@@ -1093,7 +1093,8 @@
             "repoMeshJsonHint": "Este repositorio incluye texto del prompt del coordinador que se suma a los campos de arriba. Edítalo en el archivo del repositorio, no aquí:",
             "repoMeshJsonOverrideLabel": "Override del repositorio",
             "repoMeshJsonAppendLabel": "Append del repositorio",
-            "repoMeshJsonInvalid": "No se pudo analizar el .adhdev/mesh.json de este repositorio, por lo que su capa de prompt se ignora."
+            "repoMeshJsonInvalid": "No se pudo analizar el .adhdev/mesh.json de este repositorio, por lo que su capa de prompt se ignora.",
+            "tabGraphs": "Grafos"
         },
         "nodeList": {
             "title": "Nodos y proveedores ({{count}})",
@@ -1326,6 +1327,26 @@
             "saving": "Saving…",
             "saved": "Saved to .adhdev/mesh.json",
             "saveError": "Failed to save provider defaults."
+        },
+        "graphs": {
+            "title": "Grafos de orquestación",
+            "description": "Grafos de tareas persistentes y sus puertas de coordinador. Reclama una puerta, verifica el trabajo (se adjunta evidencia de convergencia si los commits ya llegaron a main) y libérala con un resultado, o abandona una puerta cuyo trabajo esté muerto.",
+            "subtitle": "Grafos de este mesh, con las puertas que esperan una decisión.",
+            "includeTerminal": "Incluir terminados",
+            "refresh": "Actualizar",
+            "loading": "Cargando grafos…",
+            "empty": "Aún no hay grafos en este mesh. Los grafos se crean con solicitudes mesh_enqueue_batch que usan funciones de grafo.",
+            "stale": "estancado {{age}}",
+            "counts": "{{tasks}} tareas · {{gates}} puertas",
+            "claim": "Reclamar",
+            "release": "Liberar",
+            "abandon": "Abandonar",
+            "outcome": "Resultado",
+            "evidencePlaceholder": "Evidencia (SHAs, enlaces, notas)",
+            "released": "Puerta liberada.",
+            "abandoned": "Puerta abandonada — el trabajo descendente fue cancelado.",
+            "abandonConfirmTitle": "Abandonar puerta",
+            "abandonConfirmDescription": "¿Abandonar \"{{gate}}\"? Esto DENIEGA el paso permanentemente: las tareas descendentes retenidas se cancelan. No es una liberación."
         }
     },
     "chat": {

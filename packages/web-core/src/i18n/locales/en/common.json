@@ -1088,7 +1088,8 @@
             "repoMeshJsonHint": "This repo commits coordinator prompt text that stacks with the fields above. Edit it in the repo file, not here:",
             "repoMeshJsonOverrideLabel": "Repo override",
             "repoMeshJsonAppendLabel": "Repo append",
-            "repoMeshJsonInvalid": "This repo's .adhdev/mesh.json could not be parsed, so its prompt layer is ignored."
+            "repoMeshJsonInvalid": "This repo's .adhdev/mesh.json could not be parsed, so its prompt layer is ignored.",
+            "tabGraphs": "Graphs"
         },
         "nodeList": {
             "title": "Nodes & Providers ({{count}})",
@@ -1321,6 +1322,26 @@
             "saving": "Saving…",
             "saved": "Saved to .adhdev/mesh.json",
             "saveError": "Failed to save provider defaults."
+        },
+        "graphs": {
+            "title": "Orchestration graphs",
+            "description": "Persistent task graphs and their coordinator gates. Claim a gate, verify the work (the panel attaches convergence evidence when the guarded commits already reached main), then release with an outcome — or abandon a gate whose work is dead.",
+            "subtitle": "Graphs on this mesh, with the gates waiting for a decision.",
+            "includeTerminal": "Include finished",
+            "refresh": "Refresh",
+            "loading": "Loading graphs…",
+            "empty": "No graphs on this mesh yet. Graphs are created by mesh_enqueue_batch requests that use graph features.",
+            "stale": "stale {{age}}",
+            "counts": "{{tasks}} tasks · {{gates}} gates",
+            "claim": "Claim",
+            "release": "Release",
+            "abandon": "Abandon",
+            "outcome": "Outcome",
+            "evidencePlaceholder": "Evidence (commit SHAs, links, notes)",
+            "released": "Gate released.",
+            "abandoned": "Gate abandoned — downstream work was cancelled.",
+            "abandonConfirmTitle": "Abandon gate",
+            "abandonConfirmDescription": "Abandon \"{{gate}}\"? This permanently DENIES passage: downstream tasks the gate was holding are cancelled. It is not a release."
         }
     },
     "chat": {

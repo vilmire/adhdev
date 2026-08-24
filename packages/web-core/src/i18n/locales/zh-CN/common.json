@@ -1088,7 +1088,8 @@
             "repoMeshJsonHint": "此仓库提交的协调器提示词文本，会与上方字段叠加生效。请在仓库文件中修改，而不是在这里:",
             "repoMeshJsonOverrideLabel": "仓库 override",
             "repoMeshJsonAppendLabel": "仓库 append",
-            "repoMeshJsonInvalid": "无法解析此仓库的 .adhdev/mesh.json，因此其提示词层被忽略。"
+            "repoMeshJsonInvalid": "无法解析此仓库的 .adhdev/mesh.json，因此其提示词层被忽略。",
+            "tabGraphs": "图"
         },
         "nodeList": {
             "title": "节点与提供方（{{count}}）",
@@ -1321,6 +1322,26 @@
             "saving": "Saving…",
             "saved": "Saved to .adhdev/mesh.json",
             "saveError": "Failed to save provider defaults."
+        },
+        "graphs": {
+            "title": "编排图",
+            "description": "持久任务图及其协调器闸门。认领闸门并核实工作（若目标提交已到达 main，会附带收敛证据），然后带结果释放；工作已失效的闸门可以废弃。",
+            "subtitle": "此网格上的图，以及等待决定的闸门。",
+            "includeTerminal": "包含已结束",
+            "refresh": "刷新",
+            "loading": "正在加载图…",
+            "empty": "此网格上还没有图。图由使用图功能的 mesh_enqueue_batch 请求创建。",
+            "stale": "停滞 {{age}}",
+            "counts": "任务 {{tasks}} · 闸门 {{gates}}",
+            "claim": "认领",
+            "release": "释放",
+            "abandon": "废弃",
+            "outcome": "结果",
+            "evidencePlaceholder": "证据（提交 SHA、链接、备注）",
+            "released": "闸门已释放。",
+            "abandoned": "闸门已废弃 — 下游任务已取消。",
+            "abandonConfirmTitle": "废弃闸门",
+            "abandonConfirmDescription": "废弃 \"{{gate}}\" 吗？这将永久拒绝通过，闸门阻塞的下游任务会被取消。这不是释放。"
         }
     },
     "chat": {

@@ -1088,7 +1088,8 @@
             "repoMeshJsonHint": "このリポジトリがコミットしたコーディネータープロンプトで、上のフィールドと重なって適用されます。ここではなくリポジトリのファイルで編集してください:",
             "repoMeshJsonOverrideLabel": "リポジトリ override",
             "repoMeshJsonAppendLabel": "リポジトリ append",
-            "repoMeshJsonInvalid": "このリポジトリの .adhdev/mesh.json を解析できないため、そのプロンプトレイヤーは無視されます。"
+            "repoMeshJsonInvalid": "このリポジトリの .adhdev/mesh.json を解析できないため、そのプロンプトレイヤーは無視されます。",
+            "tabGraphs": "グラフ"
         },
         "nodeList": {
             "title": "ノードとプロバイダー（{{count}}）",
@@ -1321,6 +1322,26 @@
             "saving": "Saving…",
             "saved": "Saved to .adhdev/mesh.json",
             "saveError": "Failed to save provider defaults."
+        },
+        "graphs": {
+            "title": "オーケストレーショングラフ",
+            "description": "永続タスクグラフとコーディネーターゲート。ゲートをクレームして作業を確認し（対象コミットが main に到達済みなら収束エビデンスが表示されます）、結果とともにリリースするか、不要になったゲートは破棄してください。",
+            "subtitle": "このメッシュのグラフと、判断待ちのゲート。",
+            "includeTerminal": "終了済みを含む",
+            "refresh": "更新",
+            "loading": "グラフを読み込み中…",
+            "empty": "このメッシュにはまだグラフがありません。グラフはグラフ機能を使う mesh_enqueue_batch リクエストで作成されます。",
+            "stale": "{{age}} 停滞",
+            "counts": "タスク {{tasks}} · ゲート {{gates}}",
+            "claim": "クレーム",
+            "release": "リリース",
+            "abandon": "破棄",
+            "outcome": "結果",
+            "evidencePlaceholder": "エビデンス（コミットSHA、リンク、メモ）",
+            "released": "ゲートをリリースしました。",
+            "abandoned": "ゲートを破棄しました — 下流の作業はキャンセルされました。",
+            "abandonConfirmTitle": "ゲートを破棄",
+            "abandonConfirmDescription": "\"{{gate}}\" を破棄しますか？通過を恒久的に拒否し、ゲートが保持していた下流タスクはキャンセルされます。リリースではありません。"
         }
     },
     "chat": {
