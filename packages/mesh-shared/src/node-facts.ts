@@ -141,7 +141,7 @@ export interface MeshNodeFacts {
     machineNickname?: string
     /**
      * Per-provider quota snapshots, keyed by QuotaProvider id ('claude-cli',
-     * 'codex-cli', 'kimi'). Consumed by ROUTING as well as observation: the
+     * 'codex-cli', 'cursor-cli', 'kimi'). Consumed by ROUTING as well as observation: the
      * coordinator's quota gate / spread bonus (daemon-core mesh-quota-routing.ts,
      * thresholds in RepoMeshPolicy.quotaRouting) reads exactly this shape, so
      * field renames here are a routing-contract change, not a cosmetic one.
@@ -246,6 +246,7 @@ export const QUOTA_SUPPORTED_PROVIDERS: readonly string[] = [
     'antigravity-cli',
     'claude-cli',
     'codex-cli',
+    'cursor-cli',
     'grok-cli',
     'kimi',
     'opencode',

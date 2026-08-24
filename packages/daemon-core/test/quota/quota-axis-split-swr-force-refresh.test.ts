@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const fetchAntigravityQuota = vi.fn()
 const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
+const fetchCursorQuota = vi.fn()
 const fetchGrokQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
@@ -37,6 +38,7 @@ const fetchOpencodeUsage = vi.fn()
 vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
+vi.mock('../../src/quota/fetchers/cursor.js', () => ({ fetchCursorQuota }))
 vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
@@ -395,6 +397,7 @@ describe('★axis split: the file axis is not bound to the network axis policy',
         expect(QUOTA_AXIS['claude-cli']).toBe('file')
         expect(QUOTA_AXIS['codex-cli']).toBe('file')
         expect(QUOTA_AXIS['opencode']).toBe('file')
+        expect(QUOTA_AXIS['cursor-cli']).toBe('network')
         expect(QUOTA_AXIS['kimi']).toBe('network')
         expect(QUOTA_AXIS['grok-cli']).toBe('network')
         expect(QUOTA_AXIS['antigravity-cli']).toBe('network')
@@ -409,7 +412,7 @@ describe('★axis split: the file axis is not bound to the network axis policy',
         expect(QUOTA_AXIS_TTL_MS['opencode']).toBeGreaterThan(QUOTA_AXIS_TTL_MS['claude-cli'])
         expect(QUOTA_AXIS_TTL_MS['opencode']).toBeLessThan(15 * 60 * 1000)
         // ★The network axis is never due on cadence — the point of the split.
-        for (const provider of ['kimi', 'grok-cli', 'antigravity-cli'] as const) {
+        for (const provider of ['kimi', 'cursor-cli', 'grok-cli', 'antigravity-cli'] as const) {
             expect(Number.isFinite(QUOTA_AXIS_TTL_MS[provider])).toBe(false)
             expect(isDueByAxisTtl(provider, START)).toBe(false)
         }
@@ -419,7 +422,7 @@ describe('★axis split: the file axis is not bound to the network axis policy',
         // Reusing the cadence table for SWR would make trigger #3 a no-op on
         // exactly the three providers a user is most likely to be checking,
         // silently deleting it from the design. The SWR table is finite here.
-        for (const provider of ['kimi', 'grok-cli', 'antigravity-cli'] as const) {
+        for (const provider of ['kimi', 'cursor-cli', 'grok-cli', 'antigravity-cli'] as const) {
             expect(Number.isFinite(QUOTA_SWR_TTL_MS[provider])).toBe(true)
             expect(QUOTA_SWR_TTL_MS[provider]).toBeLessThan(QUOTA_ROUTABLE_MAX_AGE_MS)
         }

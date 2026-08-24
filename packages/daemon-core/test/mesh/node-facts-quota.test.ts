@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // call count, not as a slow test.
 const fetchClaudeQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
+const fetchCursorQuota = vi.fn()
 const fetchGrokQuota = vi.fn()
 const fetchKimiQuota = vi.fn()
 const fetchOpencodeUsage = vi.fn()
@@ -15,6 +16,7 @@ const fetchAntigravityQuota = vi.fn()
 vi.mock('../../src/quota/fetchers/antigravity.js', () => ({ fetchAntigravityQuota }))
 vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_AFTER_MS: 60_000 }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
+vi.mock('../../src/quota/fetchers/cursor.js', () => ({ fetchCursorQuota }))
 vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
@@ -57,6 +59,7 @@ describe('buildLocalNodeFacts — quota', () => {
         // read — otherwise a builder that fetched could hide behind an empty map.
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
+        fetchCursorQuota.mockResolvedValue(okQuota('cursor-cli'))
         fetchGrokQuota.mockResolvedValue(okQuota('grok-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         await refreshQuotaCacheOnce()
@@ -91,7 +94,7 @@ describe('buildLocalNodeFacts — quota', () => {
         await refreshQuotaCacheOnce()
 
         const facts = buildLocalNodeFacts()
-        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode'])
+        expect(Object.keys(facts.quota ?? {}).sort()).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'cursor-cli', 'grok-cli', 'kimi', 'opencode'])
         expect(facts.quota?.['codex-cli'].status).toBe('ok')
         expect(facts.quota?.['codex-cli'].session?.usedPercent).toBeCloseTo(38.2)
     })

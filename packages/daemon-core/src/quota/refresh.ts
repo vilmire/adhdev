@@ -41,6 +41,7 @@ import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from '.
 import { fetchAntigravityQuota } from './fetchers/antigravity.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
+import { fetchCursorQuota } from './fetchers/cursor.js';
 import { fetchGrokQuota } from './fetchers/grok.js';
 import { fetchKimiQuota } from './fetchers/kimi.js';
 import { fetchOpencodeUsage } from './fetchers/opencode.js';
@@ -91,7 +92,7 @@ export const QUOTA_ACTIVITY_WINDOW_MS = 20 * 60 * 1000;
  *                better. opencode gets a longer TTL than the two pure file
  *                reads because a child process is not free (see the TTL table).
  *  - `network` — the reading only exists on a third party's server (kimi,
- *                grok-cli, antigravity-cli OAuth calls). ★These are REMOVED
+ *                cursor-cli, grok-cli, antigravity-cli OAuth calls). ★These are REMOVED
  *                from cadenced ticking. They refresh on exactly four triggers:
  *                  1. a turn ending (setupQuotaEventRefresh, 60s debounce) —
  *                     the moment the number actually moved;
@@ -111,6 +112,7 @@ export const QUOTA_AXIS: Readonly<Record<QuotaProvider, QuotaAxis>> = {
     'antigravity-cli': 'network',
     'claude-cli': 'file',
     'codex-cli': 'file',
+    'cursor-cli': 'network',
     'grok-cli': 'network',
     'kimi': 'network',
     'opencode': 'file',
@@ -135,7 +137,7 @@ export const QUOTA_AXIS: Readonly<Record<QuotaProvider, QuotaAxis>> = {
  *    child process on a timer is a real cost (and one the 15-minute cadence was
  *    originally sized around), so it sits between the file reads and the
  *    network axis.
- *  - kimi / grok-cli / antigravity-cli — ★Infinity, meaning "never due on
+ *  - kimi / cursor-cli / grok-cli / antigravity-cli — ★Infinity, meaning "never due on
  *    cadence". This is the axis split's entire point: a timer must not hit a
  *    third party's endpoint. They still refresh on the four triggers listed in
  *    QUOTA_AXIS, and the staleness backfill still guarantees a floor.
@@ -144,6 +146,7 @@ export const QUOTA_AXIS_TTL_MS: Readonly<Record<QuotaProvider, number>> = {
     'antigravity-cli': Number.POSITIVE_INFINITY,
     'claude-cli': 60_000,
     'codex-cli': 60_000,
+    'cursor-cli': Number.POSITIVE_INFINITY,
     'grok-cli': Number.POSITIVE_INFINITY,
     'kimi': Number.POSITIVE_INFINITY,
     'opencode': 5 * 60 * 1000,
@@ -174,6 +177,7 @@ export const QUOTA_SWR_TTL_MS: Readonly<Record<QuotaProvider, number>> = {
     'antigravity-cli': 10 * 60 * 1000,
     'claude-cli': QUOTA_AXIS_TTL_MS['claude-cli'],
     'codex-cli': QUOTA_AXIS_TTL_MS['codex-cli'],
+    'cursor-cli': 10 * 60 * 1000,
     'grok-cli': 10 * 60 * 1000,
     'kimi': 10 * 60 * 1000,
     'opencode': QUOTA_AXIS_TTL_MS['opencode'],
@@ -184,6 +188,7 @@ const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => Promise<
     { provider: 'antigravity-cli', fetch: () => fetchAntigravityQuota() },
     { provider: 'claude-cli', fetch: () => fetchClaudeQuota() },
     { provider: 'codex-cli', fetch: () => fetchCodexQuota() },
+    { provider: 'cursor-cli', fetch: () => fetchCursorQuota() },
     { provider: 'grok-cli', fetch: () => fetchGrokQuota() },
     { provider: 'kimi', fetch: () => fetchKimiQuota() },
     { provider: 'opencode', fetch: () => fetchOpencodeUsage() },

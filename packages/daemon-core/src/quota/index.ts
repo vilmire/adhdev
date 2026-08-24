@@ -1,9 +1,9 @@
 /**
  * Provider quota fetching — public surface.
  *
- * Scope note: Kimi (OAuth GET), grok-cli (OAuth GET), antigravity-cli (OAuth
- * POST to the Cloud Code API), codex-cli (app-server JSON-RPC) and claude-cli
- * (statusline wrapper) ship fetchers.
+ * Scope note: Kimi and grok-cli (OAuth GET), Cursor and antigravity-cli (OAuth
+ * POST), codex-cli (app-server JSON-RPC) and claude-cli (statusline wrapper)
+ * ship fetchers.
  *
  * claude-cli is the odd one out and worth understanding before touching it.
  * Claude Code exposes no outbound quota interface; the numbers exist only as
