@@ -68,15 +68,6 @@ function slotLabel(slot: { providerType: string; model?: string }): string {
     return slot.model ? `${slot.providerType}·${slot.model}` : slot.providerType
 }
 
-function graphStatusChipClass(status: string): string {
-    switch (status) {
-        case 'completed': return 'text-green-500 bg-green-500/10'
-        case 'failed': case 'compensation_required': return 'text-red-400 bg-red-500/10'
-        case 'cancelled': return 'text-text-muted bg-bg-glass'
-        case 'waiting_gate': return 'text-amber-500 bg-amber-500/10'
-        default: return 'text-accent-primary bg-accent-primary/10'
-    }
-}
 
 export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonCommand, emptyMessage }: {
     tasks: RepoMeshQueueTask[]
@@ -97,9 +88,10 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     // record the blueprint tells — their settled gates/steps render muted, so
     // showing them costs little and hiding them made the canvas read empty.
     const [includeTerminal, setIncludeTerminal] = useState(true)
-    const [detailTask, setDetailTask] = useState<RepoMeshQueueTask | null>(null)
-    /** Read-only detail for a clicked ⛩ gate node on the fused canvas. */
-    const [gatePanel, setGatePanel] = useState<{ graph: MeshGraphView; nodeId: string; gate: import('@adhdev/daemon-core').MeshGraphGateView | null } | null>(null)
+    /** Shared overview detail modal — task cards and ⛩ gate nodes both open
+     *  here (owner call 2026-08-25: gates present like tasks, not as a footer
+     *  panel). */
+    const [detail, setDetail] = useState<import('./MeshOverviewCards').DetailSelection | null>(null)
 
 
     const [schedDetailOpen, setSchedDetailOpen] = useState(false)
@@ -171,9 +163,9 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     }, [canCommand, daemonId, includeTerminal, meshId, sendDaemonCommand])
 
     useEffect(() => { void refreshGraphs() }, [refreshGraphs])
-    // Drop a gate panel whose graph left the list (e.g. terminal filter flip).
+    // Drop a gate detail whose graph left the list (e.g. terminal filter flip).
     useEffect(() => {
-        setGatePanel(current => current && !graphs.some(g => g.graphId === current.graph.graphId) ? null : current)
+        setDetail(current => current?.kind === 'gate' && !graphs.some(g => g.graphId === current.graph.graphId) ? null : current)
     }, [graphs])
 
     // Load the full difficulty matrix in one sweep — the point of the panel is
@@ -271,34 +263,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         emptyMessage={emptyMessage}
                         predictedSlots={predictedSlots}
                         initialTerminalLimit={8}
-                        onTaskOpen={setDetailTask}
+                        onTaskOpen={task => setDetail({ kind: 'queue', task })}
                         statsContainer={statsHost}
                         graphs={graphs}
-                        onGateOpen={(graph, nodeId, gate) => setGatePanel({ graph, nodeId, gate: gate ?? null })}
+                        onGateOpen={(graph, nodeId, gate) => setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })}
                     />
                 </div>
-
-                {/* ── Gate detail — READ-ONLY. Gate verbs are deliberately not
-                    exposed (owner decision 2026-08-24): acting on a gate is done
-                    by instructing the coordinator, not by clicking. ── */}
-                {gatePanel && (() => {
-                    const gateNode = gatePanel.graph.nodes.find(n => n.nodeId === gatePanel.nodeId)
-                    const gate = gatePanel.gate
-                    return (
-                        <div className={`absolute bottom-0 left-0 right-0 z-10 rounded-xl border px-3 py-2 text-2xs shadow-lg ${meshTheme.isDark ? 'border-white/10 bg-slate-950/95' : 'border-slate-200 bg-white'}`}>
-                            <div className="flex items-center gap-2">
-                                <span className="font-semibold text-text-primary">⛩ {gateNode?.ref || gatePanel.nodeId.slice(0, 8)}</span>
-                                <span className="text-text-muted">{gate ? `${gate.action} · ${gate.state}` : gateNode?.state}</span>
-                                <span className={`rounded px-1 py-px text-4xs font-semibold ${graphStatusChipClass(gatePanel.graph.status)}`}>{gatePanel.graph.graphId.slice(0, 8)} · {gatePanel.graph.status}</span>
-                                {gate?.state === 'awaiting_coordinator' && (
-                                    <span className="ml-auto text-3xs text-text-muted">{t('meshGraph.blueprint.gateActsViaCoordinator')}</span>
-                                )}
-                                <button type="button" className="ml-2 shrink-0 text-text-muted hover:text-text-primary" aria-label="Close gate detail" onClick={() => setGatePanel(null)}>✕</button>
-                            </div>
-                            {gate?.instructions && <div className="mt-1.5 whitespace-pre-line text-3xs text-text-muted">{gate.instructions}</div>}
-                        </div>
-                    )
-                })()}
 
                 {/* ── Scheduling forecast — a vertical 4-row overlay on the LEFT of
                     the canvas (owner call 2026-08-24: overlaying expresses more than
@@ -512,11 +482,11 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     </div>
                 )}
             </div>
-            {detailTask && (
+            {detail && (
                 <MeshOverviewDetailModal
                     meshTheme={meshTheme}
-                    detail={{ kind: 'queue', task: detailTask }}
-                    onClose={() => setDetailTask(null)}
+                    detail={detail}
+                    onClose={() => setDetail(null)}
                     daemonId={daemonId}
                     meshId={meshId}
                     sendDaemonCommand={sendDaemonCommand}

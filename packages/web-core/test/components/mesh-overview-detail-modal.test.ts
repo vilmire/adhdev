@@ -70,3 +70,45 @@ describe('MeshOverviewDetailModal safe-area close path (RC32)', () => {
         expect(html).toContain('fixed inset-0')
     })
 })
+
+// Fused-blueprint gates open in THIS shared modal, exactly like task cards
+// (owner call 2026-08-25) — not in the old footer strip. READ-ONLY: the modal
+// names the gate and relays its instructions, never offers gate verbs.
+describe('MeshOverviewDetailModal — gate kind', () => {
+    it('renders the gate title, state, graph label and instructions', () => {
+        const html = renderToStaticMarkup(
+            h(MeshOverviewDetailModal, {
+                meshTheme,
+                detail: {
+                    kind: 'gate' as const,
+                    graph: {
+                        graphId: 'graph-1234abcd',
+                        batchId: 'setup-batch-01',
+                        status: 'waiting_gate',
+                        nodes: [{ nodeId: 'g1', kind: 'coordinator_gate', ref: 'results_gate', state: 'blocked' }],
+                        gates: [],
+                        edges: [],
+                    } as any,
+                    nodeId: 'g1',
+                    gate: {
+                        nodeId: 'g1',
+                        action: 'approval',
+                        state: 'awaiting_coordinator',
+                        instructions: 'Verify the release outcome before opening the gate.',
+                    } as any,
+                },
+                onClose: () => {},
+                daemonId: null,
+                meshId: null,
+                sendDaemonCommand: null,
+                resolveNodeLabel: (nodeId: string | undefined | null) => nodeId ?? 'unknown',
+            }),
+        )
+        expect(html).toContain('results_gate')
+        expect(html).toContain('awaiting_coordinator')
+        expect(html).toContain('setup-batch-01')
+        expect(html).toContain('Verify the release outcome')
+        // No gate verbs — acting happens via the coordinator.
+        expect(html).not.toMatch(/Claim|Release gate|Abandon/)
+    })
+})

@@ -249,6 +249,10 @@ export type DetailSelection =
     | { kind: 'ledger'; entry: RepoMeshLedgerEntryStatus }
     | { kind: 'queue'; task: RepoMeshQueueTask }
     | { kind: 'session'; node: RepoMeshNodeStatus; session: MeshGraphSessionDetail }
+    // Coordinator gate on the fused blueprint canvas. READ-ONLY by design
+    // (owner decision 2026-08-24): acting on a gate is done by instructing
+    // the coordinator, never by clicking.
+    | { kind: 'gate'; graph: import('@adhdev/daemon-core').MeshGraphView; nodeId: string; gate: import('@adhdev/daemon-core').MeshGraphGateView | null }
 
 /** Command seam used to fetch the verbose (full-goal) mission payload on demand. */
 type MeshCommandSeam = {
@@ -524,6 +528,10 @@ function detailTitle(detail: DetailSelection, t: (key: string) => string): { kic
         case 'ledger': return { kicker: t('mesh.overview.detailKickerLedger'), title: ledgerKindLabel(detail.entry.kind) }
         case 'queue': return { kicker: t('mesh.overview.detailKickerQueue'), title: detail.task.id }
         case 'session': return { kicker: t('mesh.overview.detailKickerSession'), title: shortSessionId(detail.session.sessionId) }
+        case 'gate': {
+            const gateNode = detail.graph.nodes.find(n => n.nodeId === detail.nodeId)
+            return { kicker: t('mesh.overview.detailKickerGate'), title: `⛩ ${gateNode?.ref || detail.nodeId.slice(0, 8)}` }
+        }
     }
 }
 
@@ -598,6 +606,7 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, 
                     {detail.kind === 'ledger' && <LedgerDetail meshTheme={meshTheme} entry={detail.entry} resolveNodeLabel={resolveNodeLabel} />}
                     {detail.kind === 'queue' && <QueueDetail meshTheme={meshTheme} task={detail.task} />}
                     {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} />}
+                    {detail.kind === 'gate' && <GateDetail meshTheme={meshTheme} graph={detail.graph} nodeId={detail.nodeId} gate={detail.gate} />}
                 </div>
             </div>
         </div>
@@ -902,6 +911,40 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
                     {t('sessionNav.openChat')}
                 </button>
             </div>
+        </div>
+    )
+}
+
+function GateDetail({ meshTheme, graph, nodeId, gate }: {
+    meshTheme: MeshGraphTheme
+    graph: import('@adhdev/daemon-core').MeshGraphView
+    nodeId: string
+    gate: import('@adhdev/daemon-core').MeshGraphGateView | null
+}) {
+    const { t } = useTranslation('common')
+    const gateNode = graph.nodes.find(n => n.nodeId === nodeId)
+    const state = gate?.state ?? gateNode?.state ?? 'declared'
+    const tone: Tone = state === 'released' ? 'emerald' : state === 'awaiting_coordinator' || state === 'claimed' ? 'amber' : state === 'expired' ? 'rose' : 'muted'
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+                <StatusBadge meshTheme={meshTheme} label={state} tone={tone} />
+                {gate?.action && <StatusBadge meshTheme={meshTheme} label={gate.action} tone="muted" />}
+                {gate?.leaseExpired && <StatusBadge meshTheme={meshTheme} label="lease expired" tone="rose" />}
+            </div>
+            <div className="grid gap-1.5 text-xs">
+                <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelGraph')} value={`${(graph as { batchId?: string }).batchId || graph.graphId.slice(0, 8)} · ${graph.status}`} />
+                {gateNode?.ref && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelRef')} value={gateNode.ref} />}
+                {gate?.releaseOutcome && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelOutcome')} value={gate.releaseOutcome} />}
+            </div>
+            {gate?.instructions && (
+                <div className={`whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                    {gate.instructions}
+                </div>
+            )}
+            {(state === 'awaiting_coordinator' || state === 'claimed') && (
+                <div className={`text-2xs ${meshTheme.textSecondary}`}>{t('meshGraph.blueprint.gateActsViaCoordinator')}</div>
+            )}
         </div>
     )
 }
