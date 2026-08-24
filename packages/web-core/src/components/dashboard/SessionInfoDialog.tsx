@@ -23,6 +23,7 @@ import {
     type SessionInfoConversation,
 } from './session-info-data'
 import Dialog from '../ui/Dialog'
+import { requestOpenSessionChat } from '../../utils/session-nav'
 import {
     collectQuotaEntries,
     collectQuotaBucketChips,
@@ -77,10 +78,23 @@ interface SessionInfoSession {
     launch?: SessionLaunchInfo
 }
 
+/** Coordinator-spawn linkage for WORKER sessions (get_session_info.meshWorker):
+ *  the daemon joins the session's mesh stamps with its registered coordinator
+ *  so the dialog can say who spawned this session and jump to that chat. */
+interface SessionInfoMeshWorker {
+    meshId?: string
+    nodeId?: string
+    taskId?: string
+    coordinatorSessionId?: string
+    coordinatorCliType?: string
+    coordinatorAlive?: boolean
+}
+
 interface SessionInfoResponse {
     success: boolean
     error?: string
     session?: SessionInfoSession
+    meshWorker?: SessionInfoMeshWorker | null
     coordinator?: SessionInfoCoordinator | null
     /**
      * Plan quota of the MACHINE hosting this session — the daemon this dialog
@@ -290,6 +304,41 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                             {conv.git.ahead ? ` ↑${conv.git.ahead}` : ''}
                                             {conv.git.behind ? ` ↓${conv.git.behind}` : ''}
                                             {conv.git.dirty ? ' · dirty' : ' · clean'}
+                                        </span>
+                                    }
+                                />
+                            )}
+                        </Section>
+                    )}
+                    {/* Coordinator-spawned worker: name the spawning coordinator and
+                        offer the jump — the counterpart of the coordinator-side
+                        prompt section below, so spawned sessions stop rendering as
+                        plain workspace CLI sessions. */}
+                    {data?.meshWorker && (
+                        <Section title={t('sessionInfo.sectionMeshWorker')}>
+                            {data.meshWorker.meshId && <Row k={t('sessionInfo.rowMeshId')} v={<Mono>{data.meshWorker.meshId}</Mono>} />}
+                            {data.meshWorker.taskId && <Row k={t('sessionInfo.rowTaskId')} v={<Mono>{data.meshWorker.taskId}</Mono>} />}
+                            {data.meshWorker.coordinatorSessionId && (
+                                <Row
+                                    k={t('sessionInfo.rowCoordinator')}
+                                    v={
+                                        <span className="inline-flex flex-wrap items-center gap-2">
+                                            <Mono>{data.meshWorker.coordinatorSessionId.slice(0, 8)}</Mono>
+                                            {data.meshWorker.coordinatorCliType && <span className="text-text-secondary">{data.meshWorker.coordinatorCliType}</span>}
+                                            {data.meshWorker.coordinatorAlive ? (
+                                                <button
+                                                    type="button"
+                                                    className="rounded border border-border-default px-2 py-0.5 text-xs hover:bg-surface-secondary"
+                                                    onClick={() => {
+                                                        requestOpenSessionChat({ sessionId: data.meshWorker!.coordinatorSessionId!, source: 'session-info-dialog' })
+                                                        onClose()
+                                                    }}
+                                                >
+                                                    {t('sessionNav.openCoordinatorChat')}
+                                                </button>
+                                            ) : (
+                                                <span className="text-text-secondary">{t('sessionNav.coordinatorGone')}</span>
+                                            )}
                                         </span>
                                     }
                                 />

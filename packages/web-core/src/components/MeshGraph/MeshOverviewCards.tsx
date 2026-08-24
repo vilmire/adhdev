@@ -26,6 +26,7 @@ import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
 import { nodeCheckoutLabel, nodeDisplayName, sessionElapsedLabel, sessionRoleLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { requestOpenSessionChat } from '../../utils/session-nav'
 
 /**
  * MeshOverviewCards — the text/card "Overview" surface for a mesh. This is the
@@ -886,6 +887,20 @@ function SessionDetail({ meshTheme, node, session }: { meshTheme: MeshGraphTheme
                 {(session.startedAt || session.createdAt) && (
                     <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelStarted')} value={relativeTime(session.startedAt || session.createdAt) ?? (session.startedAt || session.createdAt)!} />
                 )}
+            </div>
+            {/* Jump straight into this session's conversation — the session-nav
+                bus resolves the chat tab and closes this dialog on its way
+                (misses toast "no local chat tab", e.g. remote-machine sessions). */}
+            <div>
+                <button
+                    type="button"
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${meshTheme.isDark
+                        ? 'border-white/15 bg-white/[0.05] text-slate-200 hover:bg-white/[0.1]'
+                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}
+                    onClick={() => requestOpenSessionChat({ sessionId: session.sessionId, source: 'mesh-overview-session-modal' })}
+                >
+                    {t('sessionNav.openChat')}
+                </button>
             </div>
         </div>
     )

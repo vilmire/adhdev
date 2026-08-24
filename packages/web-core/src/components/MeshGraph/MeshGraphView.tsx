@@ -54,6 +54,7 @@ import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './me
 import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../utils/mesh-visualization'
 import { sessionElapsedLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { IconGitBranch } from '../Icons'
+import { requestOpenSessionChat } from '../../utils/session-nav'
 
 /** Dense graph threshold: above this node count, switch to compact card mode */
 const COMPACT_NODE_THRESHOLD = 7
@@ -588,8 +589,13 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         {visibleCardSessions.slice(0, CARD_SESSION_ROW_CAP).map(session => (
                             <div
                                 key={session.sessionId}
-                                className={`min-w-0 rounded-md border px-1.5 py-1 ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/[0.055]' : 'border-sky-200 bg-white/80'}`}
+                                // Session rows double as chat links: the session-nav bus
+                                // resolves the tab and closes this dialog. stopPropagation
+                                // keeps the click from also selecting the node card.
+                                onClick={event => { event.stopPropagation(); requestOpenSessionChat({ sessionId: session.sessionId, source: 'mesh-topology-card' }) }}
+                                className={`min-w-0 cursor-pointer rounded-md border px-1.5 py-1 transition-colors ${meshTheme.isDark ? 'border-cyan-400/15 bg-cyan-500/[0.055] hover:bg-cyan-500/[0.12]' : 'border-sky-200 bg-white/80 hover:bg-sky-50'}`}
                                 title={[
+                                    t('sessionNav.openChatHint'),
                                     `Session ID: ${session.sessionId}`,
                                     session.providerType ? `Provider: ${session.providerType}` : null,
                                     `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
@@ -769,8 +775,10 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                 return (
                                     <div
                                         key={session.sessionId}
-                                        className={`min-w-0 rounded-lg border px-2.5 py-1.5 ${meshTheme.isDark ? 'border-white/8 bg-white/[0.035]' : 'border-slate-200 bg-white/80'}`}
+                                        onClick={() => requestOpenSessionChat({ sessionId: session.sessionId, source: 'mesh-topology-panel' })}
+                                        className={`min-w-0 cursor-pointer rounded-lg border px-2.5 py-1.5 transition-colors ${meshTheme.isDark ? 'border-white/8 bg-white/[0.035] hover:bg-white/[0.08]' : 'border-slate-200 bg-white/80 hover:bg-slate-50'}`}
                                         title={[
+                                            t('sessionNav.openChatHint'),
                                             `Session ID: ${session.sessionId}`,
                                             session.providerType ? `Provider: ${session.providerType}` : null,
                                             `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,

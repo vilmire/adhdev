@@ -12,7 +12,7 @@ import { readUpgradeFailureNotice } from '../upgrade-helper.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../../status/snapshot.js';
 import { getDaemonBuildInfo } from '../../build-info.js';
 import { TRACK } from '../../track-identity.js';
-import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
+import { getCoordinatorForSession, listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
 // ★These two commands are the SWR read surfaces — the ONLY read path allowed to
 // schedule a background refresh (quota/refresh.ts readQuotaCacheWithRevalidate).
 // They qualify because they are on-demand and human-paced: a machine page load
@@ -163,6 +163,41 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         const providerMetaForSession = providerType
             ? ctx.deps.providerLoader.resolve?.(providerType) || ctx.deps.providerLoader.getMeta(providerType)
             : undefined;
+        // WORKER-side mesh linkage — the inverse of the `coordinator` block
+        // below. A session the mesh auto-launch spawned carries authoritative
+        // stamps on its live instance settings (same order the event
+        // forwarder trusts, resolveForwardEventMeshId): meshNodeFor = meshId,
+        // meshNodeId, meshActiveTaskId. Join this daemon's registered
+        // coordinator for that mesh so the dashboard can render "spawned by
+        // the coordinator" and offer a jump to its chat — until now only the
+        // coordinator side got special treatment and its spawned workers
+        // rendered as plain CLI sessions.
+        let meshWorker: Record<string, unknown> | null = null;
+        if (!coord && target) {
+            try {
+                const state = ctx.deps.instanceManager?.getInstance?.(sessionId)?.getState?.();
+                const settings = (state?.settings as Record<string, unknown>) || {};
+                const workerMeshId = typeof settings.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
+                const workerNodeId = typeof settings.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
+                const workerTaskId = typeof settings.meshActiveTaskId === 'string' ? settings.meshActiveTaskId.trim() : '';
+                if (workerMeshId || workerNodeId || workerTaskId) {
+                    const coordinatorEntry = workerMeshId ? listCoordinatorsForMesh(workerMeshId)[0] : undefined;
+                    meshWorker = {
+                        ...(workerMeshId ? { meshId: workerMeshId } : {}),
+                        ...(workerNodeId ? { nodeId: workerNodeId } : {}),
+                        ...(workerTaskId ? { taskId: workerTaskId } : {}),
+                        ...(coordinatorEntry ? {
+                            coordinatorSessionId: coordinatorEntry.sessionId,
+                            coordinatorCliType: coordinatorEntry.cliType,
+                            // Live only while the coordinator's session record
+                            // exists — the jump button should not point at a
+                            // chat that no longer has a session behind it.
+                            coordinatorAlive: Boolean(ctx.deps.sessionRegistry.get(coordinatorEntry.sessionId)),
+                        } : {}),
+                    };
+                }
+            } catch { /* linkage is best-effort observability */ }
+        }
         const quota = readQuotaCacheWithRevalidate();
         return {
             success: true,
@@ -187,6 +222,9 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // same never-reported-vs-reported-empty contract as node-facts.ts.
             ...(quota ? { quota } : {}),
             machineNickname: loadConfig().machineNickname,
+            // Present only for coordinator-spawned worker sessions; null keeps
+            // the "field exists, nothing to show" contract of `coordinator`.
+            meshWorker,
             coordinator: coord ? {
                 meshId: coord.meshId,
                 startedAt: coord.startedAt,

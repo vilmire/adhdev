@@ -120,3 +120,14 @@ export function getCoordinatorForSession(sessionId: string): CoordinatorRegistry
 export function listCoordinatorsForWorkspace(workspace: string): CoordinatorRegistryEntry[] {
     return [..._registry.values()].filter(e => e.workspace === workspace);
 }
+
+/** Coordinator entries for a mesh, newest started first — the inverse join a
+ *  WORKER session needs to answer "who spawned me?" (get_session_info's
+ *  meshWorker block). Newest-first because a mesh occasionally carries a
+ *  stale entry from a coordinator that died without unregistering; the most
+ *  recently started one is the live owner. */
+export function listCoordinatorsForMesh(meshId: string): CoordinatorRegistryEntry[] {
+    return [..._registry.values()]
+        .filter(e => e.meshId === meshId)
+        .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+}

@@ -23,6 +23,8 @@ import { useDashboardMainViewUiState, type DashboardMainViewShortcutSectionId } 
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { conversationMatchesTarget } from './conversation-identity'
+import { onOpenSessionChat } from '../../utils/session-nav'
+import { eventManager } from '../../managers/EventManager'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 
@@ -360,6 +362,45 @@ export default function DashboardMainView({
         onMarkNotificationRead,
         onRequestScrollToBottom,
     ])
+    // session-nav bus: observation surfaces buried inside dialogs (session
+    // info's coordinator jump, the mesh dialog's session modal, topology
+    // session chips) request "open this session's chat" here — the one place
+    // that can resolve a sessionId to a conversation tab and activate it.
+    // Misses get a toast instead of silence: the session may live on another
+    // machine, whose chat this dashboard has no tab for.
+    React.useEffect(() => onOpenSessionChat(request => {
+        const targets = [
+            { sessionId: request.sessionId },
+            ...(request.providerSessionId ? [{ providerSessionId: request.providerSessionId }] : []),
+        ]
+        let conversation: ActiveConversation | undefined
+        for (const target of targets) {
+            conversation = mobileChatConversations.find(candidate => conversationMatchesTarget(candidate, target))
+                || hiddenConversations.find(candidate => conversationMatchesTarget(candidate, target))
+            if (conversation) break
+        }
+        if (!conversation) {
+            eventManager.showToast(t('sessionNav.chatNotFound'), 'info')
+            return
+        }
+        if (hiddenConversations.some(candidate => candidate.tabKey === conversation!.tabKey)) {
+            handleShowHiddenConversationWithRestore(conversation)
+        }
+        // The mesh dialog covers the whole screen — navigating from inside it
+        // implies leaving it.
+        setMeshGraphConversation(null)
+        onDesktopActiveTabChange(conversation.tabKey)
+        dockviewActionHandlersRef.current?.activateConversationTab(conversation.tabKey)
+        onRequestScrollToBottom(conversation.tabKey, 'conversation-open')
+    }), [
+        handleShowHiddenConversationWithRestore,
+        hiddenConversations,
+        mobileChatConversations,
+        onDesktopActiveTabChange,
+        onRequestScrollToBottom,
+        t,
+    ])
+
     const handleResetAllPanelsToMain = React.useCallback(async () => {
         const confirmed = await confirmAction({
             title: t('common.confirmTitle'),
