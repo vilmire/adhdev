@@ -305,8 +305,9 @@ const WIN32_SUBMIT_MAX_RESENDS = 14;
 const WIN32_SUBMIT_SETTLE_MS = 500;
 const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
 // Defensive paced PTY write tuning (WIN32_PTY_WRITE_CHUNK_CHARS / _GAP_MS) and the
-// surrogate-safe splitter now live in the shared pty-write-chunking module so this
-// driver and the legacy ProviderCliAdapter cannot drift apart — see the import above.
+// surrogate-safe splitter live in the shared cli-adapters/pty-write-chunking module —
+// see the import above. (It was originally shared with the legacy ProviderCliAdapter
+// engine, deleted in 48e5ed1a; this driver is now its only runtime consumer.)
 // Echo-gate for the win32 FIRST submit CR (supersedes the bare output-quiet settle).
 // The body write can race claude-cli's boot — its stdin reader is not wired until the
 // composer renders (~5–7s in, later under load), so a too-early write is buffered and
@@ -477,8 +478,8 @@ export function resolveSubmitDelayMs(
 
 /** Re-export of the shared surrogate-safe splitter so existing imports of
  *  `chunkPreservingSurrogates` from this module keep working. The implementation
- *  lives in ../../cli-adapters/pty-write-chunking so the spec driver and the
- *  legacy adapter share one definition. */
+ *  lives in ../../cli-adapters/pty-write-chunking (originally shared with the
+ *  legacy adapter engine, deleted in 48e5ed1a). */
 export const chunkPreservingSurrogates = chunkPreservingSurrogatesShared;
 
 export function guessExt(mime: string): string {
@@ -862,8 +863,9 @@ export class FsmDriver implements ISpecDriver {
 
     private buildAdapterOpts(): TerminalAdapterOpts {
         // Single-source spawn resolution: route the spec's binary/args/env
-        // through the SAME planner the legacy ProviderCliAdapter uses
-        // (resolveCliSpawnPlanFromParts). This gives the spec/FSM path
+        // through the shared spawn planner (resolveCliSpawnPlanFromParts,
+        // inherited from the legacy ProviderCliAdapter engine deleted in
+        // 48e5ed1a). This gives the spec/FSM path
         // findBinary (PATH + npm-global / Node-dir fallback so an off-PATH
         // `codex`/`claude` resolves), `{{workingDir}}` token substitution, shell
         // wrapping for script-shims / non-absolute / non-native binaries, and a

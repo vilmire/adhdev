@@ -92,7 +92,7 @@ describe('check vs activate separation', () => {
 // what would actually have caught the defect: a stub loader whose
 // syncVerifiedChannel() fails the test if the read path ever calls it.
 describe('handleCheckProviderUpdates (real handler)', () => {
-    async function runCheck() {
+    async function runCheck(loaderExtras: Record<string, unknown> = {}) {
         const { DaemonCommandHandler } = await import('../../src/commands/handler.js');
         const syncSpy = vi.fn(async () => ({ activated: [] }));
         const handler = new DaemonCommandHandler({
@@ -101,6 +101,7 @@ describe('handleCheckProviderUpdates (real handler)', () => {
                 // .upstream manifest — the kimi situation exactly.
                 listVerifiedChannelPins: () => new Map([['kimi', pin('1.0.3', '1.0.0')]]),
                 syncVerifiedChannel: syncSpy,
+                ...loaderExtras,
             },
         } as any);
         // list_installed_providers reads real dirs; stub it so the test is
@@ -128,5 +129,32 @@ describe('handleCheckProviderUpdates (real handler)', () => {
         expect(kimi.activatedAt).toBe('2026-08-05T06:58:32.933Z');
         expect(kimi.previousVersion).toBe('1.0.0');
         expect(kimi.digest).toBe('sha256:1.0.3');
+    }, 30000);
+
+    // CHANNEL-AWARE STALENESS: the registry serves per-channel rows, and the
+    // loader pins from ITS channel (channel/runtime.ts sends ?channel= on the
+    // listing). The per-type staleness fetch omitted the query, so a daemon on
+    // the preview provider channel compared its preview pin against the STABLE
+    // row and mis-reported staleness in both directions.
+    it('sends the loader channel as ?channel= on the registry staleness fetch', async () => {
+        const https = await import('node:https');
+        const urls: string[] = [];
+        const getSpy = vi.spyOn(https.default, 'get').mockImplementation(((url: any) => {
+            urls.push(String(url));
+            const { EventEmitter } = require('node:events');
+            const req = new EventEmitter();
+            (req as any).destroy = () => {};
+            setImmediate(() => req.emit('error', new Error('offline')));
+            return req;
+        }) as any);
+        try {
+            const { result } = await runCheck({ channel: 'preview' });
+            expect(result.success).toBe(true);
+            const kimiUrl = urls.find((u) => u.includes('/providers/kimi'));
+            expect(kimiUrl).toBeTruthy();
+            expect(kimiUrl).toContain('?channel=preview');
+        } finally {
+            getSpy.mockRestore();
+        }
     }, 30000);
 });

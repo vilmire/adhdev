@@ -918,6 +918,11 @@ export class DaemonCommandHandler implements CommandHelpers {
         // disk. Where a provider has no pin (channel store empty/disabled),
         // fall back to the upstream version so the row is still meaningful.
         const pins = this._ctx.providerLoader?.listVerifiedChannelPins?.() ?? new Map();
+        // Staleness must be judged against the SAME channel the loader pins
+        // from (channel/runtime.ts sends ?channel= on its listing for the same
+        // reason). Without it, a preview-channel daemon compared its preview
+        // pin against the stable row and mis-reported staleness both ways.
+        const channel = this._ctx.providerLoader?.channel ?? 'stable';
         const checks = await Promise.all(
             installedList.map(async (p) => {
                 const pin = pins.get(p.type);
@@ -936,7 +941,7 @@ export class DaemonCommandHandler implements CommandHelpers {
                     previousVersion: pin?.previous?.providerVersion ?? null,
                 };
                 try {
-                    const remote = await fetchJson(`${REGISTRY}/providers/${encodeURIComponent(p.type)}`);
+                    const remote = await fetchJson(`${REGISTRY}/providers/${encodeURIComponent(p.type)}?channel=${encodeURIComponent(channel)}`);
                     const latestVersion = String(remote?.version ?? '');
                     const stale = latestVersion !== '' && latestVersion !== activeVersion;
                     return { ...base, latestVersion, updateAvailable: stale, stale };

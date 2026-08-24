@@ -87,8 +87,9 @@ import {
   type InteractivePrompt,
   type InteractivePromptResponse,
   readCachedInlineMeshActiveSessionDetails,
+  shouldAutoRestoreHostedSessionsOnStartup,
 } from '@adhdev/daemon-core';
-import { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from '@adhdev/daemon-core';
+import { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH, DEFAULT_STANDALONE_PORT } from '@adhdev/daemon-core';
 import {
   ensureSessionHostReady,
   getStandaloneSessionHostAppName,
@@ -98,7 +99,6 @@ import {
   proxySessionHostList,
 } from './session-host.js';
 import { runQuotaCommand } from './quota-cli.js';
-import { shouldAutoRestoreHostedSessionsOnStartup } from './startup-restore-policy.js';
 import { StandaloneSessionHostControlPlane } from './session-host-control.js';
 import { SessionHostClient, type SessionHostEndpoint, type SessionHostEvent } from '@adhdev/session-host-core';
 import {
@@ -133,7 +133,7 @@ import {
 } from './interactive-prompt-http.js';
 
 // ─── Constants ───
-const DEFAULT_PORT = 3847;
+const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
 const STATUS_INTERVAL = 2000;
 const CHAT_OUTPUT_ACTIVITY_HOT_MS = DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS;
 const CHAT_OUTPUT_FLUSH_DEBOUNCE_MS = 700;

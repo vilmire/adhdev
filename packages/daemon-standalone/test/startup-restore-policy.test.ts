@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import * as assert from 'node:assert/strict'
 
-import { shouldAutoRestoreHostedSessionsOnStartup } from '../src/startup-restore-policy.js'
+// Direct source-path import (established OSS pattern): the daemon-core barrel
+// has import-time side effects (logger init) that trip the test-runtime config
+// isolation guard in this bare node:test process.
+import { shouldAutoRestoreHostedSessionsOnStartup } from '../../daemon-core/src/session-host/startup-restore-policy.js'
 
 test('startup restore defaults to enabled in standalone', () => {
   assert.equal(shouldAutoRestoreHostedSessionsOnStartup({}), true)

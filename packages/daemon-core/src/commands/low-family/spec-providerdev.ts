@@ -52,17 +52,19 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
         const target = ctx.deps.sessionRegistry.get(sessionId);
         if (!target) return { success: false, error: 'Session not found', sessionId };
         const adapterObj = ctx.deps.cliManager.findAdapter(target.providerType, { instanceKey: sessionId })?.adapter;
-        const snapshot = adapterObj
-            ? (typeof (adapterObj as any).getDebugSnapshot === 'function'
-                ? (adapterObj as any).getDebugSnapshot()
-                : typeof (adapterObj as any).getDebugState === 'function'
-                    ? (adapterObj as any).getDebugState()
-                    : null)
+        // Every CLI adapter is a SpecCliAdapter since the legacy engine was
+        // deleted (48e5ed1a), and SpecCliAdapter always exposes
+        // getDebugSnapshot(), so the old getDebugState() fallback branch here
+        // was unreachable. (SpecCliAdapter still has getDebugState() too — the
+        // dev-cli debug tooling reads it — it just never fed this handler.)
+        const snapshot = adapterObj && typeof (adapterObj as any).getDebugSnapshot === 'function'
+            ? (adapterObj as any).getDebugSnapshot()
             : null;
         return {
             success: true,
             sessionId,
             providerType: target.providerType,
+            // Non-null snapshot ⇔ a live spec adapter answered the probe.
             isSpecProvider: snapshot !== null,
             snapshot,
         };

@@ -98,10 +98,19 @@ export function buildIpcStatusHttpResponse(
     if (method && method.toUpperCase() !== 'GET') {
         return { statusCode: 405, body: { ok: false, error: 'method not allowed' } };
     }
-    // `/health` is the probe path used by the MCP IpcTransport ping —
-    // mirror cloud daemon behavior so `adhdev mcp --mode ipc` recognizes
-    // us as a live IPC host. `/` and `/status` return the same shape.
-    if (url && url !== '/' && url !== '/status' && url !== '/health') {
+    // Route table mirrors the cloud daemon's local IPC HTTP responder so every
+    // probe that works against daemon-cloud also works against this server:
+    //   - `/health` is the liveness probe used by the MCP IpcTransport ping and
+    //     the upgrade engine's pid-identity check (fetchLocalHealth).
+    //   - `/api/v1/status` (and its `/api/status` alias) is the upgrade version
+    //     gate: windows-atomic-upgrade.ts fetchLocalStatusVersion reads
+    //     `payload.status.version` from it. Serving only `/`+`/status`+`/health`
+    //     here 404'd that gate for standalone self-upgrades.
+    //   - `/` and `/status` are kept for existing consumers.
+    // All routes return the same full payload; query strings are ignored.
+    const path = url ? url.split('?')[0] : url;
+    const KNOWN_ROUTES = ['/', '/status', '/health', '/api/v1/status', '/api/status'];
+    if (path && !KNOWN_ROUTES.includes(path)) {
         return { statusCode: 404, body: { ok: false, error: 'not found' } };
     }
     return { statusCode: 200, body: payload as unknown as Record<string, unknown> };
