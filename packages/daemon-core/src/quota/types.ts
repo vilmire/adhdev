@@ -17,7 +17,7 @@
 
 /** Providers that can report a quota. Kept narrow on purpose — adding one
  *  means an actual fetcher exists, not just a CLI we support. */
-export type QuotaProvider = 'kimi' | 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'opencode' | 'grok-cli';
+export type QuotaProvider = 'kimi' | 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'opencode' | 'grok-cli' | 'cursor-cli';
 
 /**
  * Lifecycle of a quota snapshot.
@@ -159,6 +159,15 @@ export interface QuotaMetadata {
      * null when the CLI did not report that field.
      */
     usage?: { days: number; [field: string]: number | null };
+    /** Cursor CLI's usage-based-spend view, mirrored from its usage-data.ts. */
+    cursorUsage?: {
+        kind: 'fixed' | 'unlimited' | 'disabled' | 'unavailable';
+        usedDollars: number;
+        limitDollars?: number;
+        scope?: 'personal' | 'team-member';
+        enabled?: boolean;
+        displayMessage?: string;
+    };
     /** Where the numbers came from, e.g. 'oauth' | 'statusline' | 'app-server'. */
     source?: string;
     failureKind?: QuotaFailureKind;
