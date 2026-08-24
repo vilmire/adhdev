@@ -10,6 +10,9 @@ const VALID_INPUT_STRATEGIES = new Set(['native', 'native_acp', 'resource_link',
 // schema-valid manifests. The schema-fields conformance test
 // (test/providers/schema-known-fields.test.ts) enforces the subset relation.
 export const KNOWN_PROVIDER_FIELDS = new Set<string>([
+  // File-level editor hint carried by published manifests; the daemon ignores
+  // it, but it must not trip the unknown-key warning (live: 9 warnings/boot).
+  '$schema',
   'type',
   'name',
   'category',

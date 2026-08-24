@@ -19,8 +19,7 @@ import cliSchema from '../../src/providers/sdk/v1/schemas/cli/provider.schema.js
 import acpSchema from '../../src/providers/sdk/v1/schemas/acp/provider.schema.json';
 
 function schemaProps(schema: { properties?: Record<string, unknown> }): string[] {
-    // $schema is a file-level editor hint, stripped before the loader sees it.
-    return Object.keys(schema.properties ?? {}).filter((k) => k !== '$schema');
+    return Object.keys(schema.properties ?? {});
 }
 
 describe('v1 schema properties are known to the loader', () => {
