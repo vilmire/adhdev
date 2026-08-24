@@ -67,6 +67,9 @@ interface MeshTaskDagViewProps {
     graphs?: MeshGraphView[]
     /** Clicking a fused gate node opens the caller's read-only gate panel. */
     onGateOpen?: (graph: MeshGraphView, nodeId: string, gate?: MeshGraphGateView) => void
+    /** missionId → human title, so the card's mission chip can name the
+     *  mission instead of flashing a raw id (owner polish 2026-08-25). */
+    missionTitles?: Record<string, string>
     /**
      * When set, the stats/load-more chips render into this element (via
      * portal) instead of in-flow above the canvas — the blueprint tab hosts
@@ -81,6 +84,7 @@ type TaskFlowNodeData = Record<string, unknown> & {
     theme: MeshGraphTheme
     selected: boolean
     predictedSlot?: string
+    missionTitle?: string
 }
 
 type TaskFlowNode = Node<TaskFlowNodeData, 'taskNode'>
@@ -143,7 +147,7 @@ const messageClampStyle: CSSProperties = {
 
 function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     const { t } = useTranslation('common')
-    const { dagNode, theme, selected, predictedSlot } = data
+    const { dagNode, theme, selected, predictedSlot, missionTitle } = data
     const task = dagNode.task
     const style = STATUS_STYLES[task.status] ?? STATUS_STYLES.pending
     const statusClass = theme.isDark ? style.dark : style.light
@@ -191,7 +195,13 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                 {task.priority && task.priority !== 'normal' && <span className={chipClass}>{task.priority}</span>}
                 {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={chipClass}>read-only</span>}
                 {task.missionId && (
-                    <span className={`${chipClass} inline-flex items-center gap-1`} title={task.missionId}><IconFlag size={8} />{task.missionId.slice(0, 10)}</span>
+                    <span
+                        className={`${chipClass} inline-flex max-w-[150px] items-center gap-1`}
+                        title={missionTitle ? `${missionTitle} (${task.missionId})` : task.missionId}
+                    >
+                        <IconFlag size={8} />
+                        <span className="truncate">{missionTitle || task.missionId.slice(0, 10)}</span>
+                    </span>
                 )}
                 {dagNode.waitingOn.length > 0 && (
                     <span
@@ -381,7 +391,22 @@ const UNLINKED_STACK_GAP_Y = 24
  * 2026-08-25: time order beats a separate zone), so the loose queue reads as
  * a timeline next to the plans instead of noise inside them.
  */
-async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise<Map<string, { x: number; y: number }>> {
+/** How the canvas partitions: chains (ELK material) vs the loose stack, with
+ *  the loose stack's mission groupings — computed once so the layout and the
+ *  hull renderer agree on membership. */
+interface CanvasComposition {
+    connectedTasks: TaskDagNode[]
+    /** Loose-stack units, newest activity first. A mission unit groups every
+     *  loose task of that mission (hulled); singles are mission-less tasks. */
+    stackUnits: Array<{ kind: 'mission'; missionId: string; nodes: TaskDagNode[] } | { kind: 'single'; node: TaskDagNode }>
+    missionClusters: Array<{ id: string; missionId: string; memberIds: string[] }>
+}
+
+function taskTimeKey(node: TaskDagNode): string {
+    return String(node.task.updatedAt || node.task.createdAt || '')
+}
+
+function buildCanvasComposition(dag: TaskDagData, overlays: FusedOverlays): CanvasComposition {
     const clusterMemberIds = new Set(overlays.clusters.flatMap(cluster => cluster.memberIds))
     const edgeTouchedIds = new Set<string>()
     for (const edge of dag.edges) { edgeTouchedIds.add(edge.source); edgeTouchedIds.add(edge.target) }
@@ -390,6 +415,44 @@ async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise
     const connectedTasks = dag.nodes.filter(node => isConnected(node.id))
     const unlinkedTasks = dag.nodes.filter(node => !isConnected(node.id))
 
+    // Missions are the second grouping axis (owner catch 2026-08-25: graphs
+    // were the only hulls, so same-mission loose tasks scattered through the
+    // time stack). Loose tasks sharing a missionId form one contiguous,
+    // hulled unit; mission-less tasks stay singles. Units order by their
+    // newest member so the stack stays a timeline.
+    const byMission = new Map<string, TaskDagNode[]>()
+    const singles: TaskDagNode[] = []
+    for (const node of unlinkedTasks) {
+        const missionId = typeof node.task.missionId === 'string' && node.task.missionId ? node.task.missionId : ''
+        if (!missionId) { singles.push(node); continue }
+        const bucket = byMission.get(missionId) ?? []
+        bucket.push(node)
+        byMission.set(missionId, bucket)
+    }
+    const stackUnits: CanvasComposition['stackUnits'] = [
+        ...[...byMission.entries()].map(([missionId, nodes]) => ({
+            kind: 'mission' as const,
+            missionId,
+            nodes: [...nodes].sort((a, b) => taskTimeKey(b).localeCompare(taskTimeKey(a))),
+        })),
+        ...singles.map(node => ({ kind: 'single' as const, node })),
+    ].sort((a, b) => {
+        const newest = (unit: CanvasComposition['stackUnits'][number]) =>
+            unit.kind === 'mission' ? taskTimeKey(unit.nodes[0]) : taskTimeKey(unit.node)
+        return newest(b).localeCompare(newest(a))
+    })
+    const missionClusters = stackUnits.flatMap(unit => unit.kind === 'mission' && unit.nodes.length > 1
+        ? [{ id: `mission:${unit.missionId}`, missionId: unit.missionId, memberIds: unit.nodes.map(n => n.id) }]
+        : [])
+    return { connectedTasks, stackUnits, missionClusters }
+}
+
+/** Extra vertical room before a hulled mission unit so its label clears the
+ *  previous unit. */
+const MISSION_UNIT_CLEARANCE = 44
+
+async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays, composition: CanvasComposition): Promise<Map<string, { x: number; y: number }>> {
+    const { connectedTasks, stackUnits } = composition
     const positions = new Map<string, { x: number; y: number }>()
     let chainsMaxX = 0
     if (connectedTasks.length > 0 || overlays.gates.length > 0 || overlays.planned.length > 0) {
@@ -400,14 +463,21 @@ async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays): Promise
             chainsMaxX = Math.max(chainsMaxX, position.x + width)
         }
     }
-    if (unlinkedTasks.length > 0) {
+    if (stackUnits.length > 0) {
         const stackX = chainsMaxX > 0 ? chainsMaxX + UNLINKED_STACK_GAP_X : 0
-        const byNewest = [...unlinkedTasks].sort((a, b) =>
-            String(b.task.updatedAt || b.task.createdAt || '').localeCompare(String(a.task.updatedAt || a.task.createdAt || '')))
         let y = 0
-        for (const node of byNewest) {
-            positions.set(node.id, { x: stackX, y })
-            y += estimateTaskCardHeight(node) + UNLINKED_STACK_GAP_Y
+        for (const unit of stackUnits) {
+            if (unit.kind === 'mission') {
+                if (unit.nodes.length > 1) y += MISSION_UNIT_CLEARANCE
+                for (const node of unit.nodes) {
+                    positions.set(node.id, { x: stackX, y })
+                    y += estimateTaskCardHeight(node) + UNLINKED_STACK_GAP_Y
+                }
+                if (unit.nodes.length > 1) y += UNLINKED_STACK_GAP_Y
+            } else {
+                positions.set(unit.node.id, { x: stackX, y })
+                y += estimateTaskCardHeight(unit.node) + UNLINKED_STACK_GAP_Y
+            }
         }
     }
     return positions
@@ -457,7 +527,7 @@ async function layoutConnectedElements(connectedTasks: TaskDagNode[], taskEdges:
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -491,11 +561,15 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     // Focus highlight driven by the stat-chip jump — separate from selection so
     // jumping never opens the detail surface, it only rings + centers the card.
     const [focusTaskId, setFocusTaskId] = useState<string | null>(null)
+    /** Mission whose thread is lit up because the pointer rests on one of its cards. */
+    const [hoveredMissionId, setHoveredMissionId] = useState<string | null>(null)
     const [positions, setPositions] = useState<Map<string, { x: number; y: number }> | null>(null)
     // State (not a ref) so the live-fit effect reruns once the canvas mounts.
     const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<TaskFlowNode, Edge> | null>(null)
     const jumpCycleRef = useRef<Record<string, number>>({})
     const fittedFingerprintRef = useRef('')
+
+    const composition = useMemo(() => buildCanvasComposition(dag, fused), [dag, fused])
 
     useEffect(() => {
         let cancelled = false
@@ -503,7 +577,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             setPositions(null)
             return
         }
-        void layoutTaskDag(dag, fused)
+        void layoutTaskDag(dag, fused, composition)
             .then(next => { if (!cancelled) setPositions(next) })
             .catch(() => { if (!cancelled) setPositions(null) })
         return () => { cancelled = true }
@@ -523,11 +597,12 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     theme: meshTheme,
                     selected: selectedTaskId === node.id || focusTaskId === node.id,
                     ...(predictedSlots ? { predictedSlot: predictedSlots[node.task.difficulty ?? 'medium'] } : {}),
+                    ...(node.task.missionId && missionTitles?.[node.task.missionId] ? { missionTitle: missionTitles[node.task.missionId] } : {}),
                 },
                 draggable: false,
                 selectable: true,
             }))
-    }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots])
+    }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots, missionTitles])
 
     const overlayFlowNodes = useMemo<Node[]>(() => {
         if (!positions) return []
@@ -626,8 +701,53 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 ...(edge.kind ? { label: edge.kind, labelStyle: { fontSize: 9 } } : {}),
             }
         })
-        return [...taskEdges, ...graphEdges]
-    }, [dag, fused, meshTheme, positions])
+        // Mission threads (owner ask 2026-08-25): a barely-there dotted line
+        // chaining same-mission cards in time order, so the mission reads as
+        // one thread across chains and the loose stack. Purely decorative —
+        // it never feeds ELK, so the layout is untouched; no arrowheads, no
+        // animation, indigo echoing the mission flag chip.
+        const missionThreads: Edge[] = (() => {
+            const byMission = new Map<string, TaskDagNode[]>()
+            for (const node of dag.nodes) {
+                const missionId = typeof node.task.missionId === 'string' && node.task.missionId ? node.task.missionId : ''
+                if (!missionId) continue
+                const bucket = byMission.get(missionId) ?? []
+                bucket.push(node)
+                byMission.set(missionId, bucket)
+            }
+            // Resting vs lit: always-on threads at full strength made the board
+            // read as clutter (owner 2026-08-25), while barely-there ones were
+            // invisible. So the thread idles as a whisper and lights up only
+            // while the pointer rests on one of the mission's cards.
+            const threads: Edge[] = []
+            for (const [missionId, nodes] of byMission) {
+                if (nodes.length < 2) continue
+                const lit = hoveredMissionId === missionId
+                const stroke = meshTheme.isDark
+                    ? `rgba(139, 148, 255, ${lit ? 0.9 : 0.22})`
+                    : `rgba(88, 92, 235, ${lit ? 0.85 : 0.25})`
+                const ordered = [...nodes].sort((a, b) => taskTimeKey(a).localeCompare(taskTimeKey(b)))
+                for (let i = 0; i < ordered.length - 1; i += 1) {
+                    threads.push({
+                        id: `mt:${missionId}:${i}`,
+                        source: ordered[i].id,
+                        target: ordered[i + 1].id,
+                        // Straight, not smoothstep: the thread must read as a
+                        // loose string laid across the board, visually distinct
+                        // from the orthogonal dependency wiring it crosses.
+                        type: 'straight' as const,
+                        animated: false,
+                        selectable: false,
+                        focusable: false,
+                        zIndex: 0,
+                        style: { stroke, strokeWidth: lit ? 2.2 : 1.3, strokeDasharray: '7 7', transition: 'stroke 150ms ease' },
+                    })
+                }
+            }
+            return threads
+        })()
+        return [...missionThreads, ...taskEdges, ...graphEdges]
+    }, [dag, fused, hoveredMissionId, meshTheme, positions])
 
     const selectedNode = selectedTaskId ? dag.nodes.find(node => node.id === selectedTaskId) ?? null : null
 
@@ -675,6 +795,12 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             { zoom: Math.max(instance.getZoom(), 0.85), duration: 350 },
         )
     }, [dag, flowInstance, positions])
+
+    const handleNodeHover = useCallback((_event: unknown, node: TaskFlowNode) => {
+        const missionId = node.type === 'taskNode' ? node.data.dagNode.task.missionId : undefined
+        setHoveredMissionId(typeof missionId === 'string' && missionId ? missionId : null)
+    }, [])
+    const handleNodeHoverEnd = useCallback(() => { setHoveredMissionId(null) }, [])
 
     const handleNodeClick = useCallback((_event: unknown, node: TaskFlowNode) => {
         if (node.type === 'gateNode') {
@@ -753,6 +879,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 nodeTypes={nodeTypes}
                 onInit={setFlowInstance}
                 onNodeClick={handleNodeClick}
+                onNodeMouseEnter={handleNodeHover}
+                onNodeMouseLeave={handleNodeHoverEnd}
                 onPaneClick={() => { setSelectedTaskId(null); setFocusTaskId(null) }}
                 fitView
                 fitViewOptions={{ padding: 0.08, maxZoom: 1 }}

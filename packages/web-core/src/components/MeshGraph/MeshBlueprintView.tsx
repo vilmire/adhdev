@@ -146,6 +146,15 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         return map
     }, [status])
 
+    // missionId → title, so mission chips on the canvas read as names.
+    const missionTitles = useMemo(() => {
+        const map: Record<string, string> = {}
+        for (const mission of (status as { missions?: Array<{ id?: string; title?: string }> }).missions ?? []) {
+            if (mission?.id && typeof mission.title === 'string' && mission.title.trim()) map[mission.id] = mission.title.trim()
+        }
+        return map
+    }, [status])
+
     const refreshGraphs = useCallback(async () => {
         if (!canCommand) return
         setGraphsLoading(true)
@@ -267,6 +276,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         statsContainer={statsHost}
                         graphs={graphs}
                         onGateOpen={(graph, nodeId, gate) => setDetail({ kind: 'gate', graph, nodeId, gate: gate ?? null })}
+                        missionTitles={missionTitles}
                     />
                 </div>
 
