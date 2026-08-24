@@ -10307,7 +10307,8 @@ var import_node_os = __toESM(require("os"));
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
-var DEFAULT_PORT = 3847;
+var import_daemon_core10 = require("@adhdev/daemon-core");
+var DEFAULT_PORT = import_daemon_core10.DEFAULT_STANDALONE_PORT;
 var LocalTransport = class {
   baseUrl;
   authHeader;
