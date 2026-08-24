@@ -40,7 +40,9 @@ describe('getProviderEnablementFacts', () => {
         // with no fetcher can never have a snapshot for any other reason, so
         // reporting its switches would grow every git_status for nothing.
         const facts = getProviderEnablementFacts(makeLoader());
-        expect(facts['cursor-cli']).toBeUndefined(); // permanently unsupported
+        // cursor-cli graduated to quota-supported on 2026-08-24 (fetcher landed),
+        // so it now IS reported; hermes stays the no-fetcher example.
+        expect(facts['cursor-cli']).toEqual({ enabled: true, quotaEnabled: true });
         expect(facts['hermes-cli']).toBeUndefined(); // no model-axis quota
     });
 
