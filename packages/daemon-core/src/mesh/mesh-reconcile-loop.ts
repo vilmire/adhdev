@@ -109,6 +109,7 @@ import {
 import { recoverExpiredWorkspaceSagas } from './mesh-graph-workspace-saga.js';
 import { createDefaultWorkspaceSagaPorts } from './mesh-graph-workspace-ports.js';
 import { sweepMeshGraphGateTimeouts } from './mesh-graph-gates.js';
+import { sweepMeshGraphStaleness } from './mesh-graph-staleness.js';
 import { recordGraphGateExpired } from './mesh-graph-provenance.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
@@ -425,6 +426,24 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 }
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Graph gate sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+        }
+    }
+
+    // ── PHASE 5.45: graph/gate staleness reminders (G3) ─────────────────────
+    // Read-only visibility sweep: a graph that stopped advancing or a gate that
+    // kept waiting past the staleness threshold pages the coordinator again,
+    // once per reminder window (windowed fingerprint anchor — see
+    // mesh-graph-staleness.ts). Never mutates graph/gate/queue state; timeout
+    // POLICY remains PHASE 5.4's job. Isolated per mesh like the other phases.
+    if (store) {
+        for (const mesh of listMeshes()) {
+            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+            if (!daemonHostsMesh(mesh, selfIds)) continue;
+            try {
+                sweepMeshGraphStaleness(mesh.id);
+            } catch (e: any) {
+                LOG.warn('MeshReconcile', `Graph staleness sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
     }
