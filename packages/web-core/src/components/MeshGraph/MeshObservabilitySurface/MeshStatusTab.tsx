@@ -18,7 +18,7 @@ import {
     healthTone,
     quotaProviderLabel,
     schedulingReasonLabel,
-    shouldShowClaudeSetupHint,
+    claudeQuotaHint,
     shortCommit,
     summarizeNodeDrift,
     type MachineQuotaGroup,
@@ -167,6 +167,7 @@ export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: M
                         // failure) live in the shared view-model — this card
                         // only chooses HOW each kind looks (Badge styling).
                         const model = buildQuotaDisplayModel(quota)
+                        const claudeHint = claudeQuotaHint(provider, quota)
                         return (
                             <div key={provider} className="flex flex-wrap items-center gap-1.5">
                                 <span className={`text-2xs ${meshTheme.textPrimary}`}>{quotaProviderLabel(provider)}</span>
@@ -203,13 +204,14 @@ export function MeshMachineQuotaCard({ machine, providerVersions }: { machine: M
                                         {model.message}
                                     </span>
                                 )}
-                                {/* Claude-only: the daemon's message already names the
-                                    command, so this adds the missing REASON — Claude Code
-                                    has no outbound quota API, unlike codex/kimi. Not a
-                                    fourth state; a hint on the existing failure line. */}
-                                {shouldShowClaudeSetupHint(provider, quota) && (
+                                {/* Claude-only action for the existing failure: install a
+                                    missing/broken capture bridge, or open one session when
+                                    an installed bridge merely has an aged-out reading. */}
+                                {claudeHint && (
                                     <span className={`text-2xs ${meshTheme.textSecondary} opacity-80`}>
-                                        {t('mesh.status.quotaClaudeSetupHint')}
+                                        {t(claudeHint === 'setup'
+                                            ? 'mesh.status.quotaClaudeSetupHint'
+                                            : 'mesh.status.quotaClaudeRefreshHint')}
                                     </span>
                                 )}
                             </div>

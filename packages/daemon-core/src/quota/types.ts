@@ -55,6 +55,13 @@ export type QuotaFailureKind =
     | 'cli-unavailable'
     | 'unsupported'
     /**
+     * An opt-in capture bridge is absent or broken and must be installed or
+     * repaired before quota can be collected. Claude's statusline wrapper is
+     * currently the only producer. Kept distinct from `no-data`: opening a
+     * session fixes `no-data`, but cannot fix a missing wrapper.
+     */
+    | 'setup-required'
+    /**
      * The capture channel works but holds no CURRENT reading — nothing was
      * recorded yet, or the last reading aged out. Claude's statusline bridge
      * is the canonical case: quota only flows while a Claude Code session is

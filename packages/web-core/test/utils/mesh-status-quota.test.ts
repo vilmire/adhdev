@@ -13,6 +13,7 @@ import {
   formatQuotaWindow,
   quotaProviderLabel,
   quotaUsageTone,
+  claudeQuotaHint,
   shouldShowClaudeSetupHint,
   formatQuotaAccount,
 } from '../../src/components/MeshGraph/MeshObservabilitySurface/meshSurfaceHelpers'
@@ -458,22 +459,40 @@ describe('provider quota helpers', () => {
 })
 
 // ── Claude-only setup hint ──────────────────────────────────────────────────
-// Claude Code exposes no outbound quota API: the numbers exist only in the JSON
-// it pipes to a user-configured statusLine, so reading them means wrapping that
-// slot. codex/kimi answer a live query and need no setup. The dashboard says
-// "unavailable" for all three, so the missing piece is the REASON — the daemon's
-// own message already names the command.
+// Claude Code exposes no outbound quota API: a missing/broken statusline bridge
+// needs installation, while an installed bridge with an old capture only needs
+// one Claude session. These actions must never collapse again.
 describe('claude-only quota setup hint', () => {
   const failing = (provider: string, kind: string, status = 'unavailable') => ({
     provider, status, session: null, weekly: null, updatedAt: 1,
     error: 'nope', metadata: { failureKind: kind },
   }) as any
 
-  it('shows the hint for a claude provider that could not report', () => {
-    expect(shouldShowClaudeSetupHint('claude-cli', failing('claude-cli', 'missing-credentials'))).toBe(true)
-    // Any non-ok claude status qualifies — a future claude-side failure code
-    // must not silently drop the explanation.
-    expect(shouldShowClaudeSetupHint('claude-cli', failing('claude-cli', 'unsupported', 'error'))).toBe(true)
+  it('shows the install hint only when setup is missing or broken', () => {
+    expect(shouldShowClaudeSetupHint('claude-cli', failing('claude-cli', 'setup-required'))).toBe(true)
+    expect(claudeQuotaHint('claude-cli', failing('claude-cli', 'setup-required'))).toBe('setup')
+
+    // Older daemons used no-data for a setup failure; preserve the actionable
+    // install path by recognizing their daemon message.
+    const legacy = failing('claude-cli', 'no-data')
+    legacy.error = 'Claude quota reporting is not set up — run `adhdev quota claude:install`'
+    expect(claudeQuotaHint('claude-cli', legacy)).toBe('setup')
+  })
+
+  it('installed + aged-out asks for a session and NEVER shows install', () => {
+    const aged = {
+      ...failing('claude-cli', 'no-data', 'error'),
+      error: 'Claude quota reading is stale (1201 min old) — open a Claude Code session to refresh',
+      session: { usedPercent: 23.5, windowMinutes: 300, resetsAt: null },
+      metadata: { source: 'statusline', failureKind: 'no-data', lastGoodWindows: true },
+    } as any
+    expect(claudeQuotaHint('claude-cli', aged)).toBe('refresh')
+    expect(shouldShowClaudeSetupHint('claude-cli', aged)).toBe(false)
+  })
+
+  it('leaves unrelated Claude failures to their daemon message', () => {
+    expect(claudeQuotaHint('claude-cli', failing('claude-cli', 'expired-token', 'error'))).toBeNull()
+    expect(shouldShowClaudeSetupHint('claude-cli', failing('claude-cli', 'unsupported', 'error'))).toBe(false)
   })
 
   it('NEVER shows it for codex or kimi — even on the same failureKind', () => {
@@ -496,8 +515,9 @@ describe('claude-only quota setup hint', () => {
       path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshObservabilitySurface/MeshStatusTab.tsx'),
       'utf8',
     )
-    expect(source).toContain('shouldShowClaudeSetupHint(provider, quota)')
-    expect(source).toContain("t('mesh.status.quotaClaudeSetupHint')")
+    expect(source).toContain('claudeQuotaHint(provider, quota)')
+    expect(source).toContain("'mesh.status.quotaClaudeSetupHint'")
+    expect(source).toContain("'mesh.status.quotaClaudeRefreshHint'")
     // The three-state branches are untouched: the hint sits alongside the
     // failure text (the view-model's 'failure' kind), in the same provider row.
     expect(source).toContain("model.kind === 'failure'")

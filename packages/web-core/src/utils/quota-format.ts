@@ -342,26 +342,39 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now: n
     return { kind: 'failure', cue, chips: [], usageLabel: null, message: describeQuotaFailure(quota), compactChip: null }
 }
 
-/**
- * Should we explain, next to this provider's failure line, WHY Claude alone
- * needs a setup step?
- *
- * Claude Code exposes no outbound quota interface: the numbers exist only in
- * the JSON it pipes to a user-configured `statusLine` command, so reading them
- * means occupying that slot with a wrapper. codex/kimi answer a live query and
- * need nothing. That asymmetry is invisible on a dashboard that just says
- * "unavailable", and the missing piece is the REASON — the daemon's own message
- * already names the command to run.
- *
- * Deliberately gated on the PROVIDER, not on failureKind: kimi emits
- * `missing-credentials` too (fetchers/kimi.ts), and there it means "log in to
- * kimi", which this hint would answer wrongly. Gated on non-ok rather than on a
- * specific kind so a future claude-side failure code does not silently drop the
- * explanation.
- */
+export type ClaudeQuotaHint = 'setup' | 'refresh' | null
+
+/** The action, if any, that resolves a failed Claude statusline reading. */
+export function claudeQuotaHint(provider: string, quota: MeshNodeFactsProviderQuota): ClaudeQuotaHint {
+    // Provider gating is essential: kimi also emits failure kinds used here,
+    // but installing Claude's statusline wrapper is never an answer for kimi.
+    if (provider !== 'claude-cli' || quota.status === 'ok') return null
+
+    const failureKind = quota.metadata?.failureKind
+    const error = typeof quota.error === 'string' ? quota.error.toLowerCase() : ''
+    if (failureKind === 'setup-required') return 'setup'
+
+    // Compatibility with older daemons, which labeled both setup failures and
+    // aged-out readings `no-data`. Their actionable error text is the only
+    // remaining discriminator. Check it before lastGoodWindows because an old
+    // daemon can report a dangling wrapper while retaining an old snapshot.
+    if (error.includes('claude:install') || error.includes('not set up') || error.includes('wrapper is missing')) {
+        return 'setup'
+    }
+
+    // A retained Claude snapshot proves the capture bridge worked at least
+    // once, so an aged-out reading asks for a session, never installation.
+    // This alone cannot detect "dangling wrapper + old snapshot" when an old
+    // daemon has already masked it with the stale message. The fallback above
+    // handles older unmasked setup messages; fully resolving the masked shape
+    // requires the new daemon's wrapper audit and setup-required signal.
+    if (quota.metadata?.lastGoodWindows === true || failureKind === 'no-data') return 'refresh'
+    return null
+}
+
+/** True only when Claude's capture bridge must be installed or repaired. */
 export function shouldShowClaudeSetupHint(provider: string, quota: MeshNodeFactsProviderQuota): boolean {
-    if (provider !== 'claude-cli') return false
-    return quota.status !== 'ok'
+    return claudeQuotaHint(provider, quota) === 'setup'
 }
 
 // formatQuotaAccount moved to @adhdev/mesh-shared (pure relocation, no behaviour

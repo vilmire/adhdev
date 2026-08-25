@@ -77,12 +77,27 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
     const deps = resolveDeps(overrides);
     const paths = resolveInstallPaths(deps.env);
 
+    // Audit the capture channel before trusting even an existing snapshot.
+    // A stale file only proves the wrapper worked in the past; it does not
+    // prove the wrapper named by today's settings still exists. This ordering
+    // keeps "wrapper broken + old snapshot" distinct from the ordinary
+    // "installed, session not opened recently" state.
+    const setupFailure = statuslineSetupFailure(deps.env);
+    if (setupFailure !== null) {
+        return setupFailure;
+    }
+
     let raw: string;
     try {
         raw = fs.readFileSync(paths.snapshotFile, 'utf-8');
     } catch (err) {
         if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-            return missingSnapshotFailure(deps.env);
+            return quotaFailure(
+                'claude-cli',
+                'unavailable',
+                'No Claude quota captured yet — open a Claude Code session to record one',
+                { source: SOURCE, failureKind: 'no-data' },
+            );
         }
         const message = err instanceof Error ? err.message : String(err);
         return quotaFailure('claude-cli', 'error', `Unable to read Claude quota snapshot: ${message}`, {
@@ -146,11 +161,10 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
 }
 
 /**
- * Distinguish "wrapper was never installed" from "installed but has not
- * captured anything yet" — the first needs a setup step, the second just needs
- * a Claude Code session to run.
+ * Return the actionable setup failure when the statusline capture bridge is
+ * absent or dangling. Null means the wrapper is installed and healthy.
  */
-function missingSnapshotFailure(env: NodeJS.ProcessEnv): ProviderQuota {
+function statuslineSetupFailure(env: NodeJS.ProcessEnv): ProviderQuota | null {
     let installed = false;
     let danglingPath: string | null = null;
     try {
@@ -170,20 +184,16 @@ function missingSnapshotFailure(env: NodeJS.ProcessEnv): ProviderQuota {
             'claude-cli',
             'unavailable',
             `Claude statusline wrapper is missing (${danglingPath}) — re-run \`adhdev quota claude:install\` to repair`,
-            { source: SOURCE, failureKind: 'no-data' },
+            { source: SOURCE, failureKind: 'setup-required' },
         );
     }
-    return quotaFailure(
-        'claude-cli',
-        'unavailable',
-        installed
-            ? 'No Claude quota captured yet — open a Claude Code session to record one'
-            : 'Claude quota reporting is not set up — run `adhdev quota claude:install`',
-        // 'no-data', NOT 'missing-credentials': this fetcher reads no
-        // credential at all (see the header), and the old label made the
-        // dashboard render "(missing credentials)" for a machine that was
-        // merely waiting for its first statusline capture — a live
-        // coordinator misread that as a claude-cli auth failure.
-        { source: SOURCE, failureKind: 'no-data' },
-    );
+    if (!installed) {
+        return quotaFailure(
+            'claude-cli',
+            'unavailable',
+            'Claude quota reporting is not set up — run `adhdev quota claude:install`',
+            { source: SOURCE, failureKind: 'setup-required' },
+        );
+    }
+    return null;
 }

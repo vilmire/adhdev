@@ -28,6 +28,10 @@ afterEach(() => {
 
 function writeSnapshot(overrides: Record<string, unknown> = {}): void {
     const paths = resolveInstallPaths(env);
+    // A real snapshot can only be produced by an installed wrapper. Keeping
+    // the fixture realistic also lets the fetcher audit wrapper health before
+    // trusting an old file.
+    installClaudeStatusline(env);
     fs.mkdirSync(path.dirname(paths.snapshotFile), { recursive: true });
     fs.writeFileSync(
         paths.snapshotFile,
@@ -91,11 +95,7 @@ describe('fetchClaudeQuota', () => {
         const quota = await fetch();
 
         expect(quota.status).toBe('unavailable');
-        // 'no-data', never 'missing-credentials': this fetcher reads no
-        // credential, and the old label rendered "(missing credentials)" on
-        // the dashboard for a machine merely awaiting its first capture —
-        // misread live as a claude-cli auth failure (owner report 2026-08-10).
-        expect(quota.metadata?.failureKind).toBe('no-data');
+        expect(quota.metadata?.failureKind).toBe('setup-required');
         expect(quota.error).toContain('not set up');
     });
 
@@ -131,6 +131,20 @@ describe('fetchClaudeQuota', () => {
         expect(quota.metadata?.lastGoodWindows).toBe(true);
     });
 
+    it('reports a dangling wrapper as setup-required even when an old snapshot exists', async () => {
+        writeSnapshot({ capturedAt: NOW - STALE_AFTER_MS - 60_000 });
+        const paths = resolveInstallPaths(env);
+        fs.rmSync(paths.wrapperFile);
+
+        const quota = await fetch();
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('setup-required');
+        expect(quota.error).toContain('wrapper is missing');
+        expect(quota.error).toContain('claude:install');
+        expect(quota.session).toBeNull();
+    });
+
     it('treats a reading just inside the stale threshold as current', async () => {
         writeSnapshot({ capturedAt: NOW - STALE_AFTER_MS + 1_000 });
 
@@ -139,6 +153,7 @@ describe('fetchClaudeQuota', () => {
 
     it('reports a parse failure for a corrupted snapshot', async () => {
         const paths = resolveInstallPaths(env);
+        installClaudeStatusline(env);
         fs.mkdirSync(path.dirname(paths.snapshotFile), { recursive: true });
         fs.writeFileSync(paths.snapshotFile, 'not json at all', 'utf-8');
 
