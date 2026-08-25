@@ -23,7 +23,7 @@ import {
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { buildBlueprintGraphTimeline, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState } from './blueprintViewModel'
+import { buildBlueprintGraphTimeline, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, resolveTaskPredictedSlot } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, scopeTaskDagTasks, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -42,8 +42,16 @@ interface MeshTaskDagViewProps {
      * Scheduling forecast (mesh_route_preview): difficulty → label of the slot
      * that would take the NEXT task of that difficulty. Rendered as a "→ slot"
      * chip on pending cards so routing is visible on the blueprint itself.
+     * This is the GENERIC, explicitly-unpinned reading — a hypothetical
+     * dispatch with no target pin.
      */
     predictedSlots?: Record<string, string>
+    /**
+     * taskId → predicted slot on the task's PINNED node (mesh_route_preview
+     * with targetNodeId). A pinned task routes to its pin, so its card shows
+     * this forecast — as a distinct 📌 chip — instead of the generic one.
+     */
+    pinnedSlots?: Record<string, string>
     /** Initial cap on terminal (completed/failed/cancelled) cards — the blueprint
      *  tab passes a tight cap so history doesn't drown the active plan. */
     initialTerminalLimit?: number
@@ -89,6 +97,8 @@ type TaskFlowNodeData = Record<string, unknown> & {
     theme: MeshGraphTheme
     selected: boolean
     predictedSlot?: string
+    /** True when predictedSlot comes from the task's PINNED-node preview. */
+    predictedSlotPinned?: boolean
     missionTitle?: string
     /** Pointer rests on a same-mission card — echo the lit thread with a ring. */
     missionHighlighted?: boolean
@@ -156,7 +166,7 @@ const messageClampStyle: CSSProperties = {
 
 function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     const { t } = useTranslation('common')
-    const { dagNode, theme, selected, predictedSlot, missionTitle, missionHighlighted, onMissionOpen } = data
+    const { dagNode, theme, selected, predictedSlot, predictedSlotPinned, missionTitle, missionHighlighted, onMissionOpen } = data
     const task = dagNode.task
     const style = STATUS_STYLES[task.status] ?? STATUS_STYLES.pending
     const statusClass = theme.isDark ? style.dark : style.light
@@ -208,12 +218,16 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                 {task.difficulty && <span className={chipClass}>{task.difficulty}</span>}
                 {predictedSlot && task.status === 'pending' && (
                     <span
-                        className={theme.isDark
-                            ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-px text-4xs text-emerald-200'
-                            : 'rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-px text-4xs text-emerald-700'}
-                        title={t('meshGraph.taskDag.predictedSlot')}
+                        className={predictedSlotPinned
+                            ? (theme.isDark
+                                ? 'rounded-full border border-sky-400/25 bg-sky-500/10 px-1.5 py-px text-4xs text-sky-200'
+                                : 'rounded-full border border-sky-300 bg-sky-50 px-1.5 py-px text-4xs text-sky-700')
+                            : (theme.isDark
+                                ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-px text-4xs text-emerald-200'
+                                : 'rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-px text-4xs text-emerald-700')}
+                        title={t(predictedSlotPinned ? 'meshGraph.taskDag.predictedSlotPinned' : 'meshGraph.taskDag.predictedSlot')}
                     >
-                        → {predictedSlot}
+                        {predictedSlotPinned ? '📌 ' : '→ '}{predictedSlot}
                     </span>
                 )}
                 {task.priority && task.priority !== 'normal' && <span className={chipClass}>{task.priority}</span>}
@@ -665,7 +679,7 @@ async function layoutConnectedElements(connectedTasks: TaskDagNode[], taskEdges:
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles, onMissionOpen, focusMission }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, pinnedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles, onMissionOpen, focusMission }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -774,7 +788,10 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     dagNode: node,
                     theme: meshTheme,
                     selected: selectedTaskId === node.id || focusTaskId === node.id,
-                    ...(predictedSlots ? { predictedSlot: predictedSlots[node.task.difficulty ?? 'medium'] } : {}),
+                    ...(() => {
+                        const predicted = resolveTaskPredictedSlot(node.task, predictedSlots, pinnedSlots)
+                        return predicted ? { predictedSlot: predicted.label, predictedSlotPinned: predicted.pinned } : {}
+                    })(),
                     ...(node.task.missionId && missionTitles?.[node.task.missionId] ? { missionTitle: missionTitles[node.task.missionId] } : {}),
                     ...(hoveredMissionId && node.task.missionId === hoveredMissionId ? { missionHighlighted: true } : {}),
                     ...(onMissionOpen ? { onMissionOpen } : {}),
@@ -782,7 +799,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 draggable: false,
                 selectable: true,
             }))
-    }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots, missionTitles, hoveredMissionId, onMissionOpen])
+    }, [dag, meshTheme, positions, selectedTaskId, focusTaskId, predictedSlots, pinnedSlots, missionTitles, hoveredMissionId, onMissionOpen])
 
     const overlayFlowNodes = useMemo<Node[]>(() => {
         if (!positions) return []

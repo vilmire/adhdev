@@ -768,6 +768,7 @@
             "loadMore_one": "さらに{{count}}件読み込む",
             "loadMore_other": "さらに{{count}}件読み込む",
             "predictedSlot": "次のルーティング予測スロット",
+            "predictedSlotPinned": "ターゲットノードにピン留め済み — そのノードの予測スロット",
             "statsPending": "待機 {{count}}",
             "statsAssigned": "割当 {{count}}",
             "jumpToState": "クリックでこの状態の次のカードへ移動",
@@ -988,6 +989,8 @@
             "schedColMachine": "マシン",
             "schedNextTitle": "今この難易度のタスクを送るとこのスロットに割り当てられます",
             "schedTargetWorktreeTitle": "このワークツリーで実行されます",
+            "schedUnpinned": "ピンなし",
+            "schedUnpinnedTitle": "ピンなしで送った場合の仮想的な予測 — ノードにピン留めされたタスクはカードに個別の予測が表示されます",
             "schedulingShort": "スケジュール"
         }
     },

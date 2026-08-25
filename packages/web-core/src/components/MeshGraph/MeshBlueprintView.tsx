@@ -16,9 +16,11 @@
  *    whose MCP tools (mesh_gate_claim/release/abandon) are the acting surface.
  *  - scheduling preview: mesh_route_preview (read-only) shows the per-node
  *    predicted routing winner for a hypothetical task, so slot pressure is
- *    visible on the same screen as the plan
+ *    visible on the same screen as the plan. The generic forecast is
+ *    explicitly UNPINNED; a task pinned to a node (targetNodeId) gets its
+ *    own pinned preview, rendered as a distinct 📌 chip on its card.
  */
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
@@ -32,9 +34,15 @@ import { MeshOverviewDetailModal } from './MeshOverviewCards'
 import {
     BLUEPRINT_GRAPH_INITIAL_LIMIT,
     BLUEPRINT_GRAPH_LOAD_MORE_STEP,
+    ROUTE_PREVIEW_DIFFICULTIES,
     buildBlueprintGraphOverviewArgs,
+    buildPinnedSlotLabels,
+    buildRoutePreviewRequests,
     getBlueprintGraphPagination,
     nextBlueprintGraphLimit,
+    routePreviewKey,
+    routePreviewNextSlotLabel,
+    routePreviewSlotLabel,
 } from './blueprintViewModel'
 
 interface RoutePreviewSlotScore {
@@ -71,9 +79,7 @@ interface RoutePreviewNode {
 }
 
 /** Label for one slot: `provider·model` or bare provider. */
-function slotLabel(slot: { providerType: string; model?: string }): string {
-    return slot.model ? `${slot.providerType}·${slot.model}` : slot.providerType
-}
+const slotLabel = routePreviewSlotLabel
 
 
 export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonCommand, emptyMessage }: {
@@ -201,26 +207,36 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     // Load the full difficulty matrix in one sweep — the point of the panel is
     // "which slot matches next, per difficulty, at a glance", so it must not
     // hide behind a run button. Auto-runs on mount and when read-only flips.
+    // The sweep also covers one PINNED preview per pending pinned task
+    // (buildRoutePreviewRequests): a task pinned to a node routes there, so
+    // annotating it with the UNPINNED forecast was a misprediction.
+    const previewRequests = useMemo(() => buildRoutePreviewRequests(tasks), [tasks])
+    // Stable signature of the request set — `tasks` identity changes on every
+    // status poll, and the sweep must re-run only when the requests actually
+    // change, not on each poll.
+    const previewRequestsKey = previewRequests.map(r => routePreviewKey(r.difficulty, r.targetNodeId)).join('|')
+    const previewRequestsRef = useRef(previewRequests)
+    previewRequestsRef.current = previewRequests
     const runRoutePreview = useCallback(async () => {
         if (!canCommand) return
         setSchedLoading(true)
         setSchedError('')
         try {
-            const difficulties = ['easy', 'medium', 'difficult', 'freeform'] as const
-            const results = await Promise.all(difficulties.map(async difficulty => {
+            const results = await Promise.all(previewRequestsRef.current.map(async request => {
                 const raw = await sendDaemonCommand!(daemonId!, 'mesh_route_preview', {
                     meshId,
-                    difficulty,
+                    difficulty: request.difficulty,
                     readonly: schedReadonly,
+                    ...(request.targetNodeId ? { targetNodeId: request.targetNodeId } : {}),
                 })
                 const body = unwrapDaemonCommandBody<{ success?: boolean; error?: string; preview?: any }>(raw)
                 if (!body || body.success === false) throw new Error(body?.error || 'route preview failed')
                 const nodes = Array.isArray(body.preview?.nodes) ? body.preview.nodes as RoutePreviewNode[] : []
                 const observedAt = typeof body.preview?.snapshot?.observedAt === 'string' ? body.preview.snapshot.observedAt : ''
-                return { difficulty, nodes, observedAt }
+                return { key: routePreviewKey(request.difficulty, request.targetNodeId), nodes, observedAt }
             }))
             const matrix: Record<string, RoutePreviewNode[]> = {}
-            for (const entry of results) matrix[entry.difficulty] = entry.nodes
+            for (const entry of results) matrix[entry.key] = entry.nodes
             setSchedMatrix(matrix)
             setSchedObservedAt(results.find(r => r.observedAt)?.observedAt ?? '')
         } catch (e: any) {
@@ -231,23 +247,32 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         }
     }, [canCommand, daemonId, meshId, schedReadonly, sendDaemonCommand])
 
-    useEffect(() => { void runRoutePreview() }, [runRoutePreview])
+    useEffect(() => { void runRoutePreview() }, [runRoutePreview, previewRequestsKey])
 
     // difficulty → next-match slot label, threaded onto the live-queue DAG cards.
+    // This is the GENERIC forecast — a hypothetical dispatch with NO pin; the
+    // overlay labels that premise (schedUnpinned) so it can't be mistaken for
+    // a pinned task's actual route.
+    const previewNodeSuffix = useCallback((nodeId: string) => {
+        const meta = nodeMetaById.get(nodeId)
+        return meta?.isWorktree ? ` @ ${meta.nodeLabel}` : ''
+    }, [nodeMetaById])
     const predictedSlots = useMemo(() => {
         if (!schedMatrix) return undefined
         const out: Record<string, string> = {}
-        for (const difficulty of ['easy', 'medium', 'difficult', 'freeform']) {
-            const nodes = schedMatrix[difficulty] ?? []
-            const first = nodes[0]
-            const slot = first?.stages?.fitness?.[0] ?? first?.predictedWinner
-            if (!first || !slot) continue
-            const meta = nodeMetaById.get(first.nodeId)
-            const target = meta?.isWorktree ? ` @ ${meta.nodeLabel}` : ''
-            out[difficulty] = `${slotLabel(slot)}${target}`
+        for (const difficulty of ROUTE_PREVIEW_DIFFICULTIES) {
+            const label = routePreviewNextSlotLabel(schedMatrix[difficulty], previewNodeSuffix)
+            if (label) out[difficulty] = label
         }
         return out
-    }, [schedMatrix, nodeMetaById])
+    }, [schedMatrix, previewNodeSuffix])
+
+    // taskId → predicted slot on the task's PINNED node — the forecast that
+    // actually applies to a pinned task, rendered distinctly on its card.
+    const pinnedSlots = useMemo(() => {
+        if (!schedMatrix) return undefined
+        return buildPinnedSlotLabels(tasks, schedMatrix, previewNodeSuffix)
+    }, [schedMatrix, tasks, previewNodeSuffix])
 
     // Owner call 2026-08-24: the blueprint canvas renders as LARGE as the
     // dialog allows — no content-count tiers (unlike topology's
@@ -320,6 +345,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         tasks={tasks}
                         emptyMessage={emptyMessage}
                         predictedSlots={predictedSlots}
+                        pinnedSlots={pinnedSlots}
                         initialTerminalLimit={8}
                         onTaskOpen={task => setDetail({ kind: 'queue', task })}
                         statsContainer={statsHost}
@@ -342,6 +368,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             ? 'border-white/10 bg-slate-950/85 text-slate-300'
                             : 'border-slate-200 bg-white/95 text-slate-600'}`}
                         >
+                            {/* Premise of the generic forecast: a hypothetical
+                                dispatch with NO pin. Pinned tasks carry their
+                                own 📌 forecast on their cards. */}
+                            <div className="px-2 pt-1 text-4xs uppercase tracking-wide opacity-60" title={t('meshGraph.blueprint.schedUnpinnedTitle')}>
+                                {t('meshGraph.blueprint.schedUnpinned')}
+                            </div>
                             {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
                                 <button
                                     key={difficulty}

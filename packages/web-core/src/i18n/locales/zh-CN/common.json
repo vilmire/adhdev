@@ -768,6 +768,7 @@
             "loadMore_one": "再加载 {{count}} 个",
             "loadMore_other": "再加载 {{count}} 个",
             "predictedSlot": "下一个路由预测槽位",
+            "predictedSlotPinned": "已固定到目标节点 — 该节点上的预测槽位",
             "statsPending": "排队 {{count}}",
             "statsAssigned": "已分配 {{count}}",
             "jumpToState": "点击跳转到此状态的下一张卡片",
@@ -988,6 +989,8 @@
             "schedColMachine": "机器",
             "schedNextTitle": "现在派发该难度的任务将由此槽位接收",
             "schedTargetWorktreeTitle": "任务将在此工作树中运行",
+            "schedUnpinned": "未固定",
+            "schedUnpinnedTitle": "未固定节点时的假设性预测 — 固定到节点的任务会在卡片上显示各自的预测",
             "schedulingShort": "调度"
         }
     },

@@ -768,6 +768,7 @@
             "loadMore_one": "Cargar {{count}} más",
             "loadMore_other": "Cargar {{count}} más",
             "predictedSlot": "Slot de enrutamiento previsto",
+            "predictedSlotPinned": "Fijado a un nodo destino — slot previsto en ese nodo",
             "statsPending": "{{count}} en cola",
             "statsAssigned": "{{count}} asignadas",
             "jumpToState": "Clic para saltar a la siguiente tarjeta en este estado",
@@ -993,6 +994,8 @@
             "schedColMachine": "Máquina",
             "schedNextTitle": "Si envías una tarea de esta dificultad ahora, este slot la toma",
             "schedTargetWorktreeTitle": "La tarea se ejecutaría en este worktree",
+            "schedUnpinned": "sin fijar",
+            "schedUnpinnedTitle": "Envío hipotético sin nodo fijado — las tareas fijadas a un nodo muestran su propia previsión en sus tarjetas",
             "schedulingShort": "Scheduling"
         }
     },

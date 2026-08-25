@@ -768,6 +768,7 @@
             "loadMore_one": "Load {{count}} more",
             "loadMore_other": "Load {{count}} more",
             "predictedSlot": "Predicted next routing slot",
+            "predictedSlotPinned": "Pinned to a target node — predicted slot on that node",
             "statsPending": "{{count}} queued",
             "statsAssigned": "{{count}} assigned",
             "jumpToState": "Click to jump to the next card in this state",
@@ -988,6 +989,8 @@
             "schedColMachine": "Machine",
             "schedNextTitle": "Dispatch a task of this difficulty now and this slot takes it",
             "schedTargetWorktreeTitle": "The task would run in this worktree checkout",
+            "schedUnpinned": "no pin",
+            "schedUnpinnedTitle": "Hypothetical dispatch with no target pin — tasks pinned to a node show their own forecast on their cards",
             "schedulingShort": "Scheduling"
         }
     },

@@ -768,6 +768,7 @@
             "loadMore_one": "{{count}}개 더 불러오기",
             "loadMore_other": "{{count}}개 더 불러오기",
             "predictedSlot": "다음 라우팅 예측 슬롯",
+            "predictedSlotPinned": "대상 노드 핀 지정됨 — 해당 노드의 예측 슬롯",
             "statsPending": "대기 {{count}}",
             "statsAssigned": "할당 {{count}}",
             "jumpToState": "클릭하면 이 상태의 다음 카드로 이동",
@@ -988,6 +989,8 @@
             "schedColMachine": "머신",
             "schedNextTitle": "지금 이 난이도의 작업을 보내면 이 슬롯이 배정됩니다",
             "schedTargetWorktreeTitle": "이 워크트리 체크아웃에서 실행됩니다",
+            "schedUnpinned": "핀 없음",
+            "schedUnpinnedTitle": "핀 없이 보낼 때의 가상 예측 — 노드가 핀 지정된 태스크는 카드에 별도 예측이 표시됩니다",
             "schedulingShort": "스케줄링"
         }
     },

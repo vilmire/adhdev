@@ -4,7 +4,7 @@
  * vocabulary — the "what unlocks what" reading of the graph — is unit-tested
  * without rendering React Flow (same convention as taskDagViewModel).
  */
-import type { MeshGraphView, MeshGraphEdgeView, MeshGraphGateView } from '@adhdev/daemon-core'
+import type { MeshGraphView, MeshGraphEdgeView, MeshGraphGateView, RepoMeshQueueTask } from '@adhdev/daemon-core'
 
 /** The daemon defaults to 20 and clamps mesh_graph_overview requests at 100. */
 export const BLUEPRINT_GRAPH_INITIAL_LIMIT = 20
@@ -30,6 +30,121 @@ export function getBlueprintGraphPagination(graphCount: number, totalGraphCount:
         canLoadMore: hiddenCount > 0 && requestedLimit < BLUEPRINT_GRAPH_MAX_LIMIT,
         atServerLimit: hiddenCount > 0 && requestedLimit >= BLUEPRINT_GRAPH_MAX_LIMIT,
     }
+}
+
+/* ── Route-preview requests: the forecast must respect the pin ─────────────
+ * The scheduling forecast used to ask mesh_route_preview only the four bare
+ * difficulties, so a task PINNED to a node (targetNodeId) was annotated with
+ * the UNPINNED prediction — the owner watched the blueprint predict a
+ * machine the pinned task could never land on. The engine has the pin axis
+ * (targetNodeId, verified against both conditions); the fix is on the
+ * display axis: request a pinned preview per pending pinned task and keep
+ * the generic forecast as a separate, explicitly-unpinned reading. */
+
+export const ROUTE_PREVIEW_DIFFICULTIES = ['easy', 'medium', 'difficult', 'freeform'] as const
+
+export interface RoutePreviewRequest {
+    difficulty: string
+    /** Present only for pinned previews — the generic forecast omits it. */
+    targetNodeId?: string
+}
+
+/** Matrix key: bare difficulty for the generic forecast, `difficulty::nodeId` for a pinned one. */
+export function routePreviewKey(difficulty: string, targetNodeId?: string): string {
+    return targetNodeId ? `${difficulty}::${targetNodeId}` : difficulty
+}
+
+/**
+ * The full request sweep: the four generic difficulties PLUS one pinned
+ * preview per distinct (difficulty, targetNodeId) among PENDING pinned tasks
+ * (settled tasks no longer need a prediction; assigned ones already landed).
+ */
+export function buildRoutePreviewRequests(
+    tasks: ReadonlyArray<Pick<RepoMeshQueueTask, 'status' | 'difficulty' | 'targetNodeId'>>,
+): RoutePreviewRequest[] {
+    const requests: RoutePreviewRequest[] = ROUTE_PREVIEW_DIFFICULTIES.map(difficulty => ({ difficulty }))
+    const seen = new Set<string>()
+    for (const task of tasks) {
+        const targetNodeId = typeof task.targetNodeId === 'string' ? task.targetNodeId.trim() : ''
+        if (task.status !== 'pending' || !targetNodeId) continue
+        const difficulty = task.difficulty ?? 'medium'
+        const key = routePreviewKey(difficulty, targetNodeId)
+        if (seen.has(key)) continue
+        seen.add(key)
+        requests.push({ difficulty, targetNodeId })
+    }
+    return requests
+}
+
+/** Minimal shape of one node entry in a mesh_route_preview response. */
+export interface RoutePreviewNodeLike {
+    nodeId: string
+    predictedWinner?: { providerType: string; model?: string; fitnessScore?: number }
+    stages?: { fitness?: Array<{ providerType: string; model?: string }> }
+}
+
+/** Label for one slot: `provider·model` or bare provider. */
+export function routePreviewSlotLabel(slot: { providerType: string; model?: string }): string {
+    return slot.model ? `${slot.providerType}·${slot.model}` : slot.providerType
+}
+
+/**
+ * The next-match reading of one preview response: the first node's top-ranked
+ * fitness slot (falling back to its predictedWinner), labelled with the
+ * node suffix the caller supplies for that node ('' when none applies).
+ */
+export function routePreviewNextSlotLabel(
+    nodes: ReadonlyArray<RoutePreviewNodeLike> | undefined,
+    nodeSuffix?: (nodeId: string) => string,
+): string | undefined {
+    const first = nodes?.[0]
+    if (!first) return undefined
+    const slot = first.stages?.fitness?.[0] ?? first.predictedWinner
+    if (!slot) return undefined
+    return `${routePreviewSlotLabel(slot)}${nodeSuffix?.(first.nodeId) ?? ''}`
+}
+
+/**
+ * taskId → predicted slot label for PENDING pinned tasks, read from the
+ * pinned entries of the preview matrix. Tasks whose pinned preview has no
+ * eligible slot are omitted (the card then shows no forecast rather than a
+ * wrong one).
+ */
+export function buildPinnedSlotLabels(
+    tasks: ReadonlyArray<Pick<RepoMeshQueueTask, 'id' | 'status' | 'difficulty' | 'targetNodeId'>>,
+    matrix: Readonly<Record<string, ReadonlyArray<RoutePreviewNodeLike>>>,
+    nodeSuffix?: (nodeId: string) => string,
+): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const task of tasks) {
+        const targetNodeId = typeof task.targetNodeId === 'string' ? task.targetNodeId.trim() : ''
+        if (task.status !== 'pending' || !targetNodeId) continue
+        const label = routePreviewNextSlotLabel(matrix[routePreviewKey(task.difficulty ?? 'medium', targetNodeId)], nodeSuffix)
+        if (label) out[task.id] = label
+    }
+    return out
+}
+
+/**
+ * Which forecast a task card shows: the PINNED prediction when the task pins
+ * a target node and that preview exists, else the generic per-difficulty
+ * one. The `pinned` flag lets the card render the two readings distinctly —
+ * the generic forecast is a hypothetical unpinned dispatch, the pinned one
+ * is where THIS task would actually go. A pinned task WITHOUT its pinned
+ * preview shows nothing: falling back to the unpinned forecast there is
+ * exactly the misprediction this fixes.
+ */
+export function resolveTaskPredictedSlot(
+    task: Pick<RepoMeshQueueTask, 'id' | 'difficulty' | 'targetNodeId'>,
+    predictedSlots: Readonly<Record<string, string>> | undefined,
+    pinnedSlots: Readonly<Record<string, string>> | undefined,
+): { label: string; pinned: boolean } | undefined {
+    if (task.targetNodeId) {
+        const pinnedLabel = pinnedSlots?.[task.id]
+        return pinnedLabel ? { label: pinnedLabel, pinned: true } : undefined
+    }
+    const generic = predictedSlots?.[task.difficulty ?? 'medium']
+    return generic ? { label: generic, pinned: false } : undefined
 }
 
 /** One graph's placement on the blueprint's vertical time axis. */
