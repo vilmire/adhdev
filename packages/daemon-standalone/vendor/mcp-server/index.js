@@ -11367,6 +11367,63 @@ async function checkPending(transport, args) {
 ${lines.join("\n\n")}`;
 }
 
+// src/tools/validate-tool-args.ts
+var META_KEYS = /* @__PURE__ */ new Set(["_meta"]);
+function normalizeKey(key) {
+  return key.toLowerCase().replace(/_/g, "");
+}
+function editDistance(a, b) {
+  const m = a.length;
+  const n = b.length;
+  let prev = new Array(n + 1);
+  let curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+var MAX_SUGGESTION_DISTANCE = 2;
+function suggestKeys(unknownKey, allowed) {
+  const target = normalizeKey(unknownKey);
+  return allowed.map((key) => ({ key, distance: editDistance(target, normalizeKey(key)) })).filter((entry) => entry.distance <= MAX_SUGGESTION_DISTANCE).sort((x, y) => x.distance - y.distance || x.key.localeCompare(y.key)).slice(0, 3).map((entry) => entry.key);
+}
+function unknownToolArgsError(toolName, properties, args) {
+  const allowed = Object.keys(properties ?? {});
+  const unknown = Object.keys(args).filter((key) => !META_KEYS.has(key) && !(key in (properties ?? {})));
+  if (unknown.length === 0) return null;
+  const parts = unknown.map((key) => {
+    const suggestions = suggestKeys(key, allowed);
+    return suggestions.length > 0 ? `"${key}" \u2014 did you mean ${suggestions.map((s) => `"${s}"`).join(", ")}?` : `"${key}"`;
+  });
+  const allowedList = allowed.length > 0 ? ` Allowed parameters: ${allowed.join(", ")}.` : " This tool takes no parameters.";
+  return `Unknown parameter(s) for ${toolName}: ${parts.join("; ")}.${allowedList}`;
+}
+var MESH_TOOL_BY_NAME = new Map(
+  ALL_MESH_TOOLS.map((tool) => [tool.name, tool])
+);
+var MESH_ALIAS_TOOL = {
+  mesh_refine_config_schema: MESH_REFINE_CONFIG_TOOL,
+  mesh_validate_refine_config: MESH_REFINE_CONFIG_TOOL,
+  mesh_suggest_refine_config: MESH_REFINE_CONFIG_TOOL,
+  mesh_change_impact_config_schema: MESH_CHANGE_IMPACT_CONFIG_TOOL,
+  mesh_validate_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
+  mesh_suggest_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL
+};
+function rejectUnknownMeshToolArgs(name, args) {
+  const tool = MESH_TOOL_BY_NAME.get(name) ?? MESH_ALIAS_TOOL[name];
+  if (!tool) return null;
+  return unknownToolArgsError(name, tool.inputSchema?.properties, args);
+}
+
 // src/server.ts
 var MCP_SERVER_VERSION = "0.0.0-vendored";
 async function buildMeshModeCoordinatorPrompt(mesh) {
@@ -11474,6 +11531,8 @@ async function startMcpServer(opts) {
     server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = args ?? {};
+      const unknownArgsError = rejectUnknownMeshToolArgs(name, a);
+      if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
       try {
         let text;
         switch (name) {
@@ -11726,9 +11785,17 @@ async function startMcpServer(opts) {
     { capabilities: { tools: {} } }
   );
   server.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: allTools }));
+  const standardToolByName = new Map(
+    allTools.map((tool) => [tool.name, tool])
+  );
   server.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
     const a = args ?? {};
+    const standardTool = standardToolByName.get(name);
+    if (standardTool) {
+      const unknownArgsError = unknownToolArgsError(name, standardTool.inputSchema?.properties, a);
+      if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
+    }
     try {
       switch (name) {
         case "list_daemons": {

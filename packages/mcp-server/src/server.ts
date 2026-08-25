@@ -54,6 +54,7 @@ import {
   meshCoordinatorPromptAppendGet, meshCoordinatorPromptAppendSet
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
+import { rejectUnknownMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
 
 /**
  * Version reported in the MCP `initialize` response (`serverInfo.version`).
@@ -228,6 +229,11 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = (args ?? {}) as Record<string, any>;
+      // Reject mistyped/unknown parameters before dispatch (see
+      // validate-tool-args.ts — silently ignoring `session_id` for
+      // `session_ids` once deleted a live worker session).
+      const unknownArgsError = rejectUnknownMeshToolArgs(name, a);
+      if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
       try {
         let text: string;
         switch (name) {
@@ -356,9 +362,20 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: allTools }));
 
+  const standardToolByName = new Map<string, { inputSchema?: { properties?: Record<string, unknown> } }>(
+    allTools.map(tool => [tool.name, tool]),
+  );
+
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
     const a = (args ?? {}) as Record<string, any>;
+
+    // Same unknown-parameter gate as mesh mode (see validate-tool-args.ts).
+    const standardTool = standardToolByName.get(name);
+    if (standardTool) {
+      const unknownArgsError = unknownToolArgsError(name, standardTool.inputSchema?.properties, a);
+      if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
+    }
 
     try {
       switch (name) {
