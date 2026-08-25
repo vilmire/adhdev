@@ -140,7 +140,34 @@ describe('SpecCliAdapter interactive_prompts scheme resolution', () => {
     })
 
     it('claude-cli without the field keeps the claude_tui legacy default (answer path writes)', async () => {
-        const { adapter, dispatches } = makeAdapter({ cliType: 'claude-cli' })
+        const questionScreen = [
+            '←  ☐ Approach  ✔ Submit  →',
+            '',
+            'Which approach?',
+            '',
+            '❯ 1. Option A',
+            '  2. Option B',
+            '──────────────────────────────────────────────',
+            'Enter to select · ↑/↓ to navigate · Esc to cancel',
+        ].join('\n')
+        const reviewScreen = [
+            '←  ☒ Approach  ✔ Submit  →',
+            '',
+            'Ready to submit your answers?',
+            '',
+            '❯ Submit answers',
+            '  Cancel',
+            'Enter to select · ↑/↓ to navigate · Esc to cancel',
+        ].join('\n')
+        let screen = questionScreen
+        const { adapter, dispatches } = makeAdapter({ cliType: 'claude-cli', screen })
+        adapter.driver = {
+            snapshot: () => screen,
+            dispatch: (event: Dispatch) => {
+                dispatches.push(event)
+                if (event.kind === 'pty_write' && /^\d$/.test(event.data ?? '')) screen = reviewScreen
+            },
+        }
         adapter.activeInteractivePrompt = { ...pickerPrompt }
         adapter.interactivePromptTransport = 'tui'
         await adapter.setInteractivePromptResponse({

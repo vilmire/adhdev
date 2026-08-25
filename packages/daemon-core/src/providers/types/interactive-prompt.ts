@@ -540,7 +540,23 @@ export function readFocusedClaudeTuiQuestion(
   screenText: string,
 ): { question: string; header?: string; multiSelect: boolean } | null {
   if (!screenText.includes('Enter to select')) return null;
-  const parsed = parseClaudeInteractiveTuiQuestion({ screenText }, 0);
+  // A terminal snapshot can contain an older AskUserQuestion picker above the
+  // picker that currently owns focus. In particular, the older picker may have
+  // a `✔ Submit` nav line while the lower generic picker is headerless; parsing
+  // the whole screen would then select the stale upper nav even though the
+  // LAST shared footer belongs to the lower widget. Restrict the read to the
+  // final footer-delimited picker region so "focused" really means bottommost.
+  const lines = screenText.split(/\r?\n/);
+  let lastFooterIndex = -1;
+  let previousFooterIndex = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].includes('Enter to select')) continue;
+    previousFooterIndex = lastFooterIndex;
+    lastFooterIndex = index;
+  }
+  if (lastFooterIndex < 0) return null;
+  const focusedScreenText = lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join('\n');
+  const parsed = parseClaudeInteractiveTuiQuestion({ screenText: focusedScreenText }, 0);
   if (!parsed) return null;
   return {
     question: parsed.question,
