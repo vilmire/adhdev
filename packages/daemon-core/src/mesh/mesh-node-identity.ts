@@ -1723,6 +1723,14 @@ async function probeRemoteMeshGitStatus(args: {
     // fields above for a mixed-version-mesh rollout.
     const reporterMemberState = normalizeReportedMemberState(remoteResult?.reporterMemberState);
     if (reporterMemberState) git.reporterMemberState = reporterMemberState;
+    // Propagate the member's self-reported nodeFacts bundle (built locally by the
+    // reporter via buildLocalNodeFacts, see git-commands.ts) on the same reporter*
+    // channel. Without this re-attachment the probe dropped the bundle wholesale,
+    // so recordInlineMeshDirectGitTruth read git.reporterNodeFacts as undefined and
+    // the node.nodeFacts stamp never happened for remote nodes (local nodes are
+    // unaffected — their facts are built locally, not via this probe).
+    const reporterNodeFacts = normalizeMeshNodeFacts(remoteResult?.reporterNodeFacts);
+    if (reporterNodeFacts) git.reporterNodeFacts = reporterNodeFacts;
     return git;
 }
 
