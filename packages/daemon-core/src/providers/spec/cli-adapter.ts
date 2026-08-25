@@ -715,11 +715,27 @@ export class SpecCliAdapter implements CliAdapter {
             throw new Error(`Provider "${this.spec.id}" declares no answerable interactive-prompt scheme${scheme ? ` (scheme: ${scheme})` : ''} — the question was NOT answered.`);
         }
         if (this.interactivePromptTransport === 'tui') {
-            const steps = buildClaudeInteractiveTuiAnswerSteps(prompt, response);
-            for (const step of steps) {
-                this.driver.dispatch({ kind: 'pty_write', data: step });
-                await new Promise(resolve => setTimeout(resolve, 180));
+            // A claude terminal can render another picker above the held
+            // AskUserQuestion. promptId only binds the dashboard response to
+            // our held slot; it says nothing about which terminal widget owns
+            // focus. Bind every key to the live focused question before it is
+            // written, then require the matching review page for final Enter.
+            // A mismatch fails closed and deliberately leaves the held prompt
+            // intact so a stale response cannot operate another picker.
+            for (const question of prompt.questions) {
+                const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
+                    ...prompt,
+                    questions: [question],
+                }, response).slice(0, -1); // final Enter belongs to the review page below
+                for (const step of questionSteps) {
+                    this.assertFocusedClaudeTuiQuestion(question);
+                    this.driver.dispatch({ kind: 'pty_write', data: step });
+                    await new Promise(resolve => setTimeout(resolve, 180));
+                }
             }
+            this.assertFocusedClaudeTuiReview(prompt);
+            this.driver.dispatch({ kind: 'pty_write', data: '\r' });
+            await new Promise(resolve => setTimeout(resolve, 180));
         } else {
             this.driver.dispatch({ kind: 'pty_write', data: `${buildClaudeInteractiveToolResult(response)}\n` });
         }
@@ -1272,9 +1288,10 @@ export class SpecCliAdapter implements CliAdapter {
      * had no equivalent, so a terminal-side answer left activeInteractivePrompt
      * set and getStatus() re-emitted the same choice modal forever.
      *
-     * Detection mirrors capture: the claude TUI picker is on-screen exactly
-     * while its "Enter to select" footer is rendered. When the footer is gone
-     * for INTERACTIVE_PROMPT_LOST_GRACE_MS the prompt is genuinely resolved.
+     * Detection is question-specific. "Enter to select" is shared by every
+     * claude picker, so another picker must not keep this held question alive.
+     * When the held question text is absent for
+     * INTERACTIVE_PROMPT_LOST_GRACE_MS the prompt is genuinely resolved.
      */
     private maybeClearResolvedClaudeTuiPrompt(): void {
         if (this.interactivePromptScheme() !== 'claude_tui' || !this.activeInteractivePrompt) return;
@@ -1288,7 +1305,12 @@ export class SpecCliAdapter implements CliAdapter {
         } catch {
             return;
         }
-        const stillOnScreen = screenText.includes('Enter to select');
+        const identifiableQuestions = this.activeInteractivePrompt.questions.filter(q => !!q.question?.trim());
+        // Empty questions are not emitted by a real capture, but retaining the
+        // footer fallback keeps defensive/manual prompt fixtures compatible.
+        const stillOnScreen = identifiableQuestions.length > 0
+            ? identifiableQuestions.some(q => this.claudeTuiQuestionTextAppears(q, screenText))
+            : screenText.includes('Enter to select');
         if (stillOnScreen) {
             // Prompt reappeared / never left — reset the hysteresis timer.
             this.interactivePromptLostAt = null;
@@ -1407,7 +1429,8 @@ export class SpecCliAdapter implements CliAdapter {
 
         if (questions.length === 1) {
             if (questions[0].multiSelect) return;
-            if (!detectClaudeTuiMultiSelect(screenText)) return;
+            const focused = readFocusedClaudeTuiQuestion(screenText);
+            if (!focused || !this.claudeTuiQuestionMatches(questions[0], focused) || !focused.multiSelect) return;
             questions[0].multiSelect = true;
             this.statusCallback?.();
             return;
@@ -1418,16 +1441,84 @@ export class SpecCliAdapter implements CliAdapter {
         // one. Never demote — a settled non-multi page is left as captured.
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (!focused || !focused.multiSelect) return;
-        const match = questions.find(q =>
-            (focused.header && q.header && q.header === focused.header)
-            || q.question === focused.question);
+        const match = questions.find(q => this.claudeTuiQuestionMatches(q, focused));
         if (!match || match.multiSelect) return;
         match.multiSelect = true;
         this.statusCallback?.();
     }
 
+    private normalizeClaudeTuiIdentity(text: string): string {
+        return text.replace(/\s+/g, ' ').trim();
+    }
+
+    private claudeTuiQuestionMatches(
+        expected: InteractivePrompt['questions'][number],
+        focused: { question: string; header?: string },
+    ): boolean {
+        const expectedQuestion = this.normalizeClaudeTuiIdentity(expected.question);
+        const focusedQuestion = this.normalizeClaudeTuiIdentity(focused.question);
+        // The question line is always present when the focused-page parser
+        // succeeds. Do not accept a header-only match: headers such as Model or
+        // Approach are reusable across unrelated pickers, while a false match
+        // here would authorize keystrokes against the wrong widget.
+        return !!expectedQuestion && expectedQuestion === focusedQuestion;
+    }
+
+    private claudeTuiQuestionTextAppears(
+        expected: InteractivePrompt['questions'][number],
+        screenText: string,
+    ): boolean {
+        const expectedQuestion = this.normalizeClaudeTuiIdentity(expected.question);
+        return !!expectedQuestion
+            && this.normalizeClaudeTuiIdentity(screenText).includes(expectedQuestion);
+    }
+
+    private readClaudeTuiSnapshotForAnswer(): string {
+        try {
+            return this.driver.snapshot();
+        } catch (error: any) {
+            throw new Error(`Cannot verify the focused Claude TUI question before answering: ${error?.message || error}`);
+        }
+    }
+
+    private assertFocusedClaudeTuiQuestion(expected: InteractivePrompt['questions'][number]): void {
+        const screenText = this.readClaudeTuiSnapshotForAnswer();
+        const focused = readFocusedClaudeTuiQuestion(screenText);
+        if (focused && this.claudeTuiQuestionMatches(expected, focused)) return;
+        const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
+        throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"${observed})`);
+    }
+
+    private assertFocusedClaudeTuiReview(prompt: InteractivePrompt): void {
+        const screenText = this.readClaudeTuiSnapshotForAnswer();
+        const focused = readFocusedClaudeTuiQuestion(screenText);
+        if (focused || !isClaudeTuiReviewScreen(screenText)) {
+            const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
+            throw new Error(`Claude TUI review page is not focused for the active interactive prompt${observed}`);
+        }
+
+        // Review pages retain the per-question nav headers. When the captured
+        // prompt has headers, require the focused review nav to carry them so
+        // a second AskUserQuestion review page cannot borrow the final Enter.
+        const expectedHeaders = prompt.questions
+            .map(q => q.header && this.normalizeClaudeTuiIdentity(q.header))
+            .filter((header): header is string => !!header);
+        if (expectedHeaders.length === 0) return;
+        const reviewHeaders = this.readClaudeTuiHeaders(screenText)
+            .map(header => this.normalizeClaudeTuiIdentity(header));
+        if (expectedHeaders.every(header => reviewHeaders.includes(header))) return;
+        throw new Error('Claude TUI review page does not match the active interactive prompt headers');
+    }
+
     private readClaudeTuiHeaders(screenText: string): string[] {
-        const navLine = screenText.split(/\r?\n/).find(line => line.includes('✔ Submit') && /[☐☒]/.test(line));
+        const lines = screenText.split(/\r?\n/);
+        let navLine: string | undefined;
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+            if (lines[index].includes('✔ Submit') && /[☐☒]/.test(lines[index])) {
+                navLine = lines[index];
+                break;
+            }
+        }
         if (!navLine) return [];
         const headers: string[] = [];
         for (const match of navLine.matchAll(/[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g)) {

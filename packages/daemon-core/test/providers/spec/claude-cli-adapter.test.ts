@@ -27,6 +27,59 @@ const SINGLE_QUESTION_SCREEN = [
   'Enter to select · ↑/↓ to navigate · Esc to cancel',
 ].join('\n');
 
+const OTHER_CHECKBOX_PICKER_SCREEN = [
+  '────────────────────────────────────────────────────────────────',
+  ' ☐ Model ',
+  '',
+  'Which model should Claude use?',
+  '',
+  '❯ [ ] 1. Opus',
+  '  [ ] 2. Sonnet',
+  '  [ ] 3. Haiku',
+  '────────────────────────────────────────────────────────────────',
+  '',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+
+// During a picker transition claude can leave the AskUserQuestion frame in the
+// scrollback while a second picker owns focus at the bottom of the terminal.
+// The shared footer is intentionally present twice: footer presence alone
+// cannot identify which picker will receive an injected key.
+const STACKED_PICKERS_SCREEN = [
+  SINGLE_QUESTION_SCREEN,
+  '',
+  OTHER_CHECKBOX_PICKER_SCREEN,
+].join('\n');
+
+function renderPromptQuestionScreen(prompt: any, questionIndex = 0): string {
+  const question = prompt.questions[questionIndex];
+  const nav = `←  ${prompt.questions.map((q: any) => `☐ ${q.header || q.questionId}`).join('  ')}  ✔ Submit  →`;
+  return [
+    nav,
+    '',
+    question.question,
+    '',
+    ...question.options.map((option: any, index: number) => (
+      `${index === 0 ? '❯' : ' '} ${index + 1}. ${question.multiSelect ? '[ ] ' : ''}${option.label}`
+    )),
+    '────────────────────────────────────────────────────────────────',
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ].join('\n');
+}
+
+function renderPromptReviewScreen(prompt: any): string {
+  return [
+    `←  ${prompt.questions.map((q: any) => `☒ ${q.header || q.questionId}`).join('  ')}  ✔ Submit  →`,
+    '',
+    'Ready to submit your answers?',
+    '',
+    '❯ Submit answers',
+    '  Cancel',
+    '',
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ].join('\n');
+}
+
 function makeAdapter(screenText: string): any {
   const adapter = Object.create(SpecCliAdapter.prototype);
   Object.assign(adapter, {
@@ -237,6 +290,31 @@ describe('SpecCliAdapter — interactive prompt resolved in terminal', () => {
     }
   });
 
+  it('clears the held question when only a different picker keeps the shared footer alive', () => {
+    vi.useFakeTimers();
+    try {
+      let screen = SINGLE_QUESTION_SCREEN;
+      const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+      adapter.driver = { snapshot: () => screen };
+
+      adapter.maybeCaptureClaudeTuiPrompt();
+      expect(adapter.activeInteractivePrompt?.questions[0]?.question).toBe('무엇을 내시겠어요?');
+
+      // The AskUserQuestion picker is gone, but another claude picker replaces
+      // it and renders the same footer. Footer-only presence tracking wedges
+      // the held question forever instead of starting the lost grace window.
+      screen = OTHER_CHECKBOX_PICKER_SCREEN;
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+      vi.advanceTimersByTime(1600);
+      adapter.maybeClearResolvedClaudeTuiPrompt();
+
+      expect(adapter.activeInteractivePrompt).toBeNull();
+      expect(adapter.interactivePromptTransport).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('re-arms the grace timer if the picker reappears after a transient repaint gap', () => {
     vi.useFakeTimers();
     try {
@@ -353,6 +431,22 @@ describe('SpecCliAdapter — TUI multiSelect re-evaluated on later frames', () =
     expect(adapter.statusCallback).not.toHaveBeenCalled();
   });
 
+  it('does not promote a held single-select from a different focused checkbox picker', () => {
+    let screen = SINGLE_QUESTION_SCREEN;
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.driver = { snapshot: () => screen };
+
+    adapter.maybeCaptureClaudeTuiPrompt();
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(false);
+    adapter.statusCallback.mockClear();
+
+    screen = STACKED_PICKERS_SCREEN;
+    adapter.maybeUpgradeClaudeTuiMultiSelect();
+
+    expect(adapter.activeInteractivePrompt.questions[0].multiSelect).toBe(false);
+    expect(adapter.statusCallback).not.toHaveBeenCalled();
+  });
+
   it('is a no-op once multiSelect is already true (one-way promotion, no demote)', () => {
     let screen = FRAME_WITH_GLYPH;
     const adapter = makeAdapter(FRAME_WITH_GLYPH);
@@ -384,11 +478,23 @@ describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
   // checked-box submit never reached the PTY — the selection was silently dropped.
   function makeSubmitAdapter(prompt: any): { adapter: any; writes: string[] } {
     const writes: string[] = [];
-    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    let questionIndex = 0;
+    let screen = renderPromptQuestionScreen(prompt, questionIndex);
+    const adapter = makeAdapter(screen);
     adapter.driver = {
-      snapshot: () => SINGLE_QUESTION_SCREEN,
+      snapshot: () => screen,
       dispatch: (event: any) => {
-        if (event?.kind === 'pty_write') writes.push(event.data);
+        if (event?.kind !== 'pty_write') return;
+        writes.push(event.data);
+        const question = prompt.questions[questionIndex];
+        if (!question) return; // final Enter on the review page
+        const advancesQuestion = event.data === '\t'
+          || (!question.multiSelect && /^\d$/.test(event.data));
+        if (!advancesQuestion) return;
+        questionIndex += 1;
+        screen = questionIndex < prompt.questions.length
+          ? renderPromptQuestionScreen(prompt, questionIndex)
+          : renderPromptReviewScreen(prompt);
       },
     };
     adapter.activeInteractivePrompt = prompt;
@@ -449,6 +555,62 @@ describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
     // Python(idx1) → '2', then final Enter to submit. No Space toggles.
     expect(writes).toEqual(['2', '\r']);
     expect(writes).not.toContain(' ');
+  });
+
+  it('fails closed before writing when another stacked picker owns focus', async () => {
+    let screen = SINGLE_QUESTION_SCREEN;
+    const writes: string[] = [];
+    const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
+    adapter.driver = {
+      snapshot: () => screen,
+      dispatch: (event: any) => {
+        if (event?.kind === 'pty_write') writes.push(event.data);
+      },
+    };
+
+    adapter.maybeCaptureClaudeTuiPrompt();
+    const prompt = adapter.activeInteractivePrompt;
+    expect(prompt?.questions[0]?.question).toBe('무엇을 내시겠어요?');
+
+    // The original question remains visible above, but the lower picker is the
+    // focused widget that will consume input. promptId still matches the held
+    // slot, so only a live focused-question check can prevent the stale write.
+    screen = STACKED_PICKERS_SCREEN;
+    await expect(adapter.setInteractivePromptResponse({
+      promptId: prompt.promptId,
+      answers: { q1: { selectedLabels: ['✌️  가위'] } },
+    })).rejects.toThrow(/focused.*question|question.*focused/i);
+
+    expect(writes).toEqual([]);
+    expect(adapter.activeInteractivePrompt).toBe(prompt);
+  });
+
+  it('rechecks focus before every key and stops when a second picker appears mid-submit', async () => {
+    let screen = renderPromptQuestionScreen(MULTI_PROMPT);
+    const writes: string[] = [];
+    const adapter = makeAdapter(screen);
+    adapter.driver = {
+      snapshot: () => screen,
+      dispatch: (event: any) => {
+        if (event?.kind !== 'pty_write') return;
+        writes.push(event.data);
+        if (writes.length === 1) {
+          screen = [renderPromptQuestionScreen(MULTI_PROMPT), OTHER_CHECKBOX_PICKER_SCREEN].join('\n');
+        }
+      },
+    };
+    adapter.activeInteractivePrompt = MULTI_PROMPT;
+    adapter.interactivePromptTransport = 'tui';
+
+    await expect(adapter.setInteractivePromptResponse({
+      promptId: MULTI_PROMPT.promptId,
+      answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
+    })).rejects.toThrow(/focused.*question|question.*focused/i);
+
+    // First toggle landed while the held question owned focus; the next toggle
+    // was withheld as soon as the new lower picker became focused.
+    expect(writes).toEqual(['1']);
+    expect(adapter.activeInteractivePrompt).toBe(MULTI_PROMPT);
   });
 });
 
