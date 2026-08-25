@@ -36,7 +36,8 @@ import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../m
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
-import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision } from '../repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision, mergeAndNormalizePolicy } from '../repo-mesh-types.js';
+import { readMeshConfigFromDisk, statMeshConfigFile } from '../config/mesh-config.js';
 import { resolve as pathResolve } from 'path';
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
@@ -342,6 +343,15 @@ export class DaemonCommandRouter {
     /** Coordinator-owned whole-mesh aggregate status snapshots. Browser callers read this by default.
      *  Public (not private) so the extracted ./router-aggregate-status.ts orchestration can reach it via `self`. */
     aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any; queueRevision: string }>();
+    /**
+     * meshes.json policy resync state (see syncInlineMeshPoliciesFromDisk).
+     * checkedAtMs throttles the stat; mtimeMs/size are the last-seen file
+     * identity. -1 = no baseline recorded yet: the first check RECORDS the
+     * baseline without applying, so a stale local file mirror can never
+     * regress a fresher inline (cloud-coordinator) policy — only edits made
+     * while this daemon is alive and watching are pulled into memory.
+     */
+    private meshPolicyDiskSync = { checkedAtMs: 0, mtimeMs: -1, size: -1 };
     /** Shared per-peer git_status probe dedup + recently-probed reuse gate.
      *  Spans separate mesh_status/get_mesh calls so the dashboard auto-retry
      *  loop cannot storm a slow peer with back-to-back refreshUpstream probes. */
@@ -395,7 +405,69 @@ export class DaemonCommandRouter {
         return rememberAggregateMeshStatus(this, meshId, snapshot, refreshReason);
     }
 
+    /**
+     * meshes.json → inline-cache policy resync (mtime-triggered lazy reload).
+     *
+     * Out-of-band edits to meshes.json (an operator hand-editing a policy flag)
+     * never reached the inline mesh cache: command-path updates (update_mesh)
+     * rewrite BOTH disk and cache, but a direct file edit changed nothing in
+     * memory, so mesh_status / refine gating kept serving the boot-time policy
+     * until a daemon restart (live evidence 2026-08-25: requireApprovalForPush
+     * flipped to false on disk 92 min after daemon boot; the daemon kept
+     * reporting and enforcing true).
+     *
+     * Fix: on inline-cache reads, stat meshes.json (throttled — routing and
+     * status polling are hot paths); when the file changed, re-apply ONLY each
+     * cached mesh's `policy` block from disk. Policy-only, never nodes/meshHost:
+     * the inline cache is the coordinator's live node truth, and the daemon's
+     * own mutators read-modify-write through disk, so they already carry the
+     * edit forward — overwriting the whole cached mesh here would clobber
+     * in-flight node truth for zero benefit. A changed policy also busts the
+     * aggregate status snapshot, whose scheduling projection is derived from it.
+     *
+     * Safety rules:
+     *   - unparseable file (torn mid-edit write) → keep the in-memory policy,
+     *     log only. Never fall back to defaults: that would silently LOOSEN
+     *     security flags (requireApprovalForPush / requireApprovalForDestructiveGit).
+     *   - mesh absent from disk (deleted, or inline-only cloud mesh) → keep the
+     *     cache entry untouched.
+     */
+    private syncInlineMeshPoliciesFromDisk(): void {
+        if (this.inlineMeshCache.size === 0) return;
+        const now = Date.now();
+        const sync = this.meshPolicyDiskSync;
+        if (now - sync.checkedAtMs < DaemonCommandRouter.MESH_POLICY_DISK_SYNC_THROTTLE_MS) return;
+        sync.checkedAtMs = now;
+        const stat = statMeshConfigFile();
+        if (!stat) return; // File absent/unreadable: nothing to sync; retry next window.
+        if (stat.mtimeMs === sync.mtimeMs && stat.size === sync.size) return;
+        const hadBaseline = sync.mtimeMs >= 0;
+        sync.mtimeMs = stat.mtimeMs;
+        sync.size = stat.size;
+        if (!hadBaseline) return; // First sight records the baseline only (see field comment).
+        const disk = readMeshConfigFromDisk();
+        if (!disk) {
+            console.warn('[mesh-config] meshes.json changed but is unparseable (mid-edit?) — keeping in-memory mesh policies');
+            return;
+        }
+        const diskPolicyByMeshId = new Map<string, any>();
+        for (const mesh of disk.meshes) {
+            if (mesh?.id && mesh.policy && typeof mesh.policy === 'object') diskPolicyByMeshId.set(mesh.id, mesh.policy);
+        }
+        for (const [meshId, cached] of this.inlineMeshCache) {
+            const diskPolicy = diskPolicyByMeshId.get(meshId);
+            if (!diskPolicy) continue;
+            const nextPolicy = mergeAndNormalizePolicy(undefined, diskPolicy);
+            if (JSON.stringify(cached?.policy ?? null) === JSON.stringify(nextPolicy)) continue;
+            cached.policy = nextPolicy;
+            this.invalidateAggregateMeshStatus(meshId);
+        }
+    }
+
+    private static readonly MESH_POLICY_DISK_SYNC_THROTTLE_MS = 250;
+
     public getCachedInlineMeshNodes(): any[] {
+        this.syncInlineMeshPoliciesFromDisk();
         const nodes: any[] = [];
         for (const mesh of this.inlineMeshCache.values()) {
             if (Array.isArray(mesh?.nodes)) {
@@ -416,6 +488,7 @@ export class DaemonCommandRouter {
      * the mesh policy is absent, matching the worker-launch stamp.
      */
     public getCachedInlineMeshNodesWithVisibility(): Array<{ node: any; spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility }> {
+        this.syncInlineMeshPoliciesFromDisk();
         const out: Array<{ node: any; spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility }> = [];
         for (const mesh of this.inlineMeshCache.values()) {
             const spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility =
@@ -440,6 +513,7 @@ export class DaemonCommandRouter {
     }
 
     public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
+        this.syncInlineMeshPoliciesFromDisk();
         if (inlineMesh && typeof inlineMesh === 'object') {
             return this.warmInlineMeshCache(meshId, inlineMesh);
         }

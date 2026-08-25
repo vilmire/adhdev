@@ -118,17 +118,39 @@ function withMeshConfigWriteLock<T>(fn: () => T): T {
     }
 }
 
-/** Raw read of meshes.json: no migration, no persist, never throws. */
-function readMeshConfigFile(): LocalMeshConfig {
+/**
+ * Raw read of meshes.json with failure distinguishable from empty: returns null
+ * when the file is missing or unparseable (e.g. a torn mid-edit write). Callers
+ * that hold an in-memory copy of policy data use this to KEEP that copy on a
+ * failed read instead of falling back to defaults — the safe direction for
+ * security flags (requireApprovalForPush / requireApprovalForDestructiveGit),
+ * which must never silently loosen because an operator's editor wrote half a file.
+ */
+export function readMeshConfigFromDisk(): LocalMeshConfig | null {
     const path = getMeshConfigPath();
-    if (!existsSync(path)) return { meshes: [] };
+    if (!existsSync(path)) return null;
     try {
         const raw = JSON.parse(readFileSync(path, 'utf-8'));
-        if (!raw || !Array.isArray(raw.meshes)) return { meshes: [] };
+        if (!raw || !Array.isArray(raw.meshes)) return null;
         return raw as LocalMeshConfig;
     } catch {
-        return { meshes: [] };
+        return null;
     }
+}
+
+/** Cheap change signal for meshes.json; null when the file is absent/unreadable. */
+export function statMeshConfigFile(): { mtimeMs: number; size: number } | null {
+    try {
+        const stat = statSync(getMeshConfigPath());
+        return { mtimeMs: stat.mtimeMs, size: stat.size };
+    } catch {
+        return null;
+    }
+}
+
+/** Raw read of meshes.json: no migration, no persist, never throws. */
+function readMeshConfigFile(): LocalMeshConfig {
+    return readMeshConfigFromDisk() ?? { meshes: [] };
 }
 
 function loadMeshConfig(options: { persistMigrations?: boolean } = {}): LocalMeshConfig {
