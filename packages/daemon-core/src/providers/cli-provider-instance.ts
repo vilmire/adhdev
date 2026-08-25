@@ -9,6 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { shouldUseBracketedPasteForEnvelope, buildAdapterSendOpts } from './cli-provider-bracketed-paste.js';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
@@ -1386,14 +1387,7 @@ export class CliProviderInstance implements ProviderInstance {
                 // Without it the message is queued and only flushed on the coordinator's
                 // own idle transition — which never happens until it receives the message.
                 const force = data?.force === true;
-                // Image-bearing envelopes: the prompt body holds materialized image
-                // paths. Flag it so the driver can deliver the body through the
-                // provider's declared paste channel (POSIX bracketed paste) instead
-                // of a raw write — a raw write loses every image but the last on
-                // claude-cli (heuristic-paste threshold + pipe chunking; see
-                // fsm-driver's POSIX-IMAGE-PASTE note). Providers without the spec
-                // opt-in keep the legacy raw write.
-                const bracketedPaste = input.parts.some((part) => part.type === 'image');
+                const bracketedPaste = shouldUseBracketedPasteForEnvelope(input);
                 // Modal guard: a force-inject still writes raw keystrokes into the PTY,
                 // bypassing the busy send-guard. If the coordinator is parked on a
                 // harness modal (claude-cli AskUserQuestion → waiting_choice, or a
@@ -1408,12 +1402,7 @@ export class CliProviderInstance implements ProviderInstance {
                     LOG.info('CLI', `[${this.type}] force send_message held — coordinator parked on modal (${this.resolveModalParkStatus()})`);
                     return;
                 }
-                // Note: the flag key is only present on image-bearing sends so the
-                // text-only call shape stays byte-identical to before.
-                const sendOpts = {
-                    ...(force ? { force: true } : {}),
-                    ...(bracketedPaste ? { bracketedPaste: true } : {}),
-                };
+                const sendOpts = buildAdapterSendOpts(force, bracketedPaste);
                 void this.adapter.sendMessage(promptText, sendOpts).catch((e: any) => {
                     LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
                 });
