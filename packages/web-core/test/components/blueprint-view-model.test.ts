@@ -11,11 +11,38 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+    BLUEPRINT_GRAPH_MAX_LIMIT,
+    buildBlueprintGraphOverviewArgs,
     buildGateByNodeId,
     buildNodeIdByEndpoint,
     buildStateByNodeId,
     deriveBlueprintEdgeState,
+    getBlueprintGraphPagination,
+    nextBlueprintGraphLimit,
 } from '../../src/components/MeshGraph/blueprintViewModel'
+
+describe('blueprint graph pagination', () => {
+    it('limits only the include-finished request so the in-flight-only behavior stays unchanged', () => {
+        expect(buildBlueprintGraphOverviewArgs('mesh-1', true, 20)).toEqual({
+            meshId: 'mesh-1', includeTerminal: true, limit: 20,
+        })
+        expect(buildBlueprintGraphOverviewArgs('mesh-1', false, 20)).toEqual({
+            meshId: 'mesh-1', includeTerminal: false,
+        })
+    })
+
+    it('offers another page when the response fills the requested window', () => {
+        expect(getBlueprintGraphPagination(20, 20)).toEqual({ canLoadMore: true, atServerLimit: false })
+        expect(getBlueprintGraphPagination(22, 40)).toEqual({ canLoadMore: false, atServerLimit: false })
+    })
+
+    it('increments in 20-graph pages without exceeding the daemon cap', () => {
+        expect(nextBlueprintGraphLimit(20)).toBe(40)
+        expect(nextBlueprintGraphLimit(80)).toBe(BLUEPRINT_GRAPH_MAX_LIMIT)
+        expect(nextBlueprintGraphLimit(BLUEPRINT_GRAPH_MAX_LIMIT)).toBe(BLUEPRINT_GRAPH_MAX_LIMIT)
+        expect(getBlueprintGraphPagination(100, 100)).toEqual({ canLoadMore: false, atServerLimit: true })
+    })
+})
 
 const gate = (nodeId: string, state: string) => ({
     gateId: `g-${nodeId}`, nodeId, state, action: 'approval',

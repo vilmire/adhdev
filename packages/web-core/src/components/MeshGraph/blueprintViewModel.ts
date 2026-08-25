@@ -6,6 +6,30 @@
  */
 import type { MeshGraphView, MeshGraphEdgeView, MeshGraphGateView } from '@adhdev/daemon-core'
 
+/** The daemon defaults to 20 and clamps mesh_graph_overview requests at 100. */
+export const BLUEPRINT_GRAPH_INITIAL_LIMIT = 20
+export const BLUEPRINT_GRAPH_LOAD_MORE_STEP = 20
+export const BLUEPRINT_GRAPH_MAX_LIMIT = 100
+
+export function buildBlueprintGraphOverviewArgs(meshId: string, includeTerminal: boolean, limit: number): Record<string, unknown> {
+    return includeTerminal ? { meshId, includeTerminal, limit } : { meshId, includeTerminal }
+}
+
+export function nextBlueprintGraphLimit(limit: number): number {
+    return Math.min(BLUEPRINT_GRAPH_MAX_LIMIT, limit + BLUEPRINT_GRAPH_LOAD_MORE_STEP)
+}
+
+export function getBlueprintGraphPagination(graphCount: number, requestedLimit: number): {
+    canLoadMore: boolean
+    atServerLimit: boolean
+} {
+    const mayBeTruncated = graphCount === requestedLimit
+    return {
+        canLoadMore: mayBeTruncated && requestedLimit < BLUEPRINT_GRAPH_MAX_LIMIT,
+        atServerLimit: mayBeTruncated && requestedLimit >= BLUEPRINT_GRAPH_MAX_LIMIT,
+    }
+}
+
 /** Source states that mean "this dependency is satisfied — the edge is green". */
 const TERMINAL_OK_STATES = new Set(['completed', 'released'])
 /** All terminal states (success or not) — a terminal target no longer waits. */

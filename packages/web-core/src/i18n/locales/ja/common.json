@@ -1357,7 +1357,12 @@
         "graphs": {
             "includeTerminal": "終了済みを含む",
             "refresh": "更新",
-            "loading": "グラフを読み込み中…"
+            "loading": "グラフを読み込み中…",
+            "shown_one": "グラフ{{count}}件を表示中",
+            "shown_other": "グラフ{{count}}件を表示中",
+            "loadMore": "さらに読み込む",
+            "maxShown": "最大100件",
+            "serverLimitReached": "デーモンが返すグラフは最大100件のため、さらに古いグラフが存在する可能性があります。"
         }
     },
     "chat": {

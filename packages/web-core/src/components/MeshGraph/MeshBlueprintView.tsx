@@ -29,6 +29,12 @@ import { collectMachineQuotaGroups, machineKeyForMeshNode, resolveMachineLabel }
 import { MeshMachineQuotaCard } from './MeshObservabilitySurface/MeshStatusTab'
 import MeshTaskDagView from './MeshTaskDagView'
 import { MeshOverviewDetailModal } from './MeshOverviewCards'
+import {
+    BLUEPRINT_GRAPH_INITIAL_LIMIT,
+    buildBlueprintGraphOverviewArgs,
+    getBlueprintGraphPagination,
+    nextBlueprintGraphLimit,
+} from './blueprintViewModel'
 
 interface RoutePreviewSlotScore {
     providerType: string
@@ -88,6 +94,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     // record the blueprint tells — their settled gates/steps render muted, so
     // showing them costs little and hiding them made the canvas read empty.
     const [includeTerminal, setIncludeTerminal] = useState(true)
+    const [graphLimit, setGraphLimit] = useState(BLUEPRINT_GRAPH_INITIAL_LIMIT)
     /** Shared overview detail modal — task cards and ⛩ gate nodes both open
      *  here (owner call 2026-08-25: gates present like tasks, not as a footer
      *  panel). */
@@ -166,7 +173,11 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         setGraphsLoading(true)
         setGraphsError('')
         try {
-            const raw = await sendDaemonCommand!(daemonId!, 'mesh_graph_overview', { meshId, includeTerminal })
+            const raw = await sendDaemonCommand!(
+                daemonId!,
+                'mesh_graph_overview',
+                buildBlueprintGraphOverviewArgs(meshId, includeTerminal, graphLimit),
+            )
             const body = unwrapDaemonCommandBody<{ success?: boolean; error?: string; graphs?: MeshGraphView[] }>(raw)
             if (!body || body.success === false) throw new Error(body?.error || 'graph overview failed')
             setGraphs(Array.isArray(body.graphs) ? body.graphs : [])
@@ -175,7 +186,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         } finally {
             setGraphsLoading(false)
         }
-    }, [canCommand, daemonId, includeTerminal, meshId, sendDaemonCommand])
+    }, [canCommand, daemonId, graphLimit, includeTerminal, meshId, sendDaemonCommand])
 
     useEffect(() => { void refreshGraphs() }, [refreshGraphs])
     // Drop a gate detail whose graph left the list (e.g. terminal filter flip).
@@ -240,6 +251,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     // floor keeps it generous even when sibling rows would squeeze it, capped
     // by viewport height so the dialog itself never scrolls.
     const bodyMinHeightClass = 'min-h-[min(760px,66dvh)]'
+    const graphPagination = getBlueprintGraphPagination(graphs.length, graphLimit)
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-1.5">
@@ -252,8 +264,33 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     <div ref={setStatsHost} className="flex min-w-0 items-center gap-1.5" />
                 </div>
+                {includeTerminal && !graphsLoading && (
+                    <div className="flex shrink-0 items-center gap-1.5 text-3xs text-text-muted">
+                        <span>{t('repoMesh.graphs.shown', { count: graphs.length })}</span>
+                        {graphPagination.canLoadMore && (
+                            <button
+                                type="button"
+                                onClick={() => setGraphLimit(nextBlueprintGraphLimit)}
+                                className={`rounded-full border px-2 py-0.5 font-medium transition-colors ${meshTheme.isDark
+                                    ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
+                                    : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
+                            >
+                                {t('repoMesh.graphs.loadMore')}
+                            </button>
+                        )}
+                        {graphPagination.atServerLimit && (
+                            <span title={t('repoMesh.graphs.serverLimitReached')}>
+                                · {t('repoMesh.graphs.maxShown')}
+                            </span>
+                        )}
+                    </div>
+                )}
                 <label className="hidden sm:flex shrink-0 items-center gap-1.5 text-2xs text-text-muted cursor-pointer">
-                    <input type="checkbox" checked={includeTerminal} onChange={e => setIncludeTerminal(e.target.checked)} />
+                    <input type="checkbox" checked={includeTerminal} onChange={e => {
+                        const checked = e.target.checked
+                        setIncludeTerminal(checked)
+                        if (checked) setGraphLimit(BLUEPRINT_GRAPH_INITIAL_LIMIT)
+                    }} />
                     {t('repoMesh.graphs.includeTerminal')}
                 </label>
                 <button type="button" className="btn btn-sm btn-secondary flex shrink-0 items-center" disabled={graphsLoading || !canCommand} onClick={() => void refreshGraphs()} title={t('repoMesh.graphs.refresh')} aria-label={t('repoMesh.graphs.refresh')}>

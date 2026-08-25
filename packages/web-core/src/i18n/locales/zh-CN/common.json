@@ -1357,7 +1357,12 @@
         "graphs": {
             "includeTerminal": "包含已结束",
             "refresh": "刷新",
-            "loading": "正在加载图…"
+            "loading": "正在加载图…",
+            "shown_one": "正在显示 {{count}} 个图",
+            "shown_other": "正在显示 {{count}} 个图",
+            "loadMore": "加载更多",
+            "maxShown": "最多 100 个",
+            "serverLimitReached": "守护进程最多返回 100 个图，可能还存在更早的图。"
         }
     },
     "chat": {

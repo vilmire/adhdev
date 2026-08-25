@@ -1362,7 +1362,12 @@
         "graphs": {
             "includeTerminal": "Incluir terminados",
             "refresh": "Actualizar",
-            "loading": "Cargando grafos…"
+            "loading": "Cargando grafos…",
+            "shown_one": "{{count}} grafo mostrado",
+            "shown_other": "{{count}} grafos mostrados",
+            "loadMore": "Cargar más",
+            "maxShown": "máximo 100",
+            "serverLimitReached": "El daemon devuelve como máximo 100 grafos; puede haber grafos más antiguos."
         }
     },
     "chat": {
