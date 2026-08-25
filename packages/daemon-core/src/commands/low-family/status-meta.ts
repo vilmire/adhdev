@@ -181,7 +181,13 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
                 const workerNodeId = typeof settings.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
                 const workerTaskId = typeof settings.meshActiveTaskId === 'string' ? settings.meshActiveTaskId.trim() : '';
                 if (workerMeshId || workerNodeId || workerTaskId) {
+                    // LOCAL registry first: listCoordinatorsForMesh knows the
+                    // coordinator's cliType and lets us compute liveness — richer
+                    // than the stamp, so it keeps priority (same-machine case is
+                    // unchanged). The stamp fallback below only fires on a miss.
                     const coordinatorEntry = workerMeshId ? listCoordinatorsForMesh(workerMeshId)[0] : undefined;
+                    const stampCoordinatorSessionId = typeof settings.meshCoordinatorSessionId === 'string' ? settings.meshCoordinatorSessionId.trim() : '';
+                    const stampCoordinatorDaemonId = typeof settings.meshCoordinatorDaemonId === 'string' ? settings.meshCoordinatorDaemonId.trim() : '';
                     meshWorker = {
                         ...(workerMeshId ? { meshId: workerMeshId } : {}),
                         ...(workerNodeId ? { nodeId: workerNodeId } : {}),
@@ -193,6 +199,18 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
                             // exists — the jump button should not point at a
                             // chat that no longer has a session behind it.
                             coordinatorAlive: Boolean(ctx.deps.sessionRegistry.get(coordinatorEntry.sessionId)),
+                        } : stampCoordinatorSessionId ? {
+                            // REMOTE-worker fallback: the coordinator registry is
+                            // machine-local, so a worker on a remote node misses it
+                            // even though the dispatch stamped the coordinator's
+                            // session id onto this worker's settings (carried over
+                            // P2P — buildMeshWorkerRelayStamp). Liveness of a
+                            // remote session is unknowable from here, so
+                            // coordinatorAlive stays undefined and the dialog
+                            // renders the jump button optimistically (a miss is
+                            // answered by the existing chatNotFound toast).
+                            coordinatorSessionId: stampCoordinatorSessionId,
+                            ...(stampCoordinatorDaemonId ? { coordinatorDaemonId: stampCoordinatorDaemonId } : {}),
                         } : {}),
                     };
                 }

@@ -81,7 +81,16 @@ interface SessionInfoMeshWorker {
     taskId?: string
     coordinatorSessionId?: string
     coordinatorCliType?: string
+    /**
+     * Three states: true = coordinator session confirmed live (local registry
+     * hit), false = confirmed dead (renders "gone", no jump), undefined =
+     * unknown — the coordinator lives on a remote node whose liveness this
+     * daemon cannot see (stamp fallback). Unknown renders the jump button
+     * optimistically; a miss is answered by the chatNotFound toast.
+     */
     coordinatorAlive?: boolean
+    /** Daemon hosting the coordinator, when the stamp carried it. */
+    coordinatorDaemonId?: string
 }
 
 interface SessionInfoResponse {
@@ -305,7 +314,14 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                         <span className="inline-flex flex-wrap items-center gap-2">
                                             <Mono>{data.meshWorker.coordinatorSessionId.slice(0, 8)}</Mono>
                                             {data.meshWorker.coordinatorCliType && <span className="text-text-secondary">{data.meshWorker.coordinatorCliType}</span>}
-                                            {data.meshWorker.coordinatorAlive ? (
+                                            {data.meshWorker.coordinatorAlive === false ? (
+                                                <span className="text-text-secondary">{t('sessionNav.coordinatorGone')}</span>
+                                            ) : (
+                                                // true (local, confirmed live) or
+                                                // undefined (remote stamp — liveness
+                                                // unknowable): render the jump
+                                                // optimistically. A miss lands on the
+                                                // existing chatNotFound toast.
                                                 <button
                                                     type="button"
                                                     className="rounded border border-border-default px-2 py-0.5 text-xs hover:bg-surface-secondary"
@@ -316,8 +332,6 @@ export default function SessionInfoDialog({ sessionId, daemonId, conv, onClose }
                                                 >
                                                     {t('sessionNav.openCoordinatorChat')}
                                                 </button>
-                                            ) : (
-                                                <span className="text-text-secondary">{t('sessionNav.coordinatorGone')}</span>
                                             )}
                                         </span>
                                     }

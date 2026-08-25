@@ -235,4 +235,51 @@ describe('get_session_info — coordinator-spawn linkage (meshWorker)', () => {
         expect(res.success).toBe(true)
         expect(res.meshWorker).toBeNull()
     })
+
+    it('falls back to the dispatch stamp when the local registry misses (remote worker)', async () => {
+        // Remote node: listCoordinatorsForMesh is machine-local and misses, but
+        // the dispatch stamped meshCoordinatorSessionId/DaemonId onto the worker.
+        const res = await statusMetaHandlers.get_session_info(
+            { deps: workerDeps({ meshNodeFor: 'mesh_remote', meshCoordinatorSessionId: 'remote-coord-1', meshCoordinatorDaemonId: 'daemon-jupiter' }) },
+            { targetSessionId: 'worker-1' },
+        ) as any
+        expect(res.success).toBe(true)
+        expect(res.meshWorker.meshId).toBe('mesh_remote')
+        expect(res.meshWorker.coordinatorSessionId).toBe('remote-coord-1')
+        expect(res.meshWorker.coordinatorDaemonId).toBe('daemon-jupiter')
+        // Remote liveness is unknowable — undefined (optimistic jump), not false.
+        expect(res.meshWorker.coordinatorAlive).toBeUndefined()
+        expect(res.meshWorker.coordinatorCliType).toBeUndefined()
+    })
+
+    it('keeps the local registry authoritative over the stamp (same machine, no regression)', async () => {
+        const { registerMeshCoordinator, unregisterMeshCoordinator } = await import('../../src/mesh/coordinator-registry.js')
+        registerMeshCoordinator({ meshId: 'mesh_z', sessionId: 'coord-1', startedAt: 111, cliType: 'claude-cli' })
+        try {
+            const res = await statusMetaHandlers.get_session_info(
+                { deps: workerDeps({ meshNodeFor: 'mesh_z', meshCoordinatorSessionId: 'stale-stamp-session', meshCoordinatorDaemonId: 'daemon-x' }) },
+                { targetSessionId: 'worker-1' },
+            ) as any
+            // Registry hit wins: cliType + computed liveness, stamp ignored.
+            expect(res.meshWorker).toMatchObject({
+                coordinatorSessionId: 'coord-1',
+                coordinatorCliType: 'claude-cli',
+                coordinatorAlive: true,
+            })
+            expect(res.meshWorker.coordinatorDaemonId).toBeUndefined()
+        } finally {
+            unregisterMeshCoordinator('coord-1')
+        }
+    })
+
+    it('omits the coordinator row when neither registry nor stamp knows one (stdio MCP dispatch)', async () => {
+        // A task pushed by a stdio-MCP coordinator carries no
+        // sourceCoordinatorSessionId, so there is no chat to jump to — hiding
+        // the row is the honest rendering.
+        const res = await statusMetaHandlers.get_session_info(
+            { deps: workerDeps({ meshNodeFor: 'mesh_orphan', meshNodeId: 'node_2' }) },
+            { targetSessionId: 'worker-1' },
+        ) as any
+        expect(res.meshWorker).toEqual({ meshId: 'mesh_orphan', nodeId: 'node_2' })
+    })
 })
