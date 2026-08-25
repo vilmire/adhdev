@@ -90,6 +90,22 @@ export class MeshGraphStore {
         return rows.map(mapGraphRow);
     }
 
+    /** Exact size of the same mesh/status window exposed by listGraphsByMesh. */
+    countGraphsByMesh(meshId: string, opts?: { statuses?: readonly MeshGraphStatus[] }): number {
+        const statuses = opts?.statuses;
+        if (statuses && statuses.length > 0) {
+            const placeholders = statuses.map(() => '?').join(',');
+            const row = this.db.prepare(
+                `SELECT COUNT(*) AS count FROM mesh_task_graphs WHERE mesh_id = ? AND status IN (${placeholders})`
+            ).get(meshId, ...statuses) as { count: number };
+            return row.count;
+        }
+        const row = this.db.prepare(
+            `SELECT COUNT(*) AS count FROM mesh_task_graphs WHERE mesh_id = ?`
+        ).get(meshId) as { count: number };
+        return row.count;
+    }
+
     /**
      * Phase-E: replace the graph's normalized policy document. Used at plan-commit
      * time to attach the enqueue-decision provenance record next to the persisted

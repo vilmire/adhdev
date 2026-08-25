@@ -1360,9 +1360,11 @@
             "loading": "Loading graphs…",
             "shown_one": "{{count}} graph shown",
             "shown_other": "{{count}} graphs shown",
-            "loadMore": "Load more",
-            "maxShown": "maximum 100",
-            "serverLimitReached": "The daemon returns at most 100 graphs; older graphs may exist."
+            "loadMore_one": "Load {{count}} more",
+            "loadMore_other": "Load {{count}} more",
+            "serverLimitHidden_one": "{{count}} older graph hidden · maximum 100",
+            "serverLimitHidden_other": "{{count}} older graphs hidden · maximum 100",
+            "serverLimitReached": "The daemon returns at most 100 graphs."
         }
     },
     "chat": {

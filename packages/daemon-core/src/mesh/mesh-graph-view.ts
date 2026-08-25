@@ -421,6 +421,19 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
     });
 }
 
+/** Exact count for the same selector used by buildMeshGraphViews, before limit. */
+export function countMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOptions = {}): number {
+    const graphStore = MeshRuntimeStore.getInstance().graphStore();
+    if (opts.graphId) {
+        const graph = graphStore.getGraph(opts.graphId);
+        return graph && graph.meshId === meshId ? 1 : 0;
+    }
+    if (opts.batchId) return graphStore.getGraphByBatchId(meshId, opts.batchId) ? 1 : 0;
+    return graphStore.countGraphsByMesh(meshId, {
+        ...(opts.activeOnly === false ? {} : { statuses: IN_FLIGHT_GRAPH_STATUSES }),
+    });
+}
+
 /** Which advanced graph features a node declared — enough to explain a hold, no spec contents. */
 function describeNodeFeatures(baseSpecJson: string): string[] {
     let spec: Record<string, unknown> | undefined;

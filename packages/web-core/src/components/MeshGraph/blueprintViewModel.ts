@@ -19,14 +19,16 @@ export function nextBlueprintGraphLimit(limit: number): number {
     return Math.min(BLUEPRINT_GRAPH_MAX_LIMIT, limit + BLUEPRINT_GRAPH_LOAD_MORE_STEP)
 }
 
-export function getBlueprintGraphPagination(graphCount: number, requestedLimit: number): {
+export function getBlueprintGraphPagination(graphCount: number, totalGraphCount: number, requestedLimit: number): {
+    hiddenCount: number
     canLoadMore: boolean
     atServerLimit: boolean
 } {
-    const mayBeTruncated = graphCount === requestedLimit
+    const hiddenCount = Math.max(0, totalGraphCount - graphCount)
     return {
-        canLoadMore: mayBeTruncated && requestedLimit < BLUEPRINT_GRAPH_MAX_LIMIT,
-        atServerLimit: mayBeTruncated && requestedLimit >= BLUEPRINT_GRAPH_MAX_LIMIT,
+        hiddenCount,
+        canLoadMore: hiddenCount > 0 && requestedLimit < BLUEPRINT_GRAPH_MAX_LIMIT,
+        atServerLimit: hiddenCount > 0 && requestedLimit >= BLUEPRINT_GRAPH_MAX_LIMIT,
     }
 }
 

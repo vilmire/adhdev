@@ -1360,9 +1360,11 @@
             "loading": "그래프 불러오는 중…",
             "shown_one": "그래프 {{count}}개 표시 중",
             "shown_other": "그래프 {{count}}개 표시 중",
-            "loadMore": "더 불러오기",
-            "maxShown": "최대 100개",
-            "serverLimitReached": "데몬은 최대 100개의 그래프를 반환하므로 더 오래된 그래프가 있을 수 있습니다."
+            "loadMore_one": "{{count}}개 더 불러오기",
+            "loadMore_other": "{{count}}개 더 불러오기",
+            "serverLimitHidden_one": "이전 그래프 {{count}}개 미표시 · 최대 100개",
+            "serverLimitHidden_other": "이전 그래프 {{count}}개 미표시 · 최대 100개",
+            "serverLimitReached": "데몬은 최대 100개의 그래프를 반환합니다."
         }
     },
     "chat": {

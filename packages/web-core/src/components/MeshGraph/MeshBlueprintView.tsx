@@ -31,6 +31,7 @@ import MeshTaskDagView from './MeshTaskDagView'
 import { MeshOverviewDetailModal } from './MeshOverviewCards'
 import {
     BLUEPRINT_GRAPH_INITIAL_LIMIT,
+    BLUEPRINT_GRAPH_LOAD_MORE_STEP,
     buildBlueprintGraphOverviewArgs,
     getBlueprintGraphPagination,
     nextBlueprintGraphLimit,
@@ -88,6 +89,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     const meshId = status.meshId
 
     const [graphs, setGraphs] = useState<MeshGraphView[]>([])
+    const [totalGraphCount, setTotalGraphCount] = useState(0)
     const [graphsError, setGraphsError] = useState('')
     const [graphsLoading, setGraphsLoading] = useState(false)
     // Default ON (owner call 2026-08-25): finished graphs are part of the
@@ -178,9 +180,11 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 'mesh_graph_overview',
                 buildBlueprintGraphOverviewArgs(meshId, includeTerminal, graphLimit),
             )
-            const body = unwrapDaemonCommandBody<{ success?: boolean; error?: string; graphs?: MeshGraphView[] }>(raw)
+            const body = unwrapDaemonCommandBody<{ success?: boolean; error?: string; graphs?: MeshGraphView[]; totalGraphCount?: number }>(raw)
             if (!body || body.success === false) throw new Error(body?.error || 'graph overview failed')
-            setGraphs(Array.isArray(body.graphs) ? body.graphs : [])
+            const nextGraphs = Array.isArray(body.graphs) ? body.graphs : []
+            setGraphs(nextGraphs)
+            setTotalGraphCount(typeof body.totalGraphCount === 'number' ? body.totalGraphCount : nextGraphs.length)
         } catch (e: any) {
             setGraphsError(e?.message || String(e))
         } finally {
@@ -251,7 +255,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     // floor keeps it generous even when sibling rows would squeeze it, capped
     // by viewport height so the dialog itself never scrolls.
     const bodyMinHeightClass = 'min-h-[min(760px,66dvh)]'
-    const graphPagination = getBlueprintGraphPagination(graphs.length, graphLimit)
+    const graphPagination = getBlueprintGraphPagination(graphs.length, totalGraphCount, graphLimit)
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-1.5">
@@ -275,12 +279,14 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                     ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                                     : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
                             >
-                                {t('repoMesh.graphs.loadMore')}
+                                {t('repoMesh.graphs.loadMore', {
+                                    count: Math.min(BLUEPRINT_GRAPH_LOAD_MORE_STEP, graphPagination.hiddenCount),
+                                })}
                             </button>
                         )}
                         {graphPagination.atServerLimit && (
                             <span title={t('repoMesh.graphs.serverLimitReached')}>
-                                · {t('repoMesh.graphs.maxShown')}
+                                · {t('repoMesh.graphs.serverLimitHidden', { count: graphPagination.hiddenCount })}
                             </span>
                         )}
                     </div>

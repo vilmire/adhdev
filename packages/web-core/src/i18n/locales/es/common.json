@@ -1365,9 +1365,11 @@
             "loading": "Cargando grafos…",
             "shown_one": "{{count}} grafo mostrado",
             "shown_other": "{{count}} grafos mostrados",
-            "loadMore": "Cargar más",
-            "maxShown": "máximo 100",
-            "serverLimitReached": "El daemon devuelve como máximo 100 grafos; puede haber grafos más antiguos."
+            "loadMore_one": "Cargar {{count}} más",
+            "loadMore_other": "Cargar {{count}} más",
+            "serverLimitHidden_one": "{{count}} grafo anterior oculto · máximo 100",
+            "serverLimitHidden_other": "{{count}} grafos anteriores ocultos · máximo 100",
+            "serverLimitReached": "El daemon devuelve como máximo 100 grafos."
         }
     },
     "chat": {

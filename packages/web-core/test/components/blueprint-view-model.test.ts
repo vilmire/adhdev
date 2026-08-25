@@ -32,15 +32,21 @@ describe('blueprint graph pagination', () => {
     })
 
     it('offers another page when the response fills the requested window', () => {
-        expect(getBlueprintGraphPagination(20, 20)).toEqual({ canLoadMore: true, atServerLimit: false })
-        expect(getBlueprintGraphPagination(22, 40)).toEqual({ canLoadMore: false, atServerLimit: false })
+        expect(getBlueprintGraphPagination(20, 22, 20)).toEqual({
+            hiddenCount: 2, canLoadMore: true, atServerLimit: false,
+        })
+        expect(getBlueprintGraphPagination(22, 22, 40)).toEqual({
+            hiddenCount: 0, canLoadMore: false, atServerLimit: false,
+        })
     })
 
     it('increments in 20-graph pages without exceeding the daemon cap', () => {
         expect(nextBlueprintGraphLimit(20)).toBe(40)
         expect(nextBlueprintGraphLimit(80)).toBe(BLUEPRINT_GRAPH_MAX_LIMIT)
         expect(nextBlueprintGraphLimit(BLUEPRINT_GRAPH_MAX_LIMIT)).toBe(BLUEPRINT_GRAPH_MAX_LIMIT)
-        expect(getBlueprintGraphPagination(100, 100)).toEqual({ canLoadMore: false, atServerLimit: true })
+        expect(getBlueprintGraphPagination(100, 120, 100)).toEqual({
+            hiddenCount: 20, canLoadMore: false, atServerLimit: true,
+        })
     })
 })
 

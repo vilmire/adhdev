@@ -82,8 +82,25 @@ describe('mesh graph dashboard commands', () => {
         const res: any = await meshGraphCommandHandlers.mesh_graph_overview(ctx, { meshId: mesh });
         expect(res.success).toBe(true);
         expect(res.graphCount).toBe(1);
+        expect(res.totalGraphCount).toBe(1);
         expect(res.graphs[0].graphId).toBe(graphId);
         expect(res.graphs[0].gates.map((g: any) => g.gateId)).toContain(gateId);
+    });
+
+    it('reports the exact total when the requested graph window is truncated', async () => {
+        const mesh = meshId('overview-limit');
+        for (let index = 0; index < 22; index += 1) seedGateGraph(mesh);
+
+        const res: any = await meshGraphCommandHandlers.mesh_graph_overview(ctx, {
+            meshId: mesh,
+            includeTerminal: true,
+            limit: 20,
+        });
+
+        expect(res.success).toBe(true);
+        expect(res.graphCount).toBe(20);
+        expect(res.graphs).toHaveLength(20);
+        expect(res.totalGraphCount).toBe(22);
     });
 
     it('claim → release round-trips through the fenced engine', async () => {

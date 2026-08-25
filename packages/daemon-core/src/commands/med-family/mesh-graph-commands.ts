@@ -22,7 +22,7 @@
  * below stay registered for ops/automation callers, not for dashboard UI.
  */
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
-import { buildMeshGraphViews } from '../../mesh/mesh-graph-view.js';
+import { buildMeshGraphViews, countMeshGraphViews } from '../../mesh/mesh-graph-view.js';
 import { claimMeshGraphGate, releaseMeshGraphGate, abandonMeshGraphGate } from '../../mesh/mesh-graph-gates.js';
 import { collectGateConvergenceEvidence } from '../../mesh/mesh-graph-gate-evidence.js';
 import { buildMeshRoutePreview } from '../../mesh/mesh-route-preview.js';
@@ -67,13 +67,15 @@ export const meshGraphCommandHandlers: Record<string, MedFamilyHandler> = {
         if (!meshId) return { success: false, error: 'meshId is required' };
         const includeTerminal = args?.includeTerminal === true;
         try {
-            const graphs = buildMeshGraphViews(meshId, {
+            const viewOptions = {
                 activeOnly: !includeTerminal,
                 ...(typeof args?.limit === 'number' && args.limit > 0 ? { limit: Math.min(100, args.limit) } : {}),
-            });
+            };
+            const graphs = buildMeshGraphViews(meshId, viewOptions);
+            const totalGraphCount = countMeshGraphViews(meshId, viewOptions);
             const pendingCoordinatorActions = graphs.flatMap(g =>
                 (g.nextCoordinatorAction ?? []).map(a => ({ graphId: g.graphId, ...a })));
-            return { success: true, meshId, graphCount: graphs.length, graphs, pendingCoordinatorActions };
+            return { success: true, meshId, graphCount: graphs.length, totalGraphCount, graphs, pendingCoordinatorActions };
         } catch (e: any) {
             return { success: false, error: `graph overview failed: ${e?.message || e}` };
         }
