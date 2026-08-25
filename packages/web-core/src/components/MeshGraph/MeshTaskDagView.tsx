@@ -23,7 +23,7 @@ import {
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState } from './blueprintViewModel'
+import { buildBlueprintGraphTimeline, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, scopeTaskDagTasks, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -368,6 +368,7 @@ const HULL_PADDING = 26
 const HULL_LABEL_CLEARANCE = 24
 
 type HullFlowNode = Node<Record<string, unknown> & { label: string; status: string; width: number; height: number; theme: MeshGraphTheme }, 'clusterHull'>
+type TimelineTickFlowNode = Node<Record<string, unknown> & { dateLabel: string; timeLabel: string; theme: MeshGraphTheme }, 'timelineTick'>
 
 /** Faint bounding frame + label naming which orchestration graph/batch a chain
  *  belongs to — without it, chains from different plans float indistinguishably
@@ -392,10 +393,125 @@ function ClusterHullNode({ data }: NodeProps<HullFlowNode>) {
     )
 }
 
-const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, planNode: PlanNodeCard, clusterHull: ClusterHullNode }
+/**
+ * One mark on the blueprint's vertical time rail: a dot on the axis plus the
+ * moment its graph belongs to. The date line only renders on the first mark of
+ * a day (owner ask 2026-08-25: "그래프에 날짜 시간을 적어두면 엔드유저가 보기 훨씬 편할 것"),
+ * so a run of same-day graphs reads as times under one date instead of repeating it.
+ */
+function TimelineTickNode({ data }: NodeProps<TimelineTickFlowNode>) {
+    const { dateLabel, timeLabel, theme } = data
+    return (
+        <div className="pointer-events-none flex items-start gap-2" style={{ width: TIMELINE_TICK_WIDTH - 8 }}>
+            <div className="flex-1 text-right leading-tight">
+                {dateLabel && (
+                    <div className={`text-4xs font-semibold uppercase tracking-[0.16em] ${theme.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {dateLabel}
+                    </div>
+                )}
+                <div className={`font-mono text-3xs ${theme.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{timeLabel}</div>
+            </div>
+            <div className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${theme.isDark ? 'bg-slate-500' : 'bg-slate-400'}`} />
+        </div>
+    )
+}
+
+const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, planNode: PlanNodeCard, clusterHull: ClusterHullNode, timelineTick: TimelineTickNode }
 
 const UNLINKED_STACK_GAP_X = 170
 const UNLINKED_STACK_GAP_Y = 24
+
+/** Timeline lane geometry: the date/time tick column on the left, the
+ *  detached graph clusters stacked newest-first to its right. */
+const TIMELINE_TICK_WIDTH = 96
+const TIMELINE_CLUSTER_GAP_Y = 72
+const TIMELINE_LANE_GAP_X = 64
+
+interface BlueprintTimelineTick { graphId: string; y: number }
+
+/**
+ * Re-stack the FREE-FLOATING graph clusters (no edge ties them to the live
+ * chains — the boxes ELK otherwise scatters as a disconnected-component grid)
+ * into one vertical lane ordered by each graph's timeline moment, newest on
+ * top, and slide the fused chains right of the lane (owner call 2026-08-25:
+ * the graph boxes read as a vertical timeline with date/time ticks). Clusters
+ * wired INTO the live queue keep their ELK placement — the 2026-08-25 fusion
+ * is untouched; only the macro placement of detached graph boxes changes.
+ * Returns the axis tick per stacked cluster (newest first).
+ */
+function restackBlueprintClustersOnTimeline(
+    positions: Map<string, { x: number; y: number }>,
+    dag: TaskDagData,
+    overlays: FusedOverlays,
+    timelineByGraphId: Map<string, number>,
+): BlueprintTimelineTick[] {
+    if (overlays.clusters.length === 0) return []
+    const clusterByNodeId = new Map<string, string>()
+    for (const cluster of overlays.clusters) {
+        for (const id of cluster.memberIds) clusterByNodeId.set(id, cluster.id)
+    }
+    const attached = new Set<string>()
+    const markAttached = (a: string, b: string) => {
+        const clusterA = clusterByNodeId.get(a)
+        const clusterB = clusterByNodeId.get(b)
+        if (clusterA && clusterA !== clusterB) attached.add(clusterA)
+        if (clusterB && clusterA !== clusterB) attached.add(clusterB)
+    }
+    for (const edge of dag.edges) markAttached(edge.source, edge.target)
+    for (const edge of overlays.edges) markAttached(edge.source, edge.target)
+
+    const taskNodeById = new Map(dag.nodes.map(node => [node.id, node]))
+    const sizeOf = (id: string): { w: number; h: number } => {
+        if (id.startsWith('gate:')) return { w: GATE_NODE_WIDTH, h: GATE_NODE_HEIGHT }
+        if (id.startsWith('plan:')) return { w: PLAN_NODE_WIDTH, h: PLAN_NODE_HEIGHT }
+        const node = taskNodeById.get(id)
+        return { w: TASK_CARD_WIDTH, h: node ? estimateTaskCardHeight(node) : TASK_CARD_MIN_HEIGHT }
+    }
+
+    const ordered = overlays.clusters
+        .filter(cluster => !attached.has(cluster.id) && cluster.memberIds.some(id => positions.has(id)))
+        .sort((a, b) => (timelineByGraphId.get(b.graphId) ?? 0) - (timelineByGraphId.get(a.graphId) ?? 0))
+    if (ordered.length === 0) return []
+
+    const ticks: BlueprintTimelineTick[] = []
+    const moved = new Set<string>()
+    let laneMaxX = 0
+    let y = 0
+    for (const cluster of ordered) {
+        // A task card can belong to two graphs — each member moves once, with
+        // the NEWER graph's cluster claiming it.
+        const members = cluster.memberIds.filter(id => positions.has(id) && !moved.has(id))
+        if (members.length === 0) continue
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (const id of members) {
+            const position = positions.get(id)!
+            const size = sizeOf(id)
+            minX = Math.min(minX, position.x)
+            minY = Math.min(minY, position.y)
+            maxX = Math.max(maxX, position.x + size.w)
+            maxY = Math.max(maxY, position.y + size.h)
+        }
+        // Match the hull frame (padding + label clearance above) so stacked
+        // frames never ride each other's labels.
+        const dx = TIMELINE_TICK_WIDTH + HULL_PADDING - minX
+        const dy = y + HULL_PADDING + HULL_LABEL_CLEARANCE - minY
+        for (const id of members) {
+            const position = positions.get(id)!
+            positions.set(id, { x: position.x + dx, y: position.y + dy })
+            moved.add(id)
+        }
+        ticks.push({ graphId: cluster.graphId, y: y + HULL_PADDING + HULL_LABEL_CLEARANCE + (maxY - minY) / 2 })
+        laneMaxX = Math.max(laneMaxX, TIMELINE_TICK_WIDTH + (maxX - minX) + HULL_PADDING * 2)
+        y += (maxY - minY) + HULL_PADDING * 2 + HULL_LABEL_CLEARANCE + TIMELINE_CLUSTER_GAP_Y
+    }
+    if (ticks.length === 0) return []
+    // Everything still fused to the live chains slides right of the lane.
+    const shift = laneMaxX + TIMELINE_LANE_GAP_X
+    for (const [id, position] of positions) {
+        if (!moved.has(id)) positions.set(id, { x: position.x + shift, y: position.y })
+    }
+    return ticks
+}
 
 /**
  * Two-phase layout. ELK only sees the CONNECTED material — tasks touching any
@@ -466,17 +582,24 @@ function buildCanvasComposition(dag: TaskDagData, overlays: FusedOverlays): Canv
  *  previous unit. */
 const MISSION_UNIT_CLEARANCE = 44
 
-async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays, composition: CanvasComposition): Promise<Map<string, { x: number; y: number }>> {
+async function layoutTaskDag(
+    dag: TaskDagData,
+    overlays: FusedOverlays,
+    composition: CanvasComposition,
+    timelineByGraphId: Map<string, number>,
+): Promise<{ positions: Map<string, { x: number; y: number }>; ticks: BlueprintTimelineTick[] }> {
     const { connectedTasks, stackUnits } = composition
     const positions = new Map<string, { x: number; y: number }>()
-    let chainsMaxX = 0
+    let ticks: BlueprintTimelineTick[] = []
     if (connectedTasks.length > 0 || overlays.gates.length > 0 || overlays.planned.length > 0) {
         const elkPositions = await layoutConnectedElements(connectedTasks, dag.edges, overlays)
-        for (const [id, position] of elkPositions) {
-            positions.set(id, position)
-            const width = id.startsWith('gate:') ? GATE_NODE_WIDTH : id.startsWith('plan:') ? PLAN_NODE_WIDTH : TASK_CARD_WIDTH
-            chainsMaxX = Math.max(chainsMaxX, position.x + width)
-        }
+        for (const [id, position] of elkPositions) positions.set(id, position)
+        ticks = restackBlueprintClustersOnTimeline(positions, dag, overlays, timelineByGraphId)
+    }
+    let chainsMaxX = 0
+    for (const [id, position] of positions) {
+        const width = id.startsWith('gate:') ? GATE_NODE_WIDTH : id.startsWith('plan:') ? PLAN_NODE_WIDTH : TASK_CARD_WIDTH
+        chainsMaxX = Math.max(chainsMaxX, position.x + width)
     }
     if (stackUnits.length > 0) {
         const stackX = chainsMaxX > 0 ? chainsMaxX + UNLINKED_STACK_GAP_X : 0
@@ -495,7 +618,7 @@ async function layoutTaskDag(dag: TaskDagData, overlays: FusedOverlays, composit
             }
         }
     }
-    return positions
+    return { positions, ticks }
 }
 
 async function layoutConnectedElements(connectedTasks: TaskDagNode[], taskEdges: TaskDagData['edges'], overlays: FusedOverlays): Promise<Map<string, { x: number; y: number }>> {
@@ -579,6 +702,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     /** Mission whose thread is lit up because the pointer rests on one of its cards. */
     const [hoveredMissionId, setHoveredMissionId] = useState<string | null>(null)
     const [positions, setPositions] = useState<Map<string, { x: number; y: number }> | null>(null)
+    /** Axis marks for the vertical time rail — one per graph cluster, keyed to its stacked y. */
+    const [timelineTicks, setTimelineTicks] = useState<BlueprintTimelineTick[]>([])
     // State (not a ref) so the live-fit effect reruns once the canvas mounts.
     const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<TaskFlowNode, Edge> | null>(null)
     const jumpCycleRef = useRef<Record<string, number>>({})
@@ -586,15 +711,53 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
 
     const composition = useMemo(() => buildCanvasComposition(dag, fused), [dag, fused])
 
+    /**
+     * graphId → the moment that graph belongs to, so clusters stack newest-first
+     * down the rail. Read from the structured createdAt/terminalAt the daemon
+     * sends — never parsed out of a graph title.
+     */
+    const timelineByGraphId = useMemo(() => {
+        const map = new Map<string, number>()
+        for (const entry of buildBlueprintGraphTimeline(graphs ?? [])) map.set(entry.graphId, entry.timestamp)
+        return map
+    }, [graphs])
+
+    /**
+     * Rail labels per graph. The date is emitted only on a day's FIRST graph
+     * (showDate) so a run of same-day graphs reads as bare times under one date.
+     * Formatting is locale-aware — never a hardcoded pattern.
+     */
+    const timelineLabels = useMemo(() => {
+        const map = new Map<string, { dateLabel: string; timeLabel: string }>()
+        for (const entry of buildBlueprintGraphTimeline(graphs ?? [])) {
+            if (!entry.timestamp) continue
+            const at = new Date(entry.timestamp)
+            map.set(entry.graphId, {
+                dateLabel: entry.showDate ? at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '',
+                timeLabel: at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+            })
+        }
+        return map
+    }, [graphs])
+
     useEffect(() => {
         let cancelled = false
         if (dag.nodes.length === 0 && fused.gates.length === 0 && fused.planned.length === 0) {
             setPositions(null)
+            setTimelineTicks([])
             return
         }
-        void layoutTaskDag(dag, fused, composition)
-            .then(next => { if (!cancelled) setPositions(next) })
-            .catch(() => { if (!cancelled) setPositions(null) })
+        void layoutTaskDag(dag, fused, composition, timelineByGraphId)
+            .then(next => {
+                if (cancelled) return
+                setPositions(next.positions)
+                setTimelineTicks(next.ticks)
+            })
+            .catch(() => {
+                if (cancelled) return
+                setPositions(null)
+                setTimelineTicks([])
+            })
         return () => { cancelled = true }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dagFingerprint])
@@ -662,6 +825,23 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             }]
         })
         return [
+            ...timelineTicks.map(tick => ({
+                id: `tick:${tick.graphId}`,
+                type: 'timelineTick' as const,
+                // The restack already reserves x 0..TIMELINE_TICK_WIDTH as the rail
+                // gutter and shifts every cluster to its right, so the mark just
+                // occupies that lane at its cluster's vertical centre.
+                position: { x: 0, y: tick.y },
+                data: {
+                    dateLabel: timelineLabels.get(tick.graphId)?.dateLabel ?? '',
+                    timeLabel: timelineLabels.get(tick.graphId)?.timeLabel ?? '',
+                    theme: meshTheme,
+                },
+                draggable: false,
+                selectable: false,
+                zIndex: -1,
+                style: { pointerEvents: 'none' as const },
+            })),
             ...hulls,
             ...fused.gates
                 .filter(gate => positions.has(gate.id))

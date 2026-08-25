@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import {
     BLUEPRINT_GRAPH_MAX_LIMIT,
     buildBlueprintGraphOverviewArgs,
+    buildBlueprintGraphTimeline,
     buildGateByNodeId,
     buildNodeIdByEndpoint,
     buildStateByNodeId,
@@ -54,6 +55,48 @@ const gate = (nodeId: string, state: string) => ({
     gateId: `g-${nodeId}`, nodeId, state, action: 'approval',
     onTimeout: 'hold', leaseGeneration: 0,
 }) as any
+
+describe('buildBlueprintGraphTimeline', () => {
+    // UTC day keys keep the grouping assertions timezone-deterministic.
+    const toDateKey = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+
+    it('orders newest first and prefers terminalAt over createdAt', () => {
+        const timeline = buildBlueprintGraphTimeline([
+            { graphId: 'old', createdAt: '2026-08-19T09:00:00Z', terminalAt: '2026-08-19T23:41:00Z' },
+            { graphId: 'new', createdAt: '2026-08-25T13:41:00Z' },
+            // Created before `new` but settled after it — the settled moment wins.
+            { graphId: 'settled-late', createdAt: '2026-08-20T08:00:00Z', terminalAt: '2026-08-25T14:02:00Z' },
+        ], toDateKey)
+        expect(timeline.map(entry => entry.graphId)).toEqual(['settled-late', 'new', 'old'])
+        expect(timeline[0].timestamp).toBe(Date.parse('2026-08-25T14:02:00Z'))
+    })
+
+    it('collapses same-day graphs under one date header (the timeline date-group rule)', () => {
+        const timeline = buildBlueprintGraphTimeline([
+            { graphId: 'a', createdAt: '2026-08-25T14:02:00Z' },
+            { graphId: 'b', createdAt: '2026-08-25T13:41:00Z' },
+            { graphId: 'c', createdAt: '2026-08-24T23:41:00Z' },
+        ], toDateKey)
+        expect(timeline.map(entry => entry.dateKey)).toEqual(['2026-08-25', '2026-08-25', '2026-08-24'])
+        expect(timeline.map(entry => entry.showDate)).toEqual([true, false, true])
+    })
+
+    it('sorts unparseable timestamps last instead of crashing', () => {
+        const timeline = buildBlueprintGraphTimeline([
+            { graphId: 'broken', createdAt: 'not-a-date' },
+            { graphId: 'ok', createdAt: '2026-08-25T14:02:00Z' },
+        ], toDateKey)
+        expect(timeline.map(entry => entry.graphId)).toEqual(['ok', 'broken'])
+        expect(timeline[1].timestamp).toBe(0)
+    })
+
+    it('handles the empty and single-graph cases', () => {
+        expect(buildBlueprintGraphTimeline([], toDateKey)).toEqual([])
+        const single = buildBlueprintGraphTimeline([{ graphId: 'only', createdAt: '2026-08-25T14:02:00Z' }], toDateKey)
+        expect(single).toHaveLength(1)
+        expect(single[0].showDate).toBe(true)
+    })
+})
 
 const node = (nodeId: string, kind: 'worker_task' | 'coordinator_gate', state: string) => ({
     nodeId, kind, state, materializationVersion: 1,

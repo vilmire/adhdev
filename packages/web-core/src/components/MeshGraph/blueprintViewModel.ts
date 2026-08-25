@@ -32,6 +32,58 @@ export function getBlueprintGraphPagination(graphCount: number, totalGraphCount:
     }
 }
 
+/** One graph's placement on the blueprint's vertical time axis. */
+export interface BlueprintGraphTimelineEntry {
+    graphId: string
+    /** Epoch ms — terminalAt when the graph settled, else createdAt; 0 when neither parses. */
+    timestamp: number
+    /** Day bucket (yyyy-mm-dd) — graphs sharing one collapse under a single date header. */
+    dateKey: string
+    /** True for the first entry of a day — the axis renders the date label there only. */
+    showDate: boolean
+}
+
+/**
+ * The moment a graph belongs to on the timeline: when it SETTLED (terminalAt)
+ * for finished graphs, when it was CREATED otherwise. Read the structured
+ * fields — never parse the date out of a graph title.
+ */
+export function blueprintGraphTimelineTime(graph: Pick<MeshGraphView, 'createdAt' | 'terminalAt'>): number {
+    const terminal = graph.terminalAt ? Date.parse(graph.terminalAt) : Number.NaN
+    if (Number.isFinite(terminal)) return terminal
+    const created = graph.createdAt ? Date.parse(graph.createdAt) : Number.NaN
+    return Number.isFinite(created) ? created : 0
+}
+
+/** Local-day bucket key — the axis groups by the viewer's own calendar day. */
+export function blueprintTimelineDateKey(ms: number): string {
+    const date = new Date(ms)
+    const pad = (value: number) => String(value).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/**
+ * Graphs ordered for the vertical timeline: newest first (matching the
+ * daemon's mesh_graph_overview order), each stamped with its day bucket and a
+ * showDate flag that fires only on the day's first graph. The dateKey source
+ * is injectable so tests stay timezone-deterministic.
+ */
+export function buildBlueprintGraphTimeline(
+    graphs: Array<Pick<MeshGraphView, 'graphId' | 'createdAt' | 'terminalAt'>>,
+    toDateKey: (ms: number) => string = blueprintTimelineDateKey,
+): BlueprintGraphTimelineEntry[] {
+    const ordered = graphs
+        .map(graph => ({ graphId: graph.graphId, timestamp: blueprintGraphTimelineTime(graph) }))
+        .sort((a, b) => b.timestamp - a.timestamp)
+    let lastDateKey = ''
+    return ordered.map(entry => {
+        const dateKey = toDateKey(entry.timestamp)
+        const showDate = dateKey !== lastDateKey
+        lastDateKey = dateKey
+        return { ...entry, dateKey, showDate }
+    })
+}
+
 /** Source states that mean "this dependency is satisfied — the edge is green". */
 const TERMINAL_OK_STATES = new Set(['completed', 'released'])
 /** All terminal states (success or not) — a terminal target no longer waits. */
