@@ -65,7 +65,7 @@ export type DashboardEvent =
     | { kind: 'spec_error'; errors: string[] };
 
 export type DashboardCommand =
-    | { kind: 'send_message'; text: string }
+    | { kind: 'send_message'; text: string; bracketedPaste?: boolean }
     | { kind: 'pty_write'; data: string }
     | { kind: 'click_control'; control_id: string; payload?: unknown }
     | { kind: 'click_modal_button'; index: number }
@@ -428,6 +428,10 @@ export function resolveEchoConfirmPolicy(
 export type Win32SubmitMode = 'paste' | 'soft_newline';
 const WIN32_BRACKETED_PASTE_OPEN = '\x1b[200~';
 const WIN32_BRACKETED_PASTE_CLOSE = '\x1b[201~';
+// Platform-agnostic aliases: the same bracketed-paste region is used on POSIX
+// for image-bearing bodies (see actuallySendMessage's bracketedPaste branch).
+const BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
+const BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
 // Non-submitting soft-newline for the claude-cli Ink composer. The spec
 // (cli/claude-cli/specs/4.0.json) declares no soft-newline keycode, so we use the
 // CSI-u encoding of Shift+Enter (modifyOtherKeys form: keycode 13 = Enter, modifier
@@ -599,7 +603,9 @@ export class FsmDriver implements ISpecDriver {
     // ── send_message queueing until the machine first reaches a non-initial,
     //    non-busy ("ready") state — same contract as v3's idleSeenOnce.
     private readySeenOnce = false;
-    private pendingSends: string[] = [];
+    /** Queued send bodies. `bracketedPaste` rides along so a queued image
+     *  prompt keeps its paste-wrapped delivery when drained later. */
+    private pendingSends: { text: string; bracketedPaste?: boolean }[] = [];
     /** True while a send is written but the FSM has not yet left idle, i.e. the
      *  composer is mid-submit. Blocks a second send from overwriting the first
      *  before the CLI has consumed it (see handleSendMessage). */
@@ -719,7 +725,7 @@ export class FsmDriver implements ISpecDriver {
 
     dispatch(cmd: DashboardCommand): void {
         switch (cmd.kind) {
-            case 'send_message': this.handleSendMessage(cmd.text); return;
+            case 'send_message': this.handleSendMessage(cmd.text, cmd.bracketedPaste); return;
             case 'pty_write': this.adapter.send_keys(cmd.data); return;
             case 'click_control': this.handleClickControl(cmd.control_id, cmd.payload); return;
             case 'click_modal_button': this.clickModalButton(cmd.index); return;
@@ -1457,7 +1463,7 @@ export class FsmDriver implements ISpecDriver {
      * on top of a still-generating turn, braiding the two bodies in the composer
      * (see the SEND-OVERLAP note above the constants).
      */
-    private handleSendMessage(text: string): void {
+    private handleSendMessage(text: string, bracketedPaste?: boolean): void {
         // A resend of text we are already in the middle of delivering is dropped
         // outright rather than queued: queueing it would just submit the same
         // prompt a second time once the turn ends, which is the duplicate-bubble
@@ -1467,14 +1473,14 @@ export class FsmDriver implements ISpecDriver {
             return;
         }
         if (!this.canSendNow()) {
-            this.pendingSends.push(text);
+            this.pendingSends.push({ text, bracketedPaste });
             LOG.info(
                 'FsmDriver',
                 `[${this.specTag()}] send queued — ${this.sendBlockedReason()} (len=${text.length}, queued=${this.pendingSends.length})`,
             );
             return;
         }
-        this.beginSend(text);
+        this.beginSend(text, bracketedPaste);
     }
 
     /** True when a send can be written to the PTY right now. */
@@ -1529,11 +1535,11 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /** Mark a send as in flight, record it for the duplicate gate, and write it. */
-    private beginSend(text: string): void {
+    private beginSend(text: string, bracketedPaste?: boolean): void {
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
         this.recentSendHashes.set(hashSendText(text), this.sendInFlightAt);
-        this.actuallySendMessage(text);
+        this.actuallySendMessage(text, bracketedPaste);
     }
 
     /**
@@ -1554,13 +1560,13 @@ export class FsmDriver implements ISpecDriver {
         if (this.isSendInFlight()) return;
         if (this.pendingSends.length === 0) return;
         const next = this.pendingSends.shift()!;
-        LOG.info('FsmDriver', `[${this.specTag()}] draining queued send (len=${next.length}, remaining=${this.pendingSends.length})`);
+        LOG.info('FsmDriver', `[${this.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
         // Small delay for parity with the ready-gate drain: it lets the prompt
         // frame settle before the body lands.
         if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
         this.pendingSendDrainTimer = setTimeout(() => {
             this.pendingSendDrainTimer = null;
-            this.beginSend(next);
+            this.beginSend(next.text, next.bracketedPaste);
         }, 50);
         // Hold the latch immediately so a second drain on the very next frame
         // cannot write a second body into the same composer line.
@@ -1575,11 +1581,36 @@ export class FsmDriver implements ISpecDriver {
         return this.submitUnconfirmed;
     }
 
-    private actuallySendMessage(text: string): void {
+    private actuallySendMessage(text: string, bracketedPaste?: boolean): void {
         const sm = this.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.opts.manifestSendDelayMs);
+
+        // POSIX-IMAGE-PASTE (multi-image attachment loss): a body carrying
+        // materialized image paths is wrapped in a bracketed-paste region when the
+        // spec opts in (send_message.posix_bracketed_paste_for_images). Live A/B
+        // against claude-cli v2.1.220 (2026-08-26) showed the raw-write path loses
+        // every image but the last: the CLI only converts image paths to real
+        // attachments when a single input burst clears its ~800-char
+        // heuristic-paste threshold, so a short body attaches NONE and a body split
+        // across pipe chunks attaches only the burst's tail. The bracketed-paste
+        // region routes the whole body through the CLI's real paste handler, which
+        // attaches EVERY image path in it (verified: imagePasteIds [1, 2] on the
+        // recorded user turn). The echo-gate is skipped for the wrapped body: the
+        // composer renders paste chips ([Image #N]) instead of the literal text, so
+        // the raw body can never echo and the gate would stall to its blind-fire
+        // backstop. The verified-resend net still runs, covering a CR that lands
+        // while the CLI's async image ingestion is still in flight.
+        const wrapInPaste = process.platform !== 'win32'
+            && bracketedPaste === true
+            && sm.posix_bracketed_paste_for_images === true;
+        if (wrapInPaste) {
+            this.adapter.send_keys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`);
+            this.markBodyWrite();
+            this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, { skipEchoGate: true });
+            return;
+        }
 
         // win32 ConPTY submit: the text and the submit key (CR) must NOT be
         // combined into one PTY write — Ink-based TUIs (claude-cli) treat a
@@ -1742,7 +1773,7 @@ export class FsmDriver implements ISpecDriver {
      *  idle and stop the instant the agent leaves idle (submitted → generating /
      *  approval). This preserves the win32 lone-CR-swallow handling.
      */
-    private scheduleVerifiedSubmit(submitKey: string, initialDelayMs: number, body: string): void {
+    private scheduleVerifiedSubmit(submitKey: string, initialDelayMs: number, body: string, opts?: { skipEchoGate?: boolean }): void {
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         const startedAt = Date.now();
 
@@ -1828,8 +1859,14 @@ export class FsmDriver implements ISpecDriver {
             const quietFor = now - this.lastWin32InputActivityAt();
             const waited = now - startedAt;
             const settled = quietFor >= WIN32_SUBMIT_SETTLE_MS;
-            // Body present in the composer AND output quiet (full body arrived) → submit.
-            if (bodyEchoed() && settled) { fire(0); return; }
+            // skipEchoGate (POSIX bracketed-paste image bodies): the composer renders
+            // paste chips instead of the literal body, so the body can never echo —
+            // waiting on it would stall to the blind-fire backstop for no gain. The
+            // initial delay still applies (first tick fires after initialDelayMs), and
+            // the verified-resend net below carries a CR eaten mid-paste.
+            // Default: body present in the composer AND output quiet (full body
+            // arrived) → submit.
+            if (opts?.skipEchoGate ? true : (bodyEchoed() && settled)) { fire(0); return; }
             // Last-resort blind fire so a body that truly never confirms cannot hang.
             if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
                 LOG.warn(

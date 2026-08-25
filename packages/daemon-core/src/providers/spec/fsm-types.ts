@@ -328,6 +328,20 @@ export interface CliSpecV4 {
         submit_key: string;
         delay_ms_before_submit?: number;
         delay_ms_per_char?: number;
+        /**
+         * POSIX image-prompt delivery opt-in (claude-cli multi-image loss fix).
+         * When true AND a send_message dispatch carries `bracketedPaste: true`
+         * (set by the CLI provider instance only when the input envelope held
+         * image parts), the body is wrapped in a bracketed-paste region
+         * (ESC[200~ … ESC[201~) instead of a raw write, so the CLI's paste
+         * handler deterministically attaches EVERY image path in the body.
+         * Without the wrap the CLI's heuristic paste detector (~800-char single
+         * burst) attaches none of them (short body) or only the last one (body
+         * split across pipe chunks) — the rest degrade to plain-text paths.
+         * Omitted/false → byte-for-byte legacy writes. See
+         * test/providers/spec/driver-posix-image-paste.test.ts.
+         */
+        posix_bracketed_paste_for_images?: boolean;
     };
     sections: Record<string, SectionDef>;
     states: FsmState[];
