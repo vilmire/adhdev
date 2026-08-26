@@ -33,6 +33,7 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-github-blockquote-alert": "^2.0.1",
+    "seqscribe": "file:../../vendor/seqscribe",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {

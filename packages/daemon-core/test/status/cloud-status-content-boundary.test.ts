@@ -252,3 +252,90 @@ describe('buildCloudStatusReportPayload — p2p transport telemetry', () => {
         expect(() => buildCloudStatusReportPayload([null, undefined], undefined, 1)).not.toThrow();
     });
 });
+
+/**
+ * seqscribe replication health (design §1.5) rides the same status frame, so it
+ * sits behind the same allow-list.
+ *
+ * The specific leak this guards: seqscribe's own `stats()` is keyed BY TOPIC,
+ * and ADHDev topic names embed identifiers — `session.<sessionId>.transcript`,
+ * `mesh.<meshId>.events`. Forwarding that map would publish the fleet's session
+ * and mesh inventory to the server on every heartbeat. Only aggregates cross.
+ */
+describe('cloud status seqscribe boundary', () => {
+    const healthy = {
+        topics: 4,
+        peers: 2,
+        peersReady: 2,
+        pendingBucket: 0,
+        consumerLagBucket: 1,
+        queueBucket: 0,
+        fgenAgeBucket: 1,
+        quarantined: false,
+        authority: true,
+    };
+
+    it('omits the field entirely when no seqscribe node is running', () => {
+        // Absent must stay distinguishable from "a healthy idle node", so this
+        // is omitted rather than zero-filled.
+        expect(buildCloudStatusReportPayload([], undefined, 1)).not.toHaveProperty('seqscribe');
+        expect(buildCloudStatusReportPayload([], undefined, 1, undefined)).not.toHaveProperty('seqscribe');
+    });
+
+    it('forwards the aggregate counters', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, healthy as any);
+        expect(payload.seqscribe).toEqual(healthy);
+    });
+
+    it('drops topic names, peer ids and any other unlisted field', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, {
+            ...healthy,
+            // The shapes a careless widening would forward:
+            topicNames: ['session.sess-1.transcript', 'mesh.mesh_abc.events'],
+            perTopic: { 'session.sess-1.transcript': { pending: 3 } },
+            peerIds: ['peer-a', 'peer-b'],
+            writerId: 'adhdev-0123456789abcdef',
+            lastEntryPayload: { text: 'secret prompt text' },
+        } as any);
+
+        expect(payload.seqscribe).toEqual(healthy);
+        for (const leaked of ['topicNames', 'perTopic', 'peerIds', 'writerId', 'lastEntryPayload']) {
+            expect(payload.seqscribe).not.toHaveProperty(leaked);
+        }
+    });
+
+    it('carries only numbers and booleans — never a string', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, healthy as any);
+        for (const value of Object.values(payload.seqscribe ?? {})) {
+            expect(['number', 'boolean']).toContain(typeof value);
+        }
+    });
+
+    it('coerces malformed counters rather than emitting NaN', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, {
+            topics: Number.NaN,
+            peers: -3,
+            peersReady: 'two',
+            pendingBucket: null,
+            consumerLagBucket: 2.7,
+            queueBucket: undefined,
+            fgenAgeBucket: Infinity,
+            quarantined: 'yes',
+            authority: 1,
+        } as any);
+
+        expect(payload.seqscribe).toEqual({
+            topics: 0,
+            peers: 0,
+            peersReady: 0,
+            pendingBucket: 0,
+            consumerLagBucket: 2,
+            queueBucket: 0,
+            fgenAgeBucket: 0,
+            // Non-boolean truthy values must not become `true` — only a real
+            // boolean says the fleet secret is configured.
+            quarantined: false,
+            authority: false,
+        });
+    });
+});

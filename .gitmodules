@@ -1,0 +1,3 @@
+[submodule "vendor/seqscribe"]
+	path = vendor/seqscribe
+	url = https://github.com/vilmire/seqscribe.git

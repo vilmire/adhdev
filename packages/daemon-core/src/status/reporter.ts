@@ -13,7 +13,7 @@ import {
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
-import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, StatusReportPayload } from '../shared-types.js';
+import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
@@ -80,12 +80,46 @@ function buildCloudP2PSummary(p2p: StatusReportPayload['p2p'] | undefined): P2PS
     return summary;
 }
 
+/**
+ * Project the seqscribe health summary down to the fields the server may see.
+ *
+ * Third allow-list in this file, same discipline as the two above: copy known
+ * non-content fields by name, never spread the source. The daemon-side summary
+ * is already aggregate-only (see seqscribe/stats.ts — no topic names, no peer
+ * or writer ids), and re-applying the projection here means a future field
+ * added upstream cannot reach the server without an edit to this list.
+ *
+ * Numbers are coerced defensively: this input crosses a package boundary and a
+ * malformed value must not land as `NaN` in a payload the server parses.
+ */
+function buildCloudSeqscribeSummary(
+    seqscribe: SeqscribeStatusSummary | undefined,
+): SeqscribeStatusSummary | undefined {
+    if (!seqscribe) return undefined;
+    const count = (value: unknown): number =>
+        typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+
+    return {
+        topics: count(seqscribe.topics),
+        peers: count(seqscribe.peers),
+        peersReady: count(seqscribe.peersReady),
+        pendingBucket: count(seqscribe.pendingBucket),
+        consumerLagBucket: count(seqscribe.consumerLagBucket),
+        queueBucket: count(seqscribe.queueBucket),
+        fgenAgeBucket: count(seqscribe.fgenAgeBucket),
+        quarantined: seqscribe.quarantined === true,
+        authority: seqscribe.authority === true,
+    };
+}
+
 export function buildCloudStatusReportPayload(
     sessions: unknown,
     p2p: StatusReportPayload['p2p'] | undefined,
     timestamp: number,
+    seqscribe?: SeqscribeStatusSummary,
 ): CloudStatusReportPayload {
     const list = Array.isArray(sessions) ? sessions : [];
+    const seqscribeSummary = buildCloudSeqscribeSummary(seqscribe);
     return {
         sessions: list.map((raw): RoutingSessionEntry => {
             const session = (raw || {}) as Record<string, any>;
@@ -107,6 +141,7 @@ export function buildCloudStatusReportPayload(
             };
         }),
         p2p: buildCloudP2PSummary(p2p),
+        ...(seqscribeSummary ? { seqscribe: seqscribeSummary } : {}),
         timestamp,
     };
 }
@@ -159,6 +194,15 @@ export interface StatusReporterDeps {
         getInstance?(sessionId: string): { getState?(): ProviderState | undefined } | undefined;
     };
     getScreenshotUsage?: () => { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
+    /**
+     * seqscribe replication health, if a node is running (design §1.5).
+     *
+     * Optional and absent-by-default: daemons without seqscribe wired up omit
+     * the field entirely rather than reporting zeros, so "no node" stays
+     * distinguishable from "a healthy idle node". Returns pre-bucketed
+     * aggregates — see seqscribe/stats.ts for why the values are coarse.
+     */
+    getSeqscribeStats?: () => SeqscribeStatusSummary | null;
 }
 
 /**
@@ -498,7 +542,17 @@ export class DaemonStatusReporter {
         if (!serverConnected || !serverConn) return;
         // Server relay only needs compact session metadata for routing, compact status,
         // initial_state fallback, and lightweight API/session inspection.
-        const wsPayload = buildCloudStatusReportPayload(payload.sessions, payload.p2p, now);
+        // seqscribe health rides this existing frame — no new endpoint, no new
+        // periodic transmission. Its values are bucketed upstream precisely so
+        // they participate in the dedup hash below without defeating it: an
+        // idle node keeps reporting the same buckets, so identical reports stay
+        // identical and only a real state change forces a send.
+        const wsPayload = buildCloudStatusReportPayload(
+            payload.sessions,
+            payload.p2p,
+            now,
+            this.deps.getSeqscribeStats?.() || undefined,
+        );
         const wsHash = this.simpleHash(JSON.stringify({
             ...wsPayload,
             timestamp: undefined,

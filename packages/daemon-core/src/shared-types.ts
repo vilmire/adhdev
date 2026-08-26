@@ -955,10 +955,42 @@ export interface P2PStatusSummary {
     relayTotal?: number;
 }
 
+/**
+ * seqscribe replication health (daemon → server).
+ *
+ * Fleet-wide aggregates only: no topic names (they embed session and mesh ids),
+ * no peer or writer ids, nothing derived from an entry payload. The counters
+ * that would otherwise change every tick are bucketed so the status_report
+ * dedup hash still collapses an idle daemon's reports — see
+ * `summarizeSeqscribeStats` in seqscribe/stats.ts for the full rationale.
+ */
+export interface SeqscribeStatusSummary {
+    /** Topics defined on this node. */
+    topics: number;
+    /** Peers currently attached (any state). */
+    peers: number;
+    /** Peers in the `ready` state — i.e. actually syncing. */
+    peersReady: number;
+    /** Bucketed max pending rows across topics (0 = none). */
+    pendingBucket: number;
+    /** Bucketed max consumer lag in rows (0 = none). */
+    consumerLagBucket: number;
+    /** Bucketed max peer send-queue depth (0 = none). */
+    queueBucket: number;
+    /** Bucketed oldest finality certificate age (0 = fresh or nothing certified). */
+    fgenAgeBucket: number;
+    /** Whether any topic holds quarantined entries. */
+    quarantined: boolean;
+    /** Whether a fleet secret is configured and certificates can be verified. */
+    authority: boolean;
+}
+
 /** Minimal daemon->cloud status payload used for routing, fallback, and server APIs. */
 export interface CloudStatusReportPayload {
     sessions: RoutingSessionEntry[];
     p2p?: StatusReportPayload['p2p'];
+    /** seqscribe replication health — counters and buckets only. */
+    seqscribe?: SeqscribeStatusSummary;
     timestamp: number;
 }
 

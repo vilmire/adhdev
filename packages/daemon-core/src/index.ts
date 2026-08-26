@@ -30,6 +30,7 @@ export type {
   CloudStatusReportPayload,
   RoutingSessionEntry,
   P2PStatusSummary,
+  SeqscribeStatusSummary,
   DaemonStatusEventPayload,
   DashboardStatusEventPayload,
   SessionTransport,
@@ -970,3 +971,44 @@ export {
   printClaudeStatuslineStatus,
   printQuotaInstallError,
 } from './quota/cli.js';
+
+// seqscribe integration (docs/design/2026-08-26-seqscribe-integration-plan.md).
+// Phase 0 surface: node lifecycle, the topic table, the authority wiring and
+// the status projection. No producer or consumer is wired up yet.
+export {
+  openSeqscribeNode,
+  getSeqscribeDbPath,
+  SEQSCRIBE_DB_NAME,
+  WRITER_ID_PREFIX,
+  type SeqscribeNodeHandle,
+  type SeqscribeNodeOptions,
+} from './seqscribe/node.js';
+export {
+  safeMeshId,
+  safeSessionId,
+  meshEventsTopic,
+  meshEventsPolicy,
+  sessionTranscriptTopic,
+  sessionTranscriptPolicy,
+  assistantJournalPolicy,
+  fleetStatusPolicy,
+  configSettingsPolicy,
+  baseTopicDefinitions,
+  contentTopicsFor,
+  ASSISTANT_JOURNAL_TOPIC,
+  FLEET_STATUS_TOPIC,
+  CONFIG_SETTINGS_TOPIC,
+  SESSION_TRANSCRIPT_RING,
+  FLEET_STATUS_RING,
+  type TopicDefinition,
+} from './seqscribe/topics.js';
+export {
+  createFleetAuthority,
+  createFleetAuthorityIfConfigured,
+  resolveFleetSecret,
+  startFleetFinalityLoop,
+  ADHDEV_AUTHORITY_ID,
+  FINALITY_INTERVAL_MS,
+  type FleetAuthorityOptions,
+} from './seqscribe/authority.js';
+export { summarizeSeqscribeStats } from './seqscribe/stats.js';
