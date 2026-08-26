@@ -850,6 +850,36 @@ function rankedRisk(reading: ExpiryRisk): number {
     return reading.risk * reading.confidence;
 }
 
+/**
+ * The per-candidate numbers the sort in rankProvidersByQuotaGate actually
+ * compared, on the axis it actually used.
+ *
+ * ★OBSERVABILITY ONLY. These are reported, never re-decided: nothing reads
+ * them back to influence selection. They exist because the ranking used to
+ * compute all of this and then throw it away, leaving a reader able to see
+ * THAT the fitness order was reordered but not by how much or on which axis —
+ * which is how two independent investigations (553d4006 vs 7267eead) reached
+ * opposite conclusions about whether the reordering was a bug.
+ */
+export interface ProviderQuotaRankingEvidence {
+    providerType: string;
+    /** The window axis this candidate's `risk` was measured on — the axis the
+     *  sort used, not a per-candidate preference. `sessionAxisActive` on the
+     *  ranking says which one governed overall; a candidate can still report
+     *  'weekly' while session mode is active if its session window is
+     *  unreadable (the fail-open fallback in the comparator). */
+    axis: 'weekly' | 'session';
+    /** remaining × elapsedFraction on `axis`. Absent when the axis has no
+     *  readable reading (this candidate sorts last on the unknown rule). */
+    risk?: number;
+    /** The reading's trust tier, 1 / 0.7 / 0.4 — see the CONFIDENCE tiers. */
+    confidence?: number;
+    /** `risk × confidence` — the value the comparator actually sorted on. */
+    rankedRisk?: number;
+    /** Remaining headroom on `axis`, the risk tie-break. */
+    remainingPercent?: number;
+}
+
 export interface ProviderQuotaGateRanking {
     /** Gate-clear providers, best first: weekly EXPIRY-RISK DESC (remaining ×
      *  elapsed window fraction × reading CONFIDENCE) — or SESSION (5h)
@@ -860,6 +890,13 @@ export interface ProviderQuotaGateRanking {
     clear: string[];
     /** Gate-blocked providers with their blocks, in the caller's order. */
     gated: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
+    /** Did the SESSION (5h) axis govern this ranking? True only while every
+     *  weekly-readable candidate is strictly above
+     *  sessionAxisWeeklyHeadroomPercent — see the 2′ conditional gate below. */
+    sessionAxisActive: boolean;
+    /** Per-candidate ranking evidence for the gate-clear set, in `clear`'s
+     *  final order. Observability only (see ProviderQuotaRankingEvidence). */
+    rankingEvidence: ProviderQuotaRankingEvidence[];
 }
 
 /**
@@ -1035,7 +1072,27 @@ export function rankProvidersByQuotaGate(
         if (wb.confidence !== wa.confidence) return wb.confidence - wa.confidence;
         return wb.remainingPercent - wa.remainingPercent;
     });
-    return { clear, gated };
+    // Ranking evidence is derived AFTER the sort, from the same maps the
+    // comparator read. It reports; it decides nothing. Per candidate the axis
+    // is the one the comparator actually applied to it: session only where
+    // session mode is on AND that candidate has a readable session reading —
+    // otherwise the comparator fell back to weekly for it.
+    const rankingEvidence: ProviderQuotaRankingEvidence[] = clear.map(providerType => {
+        const session = sessionByProvider?.get(providerType);
+        const reading = session ?? weeklyByProvider.get(providerType);
+        const axis: 'weekly' | 'session' = session ? 'session' : 'weekly';
+        return {
+            providerType,
+            axis,
+            ...(reading ? {
+                risk: reading.risk,
+                confidence: reading.confidence,
+                rankedRisk: rankedRisk(reading),
+                remainingPercent: reading.remainingPercent,
+            } : {}),
+        };
+    });
+    return { clear, gated, sessionAxisActive, rankingEvidence };
 }
 
 /**

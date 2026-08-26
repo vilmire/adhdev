@@ -52,14 +52,45 @@ export interface NodeRoutePreview {
             fitnessOrder: string[];
             clearOrder: string[];
             gated: Array<{ providerType: string; reason: string }>;
+            /**
+             * ★NOT the winner. This is the HEAD OF THE INPUT ORDER handed to
+             * quota ranking — the fitness stage's first choice, which Stage 3
+             * routinely and correctly displaces. `winner` is the winner.
+             *
+             * @deprecated Misleading name kept for existing readers; prefer the
+             * identical `fitnessOrderHead`. Both are emitted with the same value.
+             */
             fitnessWinner?: string;
+            /** Unambiguous alias of `fitnessWinner`: `fitnessOrder[0]`, the
+             *  input order's head. Never a selection result. */
+            fitnessOrderHead?: string;
+            /** Reads as prose what the field names above cannot. Always emitted
+             *  so a reader of raw JSON cannot miss it. */
+            note: string;
             winner?: string;
             reordered: boolean;
             displacedFitnessWinner?: string;
+            /** Which window axis Stage 3 ranked on — see `sessionAxisActive`. */
+            axis: 'weekly' | 'session';
+            /** True when every weekly-readable candidate had weekly headroom to
+             *  spare, so the SESSION (5h) expiry axis governed instead of the
+             *  weekly one (mesh-quota-routing.ts, the 2′ conditional gate). */
+            sessionAxisActive: boolean;
         };
     };
     quotaDiagnostics: ProviderQuotaGateDiagnostic[];
 }
+
+/**
+ * ★Emitted verbatim on every quota stage. Two independent investigations
+ * (553d4006 / 7267eead) read `fitnessWinner` + `selectionRank: 0` +
+ * `gate.outcome: 'clear'` as "this provider won" and reached opposite
+ * conclusions about a reordering that was working as designed. The names are
+ * kept for compatibility; this sentence is what makes the JSON self-describing.
+ */
+const QUOTA_STAGE_NOTE =
+    'fitnessOrder/fitnessWinner(=fitnessOrderHead) are the INPUT order to quota ranking, not a result. '
+    + 'The selected provider is `winner`; per-candidate ranking numbers are in quotaDiagnostics[].ranking.';
 
 function providerReportedDisabled(node: any, providerType: string): boolean {
     return node?.nodeFacts?.providerEnablement?.[providerType]?.enabled === false;
@@ -129,7 +160,10 @@ export function buildNodeRoutePreview(args: {
             stages: {
                 difficultyFloor: { required: difficultyFloorRequired, admittedSlots: [], excludedSlots: [] },
                 fitness: [],
-                quota: { fitnessOrder: [], clearOrder: [], gated: [], reordered: false },
+                quota: {
+                    fitnessOrder: [], clearOrder: [], gated: [], reordered: false,
+                    note: QUOTA_STAGE_NOTE, axis: 'weekly', sessionAxisActive: false,
+                },
             },
             quotaDiagnostics: [],
         };
@@ -164,7 +198,7 @@ export function buildNodeRoutePreview(args: {
             return { ...slotIdentity(candidate), reason };
         });
     const fitnessOrder = selection.candidates.map(candidate => candidate.providerType);
-    const fitnessWinner = fitnessOrder[0];
+    const fitnessOrderHead = fitnessOrder[0];
     const winner = selection.winner?.providerType;
     const winnerIndex = selection.winner ? usableSlots.indexOf(selection.winner) : -1;
     const winnerScore = winnerIndex >= 0 ? scores[winnerIndex] : undefined;
@@ -198,12 +232,15 @@ export function buildNodeRoutePreview(args: {
                     providerType: entry.providerType,
                     reason: entry.block.reason,
                 })),
-                ...(fitnessWinner ? { fitnessWinner } : {}),
+                ...(fitnessOrderHead ? { fitnessWinner: fitnessOrderHead, fitnessOrderHead } : {}),
+                note: QUOTA_STAGE_NOTE,
                 ...(winner ? { winner } : {}),
-                reordered: !!winner && !!fitnessWinner && winner !== fitnessWinner,
-                ...(winner && fitnessWinner && winner !== fitnessWinner
-                    ? { displacedFitnessWinner: fitnessWinner }
+                reordered: !!winner && !!fitnessOrderHead && winner !== fitnessOrderHead,
+                ...(winner && fitnessOrderHead && winner !== fitnessOrderHead
+                    ? { displacedFitnessWinner: fitnessOrderHead }
                     : {}),
+                axis: selection.ranked.sessionAxisActive ? 'session' : 'weekly',
+                sessionAxisActive: selection.ranked.sessionAxisActive === true,
             },
         },
         quotaDiagnostics: selection.diagnostics.quotaDiagnostics ?? [],

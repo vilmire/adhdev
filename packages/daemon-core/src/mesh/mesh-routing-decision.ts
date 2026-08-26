@@ -1,7 +1,7 @@
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
-import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaBonusDiagnostic, type ProviderQuotaGateBlock, type ProviderQuotaRiskSnapshot, type QuotaFactsContext, type QuotaRankingRationale } from './mesh-quota-routing.js';
+import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaBonusDiagnostic, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence, type ProviderQuotaRiskSnapshot, type QuotaFactsContext, type QuotaRankingRationale } from './mesh-quota-routing.js';
 import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotCapacityRemaining, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
 
 export interface MeshIntraNodeLoser {
@@ -66,7 +66,18 @@ export interface ProviderSlotCandidate {
 export interface ProviderSelectionPreviewScore {
     providerType: string;
     model?: string;
+    /**
+     * ★INPUT rank, not result rank: this candidate's position in the slot
+     * order HANDED TO Stage 3, before quota ranking reorders it. Rank 0 is
+     * not the winner — `stages.quota.winner` is.
+     *
+     * @deprecated Misleading name kept for existing readers; prefer the
+     * identical `fitnessInputRank`. Both are emitted with the same value.
+     */
     selectionRank: number;
+    /** Unambiguous alias of `selectionRank` — this candidate's position in the
+     *  fitness-ordered INPUT to quota ranking. */
+    fitnessInputRank: number;
     capacitySortKey: 0 | 1;
     capacityAvailable: boolean;
     capacity: { available: boolean; slotCap?: number; providerCap?: number };
@@ -86,11 +97,27 @@ export interface ProviderQuotaGateDiagnostic {
         outcome: 'clear' | 'skip' | 'hard-block' | 'fail-open' | 'not-evaluated-floor';
         reason?: string;
     };
+    /**
+     * ★WHY this gate-clear candidate placed where it did — the numbers the
+     * Stage 3 sort actually compared (risk, confidence, rankedRisk) and the
+     * window axis it read them on. Present only for candidates that reached
+     * the ranking (gate outcome clear/fail-open); gated and
+     * not-evaluated-floor candidates were never sorted, so they carry none.
+     *
+     * ★A `gate.outcome: 'clear'` alone says only that this provider MAY run.
+     * It is this block that says whether it WON, and by how much — reading
+     * 'clear' as "selected" is exactly the misread this field exists to close.
+     */
+    ranking?: Omit<ProviderQuotaRankingEvidence, 'providerType'> & { clearOrderIndex: number };
 }
 
 interface ProviderQuotaRanking {
     clear: string[];
     gated: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
+    /** Observability carry-through from rankProvidersByQuotaGate. Optional
+     *  because the difficulty-floor-wait early return never ran a ranking. */
+    sessionAxisActive?: boolean;
+    rankingEvidence?: ProviderQuotaRankingEvidence[];
 }
 
 export interface ProviderSelectionDiagnostics {
@@ -179,6 +206,7 @@ export function buildProviderSelectionDiagnostics(args: {
             providerType: candidate.providerType,
             ...(candidate.slot.model ? { model: candidate.slot.model } : {}),
             selectionRank,
+            fitnessInputRank: selectionRank,
             capacitySortKey: (selectionCapacity.available ? 1 : 0) as 0 | 1,
             capacityAvailable: selectionCapacity.available,
             capacity: taskCapacity,
@@ -207,8 +235,16 @@ export function buildProviderSelectionDiagnostics(args: {
         ...args.ranked.clear,
         ...args.ranked.gated.map(entry => entry.providerType),
     ]);
+    const evidenceByProvider = new Map(
+        (args.ranked.rankingEvidence ?? []).map((entry, clearOrderIndex) => {
+            const { providerType, ...rest } = entry;
+            return [providerType, { ...rest, clearOrderIndex }] as const;
+        }),
+    );
     const quotaDiagnostics: ProviderQuotaGateDiagnostic[] = bonusDiagnostics.map(detail => {
         const { providerType, ...bonus } = detail;
+        const ranking = evidenceByProvider.get(detail.providerType);
+        const withRanking = ranking ? { ranking } : {};
         const gated = args.ranked.gated.find(entry => entry.providerType === detail.providerType);
         if (!rankedProviders.has(detail.providerType)) {
             return { providerType, bonus, gate: { outcome: 'not-evaluated-floor' } };
@@ -234,6 +270,7 @@ export function buildProviderSelectionDiagnostics(args: {
             gate: failOpen
                 ? { outcome: 'fail-open', reason: detail.zeroReason }
                 : { outcome: 'clear' },
+            ...withRanking,
         };
     });
     const previewOnly = args.unbounded ? {

@@ -237,3 +237,100 @@ describe('mesh route preview', () => {
         expect(result.stages.quota.fitnessOrder).toHaveLength(7);
     });
 });
+
+/**
+ * These cases exist because the preview used to report a Stage 3 reversal
+ * WITHOUT reporting why: `fitnessWinner` named the loser, `selectionRank: 0`
+ * sat on it, `gate.outcome` said 'clear' for both, and the risk/confidence
+ * numbers the sort actually compared were computed and discarded. Two
+ * independent investigations read that output and disagreed about whether the
+ * reversal was a bug. The assertions below pin the evidence, not the ordering
+ * — the ordering is owned by the reversal case above and by
+ * mesh-quota-routing.test.ts.
+ */
+describe('mesh route preview — reordering evidence', () => {
+    function reversalNode() {
+        detectCliMocks.detected.add('fitness-first').add('quota-first');
+        return nodeWith([
+            { provider: 'fitness-first', model: 'model-a', difficulty: ['difficult'], maxParallel: 1 },
+            { provider: 'quota-first', model: 'model-b', difficulty: ['difficult'], maxParallel: 1 },
+        ], {
+            'fitness-first': quota('fitness-first', {
+                weeklyRemaining: 100,
+                weeklyResetsAt: NOW + 7 * DAY,
+                sessionRemaining: 100,
+            }),
+            'quota-first': quota('quota-first', {
+                weeklyRemaining: 20,
+                weeklyResetsAt: NOW + MIN,
+                sessionRemaining: 100,
+            }),
+        });
+    }
+
+    it('exposes the ranking numbers that decided the reversal, per candidate', () => {
+        const result = preview(reversalNode());
+        const byProvider = new Map(result.quotaDiagnostics.map(entry => [entry.providerType, entry]));
+
+        const loser = byProvider.get('fitness-first');
+        const winner = byProvider.get('quota-first');
+        // Both cleared the gate — which is exactly why 'clear' alone never
+        // identified the winner, and why `ranking` has to.
+        expect(loser?.gate.outcome).toBe('clear');
+        expect(winner?.gate.outcome).toBe('clear');
+
+        // quota-first: 20% remaining, weekly window all but elapsed → nearly
+        // all of that remainder evaporates at the imminent reset.
+        expect(winner?.ranking?.axis).toBe('weekly');
+        expect(winner?.ranking?.remainingPercent).toBe(20);
+        expect(winner?.ranking?.confidence).toBe(1);
+        expect(winner!.ranking!.risk).toBeGreaterThan(19);
+        expect(winner!.ranking!.rankedRisk).toBeCloseTo(winner!.ranking!.risk!, 10);
+        expect(winner?.ranking?.clearOrderIndex).toBe(0);
+
+        // fitness-first: a full remainder whose window has just reset scores
+        // ~0 — there is plenty of time left to spend it.
+        expect(loser?.ranking?.remainingPercent).toBe(100);
+        expect(loser!.ranking!.risk).toBe(0);
+        expect(loser?.ranking?.clearOrderIndex).toBe(1);
+
+        // The decision in one comparison: the reversal is a rankedRisk gap.
+        expect(winner!.ranking!.rankedRisk!).toBeGreaterThan(loser!.ranking!.rankedRisk!);
+    });
+
+    it('names the input order as input, and states the axis it ranked on', () => {
+        const stage = preview(reversalNode()).stages.quota;
+        expect(stage.fitnessOrderHead).toBe('fitness-first');
+        expect(stage.fitnessWinner).toBe(stage.fitnessOrderHead); // alias, same value
+        expect(stage.winner).toBe('quota-first');
+        expect(stage.note).toContain('INPUT order');
+        // quota-first sits at 20% weekly, at/below the 40% headroom threshold,
+        // so the weekly axis governs and the 5h axis stays off.
+        expect(stage.sessionAxisActive).toBe(false);
+        expect(stage.axis).toBe('weekly');
+        expect(preview(reversalNode()).stages.fitness[0]).toMatchObject({
+            providerType: 'fitness-first',
+            selectionRank: 0,
+            fitnessInputRank: 0,
+        });
+    });
+
+    it('reports the session axis when every weekly reading has headroom to spare', () => {
+        detectCliMocks.detected.add('roomy-a').add('roomy-b');
+        const node = nodeWith([
+            { provider: 'roomy-a', model: 'model-a', difficulty: ['difficult'] },
+            { provider: 'roomy-b', model: 'model-b', difficulty: ['difficult'] },
+        ], {
+            // Both far above the 40% weekly-headroom threshold → session axis.
+            'roomy-a': quota('roomy-a', { weeklyRemaining: 90, sessionRemaining: 80 }),
+            'roomy-b': quota('roomy-b', { weeklyRemaining: 95, sessionRemaining: 60 }),
+        });
+
+        const result = preview(node);
+        expect(result.stages.quota.sessionAxisActive).toBe(true);
+        expect(result.stages.quota.axis).toBe('session');
+        for (const entry of result.quotaDiagnostics) {
+            expect(entry.ranking?.axis).toBe('session');
+        }
+    });
+});

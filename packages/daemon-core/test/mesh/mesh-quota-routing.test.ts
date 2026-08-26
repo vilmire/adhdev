@@ -1053,8 +1053,22 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
     });
 
     it('no quota information at all: caller order preserved byte-for-byte', () => {
+        // Still an exhaustive toEqual — the ranking evidence is part of the
+        // return now, and with nothing measured every entry must be BARE:
+        // an axis label and no numbers. An evidence block carrying invented
+        // risk/confidence here would be exactly the "assumed full" failure the
+        // module header bans, so it is asserted, not loosened away.
         expect(rankProvidersByQuotaGate(nodeWithQuota(undefined), ['kimi', 'claude-cli', 'codex'], null, NOW))
-            .toEqual({ clear: ['kimi', 'claude-cli', 'codex'], gated: [] });
+            .toEqual({
+                clear: ['kimi', 'claude-cli', 'codex'],
+                gated: [],
+                sessionAxisActive: false,
+                rankingEvidence: [
+                    { providerType: 'kimi', axis: 'weekly' },
+                    { providerType: 'claude-cli', axis: 'weekly' },
+                    { providerType: 'codex', axis: 'weekly' },
+                ],
+            });
     });
 });
 
