@@ -4,8 +4,10 @@ import { test, type TestContext } from 'node:test'
 import {
   PUBLIC_ANY_ADDRESSES,
   StandaloneCliArgsError,
+  STANDALONE_PORT_ENV_VAR,
   normalizeStandaloneHostAddress,
   parseStandaloneCliArgs,
+  resolveStandalonePortEnvOverride,
 } from '../src/standalone-cli-args'
 
 // ─── Canonical contract: explicit --host <address> binds exactly that ───
@@ -164,4 +166,31 @@ test('live negative control: the malformed 0.0.0.0.0 the old parser produced can
       server.listen(0, '0.0.0.0.0', () => resolve())
     }),
   )
+})
+
+// ─── ADHDEV_STANDALONE_PORT env override (isolation gap fix) ───
+
+test('resolveStandalonePortEnvOverride reads a valid port from the env', () => {
+  assert.equal(resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: '3849' }), 3849)
+})
+
+test('resolveStandalonePortEnvOverride returns undefined when unset', () => {
+  assert.equal(resolveStandalonePortEnvOverride({}), undefined)
+  assert.equal(resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: '' }), undefined)
+  assert.equal(resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: '   ' }), undefined)
+})
+
+test('resolveStandalonePortEnvOverride tolerates a malformed value by falling back (never throws)', () => {
+  assert.equal(resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: 'not-a-port' }), undefined)
+  assert.equal(resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: '99999' }), undefined)
+  assert.equal(resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: '0' }), undefined)
+  assert.equal(resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: '-1' }), undefined)
+})
+
+test('an explicit --port always outranks ADHDEV_STANDALONE_PORT (precedence pin)', () => {
+  // Mirrors the precedence order in index.ts start(): options.port || resolveStandalonePortEnvOverride() || DEFAULT_PORT
+  const { options } = parseStandaloneCliArgs(['--port', '4000'])
+  const envOverride = resolveStandalonePortEnvOverride({ [STANDALONE_PORT_ENV_VAR]: '3849' })
+  const effectivePort = options.port || envOverride
+  assert.equal(effectivePort, 4000)
 })

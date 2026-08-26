@@ -30,6 +30,7 @@ import {
   StandaloneCliArgsError,
   PUBLIC_ANY_ADDRESSES,
   STANDALONE_HELP_TEXT,
+  resolveStandalonePortEnvOverride,
 } from './standalone-cli-args.js';
 
 import {
@@ -743,7 +744,7 @@ class StandaloneServer {
     if (!options.host && persistedStandaloneBindHost !== STANDALONE_BIND_HOST_DEFAULT) {
       saveStandaloneBindHostPreference(persistedStandaloneBindHost);
     }
-    const port = options.port || DEFAULT_PORT;
+    const port = options.port || resolveStandalonePortEnvOverride() || DEFAULT_PORT;
     // Tag the daemon-core file logger with this server's port so its
     // daemon-<port>-YYYY-MM-DD.log never interleaves with another daemon
     // sharing the same log dir (e.g. an explicit shared ADHDEV_CONFIG_DIR).
@@ -900,8 +901,27 @@ class StandaloneServer {
 
     // 8. Start listening
     this.running = true;
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      // listen()'s completion callback only fires on success; a bind failure
+      // (e.g. EADDRINUSE because another daemon already holds this port)
+      // surfaces as an async 'error' event instead. Without this listener
+      // Node treats it as an uncaught exception on the whole process instead
+      // of a clean, attributable startup failure via main().catch() below.
+      const onError = (err: NodeJS.ErrnoException): void => {
+        this.running = false;
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(
+            `Port ${port} is already in use — another process (possibly another ADHDev daemon) `
+            + `is listening on ${host}:${port}. Use --port <port> or set ADHDEV_STANDALONE_PORT `
+            + 'to pick a different one.',
+          ));
+        } else {
+          reject(err);
+        }
+      };
+      this.httpServer!.once('error', onError);
       this.httpServer!.listen(port, host, () => {
+        this.httpServer!.off('error', onError);
         resolve();
       });
     });

@@ -57,6 +57,11 @@ Options:
 
 Environment:
   ADHDEV_SESSION_HOST_NAME   Override session host namespace (default: adhdev-standalone)
+  ADHDEV_STANDALONE_PORT     Port to listen on when --port is not given (default: 3847).
+                             An explicit --port always wins over this.
+  ADHDEV_CONFIG_DIR          Override the state/profile directory (default: ~/.adhdev-standalone).
+                             Inherited from the environment, not just set explicitly — see the
+                             startup warning if this points at a directory a live daemon owns.
   --help, -h             Show this help message
 
 Runtime commands:
@@ -95,6 +100,26 @@ function normalizeStandalonePort(raw: string): number {
   if (!/^\d+$/.test(value) || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new StandaloneCliArgsError(`Invalid --port value "${value}". Expected an integer between 1 and 65535.`);
   }
+  return port;
+}
+
+/** Env var that sets the standalone listen port when --port is not given. */
+export const STANDALONE_PORT_ENV_VAR = 'ADHDEV_STANDALONE_PORT';
+
+/**
+ * Resolve the env-supplied port override, if any. Silently ignored (not
+ * thrown) on an unparseable value: an env var is often inherited from an
+ * unrelated shell profile rather than authored for this invocation, so unlike
+ * an explicit --port typo we fall back to the default instead of refusing to
+ * start. Mirrors the tolerant-fallback shape of runtime-defaults.ts's
+ * readMeshTimeoutEnvMs rather than the strict CLI-flag validator above.
+ */
+export function resolveStandalonePortEnvOverride(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const raw = env[STANDALONE_PORT_ENV_VAR]?.trim();
+  if (!raw) return undefined;
+  if (!/^\d+$/.test(raw)) return undefined;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
   return port;
 }
 
