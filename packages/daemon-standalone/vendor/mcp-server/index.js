@@ -2358,18 +2358,20 @@ function summarizeNodeQuota(quota, now = Date.now()) {
     if (!snapshot || typeof snapshot !== "object") continue;
     const status = typeof snapshot.status === "string" ? snapshot.status : "unknown";
     const lastGood = snapshot.metadata?.lastGoodWindows === true;
+    const failureKind = typeof snapshot.metadata?.failureKind === "string" ? snapshot.metadata.failureKind : void 0;
     const pct = (w) => w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : void 0;
     const weekly = pct(snapshot.weekly);
     const session = pct(snapshot.session);
     if (weekly === void 0 && session === void 0) {
-      const kind = typeof snapshot.metadata?.failureKind === "string" ? snapshot.metadata.failureKind : void 0;
-      out[provider] = kind ? `${status}:${kind}` : status;
+      out[provider] = failureKind ? `${status}:${failureKind}` : status;
       continue;
     }
     const age = formatQuotaSnapshotAge(snapshot, now);
     const stale = isQuotaSnapshotStale(snapshot, now);
     let line = `7d ${weekly ?? "\u2014"} \xB7 5h ${session ?? "\u2014"} \xB7 ${age}${stale ? " stale" : ""}`;
-    if (lastGood) line += " \xB7 refreshing";
+    if (failureKind === "no-data") {
+      if (!stale) line += " \xB7 stale";
+    } else if (lastGood) line += " \xB7 refreshing";
     else if (status !== "ok") line += ` \xB7 ${status}`;
     out[provider] = line;
   }
