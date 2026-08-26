@@ -773,6 +773,8 @@ export interface CloudDaemonSummaryEntry {
     hostname?: string;
     nickname?: string;
     p2p?: StatusReportPayload['p2p'];
+    /** Live seqscribe health telemetry; aggregate counters and booleans only. */
+    seqscribe?: SeqscribeStatusSummary;
     cdpConnected?: boolean;
     timestamp?: number;
     version?: string;
