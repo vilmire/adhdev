@@ -21,7 +21,10 @@ export default defineConfig({
   // Bundle the pure mesh-shared leaf inline so this dist — which daemon-standalone
   // ships verbatim — is self-contained and doesn't need mesh-shared resolvable at
   // the consumer's node_modules root.
-  noExternal: ['@adhdev/mesh-shared'],
+  // `seqscribe` is bundled for the same reason, and additionally because it is a
+  // `file:` link into vendor/: a consumer installing @adhdev/daemon-core from npm
+  // has no way to resolve it, so an external require would throw MODULE_NOT_FOUND.
+  noExternal: ['@adhdev/mesh-shared', 'seqscribe'],
   // Bake the git commit/version into __DAEMON_BUILD_* (read by src/build-info.ts)
   // so this dist — which daemon-standalone ships verbatim — reports its build.
   define: daemonBuildDefine({ version: pkg.version }),
