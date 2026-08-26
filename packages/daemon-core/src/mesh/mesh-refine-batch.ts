@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
+import type { MeshRefineSubmoduleReachabilityPreflight } from './mesh-refine-submodule-preflight.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -38,6 +39,13 @@ export interface MeshRefineBatchNodeChangeArea {
     aheadCount: number;
     /** Non-fatal analysis error (e.g. base/branch unresolved); ordering falls back to neutral. */
     error?: string;
+    /**
+     * Dry-run-only submodule reachability preflight verdict, attached by
+     * {@link buildMeshRefineBatchDryRunResult} when the branch touches a gitlink.
+     * A pre-merge WARNING (state can change before execute — the execution-time
+     * submodule_reachability gate still makes the final call).
+     */
+    submoduleReachabilityPreflight?: MeshRefineSubmoduleReachabilityPreflight;
 }
 
 export interface MeshRefineBatchOrderingResult {

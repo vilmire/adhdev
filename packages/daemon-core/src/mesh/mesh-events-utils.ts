@@ -528,6 +528,27 @@ export function buildMeshSystemMessage(args: {
             `[System] Refinery async job for ${args.nodeLabel} failed${details ? ` (${details})` : ''}${error ? `: ${error}` : '.'}`,
             nextStep ? `Next step: ${nextStep}` : 'Review the terminal refine event/ledger before retrying.',
         ];
+        // BATCH-PER-NODE: a batch terminal aggregates per-node outcomes in
+        // result.results, but the aggregate message alone never said WHICH nodes
+        // failed — the coordinator had to hand-diff `git log` to find out. List
+        // every non-converged node with its convergence/code/stage.
+        const batchResults = result?.batch === true && Array.isArray(result?.results)
+            ? result.results as Array<Record<string, unknown>>
+            : [];
+        const failedNodes = batchResults.filter(entry =>
+            entry && entry.convergence !== 'merged_to_main' && entry.convergence !== 'skipped_patch_equivalent');
+        if (failedNodes.length > 0) {
+            parts.push('Per-node failures:');
+            for (const entry of failedNodes) {
+                const nodeId = readNonEmptyString(entry.nodeId) || '(unknown node)';
+                const nodeConvergence = readNonEmptyString(entry.convergence);
+                const nodeCode = readNonEmptyString(entry.code);
+                const nodeStage = readNonEmptyString(entry.stage);
+                const nodeError = readNonEmptyString(entry.error);
+                const codeStage = [nodeCode ? `code=${nodeCode}` : '', nodeStage ? `stage=${nodeStage}` : ''].filter(Boolean).join(', ');
+                parts.push(`- ${nodeId}${nodeConvergence ? `: ${nodeConvergence}` : ''}${codeStage ? ` (${codeStage})` : ''}${nodeError ? ` — ${nodeError.length > 200 ? `${nodeError.slice(0, 200)}…` : nodeError}` : ''}`);
+            }
+        }
         return parts.join('\n');
     }
     return '';

@@ -12,6 +12,7 @@ import { fastForwardMeshNode } from '../../mesh/mesh-fast-forward.js';
 import { runMeshInit } from '../../mesh/mesh-init.js';
 import { detectCLIs } from '../../detection/cli-detector.js';
 import { buildMeshRefineValidationPlan } from '../router.js';
+import { planMeshRefineNodeSubmodulePreflight } from '../../mesh/mesh-refine-submodule-preflight.js';
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 
@@ -39,6 +40,11 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
         const mesh = meshRecord?.mesh;
         const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
         if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
+        // Submodule reachability preflight: if this branch bumps a gitlink whose
+        // commit is not on the submodule's origin/<main>, surface the publish/
+        // converge guidance NOW instead of after all execution gates pass.
+        // Undefined when no submodule is touched (dry-run stays quiet).
+        const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => undefined);
         return {
             success: true,
             dryRun: true,
@@ -47,6 +53,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
             validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
             mergeWillRun: false,
             cleanupWillRun: false,
+            ...(submoduleReachabilityPreflight ? { submoduleReachabilityPreflight } : {}),
         };
     },
 
@@ -198,6 +205,8 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
             const mesh = meshRecord?.mesh;
             const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
             if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
+            // Same submodule reachability preflight as plan_mesh_refine_node (see there).
+            const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => undefined);
             return {
                 success: true,
                 dryRun: true,
@@ -206,6 +215,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
                 validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
                 mergeWillRun: false,
                 cleanupWillRun: false,
+                ...(submoduleReachabilityPreflight ? { submoduleReachabilityPreflight } : {}),
                 hint: 'Dry-run only — no merge/push/cleanup performed. Re-invoke with execute:true to converge this node.',
             };
         }

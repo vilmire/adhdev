@@ -19,6 +19,7 @@ import { resolveCoordinatorSelfIds, daemonIdListIncludes } from '../mesh/mesh-re
 import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
+import { buildMeshRefineBatchDryRunResult } from '../mesh/mesh-refine-submodule-preflight.js';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
 // DURABLE-DUPLICATE-DISPATCH / WORKTREE-VANISHED-MIDFLIGHT: pure move to keep this
 // file under its frozen file-size baseline. Re-exported below for existing importers.
@@ -42,7 +43,6 @@ import type { ChangedPackageClassification } from '../git/git-status.js';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
 import {
     alignRefinerySubmodulesAfterMerge,
-    buildMeshRefineValidationPlan,
     buildSubmodulePublishRequiredNextStep,
     MeshRefineAsyncJobStatus,
     MeshRefineBatchJobHandle,
@@ -2118,22 +2118,9 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
 
         const dryRun = args?.dryRun !== false && args?.execute !== true;
         if (dryRun) {
-            return {
-                success: true,
-                batch: true,
-                dryRun: true,
-                nodeCount: orderedNodes.length,
-                order: ordering.order,
-                orderingRationale: ordering.rationale,
-                changeAreas: ordering.changeAreas,
-                plan: orderedNodes.map(node => ({
-                    nodeId: node.id,
-                    workspace: node.workspace,
-                    validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
-                    mergeWillRun: false,
-                })),
-                note: 'Dry-run: no validation, rebase, or merge was executed. Re-run with execute=true to converge nodes in this order.',
-            };
+            // Dry-run result assembly + the submodule reachability preflight live in
+            // mesh-refine-submodule-preflight.ts (this file is at its frozen size baseline).
+            return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
         }
 
         // Execute: refine each node in order via the shared convergence core.
@@ -2281,7 +2268,9 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
             allConverged,
             results,
             ...(allConverged ? {} : {
-                nextStep: 'Resolve blocked_review / not_mergeable nodes manually (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.',
+                // Name the failed nodes inline — the aggregate nextStep used to hide
+                // WHICH nodes blocked, forcing a manual git-log cross-check.
+                nextStep: `Resolve blocked_review / not_mergeable nodes manually — failed: ${results.filter(r => r.convergence === 'blocked_review' || r.convergence === 'not_mergeable').map(r => `${r.nodeId}${r.code ? ` [${r.code}]` : ''}`).join(', ')} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`,
             }),
         };
     }
