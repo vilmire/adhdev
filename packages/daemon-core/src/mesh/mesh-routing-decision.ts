@@ -190,8 +190,8 @@ export function buildProviderSelectionDiagnostics(args: {
     forReadonlyTask?: boolean;
 }): ProviderSelectionDiagnostics {
     const now = args.now ?? Date.now();
-    const riskSnapshot = quotaRiskSnapshotForCandidates(args.node, args.ranked.clear, args.quotaRouting, now, args.quotaFactsContext);
-    const allRisks = quotaRiskSnapshotForCandidates(args.node, args.candidateSlots.map(candidate => candidate.providerType), args.quotaRouting, now, args.quotaFactsContext);
+    const riskSnapshot = quotaRiskSnapshotForCandidates(args.node, args.ranked.clear, args.quotaRouting, now, args.quotaFactsContext, args.ranked);
+    const allRisks = quotaRiskSnapshotForCandidates(args.node, args.candidateSlots.map(candidate => candidate.providerType), args.quotaRouting, now, args.quotaFactsContext, args.ranked);
     const riskByProvider = new Map(allRisks.map(snapshot => [snapshot.providerType, snapshot]));
     const scoreDetails = args.task ? args.usableSlots.map((candidate, selectionRank) => {
         const selectionCapacity = slotCapacityRemaining(

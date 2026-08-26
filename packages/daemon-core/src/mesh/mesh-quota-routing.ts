@@ -788,11 +788,12 @@ function isStructurallyUnmeasurable(quota: MeshNodeFactsProviderQuota): boolean 
  * computed against the skew-safe reporter-now estimate (updatedAt + snapshot
  * age — the same same-clock-difference trick as isSessionResetImminent).
  *
- * resetsAt UNKNOWN (window reported, reset stamp absent): risk 0 — no
- * evidence of imminent loss means no invented urgency (the same
- * observation-without-confidence-is-inert rule as the gate's fail-open).
- * Such candidates still rank by their known remaining, above the
- * remaining-unknown group, below every candidate with positive risk.
+ * Window authority is exactly the gate/bonus authority: a window only ranks
+ * while isWindowTrustworthy says it still describes the current reset
+ * period. A past reset, an unusable reporter clock, or an aged window without
+ * a reset stamp is therefore unreadable on this axis. A fresh window without
+ * a reset stamp remains readable with risk 0 — no evidence of imminent loss
+ * means no invented urgency.
  *
  * RETAINED readings (see CONFIDENCE above) are admitted here rather than
  * rejected: a snapshot that carries real windows but is no longer current
@@ -827,6 +828,10 @@ function expiryRiskForRanking(
             ? CONFIDENCE_RETAINED_STRUCTURAL
             : CONFIDENCE_RETAINED_AGED;
     const window = axis === 'session' ? quota.session : quota.weekly;
+    // Keep ranking on the same per-window authority boundary as the launch
+    // gate and spread bonus. In particular, an already-reset window is not
+    // "fully elapsed" risk; it no longer says anything about the new window.
+    if (!isWindowTrustworthy(window, facts, quota, policy, now)) return undefined;
     const remaining = remainingPercent(window);
     if (remaining === undefined) return undefined;
     const resetsAt = Number(window?.resetsAt);
@@ -1222,11 +1227,17 @@ export function describeRecoveryRelaunchDecision(
  * mesh_status reader can show "here is what each candidate looked like"
  * without re-deriving expiryRiskForRanking itself (kept module-private — this
  * is the one sanctioned way to read it from outside the module).
- * remainingPercent/risk are undefined for the same reasons rankProvidersByQuotaGate's
- * unknown group exists: no snapshot, non-'ok', stale, or no weekly window.
+ * `axis` names the window the ranking actually used for that provider.
+ * remainingPercent/risk are undefined for the same reasons
+ * rankProvidersByQuotaGate's unknown group exists: no snapshot, an
+ * untrustworthy window, or no readable window on that axis.
  */
 export interface ProviderQuotaRiskSnapshot {
     providerType: string;
+    /** Window axis used by the ranking for this provider. A provider can be
+     *  weekly while session mode is active when its session window is
+     *  unreadable and the comparator falls back. */
+    axis: 'weekly' | 'session';
     remainingPercent?: number;
     /** Raw expiry risk, BEFORE the confidence discount. */
     risk?: number;
@@ -1247,11 +1258,27 @@ export function quotaRiskSnapshotForCandidates(
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
+    ranking?: {
+        sessionAxisActive?: boolean;
+        rankingEvidence?: ProviderQuotaRankingEvidence[];
+    },
 ): ProviderQuotaRiskSnapshot[] {
+    // Reuse the decision's per-candidate evidence when the caller has it. The
+    // standalone observability API computes that same decision once so it can
+    // never silently label session-ranked numbers as weekly.
+    const resolvedRanking = ranking
+        ?? rankProvidersByQuotaGate(node, orderedProviderTypes, policy, now, context);
+    const evidenceByProvider = new Map(
+        (resolvedRanking.rankingEvidence ?? []).map(evidence => [evidence.providerType, evidence]),
+    );
     return orderedProviderTypes.map(providerType => {
-        const w = expiryRiskForRanking(node, providerType, 'weekly', policy, now, context);
+        const evidence = evidenceByProvider.get(providerType);
+        const axis: 'weekly' | 'session' = evidence?.axis
+            ?? (resolvedRanking.sessionAxisActive ? 'session' : 'weekly');
+        const w = expiryRiskForRanking(node, providerType, axis, policy, now, context);
         return {
             providerType,
+            axis,
             ...(w ? {
                 remainingPercent: w.remainingPercent,
                 risk: w.risk,

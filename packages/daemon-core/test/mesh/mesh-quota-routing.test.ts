@@ -922,6 +922,29 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
             .toEqual(['claude-cli', 'kimi']);
     });
 
+    it('★expired session windows are unreadable and fall back to weekly instead of ranking as maximum risk', () => {
+        const node = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                // Before the fix both past windows clamped elapsedFraction to
+                // 1, so kimi's 90% dead-window remainder incorrectly won.
+                session: sessionWindow(10, NOW - MIN),
+                weekly: weeklyWindow(59, NOW + 5 * DAY),          // 41% left
+            }),
+            'claude-cli': okQuota({
+                session: sessionWindow(80, NOW - MIN),
+                weekly: weeklyWindow(40, NOW + 5 * DAY),          // 60% left → weekly winner
+            }),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW);
+        expect(ranked.sessionAxisActive).toBe(true);
+        expect(ranked.clear).toEqual(['claude-cli', 'kimi']);
+        expect(ranked.rankingEvidence).toEqual([
+            expect.objectContaining({ providerType: 'claude-cli', axis: 'weekly' }),
+            expect.objectContaining({ providerType: 'kimi', axis: 'weekly' }),
+        ]);
+    });
+
     // ★REPLACED 2026-08-20 (was: 'session reading STALE: the whole snapshot
     // fails open to the weekly order'). The old test asserted
     // ['claude-cli', 'kimi'] on the premise "kimi's snapshot is stale →
@@ -1273,6 +1296,7 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
             const node = nodeWithQuota({ 'claude-cli': claudeStructural(20, NOW + DAY) });
             const [snapshot] = quotaRiskSnapshotForCandidates(node, ['claude-cli'], null, NOW);
             expect(snapshot.providerType).toBe('claude-cli');
+            expect(snapshot.axis).toBe('weekly');
             expect(snapshot.remainingPercent).toBe(80);
             expect(snapshot.confidence).toBe(0.7);
             // rankedRisk is what the sort compared — risk scaled by confidence.
@@ -1287,6 +1311,22 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
             expect(snapshot.risk).toBeGreaterThan(0);
             expect(snapshot).not.toHaveProperty('confidence');
             expect(snapshot).not.toHaveProperty('rankedRisk');
+        });
+
+        it('reports the actual session axis used by the ranking', () => {
+            const node = nodeWithQuota({
+                kimi: okQuota({
+                    provider: 'kimi',
+                    session: { usedPercent: 30, windowMinutes: 300, resetsAt: NOW + 20 * MIN },
+                    weekly: weeklyWindow(40, NOW + 5 * DAY),
+                }),
+            });
+            const [snapshot] = quotaRiskSnapshotForCandidates(node, ['kimi'], null, NOW);
+            expect(snapshot).toEqual(expect.objectContaining({
+                providerType: 'kimi',
+                axis: 'session',
+                risk: expect.any(Number),
+            }));
         });
 
         it('distinguishes the two retained tiers', () => {
