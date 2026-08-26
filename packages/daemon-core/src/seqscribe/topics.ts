@@ -13,6 +13,16 @@
  * Grants, retention, replication and access are NOT hashed, but changing them
  * still deserves fleet coordination for operational sanity.
  *
+ * ── Which policies carry `finalityAuthority` ────────────────────────────────
+ * The three CONTENT policies do: `proposeFinality` throws and certificate
+ * ingestion rejects (`bad_cert`) unless the policy names the authority, and the
+ * id is inside `topicSchemaHash` — so it is one constant (`ADHDEV_AUTHORITY_ID`)
+ * fleet-wide, and a node without the fleet secret cannot even DEFINE these
+ * topics (the library requires `verifyFinality`; node.ts skips them in
+ * provisional mode). The two metadata policies deliberately carry none: their
+ * authority is a Phase 6 cloud promotion, and until then metadata topics sync
+ * on any node, secret or not.
+ *
  * ── Access class is a security boundary, not a hint ────────────────────────
  * `access: 'content'` topics may only ever be granted to peers we trust with
  * arbitrary writes under any writerId (host-guide §1: "granting full on a
@@ -23,6 +33,10 @@
  */
 
 import type { TopicPolicy } from 'seqscribe';
+import { ADHDEV_AUTHORITY_ID } from './authority.js';
+
+// No import cycle: authority.ts depends on the seqscribe library and the logger
+// only, never on this table.
 
 // ─── Charter normalization ──────────────────────────────────────────────────
 
@@ -118,6 +132,10 @@ export function assistantJournalPolicy(): TopicPolicy {
         retention: { mode: 'full' },
         replication: 'full-sync',
         access: 'content',
+        // Content topics name the fleet authority (see the header note on
+        // finalityAuthority): required for proposeFinality/cert ingestion, and
+        // inside topicSchemaHash, so this is one constant fleet-wide.
+        finalityAuthority: ADHDEV_AUTHORITY_ID,
     };
 }
 
@@ -133,6 +151,7 @@ export function sessionTranscriptPolicy(ringSize: number = SESSION_TRANSCRIPT_RI
         retention: { mode: 'ring', size: ringSize },
         replication: 'subscribe-only',
         access: 'content',
+        finalityAuthority: ADHDEV_AUTHORITY_ID,
     };
 }
 
@@ -158,7 +177,10 @@ export function fleetStatusPolicy(): TopicPolicy {
  *                       relax a security setting by writing last
  *
  * `owned` requires `verifyTakeover` + `verifyWriterDirective` to be configured
- * before defineTopic, or the library throws — see authority.ts.
+ * before defineTopic, or the library throws — see authority.ts. The
+ * `finalityAuthority` below likewise requires `verifyFinality`, so this topic
+ * cannot be defined at all without the fleet secret (node.ts skips it in
+ * provisional mode).
  *
  * ★ §6.1: this topic replicates to the whole fleet. Secrets and machine
  * identity must never reach it. Phase 5 adds the key whitelist that enforces
@@ -170,6 +192,7 @@ export function configSettingsPolicy(): TopicPolicy {
         retention: { mode: 'full' },
         replication: 'full-sync',
         access: 'content',
+        finalityAuthority: ADHDEV_AUTHORITY_ID,
         conflict: {
             default: 'lww',
             overrides: {

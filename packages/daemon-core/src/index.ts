@@ -974,7 +974,8 @@ export {
 
 // seqscribe integration (docs/design/2026-08-26-seqscribe-integration-plan.md).
 // Phase 0 surface: node lifecycle, the topic table, the authority wiring and
-// the status projection. No producer or consumer is wired up yet.
+// the status projection. Phase 1 adds the fleet-secret store (auth_ok delivery)
+// and the assistant.journal producer/consumer API.
 export {
   openSeqscribeNode,
   getSeqscribeDbPath,
@@ -1011,4 +1012,11 @@ export {
   FINALITY_INTERVAL_MS,
   type FleetAuthorityOptions,
 } from './seqscribe/authority.js';
+export {
+  loadStoredFleetSecret,
+  storeFleetSecret,
+  FLEET_SECRET_FILE,
+  type StoredFleetSecret,
+} from './seqscribe/fleet-secret.js';
+export { appendAssistantJournal, consumeAssistantJournal } from './seqscribe/journal.js';
 export { summarizeSeqscribeStats } from './seqscribe/stats.js';

@@ -1,10 +1,14 @@
 /**
  * seqscribe node lifecycle — one node per daemon process.
  *
- * Phase 0 of the seqscribe integration (design §1.2). This owns the DB handle,
- * the writerId, the topic definitions, the authority wiring, and shutdown.
- * Producers and consumers arrive in later phases; nothing here reads or writes
- * ADHDev data yet.
+ * Phase 0/1 of the seqscribe integration (design §1.2, §1.4). This owns the DB
+ * handle, the writerId, the topic definitions, the authority wiring, and
+ * shutdown. The fleet secret resolves env-var-first, then the auth_ok-persisted
+ * store (fleet-secret.ts); with NO secret the node runs metadata-topics-only —
+ * content topics require the secret (env or auth_ok-delivered) because their
+ * policies name `finalityAuthority`, which the library refuses to define
+ * without `verifyFinality`. Producers and consumers arrive via journal.ts and
+ * later phases.
  *
  * ── Single-process ownership is not advisory ───────────────────────────────
  * Two processes on one seqscribe DB is corruption, not degraded mode
@@ -21,12 +25,13 @@
 import { existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import type BetterSqlite3 from 'better-sqlite3';
-import type { SeqscribeNodeExt, SqliteHandle } from 'seqscribe';
+import type { Constants, SeqscribeNodeExt, SqliteHandle } from 'seqscribe';
 import { betterSqlite3Handle, createSeqscribe, loadOrCreateWriterId } from 'seqscribe';
 import { getConfigDir } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { createFleetAuthorityIfConfigured, startFleetFinalityLoop } from './authority.js';
+import { loadStoredFleetSecret } from './fleet-secret.js';
 import { baseTopicDefinitions, contentTopicsFor, type TopicDefinition } from './topics.js';
 
 /** DB file name under the config dir (design §6.2 inventory). */
@@ -54,6 +59,28 @@ export interface SeqscribeNodeOptions {
     /** Override the DB path — tests pass a tmp dir. */
     dbPath?: string;
     env?: NodeJS.ProcessEnv;
+    /**
+     * The fleet secret as persisted by the `auth_ok` path
+     * (seqscribe/fleet-secret.ts). `undefined` = load from disk;
+     * an explicit `null` = "known absent" (tests pin provisional mode without
+     * touching the filesystem). The env var still wins over either — see
+     * resolveFleetSecret in authority.ts.
+     */
+    storedFleetSecret?: string | null;
+    /**
+     * Library constants override (seqscribe `Constants`). TESTS ONLY — e.g. a
+     * short FINALITY_WINDOW_MS. Production callers never set this: the defaults
+     * are fleet-wide schema-adjacent tuning, not per-node preferences.
+     */
+    constants?: Partial<Constants>;
+    /**
+     * Finality issuance loop interval override. TESTS ONLY — the 1h default
+     * (authority.ts `FINALITY_INTERVAL_MS`) is a fleet-wide cadence, and
+     * production callers never set this; a short interval lets a test certify
+     * finality on a human timescale. Ignored unless `isCoordinator` and an
+     * authority is configured.
+     */
+    finalityIntervalMs?: number;
 }
 
 export interface SeqscribeNodeHandle {
@@ -129,7 +156,13 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
 
     // Authority hooks are needed on EVERY node (verification), not just the
     // coordinator (issuance). Absent secret = provisional-only operation.
-    const authority = createFleetAuthorityIfConfigured(opts.env ?? process.env);
+    // `undefined` storedFleetSecret means "read the auth_ok-persisted store";
+    // an explicit value (null included) is the caller's pinned answer.
+    const storedSecret =
+        opts.storedFleetSecret !== undefined
+            ? opts.storedFleetSecret
+            : loadStoredFleetSecret(opts.env ?? process.env)?.secret ?? null;
+    const authority = createFleetAuthorityIfConfigured(opts.env ?? process.env, storedSecret);
 
     let node: SeqscribeNodeExt;
     try {
@@ -137,6 +170,7 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
             writerId,
             storage,
             ...(authority ? { authority: authority.hooks } : {}),
+            ...(opts.constants ? { constants: opts.constants } : {}),
         });
     } catch (err) {
         // ERR_DB_OWNED means another process holds the file lock. Proceeding
@@ -151,15 +185,19 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         throw err;
     }
 
-    // `config.settings` uses an `owned` policy for `machine.*`, and defineTopic
-    // throws on `owned` unless verifyTakeover/verifyWriterDirective exist. With
-    // no authority we skip that one topic rather than failing the whole boot.
+    // Without a fleet secret the node runs METADATA-TOPICS-ONLY. defineTopic
+    // throws on ANY policy that sets `finalityAuthority` when verifyFinality is
+    // absent — and since Phase 1 all three content topics name the authority
+    // (topics.ts), that filter subsumes the old `owned`-register skip
+    // (`config.settings` has both). Metadata topics (mesh events, fleet status)
+    // stay defined and keep syncing in provisional mode; content topics require
+    // the secret, env-delivered or auth_ok-delivered.
     const allDefs = baseTopicDefinitions(opts.meshIds ?? []);
-    const defs = authority ? allDefs : allDefs.filter((d) => d.policy.kind !== 'register');
+    const defs = authority ? allDefs : allDefs.filter((d) => d.policy.finalityAuthority === undefined);
     if (!authority) {
         LOG.info(
             'Seqscribe',
-            'no fleet secret configured — running without finality authority; register topics are disabled',
+            'no fleet secret configured — running metadata-topics-only; content topics require the fleet secret (env or auth_ok-delivered)',
         );
     }
 
@@ -174,6 +212,7 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
             ? startFleetFinalityLoop(node, {
                   topics: contentTopicsFor(defs),
                   authority: authority.authority,
+                  intervalMs: opts.finalityIntervalMs,
               })
             : null;
 

@@ -13,9 +13,9 @@
  *
  * ── Secret handling (§6.1) ─────────────────────────────────────────────────
  * The HMAC secret is passed in by the caller and is NEVER persisted here, never
- * logged, and never placed in a topic payload. This module deliberately does
- * not read config or invent a distribution channel — see `resolveFleetSecret`
- * below for why that is the caller's job and what the current gap is.
+ * logged, and never placed in a topic payload. Persistence lives in
+ * seqscribe/fleet-secret.ts (the `auth_ok` delivery path writes it there); this
+ * module only resolves priority between the env var and that store.
  */
 
 import type { AuthorityHooks, SeqscribeNode, Topic } from 'seqscribe';
@@ -128,19 +128,35 @@ export function startFleetFinalityLoop(
  *     `mesh-config` persists only `tokenId` — a short hash — never the raw
  *     token. It is a one-time join credential, not a retrievable secret.
  *
- * So no existing store holds a retrievable fleet-shared secret, and minting one
- * here would be exactly the "new secret channel" the design forbids. Phase 0
- * therefore takes the secret from the caller and treats "absent" as
+ * So no pre-existing store held a retrievable fleet-shared secret, and minting
+ * one here would be exactly the "new secret channel" the design forbids. Phase 1
+ * closed that gap: the server issues the fleet secret over the existing daemon
+ * `auth_ok` handshake and daemon-cloud persists it via seqscribe/fleet-secret.ts;
+ * this function takes that stored value as its second argument. "Absent" remains
  * authority-disabled: nodes still sync, and entries stay provisional (which
  * seqscribe already defines as the default consumer mode — host-guide §4).
  *
  * `ADHDEV_SEQSCRIBE_FLEET_SECRET` exists so a dogfooding fleet and the
- * integration tests can supply one without a config migration. Distribution is
- * a Phase 1 decision, tracked in the design doc.
+ * integration tests can supply one without a config migration.
+ *
+ * ── Resolution priority (pinned by tests) ───────────────────────────────────
+ *   1. `ADHDEV_SEQSCRIBE_FLEET_SECRET` env var — WINS when set (standalone and
+ *      test determinism: an explicit env must never be silently overridden by
+ *      whatever the server last delivered).
+ *   2. `stored` — the secret the `auth_ok` handshake persisted via
+ *      seqscribe/fleet-secret.ts (Phase 1 distribution path).
+ *   3. null — provisional mode: nodes sync, entries never finalize.
+ *
+ * Whitespace-only values are ignored at every level.
  */
-export function resolveFleetSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+export function resolveFleetSecret(
+    env: NodeJS.ProcessEnv = process.env,
+    stored?: string | null,
+): string | null {
     const fromEnv = env.ADHDEV_SEQSCRIBE_FLEET_SECRET?.trim();
-    return fromEnv && fromEnv.length > 0 ? fromEnv : null;
+    if (fromEnv && fromEnv.length > 0) return fromEnv;
+    const fromStore = stored?.trim();
+    return fromStore && fromStore.length > 0 ? fromStore : null;
 }
 
 /**
@@ -148,14 +164,16 @@ export function resolveFleetSecret(env: NodeJS.ProcessEnv = process.env): string
  *
  * A null return is a supported operating mode, not a failure: without an
  * authority nothing certifies finality, so the log never advances a watermark
- * and every consumer stays provisional. What it does NOT support is an `owned`
- * register policy, which is why `node.ts` degrades `config.settings` when the
- * authority is absent instead of letting `defineTopic` throw at boot.
+ * and every consumer stays provisional. What it does NOT support is any policy
+ * that names a `finalityAuthority` or uses an `owned` register key — the library
+ * throws from `defineTopic` in both cases — which is why `node.ts` degrades to
+ * metadata-topics-only when the authority is absent instead of failing the boot.
  */
 export function createFleetAuthorityIfConfigured(
     env: NodeJS.ProcessEnv = process.env,
+    stored?: string | null,
 ): { authority: HmacAuthority; hooks: AuthorityHooks } | null {
-    const secret = resolveFleetSecret(env);
+    const secret = resolveFleetSecret(env, stored);
     if (!secret) return null;
     const authority = createFleetAuthority({ secret });
     return { authority, hooks: authority };
