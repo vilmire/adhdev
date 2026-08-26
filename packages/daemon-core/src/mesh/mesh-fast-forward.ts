@@ -133,7 +133,7 @@ export async function fastForwardMeshNode(args: MeshFastForwardNodeArgs): Promis
     });
   }
 
-  const earlyBlockers = collectPreflightBlockers(current, requestedBranch);
+  const earlyBlockers = collectPreflightBlockers(current, requestedBranch, updateSubmodules);
   if (earlyBlockers.length > 0) {
     const blockCode = chooseBlockCode(current, earlyBlockers);
     const result: MeshFastForwardResult = {
@@ -659,7 +659,7 @@ function otherBlockersAreOnlyAhead(blockers: string[]): boolean {
   return blockers.every((reason) => aheadOnly.has(reason));
 }
 
-function collectPreflightBlockers(status: GitRepoStatus, requestedBranch?: string): string[] {
+function collectPreflightBlockers(status: GitRepoStatus, requestedBranch?: string, updateSubmodules?: boolean): string[] {
   const blockers: string[] = [];
   if (!status.isGitRepo) blockers.push('not_git_repo');
   if (!status.branch) blockers.push('detached_head_or_unknown_branch');
@@ -668,12 +668,31 @@ function collectPreflightBlockers(status: GitRepoStatus, requestedBranch?: strin
   if (status.upstreamStatus !== 'fresh') blockers.push('upstream_not_fresh');
   if (status.hasConflicts) blockers.push('conflicts_present');
   if (status.staged > 0) blockers.push('staged_changes_present');
-  if (status.modified > 0) blockers.push('modified_changes_present');
+  // A submodule whose checked-out commit differs from the recorded gitlink shows up as
+  // its own `M` entry in the ROOT's `git status --porcelain`, on top of the per-submodule
+  // outOfSync flag collectSubmoduleBlockers checks below — the same drift double-counts
+  // across both signals. When updateSubmodules:true is set (the post-merge update step
+  // will resolve the drift in this same cycle), subtract one from `modified` for each
+  // submodule that is purely out-of-sync (not dirty, not errored) before deciding whether
+  // real file modifications remain. A genuinely dirty submodule's `M` entry is NOT
+  // subtracted — collectSubmoduleBlockers already hard-blocks that case unconditionally.
+  const tolerateGitlinkDriftAlone = updateSubmodules === true;
+  const pureDriftSubmoduleCount = tolerateGitlinkDriftAlone
+    ? (Array.isArray(status.submodules) ? status.submodules : []).filter(
+        (submodule) => submodule.outOfSync && !submodule.dirty && !submodule.error,
+      ).length
+    : 0;
+  if (status.modified - pureDriftSubmoduleCount > 0) blockers.push('modified_changes_present');
   if (status.untracked > 0) blockers.push('untracked_changes_present');
   if (status.deleted > 0) blockers.push('deleted_changes_present');
   if (status.renamed > 0) blockers.push('renamed_changes_present');
   if (status.stashCount > 0) blockers.push('stash_entries_present');
-  blockers.push(...collectSubmoduleBlockers(status, 'pre'));
+  // Pure gitlink drift (submodule working tree clean, only checked-out commit differs
+  // from what the parent tree records) is NOT a hard preflight blocker when the caller
+  // has opted into updateSubmodules:true — the post-merge submodule update step below
+  // resolves it in the same cycle. A genuinely dirty or errored submodule still blocks
+  // unconditionally; only the 'outOfSync-alone' case is relaxed, and only pre-merge.
+  blockers.push(...collectSubmoduleBlockers(status, 'pre', tolerateGitlinkDriftAlone));
   if (status.ahead > 0 && status.behind > 0) {
     blockers.push('branch_diverged_from_upstream');
     blockers.push('branch_has_local_commits');
@@ -695,13 +714,17 @@ function collectPostExecutionBlockers(status: GitRepoStatus): string[] {
   return blockers;
 }
 
-function collectSubmoduleBlockers(status: GitRepoStatus, phase: 'pre' | 'post'): string[] {
+function collectSubmoduleBlockers(status: GitRepoStatus, phase: 'pre' | 'post', tolerateGitlinkDriftAlone = false): string[] {
   const submodules = Array.isArray(status.submodules) ? status.submodules : [];
   const blockers: string[] = [];
   for (const submodule of submodules) {
     if (submodule.error) blockers.push(`${phase}_submodule_status_error:${submodule.path}`);
     if (submodule.dirty) blockers.push(`${phase}_submodule_dirty:${submodule.path}`);
-    if (submodule.outOfSync) blockers.push(`${phase}_submodule_out_of_sync:${submodule.path}`);
+    // outOfSync-alone (clean working tree, checked-out commit merely differs from the
+    // gitlink) is tolerated at the pre-merge phase when the caller will run
+    // `git submodule update --init --recursive` right after — see collectPreflightBlockers.
+    const outOfSyncIsToleratedDrift = tolerateGitlinkDriftAlone && submodule.outOfSync && !submodule.dirty && !submodule.error;
+    if (submodule.outOfSync && !outOfSyncIsToleratedDrift) blockers.push(`${phase}_submodule_out_of_sync:${submodule.path}`);
   }
   return blockers;
 }

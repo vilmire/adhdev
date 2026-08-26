@@ -93,7 +93,11 @@ function dryRunSatisfiesAutoFastForwardPolicy(
     if (policy.maxBehind !== undefined && behind > policy.maxBehind) return false;
     if (policy.requireCleanSubmodules) {
         const submodules = Array.isArray(dryRun.current?.submodules) ? dryRun.current.submodules : [];
-        if (submodules.some((submodule: any) => submodule?.dirty || submodule?.outOfSync || submodule?.error)) return false;
+        // Pure gitlink drift (outOfSync alone, working tree itself clean) is tolerated —
+        // executeLocalAutoFastForward/delegateRemoteAutoFastForward now run
+        // updateSubmodules:true, which resolves the drift as part of the same ff cycle.
+        // A genuinely dirty or errored submodule still blocks unconditionally.
+        if (submodules.some((submodule: any) => submodule?.dirty || submodule?.error)) return false;
     }
     return true;
 }
@@ -169,9 +173,12 @@ async function delegateRemoteAutoFastForward(components: DaemonComponents, args:
         inlineMesh: mesh,
         ...(submoduleIgnorePaths ? { submoduleIgnorePaths } : {}),
         trigger: args.trigger,
-        // Preserve the pre-fix self-only semantics for submodules: the local idle path
-        // never updated submodules (updateSubmodules:false), so the remote path matches.
-        updateSubmodules: false,
+        // Mirror the manual mesh_fast_forward_node update_submodules behavior: if the
+        // ff-only merge moves a submodule gitlink, run `git submodule update --init
+        // --recursive` in the same cycle so the checkout never drifts from the gitlink.
+        // Without this, drift accumulates and self-blocks every subsequent auto-ff
+        // (collectPreflightBlockers treats out-of-sync submodules as a hard blocker).
+        updateSubmodules: true,
     };
     try {
         // Fresh remote dry-run (owning daemon re-reads live git state) — TOCTOU re-check.
@@ -219,7 +226,9 @@ async function executeLocalAutoFastForward(args: {
             workspace: args.workspace,
             execute: false,
             dryRun: true,
-            updateSubmodules: false,
+            // See delegateRemoteAutoFastForward's updateSubmodules comment: mirrors the
+            // manual tool so a gitlink-moving ff cannot leave the submodule drifted.
+            updateSubmodules: true,
             submoduleIgnorePaths,
             trigger: args.trigger,
         });
@@ -230,7 +239,7 @@ async function executeLocalAutoFastForward(args: {
             workspace: args.workspace,
             execute: true,
             dryRun: false,
-            updateSubmodules: false,
+            updateSubmodules: true,
             submoduleIgnorePaths,
             trigger: args.trigger,
         });
@@ -371,6 +380,10 @@ export async function runPendingCoordinatorCatchupScan(components: DaemonCompone
                 ...(baseBranch ? { branch: baseBranch } : {}),
                 mode: 'merge',
                 execute: true,
+                // Same gitlink-drift-prevention rationale as executeLocalAutoFastForward /
+                // delegateRemoteAutoFastForward — this path pushed the base branch itself,
+                // so a submodule gitlink bump here is exactly as likely.
+                updateSubmodules: true,
                 trigger: 'refine_post_push_catchup',
                 allowAutoPublishSubmoduleMainCommits: mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true,
             });

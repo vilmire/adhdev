@@ -188,6 +188,45 @@ describe('maybeAutoFastForwardIdleNode — remote delegation', () => {
     expect(dispatch).toHaveBeenCalledTimes(1)
   })
 
+  // Regression for the gitlink-drift self-block bug (mission b6556fc4): a submodule that
+  // is merely out-of-sync (checked-out commit differs from the gitlink, but its own
+  // working tree is clean) must NOT be treated the same as a dirty submodule — it is
+  // exactly the drift that updateSubmodules:true resolves in the same ff cycle. Before
+  // the fix, this test fails: dryRunSatisfiesAutoFastForwardPolicy's requireCleanSubmodules
+  // gate lumped outOfSync in with dirty/error, so execute was never sent and drift
+  // (and behind-count) would only ever accumulate.
+  it('pure gitlink drift (outOfSync, not dirty) on fresh dry-run → execute IS sent, with updateSubmodules:true', async () => {
+    const mesh = buildMesh({ enabled: true, remoteNodes: true }, [remoteBaseNode()])
+    meshConfigMocks.getMesh.mockReturnValue(mesh)
+    const dispatch = vi.fn(async (_daemon: string, _cmd: string, payload: any) =>
+      payload?.execute
+        ? { executed: true, code: 'fast_forward_applied' }
+        : { ...cleanBehindDryRun(), current: { ahead: 0, behind: 2, submodules: [{ path: 'oss', dirty: false, outOfSync: true }] } })
+    const { components } = buildComponents({ dispatch })
+
+    await maybeAutoFastForwardIdleNode(components, { meshId: MESH_ID, nodeId: 'node_remote_1' })
+
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect(dispatch.mock.calls[0][2]).toMatchObject({ execute: false, updateSubmodules: true })
+    expect(dispatch.mock.calls[1][2]).toMatchObject({ execute: true, updateSubmodules: true })
+  })
+
+  // Companion regression: a submodule reported both outOfSync AND dirty (real edit sitting
+  // on top of drift) must still hard-block — the relaxation is for pure drift only.
+  it('outOfSync AND dirty submodule on fresh dry-run → execute is still NOT sent', async () => {
+    const mesh = buildMesh({ enabled: true, remoteNodes: true }, [remoteBaseNode()])
+    meshConfigMocks.getMesh.mockReturnValue(mesh)
+    const dispatch = vi.fn(async () => ({
+      ...cleanBehindDryRun(),
+      current: { ahead: 0, behind: 2, submodules: [{ path: 'oss', dirty: true, outOfSync: true }] },
+    }))
+    const { components } = buildComponents({ dispatch })
+
+    await maybeAutoFastForwardIdleNode(components, { meshId: MESH_ID, nodeId: 'node_remote_1' })
+
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+
   it('busy node (active generating session) → skipped even with remoteNodes=true', async () => {
     const mesh = buildMesh({ enabled: true, remoteNodes: true }, [remoteBaseNode()])
     meshConfigMocks.getMesh.mockReturnValue(mesh)
@@ -230,6 +269,10 @@ describe('maybeAutoFastForwardIdleNode — remote delegation', () => {
 
     // Local path: fastForwardMeshNode dry-run + execute; delegation never used.
     expect(fastForwardMocks.fastForwardMeshNode).toHaveBeenCalledTimes(2)
+    // Regression (mission b6556fc4): local auto-ff must also opt into updateSubmodules
+    // so a gitlink-moving ff can't leave the submodule checkout drifted.
+    expect(fastForwardMocks.fastForwardMeshNode.mock.calls[0][0]).toMatchObject({ execute: false, updateSubmodules: true })
+    expect(fastForwardMocks.fastForwardMeshNode.mock.calls[1][0]).toMatchObject({ execute: true, updateSubmodules: true })
     expect(dispatch).not.toHaveBeenCalled()
   })
 

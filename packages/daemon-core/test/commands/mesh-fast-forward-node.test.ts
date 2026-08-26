@@ -260,4 +260,183 @@ describe('fast_forward_mesh_node', () => {
       rmSync(root, { recursive: true, force: true })
     }
   }, 60000)
+
+  // Regression for mission b6556fc4 (auto-ff submodule gitlink drift self-block): a
+  // ff-only merge that lands a commit which bumps a submodule's gitlink must leave the
+  // submodule checkout IN SYNC with the new gitlink when updateSubmodules:true is passed
+  // (mirrors the manual mesh_fast_forward_node update_submodules:true behavior) — this is
+  // the auto-ff caller's new default (see mesh-auto-fast-forward.ts). Before that caller
+  // fix, auto-ff always passed updateSubmodules:false, so this second commit was
+  // fetched/merged into the root but the submodule was left checked out at the OLD sha —
+  // gitlink drift that self-blocks the next auto-ff attempt via collectPreflightBlockers.
+  describe('submodule gitlink drift (mission b6556fc4)', () => {
+    function initSubmoduleChild(root: string, name: string): string {
+      const child = join(root, name)
+      mkdirSync(child, { recursive: true })
+      git(child, ['init', '-q', '-b', 'main'])
+      configureUser(child)
+      commitFile(child, 'child.txt', 'child v1\n', 'child init')
+      return child
+    }
+
+    function addSubmoduleAndCommit(work: string, childRepo: string, path: string) {
+      git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'add', childRepo, path])
+      git(work, ['commit', '-q', '-m', 'add submodule'])
+    }
+
+    it('auto-ff-style updateSubmodules:true keeps the submodule in sync after a gitlink-moving ff', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-gitlink-sync-'))
+      try {
+        const { seed, work } = createRemoteBackedRepo(root)
+        const childRepo = initSubmoduleChild(root, 'child-origin')
+
+        // seed adds the submodule and pushes — work must pick this up too (fetch +
+        // ff-merge the "add submodule" commit), simulating: submodule already present
+        // before the drift-inducing commit, same as a real oss/ or adhdev-providers/
+        // checkout that was cloned before the pointer-bump commit landed.
+        addSubmoduleAndCommit(seed, childRepo, 'oss')
+        git(seed, ['push', '-q', 'origin', 'main'])
+        git(work, ['fetch', '-q', 'origin'])
+        git(work, ['merge', '-q', '--ff-only', 'origin/main'])
+        git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
+
+        // Bump the child repo's own history, then bump the gitlink in `seed` to point at
+        // the new child commit, and push — this is the "submodule pointer bump" commit
+        // pattern used by the real oss-pointer-bump workflow.
+        commitFile(childRepo, 'child.txt', 'child v2\n', 'child v2')
+        const childV2 = git(childRepo, ['rev-parse', 'HEAD'])
+        git(join(seed, 'oss'), ['fetch', '-q', 'origin'])
+        git(join(seed, 'oss'), ['checkout', '-q', childV2])
+        git(seed, ['add', 'oss'])
+        git(seed, ['commit', '-q', '-m', 'chore(oss): bump submodule pointer'])
+        git(seed, ['push', '-q', 'origin', 'main'])
+
+        // Sanity: before the ff, work's submodule checkout is still at v1 (old gitlink).
+        expect(git(join(work, 'oss'), ['rev-parse', 'HEAD'])).not.toBe(childV2)
+
+        const result: any = await fastForwardMeshNode({
+          workspace: work,
+          execute: true,
+          updateSubmodules: true,
+          nodeId: 'node-gitlink-sync',
+          meshId: 'mesh-test',
+        })
+
+        expect(result).toMatchObject({ success: true, allowed: true, executed: true, code: 'fast_forward_applied' })
+        // The submodule checkout must now match the new gitlink — no drift left behind.
+        expect(git(join(work, 'oss'), ['rev-parse', 'HEAD'])).toBe(childV2)
+        expect(result.postStatus?.submodules).toEqual(
+          expect.arrayContaining([expect.objectContaining({ path: 'oss', dirty: false, outOfSync: false })]),
+        )
+
+        // The self-blocking regression: a SECOND auto-ff-style dry-run immediately after
+        // must see the submodule as clean/in-sync and remain eligible (not blocked as
+        // submodule_not_clean) — this is the "behind 37 accumulation" failure mode.
+        const followUpDryRun: any = await fastForwardMeshNode({
+          workspace: work,
+          execute: false,
+          dryRun: true,
+          updateSubmodules: true,
+          nodeId: 'node-gitlink-sync',
+          meshId: 'mesh-test',
+        })
+        expect(followUpDryRun.code).toBe('already_up_to_date')
+        expect(followUpDryRun.allowed).toBe(true)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    }, 60000)
+
+    it('regression guard: a genuinely dirty submodule is still rejected even with updateSubmodules:true', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-gitlink-dirty-'))
+      try {
+        const { seed, work } = createRemoteBackedRepo(root)
+        const childRepo = initSubmoduleChild(root, 'child-origin-dirty')
+
+        addSubmoduleAndCommit(seed, childRepo, 'oss')
+        git(seed, ['push', '-q', 'origin', 'main'])
+        git(work, ['fetch', '-q', 'origin'])
+        git(work, ['merge', '-q', '--ff-only', 'origin/main'])
+        git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
+
+        // Remote advances the ROOT (not the submodule) so there's something to ff.
+        pushRemoteCommit(seed, 'base\nremote\n')
+
+        // Local submodule has uncommitted edits — a real dirty submodule, not drift.
+        writeFileSync(join(work, 'oss', 'child.txt'), 'child v1\nlocal edit\n', 'utf-8')
+
+        const result: any = await fastForwardMeshNode({
+          workspace: work,
+          execute: true,
+          updateSubmodules: true,
+          nodeId: 'node-gitlink-dirty',
+          meshId: 'mesh-test',
+        })
+
+        expect(result).toMatchObject({ success: false, allowed: false, executed: false, code: 'submodule_not_clean' })
+        expect(result.blockingReasons.some((r: string) => r.startsWith('pre_submodule_dirty:'))).toBe(true)
+        // Nothing was merged — root HEAD untouched.
+        expect(git(work, ['rev-parse', 'HEAD'])).not.toBe(git(seed, ['rev-parse', 'HEAD']))
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    }, 60000)
+
+    // This is the exact "behind 37 accumulation" mechanism: a PRIOR auto-ff (before this
+    // fix) landed a gitlink-moving commit with updateSubmodules:false, leaving the
+    // submodule checked out at the old commit — pure drift, clean working tree. The very
+    // NEXT auto-ff attempt must not hard-block on that pre-existing drift at the preflight
+    // stage; it should proceed and let updateSubmodules:true resolve it in this cycle.
+    // Before the collectPreflightBlockers fix, this test is red: 'pre_submodule_out_of_sync'
+    // alone forced code:'submodule_not_clean', allowed:false, even with updateSubmodules:true.
+    it('pre-existing gitlink drift (left by a prior ff) does not block a later ff with updateSubmodules:true', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-gitlink-preexisting-drift-'))
+      try {
+        const { seed, work } = createRemoteBackedRepo(root)
+        const childRepo = initSubmoduleChild(root, 'child-origin-preexisting')
+
+        addSubmoduleAndCommit(seed, childRepo, 'oss')
+        git(seed, ['push', '-q', 'origin', 'main'])
+        git(work, ['fetch', '-q', 'origin'])
+        git(work, ['merge', '-q', '--ff-only', 'origin/main'])
+        git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
+
+        // Bump the child repo and the gitlink, and push — same pointer-bump pattern.
+        commitFile(childRepo, 'child.txt', 'child v2\n', 'child v2')
+        const childV2 = git(childRepo, ['rev-parse', 'HEAD'])
+        git(join(seed, 'oss'), ['fetch', '-q', 'origin'])
+        git(join(seed, 'oss'), ['checkout', '-q', childV2])
+        git(seed, ['add', 'oss'])
+        git(seed, ['commit', '-q', '-m', 'chore(oss): bump submodule pointer'])
+        git(seed, ['push', '-q', 'origin', 'main'])
+
+        // Simulate a PRIOR ff that used updateSubmodules:false (the pre-fix auto-ff
+        // behavior): fetch + root ff-only merge happen directly here (bypassing
+        // fastForwardMeshNode) so the submodule is left un-updated — pure drift.
+        git(work, ['fetch', '-q', 'origin'])
+        git(work, ['merge', '-q', '--ff-only', 'origin/main'])
+        expect(git(work, ['rev-parse', 'HEAD:oss'])).toBe(childV2) // gitlink now points at v2
+        expect(git(join(work, 'oss'), ['rev-parse', 'HEAD'])).not.toBe(childV2) // but checkout wasn't updated — drift confirmed
+
+        // Root is now fully caught up (ahead=0, behind=0) — nothing left to merge — so
+        // this call exercises the preflight path directly, not the post-merge path.
+        const result: any = await fastForwardMeshNode({
+          workspace: work,
+          execute: true,
+          updateSubmodules: true,
+          nodeId: 'node-preexisting-drift',
+          meshId: 'mesh-test',
+        })
+
+        // Before the fix: code 'submodule_not_clean' (or 'dirty_worktree' via the root-level
+        // 'modified' porcelain entry a gitlink mismatch also produces), allowed:false —
+        // self-blocked forever. After the fix: neither preflight signal fires on pure drift.
+        expect(result.allowed).toBe(true)
+        expect(result.blockingReasons ?? []).not.toContain('modified_changes_present')
+        expect((result.blockingReasons ?? []).some((r: string) => r.startsWith('pre_submodule_out_of_sync:'))).toBe(false)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    }, 60000)
+  })
 })
