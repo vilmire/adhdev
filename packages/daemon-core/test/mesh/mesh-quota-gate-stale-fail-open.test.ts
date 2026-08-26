@@ -18,7 +18,11 @@
  * window with no reset stamp keeps the wall-clock staleAfterMs fallback.
  */
 import { describe, expect, it } from 'vitest'
-import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '../../src/mesh/mesh-quota-routing.js'
+import {
+    evaluateProviderQuotaGate,
+    quotaSpreadBonusByProvider,
+    rankProvidersByQuotaGate,
+} from '../../src/mesh/mesh-quota-routing.js'
 
 const MINUTE = 60_000
 const NOW = 1_800_000_000_000
@@ -146,5 +150,55 @@ describe('quota gate with NO reset stamp — the wall-clock fallback remains', (
 
     it('a stale unstamped reading fails open — nothing bounds its validity', () => {
         expect(evaluateProviderQuotaGate(nodeWithoutResetStamp(180), 'claude-cli', POLICY, NOW)).toBeNull()
+    })
+})
+
+describe('2026-08-25 Claude retained-window incident — validity is per reset boundary', () => {
+    const INCIDENT_NOW = 1_787_700_060_000 // 2026-08-25 23:21Z
+    const OBSERVED_WEEKLY_RESET = 1_787_698_800_000 // 23:00Z, 21 minutes elapsed
+    const CURRENT_SESSION_RESET = 1_787_716_800_000 // 2026-08-26 04:00Z
+    const UPDATED_AT_304_MINUTES_AGO = INCIDENT_NOW - 304 * MINUTE
+
+    function retainedClaude(weeklyResetsAt: number) {
+        return {
+            id: 'incident_node',
+            nodeFacts: {
+                reportedAt: INCIDENT_NOW,
+                quota: {
+                    'claude-cli': {
+                        provider: 'claude-cli',
+                        status: 'error',
+                        session: { usedPercent: 30, windowMinutes: 300, resetsAt: CURRENT_SESSION_RESET },
+                        weekly: { usedPercent: 99, windowMinutes: 10080, resetsAt: weeklyResetsAt },
+                        updatedAt: UPDATED_AT_304_MINUTES_AGO,
+                        error: 'Claude quota reading is stale (304 min old)',
+                        metadata: { source: 'statusline', failureKind: 'no-data', lastGoodWindows: true },
+                    },
+                },
+            },
+        }
+    }
+
+    it('drops the expired 99% weekly window from both the gate and spread bonus', () => {
+        const node = retainedClaude(OBSERVED_WEEKLY_RESET)
+
+        // The weekly low-water mark belongs to the previous window, so it
+        // cannot gate. The still-current 70%-remaining session window alone
+        // contributes 30 * 0.70 = 21 points to the spread bonus.
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, INCIDENT_NOW)).toBeNull()
+        expect(quotaSpreadBonusByProvider(node, null, INCIDENT_NOW)['claude-cli']).toBe(21)
+    })
+
+    it('keeps lastGoodWindows fallback when the same stale window resets in the future', () => {
+        const node = retainedClaude(INCIDENT_NOW + 24 * 60 * MINUTE)
+
+        // This is the overcorrection guard: wall-clock age does not discard a
+        // retained measurement while its own reset boundary is still ahead.
+        expect(evaluateProviderQuotaGate(node, 'claude-cli', null, INCIDENT_NOW)).toMatchObject({
+            reason: 'provider_quota_weekly_low',
+            window: 'weekly',
+            remainingPercent: 1,
+        })
+        expect(quotaSpreadBonusByProvider(node, null, INCIDENT_NOW)['claude-cli']).toBe(0)
     })
 })

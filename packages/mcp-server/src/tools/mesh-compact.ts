@@ -135,6 +135,8 @@ export function annotateQuotaSnapshotFreshness(quota: any, now: number = Date.no
  *   "7d 16% · 5h — · 1m · refreshing"     — metadata.lastGoodWindows: numbers are
  *                                           a retained last-good reading, kept
  *                                           visible instead of dropped
+ *   "7d 99% · 5h 30% · 319m stale"         — failureKind no-data: retained numbers
+ *                                           exist, but no new measurement arrived
  *   "unavailable:cli-unavailable"          — no numbers at all: status[:failureKind]
  *
  * Rules encoded here (each one is a past misread):
@@ -147,6 +149,8 @@ export function annotateQuotaSnapshotFreshness(quota: any, now: number = Date.no
  *     deliberately retains the last good reading across a transient failure;
  *     dropping the numbers here (the old "error:expired-token" fold) threw
  *     away exactly the signal that carry-forward preserved.
+ *   - no-data is labelled stale, never refreshing — the daemon may poll the
+ *     statusline file again, but this snapshot is not an in-flight marker.
  * A provider that FAILED still appears, carrying its failureKind: "this node
  * looked and could not tell" is a different diagnosis from "this node never
  * reported", and collapsing the two into an absent key would destroy exactly
@@ -159,20 +163,26 @@ export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record
         if (!snapshot || typeof snapshot !== 'object') continue;
         const status = typeof snapshot.status === 'string' ? snapshot.status : 'unknown';
         const lastGood = snapshot.metadata?.lastGoodWindows === true;
+        const failureKind = typeof snapshot.metadata?.failureKind === 'string' ? snapshot.metadata.failureKind : undefined;
         const pct = (w: any): string | undefined => (w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : undefined);
         const weekly = pct(snapshot.weekly);
         const session = pct(snapshot.session);
         // Only a snapshot with NO usable numbers at all degrades to the bare
         // status[:failureKind] word — any retained reading stays visible.
         if (weekly === undefined && session === undefined) {
-            const kind = typeof snapshot.metadata?.failureKind === 'string' ? snapshot.metadata.failureKind : undefined;
-            out[provider] = kind ? `${status}:${kind}` : status;
+            out[provider] = failureKind ? `${status}:${failureKind}` : status;
             continue;
         }
         const age = formatQuotaSnapshotAge(snapshot, now);
         const stale = isQuotaSnapshotStale(snapshot, now);
         let line = `7d ${weekly ?? '—'} · 5h ${session ?? '—'} · ${age}${stale ? ' stale' : ''}`;
-        if (lastGood) line += ' · refreshing';
+        // `no-data` means the source did not produce a new measurement. The
+        // quota loop may poll it again, but "refreshing" would falsely claim
+        // this snapshot denotes an active refresh. Avoid duplicating "stale"
+        // when age already did it.
+        if (failureKind === 'no-data') {
+            if (!stale) line += ' · stale';
+        } else if (lastGood) line += ' · refreshing';
         else if (status !== 'ok') line += ` · ${status}`;
         out[provider] = line;
     }

@@ -93,6 +93,23 @@ test('summarizeNodeQuota keeps last-good numbers visible while refreshing', () =
   assert.equal(summary['grok-cli'], '7d 16% · 5h — · 1m · refreshing');
 });
 
+test('summarizeNodeQuota labels retained no-data windows stale, not refreshing', () => {
+  const quota = {
+    'claude-cli': {
+      provider: 'claude-cli',
+      status: 'error',
+      session: { usedPercent: 30, windowMinutes: 300, resetsAt: 1_787_716_800_000 },
+      weekly: { usedPercent: 99, windowMinutes: 10080, resetsAt: 1_787_698_800_000 },
+      updatedAt: 1_787_681_820_000,
+      error: 'Claude quota reading is stale (304 min old)',
+      metadata: { source: 'statusline', failureKind: 'no-data', lastGoodWindows: true },
+    },
+  };
+  const summary = summarizeNodeQuota(quota, 1_787_700_060_000)!;
+  assert.equal(summary['claude-cli'], '7d 99% · 5h 30% · 304m stale');
+  assert.equal(summary['claude-cli'].includes('refreshing'), false);
+});
+
 test('summarizeNodeQuota keeps failures visible with their failureKind', () => {
   // The whole point: "looked and could not tell" must not read the same as
   // "never told us". Today 2 of 3 providers fail on a typical machine, so a
