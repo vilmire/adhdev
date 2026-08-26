@@ -44,6 +44,7 @@ import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
+import { notifyCoordinatorOfPinnedDispatchFailure } from './mesh-dispatch-failed-notify.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearQuotaClaimBlockState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
@@ -400,6 +401,10 @@ interface DeliverTaskContext {
     sourceCoordinatorDaemonId?: string;
     // LEDGER-TASK-TRACEABILITY (A): routing rationale to record on task_dispatched.
     routingDecision?: MeshTaskRoutingDecision;
+    // COORD-NOTIFY-STUCK: carried so a dispatch failure in the catch below can look up
+    // the target node's other live sessions for the coordinator notification without
+    // threading a second parameter through deliverTaskToSession.
+    components: DaemonComponents;
 }
 
 // Readiness barrier for the LOCAL auto-launch path. A just-spawned CLI session is
@@ -761,6 +766,20 @@ function deliverTaskToSession(
             // the terminal state is not mistaken for a silent drop.
             if (requeued?.status === 'failed') {
                 LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) failed after repeated dispatch failures to node ${ctx.nodeId} — the worker never started it: ${requeued.cancelReason || 'dispatch_never_started'}. Dependents were unblocked.`);
+            } else if (requeued?.status === 'pending' && readNonEmptyString(requeued.targetSessionId)) {
+                // COORD-NOTIFY-STUCK: the row is back to 'pending' STILL PINNED (clearTargetSession
+                // was false above) — the coordinator gets no other signal this happened, and could
+                // otherwise re-target the same dead session. Page it now rather than let it find
+                // out only when the slower dead-target/pin-TTL backstops eventually clear the pin.
+                notifyCoordinatorOfPinnedDispatchFailure(ctx.components, {
+                    meshId: ctx.meshId,
+                    taskId: ctx.task.id,
+                    targetSessionId: requeued.targetSessionId!,
+                    nodeId: ctx.nodeId,
+                    error: e?.message,
+                    sourceCoordinatorSessionId: ctx.sourceCoordinatorSessionId,
+                    sourceCoordinatorDaemonId: ctx.sourceCoordinatorDaemonId,
+                });
             }
         }
         try {
@@ -1331,6 +1350,7 @@ export function tryAssignQueueTask(
                     providerType,
                     task,
                     transport: 'remote',
+                    components,
                     ...(sourceCoordinatorSessionId ? { sourceCoordinatorSessionId } : {}),
                     ...(localDaemonIdForDispatch ? { sourceCoordinatorDaemonId: localDaemonIdForDispatch } : {}),
                     ...(routingDecision ? { routingDecision } : {}),
@@ -1424,6 +1444,7 @@ export function tryAssignQueueTask(
             providerType,
             task,
             transport: 'local',
+            components,
             ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
             ...(localCoordinatorDaemonId() ? { sourceCoordinatorDaemonId: localCoordinatorDaemonId() } : {}),
             ...(routingDecision ? { routingDecision } : {}),

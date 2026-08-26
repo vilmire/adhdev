@@ -58,6 +58,7 @@ import {
     resolveTaskEvidenceSessionId,
 } from './mesh-turn-ledger.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
+import { notifyCoordinatorOfPinnedReclaim } from './mesh-dispatch-failed-notify.js';
 
 // Bug B: how long a row may sit 'assigned' with an unconfirmed dispatch before the
 // watchdog reclaims it. Must be comfortably larger than the per-dispatch confirm
@@ -1761,6 +1762,21 @@ export async function recoverStrandedAssignedDispatches(
                     meshId,
                     event: 'agent:generating_completed',
                 }, `delivered ${Math.round((nowMs - dispatchedAtMs) / 1000)}s ${reclaimReason} → ${reclaimedLost.status}`);
+                // COORD-NOTIFY-STUCK: reclaimStrandedAssignedTask never clears targetSessionId
+                // — a pinned row lands back on 'pending' still addressed only to the session
+                // just reclaimed, with no other signal to the coordinator that happened. See
+                // mesh-dispatch-failed-notify.ts for the full rationale (mission af4a1ff8).
+                if (reclaimedLost.status === 'pending' && readNonEmptyString(reclaimedLost.targetSessionId) && row.assignedNodeId) {
+                    notifyCoordinatorOfPinnedReclaim(components, {
+                        meshId,
+                        taskId: row.id,
+                        targetSessionId: reclaimedLost.targetSessionId!,
+                        nodeId: row.assignedNodeId,
+                        reclaimReason,
+                        silentForMs: nowMs - dispatchedAtMs,
+                        ...(readNonEmptyString(row.sourceCoordinatorSessionId) ? { sourceCoordinatorSessionId: row.sourceCoordinatorSessionId } : {}),
+                    });
+                }
             }
             continue;
         }
