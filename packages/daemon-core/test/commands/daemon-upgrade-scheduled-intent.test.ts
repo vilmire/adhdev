@@ -138,6 +138,33 @@ describe('daemon_upgrade / daemon_restart — scheduled intent vs completed resu
     expect(result.currentVersion).toBeUndefined()
   })
 
+  // REGRESSION: daemon_upgrade used to never read args.killSessionHost, so a
+  // mesh restart_daemon_node call with mode:'upgrade' + killSessionHost:true
+  // silently never asked the helper to stop the session-host on POSIX (only
+  // daemon_restart wired it through). Windows masked the gap because it
+  // kills unconditionally regardless of the flag.
+  it('daemon_upgrade forwards killSessionHost to the detached helper when requested', async () => {
+    const router = createRouter('0.9.12')
+
+    const result = await router.execute('daemon_upgrade', { killSessionHost: true }) as any
+
+    expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledWith(
+      expect.objectContaining({ killSessionHost: true }),
+    )
+    expect(result.killSessionHost).toBe(true)
+  })
+
+  it('daemon_upgrade defaults killSessionHost to false when not requested', async () => {
+    const router = createRouter('0.9.12')
+
+    const result = await router.execute('daemon_upgrade', {}) as any
+
+    expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledWith(
+      expect.objectContaining({ killSessionHost: false }),
+    )
+    expect(result.killSessionHost).toBe(false)
+  })
+
   it('daemon_upgrade already-latest stays a no-op with an explicit outcome', async () => {
     const router = createRouter('0.9.13')
 
@@ -184,5 +211,27 @@ describe('daemon_upgrade / daemon_restart — scheduled intent vs completed resu
 
     expect(result.success).toBe(true)
     expect(result.upgradeFailure).toBeNull()
+  })
+
+  // D. Restart-verification signal: daemonBuild.builtAt is build time (fixed
+  // per compiled artifact), not boot time, so it cannot tell a coordinator
+  // whether a restart_daemon_node call actually re-spawned the process.
+  // bootId (mesh-refine-executor-liveness.ts) is minted once per process
+  // load and is stable within a process but must differ across a real
+  // restart — this is the field a coordinator can poll before/after a
+  // restart call (per the "retry in ~10s" clientHint) to confirm the daemon
+  // actually exited and came back, rather than trusting the scheduled
+  // response alone.
+  it('get_status_metadata exposes a stable per-process bootId', async () => {
+    const router = createRouter('0.9.13')
+
+    const first = await router.execute('get_status_metadata', {}) as any
+    const second = await router.execute('get_status_metadata', {}) as any
+
+    expect(typeof first.bootId).toBe('string')
+    expect(first.bootId.length).toBeGreaterThan(0)
+    // Same process, two calls — must agree (this is the "no restart happened"
+    // comparison a coordinator would make).
+    expect(second.bootId).toBe(first.bootId)
   })
 })

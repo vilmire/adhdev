@@ -226,8 +226,33 @@ describe('restart_daemon_node — E. session-host kill opt-in', () => {
     expect(daemonRestart).toHaveBeenCalledWith(expect.anything(), { killSessionHost: false })
   })
 
-  it('killSessionHost response carries the all-sessions-destroyed warning', async () => {
+  // HONESTY REGRESSION: this response is sent by the process that is about
+  // to exit, seconds before the detached upgrade-helper even attempts the
+  // session-host stop — the real outcome is not knowable here (local restart
+  // of the coordinator's own daemon is the case that most often leaves
+  // hosted sessions alive despite killSessionHost:true, since the helper
+  // must first wait for THIS process to exit). The response must therefore
+  // never assert the kill already happened; it may only report the request.
+  it('killSessionHost response reports the request, never asserts the kill already happened', async () => {
     const result = await call(makeCtx([]), baseArgs({ mode: 'restart', killSessionHost: true }))
-    expect(result.warnings.join(' ')).toMatch(/ALL hosted CLI sessions/)
+    const text = result.warnings.join(' ')
+    expect(result.sessionHostKillRequested).toBe(true)
+    // Old wording flatly asserted completion ("...process WAS stopped — ALL
+    // ... ARE destroyed"). The fix must not claim the past-tense fact.
+    expect(text).not.toMatch(/process was stopped/)
+    expect(text).toMatch(/killSessionHost requested/)
+    expect(text).toMatch(/will attempt to stop/)
+    expect(text).toMatch(/cannot confirm the stop succeeded/)
+  })
+
+  it('sessionHostKillRequested is false when killSessionHost was not passed', async () => {
+    const result = await call(makeCtx([]), baseArgs({ mode: 'restart' }))
+    expect(result.sessionHostKillRequested).toBe(false)
+  })
+
+  it('killSessionHost reaches daemon_upgrade too, not only daemon_restart (regression: was silently dropped)', async () => {
+    daemonUpgrade.mockResolvedValueOnce({ success: true, upgraded: true, restarting: true, killSessionHost: true })
+    await call(makeCtx([]), baseArgs({ killSessionHost: true }))
+    expect(daemonUpgrade).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ killSessionHost: true }))
   })
 })

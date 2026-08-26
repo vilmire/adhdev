@@ -13,6 +13,7 @@ import { buildMachineInfo, buildStatusSnapshot } from '../../status/snapshot.js'
 import { getDaemonBuildInfo } from '../../build-info.js';
 import { TRACK } from '../../track-identity.js';
 import { getCoordinatorForSession, listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
+import { currentRefineExecutorBootId } from '../../mesh/mesh-refine-executor-liveness.js';
 // ★These two commands are the SWR read surfaces — the ONLY read path allowed to
 // schedule a background refresh (quota/refresh.ts readQuotaCacheWithRevalidate).
 // They qualify because they are on-demand and human-paced: a machine page load
@@ -69,6 +70,14 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             daemonBuild: { ...getDaemonBuildInfo(), track: TRACK },
             upgradeFailure: readUpgradeFailureNotice(),
             providerChannelStaleness: ctx.deps.providerLoader?.getChannelStalenessSnapshot?.() ?? null,
+            // Per-process id, minted once at module load (mesh-refine-executor-
+            // liveness.ts) — differs across a real process restart even if the
+            // OS reissues the same pid, unlike daemonBuild.builtAt (build time,
+            // not boot time) or machine uptime (survives a daemon restart
+            // untouched). A coordinator that called restart_daemon_node can
+            // read this before and after (per the clientHint retry delay) and
+            // compare: same id means the daemon never actually exited/re-spawned.
+            bootId: currentRefineExecutorBootId(),
         };
     },
 

@@ -50,10 +50,20 @@
  *   mesh/node's); every response carries the current schedule under
  *   `deferredRestart` for visibility.
  *
- * - killSessionHost: also stop the session-host process, destroying EVERY
- *   hosted CLI session (no idle-gate — SessionHostServer.stop kills all PTYs).
- *   Mirrors what Windows already does on upgrade (conpty.node lock). Default
- *   off; POSIX daemons otherwise keep hosted sessions alive across a restart.
+ * - killSessionHost: requests that the session-host process also be stopped,
+ *   which would destroy EVERY hosted CLI session (no idle-gate —
+ *   SessionHostServer.stop kills all PTYs). Mirrors what Windows already does
+ *   on upgrade (conpty.node lock). Default off; POSIX daemons otherwise keep
+ *   hosted sessions alive across a restart.
+ *   This is a REQUEST, not a guarantee: the actual stop attempt runs inside a
+ *   detached helper process spawned seconds after this response is sent (see
+ *   upgrade-helper.ts stopSessionHostProcesses), so the response can only
+ *   report sessionHostKillRequested — never whether the kill succeeded. That
+ *   gap is most visible restarting THIS daemon (the coordinator's own): the
+ *   helper must first wait for this very process to exit before it even
+ *   attempts the stop, which is one more place for it to be skipped or fail
+ *   than the remote-forward case. Verify via the daemon's upgrade log or by
+ *   comparing get_status_metadata's bootId before/after.
  */
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { daemonLifecycleHandlers } from '../low-family/daemon-lifecycle.js';
@@ -215,13 +225,28 @@ function restartWarnings(args: { killSessionHost: boolean; forced: boolean }): s
     if (args.forced) {
         warnings.push('forced restart over active sessions — in-flight turns were interrupted and the in-memory pendingOutboundQueue is permanently lost (no persistence/restore path).');
     }
+    // HONESTY: this response is sent by the daemon process that is about to
+    // exit (daemon_restart/daemon_upgrade), seconds BEFORE the detached
+    // upgrade-helper child actually attempts stopSessionHostProcesses() —
+    // see upgrade-helper.ts. The kill's real outcome (stopped/survived) is
+    // only known inside that later, separate process and never round-trips
+    // back into this response. Previously this warning asserted the kill
+    // had already happened ("ALL ... are destroyed"), which was flatly
+    // false whenever the kill was skipped or failed — most visibly when
+    // restarting THIS daemon (the coordinator's own), where the detached
+    // helper additionally has to wait for this very process to exit first
+    // (waitForPidExit(parentPid)) before it even starts the attempt. Word
+    // this as a scheduled request, matching the outcome:'scheduled'
+    // contract already used for upgraded/version above — not a completed
+    // fact. sessionHostKillRequested (on the result) carries the same
+    // boolean for callers that want to key off it programmatically.
     if (args.killSessionHost) {
-        warnings.push('killSessionHost: the session-host process was stopped — ALL hosted CLI sessions on this machine are destroyed (hard refresh).');
+        warnings.push('killSessionHost requested: the detached restart helper will attempt to stop the session-host process after this daemon exits — if it succeeds, ALL hosted CLI sessions on this machine are destroyed (hard refresh). This response cannot confirm the stop succeeded; check the daemon\'s upgrade log, or call get_status_metadata and compare bootId before/after, to verify.');
     }
     if (process.platform === 'win32') {
-        warnings.push('Windows: the daemon restart/upgrade path stops the session-host regardless of options — all hosted sessions terminate.');
+        warnings.push('Windows: the daemon restart/upgrade path attempts to stop the session-host regardless of options — all hosted sessions are expected to terminate.');
     } else {
-        warnings.push('POSIX: hosted PTY sessions survive a plain daemon restart and rebind on next boot (unless killSessionHost was set).');
+        warnings.push('POSIX: hosted PTY sessions are expected to survive a plain daemon restart and rebind on next boot, unless killSessionHost was requested (and the stop attempt succeeds).');
     }
     return warnings;
 }
@@ -237,6 +262,11 @@ async function executeRestart(deps: CommandRouterDeps, args: any, opts: { forced
         ...result,
         mode,
         restarted: restarting,
+        // HONESTY: what was REQUESTED, always reported regardless of outcome
+        // (which this process cannot know — see restartWarnings). Do not
+        // rename this to something implying success; sessionHostKillRequested
+        // is the accurate name for "the flag was set and forwarded".
+        sessionHostKillRequested: killSessionHost,
         ...(restarting ? {
             warnings: restartWarnings({ killSessionHost, forced: opts.forced }),
             // MCP IPC has no automatic reconnect/retry — tell the caller when to

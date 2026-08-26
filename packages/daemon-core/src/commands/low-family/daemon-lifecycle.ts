@@ -176,6 +176,13 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 LOG.warn('Upgrade', `allowDowngrade set — proceeding with DOWNGRADE from v${runningVersion} to v${latest} on the ${TRACK} track`);
             }
 
+            // killSessionHost was previously read only by daemon_restart — an
+            // upgrade-mode caller that explicitly asked for it had the flag
+            // silently dropped here, so the hard-refresh kill was NEVER
+            // attempted on this path (win32 still killed unconditionally
+            // regardless of the flag, which is why the gap was invisible
+            // there). Read and forward it exactly like daemon_restart does.
+            const killSessionHost = args?.killSessionHost === true;
             spawnDetachedDaemonUpgradeHelper({
                 packageName: pkgName,
                 targetVersion: latest,
@@ -183,8 +190,9 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 restartArgv: process.argv.slice(1),
                 cwd: process.cwd(),
                 sessionHostAppName: resolveSessionHostAppName(),
+                killSessionHost,
             });
-            LOG.info('Upgrade', `Scheduled detached ${TRACK} upgrade to v${latest}`);
+            LOG.info('Upgrade', `Scheduled detached ${TRACK} upgrade to v${latest}${killSessionHost ? ' (killSessionHost requested)' : ''}`);
 
             // Exit after the command response has been sent so the helper can replace the package cleanly.
             setTimeout(() => {
@@ -210,6 +218,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
                 npmTag,
                 outcome: 'scheduled',
                 targetVersion: latest,
+                killSessionHost,
                 // No `currentVersion` here on purpose: this response is about a
                 // SCHEDULED move, and daemon-upgrade-scheduled-intent.test.ts
                 // pins that it must not read as "already on the target". The
