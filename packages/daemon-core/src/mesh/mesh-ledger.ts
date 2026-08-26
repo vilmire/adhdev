@@ -98,6 +98,21 @@ export type MeshLedgerKind =
     // (no double-requeue). payload: { heldEntryId, event, requeued: boolean, reason?, dedupSuppressed?: boolean }
     | 'event_held_requeued'
     | 'task_reclaimed'
+    // REDRIVE-PROVIDER-FLIP (a): a task that had been force-reclaimed (canonically
+    // `delivered_not_consumed_redrive`) was re-dispatched onto a DIFFERENT provider than the
+    // one it was originally routed to. The reclaim path re-claims whatever idle session is
+    // available WITHOUT recomputing routing, so this flip happens silently; live 2026-08-25/26
+    // it occurred 7-8 times and each was found only by hand.
+    //
+    // Its own kind, not a field on task_dispatched, for the same reason queue_hold_hard_deadline
+    // is its own kind: the flip is a diagnostic about WHICH provider changed and needs to be
+    // greppable/queryable on its own, while every dispatch (flip or not) still writes exactly one
+    // task_dispatched. A same-provider redrive writes NOTHING here — this stays a signal.
+    // Emitted alongside (never instead of) the task_dispatched entry, whose payload carries the
+    // same block as `redriveProvenance`.
+    // payload: { taskId, deliveryId, transport, reason, reclaimCount, previousProviderType?,
+    //            previousNodeId?, previousSessionId?, reclaimedAt, providerType, providerChanged }
+    | 'redrive_provider_changed'
     // Gap2-A: a coordinator-recorded operating note — a runtime-accumulated
     // lesson (provider quirk, pattern to avoid, recovery lesson) persisted in
     // the ledger so it survives coordinator restarts and is provider-neutral.
@@ -330,6 +345,10 @@ const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLed
     'dispatch_failed',
     'dispatch_duplicate_rebound',
     'queue_hold_hard_deadline',
+    // REDRIVE-PROVIDER-FLIP (a): joinable by kind+taskId alongside the task's
+    // task_dispatched/task_reclaimed rows — the whole point is to read a task's
+    // redrive history without an O(n) payload scan.
+    'redrive_provider_changed',
 ]);
 
 /** Resolve the taskId for a ledger entry, preferring the base field and falling

@@ -329,6 +329,33 @@ export interface MeshWorkQueueEntry {
      */
     strandedReclaimCount?: number;
     /**
+     * REDRIVE-PROVIDER-FLIP (a): the provider/node/session this row was assigned to at the
+     * moment the stranded-reclaim watchdog tore that assignment down, preserved because the
+     * reclaim itself DELETES assignedProviderType/assignedNodeId/assignedSessionId (see
+     * {@link reclaimStrandedAssignedTask}). Without it the next claim has no memory of what
+     * it is replacing, so a redrive that silently lands on a DIFFERENT provider — the
+     * observed 2026-08-25/26 failure mode, 7-8 occurrences, each recovered by hand — was
+     * only discoverable by manually joining two `task_dispatched` ledger entries and
+     * diffing their providerType.
+     *
+     * Read at the next dispatch by `recordTaskDispatchedLedger`, which folds a
+     * `redriveProvenance` block into `task_dispatched` and, when the provider actually
+     * changed, emits the explicit flip record. Diagnostic ONLY: nothing routes, gates or
+     * re-ranks on this field — it exists so the flip is measurable before any behavioral
+     * change to redrive routing is attempted.
+     */
+    lastReclaim?: {
+        /** Provider the torn-down assignment was running (absent on legacy/unassigned rows). */
+        providerType?: string;
+        nodeId?: string;
+        sessionId?: string;
+        /** The reclaim reason, e.g. 'delivered_not_consumed_redrive'. */
+        reason: string;
+        /** strandedReclaimCount AFTER this reclaim. */
+        reclaimCount: number;
+        at: string;
+    };
+    /**
      * DISPATCH-BOOT-RACE: number of times a dispatch to this task's session FAILED
      * BEFORE the worker ever started the task (transport reject / adapter-not-found —
      * e.g. a session still booting when the coordinator dispatched to it). Separate
@@ -1841,6 +1868,21 @@ export function reclaimStrandedAssignedTask(
         const reclaims = (entry.strandedReclaimCount || 0) + 1;
         const prevNode = entry.assignedNodeId;
         const prevSession = entry.assignedSessionId;
+        const prevProvider = entry.assignedProviderType;
+        // REDRIVE-PROVIDER-FLIP (a): remember WHAT is being torn down before the deletes
+        // below erase it. The re-claim that follows does NOT recompute routing — it adopts
+        // whatever idle session is available — so the provider can change silently. This
+        // stamp is the only carrier of the pre-reclaim provider into the next dispatch
+        // (the in-memory reconcile streak maps are pruned the moment the row leaves
+        // 'assigned', so they cannot carry it). Diagnostic only: no routing reads it.
+        entry.lastReclaim = {
+            ...(prevProvider ? { providerType: prevProvider } : {}),
+            ...(prevNode ? { nodeId: prevNode } : {}),
+            ...(prevSession ? { sessionId: prevSession } : {}),
+            reason,
+            reclaimCount: reclaims,
+            at: now,
+        };
         // Always clear the dead assignment ownership so a re-claim starts clean and the
         // assigned-counters (which filter status==='assigned') stop counting this row.
         delete entry.assignedNodeId;
@@ -1891,9 +1933,15 @@ export function reclaimStrandedAssignedTask(
                 kind: 'task_reclaimed' as MeshLedgerKind,
                 nodeId: prevNode,
                 sessionId: prevSession,
+                // REDRIVE-PROVIDER-FLIP (a): name the provider being torn down. This is the
+                // "before" half of the flip; the "after" half is the redriveProvenance block
+                // on the next task_dispatched, so the comparison no longer needs a manual
+                // two-entry join.
+                ...(prevProvider ? { providerType: prevProvider } : {}),
                 payload: {
                     taskId,
                     reason,
+                    ...(prevProvider ? { providerType: prevProvider } : {}),
                     ...(typeof opts?.ageMs === 'number' ? { ageMs: opts.ageMs } : {}),
                     reclaimCount: reclaims,
                     outcome: entry.status,

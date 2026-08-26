@@ -1258,13 +1258,20 @@ export async function recoverStrandedAssignedDispatches(
                     LOG.warn('MeshReconcile', `Re-drove delivered-but-unconsumed task ${row.id} on mesh ${meshId} `
                         + `(node=${row.assignedNodeId ?? '?'} session=${row.assignedSessionId ?? '?'}, delivered but no `
                         + `generating_started in ${Math.round(ageMs / 1000)}s, verdict ${verdict} → ${redriven.status})`);
+                    // REDRIVE-PROVIDER-FLIP (a): name the provider this redrive is tearing down.
+                    // This trace is the "before" anchor; the "after" is the redriveProvenance
+                    // block — and, when they differ, the redrive_provider_changed entry —
+                    // written at the next dispatch by recordTaskDispatchedLedger. The re-claim
+                    // does NOT recompute routing, so the two can disagree, which is precisely
+                    // what needed to become visible without a manual two-entry ledger join.
                     traceMeshEventDrop('assigned_delivered_not_consumed_redrive', {
                         taskId: row.id,
                         sessionId: row.assignedSessionId,
                         nodeId: row.assignedNodeId,
                         meshId,
                         event: 'agent:generating_started',
-                    }, `delivered_not_consumed ${Math.round(ageMs / 1000)}s → ${redriven.status}`);
+                    }, `delivered_not_consumed ${Math.round(ageMs / 1000)}s → ${redriven.status}`
+                        + `${row.assignedProviderType ? ` (provider ${row.assignedProviderType} released; the re-claim adopts an idle session without re-ranking, so it may differ)` : ''}`);
                     continue;
                 }
                 }

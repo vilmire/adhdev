@@ -18,7 +18,9 @@ import {
     shouldRedriveDeferredClaim,
     type MeshClaimRefusal,
 } from './mesh-claim-refusal.js';
-import { traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventDrop, traceMeshEventStage } from './mesh-event-trace.js';
+import { buildRedriveProvenance, describeRedriveProviderFlip } from './mesh-redrive-provenance.js';
+import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
 import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy, resolveQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
@@ -424,6 +426,19 @@ async function waitForLocalSessionReady(components: DaemonComponents, sessionId:
     LOG.warn('MeshQueue', `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
 }
 
+/**
+ * REMOTE-READY-WAIT: bind the remote readiness barrier (mesh-remote-ready-wait.ts) to this
+ * daemon's remote-idle registry — the place a forwarded `agent:ready` actually lands.
+ * The budget and the timeout semantics live in that module; this only supplies the probe.
+ */
+function remoteSessionReadyProbe(meshId: string, nodeId: string, sessionId: string): () => boolean {
+    return () => MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId)
+        // sessionIdsEquivalent / meshNodeIdMatches rather than raw ===: both ids reach this
+        // store through several serialization forms, and a raw comparison here is exactly the
+        // canon-identity defect class that check:canon-identity exists to catch.
+        .some(s => sessionIdsEquivalent(s.sessionId, sessionId) && meshNodeIdMatches({ nodeId: s.nodeId }, nodeId));
+}
+
 // CONS scope 3: the SINGLE source of truth for dispatching a claimed task to its
 // session. The remote (P2P dispatchMeshCommand) and local (cliManager.handleCliCommand)
 // branches differ ONLY in the transport call — the delivery record, the delivered/failed
@@ -475,6 +490,12 @@ function recordTaskDispatchedLedger(ctx: DeliverTaskContext, deliveryId: string)
         ...(routing?.selectionTrajectory ? { selectionTrajectory: routing.selectionTrajectory } : {}),
         ...(routing?.reason ? { reason: routing.reason } : {}),
     };
+    // REDRIVE-PROVIDER-FLIP (a): if a stranded-reclaim tore an assignment down before this
+    // dispatch, fold what it tore down into THIS entry. A redrive re-claims an idle session
+    // without recomputing routing, so the provider can change silently; previously the only
+    // way to see that was to hand-join two task_dispatched entries and diff providerType.
+    // null for an ordinary first dispatch → payload shape unchanged for the common case.
+    const redriveProvenance = buildRedriveProvenance(task.lastReclaim, ctx.providerType);
     appendLedgerEntry(ctx.meshId, {
         kind: 'task_dispatched',
         nodeId: ctx.nodeId,
@@ -490,8 +511,34 @@ function recordTaskDispatchedLedger(ctx: DeliverTaskContext, deliveryId: string)
             ...(ctx.sourceCoordinatorDaemonId ? { coordinatorDaemonId: ctx.sourceCoordinatorDaemonId } : {}),
             ...(Array.isArray(task.requiredTags) && task.requiredTags.length ? { requiredTags: task.requiredTags } : {}),
             routingDecision,
+            ...(redriveProvenance ? { redriveProvenance } : {}),
         },
     });
+    // A provider-CHANGING redrive additionally gets its own top-level marker, so the flip is
+    // greppable and queryable without inspecting every task_dispatched payload. A redrive that
+    // kept its provider (the benign majority) writes no extra entry — this must stay a signal,
+    // not background noise.
+    if (redriveProvenance?.providerChanged) {
+        LOG.warn('MeshQueue', describeRedriveProviderFlip(redriveProvenance, task.id, ctx.meshId));
+        // A stage, not a drop: nothing was rejected or held — the dispatch DID advance,
+        // just onto a provider the original routing did not choose.
+        traceMeshEventStage('redrive_provider_changed', {
+            taskId: task.id,
+            sessionId: ctx.sessionId,
+            nodeId: ctx.nodeId,
+            meshId: ctx.meshId,
+        }, `${redriveProvenance.previousProviderType} → ${redriveProvenance.providerType} (${redriveProvenance.reason}, reclaim #${redriveProvenance.reclaimCount})`);
+        try {
+            appendLedgerEntry(ctx.meshId, {
+                kind: 'redrive_provider_changed',
+                nodeId: ctx.nodeId,
+                sessionId: ctx.sessionId,
+                providerType: ctx.providerType,
+                taskId: task.id,
+                payload: { taskId: task.id, deliveryId, transport: ctx.transport, ...redriveProvenance },
+            });
+        } catch { /* best-effort: never fail a dispatch on a diagnostic write */ }
+    }
 }
 
 export const __recordTaskDispatchedLedgerForTests = recordTaskDispatchedLedger;
@@ -2356,6 +2403,29 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                         logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined);
                         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+                        // REMOTE-READY-WAIT: readiness barrier, symmetric with the local path's
+                        // waitForLocalSessionReady below and on the same 15s budget. The remote
+                        // worker's agent:ready is ALREADY forwarded here (it lands as a
+                        // remote-idle row); this awaits it instead of returning the instant
+                        // launch_cli resolves. On timeout we proceed exactly as before, so the
+                        // worst case is today's behavior — what it buys is not starting the
+                        // 25-40s delivered_not_consumed judgement clock against a session that
+                        // is not yet interactive, which for the five emitsPtyTurnEvents:false
+                        // providers has no other way to prove it is alive.
+                        //
+                        // The cooldown is set BEFORE the await on purpose: it must gate the 4s
+                        // loop for the whole wait, not only after it. (The per-node and per-task
+                        // autoLaunch in-progress locks are released in `finally` blocks that sit
+                        // outside this branch, so they cover the whole wait regardless.)
+                        //
+                        // Swallowed by construction: this branch runs inside the launch try/catch,
+                        // whose catch marks the auto-launch FAILED. A readiness barrier must never
+                        // be able to turn a launch that genuinely succeeded into a recorded failure.
+                        if (remoteSessionId) {
+                            await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
+                                isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId),
+                            }).catch(() => false);
+                        }
                         return true;
                     }
 
