@@ -47,11 +47,14 @@ import { migratePendingEventsJsonlToSqlite } from '../mesh/mesh-events-pending-m
 import { setupQuotaRefreshLoop, setupQuotaEventRefresh, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../quota/refresh.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
+import { currentRefineExecutorBootId } from '../mesh/mesh-refine-executor-liveness.js';
 import { applyProcessHardening } from './process-hardening.js';
 import { startEventLoopMonitor } from './event-loop-monitor.js';
 import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
 import { loadStoredFleetSecret } from '../seqscribe/fleet-secret.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../seqscribe/node.js';
+import { startConvergenceProbe, type ProbeHandle } from '../seqscribe/probe.js';
+import { summarizeSeqscribeStats } from '../seqscribe/stats.js';
 
 // ─── Init Config ───
 
@@ -177,6 +180,9 @@ export interface DaemonComponents {
     // One live seqscribe node per daemon process. Opening is fail-soft so a DB
     // or native-addon failure never prevents the rest of the daemon booting.
     seqscribeNode?: SeqscribeNodeHandle;
+    // Stage 1 convergence probe (seqscribe/probe.ts). Null in provisional mode
+    // (no fleet secret → no content topics → nothing to probe).
+    seqscribeProbe?: ProbeHandle | null;
 }
 
 export interface DaemonDevSupportOptions {
@@ -589,6 +595,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
 
     // 9. Router + Poller (with internal cross-wiring)
     // Note: poller is declared first so router's onIdeConnected closure captures it
+    //
+    // The seqscribe node opens at step 10a, AFTER the router is constructed, so
+    // `getSeqscribeStats` below closes over this holder rather than the handle.
+    // Reading at call time is required anyway: the stats are live numbers, not
+    // a wiring-time snapshot.
+    let seqscribeNodeRef: SeqscribeNodeHandle | undefined;
     const router = new DaemonCommandRouter({
         commandHandler,
         cliManager,
@@ -613,6 +625,24 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         dispatchMeshCommand: config.dispatchMeshCommand,
         updateLocalMeshOwnedSession: config.updateLocalMeshOwnedSession,
         getCdpLogFn: config.getCdpLogFn || ((ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn()),
+        // Local read surface for replication health (get_status_metadata).
+        // Aggregate-only by construction — summarizeSeqscribeStats is the same
+        // allow-list projection the status report uses, and nothing here
+        // touches the status_report payload itself.
+        getSeqscribeStats: () => {
+            if (!seqscribeNodeRef) return null;
+            try {
+                return summarizeSeqscribeStats(seqscribeNodeRef.node.stats(), {
+                    authorityEnabled: seqscribeNodeRef.authorityEnabled,
+                });
+            } catch (error) {
+                LOG.warn(
+                    'Seqscribe',
+                    `stats unavailable for get_status_metadata: ${error instanceof Error ? error.message : String(error)}`,
+                );
+                return null;
+            }
+        },
     });
 
     poller = new AgentStreamPoller({
@@ -653,6 +683,27 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // override first priority. Any failure is non-fatal by contract (node.ts):
     // later status/transport wiring simply observes an absent node.
     components.seqscribeNode = tryOpenDaemonSeqscribeNode({ daemonId: config.statusInstanceId });
+    // Publish to the holder the router's getSeqscribeStats closure reads.
+    seqscribeNodeRef = components.seqscribeNode;
+
+    // 10b. Stage 1 convergence probe. Until now nothing in the daemon appended
+    // to or consumed from a topic, so a correctly wired fleet and a broken one
+    // produced identical logs (silence). This appends one small record and logs
+    // records other daemons wrote, making live convergence greppable. Returns
+    // null in provisional mode; never throws (seqscribe/probe.ts).
+    if (components.seqscribeNode) {
+        try {
+            components.seqscribeProbe = startConvergenceProbe(components.seqscribeNode, {
+                version: config.statusVersion ?? getDaemonBuildInfo().version,
+                bootId: currentRefineExecutorBootId(),
+            });
+        } catch (error) {
+            LOG.warn(
+                'Seqscribe',
+                `convergence probe unavailable: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+    }
 
     // 11. Setup Mesh Event Forwarding (queue persistence) + periodic reconcile loop.
     // injectMeshSystemMessage now ONLY persists events to the pending-events queue;
@@ -754,7 +805,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
-        eventLoopMonitor, seqscribeNode,
+        eventLoopMonitor, seqscribeNode, seqscribeProbe,
     } = components;
 
     // 1. Stop timers
@@ -765,6 +816,10 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     try { quotaRefreshLoop?.stop(); } catch { /* noop */ }
     try { quotaEventRefresh?.stop(); } catch { /* noop */ }
     try { providerStalenessProbe?.stop(); } catch { /* noop */ }
+    // Stop the convergence probe here, with the other timers — its append and
+    // its consumer must both be quiet before step 7 closes the node underneath
+    // them, or a tick races the close.
+    try { seqscribeProbe?.stop(); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

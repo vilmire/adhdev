@@ -78,6 +78,22 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // read this before and after (per the clientHint retry delay) and
             // compare: same id means the daemon never actually exited/re-spawned.
             bootId: currentRefineExecutorBootId(),
+            // Local read surface for seqscribe replication health. Until now
+            // `getSeqscribeStats` was reachable only through the status report
+            // to the cloud server, so an operator on the machine had no way to
+            // see whether replication was healthy — `adhdev`/mesh_status can
+            // now answer it without a round trip through the server.
+            //
+            // ★This is the SAME aggregate-only summary the status path carries
+            // (seqscribe/stats.ts): counters, booleans and bucket ordinals.
+            // The server content boundary is untouched — nothing is added to
+            // status_report here, and this field must never widen into topic
+            // names, peer ids, or anything derived from an entry payload.
+            //
+            // null = replication unavailable (node failed to open, or stats
+            // threw); the key is always present so a caller can tell "no node"
+            // from an older daemon that never reported the field at all.
+            seqscribe: ctx.deps.getSeqscribeStats?.() ?? null,
         };
     },
 

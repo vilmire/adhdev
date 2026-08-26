@@ -1020,3 +1020,14 @@ export {
 } from './seqscribe/fleet-secret.js';
 export { appendAssistantJournal, consumeAssistantJournal } from './seqscribe/journal.js';
 export { summarizeSeqscribeStats } from './seqscribe/stats.js';
+// Phase 2 Stage 1: the convergence probe that makes live replication
+// observable (a producer + consumer pair existed nowhere before it).
+export {
+  startConvergenceProbe,
+  PROBE_ENTRY_KIND,
+  PROBE_CONSUMER,
+  PROBE_INTERVAL_MS,
+  type ProbeHandle,
+  type ProbeOptions,
+  type ProbePayload,
+} from './seqscribe/probe.js';

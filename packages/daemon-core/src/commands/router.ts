@@ -36,6 +36,7 @@ import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../m
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
+import type { SeqscribeStatusSummary } from '../shared-types.js';
 import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision, mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { readMeshConfigFromDisk, statMeshConfigFile } from '../config/mesh-config.js';
 import { resolve as pathResolve } from 'path';
@@ -170,6 +171,18 @@ export interface CommandRouterDeps {
      * subscription); absent in standalone (no coordinator mirror there).
      */
     updateLocalMeshOwnedSession?: (payload: Record<string, unknown>) => void;
+    /**
+     * Live seqscribe replication health, for the `get_status_metadata` read
+     * surface. Same aggregate-only summary the status report carries
+     * (seqscribe/stats.ts) — counters, booleans and bucket ordinals, never a
+     * topic name, a peer id or anything derived from an entry payload.
+     *
+     * It is a GETTER rather than a value because the router is constructed
+     * before the seqscribe node opens (daemon-lifecycle steps 9 vs 10a), and
+     * because the numbers must be read at call time, not at wiring time.
+     * Absent (or returning null) when replication is unavailable.
+     */
+    getSeqscribeStats?: () => SeqscribeStatusSummary | null;
 }
 
 export interface CommandRouterResult {
