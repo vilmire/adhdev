@@ -50,6 +50,8 @@ import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import { applyProcessHardening } from './process-hardening.js';
 import { startEventLoopMonitor } from './event-loop-monitor.js';
 import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
+import { loadStoredFleetSecret } from '../seqscribe/fleet-secret.js';
+import { openSeqscribeNode, type SeqscribeNodeHandle } from '../seqscribe/node.js';
 
 // ─── Init Config ───
 
@@ -172,11 +174,42 @@ export interface DaemonComponents {
     // stamped with the prefixed status id. Absent → reconcile falls back to
     // machineId only.
     statusInstanceId?: string;
+    // One live seqscribe node per daemon process. Opening is fail-soft so a DB
+    // or native-addon failure never prevents the rest of the daemon booting.
+    seqscribeNode?: SeqscribeNodeHandle;
 }
 
 export interface DaemonDevSupportOptions {
     components: DaemonComponents;
     logFn?: (msg: string) => void;
+}
+
+export interface DaemonSeqscribeBootOptions {
+    daemonId?: string;
+    env?: NodeJS.ProcessEnv;
+    /** Test override; production always uses the config-dir default. */
+    dbPath?: string;
+}
+
+/** Open the daemon-owned node without turning replication failure into boot failure. */
+export function tryOpenDaemonSeqscribeNode(
+    options: DaemonSeqscribeBootOptions = {},
+): SeqscribeNodeHandle | undefined {
+    const env = options.env ?? process.env;
+    try {
+        return openSeqscribeNode({
+            daemonId: options.daemonId,
+            ...(options.dbPath ? { dbPath: options.dbPath } : {}),
+            env,
+            storedFleetSecret: loadStoredFleetSecret(env)?.secret ?? null,
+        });
+    } catch (error) {
+        LOG.warn(
+            'Seqscribe',
+            `node unavailable; daemon will continue without replication: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return undefined;
+    }
 }
 
 // ─── Init ───
@@ -614,6 +647,13 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         statusInstanceId: config.statusInstanceId,
     };
 
+    // 10a. Open the process-wide seqscribe node. The auth_ok-delivered fleet
+    // secret is read explicitly here and passed as the stored fallback; the
+    // authority resolver inside openSeqscribeNode still gives the environment
+    // override first priority. Any failure is non-fatal by contract (node.ts):
+    // later status/transport wiring simply observes an absent node.
+    components.seqscribeNode = tryOpenDaemonSeqscribeNode({ daemonId: config.statusInstanceId });
+
     // 11. Setup Mesh Event Forwarding (queue persistence) + periodic reconcile loop.
     // injectMeshSystemMessage now ONLY persists events to the pending-events queue;
     // the reconcile loop drains that queue on a fixed interval and injects into live
@@ -714,7 +754,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
-        eventLoopMonitor,
+        eventLoopMonitor, seqscribeNode,
     } = components;
 
     // 1. Stop timers
@@ -748,7 +788,14 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     }
     cdpManagers.clear();
 
-    // 7. VACUUM the mesh runtime DB. Retention prunes rows with DELETE (frees pages
+    // 7. Stop replication and release the seqscribe DB owner lock after its
+    // live transports have stopped producing work. Close is idempotent and a
+    // failure must not prevent the remaining daemon shutdown steps.
+    try { await seqscribeNode?.close(); } catch (error) {
+        LOG.warn('Shutdown', `Seqscribe close: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // 8. VACUUM the mesh runtime DB. Retention prunes rows with DELETE (frees pages
     // inside the file but never shrinks it); the mesh-runtime.db grew to hundreds of
     // MB (mission 86def38d disk-accumulation bootstrap failure) because it was never
     // compacted. Do this LAST, after all writers (reconcile loop, CLIs, instances)

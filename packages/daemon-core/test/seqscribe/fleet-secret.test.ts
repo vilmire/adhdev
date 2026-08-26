@@ -1,7 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+    shutdownDaemonComponents,
+    tryOpenDaemonSeqscribeNode,
+} from '../../src/boot/daemon-lifecycle.js';
 import { ADHDEV_AUTHORITY_ID, resolveFleetSecret } from '../../src/seqscribe/authority.js';
 import {
     FLEET_SECRET_FILE,
@@ -192,5 +196,53 @@ describe('openSeqscribeNode provisional degradation', () => {
         const topics = handle.topics.map((d) => d.topic);
         expect(topics).toContain(ASSISTANT_JOURNAL_TOPIC);
         expect(handle.authorityEnabled).toBe(true);
+    });
+});
+
+describe('daemon lifecycle seqscribe boot', () => {
+    it('creates seqscribe.db, issues a writerId, and enables authority from the stored secret', () => {
+        const dir = tmpDir('daemon-boot');
+        const env = envFor(dir);
+        const dbPath = join(dir, 'seqscribe.db');
+        storeFleetSecret('auth-ok-delivered-secret', 4, env);
+
+        const handle = tryOpenDaemonSeqscribeNode({
+            daemonId: 'daemon_machine-1',
+            env,
+            dbPath,
+        });
+        expect(handle).toBeDefined();
+        handles.push(handle!);
+
+        expect(existsSync(dbPath)).toBe(true);
+        expect(handle!.writerId).toMatch(/^adhdev-[0-9a-f]{16}$/);
+        expect(handle!.daemonId).toBe('daemon_machine-1');
+        expect(handle!.authorityEnabled).toBe(true);
+        expect(handle!.topics.map((definition) => definition.topic)).toContain(ASSISTANT_JOURNAL_TOPIC);
+    });
+
+    it('returns no handle instead of throwing when the node cannot open', () => {
+        const dir = tmpDir('daemon-boot-fail-soft');
+        expect(tryOpenDaemonSeqscribeNode({ env: envFor(dir), dbPath: dir })).toBeUndefined();
+    });
+
+    it('closes the node during shared daemon shutdown', async () => {
+        let seqscribeClosed = false;
+        await shutdownDaemonComponents({
+            poller: { stop() {} },
+            cdpInitializer: { stop() {} },
+            agentStreamManager: { async dispose() {} },
+            cliManager: { detachAll() {} },
+            instanceManager: {
+                removeByCategory() {},
+                disposeAll() {},
+            },
+            cdpManagers: new Map(),
+            seqscribeNode: {
+                async close() { seqscribeClosed = true; },
+            },
+        } as any);
+
+        expect(seqscribeClosed).toBe(true);
     });
 });

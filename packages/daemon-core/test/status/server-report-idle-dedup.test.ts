@@ -22,7 +22,7 @@ interface SentMessage {
     data: any;
 }
 
-function makeReporter(sessionStatus: { value: string }) {
+function makeReporter(sessionStatus: { value: string }, getSeqscribeStats?: () => any) {
     const sent: SentMessage[] = [];
     const reporter = new DaemonStatusReporter(
         {
@@ -53,6 +53,7 @@ function makeReporter(sessionStatus: { value: string }) {
                 } as any]),
                 collectStatesByCategory: () => [],
             },
+            ...(getSeqscribeStats ? { getSeqscribeStats } : {}),
         },
         { logFn: () => {} },
     );
@@ -61,6 +62,44 @@ function makeReporter(sessionStatus: { value: string }) {
 }
 
 describe('idle status_report dedup', () => {
+    it('includes the supplied seqscribe aggregate and strips non numeric/enum content', async () => {
+        const canary = 'session.secret-session.transcript';
+        const { reporter, statusReports } = makeReporter(
+            { value: 'idle' },
+            () => ({
+                topics: 5,
+                peers: 2,
+                peersReady: 1,
+                pendingBucket: 2,
+                consumerLagBucket: 0,
+                queueBucket: 1,
+                fgenAgeBucket: 3,
+                quarantined: false,
+                authority: true,
+                topicName: canary,
+            }),
+        );
+
+        await reporter.sendUnifiedStatusReport({ reason: 'seqscribe-provider' });
+
+        expect(statusReports()).toHaveLength(1);
+        expect(statusReports()[0].data.seqscribe).toEqual({
+            topics: 5,
+            peers: 2,
+            peersReady: 1,
+            pendingBucket: 2,
+            consumerLagBucket: 0,
+            queueBucket: 1,
+            fgenAgeBucket: 3,
+            quarantined: false,
+            authority: true,
+        });
+        expect(JSON.stringify(statusReports()[0].data)).not.toContain(canary);
+        for (const value of Object.values(statusReports()[0].data.seqscribe)) {
+            expect(['number', 'boolean']).toContain(typeof value);
+        }
+    });
+
     it('suppresses unchanged periodic reports instead of resending every interval', async () => {
         const status = { value: 'idle' };
         const { reporter, statusReports } = makeReporter(status);
