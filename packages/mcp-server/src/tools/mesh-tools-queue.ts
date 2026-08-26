@@ -47,6 +47,7 @@ import {
     getQueue,
     ipcDispatchToRemoteAgent,
     isLocalControlPlaneNode,
+    isMeshNodeHealthLaunchable,
     markStaleDirectDispatches,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
@@ -317,11 +318,61 @@ function normalizeEnqueueTaskArgs(
 }
 
 /**
+ * EAGERPUSH-FANOUT-FENCE (R1) — select the SINGLE remote node that may receive the
+ * eager P2P push for one task.
+ *
+ * Before this fence the caller looped over every remote node and pushed to each one
+ * that satisfied requiredTags. For a TARGETED task that was already a single node
+ * (the `targetNodeId && node.id !== targetNodeId` skip), but an UNTARGETED task was
+ * BROADCAST to the whole fleet: every eligible machine's daemon received the same
+ * taskId and injected it into an idle session. Observed live — one readonly task ran
+ * to completion on two machines at once. Had it been a write task that is a double
+ * commit, and it bypasses daemon-core's write guards (nodeConflictAllows /
+ * convergenceAllows) entirely, because those guard the queue-CLAIM path inside one
+ * daemon process and cannot see a push another process already made.
+ *
+ * A task is a single unit of work with a single assignee, so the push must name one
+ * receiver. Selection is deliberately simple — the first eligible node in mesh order —
+ * because this is a best-effort accelerator, not the scheduler: if the chosen node
+ * cannot actually take the task, the row stays `pending` and the queue-claim path
+ * (which owns the real fitness/slot/difficulty logic in daemon-core) hands it to
+ * whichever node claims it. Picking a poor receiver costs a delay; picking several
+ * costs duplicate execution. Order is mesh-node order, which is stable for a given
+ * snapshot, so the choice is deterministic rather than racy.
+ *
+ * Eligibility is the pre-existing predicate (not local, has a daemonId, satisfies
+ * requiredTags, honours a target pin) plus a health check, so an offline node is not
+ * chosen as the single receiver while an online peer is skipped — with a fan-out that
+ * could not happen, since every eligible node got a copy.
+ *
+ * Returns null when no node is eligible; the task then simply waits for the queue.
+ */
+function selectEagerPushReceiver(
+    ctx: MeshContext,
+    targetNodeId: string | undefined,
+    requiredTags: string[],
+): MeshContext['mesh']['nodes'][number] | null {
+    const eligible = ctx.mesh.nodes.filter(node => {
+        if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) return false;
+        // When the task targets a specific node, only that node's daemon
+        // should receive the P2P push; others would steal the work.
+        if (targetNodeId && node.id !== targetNodeId) return false;
+        return nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node));
+    });
+    if (eligible.length === 0) return null;
+    // Prefer a node we believe is reachable; 'unknown' health counts as launchable, so a
+    // node with no telemetry is not excluded. If none is launchable, fall back to the
+    // first eligible node rather than dropping the push — the queue still backs it up.
+    return eligible.find(node => isMeshNodeHealthLaunchable(node)) ?? eligible[0];
+}
+
+/**
  * IpcTransport (Cloud Mesh) enqueue-and-push: directly P2P-dispatch a just-enqueued
- * task to remote nodes' idle sessions (the local queue file is invisible to other
+ * task to ONE remote node's idle session (the local queue file is invisible to other
  * machines' daemons). Shared by mesh_enqueue_task and mesh_enqueue_batch — the
  * caller is responsible for the DEPENDSON-GATE-SYMMETRY check (only push a task
- * whose dependencies are already satisfied). Returns fire-and-forget promises.
+ * whose dependencies are already satisfied). Returns fire-and-forget promises
+ * (0 or 1 element; an array keeps both call sites' spread/concat shape).
  */
 function eagerPushTaskToRemoteNodes(
     ctx: MeshContext,
@@ -332,14 +383,19 @@ function eagerPushTaskToRemoteNodes(
     coordinatorDaemonId: string | undefined,
 ): Promise<void>[] {
     const dispatchPromises: Promise<void>[] = [];
-    for (const node of ctx.mesh.nodes) {
-        const isLocalNode = isLocalControlPlaneNode(ctx, node);
-        if (isLocalNode || !node.daemonId) continue;
-        // When the task targets a specific node, only that node's daemon
-        // should receive the P2P push; others would steal the work.
-        if (targetNodeId && node.id !== targetNodeId) continue;
-        if (!nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node))) continue;
+    // EAGERPUSH-STATUS-RECHECK (R3): re-read the row's LIVE status immediately before
+    // pushing. The caller enqueued it moments ago, but the local queue drain
+    // (triggerMeshQueueAndReport) runs in between and a local node may already have
+    // claimed it — pushing then injects an ALREADY-ASSIGNED task into a second session,
+    // reproducing the double-execution this fence exists to stop. Only a still-`pending`
+    // row may be eager-pushed. Anything else (assigned/completed/cancelled/failed) is
+    // someone else's work now. Best-effort read: if the row is missing from the queue
+    // (never expected — we just inserted it) we do not push, the fail-closed direction.
+    const liveStatus = getQueue(ctx.mesh.id).find(t => t.id === task.id)?.status;
+    if (liveStatus !== 'pending') return dispatchPromises;
 
+    const node = selectEagerPushReceiver(ctx, targetNodeId, requiredTags);
+    if (node) {
         // MISROUTE-INJECT-SPLIT: stamp meshContext (nodeId) onto the eager P2P push so the
         // worker's agent_command handler scopes it to THIS node's session via the
         // fail-closed findMeshNodeAdapter, instead of the provider-only fuzzy fallback that

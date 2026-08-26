@@ -5483,13 +5483,21 @@ function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
     }
   };
 }
+function selectEagerPushReceiver(ctx, targetNodeId, requiredTags) {
+  const eligible = ctx.mesh.nodes.filter((node) => {
+    if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) return false;
+    if (targetNodeId && node.id !== targetNodeId) return false;
+    return (0, import_daemon_core6.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core6.buildMeshNodeCapabilityTags)(node));
+  });
+  if (eligible.length === 0) return null;
+  return eligible.find((node) => (0, import_daemon_core6.isMeshNodeHealthLaunchable)(node)) ?? eligible[0];
+}
 function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId) {
   const dispatchPromises = [];
-  for (const node of ctx.mesh.nodes) {
-    const isLocalNode = isLocalControlPlaneNode(ctx, node);
-    if (isLocalNode || !node.daemonId) continue;
-    if (targetNodeId && node.id !== targetNodeId) continue;
-    if (!(0, import_daemon_core6.nodeSatisfiesRequiredTags)(requiredTags, (0, import_daemon_core6.buildMeshNodeCapabilityTags)(node))) continue;
+  const liveStatus = (0, import_daemon_core6.getQueue)(ctx.mesh.id).find((t) => t.id === task.id)?.status;
+  if (liveStatus !== "pending") return dispatchPromises;
+  const node = selectEagerPushReceiver(ctx, targetNodeId, requiredTags);
+  if (node) {
     dispatchPromises.push(
       ipcDispatchToRemoteAgent(ctx, node, {
         message,
