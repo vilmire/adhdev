@@ -216,6 +216,49 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
               })
             : null;
 
+    // Anomaly logging (library P22/P24). Without this the replication signals
+    // exist only inside the library and a host mid-incident cannot see them.
+    //
+    // The `Anomaly` payload is `{ kind, entry? }` — the library carries no peer
+    // or topic detail on the sync signals, so the log line is the kind plus the
+    // node-level context we already hold. `entry` is deliberately NOT logged:
+    // it is a LogEntry and its payload is user/agent content.
+    //
+    // Severity split: `sync_hot` is informational by the library's own
+    // definition (bulk catch-up is normal and it never throttles), but it is
+    // logged at WARN because it only fires at ≥32 MiB in 60s — at that volume a
+    // host reading the log wants to see it next to `sync_stalled` rather than
+    // buried in INFO. `sync_stalled` is the actionable one.
+    let unsubAnomaly: (() => void) | null = null;
+    try {
+        unsubAnomaly = node.onAnomaly((anomaly) => {
+            try {
+                if (anomaly.kind === 'sync_stalled') {
+                    LOG.warn(
+                        'Seqscribe',
+                        `sync stalled writer=${writerId} — WANT rounds toward a peer stopped progressing; ` +
+                            'check get_status_metadata seqscribe.stalledStreams / applyRejects',
+                    );
+                } else if (anomaly.kind === 'sync_hot') {
+                    LOG.warn(
+                        'Seqscribe',
+                        `sync hot writer=${writerId} — bulk sync traffic crossed the rate window ` +
+                            '(informational, not throttled); see seqscribe.syncHotspots in get_status_metadata',
+                    );
+                } else {
+                    LOG.warn('Seqscribe', `anomaly kind=${anomaly.kind} writer=${writerId}`);
+                }
+            } catch {
+                /* a logging failure must never propagate into the library */
+            }
+        });
+    } catch (err) {
+        LOG.warn(
+            'Seqscribe',
+            `anomaly subscription failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+    }
+
     LOG.info(
         'Seqscribe',
         `node open writer=${writerId} topics=${defs.length} authority=${authority ? 'on' : 'off'}${opts.isCoordinator ? ' role=coordinator' : ''}`,
@@ -227,6 +270,11 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         closed = true;
         try {
             finalityLoop?.stop();
+        } catch {
+            /* noop */
+        }
+        try {
+            unsubAnomaly?.();
         } catch {
             /* noop */
         }

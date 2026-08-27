@@ -384,4 +384,50 @@ describe('cloud status seqscribe boundary', () => {
             parityFieldMismatchBucket: 0,
         });
     });
+
+    /**
+     * The LOCAL-ONLY replication diagnostics (library P22/P24) that
+     * `get_status_metadata` carries and the server must never see.
+     *
+     * `syncHotspots` is the dangerous one: it pairs a TOPIC NAME — which embeds
+     * a session or mesh id — with a PEER ID, which is exactly the fleet-shape
+     * leak the rest of this file exists to prevent. `throughput` is raw
+     * unbucketed counters, which would additionally defeat the status-frame
+     * dedup and turn an idle daemon into a constant transmitter.
+     *
+     * They are safe only because `buildCloudSeqscribeSummary` is a fixed-key
+     * ALLOW-LIST. This test is what keeps it that way: rewriting it as a
+     * deny-list, or adding these keys to the forward list, turns it red.
+     */
+    it('never forwards the local-only P22/P24 diagnostics', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, {
+            ...healthy,
+            applyRejects: 17,
+            stalledStreams: 4,
+            throughput: {
+                intervalMs: 60_000,
+                servedEntries: 250,
+                servedBytes: 1_048_576,
+                appliedEntries: 250,
+                appliedBytes: 1_048_576,
+                wantRoundsRequested: 12,
+                wantRoundsServed: 12,
+            },
+            syncHotspots: [
+                { topic: 'session.sess-1.transcript', peerId: 'peer-a', bytes: 1_048_576 },
+                { topic: 'mesh.mesh_abc.events', peerId: 'peer-b', bytes: 524_288 },
+            ],
+        } as any);
+
+        expect(payload.seqscribe).toEqual(healthy);
+        for (const local of ['applyRejects', 'stalledStreams', 'throughput', 'syncHotspots']) {
+            expect(payload.seqscribe).not.toHaveProperty(local);
+        }
+        // Belt and braces: no identifier from the hotspots survives anywhere in
+        // the serialized frame, whatever shape a future refactor gives it.
+        const wire = JSON.stringify(payload);
+        expect(wire).not.toContain('sess-1');
+        expect(wire).not.toContain('mesh_abc');
+        expect(wire).not.toContain('peer-a');
+    });
 });

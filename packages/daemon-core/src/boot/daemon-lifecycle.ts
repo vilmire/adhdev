@@ -56,6 +56,11 @@ import { openSeqscribeNode, type SeqscribeNodeHandle } from '../seqscribe/node.j
 import { startConvergenceProbe, type ProbeHandle } from '../seqscribe/probe.js';
 import { summarizeSeqscribeStats } from '../seqscribe/stats.js';
 import {
+    startSeqscribeThroughputCollector,
+    type SeqscribeThroughputCollector,
+} from '../seqscribe/throughput-collector.js';
+import { configureMeshReadReadinessCollector } from '../seqscribe/mesh-read-readiness.js';
+import {
     configureMeshDualWrite,
     isMeshDualWriteActive,
     meshDualWriteCounters,
@@ -198,6 +203,9 @@ export interface DaemonComponents {
     // Stage 3 parity loop (mesh/mesh-parity-loop.ts). Null when the Stage 2
     // dual-write shadow is off — with nothing written there is nothing to compare.
     seqscribeParityLoop?: MeshParityLoopHandle | null;
+    // The single `node.stats()` reader (seqscribe/throughput-collector.ts).
+    // Everything else reads its published snapshot.
+    seqscribeCollector?: SeqscribeThroughputCollector;
 }
 
 export interface DaemonDevSupportOptions {
@@ -616,6 +624,14 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // Reading at call time is required anyway: the stats are live numbers, not
     // a wiring-time snapshot.
     let seqscribeNodeRef: SeqscribeNodeHandle | undefined;
+    // ★ The daemon's ONLY caller of `node.stats()`. Since library P24 that call
+    // DRAINS the interval throughput counters, so a second caller silently
+    // steals part of every interval and every reader's numbers become wrong by
+    // an unknowable factor. The collector ticks on its own cadence and
+    // publishes a snapshot; everything else — including the closure below —
+    // reads the snapshot, which is a pure getter.
+    // See seqscribe/throughput-collector.ts.
+    let seqscribeCollector: SeqscribeThroughputCollector | undefined;
     const router = new DaemonCommandRouter({
         commandHandler,
         cliManager,
@@ -652,8 +668,31 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 // live counter and the status-frame dedup keeps working.
                 const dual = meshDualWriteCounters();
                 const parity = meshParityCounters();
-                return summarizeSeqscribeStats(seqscribeNodeRef.node.stats(), {
+                // ★ Read the collector's PUBLISHED snapshot — never
+                // `node.stats()`, and never `collector.collect()` either.
+                //
+                // This closure is called by the status reporter (~30s) AND by
+                // `get_status_metadata` (on demand). Forcing a collect here
+                // would cut the interval at those arbitrary moments — the exact
+                // interval fragmentation the collector exists to prevent, just
+                // relocated. Only the collector's own timer advances the
+                // interval; this is a pure read of whatever it last published.
+                //
+                // Cost: the numbers are up to one tick stale. That is the
+                // correct trade — a coherent interval that is a minute old is
+                // useful, a fragmented one is not.
+                const snapshot = seqscribeCollector?.snapshot() ?? null;
+                if (!snapshot) return null;
+                return summarizeSeqscribeStats(snapshot.stats, {
                     authorityEnabled: seqscribeNodeRef.authorityEnabled,
+                    // Local surface: `get_status_metadata` and the status
+                    // reporter share this closure, but the cloud projection
+                    // (buildCloudSeqscribeSummary) is a fixed-key allow-list
+                    // that drops every field below, so these never reach the
+                    // server. syncHotspots in particular carries topic names
+                    // and peer ids and is local-only by contract.
+                    includeLocalDiagnostics: true,
+                    throughput: snapshot,
                     dualWrite: {
                         active: isMeshDualWriteActive(),
                         failed: dual.failed,
@@ -718,6 +757,31 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     components.seqscribeNode = tryOpenDaemonSeqscribeNode({ daemonId: config.statusInstanceId });
     // Publish to the holder the router's getSeqscribeStats closure reads.
     seqscribeNodeRef = components.seqscribeNode;
+
+    // Start the throughput collector — the process's single `node.stats()`
+    // reader (library P24 drains the interval counters on every read, so any
+    // second reader corrupts everyone's numbers; see throughput-collector.ts).
+    // Every other consumer reads `snapshot()`.
+    if (components.seqscribeNode) {
+        try {
+            const node = components.seqscribeNode;
+            seqscribeCollector = startSeqscribeThroughputCollector({
+                readStats: () => node.node.stats(),
+            });
+            // Prime it once so `get_status_metadata` and the first status
+            // report have a snapshot to read instead of null for a full tick.
+            seqscribeCollector.collect();
+            components.seqscribeCollector = seqscribeCollector;
+            // The mesh read-readiness gate reads seqscribe stats too; point it
+            // at the collector so it also stops calling stats() directly.
+            configureMeshReadReadinessCollector(seqscribeCollector);
+        } catch (error) {
+            LOG.warn(
+                'Seqscribe',
+                `throughput collector unavailable: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+    }
 
     // 10b. Stage 1 convergence probe. Until now nothing in the daemon appended
     // to or consumed from a topic, so a correctly wired fleet and a broken one
@@ -879,6 +943,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         cliManager, instanceManager, cdpManagers,
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
         eventLoopMonitor, seqscribeNode, seqscribeProbe, seqscribeParityLoop,
+        seqscribeCollector,
     } = components;
 
     // 1. Stop timers
@@ -893,6 +958,11 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // its consumer must both be quiet before step 7 closes the node underneath
     // them, or a tick races the close.
     try { seqscribeProbe?.stop(); } catch { /* noop */ }
+    // The throughput collector reads `node.stats()` on a timer, so it must stop
+    // before step 7 closes the node — a tick landing after the close would read
+    // a released store.
+    try { seqscribeCollector?.stop(); } catch { /* noop */ }
+    try { configureMeshReadReadinessCollector(null); } catch { /* noop */ }
     // Same reasoning for the parity loop, and additionally detach the dual-write
     // shadow so any ledger append during the rest of shutdown becomes a no-op
     // rather than an append into a node that step 7 is about to close.

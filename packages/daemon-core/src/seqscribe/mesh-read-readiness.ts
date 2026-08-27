@@ -106,6 +106,7 @@ import {
     primeMeshReadModel,
 } from './mesh-read-model.js';
 import { meshEventsTopic } from './topics.js';
+import type { SeqscribeThroughputCollector } from './throughput-collector.js';
 
 /** Why a mesh is not serving reads from the replica. */
 export type MeshReadFallbackReason =
@@ -264,6 +265,30 @@ function countFallback(reason: MeshReadFallbackReason): void {
 const loggedTransitions = new Map<string, string>();
 
 /**
+ * The process's throughput collector, if one is running.
+ *
+ * ★ The readiness gate reads seqscribe stats through THIS, not through
+ * `node.stats()`. Since library P24 a stats() call drains the interval
+ * throughput counters, and this gate runs on the mesh read path, so a direct
+ * call here would fragment every measurement interval. See
+ * seqscribe/throughput-collector.ts.
+ */
+let seqscribeCollectorRef: SeqscribeThroughputCollector | null = null;
+
+/**
+ * Attach the throughput collector. Called from daemon boot alongside
+ * `configureMeshReadModel`; `null` detaches on shutdown.
+ *
+ * With no collector attached the gate reports `stats_error` and reads fall back
+ * to the ledger — the same fail-safe direction as any other readiness miss.
+ */
+export function configureMeshReadReadinessCollector(
+    collector: SeqscribeThroughputCollector | null,
+): void {
+    seqscribeCollectorRef = collector;
+}
+
+/**
  * Log a mesh's readiness only when it CHANGES.
  *
  * A per-read log line would print on every suppression check — thousands per
@@ -303,21 +328,45 @@ export function evaluateMeshReadReadiness(meshId: string): MeshReadReadiness {
         if (!hasMeshReadModelIndex(meshId)) return { ready: false, reason: 'index_missing' };
     }
 
-    let topicStats: { quarantined: number };
-    try {
-        const stats = node.node.stats();
-        const entry = stats.topics[topic];
-        if (!entry) return { ready: false, reason: 'topic_undefined' };
-        topicStats = entry;
-    } catch (error) {
-        LOG.warn(
-            'Seqscribe',
-            `read readiness stats failed mesh=${meshId}: ${
-                error instanceof Error ? error.message : String(error)
-            }`,
-        );
-        return { ready: false, reason: 'stats_error' };
+    // ★ Read the throughput collector's snapshot rather than calling
+    // `node.stats()` here.
+    //
+    // Since library P24, `stats()` DRAINS the interval throughput counters.
+    // This function runs on the mesh read path — potentially thousands of times
+    // an hour — so calling stats() here would shred every interval into
+    // fragments and make the throughput readout meaningless. The collector is
+    // the process's single stats() reader; this is a pure read of what it
+    // published (seqscribe/throughput-collector.ts).
+    //
+    // Staleness is acceptable for THIS gate specifically: `quarantined` is a
+    // latching condition (entries stay quarantined until an operator clears
+    // them), so a snapshot up to one tick old cannot report a quarantined topic
+    // as clean for long, and the gate is fail-safe — a miss costs one interval
+    // of ledger fallback, never a bad read.
+    // With no collector attached — standalone embeddings and unit tests, where
+    // nothing is measuring throughput in the first place — fall back to a
+    // direct read. There is no interval to protect in that configuration, and
+    // failing the gate instead would turn "no telemetry" into "no replica
+    // reads", which is a far worse trade than a drained counter nobody reads.
+    let topicStats: { quarantined: number } | undefined;
+    if (seqscribeCollectorRef) {
+        const snapshot = seqscribeCollectorRef.snapshot();
+        if (!snapshot) return { ready: false, reason: 'stats_error' };
+        topicStats = snapshot.stats.topics[topic];
+    } else {
+        try {
+            topicStats = node.node.stats().topics[topic];
+        } catch (error) {
+            LOG.warn(
+                'Seqscribe',
+                `read readiness stats failed mesh=${meshId}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            );
+            return { ready: false, reason: 'stats_error' };
+        }
     }
+    if (!topicStats) return { ready: false, reason: 'topic_undefined' };
 
     if (topicStats.quarantined > 0) return { ready: false, reason: 'quarantined' };
 

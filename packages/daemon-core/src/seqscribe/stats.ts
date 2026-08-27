@@ -30,6 +30,7 @@
  */
 
 import type { NodeStats } from 'seqscribe';
+import type { SeqscribeThroughputSnapshot } from './throughput-collector.js';
 
 /**
  * Finality staleness buckets, in hours. With a 1h issuance cadence, "fresh" is
@@ -120,6 +121,52 @@ export interface SeqscribeStatusSummary {
     parityMissingInShadowBucket: number;
     parityExtraInShadowBucket: number;
     parityFieldMismatchBucket: number;
+
+    // ── LOCAL-ONLY replication diagnostics (library P22/P24) ────────────────
+    // ★ Everything below is deliberately ABSENT from the cloud projection.
+    // `buildCloudSeqscribeSummary` (status/reporter.ts) is a fixed-key
+    // allow-list that re-lists every field it forwards, so these do not reach
+    // the server — `test/status/cloud-status-content-boundary.test.ts` asserts
+    // exactly that. They exist for `get_status_metadata` and the daemon log,
+    // which are local surfaces.
+    //
+    // They are also RAW counters rather than buckets, which is only safe
+    // because they never ride the deduped status frame. Do not promote any of
+    // them to the cloud summary without bucketing them first.
+    /**
+     * Cumulative non-applied wire-apply outcomes across topics (P22).
+     * Nonzero means entries arrived and were refused — the counterpart to a
+     * `sync_stalled` anomaly, and the number that distinguishes "quiet because
+     * idle" from "quiet because every apply is bouncing".
+     */
+    applyRejects?: number;
+    /** Peer streams currently suspended for non-progress (P22). */
+    stalledStreams?: number;
+    /**
+     * Interval sync throughput from the last collector tick (P24), summed
+     * across topics. Absent until the collector's first tick.
+     *
+     * ★ Sourced from the throughput collector's snapshot, never from a direct
+     * `node.stats()` call — see seqscribe/throughput-collector.ts for why
+     * stats() must have exactly one reader.
+     */
+    throughput?: {
+        intervalMs: number;
+        servedEntries: number;
+        servedBytes: number;
+        appliedEntries: number;
+        appliedBytes: number;
+        wantRoundsRequested: number;
+        wantRoundsServed: number;
+    };
+    /**
+     * Top (topic, peer) byte hotspots this interval (P24).
+     *
+     * ★★ CONTENT: topic names embed session and mesh ids, and `peerId` is a
+     * fleet identifier. This field is LOCAL-ONLY and must never be forwarded
+     * to the server on any path.
+     */
+    syncHotspots?: { topic: string; peerId: string; bytes: number }[];
 }
 
 export interface SummarizeOptions {
@@ -141,6 +188,25 @@ export interface SummarizeOptions {
         extraInShadow?: number;
         fieldMismatch?: number;
     };
+    /**
+     * Include the LOCAL-ONLY P22/P24 diagnostics (applyRejects, stalledStreams,
+     * throughput, syncHotspots).
+     *
+     * Defaults to FALSE, so the fields are absent unless a caller explicitly
+     * opts in. The status reporter leaves it off; `get_status_metadata` turns
+     * it on. The cloud allow-list would drop them regardless — this just keeps
+     * the deduped status frame from carrying fields it will never forward.
+     */
+    includeLocalDiagnostics?: boolean;
+    /**
+     * The throughput collector's published snapshot. Only read when
+     * `includeLocalDiagnostics` is set.
+     *
+     * ★ Pass the collector's `snapshot()`, never a fresh `node.stats()`:
+     * stats() drains the interval counters, so a second reader silently halves
+     * everyone's numbers (seqscribe/throughput-collector.ts).
+     */
+    throughput?: SeqscribeThroughputSnapshot | null;
 }
 
 export function summarizeSeqscribeStats(
@@ -172,6 +238,47 @@ export function summarizeSeqscribeStats(
         if (peer.state === 'ready') peersReady++;
     }
 
+    // LOCAL-ONLY diagnostics, computed from the SAME `stats` object the
+    // aggregates above came from, so the numbers in one response are mutually
+    // consistent. Opt-in — see `includeLocalDiagnostics`.
+    let localDiagnostics: Partial<SeqscribeStatusSummary> = {};
+    if (opts.includeLocalDiagnostics) {
+        let applyRejects = 0;
+        for (const topic of Object.values(stats.topics)) {
+            for (const count of Object.values(topic.applyRejects ?? {})) {
+                if (typeof count === 'number' && Number.isFinite(count) && count > 0) {
+                    applyRejects += count;
+                }
+            }
+        }
+        let stalledStreams = 0;
+        for (const peer of stats.peers) {
+            const stalled = peer.stalledStreams;
+            if (typeof stalled === 'number' && Number.isFinite(stalled) && stalled > 0) {
+                stalledStreams += stalled;
+            }
+        }
+        const snap = opts.throughput;
+        localDiagnostics = {
+            applyRejects,
+            stalledStreams,
+            ...(snap
+                ? {
+                      throughput: {
+                          intervalMs: snap.intervalMs,
+                          servedEntries: snap.totals.servedEntries,
+                          servedBytes: snap.totals.servedBytes,
+                          appliedEntries: snap.totals.appliedEntries,
+                          appliedBytes: snap.totals.appliedBytes,
+                          wantRoundsRequested: snap.totals.wantRoundsRequested,
+                          wantRoundsServed: snap.totals.wantRoundsServed,
+                      },
+                      syncHotspots: snap.hotspots.map((h) => ({ ...h })),
+                  }
+                : {}),
+        };
+    }
+
     return {
         topics,
         peers: stats.peers.length,
@@ -191,5 +298,6 @@ export function summarizeSeqscribeStats(
         parityMissingInShadowBucket: bucket(opts.parity?.missingInShadow ?? 0, BACKLOG_BUCKETS),
         parityExtraInShadowBucket: bucket(opts.parity?.extraInShadow ?? 0, BACKLOG_BUCKETS),
         parityFieldMismatchBucket: bucket(opts.parity?.fieldMismatch ?? 0, BACKLOG_BUCKETS),
+        ...localDiagnostics,
     };
 }
