@@ -1384,7 +1384,14 @@ function expandPath(template: string, input: NativeHistoryInput, opts?: { skipWo
         return v;
     });
     if (missing) return null;
-    return out;
+    // Provider specs write `path` templates with literal '/' (see e.g.
+    // adhdev-providers/cli/claude-cli/specs/4.0.json), while the ~/-expansion
+    // above joins with path.join() (native separators). On win32 the two
+    // halves never matched, so a concrete (non-wildcard) resolution carried
+    // mixed \ and / — functionally readable by fs, but not the canonical
+    // path callers/tests reasonably expect from sourcePath. The wildcard
+    // walker handles '*' segments itself, so leave those untouched.
+    return out.includes('*') ? out : path.normalize(out);
 }
 
 function claudeProjectDirName(workspace: string): string {
