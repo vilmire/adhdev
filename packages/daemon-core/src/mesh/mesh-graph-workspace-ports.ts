@@ -7,6 +7,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { gitChildEnv } from '../git/git-locale.js';
@@ -587,7 +588,45 @@ function defaultListAssignedTasks(meshId: string, nodeId: string): string[] {
     }
 }
 
+/**
+ * Deterministic node id for a prepared graph workspace.
+ *
+ * MUST stay collision-free across workspaces of the SAME graph: a batch that
+ * declares N workspaces prepares N worktrees on N distinct branches
+ * (deriveWorkspaceBranchIdentity), and each must register as its own node.
+ *
+ * The previous form sliced the whole idempotency key to 48 chars:
+ *   `node_gws_` + `graph-ws-clone:<graphId>:<workspaceRef>`.slice(0, 48)
+ * `graph_ws_clone_` (15) plus a UUID graphId (36) plus a separator already
+ * spans 52 chars, so the cut landed mid-UUID and the workspaceRef never
+ * reached the id at all. Every workspace of a graph collapsed onto one id,
+ * addNode() deduped the rest as re-registrations, and the tasks pinned to the
+ * dropped nodes stranded as `no_node_satisfies_required_tags`.
+ *
+ * The fix budgets the two components independently instead of truncating
+ * their concatenation, so the workspace part can never be squeezed out. The
+ * graph stem matches deriveWorkspaceBranchIdentity's 8-char stem, which keeps
+ * the id readable next to the branch it belongs to.
+ *
+ * Back-compat: this changes the derived id for existing single-workspace
+ * worktrees too, but not their identity in practice — a resumed intent
+ * short-circuits on the persisted `createdNodeId` (mesh-graph-workspace-saga.ts
+ * :347) and compensation unregisters that same stored id, so already-prepared
+ * worktrees keep the id they registered under and are never re-derived. Only
+ * newly prepared workspaces take the new form.
+ */
 export function derivePreparedNodeId(graphId: string, workspaceRef: string): string {
-    const key = deriveWorkspaceCloneIdempotencyKey(graphId, workspaceRef);
-    return `node_gws_${key.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 48)}`;
+    const graphStem = sanitizeNodeIdPart(graphId).slice(0, 8);
+    const refStem = sanitizeNodeIdPart(workspaceRef).slice(0, 32);
+    // Full-key digest: keeps ids distinct when two long workspace refs share a
+    // 32-char prefix, which the stems alone would collapse.
+    const digest = createHash('sha256')
+        .update(deriveWorkspaceCloneIdempotencyKey(graphId, workspaceRef))
+        .digest('hex')
+        .slice(0, 8);
+    return `node_gws_${graphStem}_${refStem}_${digest}`;
+}
+
+function sanitizeNodeIdPart(value: string): string {
+    return value.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'ws';
 }
