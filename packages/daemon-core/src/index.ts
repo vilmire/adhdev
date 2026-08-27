@@ -1122,6 +1122,29 @@ export {
   type MeshParityResult,
   type ParityLedgerEntry,
 } from './seqscribe/mesh-parity.js';
+// Phase 4 Stage 3: fleet.status parity evidence + future-consumer readiness.
+export {
+  configureFleetStatusParity,
+  observeFleetStatusWsProjection,
+  fleetStatusParityCounters,
+  __resetFleetStatusParityForTests,
+  FLEET_STATUS_PARITY_INTERVAL_MS,
+  FLEET_STATUS_PARITY_SUMMARY_INTERVAL_MS,
+  FLEET_STATUS_APPEND_SETTLE_MS,
+  type FleetStatusParityBuckets,
+  type FleetStatusParityCounters,
+  type FleetStatusParityExpectation,
+  type FleetStatusParityHandle,
+  type FleetStatusParityMismatchKind,
+  type FleetStatusParityOptions,
+  type FleetStatusParityRunResult,
+} from './seqscribe/fleet-status-parity.js';
+export {
+  evaluateFleetStatusReadiness,
+  type FleetStatusReadiness,
+  type FleetStatusReadinessInput,
+  type FleetStatusReadinessReason,
+} from './seqscribe/fleet-status-readiness.js';
 export {
   startMeshParityLoop,
   PARITY_INTERVAL_MS,

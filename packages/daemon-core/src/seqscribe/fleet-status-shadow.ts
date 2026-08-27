@@ -133,6 +133,38 @@ let activeMode: FleetStatusMode = 'off';
 let inflight = 0;
 /** Tri-state: unknown (null) until the first write checks the node. */
 let topicUsable: boolean | null = null;
+let configurationGeneration = 0;
+let appendGeneration = 0;
+let lastAppendedGeneration = 0;
+
+/**
+ * Producer-local evidence for Stage 3 parity.
+ *
+ * This is deliberately NOT a claim that the in-memory ring persisted or
+ * replicated the record. End-to-end ring delivery belongs to the Stage 2 SUB
+ * consumer. It proves only that the shadow append resolved successfully with
+ * this independently-built, fixed-shape entry.
+ */
+export type FleetStatusParitySnapshot = Readonly<
+    Omit<FleetStatusEntry, 'sessionCounts' | 'seqscribe'> & {
+        sessionCounts: Readonly<FleetStatusEntry['sessionCounts']>;
+        seqscribe?: Readonly<NonNullable<FleetStatusEntry['seqscribe']>>;
+    }
+>;
+
+let lastAppendedEntryForParity: FleetStatusParitySnapshot | null = null;
+
+function freezeParitySnapshot(entry: FleetStatusEntry): FleetStatusParitySnapshot {
+    const snapshot: FleetStatusParitySnapshot = {
+        daemonId: entry.daemonId,
+        at: entry.at,
+        onlineState: entry.onlineState,
+        p2pActive: entry.p2pActive,
+        sessionCounts: Object.freeze({ ...entry.sessionCounts }),
+        ...(entry.seqscribe ? { seqscribe: Object.freeze({ ...entry.seqscribe }) } : {}),
+    };
+    return Object.freeze(snapshot);
+}
 
 const warnedOnce = new Set<string>();
 function warnOnce(message: string): void {
@@ -153,6 +185,10 @@ export function configureFleetStatusShadow(
     activeMode = resolveFleetStatusMode(env);
     topicUsable = null;
     inflight = 0;
+    configurationGeneration++;
+    appendGeneration = 0;
+    lastAppendedGeneration = 0;
+    lastAppendedEntryForParity = null;
     if (node && activeMode === 'shadow') {
         LOG.info('Seqscribe', `fleet.status shadow armed writer=${node.writerId}`);
     }
@@ -191,8 +227,10 @@ function ensureTopic(node: SeqscribeNodeHandle): boolean {
  * The entry arrives already projected. `fleetStatusEntry()` (status/reporter.ts)
  * is the allow-list for this topic, exactly as `projectMeshLedgerEntry` is for
  * `mesh.<id>.events`, and it is where the fixed key set is enforced. This
- * function deliberately does NOT re-shape the entry: two projections that could
- * drift is worse than one that is tested.
+ * The append payload is deliberately NOT re-shaped here: two producer
+ * projections that could drift are worse than one that is tested. The parity
+ * snapshot below is only a fixed-key, deeply frozen copy retained after a
+ * successful append; it never crosses the transport boundary.
  */
 export function recordFleetStatusShadow(entry: FleetStatusEntry): boolean {
     try {
@@ -234,6 +272,10 @@ export function recordFleetStatusShadow(entry: FleetStatusEntry): boolean {
             return false;
         }
 
+        const configuredNode = node;
+        const configuredGeneration = configurationGeneration;
+        const thisAppendGeneration = ++appendGeneration;
+        const paritySnapshot = freezeParitySnapshot(entry);
         inflight++;
         void node.node
             .log(FLEET_STATUS_TOPIC)
@@ -242,6 +284,18 @@ export function recordFleetStatusShadow(entry: FleetStatusEntry): boolean {
                 () => {
                     inflight--;
                     counters.written++;
+                    // A completion from a detached/replaced configuration must
+                    // not repopulate the getter, and an older append resolving
+                    // late must not replace a newer successful one.
+                    if (
+                        activeNode === configuredNode &&
+                        activeMode === 'shadow' &&
+                        configurationGeneration === configuredGeneration &&
+                        thisAppendGeneration >= lastAppendedGeneration
+                    ) {
+                        lastAppendedGeneration = thisAppendGeneration;
+                        lastAppendedEntryForParity = paritySnapshot;
+                    }
                 },
                 (error: unknown) => {
                     inflight--;
@@ -288,12 +342,26 @@ export function fleetStatusInflight(): number {
     return inflight;
 }
 
+/**
+ * Last successfully appended producer entry, for Stage 3 builder parity only.
+ * The returned object and both nested objects are frozen. Off/detached mode is
+ * always null, even if an append from an older configuration completes late.
+ */
+export function getLastAppendedEntryForParity(): FleetStatusParitySnapshot | null {
+    if (activeMode !== 'shadow' || activeNode === null) return null;
+    return lastAppendedEntryForParity;
+}
+
 /** Reset all module state. TESTS ONLY. */
 export function __resetFleetStatusShadowForTests(): void {
     activeNode = null;
     activeMode = 'off';
     topicUsable = null;
     inflight = 0;
+    configurationGeneration++;
+    appendGeneration = 0;
+    lastAppendedGeneration = 0;
+    lastAppendedEntryForParity = null;
     warnedOnce.clear();
     counters.written = 0;
     counters.failed = 0;

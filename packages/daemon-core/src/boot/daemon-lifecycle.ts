@@ -66,6 +66,7 @@ import {
     meshDualWriteCounters,
 } from '../seqscribe/mesh-dual-write.js';
 import { configureFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
+import { configureFleetStatusParity } from '../seqscribe/fleet-status-parity.js';
 import { meshParityCounters } from '../seqscribe/mesh-parity.js';
 import { startMeshParityLoop, type MeshParityLoopHandle } from '../mesh/mesh-parity-loop.js';
 import {
@@ -825,6 +826,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         // the mode, stores a null-op state and changes nothing else — there is
         // no consumer until Stage 2 adds the dashboard SUB.
         configureFleetStatusShadow(components.seqscribeNode ?? null);
+        // Phase 4 Stage 3: the checker only arms when the shadow call above
+        // resolved to `shadow`. Default/off therefore creates no timer and no
+        // WS projection work.
+        configureFleetStatusParity(components.seqscribeNode ?? null);
         if (components.seqscribeNode) {
             // GC durable cursors older builds left behind: pre-P17 read-model
             // generation names (`…#2`) and pre-P21 per-sweep parity nonces.
@@ -968,6 +973,10 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // rather than an append into a node that step 7 is about to close.
     try { seqscribeParityLoop?.stop(); } catch { /* noop */ }
     try { configureMeshDualWrite(null); } catch { /* noop */ }
+    // Detach the fleet parity timer before its producer/node. This also drops
+    // its retained WS expectations before shutdown can observe an old producer
+    // snapshot.
+    try { configureFleetStatusParity(null); } catch { /* noop */ }
     // Same for the fleet.status leg — a status tick racing shutdown must not
     // append into a node step 7 is about to close.
     try { configureFleetStatusShadow(null); } catch { /* noop */ }

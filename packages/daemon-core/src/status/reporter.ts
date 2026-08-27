@@ -17,6 +17,7 @@ import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSumma
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import { recordFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
+import { observeFleetStatusWsProjection } from '../seqscribe/fleet-status-parity.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
 // `type: string`, leaving the primary status_report producer outside the only
 // typed protocol surface (which lived in the proprietary consumer package).
@@ -731,6 +732,23 @@ export class DaemonStatusReporter {
         //
         // Off by default and non-throwing by construction, so on a daemon that
         // has not opted in this is one boolean check per tick.
+        const fleetOnlineState: FleetOnlineState = serverConnected
+            ? 'online'
+            : (p2pConnected ? 'reconnecting' : 'offline');
+
+        // Stage 3 parity expectation. Re-project through the actual WS builder
+        // before counting, so this side does not simply reuse the ring entry it
+        // is meant to verify. The thunk is never evaluated in the default/off
+        // mode, and only fixed counts/state are retained locally.
+        observeFleetStatusWsProjection(() => {
+            const wsProjection = buildCloudStatusReportPayload(payload.sessions, payload.p2p, now);
+            return {
+                at: new Date(now).toISOString(),
+                sessionCounts: countFleetSessions(wsProjection.sessions),
+                onlineState: fleetOnlineState,
+            };
+        });
+
         recordFleetStatusShadow(fleetStatusEntry({
             daemonId: this.deps.instanceId,
             sessions: payload.sessions,
@@ -740,7 +758,7 @@ export class DaemonStatusReporter {
             // effectively unreachable from here — `sendUnifiedStatusReport`
             // returns early when neither transport is up — and is kept in the
             // enum for a consumer that infers it from a stale `at`.
-            onlineState: serverConnected ? 'online' : (p2pConnected ? 'reconnecting' : 'offline'),
+            onlineState: fleetOnlineState,
             p2pActive: p2pConnected,
             timestamp: now,
             seqscribe: this.deps.getSeqscribeStats?.() || undefined,
