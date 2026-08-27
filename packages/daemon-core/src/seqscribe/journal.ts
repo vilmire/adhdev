@@ -25,10 +25,18 @@ import { ASSISTANT_JOURNAL_TOPIC } from './topics.js';
 /**
  * Append one entry to the assistant journal.
  *
- * Throws a plain Error when the topic is not defined on this node — the
- * authority-less (provisional) boot mode skips every content topic, and the
- * remedy is always the same: the fleet secret, from
+ * ── One failure contract (seqscribe v3.5 P11) ──────────────────────────────
+ * REJECTS (never throws synchronously) when the topic is not defined on this
+ * node — the authority-less (provisional) boot mode skips every content topic,
+ * and the remedy is always the same: the fleet secret, from
  * ADHDEV_SEQSCRIBE_FLEET_SECRET or the auth_ok-delivered store.
+ *
+ * Because this function is `async`, the guard below already rejects rather than
+ * throwing, which now MATCHES the library: P11 made every data-dependent
+ * `append` failure — closed node, unknown topic, encoding, sealed writer,
+ * oversized entry — a Promise rejection too. So a caller needs exactly one
+ * error path (`await` inside its own error handling, or `.catch`) and never a
+ * synchronous `try/catch` around this call.
  */
 export async function appendAssistantJournal(
     handle: SeqscribeNodeHandle,

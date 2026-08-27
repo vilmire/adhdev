@@ -138,6 +138,12 @@ export function startConvergenceProbe(
 
     // Register the consumer BEFORE the first append so a peer's backlog that is
     // already converged is reported on this boot rather than silently skipped.
+    //
+    // ★ This try/catch is NOT the append contract and must stay synchronous:
+    // seqscribe v3.5 P11 moved every data-dependent APPEND failure onto the
+    // returned Promise, but `onEntry` is a synchronous registration that still
+    // throws (unknown topic, closed node). The append path below is handled by
+    // its rejection handler alone — see `emit`.
     let unsub: (() => void) | null = null;
     try {
         unsub = consumeAssistantJournal(handle, PROBE_CONSUMER, (entry) => {
@@ -171,6 +177,10 @@ export function startConvergenceProbe(
             bootId,
             at: Date.now(),
         };
+        // One error path (seqscribe v3.5 P11): `appendAssistantJournal` rejects
+        // for every runtime condition — provisional mode, closed node, encoding
+        // — so the rejection handler below is the whole contract. No
+        // synchronous try/catch wraps this call, and none is needed.
         void appendAssistantJournal(handle, PROBE_ENTRY_KIND, { ...payload }).then(
             () => {
                 if (reason === 'boot') {

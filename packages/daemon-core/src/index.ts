@@ -1041,6 +1041,10 @@ export {
   meshDualWriteCounters,
   meshDualWriteInflight,
   isMeshDualWriteActive,
+  // seqscribe v3.5 P14/P15: the runtime topic-activation announcement the cloud
+  // transport subscribes to so a mesh created after boot is granted on every
+  // LIVE peer session (defineTopic here → updateGrants there).
+  onTopicActivated,
   __resetMeshDualWriteForTests,
   MESH_DUAL_WRITE_ENV,
   MAX_INFLIGHT,
@@ -1053,6 +1057,12 @@ export {
   PROJECTED_PAYLOAD_KEYS,
   MESH_EVENT_ENTRY_KIND,
   MAX_PROJECTED_STRING,
+  // seqscribe v3.5 P12/P13: the checked JsonValue conversion (sanitizeJson) and
+  // the pre-append size estimate that replaced an unchecked cast and an
+  // unbounded append respectively.
+  toJsonValue,
+  estimateProjectedEntryBytes,
+  maxEntryBytes,
   type ProjectedMeshEvent,
 } from './seqscribe/mesh-event-projection.js';
 // Phase 2 Stage 3: the parity verifier that compares the two stores.

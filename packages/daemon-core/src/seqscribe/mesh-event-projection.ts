@@ -53,7 +53,7 @@
  * the cutover is a separate decision rather than a consequence of this file.
  */
 
-import type { JsonValue } from 'seqscribe';
+import { estimateEntryBytes, resolveConstants, sanitizeJson, type JsonValue } from 'seqscribe';
 
 /**
  * Entry `kind` used for every projected mesh ledger record.
@@ -218,9 +218,59 @@ export function projectMeshLedgerEntry(entry: {
     };
 }
 
-/** Narrow a projected record to the library's `JsonValue` for `append`. */
+/**
+ * Narrow a projected record to the library's `JsonValue` for `append`.
+ *
+ * ── Why `sanitizeJson` and not a cast (seqscribe v3.5 P12) ─────────────────
+ * This used to be `event as unknown as JsonValue` — a compile-time assertion
+ * that checked nothing at runtime. `ProjectedMeshEvent` is structurally a
+ * `JsonValue` only as long as every producer honours the type, and the payload
+ * map is built from `Record<string, unknown>` input, so the cast was trusting a
+ * boundary the projection exists precisely to distrust. `sanitizeJson` walks
+ * the tree, drops explicit-`undefined` properties into a FRESH object (it never
+ * mutates ours), and throws `ERR_ENTRY_ENCODING` on anything `assertJsonValue`
+ * would reject — turning a latent `append` rejection into a checked conversion.
+ *
+ * ★ Its one throwing case — an `undefined` ARRAY element, which cannot be
+ * dropped because §4 makes positions load-bearing — is UNREACHABLE here, and
+ * that is a property of the allow-list rather than luck: `isProjectableScalar`
+ * refuses arrays and objects wholesale, so a projected `payload` holds only
+ * strings, finite numbers and booleans, and the base fields are `string | null`.
+ * No array ever reaches this function. Verified against the projection's own
+ * behaviour, not assumed — see the P12 case in the boundary regression test.
+ * If a future field ever admits an array, that assertion fails loudly rather
+ * than silently shifting positions.
+ */
 export function toJsonValue(event: ProjectedMeshEvent): JsonValue {
-    return event as unknown as JsonValue;
+    return sanitizeJson(event);
+}
+
+/**
+ * Estimated wire size of the entry `recordMeshEventShadow` is about to append,
+ * in bytes (seqscribe v3.5 P13).
+ *
+ * The projection bounds each string at `MAX_PROJECTED_STRING` and the key set
+ * is fixed, so a projected entry is small by construction — this is a BACKSTOP
+ * that makes "too large to append" knowable BEFORE the append rather than as an
+ * `ERR_ENTRY_TOO_LARGE` rejection counted as a generic shadow failure.
+ *
+ * `estimateEntryBytes` is called WITHOUT a ctx, which yields the library's
+ * monotone conservative upper bound (max-length writer, 16-digit numeric
+ * fields). That is the right side to err on for a pre-flight check: the real
+ * entry is never larger than the estimate, so a passing estimate cannot be
+ * followed by a size rejection. `assertEntrySize` at commit stays authoritative.
+ */
+export function estimateProjectedEntryBytes(topic: string, event: ProjectedMeshEvent): number {
+    return estimateEntryBytes({
+        topic,
+        kind: MESH_EVENT_ENTRY_KIND,
+        payload: toJsonValue(event),
+    });
+}
+
+/** The library's configured entry-size ceiling, for comparison with the above. */
+export function maxEntryBytes(): number {
+    return resolveConstants().MAX_ENTRY_BYTES;
 }
 
 /**
