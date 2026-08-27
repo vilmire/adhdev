@@ -31,7 +31,17 @@ class DrivablePty implements PtyRuntimeTransport {
     readonly writes: string[] = [];
     private dataCb: ((chunk: string) => void) | null = null;
     private exitCb: ((info: { exitCode: number }) => void) | null = null;
-    write(data: string): void { this.writes.push(data); }
+    write(data: string): void {
+        this.writes.push(data);
+        // A real terminal reflects written input back into the rendered
+        // screen (the composer redraws with the typed text) — the win32
+        // submit path (scheduleVerifiedSubmit / shouldUseVerifiedSubmit)
+        // withholds the submit key until that echo is observed in
+        // adapter.snapshot(), so a fake PTY that never echoes anything
+        // leaves the first CR pending forever on a real win32 host (it
+        // falls through only after the 20s last-resort blind-fire).
+        this.dataCb?.(data);
+    }
     resize(): void { /* no-op */ }
     kill(): void { this.exitCb?.({ exitCode: 0 }); }
     onData(cb: (chunk: string) => void): void { this.dataCb = cb; }
