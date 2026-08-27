@@ -109,6 +109,15 @@ function buildCloudSeqscribeSummary(
         fgenAgeBucket: count(seqscribe.fgenAgeBucket),
         quarantined: seqscribe.quarantined === true,
         authority: seqscribe.authority === true,
+        dualWrite: seqscribe.dualWrite === true,
+        dualWriteFailedBucket: count(seqscribe.dualWriteFailedBucket),
+        dualWriteDroppedBucket: count(seqscribe.dualWriteDroppedBucket),
+        dualWriteBackfilledBucket: count(seqscribe.dualWriteBackfilledBucket),
+        parityMismatchBucket: count(seqscribe.parityMismatchBucket),
+        parityRan: seqscribe.parityRan === true,
+        parityMissingInShadowBucket: count(seqscribe.parityMissingInShadowBucket),
+        parityExtraInShadowBucket: count(seqscribe.parityExtraInShadowBucket),
+        parityFieldMismatchBucket: count(seqscribe.parityFieldMismatchBucket),
     };
 }
 

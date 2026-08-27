@@ -29,11 +29,26 @@
  *   missing_in_shadow — ledger has it, the topic does not. The expected shape
  *                       of a real bug (a dropped append, a topic that failed to
  *                       define, load-shedding).
- *   extra_in_shadow   — the topic has an id the ledger does not. Expected to be
- *                       rare and interesting: a replicated record from a REMOTE
- *                       writer lands here on a full-sync topic, so this class is
- *                       reported only for records this node itself wrote.
+ *   extra_in_shadow   — the topic has an id the ledger does not, AND the shadow
+ *                       record's timestamp falls within the ledger window this
+ *                       sweep actually compared (see "Window alignment" below).
+ *                       Expected to be rare and interesting: a replicated record
+ *                       from a REMOTE writer lands here on a full-sync topic, so
+ *                       this class is reported only for records this node
+ *                       itself wrote.
  *   field_mismatch    — both sides have the id, projected fields differ.
+ *
+ * ── Window alignment ───────────────────────────────────────────────────────
+ * `ledgerEntries` (the caller's argument) is a BOUNDED tail — mesh-parity-loop
+ * passes at most `PARITY_TAIL` recent rows. `shadow`, read in this module, is
+ * the topic's FULL retained window — unbounded. Comparing a bounded set against
+ * an unbounded one is only valid inside their overlap: a shadow record older
+ * than the oldest ledger row this sweep examined was never asked about, so its
+ * absence from `ledgerEntries` means "not in this sweep's window", not "not in
+ * the ledger". `runMeshParityCheck` tracks the oldest compared ledger
+ * timestamp and skips `extra_in_shadow` for any shadow record older than it —
+ * detection strength INSIDE the window is unchanged; only the ambiguous
+ * outside-window case is excluded.
  *
  * ── §6.1 / content boundary ────────────────────────────────────────────────
  * ★ The mismatch LOG LINE carries identifiers only — `id`, `ledgerKind`, and
@@ -244,9 +259,12 @@ export async function runMeshParityCheck(
     }
 
     const seen = new Set<string>();
+    let oldestComparedMs = Infinity;
     for (const entry of ledgerEntries) {
         result.compared++;
         seen.add(entry.id);
+        const entryMs = new Date(entry.timestamp).getTime();
+        if (Number.isFinite(entryMs) && entryMs < oldestComparedMs) oldestComparedMs = entryMs;
         const actual = shadow.get(entry.id);
         if (!actual) {
             result.mismatches.push({
@@ -267,8 +285,21 @@ export async function runMeshParityCheck(
         }
     }
 
+    // ★ Window alignment. `ledgerEntries` is a bounded tail (mesh-parity-loop's
+    // PARITY_TAIL), but `shadow` above is read from the FULL retained topic —
+    // unbounded. Without this, any shadow record older than the oldest ledger
+    // entry in this sweep's window is reported `extra_in_shadow` forever: the
+    // ledger row that would match it fell off the tail, not off the ledger. The
+    // ledger simply was not asked about that record this sweep, so its absence
+    // from `ledgerEntries` carries no information — skip rather than flag.
+    // A record inside the window with no matching id is still a real extra: the
+    // ledger WAS asked and does not have it. Only the outside-window case is
+    // ambiguous, so only it is excluded here — detection strength inside the
+    // window is unchanged.
     for (const [id, record] of shadow) {
         if (seen.has(id)) continue;
+        const recordMs = new Date(record.timestamp).getTime();
+        if (Number.isFinite(recordMs) && recordMs < oldestComparedMs) continue;
         result.mismatches.push({
             kind: 'extra_in_shadow',
             id,

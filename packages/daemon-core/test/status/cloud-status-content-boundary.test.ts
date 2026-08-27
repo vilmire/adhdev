@@ -273,6 +273,15 @@ describe('cloud status seqscribe boundary', () => {
         fgenAgeBucket: 1,
         quarantined: false,
         authority: true,
+        dualWrite: false,
+        dualWriteFailedBucket: 0,
+        dualWriteDroppedBucket: 0,
+        dualWriteBackfilledBucket: 0,
+        parityMismatchBucket: 0,
+        parityRan: false,
+        parityMissingInShadowBucket: 0,
+        parityExtraInShadowBucket: 0,
+        parityFieldMismatchBucket: 0,
     };
 
     it('omits the field entirely when no seqscribe node is running', () => {
@@ -336,6 +345,17 @@ describe('cloud status seqscribe boundary', () => {
             // boolean says the fleet secret is configured.
             quarantined: false,
             authority: false,
+            // Absent Stage 2+3 input coerces to inactive/zero, same discipline
+            // as the malformed counters above.
+            dualWrite: false,
+            dualWriteFailedBucket: 0,
+            dualWriteDroppedBucket: 0,
+            dualWriteBackfilledBucket: 0,
+            parityMismatchBucket: 0,
+            parityRan: false,
+            parityMissingInShadowBucket: 0,
+            parityExtraInShadowBucket: 0,
+            parityFieldMismatchBucket: 0,
         });
     });
 });

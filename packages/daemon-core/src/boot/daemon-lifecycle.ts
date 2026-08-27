@@ -656,7 +656,13 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                         dropped: dual.dropped,
                         backfilled: dual.backfilled,
                     },
-                    parity: { runs: parity.runs, mismatches: parity.mismatches },
+                    parity: {
+                        runs: parity.runs,
+                        mismatches: parity.mismatches,
+                        missingInShadow: parity.missingInShadow,
+                        extraInShadow: parity.extraInShadow,
+                        fieldMismatch: parity.fieldMismatch,
+                    },
                 });
             } catch (error) {
                 LOG.warn(

@@ -110,6 +110,16 @@ export interface SeqscribeStatusSummary {
     parityMismatchBucket: number;
     /** True once at least one parity comparison has run. */
     parityRan: boolean;
+    /**
+     * Bucketed breakdown of `parityMismatchBucket` by mismatch class.
+     *
+     * The combined bucket answers "is Stage 4 blocked"; these three answer
+     * "blocked by what" without adding a live counter — same bucket discipline
+     * as everything else in this summary.
+     */
+    parityMissingInShadowBucket: number;
+    parityExtraInShadowBucket: number;
+    parityFieldMismatchBucket: number;
 }
 
 export interface SummarizeOptions {
@@ -126,6 +136,10 @@ export interface SummarizeOptions {
     parity?: {
         runs: number;
         mismatches: number;
+        /** Per-class breakdown. Omitted → each axis reported as 0. */
+        missingInShadow?: number;
+        extraInShadow?: number;
+        fieldMismatch?: number;
     };
 }
 
@@ -174,5 +188,8 @@ export function summarizeSeqscribeStats(
         dualWriteBackfilledBucket: bucket(opts.dualWrite?.backfilled ?? 0, BACKLOG_BUCKETS),
         parityMismatchBucket: bucket(opts.parity?.mismatches ?? 0, BACKLOG_BUCKETS),
         parityRan: (opts.parity?.runs ?? 0) > 0,
+        parityMissingInShadowBucket: bucket(opts.parity?.missingInShadow ?? 0, BACKLOG_BUCKETS),
+        parityExtraInShadowBucket: bucket(opts.parity?.extraInShadow ?? 0, BACKLOG_BUCKETS),
+        parityFieldMismatchBucket: bucket(opts.parity?.fieldMismatch ?? 0, BACKLOG_BUCKETS),
     };
 }

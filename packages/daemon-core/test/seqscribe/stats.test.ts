@@ -60,6 +60,9 @@ describe('summarizeSeqscribeStats', () => {
             dualWriteBackfilledBucket: 0,
             parityMismatchBucket: 0,
             parityRan: false,
+            parityMissingInShadowBucket: 0,
+            parityExtraInShadowBucket: 0,
+            parityFieldMismatchBucket: 0,
         });
     });
 
@@ -69,7 +72,7 @@ describe('summarizeSeqscribeStats', () => {
             {
                 authorityEnabled: true,
                 dualWrite: { active: true, failed: 4, dropped: 250, backfilled: 40 },
-                parity: { runs: 3, mismatches: 12 },
+                parity: { runs: 3, mismatches: 24, missingInShadow: 9, extraInShadow: 15, fieldMismatch: 0 },
             },
         );
 
@@ -80,9 +83,9 @@ describe('summarizeSeqscribeStats', () => {
         // creeps, so the server-side dedup keeps suppressing idle frames.
         expect(summary.dualWriteFailedBucket).toBe(2);
         expect(summary.dualWriteDroppedBucket).toBe(4);
-        expect(summary.parityMismatchBucket).toBe(3);
+        expect(summary.parityMismatchBucket).toBe(3); // 24 → [10,100)
         expect(summary.dualWriteFailedBucket).not.toBe(4);
-        expect(summary.parityMismatchBucket).not.toBe(12);
+        expect(summary.parityMismatchBucket).not.toBe(24);
         // The backfill counter follows the SAME bucket discipline. It has to:
         // on a machine running mesh MCP tools it is the counter that ticks most,
         // since every mcp-server append is repaired here — passing it through
@@ -91,6 +94,13 @@ describe('summarizeSeqscribeStats', () => {
         // which lands at 4), so this pins the bucketing rather than a constant.
         expect(summary.dualWriteBackfilledBucket).toBe(3);
         expect(summary.dualWriteBackfilledBucket).not.toBe(40);
+        // The combined `parityMismatchBucket` (4, from mismatches=24) answers
+        // "is Stage 4 blocked"; the per-class axes answer "blocked by what" —
+        // each bucketed independently against its OWN raw count, not derived
+        // from the combined total, so they need not sum to it.
+        expect(summary.parityMissingInShadowBucket).toBe(2); // 9 → [1,10)
+        expect(summary.parityExtraInShadowBucket).toBe(3); // 15 → [10,100)
+        expect(summary.parityFieldMismatchBucket).toBe(0); // 0 → none
     });
 
     it('emits no topic names, peer ids or other identifiers', () => {

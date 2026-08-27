@@ -985,6 +985,28 @@ export interface SeqscribeStatusSummary {
     quarantined: boolean;
     /** Whether a fleet secret is configured and certificates can be verified. */
     authority: boolean;
+
+    // ── Phase 2 Stage 2+3: mesh dual-write shadow + parity ──────────────────
+    // Same bucket/boolean discipline as the fields above. See
+    // seqscribe/stats.ts SeqscribeStatusSummary for the full field docs.
+    /** Whether the mesh dual-write shadow leg is armed. */
+    dualWrite?: boolean;
+    /** Bucketed count of shadow appends that failed (0 = none). */
+    dualWriteFailedBucket?: number;
+    /** Bucketed count of shadow records dropped by load-shedding (0 = none). */
+    dualWriteDroppedBucket?: number;
+    /** Bucketed count of records mirrored late by the parity backfill (0 = none). */
+    dualWriteBackfilledBucket?: number;
+    /** Bucketed count of parity mismatches observed since boot (0 = none). */
+    parityMismatchBucket?: number;
+    /** Whether at least one parity comparison has run. */
+    parityRan?: boolean;
+    /** Bucketed count of `missing_in_shadow` mismatches (0 = none). */
+    parityMissingInShadowBucket?: number;
+    /** Bucketed count of `extra_in_shadow` mismatches (0 = none). */
+    parityExtraInShadowBucket?: number;
+    /** Bucketed count of `field_mismatch` mismatches (0 = none). */
+    parityFieldMismatchBucket?: number;
 }
 
 /** Minimal daemon->cloud status payload used for routing, fallback, and server APIs. */

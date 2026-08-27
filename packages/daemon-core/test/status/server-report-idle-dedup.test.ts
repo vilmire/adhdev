@@ -93,6 +93,15 @@ describe('idle status_report dedup', () => {
             fgenAgeBucket: 3,
             quarantined: false,
             authority: true,
+            dualWrite: false,
+            dualWriteFailedBucket: 0,
+            dualWriteDroppedBucket: 0,
+            dualWriteBackfilledBucket: 0,
+            parityMismatchBucket: 0,
+            parityRan: false,
+            parityMissingInShadowBucket: 0,
+            parityExtraInShadowBucket: 0,
+            parityFieldMismatchBucket: 0,
         });
         expect(JSON.stringify(statusReports()[0].data)).not.toContain(canary);
         for (const value of Object.values(statusReports()[0].data.seqscribe)) {
