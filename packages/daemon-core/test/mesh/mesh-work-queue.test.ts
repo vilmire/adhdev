@@ -879,8 +879,12 @@ describe('buildMeshNodeCapabilityTags — per-node platform/arch (not coordinato
         );
         expect(tags).toContain('os=win32');
         expect(tags).toContain('arch=x64');
-        // The coordinator's own process.platform must NOT leak through.
-        expect(tags).not.toContain(`os=${process.platform}`);
+        // The coordinator's own process.platform must NOT leak through as a
+        // SECOND 'os=' entry. Comparing against the literal process.platform
+        // is meaningless when the suite itself runs on a win32 host (its own
+        // 'os=win32' is then indistinguishable from the override) — assert
+        // there is exactly one 'os=' tag instead.
+        expect(tags.filter((t) => t.startsWith('os='))).toEqual(['os=win32']);
     });
 
     it('falls back to process.platform/process.arch when the node has no override (local/worktree node)', () => {
@@ -926,8 +930,9 @@ describe('buildMeshNodeCapabilityTags — live reportedPlatform/reportedArch sel
         );
         expect(tags).toContain('os=win32');
         expect(tags).toContain('arch=x64');
-        // The coordinator's own process.platform must NOT leak through.
-        expect(tags).not.toContain(`os=${process.platform}`);
+        // See the same note above: comparing against the literal
+        // process.platform is meaningless on a win32 test host.
+        expect(tags.filter((t) => t.startsWith('os='))).toEqual(['os=win32']);
     });
 
     it('falls back to process.platform when neither userOverrides nor reported* is present', () => {
