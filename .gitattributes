@@ -35,3 +35,11 @@ packages/daemon-standalone/vendor/** text eol=lf
 # This fixture is an intentional raw PTY capture whose exact bytes (including
 # embedded CRLF sequences) are the thing under test — never renormalize it.
 packages/daemon-core/test/sdk/fixtures/cursor-agent-buffer-raw.bin -text
+
+# Byte-for-byte copy of a real provider bundle tree (extension/cline), hashed
+# by tree-digest.test.ts against a golden SHA-256 computed by the reference
+# implementation over the git-tracked (LF) source. `.js` is not in the
+# general source LF list above, so on a win32 checkout with
+# core.autocrlf=true these would otherwise land as CRLF and change the
+# digest — a byte-fidelity fixture, not an incidental line-ending detail.
+packages/daemon-core/test/providers/channel/fixtures/cline-tree/** text eol=lf
