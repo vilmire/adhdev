@@ -39,7 +39,10 @@ describe('applyGrokWorkspaceTrust', () => {
         expect(registered).toBe(real());
 
         const contents = fs.readFileSync(storePath(), 'utf8');
-        expect(contents).toContain(`[folders."${real()}"]`);
+        // TOML basic strings require backslashes to be escaped — a raw
+        // Windows path (100% backslashes) would otherwise be invalid TOML,
+        // so the stored key runs through escapeTomlKey() same as the source.
+        expect(contents).toContain(`[folders."${escapeTomlKey(real())}"]`);
         expect(contents).toMatch(/^trusted = true$/m);
         expect(contents).toMatch(/^decided_at = \d{10}$/m);
     });
@@ -51,7 +54,7 @@ describe('applyGrokWorkspaceTrust', () => {
         fs.symlinkSync(workspace, link);
         try {
             expect(applyGrokWorkspaceTrust(link, env())).toBe(real());
-            expect(fs.readFileSync(storePath(), 'utf8')).toContain(`[folders."${real()}"]`);
+            expect(fs.readFileSync(storePath(), 'utf8')).toContain(`[folders."${escapeTomlKey(real())}"]`);
         } finally {
             fs.rmSync(link, { force: true });
         }
@@ -75,7 +78,7 @@ describe('applyGrokWorkspaceTrust', () => {
 
         const contents = fs.readFileSync(storePath(), 'utf8');
         expect(contents).toContain('[folders."/private/tmp/someone-elses-project"]');
-        expect(contents).toContain(`[folders."${real()}"]`);
+        expect(contents).toContain(`[folders."${escapeTomlKey(real())}"]`);
     });
 
     it('separates the appended entry when the store lacks a trailing newline', () => {
@@ -88,9 +91,12 @@ describe('applyGrokWorkspaceTrust', () => {
     });
 
     it('never flips an explicit distrust decision back to trusted', () => {
+        // Write the fixture the same way the source would (escaped), so
+        // hasTrustEntry's own escapeTomlKey(real()) lookup actually matches
+        // this row on win32 instead of missing it and appending a duplicate.
         fs.writeFileSync(
             storePath(),
-            `[folders."${real()}"]\ntrusted = false\ndecided_at = 1786765860\n`,
+            `[folders."${escapeTomlKey(real())}"]\ntrusted = false\ndecided_at = 1786765860\n`,
             'utf8',
         );
         expect(applyGrokWorkspaceTrust(workspace, env())).toBeNull();
@@ -106,7 +112,7 @@ describe('applyGrokWorkspaceTrust', () => {
         applyGrokWorkspaceTrust(child, env());
 
         const contents = fs.readFileSync(storePath(), 'utf8');
-        expect(contents).toContain(`[folders."${fs.realpathSync(child)}"]`);
+        expect(contents).toContain(`[folders."${escapeTomlKey(fs.realpathSync(child))}"]`);
         expect(hasTrustEntry(contents, real())).toBe(false);
     });
 
@@ -119,7 +125,7 @@ describe('applyGrokWorkspaceTrust', () => {
     it('creates the grok home directory when it does not exist yet', () => {
         fs.rmSync(grokHome, { recursive: true, force: true });
         expect(applyGrokWorkspaceTrust(workspace, env())).toBe(real());
-        expect(fs.readFileSync(storePath(), 'utf8')).toContain(`[folders."${real()}"]`);
+        expect(fs.readFileSync(storePath(), 'utf8')).toContain(`[folders."${escapeTomlKey(real())}"]`);
     });
 
     it('swallows failures rather than blocking launch', () => {
