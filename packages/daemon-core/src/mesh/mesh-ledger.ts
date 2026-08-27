@@ -21,6 +21,11 @@ import { resolveLedgerRotationMaxBytes, resolveLedgerRotationMaxFiles } from './
 import { daemonIdsEquivalent, sessionIdsEquivalent, isMeshTaskDifficulty, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+// Phase 2 Stage 2 dual-write shadow. Direction is mesh/ → seqscribe/, which
+// check:boundaries allows (the forbidden edge is seqscribe/ → mesh/, which is
+// why mesh-dual-write.ts takes a structural entry shape rather than importing
+// MeshLedgerEntry).
+import { recordMeshEventShadow } from '../seqscribe/mesh-dual-write.js';
 import {
     coordinatorIdentityFromEmitFields,
     MESH_PROTOCOL_VERSION_V2,
@@ -1239,6 +1244,20 @@ export function appendLedgerEntry(
         appendFileSync(filePath, line, { encoding: 'utf-8', mode: 0o600 });
         invalidateLedgerCache(meshId);
         meshLedgerEvents.emit('append', meshId, entry);
+
+        // Phase 2 Stage 2: seqscribe dual-write SHADOW leg. Deliberately placed
+        // AFTER the two authoritative writes and after `return`-relevant work,
+        // so a shadow that misbehaves cannot reorder or block anything above it.
+        // The call is non-throwing and asynchronous by contract
+        // (seqscribe/mesh-dual-write.ts); the `try` here is defense in depth,
+        // not the mechanism. Entries are projected through a content-boundary
+        // allow-list before replication — the ledger payload itself, which
+        // carries agent-authored text, never crosses.
+        try {
+            recordMeshEventShadow(meshId, entry);
+        } catch {
+            /* shadow leg must never affect the ledger write */
+        }
         // Fix (3) keep-latest-N: operating notes are never archived by compactLedger,
         // so cap their store footprint here. Runs only when a note (or its tombstone)
         // is recorded, and is a no-op until the live-note count exceeds the bound.

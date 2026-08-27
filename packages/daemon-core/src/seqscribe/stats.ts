@@ -77,10 +77,42 @@ export interface SeqscribeStatusSummary {
     quarantined: boolean;
     /** True when a fleet secret is configured and certificates can be verified. */
     authority: boolean;
+
+    // ── Phase 2 Stage 2+3: mesh dual-write shadow + parity ──────────────────
+    // Same discipline as the fields above: booleans and bucket ordinals, never
+    // live counters, so an idle daemon's status frame stays byte-identical and
+    // the server-side dedup keeps working.
+    /** True when the mesh dual-write shadow leg is armed. */
+    dualWrite: boolean;
+    /** Bucketed count of shadow appends that failed. 0 = none. */
+    dualWriteFailedBucket: number;
+    /** Bucketed count of shadow records dropped by load-shedding. 0 = none. */
+    dualWriteDroppedBucket: number;
+    /**
+     * Bucketed count of parity mismatches observed since boot.
+     *
+     * ★ This is the number Stage 4 needs at 0 before the read-path cutover.
+     * Bucketed rather than raw for the dedup reason above — a nonzero bucket is
+     * the signal; the exact count lives in the daemon log and `get_status_metadata`.
+     */
+    parityMismatchBucket: number;
+    /** True once at least one parity comparison has run. */
+    parityRan: boolean;
 }
 
 export interface SummarizeOptions {
     authorityEnabled: boolean;
+    /** Stage 2 shadow counters. Omitted → reported as inactive/zero. */
+    dualWrite?: {
+        active: boolean;
+        failed: number;
+        dropped: number;
+    };
+    /** Stage 3 parity counters. Omitted → reported as never-run. */
+    parity?: {
+        runs: number;
+        mismatches: number;
+    };
 }
 
 export function summarizeSeqscribeStats(
@@ -122,5 +154,10 @@ export function summarizeSeqscribeStats(
         fgenAgeBucket: bucket(maxCertAgeMs / (60 * 60 * 1000), FGEN_AGE_BUCKETS_H),
         quarantined,
         authority: opts.authorityEnabled,
+        dualWrite: opts.dualWrite?.active ?? false,
+        dualWriteFailedBucket: bucket(opts.dualWrite?.failed ?? 0, BACKLOG_BUCKETS),
+        dualWriteDroppedBucket: bucket(opts.dualWrite?.dropped ?? 0, BACKLOG_BUCKETS),
+        parityMismatchBucket: bucket(opts.parity?.mismatches ?? 0, BACKLOG_BUCKETS),
+        parityRan: (opts.parity?.runs ?? 0) > 0,
     };
 }

@@ -55,6 +55,13 @@ import { loadStoredFleetSecret } from '../seqscribe/fleet-secret.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../seqscribe/node.js';
 import { startConvergenceProbe, type ProbeHandle } from '../seqscribe/probe.js';
 import { summarizeSeqscribeStats } from '../seqscribe/stats.js';
+import {
+    configureMeshDualWrite,
+    isMeshDualWriteActive,
+    meshDualWriteCounters,
+} from '../seqscribe/mesh-dual-write.js';
+import { meshParityCounters } from '../seqscribe/mesh-parity.js';
+import { startMeshParityLoop, type MeshParityLoopHandle } from '../mesh/mesh-parity-loop.js';
 
 // ─── Init Config ───
 
@@ -183,6 +190,9 @@ export interface DaemonComponents {
     // Stage 1 convergence probe (seqscribe/probe.ts). Null in provisional mode
     // (no fleet secret → no content topics → nothing to probe).
     seqscribeProbe?: ProbeHandle | null;
+    // Stage 3 parity loop (mesh/mesh-parity-loop.ts). Null when the Stage 2
+    // dual-write shadow is off — with nothing written there is nothing to compare.
+    seqscribeParityLoop?: MeshParityLoopHandle | null;
 }
 
 export interface DaemonDevSupportOptions {
@@ -632,8 +642,19 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         getSeqscribeStats: () => {
             if (!seqscribeNodeRef) return null;
             try {
+                // Stage 2+3 counters ride the same aggregate-only projection:
+                // summarizeSeqscribeStats buckets them, so nothing here is a
+                // live counter and the status-frame dedup keeps working.
+                const dual = meshDualWriteCounters();
+                const parity = meshParityCounters();
                 return summarizeSeqscribeStats(seqscribeNodeRef.node.stats(), {
                     authorityEnabled: seqscribeNodeRef.authorityEnabled,
+                    dualWrite: {
+                        active: isMeshDualWriteActive(),
+                        failed: dual.failed,
+                        dropped: dual.dropped,
+                    },
+                    parity: { runs: parity.runs, mismatches: parity.mismatches },
                 });
             } catch (error) {
                 LOG.warn(
@@ -703,6 +724,28 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 `convergence probe unavailable: ${error instanceof Error ? error.message : String(error)}`,
             );
         }
+    }
+
+    // 10c. Phase 2 Stage 2+3: arm the mesh ledger dual-write SHADOW leg and the
+    // parity loop that compares it against the ledger.
+    //
+    // Ordering matters: configureMeshDualWrite must run BEFORE the parity loop
+    // starts (the loop returns null unless the shadow is active) and before any
+    // ledger append — appends before this point simply do not shadow, which is
+    // also why the loop records `armedAt` and ignores older entries.
+    //
+    // Read paths are untouched: nothing consumes the shadow topic except the
+    // parity comparison. Stage 4 owns the cutover.
+    try {
+        configureMeshDualWrite(components.seqscribeNode ?? null);
+        if (components.seqscribeNode) {
+            components.seqscribeParityLoop = startMeshParityLoop(components.seqscribeNode);
+        }
+    } catch (error) {
+        LOG.warn(
+            'Seqscribe',
+            `mesh dual-write/parity unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
     }
 
     // 11. Setup Mesh Event Forwarding (queue persistence) + periodic reconcile loop.
@@ -805,7 +848,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         poller, cdpInitializer, agentStreamManager,
         cliManager, instanceManager, cdpManagers,
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
-        eventLoopMonitor, seqscribeNode, seqscribeProbe,
+        eventLoopMonitor, seqscribeNode, seqscribeProbe, seqscribeParityLoop,
     } = components;
 
     // 1. Stop timers
@@ -820,6 +863,11 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // its consumer must both be quiet before step 7 closes the node underneath
     // them, or a tick races the close.
     try { seqscribeProbe?.stop(); } catch { /* noop */ }
+    // Same reasoning for the parity loop, and additionally detach the dual-write
+    // shadow so any ledger append during the rest of shutdown becomes a no-op
+    // rather than an append into a node that step 7 is about to close.
+    try { seqscribeParityLoop?.stop(); } catch { /* noop */ }
+    try { configureMeshDualWrite(null); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

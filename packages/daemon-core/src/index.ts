@@ -1031,3 +1031,47 @@ export {
   type ProbeOptions,
   type ProbePayload,
 } from './seqscribe/probe.js';
+// Phase 2 Stage 2: the mesh ledger dual-write SHADOW leg, and the projection
+// allow-list that keeps agent-authored ledger payloads off a metadata-class
+// topic. Read paths are unchanged — Stage 4 owns the cutover.
+export {
+  configureMeshDualWrite,
+  recordMeshEventShadow,
+  resolveMeshDualWriteMode,
+  meshDualWriteCounters,
+  meshDualWriteInflight,
+  isMeshDualWriteActive,
+  __resetMeshDualWriteForTests,
+  MESH_DUAL_WRITE_ENV,
+  MAX_INFLIGHT,
+  type MeshDualWriteMode,
+  type MeshDualWriteCounters,
+} from './seqscribe/mesh-dual-write.js';
+export {
+  projectMeshLedgerEntry,
+  isProjectedPayloadKey,
+  PROJECTED_PAYLOAD_KEYS,
+  MESH_EVENT_ENTRY_KIND,
+  MAX_PROJECTED_STRING,
+  type ProjectedMeshEvent,
+} from './seqscribe/mesh-event-projection.js';
+// Phase 2 Stage 3: the parity verifier that compares the two stores.
+export {
+  runMeshParityCheck,
+  meshParityCounters,
+  __resetMeshParityForTests,
+  PARITY_CONSUMER,
+  MISMATCH_LOG_CAP,
+  type MeshParityCounters,
+  type MeshParityMismatch,
+  type MeshParityMismatchKind,
+  type MeshParityResult,
+  type ParityLedgerEntry,
+} from './seqscribe/mesh-parity.js';
+export {
+  startMeshParityLoop,
+  PARITY_INTERVAL_MS,
+  PARITY_TAIL,
+  type MeshParityLoopHandle,
+  type MeshParityLoopOptions,
+} from './mesh/mesh-parity-loop.js';
