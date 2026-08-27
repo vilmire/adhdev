@@ -14,6 +14,7 @@ import { createManagedSessionHost } from '../../src/session-host/managed-host'
 const tempRoots: string[] = []
 let platformDescriptor: PropertyDescriptor | undefined
 let originalHome: string | undefined
+let originalUserProfile: string | undefined
 let originalConfigDir: string | undefined
 
 // The session-host spawn must run under the bundled portable Node 22 on win32 so
@@ -26,6 +27,7 @@ describe('managed session-host node runtime pin', () => {
     cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
     platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     originalHome = process.env.HOME
+    originalUserProfile = process.env.USERPROFILE
     originalConfigDir = process.env.ADHDEV_CONFIG_DIR
   })
 
@@ -35,6 +37,8 @@ describe('managed session-host node runtime pin', () => {
     }
     if (originalHome === undefined) delete process.env.HOME
     else process.env.HOME = originalHome
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = originalUserProfile
     if (originalConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
     else process.env.ADHDEV_CONFIG_DIR = originalConfigDir
     for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -44,6 +48,14 @@ describe('managed session-host node runtime pin', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-managed-host-pin-'))
     tempRoots.push(dir)
     return dir
+  }
+
+  // findPortableNode22() is called with os.homedir(), which reads
+  // USERPROFILE on win32 (not HOME) — relocate both so the staged fixture
+  // under <home>/.adhdev/tools/node22 is actually found.
+  function setFakeHome(dir: string): void {
+    process.env.HOME = dir
+    process.env.USERPROFILE = dir
   }
 
   function stagePortableNode22(homeDir: string): string {
@@ -56,7 +68,7 @@ describe('managed session-host node runtime pin', () => {
 
   it('spawns the session-host with portable Node 22 on win32', () => {
     const homeDir = makeTempHome()
-    process.env.HOME = homeDir
+    setFakeHome(homeDir)
     process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
     const portableNode = stagePortableNode22(homeDir)
@@ -82,7 +94,7 @@ describe('managed session-host node runtime pin', () => {
 
   it('falls back to process.execPath on win32 when no portable Node 22 is staged', () => {
     const homeDir = makeTempHome()
-    process.env.HOME = homeDir
+    setFakeHome(homeDir)
     process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
 
@@ -100,7 +112,7 @@ describe('managed session-host node runtime pin', () => {
 
   it('spawns the session-host with process.execPath unchanged on non-win32 (invariant)', () => {
     const homeDir = makeTempHome()
-    process.env.HOME = homeDir
+    setFakeHome(homeDir)
     process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
 
