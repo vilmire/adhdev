@@ -118,6 +118,30 @@ function removePrefixFromScript(script: string): void {
   fs.rmSync(target, { recursive: true, force: true })
 }
 
+// atomicWrite()'s win32 branch (windows-atomic-upgrade.ts) ships the write as
+// a base64 JSON payload embedded in a `[Convert]::FromBase64String('...') |
+// ConvertFrom-Json` PowerShell one-liner, then spawns real powershell.exe to
+// perform [IO.File]::WriteAllBytes + Move/Replace. child_process is fully
+// mocked in this suite, so nothing performs that write unless the mock does
+// it — decode the same payload here and perform the equivalent write via fs
+// so writePointerVerified's readback (which genuinely executes on a real
+// win32 host, see REAL_PLATFORM in the source) has real bytes to find.
+function performAtomicWriteFromScript(script: string): boolean {
+  const match = script.match(/FromBase64String\('([^']+)'\)/)
+  if (!match) return false
+  try {
+    const payload = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8')) as {
+      destination: string
+      bytes: string
+    }
+    fs.mkdirSync(path.dirname(payload.destination), { recursive: true })
+    fs.writeFileSync(payload.destination, Buffer.from(payload.bytes, 'base64'))
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Build a fake execFileSync/spawnSync router that enumerates node pids and
  * command lines, answers staged-CLI `--version` probes, and performs prefix
@@ -167,6 +191,10 @@ function buildRouter(processes: Record<number, string>, survivors: Set<number> =
       const cmd = decodePowerShellCommand(args)
       if (cmd.includes('Remove-Item')) {
         removePrefixFromScript(cmd)
+        return { status: 0, error: null }
+      }
+      if (cmd.includes('ConvertFrom-Json')) {
+        performAtomicWriteFromScript(cmd)
         return { status: 0, error: null }
       }
     }
