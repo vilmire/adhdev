@@ -44,7 +44,10 @@ describe.each(['kimi', 'opencode'] as const)('%s mesh coordinator declaration', 
         expect((setup as any).serverName).toBe('adhdev-mesh');
         if (type === 'kimi') {
             expect((setup as any).configFormat).toBe('claude_mcp_json');
-            expect(String((setup as any).configPath)).toContain('.kimi-code/mcp.json');
+            // configPath is built with path.join(), which emits OS-native
+            // separators — match against the joined suffix, not a
+            // hardcoded forward-slash literal.
+            expect(String((setup as any).configPath)).toContain(path.join('.kimi-code', 'mcp.json'));
         } else {
             expect((setup as any).configFormat).toBe('opencode_json');
             expect(String((setup as any).configPath)).toContain('opencode.json');
