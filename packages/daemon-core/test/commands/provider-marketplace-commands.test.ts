@@ -160,7 +160,9 @@ describe('marketplace install / uninstall safety', () => {
         it('writes manifest to ~/.adhdev/marketplace/{category}/{type}/provider.json', async () => {
             const r = await mockInstall('test-foo', 'cli', { providerVersion: '1.0.0' })
             expect(r.success).toBe(true)
-            expect(r.path).toMatch(/\.adhdev\/marketplace\/cli\/test-foo\/provider\.json$/)
+            // path.join() emits OS-native separators (backslash on win32) — match
+            // against the joined suffix instead of a hardcoded forward-slash regex.
+            expect(r.path!.endsWith(path.join('.adhdev', 'marketplace', 'cli', 'test-foo', 'provider.json'))).toBe(true)
             expect(fs.existsSync(r.path!)).toBe(true)
         })
 
