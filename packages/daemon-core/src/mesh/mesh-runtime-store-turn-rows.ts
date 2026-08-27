@@ -95,6 +95,27 @@ export function meshTurnHeldSuspensionFromRow(r: Record<string, unknown>): MeshT
     };
 }
 
+/**
+ * Hook invoked when mesh_event_ledger rows change in a way that is NOT scoped to a
+ * single mesh, so mesh-ledger can drop its (per-mesh keyed) read cache wholesale.
+ * Two callers: the retention sweep's cross-mesh DELETE below, and
+ * MeshRuntimeStore.resetForTests, which swaps the entire database out.
+ *
+ * Registered by mesh-ledger at import time; a no-op until then, which is correct —
+ * nothing can be holding a ledger cache before mesh-ledger has loaded. It lives
+ * here rather than in mesh-ledger because mesh-ledger imports mesh-runtime-store,
+ * which imports this file: a static import back would close an import cycle.
+ */
+let onLedgerBulkChange: (() => void) | undefined;
+
+export function registerLedgerBulkChangeListener(fn: () => void): void {
+    onLedgerBulkChange = fn;
+}
+
+export function notifyLedgerBulkChange(): void {
+    try { onLedgerBulkChange?.(); } catch { /* cache invalidation is best-effort */ }
+}
+
 // ─── Mesh runtime retention windows (SoT 1-11 (b) / gap I-10) ────────────────
 // mesh-runtime.db had lifecycle GC only for mesh_pending_events (prunePendingEvents,
 // hourly via the mesh-event maintenance sweep) and fingerprints/tool-call windows;
@@ -134,6 +155,14 @@ export function pruneMeshRuntimeRetention(): { ledger: number; toolCalls: number
     try {
         const store = MeshRuntimeStore.getInstance();
         const ledger = store.pruneEventLedger(MESH_EVENT_LEDGER_RETENTION_MS);
+        // LEDGER-READ-AMPLIFICATION: this DELETE is cross-mesh (one statement, no
+        // meshId), so it cannot use mesh-ledger's per-mesh invalidateLedgerCache.
+        // That cache holds entries for up to 30s, so without this a sweep would
+        // leave pruned rows readable for the rest of the TTL. Dispatched through a
+        // registered hook rather than importing mesh-ledger directly: mesh-ledger
+        // imports mesh-runtime-store, which imports THIS file, so a static import
+        // back would close an import cycle. Only pay the cost when rows went away.
+        if (ledger > 0) notifyLedgerBulkChange();
         const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
         const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
         const sessionDelivery = store.pruneTerminalSessionDeliveries(resolveSessionDeliveryRetentionMs());

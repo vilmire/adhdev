@@ -13,14 +13,16 @@
  * Safety:  mode 0o600, atomic append via appendFileSync
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { getConfigDir } from '../config/config.js';
 import { resolveLedgerRotationMaxBytes, resolveLedgerRotationMaxFiles } from './mesh-retention-config.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent, isMeshTaskDifficulty, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { getLedgerDir, getLedgerPath, getRotatedPath, getArchivePath, getRotatedArchivePath, getArchivedTerminalKeysPath } from './mesh-ledger-paths.js';
+import { ledgerEntryTaskId, getCachedRawEntries, readLedgerFromStore, readLedgerFile, liveCacheEntry, recordLedgerAppend, recordLedgerPushdownScan, invalidateLedgerCache, clearLedgerImportFlag } from './mesh-ledger-read-cache.js';
+import { LOG } from '../logging/logger.js';
 // Phase 2 Stage 2 dual-write shadow. Direction is mesh/ → seqscribe/, which
 // check:boundaries allows (the forbidden edge is seqscribe/ → mesh/, which is
 // why mesh-dual-write.ts takes a structural entry shape rather than importing
@@ -358,11 +360,6 @@ const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLed
 
 /** Resolve the taskId for a ledger entry, preferring the base field and falling
  *  back to payload.taskId (legacy rows / entries that only carry it in payload). */
-export function ledgerEntryTaskId(entry: Pick<MeshLedgerEntry, 'taskId' | 'payload'>): string | undefined {
-    if (typeof entry.taskId === 'string' && entry.taskId.trim()) return entry.taskId.trim();
-    const fromPayload = entry.payload && typeof entry.payload === 'object' ? (entry.payload as Record<string, unknown>).taskId : undefined;
-    return typeof fromPayload === 'string' && fromPayload.trim() ? fromPayload.trim() : undefined;
-}
 
 export function isIntentionalCleanupStopEntry(entry: Pick<MeshLedgerEntry, 'kind' | 'payload'>): boolean {
     if (entry.kind !== 'session_stopped' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') return false;
@@ -527,7 +524,6 @@ export interface AppendRemoteLedgerResult {
 
 // ─── Constants ──────────────────────────────────
 
-const LEDGER_DIR_NAME = 'mesh-ledger';
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB — full rotation threshold
 const COMPACT_THRESHOLD_BYTES = 2 * 1024 * 1024; // 2 MB — compaction threshold
 const ARCHIVE_TERMINAL_OLDER_THAN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -683,40 +679,11 @@ export function isNoteExpired(note: OperatingNoteExpiryInput, now: number): bool
 }
 
 // ─── Path Helpers ───────────────────────────────
-
-export function getLedgerDir(): string {
-    const dir = join(getConfigDir(), LEDGER_DIR_NAME);
-    if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true, mode: 0o700 });
-    }
-    return dir;
-}
-
-function getLedgerPath(meshId: string): string {
-    // Sanitize meshId to prevent path traversal
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return join(getLedgerDir(), `${safe}.jsonl`);
-}
-
-function getRotatedPath(meshId: string, index: number): string {
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return join(getLedgerDir(), `${safe}.${index}.jsonl`);
-}
-
-function getArchivePath(meshId: string): string {
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return join(getLedgerDir(), `${safe}.archive.jsonl`);
-}
-
-function getRotatedArchivePath(meshId: string, index: number): string {
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return join(getLedgerDir(), `${safe}.archive.${index}.jsonl`);
-}
-
-function getArchivedTerminalKeysPath(meshId: string): string {
-    const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return join(getLedgerDir(), `${safe}.archived-terminal-keys.json`);
-}
+// Definitions moved to mesh-ledger-paths.ts (file-size gate) so mesh-ledger and
+// mesh-ledger-read-cache can share them without importing each other.
+// Re-exported here because getLedgerDir is part of this module's public surface
+// (index.ts barrel, and several mesh modules import it from mesh-ledger.js).
+export { getLedgerDir } from './mesh-ledger-paths.js';
 
 // ARCHIVE-TERMINAL-KEY-INDEX (A): bound on the sidecar. Terminal pair keys are
 // small (~60 bytes) and only ever recorded for entries that ALREADY escaped the
@@ -1235,14 +1202,18 @@ export function appendLedgerEntry(
         // SQLite write failed but the JSONL append below still records the entry.
         // Reset the one-time import flag so the next read re-imports from JSONL
         // and the store self-heals instead of silently missing this entry.
-        ledgerImportDone.delete(meshId);
+        clearLedgerImportFlag(meshId);
     }
 
     // Also write to JSONL (retained as export/import/debug/legacy artifact)
     try {
         const line = JSON.stringify(entry) + '\n';
         appendFileSync(filePath, line, { encoding: 'utf-8', mode: 0o600 });
-        invalidateLedgerCache(meshId);
+        // LEDGER-READ-AMPLIFICATION: extend the cache rather than dropping it. The
+        // timestamp was stamped above with `new Date()`, so this entry is always at
+        // or after the cached tail and lands in the same position a store re-read
+        // would give it.
+        recordLedgerAppend(meshId, [entry]);
         meshLedgerEvents.emit('append', meshId, entry);
 
         // Phase 2 Stage 2: seqscribe dual-write SHADOW leg. Deliberately placed
@@ -1465,7 +1436,12 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
     try {
         const lines = validEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
         appendFileSync(ledgerPath, lines, { encoding: 'utf-8', mode: 0o600 });
-        invalidateLedgerCache(meshId);
+        // LEDGER-READ-AMPLIFICATION: remote entries carry timestamps authored on
+        // another node, so they may sort BEFORE the local tail. recordLedgerAppend
+        // absorbs them only when they extend the tail and invalidates otherwise —
+        // converge traffic therefore stops forcing a full rescan in the common
+        // (newer-than-local) case without ever reordering the cached array.
+        recordLedgerAppend(meshId, validEntries);
         for (const entry of validEntries) {
             meshLedgerEvents.emit('append', meshId, entry);
         }
@@ -1476,114 +1452,11 @@ export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEnt
 }
 
 // ─── Ledger Read Cache ─────────────────────────
-// Absorbs repeated reads within a single event-processing burst (e.g. agent:stopped
-// triggers shouldSuppressIntentionalCleanupStop, findRecentTerminalLedgerEvidence,
-// hasDispatchAfterTerminal, and getSessionRecoveryContext — all reading the same store).
-// TTL is 100ms: short enough to stay current, long enough to cover one event cycle.
-// Cache is invalidated on every write (append, remote import, compaction).
-
-const ledgerReadCache = new Map<string, { entries: MeshLedgerEntry[]; cachedAt: number }>();
-const LEDGER_CACHE_TTL_MS = 100;
-
-function readLedgerFile(meshId: string): MeshLedgerEntry[] {
-    const filePath = getLedgerPath(meshId);
-    if (!existsSync(filePath)) return [];
-    let content: string;
-    try { content = readFileSync(filePath, 'utf-8'); } catch { return []; }
-    const entries: MeshLedgerEntry[] = [];
-    for (const line of content.split('\n')) {
-        if (!line.trim()) continue;
-        try {
-            const entry = JSON.parse(line) as MeshLedgerEntry;
-            if (entry.id && entry.kind) {
-                // LEDGER-TASK-TRACEABILITY (B): backfill the base taskId from
-                // payload.taskId for legacy JSONL lines that predate the field.
-                if (!entry.taskId) {
-                    const derived = ledgerEntryTaskId(entry);
-                    if (derived) entry.taskId = derived;
-                }
-                entries.push(entry);
-            }
-        } catch { /* skip malformed lines */ }
-    }
-    return entries;
-}
-
-// ─── G2: One-Time JSONL → SQLite Import ─────────
-// On the first SQLite read for a mesh (per store instance), import any legacy
-// JSONL entries into mesh_event_ledger. INSERT OR IGNORE makes this idempotent:
-// dual-written entries are skipped, only pre-cutover legacy entries are added.
-// Keyed by the store instance so MeshRuntimeStore.resetForTests() (fresh DB)
-// naturally re-imports.
-
-let ledgerImportStoreRef: MeshRuntimeStore | undefined;
-const ledgerImportDone = new Set<string>();
-
-function ensureLedgerImported(store: MeshRuntimeStore, meshId: string): void {
-    if (ledgerImportStoreRef !== store) {
-        ledgerImportDone.clear();
-        ledgerImportStoreRef = store;
-    }
-    if (ledgerImportDone.has(meshId)) return;
-    ledgerImportDone.add(meshId);
-    const fileEntries = readLedgerFile(meshId);
-    if (fileEntries.length === 0) return;
-    try {
-        store.importLedgerEntries(fileEntries.map(e => ({
-            id: e.id,
-            meshId: e.meshId,
-            timestamp: e.timestamp,
-            kind: e.kind,
-            nodeId: e.nodeId ?? null,
-            sessionId: e.sessionId ?? null,
-            providerType: e.providerType ?? null,
-            taskId: ledgerEntryTaskId(e) ?? null,
-            payload: e.payload ?? {},
-        })));
-    } catch { /* import is best-effort; reads fall back to JSONL on store failure */ }
-}
-
-function readLedgerFromStore(meshId: string): MeshLedgerEntry[] {
-    const store = MeshRuntimeStore.getInstance();
-    ensureLedgerImported(store, meshId);
-    return store.readLedgerEntriesOrdered(meshId).map(r => {
-        const payload = (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, unknown>;
-        // LEDGER-TASK-TRACEABILITY (B): prefer the column, fall back to payload.taskId
-        // for legacy rows written before the column existed (back-compat join).
-        const taskId = ledgerEntryTaskId({ taskId: r.taskId ?? undefined, payload });
-        return {
-            id: r.id,
-            meshId: r.meshId,
-            timestamp: r.timestamp,
-            kind: r.kind as MeshLedgerKind,
-            ...(r.nodeId ? { nodeId: r.nodeId } : {}),
-            ...(r.sessionId ? { sessionId: r.sessionId } : {}),
-            ...(r.providerType ? { providerType: r.providerType } : {}),
-            ...(taskId ? { taskId } : {}),
-            payload,
-        };
-    });
-}
-
-function getCachedRawEntries(meshId: string): MeshLedgerEntry[] {
-    const now = Date.now();
-    const cached = ledgerReadCache.get(meshId);
-    if (cached && now - cached.cachedAt < LEDGER_CACHE_TTL_MS) return cached.entries;
-    let entries: MeshLedgerEntry[];
-    try {
-        // G2: SQLite mesh_event_ledger is the primary runtime read path.
-        entries = readLedgerFromStore(meshId);
-    } catch {
-        // Store unavailable — fall back to the JSONL export artifact.
-        entries = readLedgerFile(meshId);
-    }
-    ledgerReadCache.set(meshId, { entries, cachedAt: now });
-    return entries;
-}
-
-function invalidateLedgerCache(meshId: string): void {
-    ledgerReadCache.delete(meshId);
-}
+// Moved to mesh-ledger-read-cache.ts (file-size gate). That module owns the read
+// cache, the SQLite/JSONL read paths, and the full-scan counters added by the
+// LEDGER-READ-AMPLIFICATION fix; the write paths in this file drive it via
+// recordLedgerAppend / invalidateLedgerCache.
+export { ledgerEntryTaskId, getLedgerScanStats, __resetLedgerScanStatsForTests, invalidateAllLedgerCaches } from './mesh-ledger-read-cache.js';
 
 /**
  * Test helper: clear all runtime ledger state for a mesh — SQLite rows, read
@@ -1593,8 +1466,52 @@ export function __clearMeshLedgerForTests(meshId: string): void {
     try {
         MeshRuntimeStore.getInstance().clearLedgerForMesh(meshId);
     } catch { /* store unavailable — nothing to clear */ }
-    ledgerReadCache.delete(meshId);
-    ledgerImportDone.delete(meshId);
+    invalidateLedgerCache(meshId);
+    clearLedgerImportFlag(meshId);
+}
+
+/**
+ * Source the raw entry list for a filtered read.
+ *
+ * LEDGER-READ-AMPLIFICATION: when the cache is WARM, serve from it — the JS
+ * filters below are cheap against an already-parsed array, and it keeps the cache
+ * doing its job. When the cache is COLD and the caller supplied a narrowing
+ * `since`/`kind`, push those predicates into SQL (both are indexed:
+ * idx_mesh_event_ledger_mesh_time / _mesh_kind) instead of loading and parsing the
+ * entire ledger to throw most of it away. A cold `readLedgerEntriesByKind` on a
+ * 78.5k-row ledger went from parsing 78.5k payloads to parsing only the matching
+ * kind's rows.
+ *
+ * Deliberately does NOT populate the cache: the result is a filtered subset, and
+ * storing it as if it were the full raw set would corrupt every later read. Cold
+ * unfiltered reads still go through getCachedRawEntries and do populate it.
+ *
+ * `tail` is NOT pushed down. A bare `tail` means "last N of every kind" but the
+ * caller may also have passed `node`, which is filtered in JS afterwards — pushing
+ * the LIMIT down first would take the last N rows and then shrink them further,
+ * returning fewer than N. Ordering and count semantics stay exactly as before.
+ */
+function readRawEntriesForOpts(meshId: string, opts?: ReadLedgerOptions): MeshLedgerEntry[] {
+    const cached = liveCacheEntry(meshId);
+    if (cached) return cached.entries;
+
+    const hasSince = typeof opts?.since === 'string' && !Number.isNaN(new Date(opts.since).getTime());
+    const kinds = opts?.kind?.length ? opts.kind : undefined;
+    if (!hasSince && !kinds) return getCachedRawEntries(meshId);
+
+    try {
+        const entries = readLedgerFromStore(meshId, {
+            ...(hasSince ? { since: opts!.since } : {}),
+            ...(kinds ? { kinds } : {}),
+        });
+        recordLedgerPushdownScan(entries.length);
+        return entries;
+    } catch {
+        // Store unavailable — fall back to the full-read path (which itself falls
+        // back to JSONL). The JS filters in readLedgerEntries re-apply the same
+        // predicates, so the result is identical either way.
+        return getCachedRawEntries(meshId);
+    }
 }
 
 /**
@@ -1604,7 +1521,7 @@ export function __clearMeshLedgerForTests(meshId: string): void {
  * export/import/debug artifact only.
  */
 export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): MeshLedgerEntry[] {
-    let entries = getCachedRawEntries(meshId);
+    let entries = readRawEntriesForOpts(meshId, opts);
 
     if (opts?.since) {
         const sinceDate = new Date(opts.since).getTime();

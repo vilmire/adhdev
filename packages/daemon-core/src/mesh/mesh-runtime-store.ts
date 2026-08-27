@@ -22,7 +22,7 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // below, and re-exported at the bottom of this file so every existing import path
 // (`from './mesh-runtime-store.js'`) keeps working unchanged — barrel-preserving,
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
-import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow } from './mesh-runtime-store-turn-rows.js';
+import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange } from './mesh-runtime-store-turn-rows.js';
 import type { MeshTurnAttemptRow, MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
@@ -187,6 +187,11 @@ export class MeshRuntimeStore {
     static resetForTests(): void {
         this.instance?.close();
         this.instance = undefined;
+        // The whole database is going away, including mesh_event_ledger. mesh-ledger
+        // caches ledger reads for up to 30s and keys that cache by meshId, so it
+        // cannot detect a store swap on its own — tell it to drop everything, or the
+        // next test reads the previous test's rows.
+        notifyLedgerBulkChange();
     }
 
     /**
