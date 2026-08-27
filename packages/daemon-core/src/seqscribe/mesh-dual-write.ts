@@ -24,12 +24,28 @@
  *     if the topic somehow stops draining. A shadow that OOMs a daemon is a
  *     worse failure than a shadow that skips records, and the skip is counted.
  *
- * ── Off means off ──────────────────────────────────────────────────────────
+ * ── Off means off, and primary is a SUPERSET of shadow ─────────────────────
  * `ADHDEV_SEQSCRIBE_MESH` (design §3): `shadow` (default) writes the shadow leg;
  * `off` makes every entry point an immediate return, so the daemon behaves
- * byte-identically to a build without this file. `primary` is NOT accepted —
- * Stage 4 owns the read-path cutover, and silently accepting the value now
- * would let a config typo look like a cutover that never happened.
+ * byte-identically to a build without this file.
+ *
+ * ★ Stage 4A adds `primary`, and the important property is that it does NOT
+ * turn the shadow off. `primary` = shadow's writes and parity checking, PLUS a
+ * read-path cutover for an allow-listed set of consumers (mesh-read-model.ts).
+ * The write leg has to keep running under `primary` for two reasons: the
+ * materialized read model is built by consuming the very topic the shadow
+ * writes, so stopping the writes would starve the reader; and parity has to
+ * keep proving the two stores agree exactly while reads are being served from
+ * one of them. Stage 5 owns stopping the legacy write, not this stage.
+ *
+ * So `isMeshDualWriteActive()` is true for BOTH shadow and primary — every
+ * existing caller keeps its meaning — and the read cutover asks the separate
+ * `isMeshReadPrimary()` question.
+ *
+ * Before Stage 4A, `primary` was deliberately rejected (it fell through to the
+ * unrecognized-value branch and was treated as `shadow`) so that setting it
+ * early looked like a typo rather than a cutover that never happened. That
+ * trap is now resolved by accepting the value for real.
  *
  * ── Topic definition is lazy, and that has a limit ─────────────────────────
  * `openSeqscribeNode` is called with NO `meshIds` in production
@@ -75,7 +91,7 @@ import { meshEventsPolicy, meshEventsTopic } from './topics.js';
 /** Env flag name (design §3 step 1). */
 export const MESH_DUAL_WRITE_ENV = 'ADHDEV_SEQSCRIBE_MESH';
 
-export type MeshDualWriteMode = 'shadow' | 'off';
+export type MeshDualWriteMode = 'shadow' | 'off' | 'primary';
 
 /**
  * Cap on appends in flight before we start dropping.
@@ -89,20 +105,29 @@ export type MeshDualWriteMode = 'shadow' | 'off';
 export const MAX_INFLIGHT = 512;
 
 /**
- * Resolve the mode. Anything other than an explicit `off` is `shadow`:
- * the flag exists to DISABLE a default-on leg, so an unrecognized value must
- * not silently disable replication. An unrecognized value is logged once so a
- * typo (`ADHDEV_SEQSCRIBE_MESH=primary`) is visible rather than mistaken for a
- * working cutover.
+ * Resolve the mode. The three values are explicit; anything else is `shadow`.
+ *
+ * ★ Note the asymmetry, which is deliberate. An unrecognized value falls back
+ * to `shadow` — NOT to `off` and NOT to `primary`:
+ *
+ *   · not `off`, because the flag exists to disable a default-on write leg, and
+ *     a typo must not silently stop replication.
+ *   · ★ not `primary`, because `primary` moves reads onto the replicated store.
+ *     Fail-closed on the READ cutover means an unparseable value keeps reads on
+ *     the legacy ledger, which is the store that cannot be wrong. A typo may
+ *     cost replication observability; it must never redirect reads.
+ *
+ * The unrecognized value is still logged once so it is visible as a typo.
  */
 export function resolveMeshDualWriteMode(env: NodeJS.ProcessEnv = process.env): MeshDualWriteMode {
     const raw = env[MESH_DUAL_WRITE_ENV]?.trim().toLowerCase();
     if (!raw) return 'shadow';
     if (raw === 'off') return 'off';
     if (raw === 'shadow') return 'shadow';
+    if (raw === 'primary') return 'primary';
     warnOnce(
-        `unrecognized ${MESH_DUAL_WRITE_ENV}=${raw}; treating as 'shadow'. ` +
-            "Valid values are 'shadow' (default) and 'off'. Stage 4 owns 'primary'.",
+        `unrecognized ${MESH_DUAL_WRITE_ENV}=${raw}; treating as 'shadow' (reads stay on the ledger). ` +
+            "Valid values are 'shadow' (default), 'primary' and 'off'.",
     );
     return 'shadow';
 }
@@ -256,7 +281,15 @@ export function configureMeshDualWrite(
     activeMode = resolveMeshDualWriteMode(env);
     definedTopics.clear();
     inflight = 0;
-    if (node && activeMode === 'shadow') {
+    if (node && activeMode === 'primary') {
+        // The write leg is identical to shadow here — only the READ path differs
+        // (mesh-read-model.ts), and it differs per mesh behind a readiness gate.
+        LOG.info(
+            'Seqscribe',
+            `mesh dual-write armed in PRIMARY mode writer=${node.writerId} — ` +
+                'reads cut over per mesh once the readiness gate passes',
+        );
+    } else if (node && activeMode === 'shadow') {
         LOG.info('Seqscribe', `mesh dual-write shadow armed writer=${node.writerId}`);
     } else if (node) {
         LOG.info('Seqscribe', `mesh dual-write disabled (${MESH_DUAL_WRITE_ENV}=off)`);
@@ -423,9 +456,36 @@ export function meshDualWriteCounters(): MeshDualWriteCounters {
     return { ...counters };
 }
 
-/** True when the shadow leg is armed (a node is wired and the mode is shadow). */
+/**
+ * True when the write leg is armed — a node is wired and the mode WRITES.
+ *
+ * ★ True for `primary` as well as `shadow`. `primary` is a superset: it keeps
+ * writing and keeps parity running, and only additionally moves an allow-listed
+ * set of reads. Existing callers (the parity loop, the stats bucket) ask this
+ * question to mean "is the shadow topic being written", and that answer is yes
+ * in both modes — a `=== 'shadow'` test here would silently disable parity in
+ * exactly the mode where parity matters most.
+ */
 export function isMeshDualWriteActive(): boolean {
-    return activeNode !== null && activeMode === 'shadow';
+    return activeNode !== null && (activeMode === 'shadow' || activeMode === 'primary');
+}
+
+/**
+ * True when the READ cutover is enabled process-wide.
+ *
+ * ★ This is necessary but NOT sufficient for any individual read to be served
+ * from the replicated store. Every switched consumer must also pass the
+ * per-mesh readiness gate (mesh-read-model.ts `isMeshReadModelReady`), because
+ * a mode flag says what the operator intends while readiness says whether this
+ * particular mesh's replica can actually answer correctly right now.
+ */
+export function isMeshReadPrimary(): boolean {
+    return activeNode !== null && activeMode === 'primary';
+}
+
+/** The resolved mode, for diagnostics and the stats bucket. */
+export function meshDualWriteMode(): MeshDualWriteMode {
+    return activeMode;
 }
 
 /** Appends currently in flight — used by tests to await quiescence. */

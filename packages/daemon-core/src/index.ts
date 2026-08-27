@@ -1045,12 +1045,52 @@ export {
   // transport subscribes to so a mesh created after boot is granted on every
   // LIVE peer session (defineTopic here → updateGrants there).
   onTopicActivated,
+  isMeshReadPrimary,
+  meshDualWriteMode,
   __resetMeshDualWriteForTests,
   MESH_DUAL_WRITE_ENV,
   MAX_INFLIGHT,
   type MeshDualWriteMode,
   type MeshDualWriteCounters,
 } from './seqscribe/mesh-dual-write.js';
+// Phase 2 Stage 4A: the materialized read model and its per-mesh readiness gate.
+export {
+  configureMeshReadModel,
+  queryMeshReadModel,
+  queryMeshReadModelBySession,
+  primeMeshReadModel,
+  rebuildMeshReadModel,
+  meshReadModelStats,
+  meshReadModelMeshIds,
+  hasMeshReadModelIndex,
+  meshReadModelConsumerName,
+  meshReadModelNode,
+  __resetMeshReadModelForTests,
+  READ_MODEL_CONSUMER,
+  type MeshReadModelQuery,
+  type MeshReadModelRecord,
+  type MeshReadModelStats,
+} from './seqscribe/mesh-read-model.js';
+export {
+  isMeshReadModelReady,
+  evaluateMeshReadReadiness,
+  reportMeshTopicGrants,
+  meshReadRoutingCounters,
+  __resetMeshReadReadinessForTests,
+  type MeshReadReadiness,
+  type MeshReadFallbackReason,
+  type MeshReadRoutingCounters,
+} from './seqscribe/mesh-read-readiness.js';
+export {
+  readProjectedEntriesByKind,
+  readTaskStatsEntries,
+  readApprovalResolutionEntries,
+  hasMatchingTaskDispatchedEntry,
+  hasDispatchAfterTerminalEntry,
+  meshReplicaDiagnostics,
+  type ProjectedLedgerView,
+  type MeshReplicaDiagnostics,
+} from './mesh/mesh-read-model-consumers.js';
 export {
   projectMeshLedgerEntry,
   isProjectedPayloadKey,

@@ -20,6 +20,7 @@ import {
     hasDispatchAfterTerminal,
     buildNoProgressCompletionReconciliation,
 } from './mesh-events-stale.js';
+import { hasMatchingTaskDispatchedEntry } from './mesh-read-model-consumers.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
@@ -443,13 +444,13 @@ function hasMatchingTaskDispatchedLedgerEntry(meshId: string, taskId: string, se
     // CAUSAL-COMPLETION-GATE below — a false negative here suppresses a genuine task
     // completion as a "boot artifact." A bare tail:200 window can be crowded out by
     // unrelated mesh traffic before the real task_dispatched row is found.
-    const entries = readLedgerEntriesByKind(meshId, ['task_dispatched']);
-    for (let i = entries.length - 1; i >= 0; i--) {
-        const entry = entries[i];
-        if (!sessionIdsEquivalent(entry.sessionId, sessionId)) continue;
-        if (readNonEmptyString(entry.payload?.taskId) === taskId) return true;
-    }
-    return false;
+    //
+    // Stage 4A roster entry 3: served from the seqscribe replica behind the
+    // readiness gate, from the ledger otherwise. Lossless — reads only
+    // sessionId (base) and taskId (base + allow-listed payload key). The
+    // gate's lagRows===0 condition exists for exactly this consumer's danger
+    // direction: a lagging index would report "no dispatch" for one that exists.
+    return hasMatchingTaskDispatchedEntry(meshId, taskId, sessionId);
 }
 
 // Coordinator-side suppression/reconcile gate for an incoming mesh event. Each clause is a

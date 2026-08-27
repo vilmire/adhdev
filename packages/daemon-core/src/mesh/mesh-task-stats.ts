@@ -8,8 +8,11 @@
  * estimated numbers.
  */
 
-import { readLedgerEntries } from './mesh-ledger.js';
-import type { MeshLedgerEntry } from './mesh-ledger.js';
+// Stage 4A roster entry 1: this tail read is served from the seqscribe replica
+// when the mesh passes the readiness gate, and from the ledger otherwise. The
+// read is lossless either way — every field below (kind, timestamp, taskId) is
+// a projected field. See mesh-read-model-consumers.ts for the argument.
+import { readTaskStatsEntries, type ProjectedLedgerView } from './mesh-read-model-consumers.js';
 import { getQueue } from './mesh-work-queue.js';
 
 export interface MeshTaskStats {
@@ -43,7 +46,15 @@ export interface MeshMissionStats {
     incompleteTaskIds: string[];
 }
 
-function readPayloadTaskId(entry: MeshLedgerEntry): string {
+function readPayloadTaskId(entry: ProjectedLedgerView): string {
+    // ★ payload.taskId ONLY — deliberately not the `taskId` base field, and not
+    // a fallback between them. The two are not interchangeable: appendLedgerEntry
+    // derives the base field FROM payload.taskId for the task-lifecycle kinds,
+    // but an explicitly-set base field wins over the payload, so a kind that
+    // sets `taskId` directly without a payload copy would start matching here if
+    // this preferred the base field. Both keys survive the projection, so this
+    // resolves identically on either read path — the constraint is preserving
+    // THIS site's pre-cutover semantics, not using the richer field.
     const value = entry.payload?.taskId;
     return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
@@ -73,7 +84,7 @@ export function computeMeshTaskStats(meshId: string, opts?: { taskIds?: string[]
     if (targetIds.length === 0) return [];
     const targetSet = new Set(targetIds);
 
-    const entries = readLedgerEntries(meshId, { tail: opts?.tail ?? 1000 });
+    const entries = readTaskStatsEntries(meshId, opts?.tail ?? 1000);
     const dispatches = new Map<string, { first: string; count: number }>();
     const terminals = new Map<string, { at: string; kind: 'task_completed' | 'task_failed' }>();
     for (const entry of entries) {

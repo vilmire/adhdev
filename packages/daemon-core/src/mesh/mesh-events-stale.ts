@@ -2,6 +2,7 @@ import { appendLedgerEntry, buildTaskCompletionEvidence, readLedgerEntriesByKind
 import type { MeshLedgerKind } from './mesh-ledger.js';
 import { updateDirectDispatchStatus, cleanupTerminalDirectDispatches } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal } from './mesh-delivery-policy.js';
+import { hasDispatchAfterTerminalEntry } from './mesh-read-model-consumers.js';
 import type { LiveTurnEvidenceSource } from './mesh-completion-live-gate.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { readNonEmptyString, readRecord, resolveEventSessionId, readWorkerResultMetadata, isWeakCompletionEvidence, buildMeshSystemMessage } from './mesh-events-utils.js';
@@ -181,16 +182,16 @@ export function hasDispatchAfterTerminal(meshId: string, sessionId: string, term
     // append order within the filtered set) still lets us walk past the anchor correctly. A
     // bare tail:200 window can be crowded out by unrelated mesh traffic before reaching either
     // the anchor or the dispatch this function is looking for.
-    const entries = readLedgerEntriesByKind(meshId, ['task_dispatched', ...TERMINAL_LEDGER_KINDS]);
-    let pastTerminal = false;
-    for (const entry of entries) {
-        if (!pastTerminal) {
-            if (entry.id === terminalId) pastTerminal = true;
-            continue;
-        }
-        if (entry.kind === 'task_dispatched' && sessionIdsEquivalent(entry.sessionId, sessionId)) return true;
-    }
-    return false;
+    //
+    // Stage 4A roster entry 4: served from the seqscribe replica behind the readiness
+    // gate, from the ledger otherwise. Lossless — reads only id/kind/sessionId.
+    // ★ This is the consumer that makes the replica's tie-break load-bearing. The
+    // walk is POSITIONAL, and the same-millisecond case noted above is exactly the
+    // tie the sort has to break. The replica orders by (timestamp, canonical order)
+    // — mirroring the ledger's own `ORDER BY timestamp ASC, rowid ASC`, with
+    // seqscribe's total order standing in for rowid so the tie resolves the same
+    // way here as it does there.
+    return hasDispatchAfterTerminalEntry(meshId, sessionId, terminalId, TERMINAL_LEDGER_KINDS);
 }
 
 export function hasUnterminalDirectDispatchLedgerEntry(meshId: string, sessionId: string): boolean {

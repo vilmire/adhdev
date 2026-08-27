@@ -23,8 +23,8 @@ import {
     requeueDrainedPendingMeshCoordinatorEvent,
 } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { appendLedgerEntry, readLedgerEntries } from './mesh-ledger.js';
-import type { MeshLedgerEntry } from './mesh-ledger.js';
+import { appendLedgerEntry } from './mesh-ledger.js';
+import { readApprovalResolutionEntries, type ProjectedLedgerView } from './mesh-read-model-consumers.js';
 import { shouldForceInjectMeshEvent } from './mesh-events-coordinator.js';
 import { isMeshApprovalEvent, MESH_APPROVAL_EVENTS } from './mesh-event-classify.js';
 import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage } from './mesh-events-utils.js';
@@ -526,9 +526,15 @@ function isApprovalNudgeResolved(meshId: string, pending: PendingMeshCoordinator
     const sessionId = readNonEmptyString(metadataEvent.targetSessionId) || readNonEmptyString(metadataEvent.sessionId);
     if (!nodeId && !sessionId) return false; // nothing to correlate a terminal against
     const queuedAt = typeof pending.queuedAt === 'number' && Number.isFinite(pending.queuedAt) ? pending.queuedAt : 0;
-    let entries: MeshLedgerEntry[];
+    // Stage 4A roster entry 2: served from the seqscribe replica when this mesh
+    // passes the readiness gate, from the ledger otherwise. Lossless — this
+    // predicate reads only kind/timestamp/nodeId/sessionId, all projected base
+    // fields. The kind filter moved into the read (it was a caller-side filter
+    // over a full-set read); equivalent here because the predicate inspects no
+    // other kind, and it keeps a hot reconcile tick off the full entry set.
+    let entries: ProjectedLedgerView[];
     try {
-        entries = readLedgerEntries(meshId);
+        entries = readApprovalResolutionEntries(meshId);
     } catch {
         return false; // best-effort — a read failure never blocks delivery
     }

@@ -62,6 +62,7 @@ import {
 } from '../seqscribe/mesh-dual-write.js';
 import { meshParityCounters } from '../seqscribe/mesh-parity.js';
 import { startMeshParityLoop, type MeshParityLoopHandle } from '../mesh/mesh-parity-loop.js';
+import { configureMeshReadModel } from '../seqscribe/mesh-read-model.js';
 
 // ─── Init Config ───
 
@@ -734,10 +735,15 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // ledger append — appends before this point simply do not shadow, which is
     // also why the loop records `armedAt` and ignores older entries.
     //
-    // Read paths are untouched: nothing consumes the shadow topic except the
-    // parity comparison. Stage 4 owns the cutover.
+    // Stage 4A additionally wires the materialized READ MODEL. Attaching it is
+    // unconditional and cheap — it registers no consumer until a mesh is first
+    // queried — while whether any read is actually SERVED from it depends on
+    // `ADHDEV_SEQSCRIBE_MESH=primary` plus the per-mesh readiness gate
+    // (seqscribe/mesh-read-readiness.ts). Under the default `shadow` mode this
+    // wiring changes no behaviour at all.
     try {
         configureMeshDualWrite(components.seqscribeNode ?? null);
+        configureMeshReadModel(components.seqscribeNode ?? null);
         if (components.seqscribeNode) {
             components.seqscribeParityLoop = startMeshParityLoop(components.seqscribeNode);
         }
@@ -868,6 +874,10 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // rather than an append into a node that step 7 is about to close.
     try { seqscribeParityLoop?.stop(); } catch { /* noop */ }
     try { configureMeshDualWrite(null); } catch { /* noop */ }
+    // Detach the read model too, so its per-mesh onEntry consumers are
+    // unsubscribed before step 7 closes the node. A consumer still registered
+    // when the node closes would touch the store after the owner lock released.
+    try { configureMeshReadModel(null); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {
