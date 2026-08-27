@@ -16,6 +16,7 @@ import type { MachineInfo } from '../shared-types.js';
 import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
+import { recordFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
 // `type: string`, leaving the primary status_report producer outside the only
 // typed protocol surface (which lived in the proprietary consumer package).
@@ -152,6 +153,177 @@ export function buildCloudStatusReportPayload(
         p2p: buildCloudP2PSummary(p2p),
         ...(seqscribeSummary ? { seqscribe: seqscribeSummary } : {}),
         timestamp,
+    };
+}
+
+// ─── fleet.status entry (Phase 4 Stage 1) ─────────────
+
+/**
+ * Daemon reachability, as the producer itself sees it.
+ *
+ * Deliberately NOT the server's notion of online: this entry is written by the
+ * daemon into a replicated ring that peers read, so the honest value is what
+ * this process can observe about its own links — not a status another party
+ * would infer from the absence of a heartbeat (a peer reading a stale ring
+ * entry draws that conclusion itself, from `at`).
+ */
+export type FleetOnlineState = 'online' | 'reconnecting' | 'offline';
+
+/**
+ * Session tallies carried on a fleet.status entry.
+ *
+ * ★ These are computed HERE, in the daemon, and are not a reuse of anything
+ * server-side. `countTopLevelSessions` (packages/server/src/durable-objects/
+ * daemon-status.ts) counts three category buckets and nothing else — it never
+ * looks at `status`, so the four state buckets below have no existing
+ * implementation anywhere in the codebase. Reusing the server function was
+ * considered and rejected twice over: it is in the proprietary package that
+ * daemon-core must not import, and it does not compute what is needed.
+ *
+ * Every field is a `number`. No `Record<string, number>` keyed by provider,
+ * session id or status: a dynamic key map is how a content boundary leaks by
+ * accident, because the KEYS then carry data that no allow-list reviewed.
+ */
+export interface FleetSessionCounts {
+    /** Category buckets — same predicate the server uses, computed locally. */
+    ideCount: number;
+    cliCount: number;
+    acpCount: number;
+    /** State buckets — new here; nothing upstream computes these. */
+    idleCount: number;
+    generatingCount: number;
+    waitingApprovalCount: number;
+    erroredCount: number;
+}
+
+/**
+ * One `fleet.status` ring entry.
+ *
+ * ── The shape is a CLOSED set of fixed keys, on purpose ────────────────────
+ * `fleet.status` is an `access: 'metadata'` topic (seqscribe/topics.ts) that
+ * replicates to every peer in the fleet, so it is governed by the same content
+ * boundary as the server WS status path: identifiers, enums, booleans and
+ * counters only — never text authored by a user or an agent.
+ *
+ * Explicitly excluded, each for a reason rather than by oversight:
+ *   · per-session arrays — session ids and workspaces are routing detail that
+ *     belongs on the P2P payload; a fleet tail needs tallies, not a roster.
+ *   · topic names, peer ids, writer ids — replication internals, and exactly
+ *     what the seqscribe summary's own allow-list already strips upstream.
+ *   · `machineNickname` — USER FREE TEXT. It is a `PATCH /machines/:id` body
+ *     field (packages/server/src/routes/machines.ts:45-51) that the user types
+ *     and the server stores in D1 `machines.nickname`, handed back to the
+ *     daemon at daemon-auth.ts:175. A consumer that wants a human label
+ *     resolves it from `daemonId` on its own side.
+ */
+export interface FleetStatusEntry {
+    daemonId: string;
+    /** ISO-8601. A string, not epoch ms, so a ring tail is readable as-is. */
+    at: string;
+    onlineState: FleetOnlineState;
+    p2pActive: boolean;
+    sessionCounts: FleetSessionCounts;
+    /**
+     * Replication health. Reuses `buildCloudSeqscribeSummary` verbatim — the
+     * same projection the server WS path already carries, already boundary
+     * tested (test/status/cloud-status-content-boundary.test.ts). Absent, not
+     * zeroed, when no node is running, so "no seqscribe" stays distinguishable
+     * from "a healthy idle node".
+     */
+    seqscribe?: SeqscribeStatusSummary;
+}
+
+/**
+ * Count sessions into the seven buckets, from the daemon's own snapshot.
+ *
+ * The category predicate mirrors the server's (`kind`+`transport`, top-level
+ * only) so the two agree on the axis they share. The state predicate is new.
+ *
+ * `status` is a `SessionStatus` union of 11 values and the four buckets do not
+ * partition it — `finalizing`, `stopped`, `starting`, `disconnected`,
+ * `panel_hidden` and `not_monitored` intentionally fall into no bucket. The
+ * buckets answer "what needs attention", not "where is every session", so the
+ * four are NOT expected to sum to the category totals, and a consumer must not
+ * derive one from the other.
+ *
+ * ★ State buckets count ALL sessions, including children, while the category
+ * buckets count top-level ones only. That asymmetry is deliberate: an agent
+ * waiting on approval matters whether or not it is nested under a workspace,
+ * and the category counts exist to describe the machine's shape.
+ */
+export function countFleetSessions(sessions: unknown): FleetSessionCounts {
+    const list = Array.isArray(sessions) ? sessions : [];
+    const counts: FleetSessionCounts = {
+        ideCount: 0,
+        cliCount: 0,
+        acpCount: 0,
+        idleCount: 0,
+        generatingCount: 0,
+        waitingApprovalCount: 0,
+        erroredCount: 0,
+    };
+
+    for (const raw of list) {
+        const session = (raw || {}) as Record<string, any>;
+
+        if (!session.parentId) {
+            if (session.kind === 'workspace' && session.transport === 'cdp-page') counts.ideCount++;
+            else if (session.kind === 'agent' && session.transport === 'pty') counts.cliCount++;
+            else if (session.kind === 'agent' && session.transport === 'acp') counts.acpCount++;
+        }
+
+        switch (session.status) {
+            case 'idle':
+                counts.idleCount++;
+                break;
+            case 'generating':
+                counts.generatingCount++;
+                break;
+            // Both approval-shaped states land in one bucket: from a fleet tail's
+            // point of view "a human must answer something" is the signal, and
+            // splitting it would invite a consumer to watch only one of the two.
+            case 'waiting_approval':
+            case 'waiting_choice':
+                counts.waitingApprovalCount++;
+                break;
+            case 'error':
+                counts.erroredCount++;
+                break;
+            default:
+                break;
+        }
+    }
+
+    return counts;
+}
+
+/**
+ * Build one `fleet.status` entry.
+ *
+ * Pure and total: it never reads module state, never throws on a malformed
+ * input (numbers are coerced, unknown session shapes simply fall into no
+ * bucket), so the shadow write path can call it without a guard of its own.
+ */
+export function fleetStatusEntry(input: {
+    daemonId: string;
+    sessions: unknown;
+    onlineState: FleetOnlineState;
+    p2pActive: boolean;
+    timestamp: number;
+    seqscribe?: SeqscribeStatusSummary | undefined;
+}): FleetStatusEntry {
+    const seqscribeSummary = buildCloudSeqscribeSummary(input.seqscribe);
+    const at = Number.isFinite(input.timestamp)
+        ? new Date(input.timestamp).toISOString()
+        : new Date().toISOString();
+
+    return {
+        daemonId: input.daemonId,
+        at,
+        onlineState: input.onlineState,
+        p2pActive: input.p2pActive === true,
+        sessionCounts: countFleetSessions(input.sessions),
+        ...(seqscribeSummary ? { seqscribe: seqscribeSummary } : {}),
     };
 }
 
@@ -545,6 +717,34 @@ export class DaemonStatusReporter {
                 );
             }
         }
+
+// ═══ fleet.status ring append (Phase 4 Stage 1 — shadow, additive) ═══
+        // ★ Placed BEFORE the `p2pOnly` early return below on purpose: a
+        // P2P-only tick is still a real status observation, and the ring is a
+        // peer-facing tail that must not go stale merely because the cloud WS
+        // leg is the one being skipped this tick.
+        //
+        // ★ This does NOT replace, gate or modify the server transmit that
+        // follows. The `status_report` frame stays exactly as it was — it is a
+        // live routing/push path, not a P2P-down fallback (see the header of
+        // seqscribe/fleet-status-shadow.ts). This is a second, parallel record.
+        //
+        // Off by default and non-throwing by construction, so on a daemon that
+        // has not opted in this is one boolean check per tick.
+        recordFleetStatusShadow(fleetStatusEntry({
+            daemonId: this.deps.instanceId,
+            sessions: payload.sessions,
+            // Derived from what this process can actually observe: a live server
+            // socket is `online`; no socket while P2P still carries traffic is a
+            // daemon mid-reconnect rather than a dead one. `offline` is
+            // effectively unreachable from here — `sendUnifiedStatusReport`
+            // returns early when neither transport is up — and is kept in the
+            // enum for a consumer that infers it from a stale `at`.
+            onlineState: serverConnected ? 'online' : (p2pConnected ? 'reconnecting' : 'offline'),
+            p2pActive: p2pConnected,
+            timestamp: now,
+            seqscribe: this.deps.getSeqscribeStats?.() || undefined,
+        }));
 
  // ═══ Server transmit (minimal routing meta only) ═══
         if (opts?.p2pOnly) return;

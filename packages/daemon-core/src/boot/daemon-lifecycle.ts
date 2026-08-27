@@ -60,6 +60,7 @@ import {
     isMeshDualWriteActive,
     meshDualWriteCounters,
 } from '../seqscribe/mesh-dual-write.js';
+import { configureFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
 import { meshParityCounters } from '../seqscribe/mesh-parity.js';
 import { startMeshParityLoop, type MeshParityLoopHandle } from '../mesh/mesh-parity-loop.js';
 import {
@@ -754,6 +755,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     try {
         configureMeshDualWrite(components.seqscribeNode ?? null);
         configureMeshReadModel(components.seqscribeNode ?? null);
+        // Phase 4 Stage 1: arm the fleet.status producer shadow. Unlike the mesh
+        // leg this defaults to OFF (ADHDEV_SEQSCRIBE_FLEET_STATUS=shadow opts
+        // in), so on every daemon that does not set the flag this call resolves
+        // the mode, stores a null-op state and changes nothing else — there is
+        // no consumer until Stage 2 adds the dashboard SUB.
+        configureFleetStatusShadow(components.seqscribeNode ?? null);
         if (components.seqscribeNode) {
             // GC durable cursors older builds left behind: pre-P17 read-model
             // generation names (`…#2`) and pre-P21 per-sweep parity nonces.
@@ -891,6 +898,9 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // rather than an append into a node that step 7 is about to close.
     try { seqscribeParityLoop?.stop(); } catch { /* noop */ }
     try { configureMeshDualWrite(null); } catch { /* noop */ }
+    // Same for the fleet.status leg — a status tick racing shutdown must not
+    // append into a node step 7 is about to close.
+    try { configureFleetStatusShadow(null); } catch { /* noop */ }
     // Detach the read model too, so its per-mesh onEntry consumers are
     // unsubscribed before step 7 closes the node. A consumer still registered
     // when the node closes would touch the store after the owner lock released.
