@@ -103,7 +103,10 @@ function logAtLevel(level: 'debug' | 'info' | 'warn' | 'error', category: string
     }
 }
 
-function getCommandLogLevel(cmd: string): 'debug' | 'info' {
+// Exported for tests: the hotpath-command log level is a pure function of the
+// command name, so a test can assert "read_chat never reaches the default info
+// stream" by calling this instead of grepping the COMMAND_DEBUG_LEVELS literal.
+export function getCommandLogLevel(cmd: string): 'debug' | 'info' {
     return COMMAND_DEBUG_LEVELS.has(cmd) ? 'debug' : 'info';
 }
 
