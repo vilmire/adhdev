@@ -541,6 +541,15 @@ describe('ProviderLoader settings schema', () => {
       args: ['agent', '--sandbox', 'workspace'],
     });
 
+    // The fixture's versionCommand only defines darwin/linux (no win32, no
+    // default) — getPlatformVersionCommand() falls through to `undefined`
+    // for any other platform rather than reusing the linux string, so mirror
+    // that per-platform lookup instead of assuming a binary darwin/"else"
+    // split.
+    const expectedVersionCommand: string | undefined =
+      process.platform === 'darwin' ? 'codex --version'
+      : process.platform === 'linux' ? 'codex version'
+      : undefined;
     const entries = loader.getCliDetectionList();
     expect(entries).toEqual([
       expect.objectContaining({
@@ -549,7 +558,9 @@ describe('ProviderLoader settings schema', () => {
         args: ['agent', '--sandbox', 'workspace'],
         category: 'cli',
         enabled: true,
-        versionCommand: process.platform === 'darwin' ? 'codex --version' : 'codex version',
+        // getPlatformVersionCommand() omits the key entirely rather than
+        // setting it to undefined — only assert it when one is expected.
+        ...(expectedVersionCommand !== undefined ? { versionCommand: expectedVersionCommand } : {}),
       }),
     ]);
 
