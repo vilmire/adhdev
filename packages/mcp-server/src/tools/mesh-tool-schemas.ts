@@ -814,8 +814,11 @@ export const MESH_ANSWER_QUESTION_TOOL = {
     description: 'Answer a multi-choice QUESTION (AskUserQuestion) a delegated agent session is waiting on. '
         + 'This is the counterpart to mesh_approve: a QUESTION (surfaced as an agent:waiting_choice event / status "awaiting_choice") is NOT a yes/no approval — '
         + 'it offers labelled options (optionally multi-select, optionally a freeform "Type something") and must be answered here, never with mesh_approve. '
-        + 'Supply the promptId from the waiting_choice event and one answer per question. Each answer selects option(s) by their exact label OR 1-based index; '
-        + 'for a multi-select question pass an array of selections; a freeform answer passes text instead. '
+        + 'Supply the promptId from the waiting_choice event and `answers`: an array with one entry per question, in question order. '
+        + 'For a single-question prompt, the simplest valid form is answers: ["<exact label>"] or answers: [<1-based index>] — the bare label/index IS the entry. '
+        + 'Each entry may instead be an object { select, freeform? } (questionId optional; entries match by position when omitted): '
+        + '`select` is an option label (string), a 1-based index (number), or an array of labels/indices for a multi-select question; '
+        + 'a freeform answer sets `freeform` to the text instead of `select`. '
         + 'The daemon drives the correct keystrokes into the provider TUI to submit the selection. '
         + 'RETURN CONTRACT: success:true means the answer RESOLVED against the session\'s active prompt and the submit keystrokes were DISPATCHED (submitted:true) — it does not prove the TUI finished redrawing, so confirm the session left awaiting_choice on a later status read. '
         + 'An unmatched option label, a stale promptId, or a provider that cannot answer questions returns success:false with the live option list in activePrompt — re-answer using one of those labels or its 1-based index.',
@@ -827,21 +830,28 @@ export const MESH_ANSWER_QUESTION_TOOL = {
             promptId: { type: 'string', description: 'The InteractivePrompt promptId from the agent:waiting_choice event. Ensures the answer matches the active prompt.' },
             answers: {
                 type: 'array',
-                description: 'One entry per question in the prompt (in question order). Each entry answers a single question by selecting option label(s)/index(es), or by supplying freeform text.',
+                description: 'One entry per question in the prompt (in question order). Each entry answers a single question by selecting option label(s)/index(es), or by supplying freeform text. '
+                    + 'An entry may be a bare option label (string) or 1-based index (number) — equivalent to { select: <that value> } — or the full { questionId?, select?, freeform? } object.',
                 items: {
-                    type: 'object',
-                    properties: {
-                        questionId: { type: 'string', description: 'Optional question id from the prompt payload. When omitted, entries are matched to the prompt questions by array position.' },
-                        select: {
-                            description: 'The chosen option(s): an option label (string), a 1-based option index (number), or an array of labels/indices for a multi-select question.',
-                            oneOf: [
-                                { type: 'string' },
-                                { type: 'number' },
-                                { type: 'array', items: { type: ['string', 'number'] } },
-                            ],
+                    oneOf: [
+                        { type: 'string', description: 'Shorthand: the exact option label to select.' },
+                        { type: 'number', description: 'Shorthand: the 1-based option index to select.' },
+                        {
+                            type: 'object',
+                            properties: {
+                                questionId: { type: 'string', description: 'Optional question id from the prompt payload. When omitted, entries are matched to the prompt questions by array position.' },
+                                select: {
+                                    description: 'The chosen option(s): an option label (string), a 1-based option index (number), or an array of labels/indices for a multi-select question.',
+                                    oneOf: [
+                                        { type: 'string' },
+                                        { type: 'number' },
+                                        { type: 'array', items: { type: ['string', 'number'] } },
+                                    ],
+                                },
+                                freeform: { type: 'string', description: 'Freeform text answer (for a "Type something" option). Mutually exclusive with select.' },
+                            },
                         },
-                        freeform: { type: 'string', description: 'Freeform text answer (for a "Type something" option). Mutually exclusive with select.' },
-                    },
+                    ],
                 },
             },
         },

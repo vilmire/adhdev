@@ -855,6 +855,84 @@ describe('resolveInteractivePromptResponse (mesh_answer_question)', () => {
     expect(resolved.answers.scope.selectedLabels).toEqual(['unicast']);
   });
 
+  // mission 29a510cc: the tool description reads as if answers: ["<label>"] or
+  // answers: [<index>] are valid on their own (no { select: ... } wrapper), but
+  // the resolver used to silently drop any non-object array entry, surfacing as
+  // a much-later "Missing answer"/"Expected one selected label" error several
+  // frames away from the actual malformed input. Bare scalar entries are now
+  // treated as { select: entry }, and `answer`/`selected` are accepted as
+  // aliases for `select` on object entries.
+  describe('friendly shapes from the tool description (mission 29a510cc)', () => {
+    const SINGLE_QUESTION: InteractivePrompt = {
+      promptId: 'ask-single',
+      origin: 'cli',
+      providerType: 'claude-cli',
+      createdAt: 1,
+      questions: [{
+        questionId: 'q1',
+        header: 'Q1',
+        question: 'Pick one',
+        multiSelect: false,
+        options: [{ label: 'ALPHA' }, { label: 'BETA' }, { label: 'GAMMA' }],
+      }],
+    };
+
+    it('accepts a bare 1-based index string in the array: answers: ["2"]', () => {
+      const resolved = resolveInteractivePromptResponse(SINGLE_QUESTION, {
+        promptId: 'ask-single',
+        answers: ['2'],
+      });
+      expect(resolved.answers.q1.selectedLabels).toEqual(['BETA']);
+    });
+
+    it('accepts a bare label string in the array: answers: ["BETA"]', () => {
+      const resolved = resolveInteractivePromptResponse(SINGLE_QUESTION, {
+        promptId: 'ask-single',
+        answers: ['BETA'],
+      });
+      expect(resolved.answers.q1.selectedLabels).toEqual(['BETA']);
+    });
+
+    it('accepts a bare numeric index in the array: answers: [2]', () => {
+      const resolved = resolveInteractivePromptResponse(SINGLE_QUESTION, {
+        promptId: 'ask-single',
+        answers: [2],
+      });
+      expect(resolved.answers.q1.selectedLabels).toEqual(['BETA']);
+    });
+
+    it('accepts { questionId, answer } using `answer` as an alias for `select`', () => {
+      const resolved = resolveInteractivePromptResponse(SINGLE_QUESTION, {
+        promptId: 'ask-single',
+        answers: [{ questionId: 'q1', answer: 'BETA' }],
+      });
+      expect(resolved.answers.q1.selectedLabels).toEqual(['BETA']);
+    });
+
+    it('accepts { questionId, selected: [label] } using `selected` as an alias for `select`', () => {
+      const resolved = resolveInteractivePromptResponse(SINGLE_QUESTION, {
+        promptId: 'ask-single',
+        answers: [{ questionId: 'q1', selected: ['BETA'] }],
+      });
+      expect(resolved.answers.q1.selectedLabels).toEqual(['BETA']);
+    });
+
+    it('accepts { questionId, selected: label } using `selected` as a scalar alias for `select`', () => {
+      const resolved = resolveInteractivePromptResponse(SINGLE_QUESTION, {
+        promptId: 'ask-single',
+        answers: [{ questionId: 'q1', selected: 'BETA' }],
+      });
+      expect(resolved.answers.q1.selectedLabels).toEqual(['BETA']);
+    });
+
+    it('throws a clear, immediate error for an entry with no select/answer/selected/freeform', () => {
+      expect(() => resolveInteractivePromptResponse(SINGLE_QUESTION, {
+        promptId: 'ask-single',
+        answers: [{ questionId: 'q1' }],
+      })).toThrow(/no recognized selection/);
+    });
+  });
+
   it('rejects a promptId mismatch and an out-of-range index', () => {
     expect(() => resolveInteractivePromptResponse(PROMPT, { promptId: 'other', answers: [] }))
       .toThrow(/does not match/);

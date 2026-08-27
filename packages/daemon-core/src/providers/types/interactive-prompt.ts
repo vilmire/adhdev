@@ -132,7 +132,13 @@ export function normalizeInteractivePromptResponse(raw: unknown): InteractivePro
  *     — passed straight to normalizeInteractivePromptResponse (back-compat).
  *   - The friendly form ({ promptId, answers: [ { questionId?, select?, freeform? } ] })
  *     — entries map to questions by questionId, else by array position. `select`
- *     is a label (string) / 1-based index (number) / array of either.
+ *     is a label (string) / 1-based index (number) / array of either. `answer`
+ *     and `selected` are accepted as aliases for `select`.
+ *   - The bare-scalar friendly form ({ promptId, answers: [ "<label>" ] } or
+ *     [ 1 ]) — a single-question prompt's one answer as the label/index itself,
+ *     with no wrapper object, matching the tool description's plain-language
+ *     "answer by label or 1-based index" without requiring `{ select: ... }`.
+ *     Each entry is treated as `{ select: entry }`.
  */
 export function resolveInteractivePromptResponse(
   prompt: InteractivePrompt,
@@ -172,19 +178,32 @@ export function resolveInteractivePromptResponse(
   const answers: Record<string, InteractiveAnswer> = {};
   const entries = record.answers as unknown[];
   entries.forEach((entryRaw, index) => {
-    if (!entryRaw || typeof entryRaw !== 'object' || Array.isArray(entryRaw)) return;
-    const entry = entryRaw as Record<string, unknown>;
+    // A bare scalar entry (e.g. answers: ["1"] or answers: ["broadcast"]) is the
+    // label/index itself, not a wrapper object — treat it as { select: entryRaw }
+    // so the tool description's "one answer per question, by label or 1-based
+    // index" reads literally instead of requiring an undocumented select wrapper.
+    const entry: Record<string, unknown> = (entryRaw && typeof entryRaw === 'object' && !Array.isArray(entryRaw))
+      ? entryRaw as Record<string, unknown>
+      : { select: entryRaw };
     const questionId = readString(entry.questionId);
     const question = (questionId ? prompt.questions.find((q) => q.questionId === questionId) : undefined)
       ?? prompt.questions[index];
     if (!question) throw new Error(`No matching question for answer entry ${index}`);
     const freeformText = readString(entry.freeform) ?? readString(entry.freeformText);
+    // Accept `answer`/`selected` as aliases for `select` — coordinators reading
+    // the prose description alone (which never names `select` explicitly) reach
+    // for the field name closest to that wording.
+    const select = entry.select ?? entry.answer ?? entry.selected;
     const selectedLabels: string[] = [];
-    const select = entry.select;
     if (Array.isArray(select)) {
       for (const sel of select) selectedLabels.push(resolveOneLabel(question, sel));
     } else if (select !== undefined && select !== null) {
       selectedLabels.push(resolveOneLabel(question, select));
+    } else if (!freeformText) {
+      throw new Error(
+        `Answer entry ${index} for ${question.questionId} has no recognized selection: `
+        + 'expected "select" (option label, 1-based index, or array of either) or "freeform" (text).',
+      );
     }
     answers[question.questionId] = {
       selectedLabels,
