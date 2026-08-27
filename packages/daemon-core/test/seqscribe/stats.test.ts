@@ -50,7 +50,38 @@ describe('summarizeSeqscribeStats', () => {
             fgenAgeBucket: 0,
             quarantined: false,
             authority: false,
+            // Stage 2+3 fields with neither `dualWrite` nor `parity` supplied:
+            // a daemon whose shadow leg never armed reports it as inactive and
+            // its buckets as zero, rather than omitting the keys — a reader
+            // must be able to tell "shadow off" from "older daemon".
+            dualWrite: false,
+            dualWriteFailedBucket: 0,
+            dualWriteDroppedBucket: 0,
+            parityMismatchBucket: 0,
+            parityRan: false,
         });
+    });
+
+    it('buckets the dual-write and parity counters instead of passing them through', () => {
+        const summary = summarizeSeqscribeStats(
+            { topics: { 'assistant.journal': topic() }, peers: [] },
+            {
+                authorityEnabled: true,
+                dualWrite: { active: true, failed: 4, dropped: 250 },
+                parity: { runs: 3, mismatches: 12 },
+            },
+        );
+
+        expect(summary.dualWrite).toBe(true);
+        expect(summary.parityRan).toBe(true);
+        // BACKLOG_BUCKETS = [1, 10, 100, 1000] → ordinals, never the raw count.
+        // This is what keeps the status frame byte-identical while a counter
+        // creeps, so the server-side dedup keeps suppressing idle frames.
+        expect(summary.dualWriteFailedBucket).toBe(2);
+        expect(summary.dualWriteDroppedBucket).toBe(4);
+        expect(summary.parityMismatchBucket).toBe(3);
+        expect(summary.dualWriteFailedBucket).not.toBe(4);
+        expect(summary.parityMismatchBucket).not.toBe(12);
     });
 
     it('emits no topic names, peer ids or other identifiers', () => {
