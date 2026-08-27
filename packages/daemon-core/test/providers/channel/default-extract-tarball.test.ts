@@ -71,6 +71,16 @@ const hasSystemTar = (() => {
 /** Env for system-tar invocations: keep macOS bsdtar from adding AppleDouble (._*) entries. */
 const SYSTEM_TAR_ENV = { ...process.env, COPYFILE_DISABLE: '1' };
 
+/**
+ * The `tar` resolved first on PATH under Git for Windows is MSYS GNU tar,
+ * which mishandles a backslash-separated Windows path ("C:\Users\...") for
+ * both the archive (`-f`) and directory (`-C`) arguments — the backslashes
+ * defeat its own path translation and it fails with a garbled "Cannot open"
+ * path. Forward-slash form ("C:/Users/...") round-trips correctly. A no-op
+ * on POSIX, where paths never contain backslashes.
+ */
+const forSystemTar = (p: string): string => p.replace(/\\/g, '/');
+
 /** Pack `srcDir` (contents at top level) into a .tar.gz — pure Node, no system tar. */
 async function packTarGz(srcDir: string, destTar: string): Promise<void> {
   await pipeline(tarFs.pack(srcDir), zlib.createGzip(), fs.createWriteStream(destTar));
@@ -160,7 +170,12 @@ describe('default tarball extraction (Node-native, no system tar)', () => {
     fs.mkdirSync(sysOut, { recursive: true });
 
     await extractTarballGz(tarPath, nodeOut);
-    execFileSync('tar', ['-xzf', tarPath, '-C', sysOut], { env: SYSTEM_TAR_ENV });
+    // --force-local: GNU tar (the `tar` resolved first on PATH via Git for
+    // Windows' usr/bin, ahead of the native System32 tar.exe) treats an
+    // archive path containing a colon as a `[user@]host:file` remote-tape
+    // spec unless told otherwise — which every Windows absolute path
+    // ("C:\...") matches. bsdtar/macOS also accepts this flag, as a no-op.
+    execFileSync('tar', ['-xzf', forSystemTar(tarPath), '-C', forSystemTar(sysOut), '--force-local'], { env: SYSTEM_TAR_ENV });
 
     // Identical regular-file sets …
     expect(listFiles(nodeOut)).toEqual(listFiles(sysOut));
@@ -176,7 +191,7 @@ describe('default tarball extraction (Node-native, no system tar)', () => {
     // Same tarball, created by the SYSTEM tar this time, extracted by the
     // Node path — digest must still match the pure-Node round-trip above.
     const sysMadeTar = path.join(root, 'providers-sys.tar.gz');
-    execFileSync('tar', ['-czf', sysMadeTar, '-C', tarSrcParent, '.'], { env: SYSTEM_TAR_ENV });
+    execFileSync('tar', ['-czf', forSystemTar(sysMadeTar), '-C', forSystemTar(tarSrcParent), '.', '--force-local'], { env: SYSTEM_TAR_ENV });
     const sysMadeOut = path.join(root, 'out-sysmade');
     fs.mkdirSync(sysMadeOut, { recursive: true });
     await extractTarballGz(sysMadeTar, sysMadeOut);
