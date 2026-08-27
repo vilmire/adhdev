@@ -37,6 +37,7 @@ vi.mock('../../src/commands/low-family/daemon-lifecycle.js', () => ({
 
 import { meshRestartHandlers } from '../../src/commands/med-family/mesh-restart'
 import { IDENTITY, TRACK } from '../../src/track-identity'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 
 const MESH_ID = 'mesh-restart-test'
 const SELF_DAEMON_ID = 'daemon_mach_self'
@@ -82,6 +83,11 @@ afterEach(async () => {
   // Drop any schedule left over from a test so module state never leaks.
   await call(makeCtx([]), baseArgs({ cancelWhenIdle: true }))
   vi.useRealTimers()
+  // resolveSessionTurnPresentation() opens the mesh-runtime.db singleton
+  // against this test's configDir. Close it before rmSync — on win32 an
+  // open sqlite handle makes the directory removal fail with EBUSY (a
+  // no-op unlink on POSIX, but not on NTFS).
+  MeshRuntimeStore.resetForTests()
   if (configDir && existsSync(configDir)) rmSync(configDir, { recursive: true, force: true })
   configDir = ''
 })

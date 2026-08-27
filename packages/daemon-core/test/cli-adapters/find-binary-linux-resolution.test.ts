@@ -34,7 +34,13 @@ vi.mock('child_process', async (importOriginal) => {
 // Import AFTER mocks are registered.
 const { findBinary, __resetNpmPrefixCacheForTests } = await import('../../src/cli-adapters/provider-cli-shared.js');
 
-describe('findBinary linux resolution', () => {
+// NTFS doesn't track POSIX executable bits: fs.chmodSync(p, 0o755) is a no-op
+// for the exec bits on Windows, so findBinary's `stat.mode & 0o111` gate (the
+// isWin===false / mocked-linux branch this suite deliberately exercises) can
+// never see an executable file here regardless of what the real Linux code
+// does. Environment limitation, not a product defect — verified real Linux
+// hosts (CI) still cover this path.
+describe.skipIf(process.platform === 'win32')('findBinary linux resolution', () => {
     let tmpDir: string;
     let home: string;
     const savedEnv: Record<string, string | undefined> = {};

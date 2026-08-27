@@ -44,6 +44,7 @@ import {
   loadDeferredRestartSchedules,
   recordDeferredRestartSchedule,
 } from '../../src/config/state-store'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 
 const MESH_ID = 'mesh-restart-persist'
 const SELF_DAEMON_ID = 'daemon_mach_self'
@@ -88,6 +89,11 @@ beforeEach(() => {
 afterEach(() => {
   __clearDeferredRestartsForTests()
   vi.useRealTimers()
+  // resolveSessionTurnPresentation() opens the mesh-runtime.db singleton
+  // against this test's configDir. Close it before rmSync — on win32 an
+  // open sqlite handle makes the directory removal fail with EBUSY (a
+  // no-op unlink on POSIX, but not on NTFS).
+  MeshRuntimeStore.resetForTests()
   if (configDir && existsSync(configDir)) rmSync(configDir, { recursive: true, force: true })
   configDir = ''
 })
