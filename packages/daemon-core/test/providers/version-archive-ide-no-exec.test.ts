@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -30,6 +30,15 @@ vi.mock('os', async () => {
 });
 
 let tmp: string | null = null;
+// version-archive.ts's local findBinary() searches the REAL process.env.PATH
+// (no test seam) — on a dev machine that actually has Cursor installed,
+// `findBinary('cursor')` resolves to the real cursor.cmd shim, which then
+// misdirects the manifest read (wrong directory) and defeats the exec-guard
+// (isKnownWin32GuiExe requires a `.exe` suffix; a `.cmd` shim doesn't
+// qualify). Isolate PATH so provider.cli resolution only ever sees the
+// fixture's own paths.win32 entry, exactly like a machine without Cursor
+// installed.
+let originalPath: string | undefined;
 
 function createLoader(
   providers: ProviderModule[],
@@ -42,7 +51,14 @@ function createLoader(
 }
 
 describe('detectAllVersions — IDE category on win32', () => {
+  beforeEach(() => {
+    originalPath = process.env.PATH;
+    process.env.PATH = '';
+  });
+
   afterEach(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
     execSpy.mockClear();
     if (tmp) {
       rmSync(tmp, { recursive: true, force: true });

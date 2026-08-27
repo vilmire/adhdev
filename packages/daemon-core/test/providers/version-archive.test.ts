@@ -45,7 +45,14 @@ function createLoader(providers: ProviderModule[]) {
   } as Pick<import('../../src/providers/provider-loader.js').ProviderLoader, 'getAll'>;
 }
 
-describe('detectAllVersions', () => {
+// This suite mocks os.platform() to 'darwin' specifically to exercise
+// findBinary()'s POSIX branch, which additionally requires the file's
+// executable bit (`stat.mode & 0o111`). NTFS has no POSIX permission bits —
+// fs.writeFileSync(..., { mode: 0o755 }) on win32 never actually sets an
+// executable bit, so that check can never pass here regardless of the
+// platform mock. Same environment limitation as
+// find-binary-linux-resolution.test.ts; verified on real POSIX hosts (CI).
+describe.skipIf(process.platform === 'win32')('detectAllVersions', () => {
   afterEach(() => {
     execSyncMock.mockReset();
     process.env.PATH = originalPath;
