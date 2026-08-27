@@ -5,7 +5,20 @@ import * as url from 'url'
 import { test, type TestContext } from 'node:test'
 import * as assert from 'node:assert/strict'
 import { createRequire } from 'module'
-import { resetProcessInstanceContextForTests } from '@adhdev/daemon-core'
+// Leaf import, NOT the '@adhdev/daemon-core' root barrel. The barrel
+// re-exports logging/logger.js, whose module scope eagerly resolves the log dir
+// at import time (the same hazard daemon-core's tsup.config.ts calls out for the
+// standalone bootstrap). A static barrel import is hoisted above every test
+// body, so that resolution ran while HOME/ADHDEV_CONFIG_DIR still pointed at the
+// real home — tripping the config-dir isolation guard ("reached the real-home
+// fallback in a test runtime") before pinTempInstance could relocate them, and
+// failing the whole FILE at load rather than any single test. That is why CI saw
+// `not ok 3 - test/session-host-stop.test.ts` with no failing subtest under it.
+// config/instance-context.js pulls in only config-dir + app-name +
+// track-identity, none of which touch the logger. Relative src path (not a
+// package subpath) because daemon-core's `exports` map is closed and publishes
+// no './config/instance-context' entry — see startup-restore-policy.test.ts.
+import { resetProcessInstanceContextForTests } from '../../daemon-core/src/config/instance-context.js'
 
 const require = createRequire(path.join(process.cwd(), 'test/session-host-stop.test.ts'))
 const childProcessModule = require('child_process') as typeof import('child_process')
