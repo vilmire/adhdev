@@ -20,6 +20,43 @@ import { buildCloudStatusReportPayload } from '../../src/status/reporter.js';
 
 const CANARY = 'fleet-secret-LEAK-CANARY-0123456789abcdef';
 
+/**
+ * `JSON.stringify(x).not.toContain(CANARY)` catches the canary whether it
+ * appears as a value or as a substring of an object KEY — `JSON.stringify`
+ * renders keys as quoted strings too. The one shape it silently misses is a
+ * `Map`/`Set`: `JSON.stringify(new Map([[CANARY, 1]]))` serializes to `"{}"`,
+ * losing the canary entirely rather than leaking it. This walks the object
+ * graph directly (unwrapping Map/Set) so a future stats field returning a Map
+ * still trips the assertion instead of silently passing.
+ */
+function assertNoCanaryAnywhere(value: unknown, canary: string, path = 'root'): void {
+    if (typeof value === 'string') {
+        expect(value, `canary leaked at ${path}`).not.toContain(canary);
+        return;
+    }
+    if (value instanceof Map) {
+        for (const [k, v] of value.entries()) {
+            expect(String(k), `canary leaked in Map key at ${path}`).not.toContain(canary);
+            assertNoCanaryAnywhere(v, canary, `${path}[Map:${String(k)}]`);
+        }
+        return;
+    }
+    if (value instanceof Set) {
+        for (const v of value.values()) assertNoCanaryAnywhere(v, canary, `${path}[Set]`);
+        return;
+    }
+    if (Array.isArray(value)) {
+        value.forEach((v, i) => assertNoCanaryAnywhere(v, canary, `${path}[${i}]`));
+        return;
+    }
+    if (value !== null && typeof value === 'object') {
+        for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+            expect(k, `canary leaked in object key at ${path}`).not.toContain(canary);
+            assertNoCanaryAnywhere(v, canary, `${path}.${k}`);
+        }
+    }
+}
+
 const tmpDirs: string[] = [];
 const handles: SeqscribeNodeHandle[] = [];
 
@@ -186,6 +223,7 @@ describe('fleet secret leakage regression', () => {
         for (const handle of [a, b]) {
             const stats = handle.node.stats();
             expect(JSON.stringify(stats)).not.toContain(CANARY);
+            assertNoCanaryAnywhere(stats, CANARY, 'stats');
             const payload = buildCloudStatusReportPayload(
                 [],
                 undefined,
@@ -193,6 +231,7 @@ describe('fleet secret leakage regression', () => {
                 summarizeSeqscribeStats(stats, { authorityEnabled: handle.authorityEnabled }),
             );
             expect(JSON.stringify(payload)).not.toContain(CANARY);
+            assertNoCanaryAnywhere(payload, CANARY, 'payload');
         }
 
         // (c) the on-disk bytes — after close so the WAL is checkpointed

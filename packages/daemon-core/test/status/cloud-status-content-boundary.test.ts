@@ -320,6 +320,32 @@ describe('cloud status seqscribe boundary', () => {
         }
     });
 
+    /**
+     * `Object.values` above only walks the TOP level. If a future field were
+     * shaped like `Record<string, number>` (e.g. a per-key sync counter), every
+     * value it holds would still be a number and the assertion above would pass
+     * — while the object's own KEYS could be session ids, mesh ids, or setting
+     * names smuggled into the wire payload. This recurses into any nested plain
+     * object and asserts its keys are drawn from the fixed field allow-list
+     * (i.e. no nested object should exist at all today), so a dynamic-keyed
+     * field trips this test instead of silently passing.
+     */
+    it('never carries an object whose keys are dynamic identifiers, not fixed field names', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, healthy as any);
+        const seqscribe = payload.seqscribe ?? {};
+        const allowedKeys = new Set(Object.keys(healthy));
+
+        function assertNoDynamicKeys(value: unknown, path: string): void {
+            if (value === null || typeof value !== 'object') return;
+            for (const key of Object.keys(value as Record<string, unknown>)) {
+                expect(allowedKeys, `unlisted key "${path}.${key}" — object keys must not carry dynamic identifiers`).toContain(key);
+                assertNoDynamicKeys((value as Record<string, unknown>)[key], `${path}.${key}`);
+            }
+        }
+
+        assertNoDynamicKeys(seqscribe, 'seqscribe');
+    });
+
     it('coerces malformed counters rather than emitting NaN', () => {
         const payload = buildCloudStatusReportPayload([], undefined, 1, {
             topics: Number.NaN,
