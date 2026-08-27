@@ -79,29 +79,31 @@ export const MAX_INFLIGHT = 32;
 /**
  * Resolve the mode.
  *
- * ★ Note the asymmetry against `resolveMeshDualWriteMode`, which defaults ON.
- * This leg defaults to **off**: the mesh leg replaced an existing replication
- * story and its shadow is the thing that proves parity, whereas `fleet.status`
- * has no consumer yet (Stage 2 adds the dashboard SUB). Shipping a write leg
- * that is on by default before anything reads it would spend ring writes, disk
- * and peer fan-out on records nobody consumes, and would make this stage's
- * blast radius nonzero on every daemon in the fleet the moment it lands.
+ * ★ Now matches `resolveMeshDualWriteMode`'s default-ON posture: this leg
+ * defaults to **shadow**. It defaulted to `off` through Stage 1 because
+ * `fleet.status` had no consumer yet; Stage 3 (fleet-status-parity.ts, which
+ * arms automatically off `isFleetStatusShadowActive()` — see
+ * `configureFleetStatusParity`) has since landed on `main` and is that
+ * consumer. With a consumer in place, shipping the leg off by default would
+ * mean every daemon in the fleet silently skips parity checking; the reason
+ * to default off no longer holds. `ADHDEV_SEQSCRIBE_FLEET_STATUS=off` remains
+ * a fully respected, explicit opt-out.
  *
- * An unrecognized value is treated as `off` for the same reason — fail-closed
- * is correct when the feature is opt-in — and is logged once so a typo is
- * visible rather than being silently indistinguishable from an intentional
- * omission.
+ * An unrecognized value now also resolves to `shadow`, matching the new
+ * default direction — an env typo should not silently disable parity
+ * checking any more than an unset env should — and is logged once so the
+ * typo itself stays visible rather than being masked by the fallback.
  */
 export function resolveFleetStatusMode(env: NodeJS.ProcessEnv = process.env): FleetStatusMode {
     const raw = env[FLEET_STATUS_ENV]?.trim().toLowerCase();
-    if (!raw) return 'off';
+    if (!raw) return 'shadow';
     if (raw === 'off') return 'off';
     if (raw === 'shadow') return 'shadow';
     warnOnce(
-        `unrecognized ${FLEET_STATUS_ENV}=${raw}; treating as 'off'. ` +
-            "Valid values are 'shadow' and 'off' (default).",
+        `unrecognized ${FLEET_STATUS_ENV}=${raw}; treating as 'shadow'. ` +
+            "Valid values are 'shadow' (default) and 'off'.",
     );
-    return 'off';
+    return 'shadow';
 }
 
 /** Counters, surfaced for diagnostics and any later stats bucket. */

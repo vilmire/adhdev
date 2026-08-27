@@ -820,15 +820,14 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     try {
         configureMeshDualWrite(components.seqscribeNode ?? null);
         configureMeshReadModel(components.seqscribeNode ?? null);
-        // Phase 4 Stage 1: arm the fleet.status producer shadow. Unlike the mesh
-        // leg this defaults to OFF (ADHDEV_SEQSCRIBE_FLEET_STATUS=shadow opts
-        // in), so on every daemon that does not set the flag this call resolves
-        // the mode, stores a null-op state and changes nothing else — there is
-        // no consumer until Stage 2 adds the dashboard SUB.
+        // Phase 4 Stage 1: arm the fleet.status producer shadow. Now defaults
+        // ON like the mesh leg (ADHDEV_SEQSCRIBE_FLEET_STATUS=off opts out):
+        // Stage 3 parity below is a live consumer of the ring append, so the
+        // original "no consumer yet" reason to default off no longer holds.
         configureFleetStatusShadow(components.seqscribeNode ?? null);
         // Phase 4 Stage 3: the checker only arms when the shadow call above
-        // resolved to `shadow`. Default/off therefore creates no timer and no
-        // WS projection work.
+        // resolved to `shadow`, which is now the default — the parity loop
+        // arms fleet-wide unless a daemon explicitly opts out.
         configureFleetStatusParity(components.seqscribeNode ?? null);
         if (components.seqscribeNode) {
             // GC durable cursors older builds left behind: pre-P17 read-model

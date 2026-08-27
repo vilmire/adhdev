@@ -182,7 +182,7 @@ describe('fleet.status parity — producer append snapshot', () => {
 
     it('is completely inert in off mode, including the expectation thunk and scan/timer', () => {
         const node = openNode('off');
-        configureFleetStatusShadow(node, {});
+        configureFleetStatusShadow(node, { ADHDEV_SEQSCRIBE_FLEET_STATUS: 'off' });
         const interval = vi.spyOn(globalThis, 'setInterval');
         const build = vi.fn(() => expectation([]));
 

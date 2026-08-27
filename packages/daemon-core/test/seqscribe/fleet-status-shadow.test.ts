@@ -336,12 +336,12 @@ describe('countFleetSessions', () => {
     });
 });
 
-// ─── Mode resolution: OFF by default ────────────────────────────────────────
+// ─── Mode resolution: shadow by default (Stage 3 parity is the consumer) ────
 
 describe('resolveFleetStatusMode', () => {
-    it('defaults to off — this leg is opt-in until a consumer exists', () => {
-        expect(resolveFleetStatusMode({})).toBe('off');
-        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: '' })).toBe('off');
+    it('defaults to shadow — Stage 3 parity is a live consumer of the ring append', () => {
+        expect(resolveFleetStatusMode({})).toBe('shadow');
+        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: '' })).toBe('shadow');
     });
 
     it('accepts shadow and off, case- and whitespace-insensitively', () => {
@@ -350,9 +350,14 @@ describe('resolveFleetStatusMode', () => {
         expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: 'off' })).toBe('off');
     });
 
-    it('fails closed on an unrecognized value', () => {
-        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: 'primary' })).toBe('off');
-        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: 'shdaow' })).toBe('off');
+    it('respects an explicit opt-out', () => {
+        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: 'OFF' })).toBe('off');
+        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: ' off ' })).toBe('off');
+    });
+
+    it('falls back to shadow on an unrecognized value', () => {
+        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: 'primary' })).toBe('shadow');
+        expect(resolveFleetStatusMode({ ADHDEV_SEQSCRIBE_FLEET_STATUS: 'shdaow' })).toBe('shadow');
     });
 });
 
@@ -365,13 +370,20 @@ describe('recordFleetStatusShadow never throws', () => {
         expect(isFleetStatusShadowActive()).toBe(false);
     });
 
-    it('is a no-op when the mode is off, even with a live node', () => {
+    it('is a no-op when the mode is explicitly off, even with a live node', () => {
         const node = openNode('off');
-        configureFleetStatusShadow(node, {});
+        configureFleetStatusShadow(node, { ADHDEV_SEQSCRIBE_FLEET_STATUS: 'off' });
         expect(fleetStatusMode()).toBe('off');
         expect(isFleetStatusShadowActive()).toBe(false);
         expect(recordFleetStatusShadow(entry())).toBe(false);
         expect(fleetStatusCounters().written).toBe(0);
+    });
+
+    it('is armed by default with a live node and no env override', () => {
+        const node = openNode('default');
+        configureFleetStatusShadow(node, {});
+        expect(fleetStatusMode()).toBe('shadow');
+        expect(isFleetStatusShadowActive()).toBe(true);
     });
 
     it('is a no-op after detaching with null', () => {
