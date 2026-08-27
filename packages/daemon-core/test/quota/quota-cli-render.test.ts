@@ -16,10 +16,18 @@ import type { InstallResult, StatuslineStatus, StatuslineInstallPaths } from '..
 // appears for the actual "not set up" case, never for the unrelated
 // "installed but no snapshot yet" unavailable message.
 
+// chalk's color decision depends on ambient terminal detection (isTTY,
+// FORCE_COLOR, CI, TERM, ...), which this suite does not control. A dev
+// shell with FORCE_COLOR set makes chalk emit real ANSI escapes here even
+// under a piped test run, which every other assertion in this file already
+// tolerates via .toContain() on a substring — strip them so exact-match
+// assertions are equally indifferent to the ambient color setting.
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
 function captureLogs(fn: () => void): string[] {
     const lines: string[] = [];
     const original = console.log;
-    console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+    console.log = (...args: unknown[]) => { lines.push(args.join(' ').replace(ANSI_PATTERN, '')); };
     try {
         fn();
     } finally {
