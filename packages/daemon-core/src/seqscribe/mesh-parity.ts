@@ -40,15 +40,39 @@
  *
  * ── Window alignment ───────────────────────────────────────────────────────
  * `ledgerEntries` (the caller's argument) is a BOUNDED tail — mesh-parity-loop
- * passes at most `PARITY_TAIL` recent rows. `shadow`, read in this module, is
- * the topic's FULL retained window — unbounded. Comparing a bounded set against
- * an unbounded one is only valid inside their overlap: a shadow record older
- * than the oldest ledger row this sweep examined was never asked about, so its
- * absence from `ledgerEntries` means "not in this sweep's window", not "not in
- * the ledger". `runMeshParityCheck` tracks the oldest compared ledger
- * timestamp and skips `extra_in_shadow` for any shadow record older than it —
- * detection strength INSIDE the window is unchanged; only the ambiguous
- * outside-window case is excluded.
+ * passes at most `PARITY_TAIL` recent rows. The shadow side must be bounded to
+ * MATCH, because comparing a bounded set against an unbounded one reports every
+ * shadow record older than the tail as `extra_in_shadow` forever: the ledger row
+ * that would match it fell off the tail, not off the ledger.
+ *
+ * ★ The bound is a PINNED CANONICAL INTERVAL (seqscribe v3.5 P21), not a
+ * timestamp filter. `headOrder(topic)` pins an immutable upper bound, and
+ * `scanEntries(topic, { through, limit })` reads the closed interval below it.
+ * Both properties matter:
+ *
+ *   · CLOSED AND PINNED. The head is captured once, so records appended DURING
+ *     the sweep are outside the interval on both sides rather than racing in on
+ *     the shadow side only. The previous implementation read the full retained
+ *     topic through a fresh nonce consumer and had no upper bound at all.
+ *   · SYMMETRIC. Both sides are now bounded windows of the same shape — a tail
+ *     of the ledger, a tail of the topic — so `extra_in_shadow` means the same
+ *     thing on both: "the other store was asked and does not have it".
+ *
+ * The lower bound stays the oldest ledger timestamp compared this sweep, since
+ * the two stores are not ordered by the same key (the ledger's rowid/timestamp
+ * vs. seqscribe's canonical order) and there is no exact translation between
+ * them. What the pin removes is the unbounded TOP of the shadow side, which is
+ * where the actual false `extra_in_shadow` reports came from — a record appended
+ * after the ledger read but before the shadow read. `truncatedBelow` from the
+ * scan says the requested lower bound predates the §7.6 archive floor, i.e. the
+ * shadow tail is shorter than the ledger tail and absence below the cut carries
+ * no information; that case widens nothing and is recorded rather than flagged.
+ *
+ * ★ NO DURABLE CURSOR. `scanEntries` creates none, so the sweep no longer leaks
+ * a `stage3-mesh-parity:<nonce>` cursor row every 15 minutes — rows which, until
+ * pruned, each held the topic's archive floor open. `PARITY_CONSUMER` survives
+ * only as the prefix `pruneStaleReadModelConsumers` uses to GC what the old
+ * implementation already left on disk.
  *
  * ── §6.1 / content boundary ────────────────────────────────────────────────
  * ★ The mismatch LOG LINE carries identifiers only — `id`, `ledgerKind`, and
@@ -58,6 +82,7 @@
  * to render. The counters that reach the stats bucket are integers.
  */
 
+import type { Order, ScanResult } from 'seqscribe';
 import { LOG } from '../logging/logger.js';
 import type { SeqscribeNodeHandle } from './node.js';
 import {
@@ -170,46 +195,68 @@ function readProjected(payload: unknown): ProjectedMeshEvent | null {
     };
 }
 
+/** Per-page bound for the shadow scan. Paged to the pinned head, not capped. */
+const SHADOW_SCAN_PAGE = 500;
+
 /**
- * Read this node's own shadow records for a mesh.
+ * Hard bound on pages per sweep, so a pathologically large retained window
+ * cannot make one parity run walk the entire topic. Reaching it means the scan
+ * covered a suffix of the interval rather than all of it, which is reported as
+ * a truncated window rather than silently treated as complete.
+ */
+const SHADOW_SCAN_MAX_PAGES = 200;
+
+interface ShadowWindow {
+    records: Map<string, ProjectedMeshEvent>;
+    /** The pinned upper bound this window was read against; null = empty topic. */
+    through: Order | null;
+    /** The requested lower bound predates the §7.6 archive floor. */
+    truncatedBelow: boolean;
+}
+
+/**
+ * Read this node's own shadow records for a mesh, bounded by a pinned head.
  *
- * Uses a FRESH consumer name per call (`${PARITY_CONSUMER}:${nonce}`) rather
- * than the durable one: a durable cursor delivers only the suffix since the
- * last read, but parity needs the WHOLE retained window every time — a record
- * that went missing before the previous run would otherwise never be seen
- * again. The nonce cursor is registered, drained, and unsubscribed.
+ * ★ Uses `scanEntries` (P21) rather than a nonce consumer. The old
+ * implementation registered a throwaway durable consumer, waited two macrotask
+ * turns for the backlog to drain, and unsubscribed — which guessed at drain
+ * completion, read an unbounded window, and left a cursor row behind on every
+ * sweep. A scan is synchronous, pinned, and has no durable side effects.
+ *
+ * `through` is captured by the CALLER via `headOrder` and passed in, so the
+ * ledger and shadow sides of one comparison share a single immutable interval.
  *
  * Only records whose writer is THIS node are collected. A full-sync topic also
  * carries remote writers' records, and those have no local ledger row to match
  * — counting them as `extra_in_shadow` would report a healthy fleet as broken.
  */
-async function collectOwnShadowRecords(
+function collectOwnShadowRecords(
     handle: SeqscribeNodeHandle,
     topic: string,
-    nonce: string,
-): Promise<Map<string, ProjectedMeshEvent>> {
-    const found = new Map<string, ProjectedMeshEvent>();
-    let unsub: (() => void) | null = null;
-    try {
-        unsub = handle.node.onEntry(topic, `${PARITY_CONSUMER}:${nonce}`, (entry) => {
-            if (entry.kind !== MESH_EVENT_ENTRY_KIND) return;
-            if (entry.writer !== handle.writerId) return;
-            const projected = readProjected(entry.payload);
-            if (projected) found.set(projected.id, projected);
+    through: Order,
+): ShadowWindow {
+    const records = new Map<string, ProjectedMeshEvent>();
+    let truncatedBelow = false;
+    let after: Order | undefined;
+
+    for (let page = 0; page < SHADOW_SCAN_MAX_PAGES; page++) {
+        const result: ScanResult = handle.node.scanEntries(topic, {
+            ...(after ? { after } : {}),
+            through,
+            limit: SHADOW_SCAN_PAGE,
         });
-        // onEntry delivers the retained backlog asynchronously; yield until the
-        // queue drains. Two macrotask turns is enough for the library's own
-        // scheduling and keeps this off the hot path entirely.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        await new Promise((resolve) => setTimeout(resolve, 0));
-    } finally {
-        try {
-            unsub?.();
-        } catch {
-            /* already gone */
+        if (result.truncatedBelow) truncatedBelow = true;
+        for (const entry of result.entries) {
+            if (entry.kind !== MESH_EVENT_ENTRY_KIND) continue;
+            if (entry.writer !== handle.writerId) continue;
+            const projected = readProjected(entry.payload);
+            if (projected) records.set(projected.id, projected);
         }
+        if (result.complete || !result.nextAfter) break;
+        after = result.nextAfter;
     }
-    return found;
+
+    return { records, through, truncatedBelow };
 }
 
 function shortId(id: string): string {
@@ -231,7 +278,10 @@ export async function runMeshParityCheck(
     handle: SeqscribeNodeHandle,
     meshId: string,
     ledgerEntries: readonly ParityLedgerEntry[],
-    opts: { nonce?: string } = {},
+    // `nonce` is VESTIGIAL: it named the throwaway durable consumer the shadow
+    // read used before P21. `scanEntries` needs no consumer, so nothing reads
+    // it — accepted only so existing callers keep compiling.
+    _opts: { nonce?: string } = {},
 ): Promise<MeshParityResult> {
     const topic = meshEventsTopic(meshId);
     const result: MeshParityResult = { meshId, compared: 0, mismatches: [] };
@@ -243,13 +293,19 @@ export async function runMeshParityCheck(
         return result;
     }
 
-    let shadow: Map<string, ProjectedMeshEvent>;
+    let window: ShadowWindow;
     try {
-        shadow = await collectOwnShadowRecords(
-            handle,
-            topic,
-            opts.nonce ?? `${Date.now()}-${counters.runs}`,
-        );
+        // ★ Pin the head BEFORE reading either side. Everything appended after
+        // this point is outside the interval on both sides, so a record landing
+        // mid-sweep can no longer appear as `extra_in_shadow`.
+        const through = handle.node.headOrder(topic);
+        if (through === null) {
+            // Empty topic. Every ledger entry is missing_in_shadow, which is
+            // the honest answer — fall through with an empty window.
+            window = { records: new Map(), through: null, truncatedBelow: false };
+        } else {
+            window = collectOwnShadowRecords(handle, topic, through);
+        }
     } catch (error) {
         LOG.warn(
             'Seqscribe',
@@ -257,6 +313,7 @@ export async function runMeshParityCheck(
         );
         return result;
     }
+    const shadow = window.records;
 
     const seen = new Set<string>();
     let oldestComparedMs = Infinity;
@@ -285,17 +342,20 @@ export async function runMeshParityCheck(
         }
     }
 
-    // ★ Window alignment. `ledgerEntries` is a bounded tail (mesh-parity-loop's
-    // PARITY_TAIL), but `shadow` above is read from the FULL retained topic —
-    // unbounded. Without this, any shadow record older than the oldest ledger
-    // entry in this sweep's window is reported `extra_in_shadow` forever: the
-    // ledger row that would match it fell off the tail, not off the ledger. The
-    // ledger simply was not asked about that record this sweep, so its absence
-    // from `ledgerEntries` carries no information — skip rather than flag.
-    // A record inside the window with no matching id is still a real extra: the
-    // ledger WAS asked and does not have it. Only the outside-window case is
-    // ambiguous, so only it is excluded here — detection strength inside the
-    // window is unchanged.
+    // ★ Window alignment — the LOWER bound. The upper bound is already handled:
+    // `shadow` was read against a head pinned before either side, so nothing
+    // appended during this sweep is in it. What remains is that `ledgerEntries`
+    // is a bounded tail (mesh-parity-loop's PARITY_TAIL) while the shadow scan
+    // reaches back to the topic's retention floor, so the shadow window can
+    // start EARLIER than the ledger window.
+    //
+    // A shadow record older than the oldest ledger entry this sweep examined was
+    // never asked about: the ledger row that would match it fell off the tail,
+    // not off the ledger. Its absence from `ledgerEntries` therefore carries no
+    // information — skip rather than flag. A record inside the window with no
+    // matching id is still a real extra: the ledger WAS asked and does not have
+    // it. Only the ambiguous below-window case is excluded, so detection
+    // strength inside the window is unchanged.
     for (const [id, record] of shadow) {
         if (seen.has(id)) continue;
         const recordMs = new Date(record.timestamp).getTime();
@@ -305,6 +365,22 @@ export async function runMeshParityCheck(
             id,
             ledgerKind: record.ledgerKind || null,
         });
+    }
+
+    // ★ Archive-gap disclosure. `truncatedBelow` means the scan's lower bound
+    // sits under the §7.6 cold-archive floor: canonical scans read the hot log
+    // only, so shadow records below the cut are simply not visible to this
+    // sweep. That WEAKENS `missing_in_shadow` detection (a ledger entry whose
+    // shadow record was archived looks missing) rather than strengthening it,
+    // so it is disclosed, not acted on — the sweep's own `missing_in_shadow`
+    // findings feed backfill, and a spurious one there costs a redundant
+    // re-append, not a wrong answer.
+    if (window.truncatedBelow) {
+        LOG.info(
+            'Seqscribe',
+            `parity window mesh=${meshId} reaches below the archive floor — ` +
+                `shadow records under the cut are not visible to this sweep`,
+        );
     }
 
     // ── Counters + logging ────────────────────────────────────────────────

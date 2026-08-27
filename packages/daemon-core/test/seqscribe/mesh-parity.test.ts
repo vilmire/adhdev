@@ -132,3 +132,94 @@ describe('runMeshParityCheck — window alignment', () => {
         expect(extraIds).not.toContain('old-1');
     });
 });
+
+/**
+ * P21 adoption regression — the shadow side is now read with
+ * `scanEntries({ through })` against a head pinned by `headOrder`, replacing a
+ * throwaway nonce consumer that drained the FULL retained topic behind two
+ * macrotask yields.
+ *
+ * The three tests above already pin that the comparison's *findings* did not
+ * change. These pin the properties the pinned interval adds, which are the
+ * reason for the swap:
+ *
+ *   · a record appended DURING the sweep is above the pin and therefore cannot
+ *     surface as `extra_in_shadow` — the race the old unbounded read had
+ *   · the sweep leaves NO durable cursor behind, so it stops holding the §7.6
+ *     archive floor open every 15 minutes
+ *   · a clean pair still reports zero mismatches (the live invariant this
+ *     adoption was required not to regress)
+ */
+describe('runMeshParityCheck — pinned scan interval (P21)', () => {
+    it('reports zero mismatches for a clean ledger/shadow pair', async () => {
+        const handle = await openNode('clean-zero');
+
+        const entries: ParityLedgerEntry[] = [
+            ledgerEntry({ id: 'c-1', timestamp: '2026-01-01T00:00:00.000Z' }),
+            ledgerEntry({ id: 'c-2', timestamp: '2026-01-01T00:01:00.000Z' }),
+            ledgerEntry({ id: 'c-3', timestamp: '2026-01-01T00:02:00.000Z' }),
+        ];
+        for (const entry of entries) await writeShadowRecord(handle, entry);
+
+        const result = await runMeshParityCheck(handle, MESH_ID, entries);
+
+        // ★ The invariant the live fleet is currently holding at zero. The
+        // window rewrite must not reintroduce a single mismatch of any class.
+        expect(result.mismatches).toEqual([]);
+        expect(result.compared).toBe(3);
+    });
+
+    it('excludes a record appended after the head was pinned', async () => {
+        const handle = await openNode('pinned-head');
+
+        const entries: ParityLedgerEntry[] = [
+            ledgerEntry({ id: 'p-1', timestamp: '2026-01-01T00:00:00.000Z' }),
+        ];
+        await writeShadowRecord(handle, entries[0]!);
+
+        // A record whose TIMESTAMP is inside the compared window — so the old
+        // lower-bound-only filter would have let it through as
+        // `extra_in_shadow` — but which is appended after the ledger side was
+        // captured. Under the pinned head it sits above the interval on the
+        // shadow side too, which is the symmetry the pin buys.
+        //
+        // Appending it before the call is exactly the observable form of the
+        // race: `headOrder` is taken inside `runMeshParityCheck`, so to test
+        // "above the pin" we pin first and compare against that snapshot.
+        const through = handle.node.headOrder(meshEventsTopic(MESH_ID));
+        expect(through).not.toBeNull();
+
+        const midSweep = ledgerEntry({ id: 'p-mid-sweep', timestamp: '2026-01-01T00:00:30.000Z' });
+        await writeShadowRecord(handle, midSweep);
+
+        // The scan bounded by the pre-append head must not see the new record.
+        const scanned = handle.node.scanEntries(meshEventsTopic(MESH_ID), {
+            through: through!,
+            limit: 500,
+        });
+        const scannedIds = scanned.entries.map((e) => (e.payload as { id: string }).id);
+        expect(scannedIds).toContain('p-1');
+        expect(scannedIds).not.toContain('p-mid-sweep');
+    });
+
+    it('leaves no durable cursor behind — the sweep no longer gates archiving', async () => {
+        const handle = await openNode('no-cursor');
+        const topic = meshEventsTopic(MESH_ID);
+
+        const entries: ParityLedgerEntry[] = [
+            ledgerEntry({ id: 'nc-1', timestamp: '2026-01-01T00:00:00.000Z' }),
+        ];
+        await writeShadowRecord(handle, entries[0]!);
+
+        const before = handle.node.listConsumers(topic);
+        await runMeshParityCheck(handle, MESH_ID, entries);
+        await runMeshParityCheck(handle, MESH_ID, entries);
+        const after = handle.node.listConsumers(topic);
+
+        // ★ Two sweeps, zero new cursor rows. The nonce-consumer implementation
+        // added one per sweep (`stage3-mesh-parity:<nonce>`), each holding the
+        // topic's archive floor open until abandonment.
+        expect(after.length).toBe(before.length);
+        expect(after.filter((c) => c.consumer.startsWith('stage3-mesh-parity'))).toEqual([]);
+    });
+});

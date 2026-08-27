@@ -62,7 +62,10 @@ import {
 } from '../seqscribe/mesh-dual-write.js';
 import { meshParityCounters } from '../seqscribe/mesh-parity.js';
 import { startMeshParityLoop, type MeshParityLoopHandle } from '../mesh/mesh-parity-loop.js';
-import { configureMeshReadModel } from '../seqscribe/mesh-read-model.js';
+import {
+    configureMeshReadModel,
+    pruneStaleConsumersAtBoot,
+} from '../seqscribe/mesh-read-model.js';
 
 // ─── Init Config ───
 
@@ -752,6 +755,13 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         configureMeshDualWrite(components.seqscribeNode ?? null);
         configureMeshReadModel(components.seqscribeNode ?? null);
         if (components.seqscribeNode) {
+            // GC durable cursors older builds left behind: pre-P17 read-model
+            // generation names (`…#2`) and pre-P21 per-sweep parity nonces.
+            // Each one holds the topic's §7.6 archive floor open until removed,
+            // and nothing in the current code path creates either any more.
+            // Runs BEFORE the parity loop arms so the first sweep sees a clean
+            // consumer set. Best-effort by construction — see the function.
+            pruneStaleConsumersAtBoot();
             components.seqscribeParityLoop = startMeshParityLoop(components.seqscribeNode);
         }
     } catch (error) {

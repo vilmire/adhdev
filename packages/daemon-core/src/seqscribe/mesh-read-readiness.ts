@@ -50,10 +50,35 @@
  *     rejected entries on a diverged chain. Reading a topic mid-divergence
  *     would serve entries whose ordering the fleet has not agreed on.
  *
- *  3. CONSUMER CAUGHT UP (`lagRows === 0`). The read model's cursor must have
- *     drained everything the local store holds. Nonzero lag means the index is
- *     missing entries that exist — precisely the "absence" a suppression
- *     consumer would misread as "this never happened".
+ *  3. CONSUMER CAUGHT UP. The read model's cursor must have drained everything
+ *     the local store held when the gate first asked. Outstanding lag means the
+ *     index is missing entries that exist — precisely the "absence" a
+ *     suppression consumer would misread as "this never happened".
+ *
+ *     ★ EVENT-DRIVEN, not polled. This condition used to read
+ *     `stats().topics[t].consumers[name].lagRows === 0` on every gate
+ *     evaluation. That was a poll: it re-derived the same answer on every read,
+ *     and it raced a moving head — `lagRows` is `maxRowid - lastRowid`, so a
+ *     write landing between the drain and the check reopens the lag and flaps
+ *     the gate even though the index is not actually behind on anything it was
+ *     asked about.
+ *
+ *     seqscribe v3.5 P19 replaced it: `consumerCaughtUp(topic, consumer)`
+ *     snapshots the head AT CALL TIME and resolves once every entry through
+ *     that head has completed its callback AND advanced the durable cursor.
+ *     Later appends explicitly begin a new interval rather than deferring
+ *     resolution — which is exactly the semantics this gate wants, because the
+ *     question is "has the index absorbed the backlog", not "is the log
+ *     momentarily quiet".
+ *
+ *     ★ WHY A LATCH: the promise is async, and this gate is synchronous on hot
+ *     paths (the suppression check runs per inbound mesh event). So the gate
+ *     ARMS the promise once per mesh (`isConsumerCaughtUp`) and reads a latched
+ *     boolean thereafter. The latch is set on resolve, and cleared whenever the
+ *     consumer identity changes underneath it — a rebuild, a detach, a node
+ *     swap — because a rewound cursor invalidates the "drained" claim that the
+ *     previous resolution made. Rejection (unsubscribe, node close) also clears
+ *     it, leaving the mesh on the ledger, which is the safe direction.
  *
  *  4. PARITY CLEAN. Zero mismatches observed since boot. This is the condition
  *     the whole staged rollout was built to produce: Stage 3 exists so that the
@@ -77,6 +102,7 @@ import {
     hasMeshReadModelIndex,
     meshReadModelConsumerName,
     meshReadModelNode,
+    meshReadModelRebuildEpoch,
     primeMeshReadModel,
 } from './mesh-read-model.js';
 import { meshEventsTopic } from './topics.js';
@@ -137,6 +163,94 @@ function isTopicGranted(topic: string): boolean {
     return grantedTopics.has(topic);
 }
 
+/**
+ * Per-mesh catch-up latch (condition 3) — see the header's EVENT-DRIVEN note.
+ *
+ * `armed` is the identity the outstanding `consumerCaughtUp` promise was taken
+ * against: the node handle plus the consumer name. A resolution only counts if
+ * that identity is still current when it lands, which is what makes a rebuild
+ * (cursor rewound) or a detach (different node) invalidate an in-flight watch
+ * rather than let it latch a stale "drained" claim.
+ */
+interface CaughtUpLatch {
+    node: unknown;
+    consumerName: string;
+    /** The rebuild epoch this watch was taken at — see `meshReadModelRebuildEpoch`. */
+    epoch: number;
+    caughtUp: boolean;
+    pending: boolean;
+}
+const caughtUpLatches = new Map<string, CaughtUpLatch>();
+
+/**
+ * Ensure a catch-up watch exists for this mesh, and report whether it has
+ * resolved. Synchronous by construction — it never awaits, it only arms.
+ *
+ * Returns false while the watch is in flight, which routes the mesh to the
+ * ledger until the index has genuinely absorbed the backlog.
+ */
+function isConsumerCaughtUp(
+    node: { node: { consumerCaughtUp(topic: string, consumer: string): Promise<unknown> } },
+    topic: string,
+    meshId: string,
+    consumerName: string,
+): boolean {
+    const epoch = meshReadModelRebuildEpoch(meshId);
+    const existing = caughtUpLatches.get(meshId);
+    // ★ Identity check, not mere presence. A rebuild rewinds the cursor under
+    // the SAME consumer name — the epoch is what makes that visible; a detach
+    // swaps the node. Either invalidates a previous resolution, so the latch is
+    // rearmed rather than trusted.
+    if (
+        existing &&
+        existing.node === node &&
+        existing.consumerName === consumerName &&
+        existing.epoch === epoch
+    ) {
+        if (existing.caughtUp || existing.pending) return existing.caughtUp;
+    }
+
+    const latch: CaughtUpLatch = { node, consumerName, epoch, caughtUp: false, pending: true };
+    caughtUpLatches.set(meshId, latch);
+
+    try {
+        void node.node.consumerCaughtUp(topic, consumerName).then(
+            () => {
+                // Only latch if this watch is still the current one.
+                if (caughtUpLatches.get(meshId) !== latch) return;
+                latch.pending = false;
+                latch.caughtUp = true;
+            },
+            (error: unknown) => {
+                // unsubscribe / node close / unregistered consumer. Stay not
+                // ready and let the next evaluation rearm — the fallback is the
+                // ledger, so a lost watch costs the cutover and nothing else.
+                if (caughtUpLatches.get(meshId) !== latch) return;
+                latch.pending = false;
+                latch.caughtUp = false;
+                LOG.info(
+                    'Seqscribe',
+                    `read model catch-up watch ended mesh=${meshId}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            },
+        );
+    } catch (error) {
+        // consumerCaughtUp rejects rather than throws (P11 discipline), but a
+        // pre-P19 node would not have the method at all.
+        latch.pending = false;
+        LOG.warn(
+            'Seqscribe',
+            `read model catch-up unavailable mesh=${meshId}: ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        );
+    }
+
+    return latch.caughtUp;
+}
+
 /** Per-mesh fallback counters, so a silent degrade is visible. */
 const fallbackCounts = new Map<MeshReadFallbackReason, number>();
 let readsServedFromReplica = 0;
@@ -189,10 +303,7 @@ export function evaluateMeshReadReadiness(meshId: string): MeshReadReadiness {
         if (!hasMeshReadModelIndex(meshId)) return { ready: false, reason: 'index_missing' };
     }
 
-    let topicStats: {
-        quarantined: number;
-        consumers: Record<string, { lastRowid: number; lagRows: number }>;
-    };
+    let topicStats: { quarantined: number };
     try {
         const stats = node.node.stats();
         const entry = stats.topics[topic];
@@ -210,15 +321,17 @@ export function evaluateMeshReadReadiness(meshId: string): MeshReadReadiness {
 
     if (topicStats.quarantined > 0) return { ready: false, reason: 'quarantined' };
 
-    // ★ The name the index actually registered under, not the base constant — a
-    // rebuilt index runs under a generation-suffixed name (see
-    // `rebuildMeshReadModel`), and reading the constant's cursor would report
-    // the lag of the ABANDONED consumer instead of the live one.
+    // ★ The name the index actually registered under, not the base constant.
+    // Since P17 that IS the stable constant on every rebuild, but the index
+    // remains the authority on what it registered — reading the constant
+    // directly would report readiness for a consumer that may not exist.
     const consumerName = meshReadModelConsumerName(meshId);
     if (!consumerName) return { ready: false, reason: 'consumer_missing' };
-    const consumer = topicStats.consumers[consumerName];
-    if (!consumer) return { ready: false, reason: 'consumer_missing' };
-    if (consumer.lagRows > 0) return { ready: false, reason: 'consumer_lag' };
+    // Event-driven catch-up (P19) — see the header. Not a poll: this arms one
+    // promise per (mesh, node, consumer) and reads its latched result.
+    if (!isConsumerCaughtUp(node, topic, meshId, consumerName)) {
+        return { ready: false, reason: 'consumer_lag' };
+    }
 
     // ★ The Stage 3 evidence condition. Any mismatch since boot blocks the
     // cutover for every mesh — parity counters are process-wide, and a
@@ -271,4 +384,5 @@ export function __resetMeshReadReadinessForTests(): void {
     readsServedFromReplica = 0;
     readsServedFromLedger = 0;
     loggedTransitions.clear();
+    caughtUpLatches.clear();
 }

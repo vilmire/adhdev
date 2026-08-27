@@ -81,6 +81,24 @@ export function meshEventsTopic(meshId: string): string {
     return `mesh.${safeMeshId(meshId)}.events`;
 }
 
+/**
+ * Recover the mesh segment from a mesh events topic, or null if not one.
+ *
+ * ★ Returns the SANITIZED segment, not necessarily the original meshId —
+ * `safeMeshId` is not injective (two ids differing only in charter-unsafe
+ * characters collapse to one segment). That is fine for the callers that have
+ * it (diagnostics, per-topic housekeeping) and wrong for anything that would
+ * feed the result back into an id comparison — use the topic itself as the key
+ * there, never this.
+ */
+export function meshIdFromEventsTopic(topic: string): string | null {
+    if (!topic.startsWith('mesh.') || !topic.endsWith('.events')) return null;
+    const segment = topic.slice('mesh.'.length, -'.events'.length);
+    // A nested dot would mean this is some other `mesh.*.…` topic shape.
+    if (segment.length === 0 || segment.includes('.')) return null;
+    return segment;
+}
+
 /** Cross-daemon assistant journal — the Phase 1 greenfield consumer. */
 export const ASSISTANT_JOURNAL_TOPIC = 'assistant.journal';
 

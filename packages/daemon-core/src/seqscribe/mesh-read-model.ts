@@ -27,14 +27,14 @@
  * remains the system of record for the full entry through Stage 4A and beyond.
  *
  * ── Why materialize at all, instead of reading the topic per query ─────────
- * The library's read surface for a `full`-retention topic is `onEntry`: a
- * durable, at-least-once, cursor-advancing consumer. It is a STREAM, not a
- * query interface — there is no "give me entries of kind X since T". Running a
- * fresh nonce consumer per query (what the parity checker does, deliberately,
- * because parity needs the whole window every time) would replay the entire
- * retained log on every call. These consumers sit on hot paths — the
- * suppression gate runs per inbound mesh event — so the log is consumed ONCE
- * into an in-memory index, incrementally, and queries hit the index.
+ * `onEntry` is a STREAM, not a query interface — there is no "give me entries
+ * of kind X since T". `scanEntries` (v3.5 P21) does read ranges, but it is a
+ * bounded LINEAR scan in canonical order, with no index on kind/taskId/session:
+ * answering one suppression question would still walk the window. These
+ * consumers sit on hot paths — the suppression gate runs per inbound mesh event
+ * — so the log is consumed ONCE into an in-memory index, incrementally, and
+ * queries hit the index. Parity, which asks a whole-window question every 15
+ * minutes rather than a keyed question per event, uses the scan instead.
  *
  * ── Ordering: timestamp first, canonical order as the tie-break ───────────
  * ★ The sort is `(timestamp ASC, canonical order ASC)`, and the ORDER of those
@@ -69,21 +69,25 @@ import { orderCompare, orderOf, type LogEntry, type Order } from 'seqscribe';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { MESH_EVENT_ENTRY_KIND, type ProjectedMeshEvent } from './mesh-event-projection.js';
-import { meshEventsTopic } from './topics.js';
+import { PARITY_CONSUMER } from './mesh-parity.js';
+import { meshEventsTopic, meshIdFromEventsTopic } from './topics.js';
 import type { SeqscribeNodeHandle } from './node.js';
 
 /**
  * Durable consumer name for the read model's tail.
  *
  * ★ DISTINCT from `PARITY_CONSUMER` (mesh-parity.ts), and the distinction is
- * required rather than stylistic. A consumer name owns a cursor; two features
- * sharing one would each advance it past the other's unread entries. It is also
- * distinct from parity's *nonce* consumers, which are created and unsubscribed
- * per run precisely because parity wants a full replay — this one must NOT
- * replay, it must resume.
+ * required rather than stylistic: a consumer name owns a cursor, and two
+ * features sharing one would each advance it past the other's unread entries.
+ * Parity no longer registers a consumer at all (it scans — see mesh-parity.ts),
+ * so `PARITY_CONSUMER` survives only as a GC prefix; the rule still stands for
+ * any future consumer.
  *
- * Renaming this replays the whole retained log once, which is safe (the index
- * dedupes by id) but costs a rebuild.
+ * ★ STABLE ACROSS REBUILDS. A rebuild rewinds this cursor via `resetConsumer`
+ * rather than minting a new name, so this constant is the only read-model
+ * consumer name that ever exists. Renaming it strands the old cursor (holding
+ * the topic's archive floor open) and replays the whole retained log once —
+ * safe, since the index dedupes by id, but it costs a rebuild for nothing.
  */
 export const READ_MODEL_CONSUMER = 'stage4a-mesh-read-model';
 
@@ -169,28 +173,52 @@ function emptyIndex(consumerName: string): MeshIndex {
 }
 
 /**
- * Rebuild generation per mesh, appended to the consumer name.
+ * Coverage reported by the most recent rebuild, per mesh.
  *
- * ★ A rebuild MUST replay the whole retained log, and reusing the consumer name
- * would not: a consumer name owns a durable cursor, and re-registering under
- * the same name resumes from where the cursor sits — which, for a caught-up
- * index, is the end. The rebuilt index would come back EMPTY, and since the
- * readiness gate requires `lagRows === 0` (which a fresh cursor at the end also
- * satisfies) it would then happily serve reads from an empty replica. That is
- * the worst available failure: not a fallback, but confident wrong answers.
+ * ★ A rebuild MUST replay the whole retained log, and merely re-registering the
+ * same consumer name would not: a consumer name owns a durable cursor, and
+ * re-registering under the same name resumes from where the cursor sits —
+ * which, for a caught-up index, is the end. The rebuilt index would come back
+ * EMPTY, and since the readiness gate requires the consumer to be caught up
+ * (which a cursor already at the end also satisfies) it would then happily
+ * serve reads from an empty replica. That is the worst available failure: not a
+ * fallback, but confident wrong answers.
  *
- * The library exposes no cursor reset on its public node surface, and
- * `oss/vendor/seqscribe` is out of scope to change here, so a rebuild registers
- * under a NEW name (`…#2`, `…#3`), which has no cursor and therefore replays
- * from the beginning. The cost is one abandoned cursor row per rebuild, which
- * also gates archiving for that topic — acceptable because rebuilds are a
- * recovery path, not a steady-state operation.
+ * ★ HOW THIS IS SOLVED: `node.resetConsumer(topic, name, { from })`
+ * (seqscribe proposals-v3.5 P17) rewinds the durable cursor in place, so the
+ * rebuild reuses the STABLE name and replays. This replaced an earlier
+ * workaround that appended a generation suffix (`…#2`, `…#3`) to force a fresh
+ * cursor — correct in effect, but it leaked one abandoned cursor row per
+ * rebuild, and an abandoned cursor gates §7.6 archiving for that topic
+ * indefinitely. `pruneConsumers` (P18) now GCs whatever those older builds
+ * already left behind; see `pruneStaleReadModelConsumers`.
+ *
+ * `resetConsumer` is INACTIVE-ONLY (it throws on a registered consumer), so the
+ * rebuild path must unsubscribe before resetting — see `rebuildMeshReadModel`.
+ *
+ * `archivedRows` is the reset's coverage metadata: non-zero means
+ * "earliest-retained" is the §7.6 archive floor rather than genesis, i.e. rows
+ * below the cut exist and are NOT replayed. Recorded per mesh so the rebuild's
+ * actual coverage is reportable rather than assumed.
  */
-const rebuildGeneration = new Map<string, number>();
+const lastRebuildCoverage = new Map<string, { archivedRows: number; replayFromRowid: number }>();
 
-function consumerNameFor(meshId: string): string {
-    const generation = rebuildGeneration.get(meshId) ?? 0;
-    return generation === 0 ? READ_MODEL_CONSUMER : `${READ_MODEL_CONSUMER}#${generation + 1}`;
+/**
+ * Monotonic rebuild counter per mesh.
+ *
+ * ★ This is what the generation suffix USED to be, minus the durable cost. The
+ * suffix existed to force a replay AND, incidentally, gave the readiness gate a
+ * changing consumer name it could notice. Now that the name is stable, the gate
+ * needs some other way to see that a rebuild rewound the cursor underneath a
+ * catch-up watch it had already resolved — otherwise it would keep serving from
+ * an index that is replaying from the floor. This epoch is that signal: it is
+ * process-local, costs nothing durable, and the gate keys its latch on it.
+ */
+const rebuildEpoch = new Map<string, number>();
+
+/** How many times this mesh's read model has been rebuilt in this process. */
+export function meshReadModelRebuildEpoch(meshId: string): number {
+    return rebuildEpoch.get(meshId) ?? 0;
 }
 
 function addToBucket(map: Map<string, Set<string>>, key: string | null, id: string): void {
@@ -306,7 +334,10 @@ function ensureIndex(meshId: string): MeshIndex | null {
     const topic = meshEventsTopic(meshId);
     if (!node.topics.some((d) => d.topic === topic)) return null;
 
-    const index = emptyIndex(consumerNameFor(meshId));
+    // ★ The STABLE name, always. A rebuild rewinds this cursor via
+    // `resetConsumer` rather than registering a new name — see
+    // `lastRebuildCoverage` and `rebuildMeshReadModel`.
+    const index = emptyIndex(READ_MODEL_CONSUMER);
     try {
         index.unsub = node.node.onEntry(topic, index.consumerName, (entry) => {
             ingest(index, entry);
@@ -464,13 +495,22 @@ export function meshReadModelMeshIds(): string[] {
 }
 
 /**
- * Drop a mesh's index and re-register its consumer.
+ * Drop a mesh's index and replay its durable consumer from the retained floor.
  *
  * The recovery path for a cursor anomaly — `consumer_abandoned`, or a lag that
  * will not close. Rebuilding is safe at any time: the index is derived state,
  * and until it is ready again the readiness gate routes reads to the ledger.
+ *
+ * ★ ORDER IS LOAD-BEARING: unsubscribe → reset → re-register. `resetConsumer`
+ * throws `ERR_MISUSE` on an ACTIVE consumer (the reset would otherwise race the
+ * hub's own cursor writes), so the live consumer must be gone before the rewind.
+ * Getting this backwards throws rather than corrupting, but the rebuild would
+ * then silently not happen.
+ *
+ * Returns the reset's coverage metadata, or null when there was nothing to
+ * reset (no node, or the topic is not defined on this node yet).
  */
-export function rebuildMeshReadModel(meshId: string): void {
+export function rebuildMeshReadModel(meshId: string): MeshReadModelRebuildCoverage | null {
     const index = indexes.get(meshId);
     if (index) {
         try {
@@ -480,10 +520,161 @@ export function rebuildMeshReadModel(meshId: string): void {
         }
         indexes.delete(meshId);
     }
-    // ★ Bump the generation so the replacement registers under a NEW consumer
-    // name and therefore REPLAYS rather than resuming. See `consumerNameFor`.
-    rebuildGeneration.set(meshId, (rebuildGeneration.get(meshId) ?? 0) + 1);
+
+    const node = activeNode;
+    if (!node) return null;
+    const topic = meshEventsTopic(meshId);
+    if (!node.topics.some((d) => d.topic === topic)) return null;
+
+    // Bumped before the reset so a failed reset still invalidates the gate's
+    // catch-up latch — the index is gone either way.
+    rebuildEpoch.set(meshId, (rebuildEpoch.get(meshId) ?? 0) + 1);
+
+    let coverage: MeshReadModelRebuildCoverage | null = null;
+    try {
+        // P17: rewind the STABLE cursor to the retained floor so the
+        // re-registration below replays instead of resuming at head.
+        const reset = node.node.resetConsumer(topic, READ_MODEL_CONSUMER, {
+            from: 'earliest-retained',
+        });
+        coverage = {
+            consumerName: READ_MODEL_CONSUMER,
+            existed: reset.existed,
+            replayFromRowid: reset.replayFromRowid,
+            archivedRows: reset.archivedRows,
+        };
+        lastRebuildCoverage.set(meshId, {
+            archivedRows: reset.archivedRows,
+            replayFromRowid: reset.replayFromRowid,
+        });
+        if (reset.archivedRows > 0) {
+            // Not an error: the §7.6 archive floor is the honest replay bound.
+            // Worth a line because the rebuilt index is complete only ABOVE the
+            // cut — completeness below it is the snapshot basis's job.
+            LOG.info(
+                'Seqscribe',
+                `read model rebuild mesh=${meshId} replays from the archive floor ` +
+                    `(rowid=${reset.replayFromRowid}, ${reset.archivedRows} archived rows not replayed)`,
+            );
+        }
+    } catch (error) {
+        // A failed reset means the re-registration below would RESUME at head
+        // and produce a confidently empty index. Leave the index unregistered
+        // instead: the readiness gate then keeps this mesh on the ledger.
+        warnOnce(
+            `read model rebuild could not reset cursor topic=${topic}: ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        );
+        return null;
+    }
+
+    // ★ Re-register PROMPTLY: a reset materializes the cursor row, which gates
+    // §7.6 archiving from this moment until the consumer drains.
     ensureIndex(meshId);
+    return coverage;
+}
+
+/** What a rebuild's `resetConsumer` actually installed — see `rebuildMeshReadModel`. */
+export interface MeshReadModelRebuildCoverage {
+    /** The stable durable name the replay was installed on. */
+    consumerName: string;
+    /** True when a durable cursor row already existed before the reset. */
+    existed: boolean;
+    /** The installed cursor (0 = the whole retained hot log). */
+    replayFromRowid: number;
+    /** Cold-archived rows BELOW the replay floor — non-zero ⇒ not genesis. */
+    archivedRows: number;
+}
+
+/** Coverage reported by this mesh's most recent rebuild, for diagnostics. */
+export function meshReadModelRebuildCoverage(
+    meshId: string,
+): { archivedRows: number; replayFromRowid: number } | null {
+    return lastRebuildCoverage.get(meshId) ?? null;
+}
+
+/**
+ * GC durable cursors left behind by older builds and by parity sweeps.
+ *
+ * ★ Two families accumulate on `mesh.<id>.events`, and both gate §7.6
+ * archiving for as long as they exist:
+ *
+ *   · `stage4a-mesh-read-model#N` — the pre-P17 rebuild workaround. Every
+ *     rebuild in an older daemon minted a new generation name; those rows
+ *     survive the process that made them. Nothing registers them any more, so
+ *     every one of them is garbage.
+ *   · `stage3-mesh-parity:<nonce>` — parity's per-sweep nonce consumers.
+ *     Unsubscribing drops the callback but never the row, so a sweep every 15
+ *     minutes leaves ~96 rows per mesh per day.
+ *
+ * `pruneConsumers` is inactive-only, so the live `stage4a-mesh-read-model`
+ * consumer and any parity nonce mid-sweep are never eligible — the prefix
+ * filters below are belt-and-braces on top of that guard. Called once at boot.
+ *
+ * Never throws: this is housekeeping, and a daemon that cannot GC cursors is
+ * still a correct daemon.
+ */
+export function pruneStaleReadModelConsumers(meshId: string): string[] {
+    const node = activeNode;
+    if (!node) return [];
+    const topic = meshEventsTopic(meshId);
+    if (!node.topics.some((d) => d.topic === topic)) return [];
+    return pruneTopicConsumers(node, topic, meshId);
+}
+
+/**
+ * Boot-time GC across every mesh events topic this node already has defined.
+ *
+ * ★ Driven by the node's OWN topic list rather than by a mesh roster, because
+ * `seqscribe/**` may not import `mesh/**` (check:boundaries) — and the topic
+ * list is the better source anyway: a cursor can only exist on a topic that was
+ * defined, so this covers exactly the meshes that could have leaked one.
+ *
+ * Topics defined later (a mesh created after boot) accumulate nothing to GC in
+ * this process, since the leak sources are gone — the read model no longer
+ * mints generation names and parity no longer registers a consumer at all.
+ */
+export function pruneStaleConsumersAtBoot(): number {
+    const node = activeNode;
+    if (!node) return 0;
+    let total = 0;
+    for (const definition of node.topics) {
+        const meshId = meshIdFromEventsTopic(definition.topic);
+        if (meshId === null) continue;
+        total += pruneTopicConsumers(node, definition.topic, meshId).length;
+    }
+    return total;
+}
+
+function pruneTopicConsumers(
+    node: SeqscribeNodeHandle,
+    topic: string,
+    meshId: string,
+): string[] {
+    const pruned: string[] = [];
+    try {
+        // ★ The generation prefix is `…#`, NOT the bare constant: the bare
+        // constant is a prefix of itself, and pruning the live consumer's own
+        // row would rewind the read model to a full replay on next boot.
+        pruned.push(...node.node.pruneConsumers(topic, { prefix: `${READ_MODEL_CONSUMER}#` }));
+        pruned.push(...node.node.pruneConsumers(topic, { prefix: `${PARITY_CONSUMER}:` }));
+    } catch (error) {
+        warnOnce(
+            `consumer prune failed topic=${topic}: ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        );
+        return pruned;
+    }
+
+    if (pruned.length > 0) {
+        LOG.info(
+            'Seqscribe',
+            `pruned ${pruned.length} stale durable consumer(s) mesh=${meshId} — archive gate released`,
+        );
+    }
+    return pruned;
 }
 
 /** The consumer name a mesh's index is currently registered under. */
@@ -501,7 +692,8 @@ export function __resetMeshReadModelForTests(): void {
         }
     }
     indexes.clear();
-    rebuildGeneration.clear();
+    lastRebuildCoverage.clear();
+    rebuildEpoch.clear();
     activeNode = null;
     warnedOnce.clear();
 }
