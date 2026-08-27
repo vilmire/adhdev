@@ -2,3 +2,36 @@
 # Force LF so Windows checkouts (core.autocrlf=true) don't munge them into CRLF,
 # which otherwise makes them perpetually dirty and blocks submodule update / ff.
 packages/daemon-standalone/vendor/** text eol=lf
+
+# Source files must stay LF on every platform. On a win32 checkout with
+# core.autocrlf=true, these would otherwise land as CRLF, which breaks any
+# test that reads its own source with fs.readFileSync and matches literal
+# "\n" (regex/substring) against it — a structural, not incidental, failure.
+# Example: test/components/dashboard/history-modal-switch-confirm.test.ts
+# reads HistoryModal.tsx and regex-matches multi-line "\n" sequences; CRLF
+# would silently fail every match.
+# Extension list is explicit (not `* text=auto`) because this repo also
+# tracks real binaries (jpg/png/node/dylib/so/dll/bin) that a blanket rule
+# risks misclassifying.
+*.ts eol=lf
+*.tsx eol=lf
+*.mjs eol=lf
+*.mts eol=lf
+*.json eol=lf
+*.md eol=lf
+
+# Known binaries: exclude from any text/eol normalization regardless of
+# extension heuristics (belt-and-suspenders alongside the explicit list above).
+*.jpg -text
+*.jpeg -text
+*.png -text
+*.node -text
+*.dylib -text
+*.so -text
+*.so.* -text
+*.dll -text
+*.map -text
+
+# This fixture is an intentional raw PTY capture whose exact bytes (including
+# embedded CRLF sequences) are the thing under test — never renormalize it.
+packages/daemon-core/test/sdk/fixtures/cursor-agent-buffer-raw.bin -text
