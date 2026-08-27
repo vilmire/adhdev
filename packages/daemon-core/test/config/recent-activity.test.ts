@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import path from 'path';
 import {
   appendRecentActivity,
   buildRecentActivityKey,
@@ -44,17 +45,26 @@ describe('recent-activity', () => {
       workspace: './tmp/project',
     });
 
-    expect(key).toBe(`cli:claude-cli:${process.cwd()}/tmp/project`);
+    // normalizeWorkspace resolves via path.resolve(), which yields
+    // OS-native separators — assert against that instead of a hardcoded
+    // '/'-joined literal so this holds on win32 too.
+    expect(key).toBe(`cli:claude-cli:${path.resolve('./tmp/project')}`);
   });
 
   it('deduplicates entries by computed id and keeps newest first', () => {
+    // normalizeWorkspace() resolves the workspace through path.resolve(),
+    // which reinterprets a bare POSIX-style '/tmp/...' fixture as
+    // drive-relative on win32 (e.g. 'C:\tmp\...'). Use path.resolve() to
+    // build the fixtures so the round-trip holds on every platform.
+    const oldWorkspace = path.resolve('/tmp/old');
+    const newWorkspace = path.resolve('/tmp/new');
     const state = createState();
     const first = appendRecentActivity(state, {
       kind: 'cli',
       providerType: 'codex-cli',
       providerName: 'Codex CLI',
       providerSessionId: 'sess_1',
-      workspace: '/tmp/old',
+      workspace: oldWorkspace,
       title: 'older',
       lastUsedAt: 10,
     });
@@ -63,14 +73,14 @@ describe('recent-activity', () => {
       providerType: 'codex-cli',
       providerName: 'Codex CLI',
       providerSessionId: 'sess_1',
-      workspace: '/tmp/new',
+      workspace: newWorkspace,
       title: 'newer',
       lastUsedAt: 20,
     });
 
     expect(second.recentActivity).toHaveLength(1);
     expect(second.recentActivity[0]?.title).toBe('newer');
-    expect(second.recentActivity[0]?.workspace).toBe('/tmp/new');
+    expect(second.recentActivity[0]?.workspace).toBe(newWorkspace);
   });
 
   it('sorts getRecentActivity by lastUsedAt descending', () => {

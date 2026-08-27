@@ -210,14 +210,22 @@ describe('resolveConfigDir test-runtime fail-fast gate', () => {
   it('does NOT throw with an unset pin when $HOME is a tmp dir (fallback lands outside live state)', () => {
     const tmpHome = mkdtempSync(join(tmpdir(), 'adhdev-cfgdir-unset-'));
     const originalHome = process.env.HOME;
+    // os.homedir() reads USERPROFILE on win32, not HOME — relocating only
+    // HOME leaves homedir() pointed at the real live profile and trips the
+    // fail-fast gate. Relocate both so the intent (isolated tmp home) holds
+    // on every platform.
+    const originalUserProfile = process.env.USERPROFILE;
     try {
       process.env.HOME = tmpHome;
+      process.env.USERPROFILE = tmpHome;
       delete process.env.ADHDEV_CONFIG_DIR;
       expect(() => resolveConfigDir()).not.toThrow();
       expect(resolveConfigDir()).toBe(join(tmpHome, '.adhdev'));
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = originalUserProfile;
       rmSync(tmpHome, { recursive: true, force: true });
     }
   });
