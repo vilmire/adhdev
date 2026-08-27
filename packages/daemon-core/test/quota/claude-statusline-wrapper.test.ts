@@ -91,13 +91,24 @@ describe('statusline wrapper passthrough', () => {
     it('preserves ANSI escapes and the absence of a trailing newline', async () => {
         // Real statuslines end with a colour reset and no newline; adding one
         // would visibly change the user's prompt.
-        const result = await runWrapper(`printf "$(printf '\\033[32m')ok$(printf '\\033[0m')"`);
+        // printf's own backslash-x1b hex escape does this without nested $(...)
+        // command substitution, which only a POSIX shell understands --
+        // the wrapper spawns cmd.exe (not a POSIX shell) on win32, so a
+        // substitution-free command also runs unchanged there.
+        const result = await runWrapper(`printf "\x1b[32mok\x1b[0m"`);
 
         expect(result.stdout).toBe('[32mok[0m');
         expect(result.stdout.endsWith('\n')).toBe(false);
     });
 
-    it('feeds the original command the statusline JSON on stdin', async () => {
+    // win32: the wrapper spawns cmd.exe (not a POSIX shell) as the shell, so
+    // `input=$(cat)` / `sed` / `|` here would need a from-scratch cmd.exe
+    // rewrite rather than a small platform branch. "passes stdin through
+    // unmodified" below already proves full stdin reaches the child on every
+    // platform using a shell-metacharacter-free command, which is the
+    // property this test cares about; skip the POSIX-toolchain-specific
+    // extraction on win32 rather than fabricate an equivalent.
+    it.skipIf(process.platform === 'win32')('feeds the original command the statusline JSON on stdin', async () => {
         // The owner's real statusline does `input=$(cat)`. If the wrapper
         // consumed stdin without re-feeding it, this reads empty.
         const result = await runWrapper(`input=$(cat); printf "got:%s" "$(echo "$input" | head -c 20)"`);
@@ -112,7 +123,7 @@ describe('statusline wrapper passthrough', () => {
         expect(JSON.parse(result.stdout)).toEqual(STATUSLINE_INPUT);
     });
 
-    it('supports a shell one-liner with pipes and quoting', async () => {
+    it.skipIf(process.platform === 'win32')('supports a shell one-liner with pipes and quoting', async () => {
         const result = await runWrapper(
             `input=$(cat); printf "dir=%s" "$(echo "$input" | sed -n 's/.*"current_dir":"\\([^"]*\\)".*/\\1/p')"`,
         );
@@ -126,7 +137,12 @@ describe('statusline wrapper resilience', () => {
         // Claude Code blanks the status line on a non-zero exit. The user's
         // command failing is their business; our wrapper must not convert a
         // partial prompt into an empty one.
-        const result = await runWrapper('printf "partial"; exit 3');
+        // Unconditional statement separator differs by shell: the wrapper
+        // spawns cmd.exe on win32 (';' is not a separator there — it would
+        // be passed straight through as a literal argument character), and
+        // /bin/sh elsewhere.
+        const seq = process.platform === 'win32' ? '&' : ';';
+        const result = await runWrapper(`printf "partial"${seq} exit 3`);
 
         expect(result.stdout).toBe('partial');
         expect(result.code).toBe(0);
@@ -165,7 +181,9 @@ describe('statusline wrapper resilience', () => {
     });
 
     it('forwards the original command stderr without polluting stdout', async () => {
-        const result = await runWrapper('printf "out"; printf "warn" >&2');
+        // See the separator note above — cmd.exe on win32, /bin/sh elsewhere.
+        const seq = process.platform === 'win32' ? '&' : ';';
+        const result = await runWrapper(`printf "out"${seq} printf "warn" >&2`);
 
         expect(result.stdout).toBe('out');
         expect(result.stderr).toContain('warn');

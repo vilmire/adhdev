@@ -385,9 +385,19 @@ export function installClaudeStatusline(env: NodeJS.ProcessEnv = process.env): I
  * Quoted because the path may contain spaces, and executed via `node` rather
  * than relying on the executable bit and shebang, which do not apply on
  * Windows.
+ *
+ * Plain double-quote wrapping, not JSON.stringify: JSON escapes backslashes
+ * (`\` -> `\\`), and extractScriptPathFromCommand's quote-stripping regex
+ * does not reverse that escaping — it takes whatever is between the quotes
+ * verbatim. Every Windows path is backslashes, so JSON.stringify silently
+ * desynced the round trip (isWrapperCommand/dangling-detection compared a
+ * doubled-backslash string against the real single-backslash path) on every
+ * Windows install. Neither form has ever handled an embedded literal `"`
+ * correctly against that regex, so dropping JSON.stringify's quote-escaping
+ * loses nothing there.
  */
 export function buildWrapperCommand(wrapperFile: string): string {
-    return `node ${JSON.stringify(wrapperFile)}`;
+    return `node "${wrapperFile}"`;
 }
 
 function readBackup(file: string): StatuslineBackup | null {
