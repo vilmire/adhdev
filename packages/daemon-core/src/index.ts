@@ -1037,6 +1037,9 @@ export {
 export {
   configureMeshDualWrite,
   recordMeshEventShadow,
+  // The cross-process REPAIR path: mirrors ledger entries appended by a process
+  // with no armed shadow leg (the mcp-server). Driven by the parity loop.
+  backfillMeshEventShadow,
   resolveMeshDualWriteMode,
   meshDualWriteCounters,
   meshDualWriteInflight,
@@ -1052,6 +1055,7 @@ export {
   MAX_INFLIGHT,
   type MeshDualWriteMode,
   type MeshDualWriteCounters,
+  type MeshShadowEntry,
 } from './seqscribe/mesh-dual-write.js';
 // Phase 2 Stage 4A: the materialized read model and its per-mesh readiness gate.
 export {
@@ -1122,6 +1126,8 @@ export {
   startMeshParityLoop,
   PARITY_INTERVAL_MS,
   PARITY_TAIL,
+  PARITY_BACKFILL_CAP,
+  PARITY_BACKFILL_FAILURE_LIMIT,
   type MeshParityLoopHandle,
   type MeshParityLoopOptions,
 } from './mesh/mesh-parity-loop.js';

@@ -57,6 +57,7 @@ describe('summarizeSeqscribeStats', () => {
             dualWrite: false,
             dualWriteFailedBucket: 0,
             dualWriteDroppedBucket: 0,
+            dualWriteBackfilledBucket: 0,
             parityMismatchBucket: 0,
             parityRan: false,
         });
@@ -67,7 +68,7 @@ describe('summarizeSeqscribeStats', () => {
             { topics: { 'assistant.journal': topic() }, peers: [] },
             {
                 authorityEnabled: true,
-                dualWrite: { active: true, failed: 4, dropped: 250 },
+                dualWrite: { active: true, failed: 4, dropped: 250, backfilled: 40 },
                 parity: { runs: 3, mismatches: 12 },
             },
         );
@@ -82,6 +83,14 @@ describe('summarizeSeqscribeStats', () => {
         expect(summary.parityMismatchBucket).toBe(3);
         expect(summary.dualWriteFailedBucket).not.toBe(4);
         expect(summary.parityMismatchBucket).not.toBe(12);
+        // The backfill counter follows the SAME bucket discipline. It has to:
+        // on a machine running mesh MCP tools it is the counter that ticks most,
+        // since every mcp-server append is repaired here — passing it through
+        // raw would defeat the status-frame dedup single-handedly.
+        // 40 → under the 100 threshold → ordinal 3 (distinct from dropped's 250,
+        // which lands at 4), so this pins the bucketing rather than a constant.
+        expect(summary.dualWriteBackfilledBucket).toBe(3);
+        expect(summary.dualWriteBackfilledBucket).not.toBe(40);
     });
 
     it('emits no topic names, peer ids or other identifiers', () => {

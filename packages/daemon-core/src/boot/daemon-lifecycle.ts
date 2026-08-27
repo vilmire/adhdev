@@ -654,6 +654,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                         active: isMeshDualWriteActive(),
                         failed: dual.failed,
                         dropped: dual.dropped,
+                        backfilled: dual.backfilled,
                     },
                     parity: { runs: parity.runs, mismatches: parity.mismatches },
                 });

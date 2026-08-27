@@ -89,6 +89,18 @@ export interface SeqscribeStatusSummary {
     /** Bucketed count of shadow records dropped by load-shedding. 0 = none. */
     dualWriteDroppedBucket: number;
     /**
+     * Bucketed count of records mirrored LATE by the parity backfill.
+     *
+     * ★ Nonzero is EXPECTED and healthy on a machine that runs mesh MCP tools:
+     * the mcp-server process appends to the shared ledger with no armed shadow
+     * leg of its own, so the daemon repairs those entries on its parity sweep
+     * (see the process-boundary note in mesh-dual-write.ts). Read it together
+     * with `parityMismatchBucket` — backfill nonzero + mismatch settling is the
+     * repair working; mismatch persisting while this stays 0 is the repair
+     * itself being broken.
+     */
+    dualWriteBackfilledBucket: number;
+    /**
      * Bucketed count of parity mismatches observed since boot.
      *
      * ★ This is the number Stage 4 needs at 0 before the read-path cutover.
@@ -107,6 +119,8 @@ export interface SummarizeOptions {
         active: boolean;
         failed: number;
         dropped: number;
+        /** Records mirrored late by the parity backfill. Omitted → 0. */
+        backfilled?: number;
     };
     /** Stage 3 parity counters. Omitted → reported as never-run. */
     parity?: {
@@ -157,6 +171,7 @@ export function summarizeSeqscribeStats(
         dualWrite: opts.dualWrite?.active ?? false,
         dualWriteFailedBucket: bucket(opts.dualWrite?.failed ?? 0, BACKLOG_BUCKETS),
         dualWriteDroppedBucket: bucket(opts.dualWrite?.dropped ?? 0, BACKLOG_BUCKETS),
+        dualWriteBackfilledBucket: bucket(opts.dualWrite?.backfilled ?? 0, BACKLOG_BUCKETS),
         parityMismatchBucket: bucket(opts.parity?.mismatches ?? 0, BACKLOG_BUCKETS),
         parityRan: (opts.parity?.runs ?? 0) > 0,
     };

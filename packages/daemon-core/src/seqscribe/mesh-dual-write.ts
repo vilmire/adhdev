@@ -75,6 +75,42 @@
  * second side updates, and the library then runs an immediate HAVE round so an
  * existing backlog converges without waiting for anti-entropy. Both endpoints
  * must run a P15 build, which the vendored-fleet bump guarantees.
+ *
+ * ── ★ The PROCESS boundary, and why a backfill exists ──────────────────────
+ * `activeNode` above is MODULE state, so the shadow leg is armed per PROCESS,
+ * not per machine. `configureMeshDualWrite` has exactly one arming caller —
+ * `boot/daemon-lifecycle.ts` — which means the shadow is armed in the DAEMON
+ * process and nowhere else.
+ *
+ * That would be complete if the daemon were the only writer. It is not. The
+ * **mcp-server process** (`oss/packages/mcp-server`) imports `appendLedgerEntry`
+ * from daemon-core and calls it IN ITS OWN PROCESS — mesh tools for missions,
+ * graph gates/enqueue decisions, dispatch, operating notes and more, ~20 ledger
+ * kinds across its tool modules. It boots no daemon lifecycle and opens no
+ * seqscribe node. So in that process `activeNode` is null forever, and
+ * `recordMeshEventShadow` returns at its first line.
+ *
+ * The result was a SILENT, STRUCTURAL divergence: those entries reached the
+ * shared SQLite ledger (both processes share it) but were never mirrored, so
+ * parity reported them as `missing_in_shadow` on every sweep — a permanent
+ * backlog that reads like a broken replication leg while the leg is in fact
+ * working perfectly for every append the daemon itself makes.
+ *
+ * ★ The mcp-server cannot simply arm its own leg: the seqscribe DB is
+ * SINGLE-OWNER-LOCKED and the daemon holds the lock, so a second node in a
+ * second process cannot open. Routing every append over IPC to the daemon is
+ * the structurally clean fix, but it is ~68 call sites and a new failure mode on
+ * the ledger hot path; it is recorded as future work rather than done here.
+ *
+ * What ships instead is a REPAIR: the daemon — the process that does hold the
+ * node — mirrors the entries it finds missing, from the ledger both processes
+ * share. See `backfillMeshEventShadow` below and `mesh/mesh-parity-loop.ts`.
+ *
+ * ★ Detection is NOT weakened to accommodate this. The parity check still
+ * reports every missing entry and still increments its counters; the backfill
+ * runs AFTERWARDS and is counted in its own bucket. A mismatch that survives a
+ * backfill into the next sweep is therefore a REAL replication failure, cleanly
+ * distinguishable from the expected cross-process gap.
  */
 
 import { LOG } from '../logging/logger.js';
@@ -143,6 +179,31 @@ export interface MeshDualWriteCounters {
     /** Meshes whose topic could not be defined (fatal for that mesh only). */
     topicErrors: number;
     /**
+     * Records mirrored LATE, by the parity loop's backfill, rather than inline
+     * at `appendLedgerEntry` time (mesh/mesh-parity-loop.ts).
+     *
+     * ★ Counted separately from `written` ON PURPOSE, and the distinction is the
+     * whole point of the counter. `written` means "the shadow leg was armed in
+     * the process that made the ledger write". A record that only ever arrives
+     * through `backfilled` means the ORIGINATING PROCESS had no armed shadow —
+     * which today is the structural, expected condition for every ledger append
+     * made by the mcp-server process (see the backfill note in the header).
+     *
+     * So a steady nonzero `backfilled` with a clean parity result is HEALTHY —
+     * the repair is working. `backfilled` collapsing to zero while
+     * `missing_in_shadow` persists is the failure signal, and folding this into
+     * `written` would have erased exactly that distinction.
+     */
+    backfilled: number;
+    /**
+     * Backfill attempts that failed — the entry was still missing after the
+     * mirror call, or the mirror itself could not run. Distinct from `failed`
+     * (an inline append rejection) because the remedy differs: a failing
+     * backfill means the repair path is broken while the inline path may be
+     * fine.
+     */
+    backfillFailed: number;
+    /**
      * Records skipped because the estimated entry exceeded MAX_ENTRY_BYTES
      * (seqscribe v3.5 P13). Counted separately from `failed` because the cause
      * and the remedy differ: a `failed` append is a runtime/replication
@@ -158,6 +219,8 @@ const counters: MeshDualWriteCounters = {
     failed: 0,
     dropped: 0,
     topicErrors: 0,
+    backfilled: 0,
+    backfillFailed: 0,
     oversized: 0,
 };
 
@@ -359,23 +422,84 @@ function ensureTopic(node: SeqscribeNodeHandle, meshId: string): string | null {
  */
 export function recordMeshEventShadow(
     meshId: string,
-    entry: {
-        id: string;
-        timestamp: string;
-        kind: string;
-        nodeId?: string | undefined;
-        sessionId?: string | undefined;
-        providerType?: string | undefined;
-        taskId?: string | undefined;
-        payload?: Record<string, unknown> | undefined;
-    },
+    entry: MeshShadowEntry,
 ): void {
+    recordMeshEvent(meshId, entry, 'inline');
+}
+
+/**
+ * Ledger-entry shape the shadow leg accepts. Structural on purpose — the
+ * boundary check forbids `seqscribe/** → mesh/**`, so this cannot be
+ * `MeshLedgerEntry`.
+ */
+export interface MeshShadowEntry {
+    id: string;
+    timestamp: string;
+    kind: string;
+    nodeId?: string | undefined;
+    sessionId?: string | undefined;
+    providerType?: string | undefined;
+    taskId?: string | undefined;
+    payload?: Record<string, unknown> | undefined;
+}
+
+/**
+ * Mirror a ledger entry that the inline shadow leg never saw — the REPAIR path
+ * for the cross-process gap, driven by the parity loop (mesh/mesh-parity-loop.ts).
+ *
+ * ── Why this exists ────────────────────────────────────────────────────────
+ * `activeNode` is module state set by `configureMeshDualWrite`, whose only
+ * caller is `boot/daemon-lifecycle.ts` — i.e. THE DAEMON PROCESS. But
+ * `appendLedgerEntry` is also called in-process by the **mcp-server process**,
+ * which imports daemon-core directly and never boots a daemon lifecycle. There,
+ * `activeNode` is permanently null and `recordMeshEventShadow` returns at its
+ * first line: the entry lands in the shared SQLite ledger and is never mirrored.
+ *
+ * That is not a race and not a bug in the shadow leg — it is a process boundary.
+ * The mcp-server cannot open its own node either: the seqscribe DB is
+ * single-owner-locked and the daemon holds it. So the repair has to run in the
+ * process that DOES hold the node, from the ledger both processes share.
+ *
+ * ── Why doing it from the parity loop is safe ──────────────────────────────
+ * Three properties make a late mirror equivalent to an inline one:
+ *
+ *   · ORDER — the read model sorts by `(payload.timestamp ASC, canonical order
+ *     ASC)` (mesh-read-model.ts, and the design doc's "정렬 키" note). A
+ *     backfilled record carries the ORIGINAL ledger `timestamp`, so it sorts
+ *     into its rightful position no matter when it was appended. Only the
+ *     tie-break degrades, and only among entries sharing a millisecond.
+ *   · IDEMPOTENCE — records are keyed by the ledger entry's own `id`, and both
+ *     the parity comparison and the read model index by that id. Mirroring an
+ *     entry that is already present overwrites with an identical projection.
+ *   · PURITY — `projectMeshLedgerEntry` is a pure function of the entry, so a
+ *     mirror produced now is byte-identical to one produced at append time.
+ *     ★ This is also why the content boundary is unaffected: backfill goes
+ *     through the SAME allow-list projection, not around it.
+ *
+ * Returns true when the mirror was handed to the topic (the append itself is
+ * still asynchronous and fire-and-forget, exactly as inline). Never throws.
+ */
+export function backfillMeshEventShadow(meshId: string, entry: MeshShadowEntry): boolean {
+    return recordMeshEvent(meshId, entry, 'backfill');
+}
+
+/**
+ * The shared write core. `origin` selects which counter a success increments and
+ * nothing else — the projection, the size pre-flight, the load-shed cap and the
+ * failure handling are deliberately IDENTICAL on both paths, so a backfilled
+ * record cannot differ from an inline one in any way a consumer could observe.
+ */
+function recordMeshEvent(
+    meshId: string,
+    entry: MeshShadowEntry,
+    origin: 'inline' | 'backfill',
+): boolean {
     try {
         const node = activeNode;
-        if (!node || activeMode === 'off') return;
+        if (!node || activeMode === 'off') return false;
 
         const topic = ensureTopic(node, meshId);
-        if (!topic) return;
+        if (!topic) return false;
 
         if (inflight >= MAX_INFLIGHT) {
             counters.dropped++;
@@ -383,7 +507,7 @@ export function recordMeshEventShadow(
                 `mesh dual-write shedding load — ${MAX_INFLIGHT} appends in flight; ` +
                     'records are being dropped from the SHADOW leg only (the ledger is unaffected)',
             );
-            return;
+            return false;
         }
 
         const projected = projectMeshLedgerEntry(entry);
@@ -403,7 +527,7 @@ export function recordMeshEventShadow(
                     `estimated=${estimated}B ceiling=${ceiling}B ledgerKind=${projected.ledgerKind}. ` +
                     'The projection is supposed to bound every field — this is a projection bug, not a transport one.',
             );
-            return;
+            return false;
         }
 
         inflight++;
@@ -426,11 +550,13 @@ export function recordMeshEventShadow(
             .then(
                 () => {
                     inflight--;
-                    counters.written++;
+                    if (origin === 'backfill') counters.backfilled++;
+                    else counters.written++;
                 },
                 (error: unknown) => {
                     inflight--;
-                    counters.failed++;
+                    if (origin === 'backfill') counters.backfillFailed++;
+                    else counters.failed++;
                     warnOnce(
                         `mesh dual-write append failed (further failures logged once): ${
                             error instanceof Error ? error.message : String(error)
@@ -438,16 +564,19 @@ export function recordMeshEventShadow(
                     );
                 },
             );
+        return true;
     } catch (error) {
         // Synchronous throw from the projection/estimate path, or one of P11's
         // remaining static-API-misuse throws. NOT the append's runtime failures
         // — those reject, and are handled above.
-        counters.failed++;
+        if (origin === 'backfill') counters.backfillFailed++;
+        else counters.failed++;
         warnOnce(
             `mesh dual-write threw synchronously (further throws logged once): ${
                 error instanceof Error ? error.message : String(error)
             }`,
         );
+        return false;
     }
 }
 
@@ -512,5 +641,7 @@ export function __resetMeshDualWriteForTests(): void {
     counters.failed = 0;
     counters.dropped = 0;
     counters.topicErrors = 0;
+    counters.backfilled = 0;
+    counters.backfillFailed = 0;
     counters.oversized = 0;
 }
