@@ -22,7 +22,7 @@ Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://doc
 
 **The loop:** describe a task in chat → the coordinator files it, tags it, queues it → an idle machine claims it into a fresh worktree → your repo's own gates decide → ff-merge to `main`, worktree gone. Your phone only buzzed if something needed approving.
 
-This repo is built that way: about a third of recent commits on its `main` are `Auto-merge via Refinery` commits. Don't take our word for it — clone it and run `git log --oneline -60 | grep -c "via Refinery"`.
+ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — 23 of the last 60 commits on `main` are `Auto-merge via Refinery` commits: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
 
 ---
 
