@@ -86,8 +86,14 @@ describe('quota cache storage', () => {
 
     it('writes the file 0600 (a snapshot may carry an account email)', () => {
         saveQuotaCache({ 'codex-cli': makeQuota() }, env);
-        const mode = statSync(quotaCachePath(env)).mode & 0o777;
-        expect(mode).toBe(0o600);
+        // NTFS has no POSIX permission bits; fs.chmod on win32 can only
+        // toggle the read-only attribute, so statSync().mode reads back a
+        // fixed ~0o666/0o444 regardless of what was requested (see the same
+        // guard in mesh-config-write-lock.test.ts).
+        if (process.platform !== 'win32') {
+            const mode = statSync(quotaCachePath(env)).mode & 0o777;
+            expect(mode).toBe(0o600);
+        }
     });
 
     it('writes a versioned envelope', () => {

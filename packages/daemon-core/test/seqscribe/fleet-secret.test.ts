@@ -102,7 +102,13 @@ describe('fleet secret store', () => {
             secret: 'fleet-secret-value',
             version: 3,
         });
-        expect(statSync(path).mode & 0o777).toBe(0o600);
+        // NTFS has no POSIX permission bits; fs.chmod on win32 can only
+        // toggle the read-only attribute, so statSync().mode reads back a
+        // fixed value regardless of what was requested (see the same guard
+        // in mesh-config-write-lock.test.ts).
+        if (process.platform !== 'win32') {
+            expect(statSync(path).mode & 0o777).toBe(0o600);
+        }
         expect(loadStoredFleetSecret(env)).toEqual({ secret: 'fleet-secret-value', version: 3 });
     });
 
