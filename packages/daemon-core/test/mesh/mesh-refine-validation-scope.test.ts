@@ -249,4 +249,54 @@ describe('runMeshRefineValidationGate change-impact scoping', () => {
         expect(summary.status).toBe('passed');
         expect(summary.commandsRun.every((c: any) => !c.skipped)).toBe(true);
     });
+
+    // ── Single-value scope (['daemon'] or ['web'] alone) — the shape shipped in the
+    // repo's own .adhdev/refine.json for daemon-core/daemon-cloud/mcp-server/seqscribe
+    // vs. web-core/web-cloud commands. Distinct from the ['web','daemon'] pair already
+    // covered above: a single-value scope must exclude the OTHER single change area,
+    // not just 'none'.
+
+    it("DOCS-ROOT: a command scoped ['daemon'] only is skipped on a web-only branch", async () => {
+        const ws = workspace({ withNodeModules: true });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'test:web-core'], category: 'test', scopes: ['web'] } as any,
+            { command: 'npm', args: ['run', 'test:daemon-core'], category: 'test', scopes: ['daemon'] } as any,
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: false, affectedPackages: ['web-core'], changeArea: 'web' },
+        });
+
+        expect(summary.status).toBe('passed');
+        const byCommand = new Map(summary.commandsRun.map((c: any) => [c.displayCommand, c]));
+        expect(byCommand.get('npm run test:web-core')).toMatchObject({ passed: true });
+        expect(byCommand.get('npm run test:web-core')?.skipped).toBeUndefined();
+        expect(byCommand.get('npm run test:daemon-core')).toMatchObject({
+            skipped: true,
+            skipReason: 'unaffected_change_scope',
+            changeArea: 'web',
+        });
+    });
+
+    it("DOCS-ROOT: a command scoped ['web'] only is skipped on a daemon-affecting branch", async () => {
+        const ws = workspace({ withNodeModules: true });
+        const mesh = meshWith([
+            { command: 'npm', args: ['run', 'test:web-core'], category: 'test', scopes: ['web'] } as any,
+            { command: 'npm', args: ['run', 'test:daemon-core'], category: 'test', scopes: ['daemon'] } as any,
+        ]);
+
+        const summary = await runMeshRefineValidationGate(mesh, ws, {
+            changeImpact: { isDaemonAffecting: true, affectedPackages: ['daemon-core'], changeArea: 'daemon' },
+        });
+
+        expect(summary.status).toBe('passed');
+        const byCommand = new Map(summary.commandsRun.map((c: any) => [c.displayCommand, c]));
+        expect(byCommand.get('npm run test:daemon-core')).toMatchObject({ passed: true });
+        expect(byCommand.get('npm run test:daemon-core')?.skipped).toBeUndefined();
+        expect(byCommand.get('npm run test:web-core')).toMatchObject({
+            skipped: true,
+            skipReason: 'unaffected_change_scope',
+            changeArea: 'daemon',
+        });
+    });
 });
