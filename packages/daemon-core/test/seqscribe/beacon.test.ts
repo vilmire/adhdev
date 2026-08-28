@@ -498,6 +498,45 @@ describe('armBeacon — lifecycle against a real node', () => {
         beacon!.stop();
     });
 
+    it('seeds auth_ok reports through Stage D projection and preserves truncated', async () => {
+        const node = open();
+        const beacon = armBeacon(node, makeFakeTransport().transport, { env: {} });
+        await settle();
+
+        const SECRET = 'auth_ok canary prose must never reach known vectors';
+        beacon!.seedKnownBoard({
+            reports: [{
+                node: 'adhdev-peerpeerpeer01',
+                at: '2026-08-28T00:00:00.000Z',
+                lastAgentMessage: SECRET,
+                vectors: {
+                    [FLEET_STATUS_TOPIC]: {
+                        preview: SECRET,
+                        writers: {
+                            'adhdev-peerpeerpeer01': {
+                                contig: 42,
+                                chain: CHAIN_A,
+                                payload: SECRET,
+                            },
+                        },
+                    },
+                },
+                hints: { 'config.settings': { 'plaintext.canary': ['adhdev-peerpeerpeer01', 42] } },
+            }],
+            truncated: 2,
+        });
+
+        const staleness = node.node.staleness(FLEET_STATUS_TOPIC);
+        expect(staleness.behind['adhdev-peerpeerpeer01']).toBe(42);
+        expect(JSON.stringify(staleness)).not.toContain(SECRET);
+        expect(staleness.keyStale).toBeUndefined();
+        const diagnostics = beacon!.diagnostics();
+        expect(diagnostics.truncated).toBe(2);
+        expect(diagnostics.soleCopyDeferred).toBe(true);
+        expect(beacon!.counters().truncated).toBe(2);
+        beacon!.stop();
+    });
+
     it('turns an inbound hash hint into a real keyStaleAdvisory value', async () => {
         const node = open(undefined, true);
         const keyHash = 'e'.repeat(64);

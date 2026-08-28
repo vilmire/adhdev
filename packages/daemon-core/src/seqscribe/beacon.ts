@@ -395,6 +395,13 @@ export interface BeaconHandle {
     stop(): void;
     counters(): BeaconCounters;
     /**
+     * Seed the library's known-vector board from auth_ok before the ordinary
+     * PUT→GET cycle completes. Inbound reports cross the same Stage D
+     * allow-list projection as a normal GET; malformed/content fields cannot
+     * bypass the boundary merely because the server piggybacked the response.
+     */
+    seedKnownBoard(seed: BeaconGetResponse): void;
+    /**
      * Push a report NOW, outside the library's debounce.
      *
      * The one host-driven trigger. The cloud host calls this on each
@@ -735,6 +742,47 @@ export function armBeacon(
             );
         },
         counters: () => ({ ...counters }),
+
+        seedKnownBoard(seed: BeaconGetResponse): void {
+            if (stopped || !Array.isArray(seed?.reports)) return;
+
+            // Defence in depth: auth_ok is just another inbound transport
+            // envelope. Never trust its server-side projection as sufficient.
+            const clean = seed.reports
+                .map((report) => projectBeaconReport(report))
+                .filter((report): report is ProjectedBeaconReport => report !== null);
+            const truncated =
+                typeof seed.truncated === 'number' && Number.isFinite(seed.truncated) && seed.truncated >= 0
+                    ? Math.floor(seed.truncated)
+                    : 0;
+            const topicScope = [...new Set(clean.flatMap((report) => [
+                ...Object.keys(report.vectors),
+                ...Object.keys(report.hints ?? {}),
+            ]))];
+
+            try {
+                handle.node.setKnownVectors(clean as never[]);
+                lastBoard = {
+                    reports: clean,
+                    truncated,
+                    topicScope,
+                    capturedAt: Date.now(),
+                };
+                if (truncated > 0) counters.truncated += truncated;
+                LOG.info(
+                    'Seqscribe',
+                    `beacon auth seed writer=${handle.writerId} peers=${clean.length} ` +
+                        `topics=${topicScope.length} truncated=${truncated}`,
+                );
+            } catch (err) {
+                // Advisory and self-healing: the ordinary GET remains armed and
+                // will replace this seed on its next successful response.
+                LOG.info(
+                    'Seqscribe',
+                    `beacon auth seed rejected (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`,
+                );
+            }
+        },
 
         async pushNow(): Promise<void> {
             if (stopped) return;
