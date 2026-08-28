@@ -14,6 +14,7 @@ import { existsSync } from 'fs';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { findBinary } from '../cli-adapters/provider-cli-shared.js';
 import { QUOTA_SUPPORTED_PROVIDERS, type MeshNodeFactsProviderEnablement } from '@adhdev/mesh-shared';
+import { runAsyncBatch } from '../chat/async-batch.js';
 
 export interface CLIInfo {
     id: string;
@@ -101,6 +102,39 @@ function execAsync(cmd: string, timeoutMs = 5000): Promise<string | null> {
     });
 }
 
+// P0 (2026-08-28 RCA): a --version/-V/-v/custom probe used to run SEQUENTIALLY per
+// provider (up to 4 x 3s = 12s worst case for one slow/hanging binary), which was the
+// dominant term behind the observed 15s false-timeout on plan_mesh_onboarding (which
+// calls detectCLIs(includeVersion:true) across ~52 providers). Cross-provider fan-out
+// was already parallel (Promise.all below); only the INTRA-provider fallback chain was
+// serial. Firing all candidates for one provider in parallel and picking the first by
+// PRIORITY (not first-to-resolve) preserves the existing "--version wins over -V" tie
+// -break while collapsing that provider's worst case from ~12s to one probe window.
+// Timeout tightened 3s -> 1.5s: these are short, local, non-interactive flag probes: a
+// real CLI answers in milliseconds, so 1.5s is still generous headroom, not a race.
+const VERSION_PROBE_TIMEOUT_MS = 1_500;
+
+/** Probe every version-command candidate for one CLI in parallel; return the first
+ *  successful result in candidate PRIORITY order (index 0 wins even if a later index
+ *  resolves first) — same precedence as the old sequential loop, without the wait. */
+async function resolveVersion(candidates: string[]): Promise<string | undefined> {
+    if (candidates.length === 0) return undefined;
+    const settled = await Promise.all(
+        candidates.map((cmd) => execAsync(cmd, VERSION_PROBE_TIMEOUT_MS)),
+    );
+    for (const result of settled) {
+        if (result) return parseVersion(result);
+    }
+    return undefined;
+}
+
+// Hard ceiling on simultaneously in-flight `exec` spawns across the whole detectCLIs
+// fan-out (which/where lookup + up to 4 parallel version probes per provider, times
+// ~50+ providers). Unbounded fan-out risks a spawn storm on a loaded/low-fd machine;
+// 8 keeps wall-clock close to the unbounded case (bounded by the slowest single
+// provider, not provider count) while capping concurrent child processes.
+const DETECT_CLIS_CONCURRENCY = 8;
+
 /**
  * Detect all CLI/ACP agents (parallel)
  * @param providerLoader ProviderLoader instance (dynamic list creation)
@@ -118,14 +152,19 @@ export async function detectCLIs(
         ? providerLoader.getCliDetectionList({ includeDisabled: options?.includeDisabled })
         : [];
 
-    // Run all `which` checks in parallel
-    const results = await Promise.all(
-        cliList.map(async (cli): Promise<CLIInfo> => {
+    // Cross-provider fan-out stays concurrent but is now capped (DETECT_CLIS_CONCURRENCY)
+    // instead of unbounded Promise.all — see the constant's comment for why.
+    const results: CLIInfo[] = new Array(cliList.length);
+    await runAsyncBatch(
+        cliList.map((cli, index) => ({ cli, index })),
+        async ({ cli, index }) => {
             try {
                 const firstPath = await resolveDetectionPath(cli.command, whichCmd);
-                if (!firstPath) return { ...cli, installed: false };
+                if (!firstPath) {
+                    results[index] = { ...cli, installed: false };
+                    return;
+                }
 
-                // Get version (parallel with other checks)
                 let version: string | undefined;
                 if (includeVersion) {
                     const versionCommands = [
@@ -135,21 +174,16 @@ export async function detectCLIs(
                         cli.versionCommand,
                     ].filter((v): v is string => !!v);
                     try {
-                        for (const versionCommand of versionCommands) {
-                            const versionResult = await execAsync(versionCommand, 3000);
-                            if (versionResult) {
-                                version = parseVersion(versionResult);
-                                break;
-                            }
-                        }
+                        version = await resolveVersion(versionCommands);
                     } catch { }
                 }
 
-                return { ...cli, installed: true, version, path: firstPath };
+                results[index] = { ...cli, installed: true, version, path: firstPath };
             } catch {
-                return { ...cli, installed: false };
+                results[index] = { ...cli, installed: false };
             }
-        })
+        },
+        { concurrency: DETECT_CLIS_CONCURRENCY },
     );
 
     return results;
@@ -181,13 +215,7 @@ export async function detectCLI(
                         target.versionCommand,
                     ].filter((v): v is string => !!v);
                     try {
-                        for (const versionCommand of versionCommands) {
-                            const versionResult = await execAsync(versionCommand, 3000);
-                            if (versionResult) {
-                                version = parseVersion(versionResult);
-                                break;
-                            }
-                        }
+                        version = await resolveVersion(versionCommands);
                     } catch { }
                 }
                 return { ...target, installed: true, version, path: firstPath };

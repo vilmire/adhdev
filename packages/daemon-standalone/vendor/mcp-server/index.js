@@ -66,7 +66,32 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   // regression; it is intentionally BELOW the relay 90s budget because the synchronous
   // ack reply is sub-second and never bounded by the relay deadline.
   refine_mesh_node: 3e4,
-  batch_refine_mesh_nodes: 3e4
+  batch_refine_mesh_nodes: 3e4,
+  // P0 (2026-08-28 RCA, false 15s timeouts on 4 unregistered commands): these commands
+  // fell through to the bare 15s default and violated IPC >= relay >= responder for a
+  // LOCAL node (no relay layer wraps a local dispatch — see the module comment above).
+  //
+  // plan_mesh_onboarding: relay classifies it as a git-status probe (30s, daemon-cloud
+  // GIT_STATUS_PROBE_COMMANDS) but the responder's own worst case can exceed that —
+  // detectCLIs(includeVersion:true) fans out across providers in parallel, but EACH
+  // provider runs its --version/-V/-v/custom fallback chain SEQUENTIALLY, up to 4 x 3s
+  // = 12s for a single slow/hanging provider (cli-detector.ts), stacked on top of
+  // mesh-onboarding-plan.ts's sequential git probes (each capped at GIT_TIMEOUT_MS 15s).
+  // 45s covers the relay's 30s plus headroom for that responder spike; see the
+  // detectCLIs parallelization fix below for the actual root-cause mitigation.
+  plan_mesh_onboarding: 45e3,
+  // get_runtime_snapshot / session_host_get_diagnostics: both are answered by the
+  // session-host process via SessionHostClient.request(), which has its own hard 30s
+  // timeout (session-host-core/src/ipc.ts). IPC must stay >= that responder budget.
+  get_runtime_snapshot: 45e3,
+  session_host_get_diagnostics: 45e3,
+  // get_mesh: the default (no refresh) read is in-memory/synchronous, but
+  // args.refresh/forceRefresh fans out a direct mesh probe per remote node with its own
+  // 25s timeout + 25s retry (mesh-node-identity.ts MESH_DIRECT_PROBE_TIMEOUT_MS /
+  // MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS), up to ~50s for that node's own probe+retry
+  // chain (nodes run in parallel, so this is not multiplied by node count). 60s covers
+  // that refresh path with headroom.
+  get_mesh: 6e4
 };
 var IPC_PROBE_RETRYABLE_COMMANDS = /* @__PURE__ */ new Set([
   "get_status_metadata",
@@ -80,7 +105,14 @@ var IPC_PROBE_RETRYABLE_COMMANDS = /* @__PURE__ */ new Set([
   "get_spec_debug",
   "get_chat_debug_bundle",
   "list_coordinator_prompts",
-  "list_provider_availability"
+  "list_provider_availability",
+  // P0 (2026-08-28): added alongside the timeout-tier fix above. All four are
+  // read-only queries (onboarding plan preview, session-host snapshot/diagnostics
+  // reads, in-memory mesh graph read) with nothing to mutate, so a timed-out retry
+  // can never double-execute an effect — same safety bar as the entries above.
+  "plan_mesh_onboarding",
+  "get_runtime_snapshot",
+  "session_host_get_diagnostics"
 ]);
 var IPC_PROBE_RETRY_MAX_ENV = "ADHDEV_IPC_PROBE_RETRY_MAX";
 var IPC_PROBE_RETRY_BACKOFF_MS_ENV = "ADHDEV_IPC_PROBE_RETRY_BACKOFF_MS";
