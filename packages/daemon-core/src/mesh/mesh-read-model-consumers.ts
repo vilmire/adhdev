@@ -266,7 +266,46 @@ export function hasDispatchAfterTerminalEntry(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// ROSTER ENTRY 5 — parity diagnostics
+// ROSTER ENTRY 5 — mesh-event-suppression.ts:98 (hasRecentIntentionalCleanupStop)
+//                  [Stage 4B, 2026-08-28]
+//
+// Asks whether an operator-initiated cleanup stopped this session/node inside a
+// 30-minute window, so an ordinary `agent:stopped` is not reported as a failure.
+// Reads `sessionId`/`nodeId`/`timestamp` (base fields) plus the four payload keys
+// `isIntentionalCleanupStopEntry` inspects.
+//
+// ★ Lossless only BECAUSE the Stage 4B projection additions landed with it.
+// Before that change three of those four keys (`source`, `intentional`,
+// `intentionalStopReason`) were absent from `PROJECTED_PAYLOAD_KEYS`, so the
+// predicate would have read `undefined` from the replica and returned false for
+// every entry — the exact silent behaviour change this roster exists to prevent,
+// and in the dangerous direction: a false negative here un-suppresses a
+// deliberate operator cleanup and reports it to the fleet as a failure. The two
+// changes are one unit; neither is correct alone.
+//
+// `reason` was already allow-listed (a closed enum set), so it needed no change.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Recent entries of the three kinds `isIntentionalCleanupStopEntry` accepts.
+ *
+ * Preserves the caller's `since` windowing rather than a tail: the original read
+ * is explicitly `{kind, since}` with no tail, because a bare tail lets unrelated
+ * mesh traffic evict a genuine cleanup-stop before the walk reaches the cutoff
+ * (LEDGER-KIND-TAIL-BLINDSPOT). Both paths below apply the same two predicates.
+ */
+export function readIntentionalCleanupStopEntries(
+    meshId: string,
+    since: string,
+): ProjectedLedgerView[] {
+    return readProjectedEntries(meshId, {
+        kind: ['session_stopped', 'task_failed', 'task_stalled'],
+        since,
+    });
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// ROSTER ENTRY 6 — parity diagnostics
 //
 // The parity loop already reads the ledger directly (mesh-parity-loop.ts) and
 // MUST keep doing so: comparing the replica against itself would be a

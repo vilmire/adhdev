@@ -361,7 +361,23 @@ const TASK_LIFECYCLE_LEDGER_KINDS: ReadonlySet<MeshLedgerKind> = new Set<MeshLed
 /** Resolve the taskId for a ledger entry, preferring the base field and falling
  *  back to payload.taskId (legacy rows / entries that only carry it in payload). */
 
-export function isIntentionalCleanupStopEntry(entry: Pick<MeshLedgerEntry, 'kind' | 'payload'>): boolean {
+/**
+ * Whether this entry records an operator-initiated cleanup rather than a genuine
+ * failure.
+ *
+ * ★ Accepts a `kind: string` rather than `MeshLedgerKind` so the Stage 4B roster
+ * (mesh-read-model-consumers.ts) can pass a `ProjectedLedgerView` read from the
+ * seqscribe replica, whose `kind` is a plain string. This widening loses nothing:
+ * the first line already narrows to the three kinds it accepts and returns false
+ * for everything else, so an unrecognized string was always a `false` — the union
+ * was never what made this function correct.
+ *
+ * The four payload keys read below are all allow-listed in the Stage 4B
+ * projection, which is what makes the replica path lossless for this predicate.
+ */
+export function isIntentionalCleanupStopEntry(
+    entry: { kind: string; payload?: Record<string, unknown> | undefined },
+): boolean {
     if (entry.kind !== 'session_stopped' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') return false;
     const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
         ? entry.payload as Record<string, unknown>

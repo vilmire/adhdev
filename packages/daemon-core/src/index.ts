@@ -326,7 +326,7 @@ export { loadRepoSettings } from './config/repo-settings.js';
 export type { RepoSettings, LoadRepoSettingsOptions } from './config/repo-settings.js';
 
 // ── Mesh Task Ledger ──
-export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, readLedgerSliceFromStore, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, ledgerEntryTaskId, MAX_LEDGER_SLICE_LIMIT, tombstoneOperatingNote, readOperatingNotes, pruneOperatingNotes, isOperatingNoteTombstoned, OPERATING_NOTE_KIND, OPERATING_NOTE_TOMBSTONE_KIND, OPERATING_NOTE_DEDUPE_WINDOW, OPERATING_NOTE_KEEP_LATEST } from './mesh/mesh-ledger.js';
+export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, isIntentionalCleanupStopEntry, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, readLedgerSliceFromStore, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, ledgerEntryTaskId, MAX_LEDGER_SLICE_LIMIT, tombstoneOperatingNote, readOperatingNotes, pruneOperatingNotes, isOperatingNoteTombstoned, OPERATING_NOTE_KIND, OPERATING_NOTE_TOMBSTONE_KIND, OPERATING_NOTE_DEDUPE_WINDOW, OPERATING_NOTE_KEEP_LATEST } from './mesh/mesh-ledger.js';
 export { isMeshTestPollution, isSyntheticTestMeshId, isSyntheticTestCoordinatorSession } from './mesh/mesh-test-pollution.js';
 export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext, MeshTaskCompletionEvidence, MeshWorkerResultArtifact, MeshProcessArtifact, MeshValidationResultArtifact } from './mesh/mesh-ledger.js';
 export { recordSessionUsage, readSessionUsage, summarizeMeshUsage, getUsageDir, MAX_SESSIONS_PER_MESH, USAGE_MAX_AGE_MS } from './mesh/mesh-usage-store.js';
@@ -1133,6 +1133,7 @@ export {
   readApprovalResolutionEntries,
   hasMatchingTaskDispatchedEntry,
   hasDispatchAfterTerminalEntry,
+  readIntentionalCleanupStopEntries,
   meshReplicaDiagnostics,
   type ProjectedLedgerView,
   type MeshReplicaDiagnostics,

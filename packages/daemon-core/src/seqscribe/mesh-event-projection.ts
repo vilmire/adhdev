@@ -118,6 +118,26 @@ export const PROJECTED_PAYLOAD_KEYS: readonly string[] = [
     'outcome',
     'terminalKind',
     'event',
+    // ── Stage 4B additions (2026-08-28) ────────────────────────────────────
+    // Added for the intentional-cleanup-stop consumer (mesh-event-suppression
+    // `hasRecentIntentionalCleanupStop`). Each was verified against EVERY
+    // producer in the tree before being asserted non-content:
+    //
+    //   `source`             — a closed set of snake_case slugs naming the code
+    //                          path that wrote the entry ('direct',
+    //                          'mesh_cleanup_sessions', 'operator_cleanup', …).
+    //                          Machine-authored discriminators, never prose.
+    //   `intentionalStopReason` — one literal producer
+    //                          (`router-worktree-cleanup.ts`), value
+    //                          `'operator_cleanup'`.
+    //
+    // ★ `source` is the widest of the two — it is written at many call sites,
+    // so the MAX_PROJECTED_STRING cap is doing real work here rather than being
+    // a formality. A caller who ever assigns prose to `source` gets truncated,
+    // not leaked wholesale; but the per-key assertion above is what keeps it
+    // out, and it must be re-checked if a producer starts composing this value.
+    'source',
+    'intentionalStopReason',
     // Booleans
     'retryable',
     'rebound',
@@ -127,6 +147,9 @@ export const PROJECTED_PAYLOAD_KEYS: readonly string[] = [
     'requestedForce',
     'removedByRemoteDaemon',
     'completedViaReady',
+    // Stage 4B: strictly boolean at every producer (mesh-termination-bridge,
+    // router-worktree-cleanup) — the intentional/accidental stop discriminator.
+    'intentional',
     // Counters
     'attempt',
     'attemptCount',

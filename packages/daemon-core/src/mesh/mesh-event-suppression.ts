@@ -6,7 +6,7 @@
 // avoid a circular import.
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry, extractJsonObjectFromSummary, isIntentionalCleanupStopEntry, readLedgerEntries, readLedgerEntriesByKind } from './mesh-ledger.js';
+import { appendLedgerEntry, extractJsonObjectFromSummary, isIntentionalCleanupStopEntry, readLedgerEntriesByKind } from './mesh-ledger.js';
 import { updateTaskStatus, getActiveDirectDispatches, getQueue, REDRIVE_RECLAIM_REASONS, REDRIVE_SUPERSEDE_WINDOW_MS } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
@@ -20,7 +20,7 @@ import {
     hasDispatchAfterTerminal,
     buildNoProgressCompletionReconciliation,
 } from './mesh-events-stale.js';
-import { hasMatchingTaskDispatchedEntry } from './mesh-read-model-consumers.js';
+import { hasMatchingTaskDispatchedEntry, readIntentionalCleanupStopEntries } from './mesh-read-model-consumers.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
@@ -96,10 +96,12 @@ function hasRecentIntentionalCleanupStop(meshId: string, sessionId?: string, nod
     // directly instead of relying on walking a fixed-size tail until timestamps age out,
     // so a genuine intentional-cleanup-stop can no longer be evicted by unrelated mesh
     // traffic filling a bare tail:200 window before the walk reaches the cutoff.
-    const entries = readLedgerEntries(meshId, {
-        kind: ['session_stopped', 'task_failed', 'task_stalled'],
-        since: new Date(cutoff).toISOString(),
-    });
+    // Stage 4B roster entry 5: served from the seqscribe replica behind the readiness
+    // gate, from the ledger otherwise. Lossless — the predicate below reads only base
+    // fields plus the four scalar payload keys isIntentionalCleanupStopEntry inspects
+    // (`intentional`, `reason`, `intentionalStopReason`, `source`), all of which the
+    // Stage 4B projection additions allow-list. See mesh-read-model-consumers.ts.
+    const entries = readIntentionalCleanupStopEntries(meshId, new Date(cutoff).toISOString());
     for (let i = entries.length - 1; i >= 0; i--) {
         const entry = entries[i];
         if (!isIntentionalCleanupStopEntry(entry)) continue;
