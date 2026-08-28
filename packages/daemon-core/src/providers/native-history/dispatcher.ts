@@ -181,6 +181,22 @@ function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: strin
     }
 }
 
+/**
+ * Exported for the background-task detector (providers/spec): resolve THIS
+ * session's antigravity conversation store with the exact same binding,
+ * claim-exclusion and spawn-floor rules the read path uses, so the detector
+ * never scans a sibling session's conversation. `sessionId` is the provider
+ * session id (the on-disk conversation uuid) when known.
+ */
+export function resolveAntigravityConversationPath(
+    workspace: string,
+    sessionId: string,
+    sessionStartedAtMs: number,
+    instanceId: string,
+): { path: string; ownerConfirmed?: boolean } | null {
+    return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
+}
+
 function resolveClaudePath(workspace: string, sessionId: string): string | null {
     // claude stores per-cwd: ~/.claude/projects/<cwd-as-dashes>/<uuid>.jsonl
     const dir = path.join(os.homedir(), '.claude', 'projects', cwdAsDashes(workspace));

@@ -480,6 +480,27 @@ export class SpecCliAdapter implements CliAdapter {
 
     private detectBackgroundTask(): { active: boolean; count: number; ids: string[]; support?: 'tracked' | 'unknown' } {
         if (!this.spec.native_history?.source) {
+            // antigravity-cli declares no declarative `source` (its authority is
+            // the per-session conversations/<uuid>.db, read via the built-in
+            // reader) — the detector dispatches on agentType and resolves the
+            // store itself. Without this branch antigravity reported
+            // support:'unknown' and the background_task_active hold was silently
+            // inert (the early-completion defect: a worker ending its turn with
+            // an async run_command still running projected completed).
+            if (this.cliType === 'antigravity-cli') {
+                try {
+                    return detectBackgroundTaskActive(undefined, {
+                        agentType: this.cliType,
+                        providerSessionId: this.providerSessionId,
+                        sessionStartedAtMs: this.spawnedAtMs,
+                        envOverrides: this.spawnedEnv,
+                        workspace: this.workingDir,
+                        instanceId: this.owningSessionId,
+                    });
+                } catch {
+                    return { active: false, count: 0, ids: [], support: 'unknown' };
+                }
+            }
             // No transcript source: only the detector can say whether this
             // provider is tracked at all (claude-cli/kimi) or unknown.
             return { active: false, count: 0, ids: [], support: this.cliType === 'claude-cli' || this.cliType === 'kimi' ? 'tracked' : 'unknown' };

@@ -952,6 +952,188 @@ function parseConversationDb(
   return messages.length > 0 ? messages : null;
 }
 
+// ─── Background-task lifecycle reader (completion-hold authority) ────────────
+//
+// Antigravity's `run_command` tool goes ASYNC when the command outlives its
+// WaitMsBeforeAsync window. The launch step then carries the durable task
+// identity `<conversation-uuid>/task-<launchStepIdx>` in its `task_details`
+// blob; a sync command that finished inside the window leaves task_details
+// EMPTY and never spawns a task.
+//
+// The launch is identified by (task_details carries a task id) AND (the
+// payload's tool name is `run_command`) — NOT by step_type. Surveyed across 40
+// live stores: async run_command launches appear under BOTH step_type 21 (40
+// rows) and step_type 132 (12 rows), so keying on a single step_type silently
+// misses most launches. The tool-name test is what actually discriminates.
+//
+// It also has to: step_type 132 rows carrying a task id in task_details are
+// `schedule` timers (16 rows — "Timer: 30s, Prompt: Check task status"), not
+// commands. Timers NEVER emit a terminal signal — measured resolution over the
+// same 40 stores was run_command 51/52 (98%) vs schedule 0/16 (0%) — so
+// admitting them as launches would pin the completion hold until the cap on
+// every session that used one. They are excluded by tool name.
+//
+// The cell's terminal state lands later as either
+//   (a) a step_type 101 task message — `Task id "<id>" finished with result:` /
+//       `Task id "<id>" was canceled with result:` (every observed 101 task
+//       message is terminal), or
+//   (b) a manage_task status-check result (`Task: <id>\nStatus: DONE`;
+//       RUNNING is NOT terminal).
+// The background-task detector (providers/spec/background-task-detector.ts)
+// consumes these normalized steps to hold completion while a causally-owned
+// async command is still unresolved.
+
+/** step_type carrying tool call/result steps. Both 21 and 132 appear for
+ *  run_command; the union is scanned and the tool name discriminates. */
+const AGY_STEP_TYPE_TOOL = 132;
+const AGY_STEP_TYPE_TOOL_ALT = 21;
+/** step_type for injected task messages (a background cell's terminal result). */
+const AGY_STEP_TYPE_TASK_MESSAGE = 101;
+
+/** Tool name that spawns a real background command cell. `schedule` (timer)
+ *  also writes a task id into task_details but never resolves — see header.
+ *
+ *  Matched only in the protobuf header region that precedes the args JSON:
+ *  across the surveyed stores the tool name is always written just before the
+ *  `{"…}` args blob (offset ~36-38 vs json ~47-52), never inside it. A bare
+ *  substring test would be loose — a manage_task status-check payload embeds
+ *  the string `run_command` in its result text — so anchoring on position is
+ *  what keeps a status row from ever being read as a launch. (No such row
+ *  carries populated task_details today, so this is defence in depth.) */
+function isBackgroundLaunchPayload(payload: string): boolean {
+  const argsAt = payload.indexOf('{"');
+  const header = argsAt >= 0 ? payload.slice(0, argsAt) : payload.slice(0, 200);
+  return /\brun_command\b/.test(header);
+}
+
+/** Durable async-task identity, as written in `task_details` / result text. */
+const AGY_TASK_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/task-\d+/i;
+
+/** `Status:` values from manage_task results. Verified live: DONE (terminal)
+ *  and RUNNING (not). The remaining tokens are defensive — resolution requires
+ *  an EXPLICIT terminal token, so an unknown future status fails toward
+ *  holding (itself time-bounded by BACKGROUND_TASK_HOLD_MAX_MS downstream). */
+const AGY_TERMINAL_TASK_STATUSES = new Set(['DONE', 'CANCELED', 'CANCELLED', 'FAILED', 'ERROR', 'KILLED', 'STOPPED']);
+
+/**
+ * One normalized background-task lifecycle observation, in `idx` (append)
+ * order. This is the record shape detectAntigravityFromRecords pairs over.
+ */
+export interface AgyTaskLifecycleStep {
+  idx: number;
+  /** user — turn boundary (ownership scope); launch — async run_command went
+   *  background; status — manage_task result; notification — task message. */
+  kind: 'user' | 'launch' | 'status' | 'notification';
+  /** `<conversation-uuid>/task-<n>` — present on launch/status/notification. */
+  taskId?: string;
+  /** status/notification only: the observation proves the cell terminal. */
+  terminal?: boolean;
+}
+
+/**
+ * Read the background-task lifecycle steps of a per-session conversations/<uuid>.db.
+ * Returns null when the db is unreadable (missing/locked past retry/no steps
+ * table) — callers fail open, same as the message reader above. Only the
+ * lifecycle-relevant step types are selected, and only the two text signals
+ * (task_details identity, `Task:/Status:` result lines) are extracted — the
+ * full protobuf message decode is unnecessary here.
+ */
+export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[] | null {
+  let Database: any;
+  try {
+    Database = loadBetterSqlite3();
+  } catch {
+    // Native binding unavailable — same degradation as parseConversationDb.
+    return null;
+  }
+
+  interface Row { idx: number; step_type: number; step_payload: Buffer | null; task_details?: Buffer | null }
+  let rows: Row[] | null = null;
+
+  for (let attempt = 1; attempt <= AGY_DB_MAX_ATTEMPTS; attempt++) {
+    let db: any;
+    try {
+      db = new Database(filePath, { readonly: true, fileMustExist: true });
+      try { db.pragma(`busy_timeout = ${AGY_DB_BUSY_TIMEOUT_MS}`); } catch { /* ignore */ }
+      // `task_details` is present in every current store but is the column this
+      // query depends on — probe the shape so a legacy/synthetic db degrades to
+      // "no launches" instead of throwing the whole read away.
+      let columns: Set<string>;
+      try {
+        columns = new Set<string>(
+          (db.prepare('PRAGMA table_info(steps)').all() as Array<{ name?: unknown }>)
+            .map((c) => String(c?.name ?? '')),
+        );
+      } catch {
+        columns = new Set<string>();
+      }
+      const hasTaskDetails = columns.has('task_details');
+      rows = db
+        .prepare(
+          `SELECT idx, step_type, step_payload${hasTaskDetails ? ', task_details' : ''}
+             FROM steps
+            WHERE step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_TOOL}, ${AGY_STEP_TYPE_TOOL_ALT}, ${AGY_STEP_TYPE_TASK_MESSAGE})
+            ORDER BY idx ASC`,
+        )
+        .all() as Row[];
+      break; // success
+    } catch (err) {
+      if (isSqliteBusyError(err)) {
+        // Transient WAL lock contention — retry, never collapse to "no tasks"
+        // on the first busy (same contract as parseConversationDb).
+        if (attempt < AGY_DB_MAX_ATTEMPTS) {
+          sleepBusy(AGY_DB_RETRY_BACKOFF_MS[attempt - 1] ?? 150);
+          continue;
+        }
+        return null;
+      }
+      LOG.debug(
+        'NativeHistory',
+        `antigravity .db ${path.basename(filePath)} task-lifecycle read failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+
+  const out: AgyTaskLifecycleStep[] = [];
+  for (const row of rows) {
+    if (row.step_type === AGY_STEP_TYPE_USER) {
+      out.push({ idx: row.idx, kind: 'user' });
+      continue;
+    }
+    if (row.step_type === AGY_STEP_TYPE_TASK_MESSAGE) {
+      const text = row.step_payload ? row.step_payload.toString('utf8') : '';
+      // `Task id "<id>" finished with result:` / `… was canceled with result:`.
+      // Every observed step_type 101 task message is a TERMINAL delivery.
+      for (const match of text.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
+        out.push({ idx: row.idx, kind: 'notification', taskId: match[1], terminal: true });
+      }
+      continue;
+    }
+    // Tool step (21 or 132): an async launch is (task id in `task_details`)
+    // AND (payload tool name is run_command) — the tool-name test excludes
+    // `schedule` timers, which carry a task id but never resolve. A manage_task
+    // status result lives in the payload as `Task:/Status:` lines.
+    const payload = row.step_payload ? row.step_payload.toString('utf8') : '';
+    const details = row.task_details && Buffer.isBuffer(row.task_details)
+      ? row.task_details.toString('utf8')
+      : '';
+    const launchId = details.match(AGY_TASK_ID_RE);
+    if (launchId && isBackgroundLaunchPayload(payload)) {
+      out.push({ idx: row.idx, kind: 'launch', taskId: launchId[0] });
+    }
+    for (const match of payload.matchAll(/Task:\s*([0-9a-f-]{36}\/task-\d+)[\s\S]{0,200}?\bStatus:\s*([A-Z_]+)/gi)) {
+      const status = match[2].toUpperCase();
+      out.push({ idx: row.idx, kind: 'status', taskId: match[1], terminal: AGY_TERMINAL_TASK_STATUSES.has(status) });
+    }
+  }
+  return out;
+}
+
 /**
  * Assemble the history.jsonl user-prompt index for a single session id into a
  * partial NativeHistorySession (user prompts only — history.jsonl never carries

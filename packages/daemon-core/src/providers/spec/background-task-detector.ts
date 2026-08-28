@@ -36,6 +36,21 @@
  *   tool work — e.g. the literal live row "Terminal notification received.
  *   Consuming the task output now." (step ended `tool_use`, followed by the
  *   output-file Read) — is progress prose and must NOT clear the hold.
+ * - antigravity-cli (per-session conversations/<uuid>.db, SQLite): an async
+ *   `run_command` launch step carries the durable task id
+ *   `<conversation-uuid>/task-<launchStepIdx>` in its `task_details` blob; a
+ *   sync command's is empty. The launch is identified by tool name, NOT
+ *   step_type — live stores put async run_command under both step_type 21 and
+ *   132, while `schedule` timer rows (also 132, also carrying a task id) never
+ *   resolve and must be excluded or they pin the hold to its cap. The cell
+ *   resolves via a step_type 101 task message (`Task id "<id>" finished|was
+ *   canceled with result:`) or a manage_task status-check result
+ *   (`Task: <id>` + `Status: DONE`; RUNNING is not terminal). Record
+ *   extraction lives with the other .db schema knowledge in
+ *   native-history/antigravity-cli-transcript.ts (readTaskLifecycleSteps);
+ *   path resolution reuses the read path's claim-exclusion + spawn-floor
+ *   binding (resolveAntigravityConversationPath) so the detector only ever
+ *   scans THIS session's own conversation.
  *
  * Ownership scoping (per task/turn, not per process): only launches recorded
  * AFTER the last user prompt in the scanned tail are causally owned by the
@@ -44,9 +59,9 @@
  * session's own claimed transcript path) never block completion.
  *
  * Provider support is explicit: `support: 'tracked'` for providers whose
- * transcript shape this module understands (claude-cli, kimi), `'unknown'`
- * for every other provider — callers must treat unknown as "not gated", never
- * as silently clean.
+ * transcript shape this module understands (claude-cli, kimi, antigravity-cli),
+ * `'unknown'` for every other provider — callers must treat unknown as "not
+ * gated", never as silently clean.
  *
  * Conservative by design: only a tool invocation that is CLEARLY flagged
  * run_in_background counts. A missing resolution that will never arrive must
@@ -62,6 +77,9 @@ import { LOG } from '../../logging/logger.js';
 import { resolveJsonlSourcePath } from './native-history-executor.js';
 import type { NativeHistoryConfig } from './types.js';
 import type { NativeHistoryInput } from './native-history-executor.js';
+import { resolveAntigravityConversationPath } from '../native-history/dispatcher.js';
+import { readTaskLifecycleSteps } from '../native-history/antigravity-cli-transcript.js';
+import type { AgyTaskLifecycleStep } from '../native-history/antigravity-cli-transcript.js';
 
 export type BackgroundTaskSupport = 'tracked' | 'unknown';
 
@@ -88,7 +106,7 @@ export interface BackgroundTaskDetection {
 const EMPTY: BackgroundTaskDetection = { active: false, count: 0, ids: [] };
 
 /** Agent types whose native transcript this detector can authoritatively read. */
-const TRACKED_AGENT_TYPES = new Set(['claude-cli', 'kimi']);
+const TRACKED_AGENT_TYPES = new Set(['claude-cli', 'kimi', 'antigravity-cli']);
 
 /**
  * Only the recent tail of the transcript is scanned, so a very long session
@@ -114,6 +132,10 @@ export function detectBackgroundTaskActive(
 ): BackgroundTaskDetection {
     const agentType = (input.agentType ?? '').trim();
     if (!TRACKED_AGENT_TYPES.has(agentType)) return { ...EMPTY, support: 'unknown' };
+    // antigravity-cli's authority is its per-session SQLite store, not a
+    // declarative jsonl source (its spec deliberately declares only
+    // `native_history.reader`) — dispatch before the jsonl gate.
+    if (agentType === 'antigravity-cli') return detectAntigravityBackgroundTaskActive(input);
     if (!cfg?.source || cfg.source.kind !== 'jsonl') return { ...EMPTY, support: 'tracked' };
 
     let sourcePath: string | null;
@@ -142,7 +164,93 @@ export function detectBackgroundTaskActive(
  */
 export function detectFromRecords(records: unknown[], agentType = 'claude-cli'): BackgroundTaskDetection {
     if (agentType === 'kimi') return detectKimiFromRecords(records);
+    if (agentType === 'antigravity-cli') return detectAntigravityFromRecords(records as AgyTaskLifecycleStep[]);
     return detectClaudeFromRecords(records);
+}
+
+/**
+ * antigravity-cli: resolve this session's conversation .db with the read
+ * path's own binding rules (exact uuid bind, else claim-excluded spawn-floor
+ * pick), read the background-task lifecycle steps out of it, and pair
+ * launch/resolve. Fail-open ({ active:false, support:'tracked' }) on any
+ * resolution/read failure — same contract as the jsonl branches; the
+ * consuming hold is time-bounded by BACKGROUND_TASK_HOLD_MAX_MS on top.
+ */
+function detectAntigravityBackgroundTaskActive(input: NativeHistoryInput): BackgroundTaskDetection {
+    let sourcePath: string | null;
+    try {
+        sourcePath = resolveAntigravityConversationPath(
+            input.workspace ?? '',
+            (input.providerSessionId ?? input.sessionId ?? input.historySessionId ?? '').trim(),
+            typeof input.sessionStartedAtMs === 'number' ? input.sessionStartedAtMs : 0,
+            input.instanceId ?? '',
+        )?.path ?? null;
+    } catch {
+        return { ...EMPTY, support: 'tracked' };
+    }
+    // Only the per-session .db carries the task lifecycle; a brain/.pb
+    // resolution predates the async-task store and yields no launches.
+    if (!sourcePath || !/\.db$/i.test(sourcePath)) return { ...EMPTY, support: 'tracked' };
+
+    let steps: AgyTaskLifecycleStep[] | null;
+    try {
+        steps = readTaskLifecycleSteps(sourcePath);
+    } catch {
+        return { ...EMPTY, support: 'tracked' };
+    }
+    if (!steps || steps.length === 0) return { ...EMPTY, support: 'tracked' };
+
+    return detectAntigravityFromRecords(steps);
+}
+
+/**
+ * antigravity-cli record shape (normalized by readTaskLifecycleSteps from the
+ * per-session conversations/<uuid>.db — see the module header):
+ *
+ *   { idx, kind:'user' }                                  — turn boundary
+ *   { idx, kind:'launch',  taskId }                       — async run_command
+ *   { idx, kind:'status',  taskId, terminal }             — manage_task result
+ *   { idx, kind:'notification', taskId, terminal:true }   — task message
+ *
+ * Pairing mirrors the claude-cli branch: a launch with NO later terminal
+ * observation is still running. Ownership is scoped to the current turn the
+ * same way kimi scopes it — only launches recorded AFTER the last user step
+ * (step_type 14) are causally owned by the current turn, so a detached
+ * background command from an earlier turn never blocks an ordinary task. The
+ * completion hold consuming this signal is time-bounded
+ * (BACKGROUND_TASK_HOLD_MAX_MS), so an intentional long-lived background
+ * (dev server) delays but never pins completion.
+ */
+export function detectAntigravityFromRecords(records: AgyTaskLifecycleStep[]): BackgroundTaskDetection {
+    const launches = new Map<string, { launchIdx: number; resolvedIdx: number }>();
+    let lastUserIdx = -1;
+
+    for (const rec of records) {
+        if (!rec || typeof rec !== 'object') continue;
+        if (rec.kind === 'user') {
+            lastUserIdx = rec.idx;
+            continue;
+        }
+        const taskId = typeof rec.taskId === 'string' ? rec.taskId.trim() : '';
+        if (!taskId) continue;
+        if (rec.kind === 'launch') {
+            // Keep the earliest observation of a task id as its launch.
+            if (!launches.has(taskId)) launches.set(taskId, { launchIdx: rec.idx, resolvedIdx: -1 });
+            continue;
+        }
+        if ((rec.kind === 'status' || rec.kind === 'notification') && rec.terminal === true) {
+            const entry = launches.get(taskId);
+            if (entry && entry.resolvedIdx < 0) entry.resolvedIdx = rec.idx;
+        }
+    }
+
+    // Ownership scope: only launches after the last user step are causally
+    // owned by the current turn.
+    const inScope = [...launches.entries()].filter(([, v]) => v.launchIdx > lastUserIdx);
+    const unresolved = inScope.filter(([, v]) => v.resolvedIdx < 0).map(([id]) => id);
+    if (unresolved.length === 0) return { ...EMPTY, support: 'tracked' };
+    LOG.debug('BackgroundTask', `antigravity-cli unresolved background task: count=${unresolved.length} ids=${unresolved.join(',')}`);
+    return { active: true, count: unresolved.length, ids: unresolved, support: 'tracked' };
 }
 
 /**
