@@ -298,12 +298,13 @@ describe('armBeacon — lifecycle against a real node', () => {
         rmSync(dir, { recursive: true, force: true });
     });
 
-    function open(): SeqscribeNodeHandle {
+    function open(constants?: { BEACON_DEBOUNCE_MS: number }): SeqscribeNodeHandle {
         handle = openSeqscribeNode({
             dbPath: join(dir, 'seqscribe.db'),
             meshIds: ['mesh_abc123'],
             env: {},
             storedFleetSecret: null,
+            ...(constants ? { constants } : {}),
         });
         return handle;
     }
@@ -344,18 +345,11 @@ describe('armBeacon — lifecycle against a real node', () => {
         expect(fake.gets).toEqual([]);
     });
 
-    it('★UPSTREAM DEFECT PIN: BeaconHub.stopped is a one-way latch, so a re-arm is silent forever', async () => {
-        // This is the reason the cloud wiring arms ONCE and re-seeds with
-        // pushNow() instead of re-arming per reconnect. `BeaconHub.stop()` sets
-        // `stopped = true` and `start()` never clears it, so the second arm
-        // accepts the call, returns a healthy-looking handle, and never pushes.
-        //
-        // Pinned as a test rather than left as a comment because the failure is
-        // SILENT SUCCESS: without this, a future "simplification" back to
-        // stop/re-arm would pass review, log "beacon armed" every epoch, and
-        // report an empty board forever. If upstream fixes the latch this test
-        // goes red — which is the correct signal to revisit the workaround.
-        const node = open();
+    it('★UPSTREAM P28 PIN: stop → start restores the initial and append-triggered pushes', async () => {
+        // P28 made stop() a reusable pause. Pin both the fresh initial push and
+        // the append debounce: merely clearing the old latch for start() would
+        // make the first assertion pass while leaving the hub silent afterward.
+        const node = open({ BEACON_DEBOUNCE_MS: 10 });
         const fake = makeFakeTransport();
 
         const first = armBeacon(node, fake.transport, { env: {} });
@@ -371,7 +365,16 @@ describe('armBeacon — lifecycle against a real node', () => {
         await settle();
 
         expect(second).not.toBeNull();
-        expect(fake.puts.length).toBe(afterFirst); // ← the defect: no new push
+        expect(fake.puts.length).toBe(afterFirst + 1); // start() initial push
+
+        const afterRearm = fake.puts.length;
+        await node.node
+            .log(FLEET_STATUS_TOPIC)
+            .append('adhdev.p28.rearm', { generation: 2 });
+        await new Promise((r) => setTimeout(r, 25));
+        await settle();
+
+        expect(fake.puts.length).toBeGreaterThan(afterRearm); // debounce is live again
         second!.stop();
     });
 

@@ -366,11 +366,10 @@ export interface BeaconHandle {
     /**
      * Push a report NOW, outside the library's debounce.
      *
-     * The one host-driven trigger, and it exists because of an upstream defect
-     * — see `armBeacon`'s note on `BeaconHub.stopped`. The cloud host calls this
-     * on each authenticated epoch so a reconnect re-seeds the board, since the
-     * library's own initial push happened once at arm time and its debounce only
-     * fires after an append that an idle daemon may never make.
+     * The one host-driven trigger. The cloud host calls this on each
+     * authenticated epoch so a reconnect re-seeds the board immediately. The
+     * library's debounce only fires after an append, which an idle daemon may
+     * not make for hours.
      *
      * Rejections are swallowed and counted, exactly like the library's own push.
      */
@@ -445,23 +444,19 @@ function mergeBeaconReportsByNode(left: unknown[], right: unknown[]): unknown[] 
  * contribution is nothing. The only host-driven push is `pushNow()`, which is
  * edge-triggered on reconnect, not paced.
  *
- * ── ★ARM ONCE. `BeaconHub.stopped` is a ONE-WAY LATCH (upstream defect) ─────
- * `BeaconHub.stop()` sets `this.stopped = true` and `start()` never clears it
- * (`oss/vendor/seqscribe/src/beacon.ts`: assigned at lines 59 and 71, cleared
- * nowhere). Since both `push()` and `notifyApplied()` bail on that flag, a
- * stop-then-re-arm yields a beacon that is silent FOREVER — it accepts the
- * `beacon()` call, returns a healthy-looking handle, and never pushes again.
+ * ── ★ARM ONCE PER NODE; RE-SEED ON RECONNECT ────────────────────────────────
+ * Upstream P28 made `BeaconHub.stop()` a reusable pause: stop → start performs
+ * a fresh initial push and restores append-triggered debounce. We deliberately
+ * keep the host's existing node-lifetime arming, however. A WS reconnect does
+ * not close the seqscribe node or replace its transport bridge, so introducing
+ * a stop/start boundary there would add lifecycle state without buying a
+ * stronger guarantee. `pushNow()` also has the behavior reconnect actually
+ * needs: re-seed the board immediately rather than wait for the next append.
  *
- * Measured on the real library (node.beacon → stop → node.beacon): the first
- * arm produced 1 put, the re-arm produced 0.
- *
- * That silent-success shape is why this is worth a comment rather than a
- * workaround note: a host that re-arms per reconnect would look correct in
- * review, log "beacon armed" on every epoch, and report an empty board forever.
- * So the host contract here is ARM ONCE PER NODE and drive reconnects with
- * `pushNow()` instead. Recorded upstream as a P28-class defect (§8); when it is
- * fixed, `pushNow` remains useful (a reconnect should re-seed the board eagerly
- * rather than wait for the next append), so nothing here needs unwinding.
+ * The real-library lifecycle test pins both sides of this decision: re-arm is
+ * now healthy upstream, while reconnect re-seeding remains an explicit host
+ * operation. Node close is still terminal upstream; our onClose hook below only
+ * stops the current handle and never attempts to start it again.
  */
 export function armBeacon(
     handle: SeqscribeNodeHandle,
