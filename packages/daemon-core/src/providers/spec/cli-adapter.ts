@@ -733,7 +733,7 @@ export class SpecCliAdapter implements CliAdapter {
                     await new Promise(resolve => setTimeout(resolve, 180));
                 }
             }
-            this.assertFocusedClaudeTuiReview(prompt);
+            await this.assertFocusedClaudeTuiReview(prompt);
             this.driver.dispatch({ kind: 'pty_write', data: '\r' });
             await new Promise(resolve => setTimeout(resolve, 180));
         } else {
@@ -1331,6 +1331,20 @@ export class SpecCliAdapter implements CliAdapter {
         if (this.interactivePromptScheme() !== 'claude_tui'
             || this.activeInteractivePrompt
             || this.claudeTuiPromptCaptureInFlight) return;
+        // QUOTED-MARKER DEFENCE (2026-08-28): the capture below is pure screen
+        // scraping, so a session that merely PRINTS the picker's marker strings
+        // ("Enter to select", "✔ Submit", "❐ 1. …" — e.g. quoting a TUI layout
+        // in its own output) used to parse as a live picker and publish a phony
+        // waiting_choice prompt while the agent was still generating.
+        //
+        // The FSM already distinguishes the two: the claude spec has a dedicated
+        // `picker` state (status falls through to idle) and its `busy` state
+        // transitions explicitly NOT-match the picker footer, so a real picker is
+        // never reported as generating. Gating on that is the same cheap
+        // cross-check the kimi built-in selector already applies for the exact
+        // same failure mode (refreshWirePendingQuestion: "a quoted snapshot in
+        // scrolling output must never parse as the picker").
+        if (this.latestState?.status === 'generating') return;
         const screenText = this.driver.snapshot();
         if (!screenText.includes('Enter to select')) {
             // Picker gone — re-arm capture for the next prompt, but only once
@@ -1489,8 +1503,32 @@ export class SpecCliAdapter implements CliAdapter {
         throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"${observed})`);
     }
 
-    private assertFocusedClaudeTuiReview(prompt: InteractivePrompt): void {
-        const screenText = this.readClaudeTuiSnapshotForAnswer();
+    /**
+     * Wait for the review page to actually be on screen before the final Enter.
+     *
+     * The last answer keystroke is what navigates the picker onto its review
+     * page, and the TUI repaint is not instantaneous. Gating on a single
+     * snapshot taken a fixed delay after that keypress races the repaint: on a
+     * slow frame the assertion still sees the previous question page and fails
+     * closed, refusing an answer that was in fact correct (live defect
+     * 2026-08-28). Poll on the same bounded budget the capture path already
+     * uses (snapshotSettledClaudeTuiPage) and accept the first frame that reads
+     * as the review page; on timeout fall through to the last frame so a
+     * genuinely wrong screen still fails closed with its real content.
+     */
+    private async snapshotSettledClaudeTuiReview(): Promise<string> {
+        let screenText = this.readClaudeTuiSnapshotForAnswer();
+        const deadline = Date.now() + SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+            if (!readFocusedClaudeTuiQuestion(screenText) && isClaudeTuiReviewScreen(screenText)) return screenText;
+            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+            screenText = this.readClaudeTuiSnapshotForAnswer();
+        }
+        return screenText;
+    }
+
+    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt): Promise<void> {
+        const screenText = await this.snapshotSettledClaudeTuiReview();
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (focused || !isClaudeTuiReviewScreen(screenText)) {
             const observed = focused?.question ? `; focused question is "${focused.question}"` : '';

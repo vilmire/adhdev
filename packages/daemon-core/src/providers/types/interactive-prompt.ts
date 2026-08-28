@@ -496,12 +496,32 @@ function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index
   if (navIndex < 0) return parseClaudeHeaderlessInteractiveTuiQuestion(page, index);
   if (!page.screenText.includes('Enter to select')) return null;
 
+  // REVIEW-PAGE GUARD. The final review/submit page renders the same nav line
+  // and footer as a question page, so it must be rejected here — otherwise its
+  // leftover option block parses as an "open question" and
+  // assertFocusedClaudeTuiReview refuses the final Enter (live defect
+  // 2026-08-28: an AskUserQuestion with a preview panel could not be answered
+  // from the dashboard or mesh_answer_question).
+  //
+  // This used to check only the FIRST non-blank line after the nav line, which
+  // a preview/notes panel drawn above the marker silently defeated. Scan
+  // forward through non-option content instead, and stop at the first option
+  // row: on a real question page the marker text can never appear before the
+  // options, while on a review page it always does. Stopping at the option
+  // block is what preserves the stacked-picker protection described on
+  // readFocusedClaudeTuiQuestion — a LATER question's rows are never reached.
+  for (let i = navIndex + 1; i < lines.length; i += 1) {
+    const candidate = lines[i].trim();
+    if (!candidate || /^─+$/.test(candidate)) continue;
+    if (candidate === 'Review your answers' || candidate === 'Ready to submit your answers?') return null;
+    if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i])) break;
+  }
+
   let question = '';
   let questionLineIndex = -1;
   for (let i = navIndex + 1; i < lines.length; i += 1) {
     const candidate = lines[i].trim();
     if (!candidate || /^─+$/.test(candidate)) continue;
-    if (candidate === 'Review your answers' || candidate === 'Ready to submit your answers?') return null;
     question = candidate;
     questionLineIndex = i;
     break;
