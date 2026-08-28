@@ -10327,6 +10327,150 @@ async function meshRefineBatch(ctx, args = {}) {
   return JSON.stringify(result, null, 2);
 }
 
+// src/tools/worker-tools.ts
+function readWorkerCredentials(env = process.env) {
+  const bind = typeof env.ADHDEV_WORKER_SESSION_BIND === "string" ? env.ADHDEV_WORKER_SESSION_BIND.trim() : "";
+  const token = typeof env.ADHDEV_WORKER_TASK_TOKEN === "string" ? env.ADHDEV_WORKER_TASK_TOKEN.trim() : "";
+  return { ...bind ? { bind } : {}, ...token ? { token } : {} };
+}
+var BRANCH_STATES = [
+  "merged_to_main",
+  "pushed_feature_branch_needs_merge",
+  "blocked_review",
+  "cleanup_candidate",
+  "not_mergeable"
+];
+var REPORT_COMPLETION_TOOL = {
+  name: "report_completion",
+  description: "Report the structured outcome of the task you were dispatched to do. Call this ONCE when your work is finished, blocked, or has failed. Your `summary` is recorded verbatim \u2014 it is not scraped from your terminal \u2014 so write what the coordinator actually needs to know. You do not pass a task id: the daemon knows which task you hold.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      outcome: {
+        type: "string",
+        enum: ["completed", "blocked", "failed"],
+        description: "'completed' = the task is done. 'blocked' = you cannot proceed without something external (list it in `blockers`). 'failed' = you tried and it did not work."
+      },
+      summary: {
+        type: "string",
+        description: "What you did and what the result was, in your own words. This is the authoritative record of this task \u2014 prefer specifics (files, commands, findings) over restating the assignment."
+      },
+      handoff_notes: {
+        type: "object",
+        description: "Durable notes for whoever touches this code next \u2014 including the agent that resolves a merge conflict against your change. These are delivered automatically into related future tasks, so write for a reader who cannot ask you questions.",
+        properties: {
+          intent: {
+            type: "string",
+            description: "WHY you made this change \u2014 the part a diff cannot show. Required."
+          },
+          conflict_guidance: {
+            type: "string",
+            description: "If someone else changed the same code, how should the conflict be resolved? State which property of your change must survive."
+          },
+          touched_files: {
+            type: "array",
+            items: { type: "string" },
+            description: "Files you changed. Required \u2014 this is how your note is matched to future work on the same code."
+          },
+          follow_ups: {
+            type: "array",
+            items: { type: "string" },
+            description: "Work you deliberately did not do, that someone should pick up."
+          }
+        },
+        required: ["intent", "touched_files"]
+      },
+      touched_files: {
+        type: "array",
+        items: { type: "string" },
+        description: "Files this task changed."
+      },
+      branch_state: {
+        type: "string",
+        enum: BRANCH_STATES,
+        description: "Where you left the branch. A task on a non-main branch is not fully complete unless this names the follow-up state."
+      },
+      blockers: {
+        type: "array",
+        items: { type: "string" },
+        description: "What is blocking you. Expected when outcome is 'blocked'."
+      }
+    },
+    required: ["outcome", "summary"]
+  }
+};
+var PROGRESS_UPDATE_TOOL = {
+  name: "progress_update",
+  description: "Record a short progress note mid-task. Does not end the task. Use it on long work so the coordinator can see movement without interrupting you.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "What you are doing or what you just learned." }
+    },
+    required: ["note"]
+  }
+};
+var ALL_WORKER_TOOLS = [REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL];
+function toDaemonReport(a) {
+  const notes = a.handoff_notes;
+  return {
+    outcome: a.outcome,
+    summary: a.summary,
+    ...a.touched_files !== void 0 ? { touchedFiles: a.touched_files } : {},
+    ...a.branch_state !== void 0 ? { branchState: a.branch_state } : {},
+    ...a.blockers !== void 0 ? { blockers: a.blockers } : {},
+    ...notes && typeof notes === "object" && !Array.isArray(notes) ? {
+      handoffNotes: {
+        ...notes.intent !== void 0 ? { intent: notes.intent } : {},
+        ...notes.conflict_guidance !== void 0 ? { conflictGuidance: notes.conflict_guidance } : {},
+        ...notes.touched_files !== void 0 ? { touchedFiles: notes.touched_files } : {},
+        ...notes.follow_ups !== void 0 ? { followUps: notes.follow_ups } : {}
+      }
+    } : {}
+  };
+}
+async function reportCompletion(transport, credentials, args) {
+  const result = await transport.command("worker_report_completion", {
+    ...credentials,
+    report: toDaemonReport(args)
+  });
+  if (result?.success === true) {
+    const lines = [
+      result.duplicate ? `Completion already recorded for task ${result.taskId} \u2014 this repeat was accepted as a duplicate.` : `Completion recorded for task ${result.taskId} (${result.outcome}).`
+    ];
+    if (result.handoffNoteRecorded) {
+      lines.push("Handoff note stored \u2014 it will be delivered to related future tasks automatically.");
+    }
+    return { text: lines.join("\n") };
+  }
+  if (result?.error === "invalid_report" && Array.isArray(result.validationErrors)) {
+    const details = result.validationErrors.map((e) => `  - ${e.field || "(root)"}: ${e.message}`).join("\n");
+    return {
+      text: `report_completion rejected \u2014 fix these and call again:
+${details}`,
+      isError: true
+    };
+  }
+  const reason = result?.error || "unknown_error";
+  const hint = result?.hint ? `
+${result.hint}` : "";
+  const detail = result?.detail ? `
+Detail: ${result.detail}` : "";
+  return { text: `report_completion refused (${reason}).${hint}${detail}`, isError: true };
+}
+async function progressUpdate(transport, credentials, args) {
+  const note = typeof args?.note === "string" ? args.note.trim() : "";
+  if (!note) return { text: "progress_update requires a non-empty `note`.", isError: true };
+  const result = await transport.command("worker_progress_update", { ...credentials, note });
+  if (result?.success === true) {
+    return { text: `Progress noted for task ${result.taskId ?? "(unknown)"}.` };
+  }
+  return {
+    text: `progress_update refused (${result?.error || "unknown_error"}).`,
+    isError: true
+  };
+}
+
 // src/help.ts
 var STANDARD_TOOLS = [
   "list_daemons",
@@ -10347,12 +10491,14 @@ var STANDARD_TOOLS = [
 ];
 function buildMcpHelpText() {
   const meshTools = ALL_MESH_TOOLS.map((tool) => tool.name);
+  const workerTools = ALL_WORKER_TOOLS.map((tool) => tool.name);
   return `
 ADHDev MCP Server
 
 Usage:
   adhdev mcp                                    Local mode (requires standalone daemon)
   adhdev mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
+  adhdev mcp --mode ipc --worker                Delegated-worker mode (daemon-launched; needs a session bind)
   adhdev-mcp --help                             Compatibility bin (same server, legacy package entrypoint)
 
 Options:
@@ -10360,16 +10506,68 @@ Options:
   --port <n>              Standalone or IPC daemon port (defaults: local 3847, ipc 19222)
   --password <pass>       Standalone daemon password (if set)
   --repo-mesh <mesh_id>   Enable mesh mode \u2014 exposes only mesh-scoped coordinator tools
+  --worker                Enable worker mode \u2014 the minimal delegated-worker toolset.
+                          Overrides --repo-mesh: a worker never gets coordinator tools.
   --help                  Show this help
 
 Environment variables:
   ADHDEV_PASSWORD     Daemon password (local mode)
   ADHDEV_MESH_ID      Mesh ID (mesh mode)
   ADHDEV_MCP_TRANSPORT Transport: local or ipc
+  ADHDEV_WORKER_SESSION_BIND  Worker session bind (worker mode; written by the daemon)
+  ADHDEV_WORKER_TASK_TOKEN    Worker task token (worker mode; alternative to the bind)
 
 Standard tools:   ${STANDARD_TOOLS.join(", ")}
 Mesh tools:       ${meshTools.join(", ")}
+Worker tools:     ${workerTools.join(", ")}, git_status, git_log, git_diff
 `.trim();
+}
+
+// src/cli-args.ts
+function parseArgs(argv, env = process.env) {
+  const args = argv.slice(2);
+  let port;
+  let password;
+  let meshId;
+  let explicitMode;
+  let worker = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--mode" && args[i + 1]) {
+      const value = String(args[++i]).trim();
+      if (value === "local" || value === "ipc") explicitMode = value;
+    } else if (arg?.startsWith("--mode=")) {
+      const value = arg.slice("--mode=".length).trim();
+      if (value === "local" || value === "ipc") explicitMode = value;
+    } else if (arg === "--port" && args[i + 1]) {
+      port = Number(args[++i]);
+    } else if (arg?.startsWith("--port=")) {
+      port = Number(arg.slice("--port=".length));
+    } else if (arg === "--password" && args[i + 1]) {
+      password = args[++i];
+    } else if ((arg === "--repo-mesh" || arg === "--mesh") && args[i + 1]) {
+      meshId = args[++i];
+    } else if (arg?.startsWith("--repo-mesh=")) {
+      meshId = arg.slice("--repo-mesh=".length);
+    } else if (arg === "--worker") {
+      worker = true;
+    } else if (arg === "--help" || arg === "-h") {
+      printHelp();
+      process.exit(0);
+    }
+  }
+  if (!password && env.ADHDEV_PASSWORD) password = env.ADHDEV_PASSWORD;
+  if (!meshId && env.ADHDEV_MESH_ID) meshId = env.ADHDEV_MESH_ID;
+  if (!explicitMode && env.ADHDEV_MCP_TRANSPORT) {
+    const value = env.ADHDEV_MCP_TRANSPORT.trim();
+    if (value === "local" || value === "ipc") explicitMode = value;
+  }
+  const mode = explicitMode || (meshId && env.ADHDEV_INLINE_MESH ? "ipc" : "local");
+  if (worker) return { mode, port, password, worker: true };
+  return { mode, port, password, meshId };
+}
+function printHelp() {
+  console.error(buildMcpHelpText());
 }
 
 // src/server.ts
@@ -11492,6 +11690,66 @@ async function startMcpServer(opts) {
     process.exit(1);
   }
   const isLocal = opts.mode === "local";
+  if (opts.worker) {
+    const credentials = readWorkerCredentials();
+    if (!credentials.bind && !credentials.token) {
+      process.stderr.write(
+        "[adhdev-mcp] Worker mode requires ADHDEV_WORKER_SESSION_BIND (or ADHDEV_WORKER_TASK_TOKEN) in the MCP server env. This is written by the daemon when it launches a delegated worker.\n"
+      );
+      process.exit(1);
+    }
+    const workerTools = [...ALL_WORKER_TOOLS, GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL];
+    const workerToolByName = new Map(
+      workerTools.map((tool) => [tool.name, tool])
+    );
+    const server2 = new import_server.Server(
+      { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
+      { capabilities: { tools: {} } }
+    );
+    server2.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: workerTools }));
+    server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
+      const { name, arguments: args } = req.params;
+      const a = args ?? {};
+      const workerTool = workerToolByName.get(name);
+      if (workerTool) {
+        const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a);
+        if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
+      }
+      try {
+        switch (name) {
+          case "report_completion": {
+            const result = await reportCompletion(transport, credentials, a);
+            return { content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} };
+          }
+          case "progress_update": {
+            const result = await progressUpdate(transport, credentials, a);
+            return { content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} };
+          }
+          case "git_status": {
+            const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
+            return { content: [{ type: "text", text }] };
+          }
+          case "git_log": {
+            const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
+            return { content: [{ type: "text", text }] };
+          }
+          case "git_diff": {
+            const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
+            return { content: [{ type: "text", text }] };
+          }
+          default:
+            return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
+        }
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true };
+      }
+    });
+    const stdioTransport2 = new import_stdio.StdioServerTransport();
+    await server2.connect(stdioTransport2);
+    process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} WORKER mode \u2014 ${workerTools.length} tools.
+`);
+    return;
+  }
   if (opts.meshId) {
     let mesh;
     if (!mesh && process.env.ADHDEV_INLINE_MESH) {
@@ -11952,47 +12210,6 @@ async function startMcpServer(opts) {
 }
 
 // src/index.ts
-function parseArgs(argv, env = process.env) {
-  const args = argv.slice(2);
-  let port;
-  let password;
-  let meshId;
-  let explicitMode;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--mode" && args[i + 1]) {
-      const value = String(args[++i]).trim();
-      if (value === "local" || value === "ipc") explicitMode = value;
-    } else if (arg?.startsWith("--mode=")) {
-      const value = arg.slice("--mode=".length).trim();
-      if (value === "local" || value === "ipc") explicitMode = value;
-    } else if (arg === "--port" && args[i + 1]) {
-      port = Number(args[++i]);
-    } else if (arg?.startsWith("--port=")) {
-      port = Number(arg.slice("--port=".length));
-    } else if (arg === "--password" && args[i + 1]) {
-      password = args[++i];
-    } else if ((arg === "--repo-mesh" || arg === "--mesh") && args[i + 1]) {
-      meshId = args[++i];
-    } else if (arg?.startsWith("--repo-mesh=")) {
-      meshId = arg.slice("--repo-mesh=".length);
-    } else if (arg === "--help" || arg === "-h") {
-      printHelp();
-      process.exit(0);
-    }
-  }
-  if (!password && env.ADHDEV_PASSWORD) password = env.ADHDEV_PASSWORD;
-  if (!meshId && env.ADHDEV_MESH_ID) meshId = env.ADHDEV_MESH_ID;
-  if (!explicitMode && env.ADHDEV_MCP_TRANSPORT) {
-    const value = env.ADHDEV_MCP_TRANSPORT.trim();
-    if (value === "local" || value === "ipc") explicitMode = value;
-  }
-  const mode = explicitMode || (meshId && env.ADHDEV_INLINE_MESH ? "ipc" : "local");
-  return { mode, port, password, meshId };
-}
-function printHelp() {
-  console.error(buildMcpHelpText());
-}
 startMcpServer(parseArgs(process.argv)).catch((err) => {
   process.stderr.write(`[adhdev-mcp] Fatal: ${err?.message ?? err}
 `);

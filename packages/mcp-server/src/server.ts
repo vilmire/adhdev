@@ -55,6 +55,9 @@ import {
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 import { rejectUnknownMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
+import {
+  ALL_WORKER_TOOLS, readWorkerCredentials, reportCompletion, progressUpdate,
+} from './tools/worker-tools.js';
 
 /**
  * Version reported in the MCP `initialize` response (`serverInfo.version`).
@@ -90,6 +93,9 @@ export interface AdhdevMcpServerOptions {
   password?: string;
   // mesh mode (optional — restricts tools to mesh-scoped set)
   meshId?: string;
+  // worker mode (optional — the MINIMAL delegated-worker toolset). Mutually
+  // exclusive with meshId, and index.ts enforces that by dropping meshId.
+  worker?: boolean;
 }
 
 export async function buildMeshModeCoordinatorPrompt(mesh: any): Promise<string> {
@@ -119,6 +125,85 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
   }
 
   const isLocal = opts.mode === 'local';
+
+  // ── Worker Mode ───────────────────────────────
+  //
+  // Checked BEFORE mesh mode. A delegated worker gets `report_completion` /
+  // `progress_update` plus read-only git inspection of its own workspace — and
+  // nothing from the coordinator surface. No mesh tools, and no
+  // `coordinator://system-prompt` resource (note this block registers no
+  // resource capability at all).
+  if (opts.worker) {
+    const credentials = readWorkerCredentials();
+    if (!credentials.bind && !credentials.token) {
+      // FAIL CLOSED (design §3 step 4). A worker server that booted without a
+      // credential could not attribute anything it was told, so the useful
+      // failure is a loud one at startup — not a tool that accepts a report and
+      // silently drops it because it has no identity to file it under.
+      process.stderr.write(
+        '[adhdev-mcp] Worker mode requires ADHDEV_WORKER_SESSION_BIND (or ADHDEV_WORKER_TASK_TOKEN) in the MCP server env. '
+        + 'This is written by the daemon when it launches a delegated worker.\n',
+      );
+      process.exit(1);
+    }
+
+    const workerTools = [...ALL_WORKER_TOOLS, GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL];
+    const workerToolByName = new Map<string, { inputSchema?: { properties?: Record<string, unknown> } }>(
+      workerTools.map(tool => [tool.name, tool]),
+    );
+
+    const server = new Server(
+      { name: 'adhdev-mcp-server', version: MCP_SERVER_VERSION },
+      { capabilities: { tools: {} } },
+    );
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: workerTools }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+      const { name, arguments: args } = req.params;
+      const a = (args ?? {}) as Record<string, any>;
+
+      const workerTool = workerToolByName.get(name);
+      if (workerTool) {
+        const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a);
+        if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
+      }
+
+      try {
+        switch (name) {
+          case 'report_completion': {
+            const result = await reportCompletion(transport, credentials, a);
+            return { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) };
+          }
+          case 'progress_update': {
+            const result = await progressUpdate(transport, credentials, a);
+            return { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) };
+          }
+          case 'git_status': {
+            const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
+            return { content: [{ type: 'text', text }] };
+          }
+          case 'git_log': {
+            const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
+            return { content: [{ type: 'text', text }] };
+          }
+          case 'git_diff': {
+            const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
+            return { content: [{ type: 'text', text }] };
+          }
+          default:
+            return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+        }
+      } catch (err: any) {
+        return { content: [{ type: 'text', text: `Error: ${err?.message ?? String(err)}` }], isError: true };
+      }
+    });
+
+    const stdioTransport = new StdioServerTransport();
+    await server.connect(stdioTransport);
+    process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} WORKER mode — ${workerTools.length} tools.\n`);
+    return;
+  }
 
   // ── Mesh Mode ─────────────────────────────────
   if (opts.meshId) {

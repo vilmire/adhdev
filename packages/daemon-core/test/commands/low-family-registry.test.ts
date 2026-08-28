@@ -11,6 +11,7 @@ import { notificationHandlers } from '../../src/commands/low-family/notification
 import { daemonLifecycleHandlers } from '../../src/commands/low-family/daemon-lifecycle.js'
 import { meshLedgerHandlers } from '../../src/commands/low-family/mesh-ledger.js'
 import { meshNodeLogsHandlers } from '../../src/commands/low-family/mesh-node-logs.js'
+import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
 
 // RF-ROUTER LOW family extraction: the registry must carry exactly the commands
 // removed from executeDaemonCommand's switch, and each handler must return the same
@@ -54,13 +55,16 @@ const DAEMON_LIFECYCLE_CMDS = [
 ]
 const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes', 'record_mesh_note', 'forget_mesh_note', 'import_mesh_ledger_slice']
 const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
+// WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
+const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_progress_update']
 
 describe('low-family registry', () => {
-  it('registers all 47 LOW family commands once, no overlap', () => {
+  it('registers all 50 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
+      ...WORKER_REPORT_CMDS,
     ]
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
@@ -77,6 +81,7 @@ describe('low-family registry', () => {
     expect(Object.keys(daemonLifecycleHandlers)).toEqual(DAEMON_LIFECYCLE_CMDS)
     expect(Object.keys(meshLedgerHandlers)).toEqual(MESH_LEDGER_CMDS)
     expect(Object.keys(meshNodeLogsHandlers)).toEqual(MESH_NODE_LOGS_CMDS)
+    expect(Object.keys(workerReportHandlers)).toEqual(WORKER_REPORT_CMDS)
   })
 
   // The lists above are written by hand, which is what makes them a real gate:
@@ -94,7 +99,7 @@ describe('low-family registry', () => {
       sessionHostHandlers, specProviderDevHandlers, refineConfigHandlers,
       diagnosticsHandlers, statusMetaHandlers, coordinatorPromptHandlers,
       notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
-      meshNodeLogsHandlers,
+      meshNodeLogsHandlers, workerReportHandlers,
     ].flatMap((handlers) => Object.keys(handlers))
 
     expect(new Set(union).size).toBe(union.length)

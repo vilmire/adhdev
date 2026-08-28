@@ -60,6 +60,19 @@ import type { ChatMessage } from '../../types.js';
  */
 export type FinalSummaryProvenance = {
     source:
+        /**
+         * (WORKER-MCP, design §4) The worker DECLARED this summary as an argument
+         * to `report_completion`. Highest grade, and the only one that is not a
+         * reading of something: there is no terminal to wrap it, no transcript
+         * to race, and no length heuristic needed to guess whether it is whole.
+         *
+         * ★This grade is produced on the MESH side (worker-report.ts stamps
+         * `summarySource: 'tool_report'` into the completion envelope), not by
+         * completionFinalSummary below — which only ever resolves the three
+         * READ sources. It is declared here so the one provenance vocabulary
+         * covers every summary a coordinator can receive.
+         */
+        | 'tool_report'
         /** Turn-scoped read of the provider's own append-only native transcript. */
         | 'native_transcript'
         /** PTY screen scrape for a provider whose ONLY history is the screen. */
@@ -72,6 +85,28 @@ export type FinalSummaryProvenance = {
     /** Length of the resolved summary, for the diagnostic/trace (0 when none). */
     contentLength: number;
 };
+
+/**
+ * Provenance ranking, strongest first. Exported so a consumer choosing between
+ * two summaries for the same turn (the mesh reconcile upgrade path) has ONE
+ * ordering to consult instead of re-deriving it per call site.
+ */
+export const FINAL_SUMMARY_PROVENANCE_RANK: readonly FinalSummaryProvenance['source'][] = [
+    'tool_report',
+    'native_transcript',
+    'parsed_screen',
+    'parsed_screen_fallback',
+    'none',
+];
+
+/** True when `candidate` is a strictly better summary source than `incumbent`. */
+export function isStrongerSummaryProvenance(
+    candidate: FinalSummaryProvenance['source'],
+    incumbent: FinalSummaryProvenance['source'],
+): boolean {
+    return FINAL_SUMMARY_PROVENANCE_RANK.indexOf(candidate)
+        < FINAL_SUMMARY_PROVENANCE_RANK.indexOf(incumbent);
+}
 
 /**
  * (SUMMARY-SCRAPE-FALLBACK, part A) Bounded wait for a native-source provider's transcript

@@ -1138,7 +1138,18 @@ export type CompletionProposalSource =
     | 'idle_status'       // status/idle-driven inference
     | 'stall_reconcile'   // stall watchdog / no-progress reconciliation
     | 'cancellation'      // operator/system cancellation
-    | 'reassignment';     // reclaim/reassign closing the attempt (task continues)
+    | 'reassignment'      // reclaim/reassign closing the attempt (task continues)
+    // WORKER-MCP (design §4): the worker DECLARED its own outcome through the
+    // report_completion tool, authenticated by a daemon-minted task token.
+    //
+    // ★It gets no causal exemption. Every source above is an INFERENCE the
+    // daemon made about a worker; this one is the worker's own statement — which
+    // makes it a better summary, not a stronger claim on the attempt. A report
+    // from a superseded dispatch is still stale, a report naming another
+    // session's attempt is still a mismatch, and a second report with a
+    // different outcome is still already_terminal. Those checks exist precisely
+    // for the case where the reporter is confident and wrong.
+    | 'worker_tool_report';
 
 export interface CompletionProposal {
     meshId: string;

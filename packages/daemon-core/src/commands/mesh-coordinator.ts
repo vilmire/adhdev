@@ -297,6 +297,47 @@ function resolveAdhdevCommand(explicitCommand?: string): string {
   return explicitCommand?.trim() || process.env.ADHDEV_COORDINATOR_MCP_COMMAND?.trim() || DEFAULT_ADHDEV_MCP_COMMAND
 }
 
+/**
+ * WORKER-MCP (design §3): the MCP server launch a delegated WORKER gets.
+ *
+ * Deliberately built from the SAME private resolvers the coordinator launch
+ * uses (entry path → node executable → `adhdev mcp`, transport, port). The one
+ * thing a worker must never receive is `--repo-mesh <meshId>`: that flag is
+ * what puts the server into mesh mode, which publishes all 60 coordinator tools
+ * and exposes the coordinator system prompt as an MCP resource. `--mode worker`
+ * selects the minimal worker toolset instead.
+ *
+ * Sharing the resolvers matters more than it looks: a worker whose binary is
+ * discovered by a DIFFERENT rule than the coordinator's would silently diverge
+ * on preview-vs-stable track (the exact class of bug the port-stamping comment
+ * on resolveMcpPort describes).
+ */
+export function resolveWorkerMcpServerLaunch(options?: {
+  adhdevMcpCommand?: string
+  adhdevMcpEntryPath?: string
+  nodeExecutable?: string
+  adhdevMcpTransport?: 'local' | 'ipc'
+  adhdevMcpPort?: number
+}): MeshCoordinatorMcpServerLaunch {
+  const transport = resolveMcpTransport(options?.adhdevMcpTransport)
+  const port = resolveMcpPort(options?.adhdevMcpPort)
+
+  const directEntryPath = resolveAdhdevMcpEntryPath(options?.adhdevMcpEntryPath)
+  if (directEntryPath) {
+    const args = [directEntryPath, '--mode', transport, '--worker']
+    if (port !== undefined) args.push('--port', String(port))
+    return { command: resolveNodeExecutable(options?.nodeExecutable), args }
+  }
+
+  const command = resolveAdhdevCommand(options?.adhdevMcpCommand)
+  const directMcpEntrypoint = basename(command).startsWith('adhdev-mcp')
+    || command.includes('/vendor/mcp-server/')
+    || command.includes('\\vendor\\mcp-server\\')
+  const args = [...(directMcpEntrypoint ? [] : ['mcp']), '--mode', transport, '--worker']
+  if (port !== undefined) args.push('--port', String(port))
+  return { command, args }
+}
+
 export interface MeshCoordinatorMcpServerPathHealth {
   /** Same three-state vocabulary as config/embedded-path-health. */
   state: EmbeddedPathState

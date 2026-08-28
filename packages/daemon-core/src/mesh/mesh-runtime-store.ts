@@ -24,6 +24,7 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
 import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange } from './mesh-runtime-store-turn-rows.js';
 import type { MeshTurnAttemptRow, MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
+import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, type TurnEventRow } from './mesh-turn-event-queries.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
@@ -543,6 +544,10 @@ export class MeshRuntimeStore {
 
             CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_task
                 ON mesh_turn_events(mesh_id, task_id, kind);
+
+            -- WORKER-MCP (design §5): by-kind probes; see mesh-turn-event-queries.ts.
+            CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_kind
+                ON mesh_turn_events(mesh_id, kind, recorded_at);
 
             -- TURN-LEDGER (Stage 5): durable outbound delivery state (coordinator-bound
             -- completion / ACK notifications) for restart recovery. A row is enqueued in
@@ -3318,23 +3323,12 @@ export class MeshRuntimeStore {
         return row !== undefined;
     }
 
-    listTurnEventsForTask(meshId: string, taskId: string): Array<{
-        eventId: string; attemptId: string; kind: string; dedupeKey: string;
-        payload: string; occurredAtMs: number | null; recordedAt: string;
-    }> {
-        const rows = this.db.prepare(`
-            SELECT * FROM mesh_turn_events WHERE mesh_id = ? AND task_id = ? ORDER BY recorded_at ASC, event_id ASC
-        `).all(meshId, taskId) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            eventId: r.event_id as string,
-            attemptId: r.attempt_id as string,
-            kind: r.kind as string,
-            dedupeKey: (r.dedupe_key as string) ?? '',
-            payload: r.payload as string,
-            occurredAtMs: r.occurred_at_ms as number | null,
-            recordedAt: r.recorded_at as string,
-        }));
-    }
+    /** Turn events for one task, oldest first. SQL: mesh-turn-event-queries.ts. */
+    listTurnEventsForTask(meshId: string, taskId: string): Omit<TurnEventRow, 'taskId'>[] { return selectTurnEventsForTask(this.db, meshId, taskId); }
+
+    /** By-KIND turn-event queries. SQL + index rationale: mesh-turn-event-queries.ts. */
+    listTurnEventsByKind(meshId: string, kind: string, limit = 200): TurnEventRow[] { return selectTurnEventsByKind(this.db, meshId, kind, limit); }
+    deleteTurnEventsByKindOlderThan(kind: string, cutoffIso: string, meshId?: string): number { return deleteTurnEventsByKindOlderThan(this.db, kind, cutoffIso, meshId); }
 
     // ── TURN-LEDGER (Stage 5): durable outbound delivery (outbox) ────────────
 

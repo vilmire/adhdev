@@ -107,6 +107,20 @@ export function sessionTranscriptTopic(sessionId: string): string {
     return `session.${safeSessionId(sessionId)}.transcript`;
 }
 
+/**
+ * Per-mesh worker handoff notes (worker-MCP decision C / F).
+ *
+ * ★Deliberately NOT `mesh.<id>.events`. That topic is metadata class precisely
+ * so a cloud peer may hold it — "routing/lifecycle records, ids, enums,
+ * counters, never chat content". A handoff note is free text an agent wrote
+ * about why it changed code: content by any reading. Putting it on the events
+ * topic would break that invariant and carry the text across the cloud boundary,
+ * so it gets its own content-class topic instead.
+ */
+export function meshHandoffTopic(meshId: string): string {
+    return `mesh.${safeMeshId(meshId)}.handoff`;
+}
+
 /** Fleet-wide daemon status tail (Phase 4). */
 export const FLEET_STATUS_TOPIC = 'fleet.status';
 
@@ -153,6 +167,32 @@ export function assistantJournalPolicy(): TopicPolicy {
         // Content topics name the fleet authority (see the header note on
         // finalityAuthority): required for proposeFinality/cert ingestion, and
         // inside topicSchemaHash, so this is one constant fleet-wide.
+        finalityAuthority: ADHDEV_AUTHORITY_ID,
+    };
+}
+
+/**
+ * `mesh.<id>.handoff` — worker handoff notes; content class, full history.
+ *
+ * `full` retention rather than a ring, unlike the session transcript: a note's
+ * whole purpose is to be read by work that has not been dispatched yet, which
+ * can be days later. A ring would silently evict exactly the older notes a
+ * long-running mission most needs. Volume is bounded in practice by shape —
+ * at most one note per completed task, not one per message.
+ *
+ * `full-sync` so a worker on another machine in the same mesh can receive a
+ * note written here; that is the cross-node handoff case the feature exists for.
+ *
+ * ★Content class, so it never reaches a metadata-only cloud peer. That is what
+ * lets decision C avoid asking for a new exception to the server content
+ * boundary: the note text stays on daemons.
+ */
+export function meshHandoffPolicy(): TopicPolicy {
+    return {
+        kind: 'append',
+        retention: { mode: 'full' },
+        replication: 'full-sync',
+        access: 'content',
         finalityAuthority: ADHDEV_AUTHORITY_ID,
     };
 }
@@ -252,6 +292,10 @@ export function baseTopicDefinitions(meshIds: readonly string[]): TopicDefinitio
         if (seen.has(topic)) continue;
         seen.add(topic);
         defs.push({ topic, policy: meshEventsPolicy() });
+        // Worker handoff notes for the same mesh. Registered at boot alongside
+        // the events topic because the mesh set IS known at boot — unlike the
+        // per-session transcript topics above, which are not.
+        defs.push({ topic: meshHandoffTopic(meshId), policy: meshHandoffPolicy() });
     }
     return defs;
 }

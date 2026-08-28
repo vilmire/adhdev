@@ -73,6 +73,8 @@ import {
     meshDualWriteCounters,
 } from '../seqscribe/mesh-dual-write.js';
 import { configureFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
+import { configureHandoffNotesSeqscribe, storeHandoffNote } from '../mesh/worker-handoff-notes.js';
+import { configureHandoffNoteSink } from '../mesh/worker-report.js';
 import { configureFleetStatusParity } from '../seqscribe/fleet-status-parity.js';
 import {
     createFleetStatusPeerViewConsumer,
@@ -917,6 +919,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         // resolved to `shadow`, which is now the default — the parity loop
         // arms fleet-wide unless a daemon explicitly opts out.
         configureFleetStatusParity(components.seqscribeNode ?? null);
+        // WORKER-MCP decision C: handoff-note content rides the per-mesh
+        // content-class topic. A null node (or an authority-less boot, where
+        // content topics are undefined) degrades to the local text mirror —
+        // same-machine enclosure keeps working, cross-machine does not.
+        configureHandoffNotesSeqscribe(components.seqscribeNode ?? null);
+        configureHandoffNoteSink(storeHandoffNote);
         if (components.seqscribeNode) {
             // GC durable cursors older builds left behind: pre-P17 read-model
             // generation names (`…#2`) and pre-P21 per-sweep parity nonces.
@@ -1073,6 +1081,12 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // unsubscribed before step 7 closes the node. A consumer still registered
     // when the node closes would touch the store after the owner lock released.
     try { configureMeshReadModel(null); } catch { /* noop */ }
+    // Detach the handoff-note topic writer for the same reason as the legs
+    // above — a report landing during shutdown must not append into a node
+    // step 7 is about to close. The sink is dropped too so the report path
+    // stops trying to store text once the node is going away.
+    try { configureHandoffNotesSeqscribe(null); } catch { /* noop */ }
+    try { configureHandoffNoteSink(null); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

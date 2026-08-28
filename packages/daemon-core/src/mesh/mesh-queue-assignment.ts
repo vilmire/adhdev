@@ -63,6 +63,7 @@ import {
 } from './mesh-autolaunch-integrity.js';
 import { allowedClassifiedDifficultiesForSession, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel } from './mesh-difficulty-floor.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
+import { resolveDispatchMessage } from './worker-handoff-dispatch.js';
 import {
     normalizeProviderPriority,
     isTerminalSessionStatus,
@@ -1244,6 +1245,13 @@ export function tryAssignQueueTask(
             LOG.warn('WorkerMcp', `Failed to mint worker task token for ${task.id}: ${e?.message || e}`);
         }
     }
+
+    // WORKER-MCP decision C: the dispatched body may carry handoff notes from
+    // related earlier work. Composed ONCE here (not per dispatch arm) so the
+    // remote and local arms cannot drift, and applied to the DISPATCHED body
+    // only — `task.message` stays the authored text. Gate-off ⇒ unchanged.
+    const dispatchMessage = resolveDispatchMessage(task, meshId, node);
+
     // TURN-LEDGER (Stage 5): a prompt must never be injected into an attempt that has
     // already CONSUMED one. The fresh claim above normally guarantees a pre-consumed
     // attempt, but a same-tick duplicate dispatch path (or a crash/replay) must fail
@@ -1348,7 +1356,9 @@ export function tryAssignQueueTask(
                     targetSessionId: sessionId,
                     cliType: providerType,
                     action: 'send_chat',
-                    message: task.message,
+                    // Handoff-note enclosure applies to the DISPATCHED body only;
+                    // task.message stays the authored text (see composition above).
+                    message: dispatchMessage,
                     // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
                     dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:remote',
                     meshContext: {
@@ -1446,7 +1456,8 @@ export function tryAssignQueueTask(
             targetSessionId: sessionId,
             cliType: providerType,
             action: 'send_chat',
-            message: task.message,
+            // Same enclosure as the remote arm — one composed body, both paths.
+            message: dispatchMessage,
             // DISPATCH-SOURCE-TRACE: call-site tag echoed in the daemon log.
             dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:local',
             meshContext: {

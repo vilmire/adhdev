@@ -45,6 +45,7 @@ import { listWorktrees } from '../git/git-worktree.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { checkDiskSpace, logDiskSpaceStatus, type DiskSpaceLevel } from '../diagnostics/disk-space-preflight.js';
+import { pruneExpiredHandoffNotes, HANDOFF_RETENTION_DAYS } from './worker-handoff-notes.js';
 
 // ─── Thresholds (all defensive) ────────────────────────────────────────────
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -298,6 +299,8 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
     sessionHostRuntimes: number;
     rotationEvicted: number;
     rotationEvictedBytes: number;
+    /** Handoff-note ledger rows dropped past their 30-day window. */
+    handoffNotes: number;
     /** Volume health after reclaiming ('ok' when unmeasurable). */
     diskLevel: DiskSpaceLevel;
 } {
@@ -306,6 +309,7 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
     let sessionHostRuntimes = 0;
     let rotationEvicted = 0;
     let rotationEvictedBytes = 0;
+    let handoffNotes = 0;
     try { ledgerJsonl = pruneExpiredLedgerJsonl(now); } catch (e: any) { LOG.warn('DiskRetention', `Ledger JSONL prune failed: ${e?.message || e}`); }
     try { dbBackups = pruneExpiredDbBackups(now); } catch (e: any) { LOG.warn('DiskRetention', `DB backup prune failed: ${e?.message || e}`); }
     try { sessionHostRuntimes = pruneExpiredSessionHostRuntimes(now); } catch (e: any) { LOG.warn('DiskRetention', `Session-host runtime prune failed: ${e?.message || e}`); }
@@ -317,6 +321,15 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
             LOG.info('DiskRetention', `Ledger rotation cap evicted ${rotation.evicted} closed rotation file(s) across ${rotation.meshes} mesh(es), ${rotation.evictedBytes} byte(s) freed (rotation_cap_count=${rotation.byReason.rotation_cap_count}, rotation_cap_bytes=${rotation.byReason.rotation_cap_bytes})`);
         }
     } catch (e: any) { LOG.warn('DiskRetention', `Ledger rotation cap sweep failed: ${e?.message || e}`); }
+    // WORKER-MCP decision G / owner §12-4: handoff notes expire 30 days out.
+    // A DB-row pass rather than a file pass — the notes live in mesh_turn_events
+    // — but it belongs on the same hourly cadence as its file-based siblings.
+    try {
+        handoffNotes = pruneExpiredHandoffNotes(now);
+        if (handoffNotes > 0) {
+            LOG.info('DiskRetention', `Pruned ${handoffNotes} handoff note row(s) older than ${HANDOFF_RETENTION_DAYS}d`);
+        }
+    } catch (e: any) { LOG.warn('DiskRetention', `Handoff note prune failed: ${e?.message || e}`); }
     // Report the volume AFTER reclaiming, so the logged figure reflects what the
     // sweep actually left behind. Retention alone is not enough: this module was
     // written after an earlier 98%-disk incident and still the volume climbed
@@ -329,7 +342,7 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
         logDiskSpaceStatus(status, 'disk retention sweep');
         if (status) diskLevel = status.level;
     } catch (e: any) { LOG.warn('DiskRetention', `Disk space check failed: ${e?.message || e}`); }
-    return { ledgerJsonl, dbBackups, sessionHostRuntimes, rotationEvicted, rotationEvictedBytes, diskLevel };
+    return { ledgerJsonl, dbBackups, sessionHostRuntimes, rotationEvicted, rotationEvictedBytes, handoffNotes, diskLevel };
 }
 
 // ─── Orphan worktree detection (detection-only, emits cleanup_candidate) ──────

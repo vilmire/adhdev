@@ -24,6 +24,7 @@ import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsFo
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
 import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
 import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
+import { resolveWorkerMcpServerLaunch } from './mesh-coordinator.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
@@ -312,6 +313,18 @@ type CliStartOptions = {
     resumeSessionId?: string;
     settingsOverride?: Record<string, any>;
     extraEnv?: Record<string, string>;
+    /**
+     * WORKER-MCP: pre-generated runtime session id.
+     *
+     * startSession normally mints its own `key`, but a delegated worker launch
+     * must write its MCP config — which carries a bind naming this session —
+     * BEFORE the process spawns, and the config write happens in the caller.
+     * Passing the id in is what lets both agree on one value; without it the
+     * bind would name a session id that does not exist yet, and the exchange
+     * would never resolve. Ignored (and a fresh uuid minted) when absent, so
+     * every other caller is unaffected.
+     */
+    presetSessionKey?: string;
     /** BRAIN-ROUTING thinking axis: standard level ('low'|'medium'|'high') applied
      *  at launch via the provider's thinkingLaunchArgs (CLI) or setConfigOption
      *  ('thought_level', ACP). Best-effort — ignored by providers with no support. */
@@ -344,6 +357,18 @@ export interface CoordinatorDelegatedCliLaunchOptionsInput {
     };
     /** Stable per-launch key so two workers never share a private HOME. */
     sessionKey?: string;
+    /**
+     * WORKER-MCP Phase B: mesh + runtime session this worker is being launched
+     * for. Present ⇒ the written config carries a worker MCP server entry and a
+     * session bind, giving the worker `report_completion`. Absent ⇒ Phase A
+     * behavior (isolating config, no server).
+     */
+    bindContext?: {
+        meshId: string;
+        sessionId: string;
+        nodeId?: string;
+        spawnedForTaskId?: string;
+    };
 }
 
 export interface CoordinatorDelegatedCliLaunchOptions {
@@ -427,10 +452,14 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         workspace: input.workspace,
         sessionKey: input.sessionKey || input.workspace,
         mcpConfig: input.mcpConfig,
-        // Phase A writes an EMPTY worker config (no servers). The worker tool
-        // surface and its server entry arrive in Phase B; until then the
-        // isolation win is simply that the coordinator's 60-tool entry is not
-        // in the file the worker reads.
+        // Phase B: with a mesh+session to bind, the worker gets a MINIMAL MCP
+        // server (`--mode worker`) plus the bind it exchanges for its task
+        // token. Without one, Phase A's shape stands — a config with no servers
+        // at all, whose isolation win is that the coordinator's 60-tool entry is
+        // absent from the file the worker reads.
+        ...(input.bindContext
+            ? { bindContext: input.bindContext, server: resolveWorkerMcpServerLaunch() }
+            : {}),
     });
 
     // Provider-declared env VALUES (env.set), applied before the unset sweep so
@@ -1124,8 +1153,10 @@ export class DaemonCliManager {
             );
         }
 
- // Create UUID-based key (allows separate instances even for same type+dir)
-        const key = crypto.randomUUID();
+ // Create UUID-based key (allows separate instances even for same type+dir).
+ // A delegated worker launch supplies this id up front so the MCP config it
+ // already wrote can name this session (see CliStartOptions.presetSessionKey).
+        const key = options?.presetSessionKey?.trim() || crypto.randomUUID();
 
         // (3) Session-anchored mesh routing: when launching a mesh COORDINATOR session
         // (settings.meshCoordinatorFor set), expose this session's OWN runtime id to its MCP
@@ -1864,6 +1895,19 @@ export class DaemonCliManager {
                         };
                     }
                 }
+                // WORKER-MCP (design §12.1a): the runtime session id is minted HERE
+                // rather than inside startSession, because the worker's MCP config —
+                // written just below — carries a bind that names this session, and the
+                // config must exist before the CLI process reads it. Passing the id
+                // down via presetSessionKey is what keeps the bind and the live session
+                // agreeing on one value. Only for a delegated launch; every other path
+                // keeps startSession's own uuid.
+                const delegatedSessionKey = settingsOverride?.launchedByCoordinator === true
+                    ? crypto.randomUUID()
+                    : undefined;
+                const delegatedMeshId = typeof settingsOverride?.meshNodeFor === 'string'
+                    ? settingsOverride.meshNodeFor.trim()
+                    : '';
                 const delegatedLaunch = settingsOverride?.launchedByCoordinator === true
                     ? buildCoordinatorDelegatedCliLaunchOptions({
                         cliType,
@@ -1883,6 +1927,24 @@ export class DaemonCliManager {
                             : '')
                             || (typeof settingsOverride?.meshNodeId === 'string' ? settingsOverride.meshNodeId.trim() : '')
                             || dir,
+                        // Present ⇒ the worker gets a reporting surface (Phase B).
+                        // Absent (a delegated launch with no mesh context) ⇒ the
+                        // Phase A shape: isolation only, no worker server.
+                        ...(delegatedMeshId && delegatedSessionKey
+                            ? {
+                                bindContext: {
+                                    meshId: delegatedMeshId,
+                                    sessionId: delegatedSessionKey,
+                                    ...(typeof settingsOverride?.meshNodeId === 'string' && settingsOverride.meshNodeId.trim()
+                                        ? { nodeId: settingsOverride.meshNodeId.trim() }
+                                        : {}),
+                                    ...(typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
+                                        && settingsOverride.autoLaunchedForQueueTaskId.trim()
+                                        ? { spawnedForTaskId: settingsOverride.autoLaunchedForQueueTaskId.trim() }
+                                        : {}),
+                                },
+                            }
+                            : {}),
                     })
                     : null;
                 if (delegatedLaunch?.workerIsolation?.notes.length) {
@@ -1916,6 +1978,7 @@ export class DaemonCliManager {
                         resumeSessionId: args?.resumeSessionId,
                         settingsOverride,
                         extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
+                        ...(delegatedSessionKey ? { presetSessionKey: delegatedSessionKey } : {}),
                         ...(typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}),
                     },
                 );
