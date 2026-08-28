@@ -889,7 +889,7 @@ export async function classifyPatchEquivalenceFailure(
         } catch { /* diff stat is best-effort */ }
         if (diffStat) evidence.diffStat = diffStat;
 
-        // Changed gitlink reachability against each submodule's local origin/main.
+        // Changed gitlink reachability against each submodule's local default branch.
         const submoduleGitlinks: NonNullable<MeshRefinePatchEquivalenceFailureClassification['evidence']['submoduleGitlinks']> = [];
         try {
             const nameStatus = git(['diff', '--name-only', '--diff-filter=d', baseHead, branchHead]).trim();
@@ -906,8 +906,21 @@ export async function classifyPatchEquivalenceFailure(
                     baseCommit = baseLs.split(/\s+/)[2];
                     branchCommit = branchLs.split(/\s+/)[2];
                 } catch { continue; }
+                // Generalize the submodule's default branch (H1, mirrors the F18
+                // `verifyRemoteMainContainsCommit` resolution above): on a main-default
+                // submodule this resolves to 'main' and the probe target is byte-identical
+                // to the prior hardcoded `refs/remotes/origin/main`.
+                let gitlinkDefaultBranch: string | undefined;
+                try {
+                    gitlinkDefaultBranch = await resolveSubmoduleDefaultBranch({
+                        submoduleRepoPath: pathResolve(submoduleProbeRoot, p),
+                        superprojectWorkspace: repoRoot,
+                        submodulePath: p,
+                    });
+                } catch { /* falls back to 'main' inside the probe */ }
                 submoduleGitlinks.push(probeSubmoduleGitlinkReachability({
                     path: p, baseCommit, branchCommit, probeRoot: submoduleProbeRoot, baseRepoRoot: repoRoot,
+                    defaultBranch: gitlinkDefaultBranch,
                 }));
             }
         } catch { /* submodule inspection is best-effort */ }

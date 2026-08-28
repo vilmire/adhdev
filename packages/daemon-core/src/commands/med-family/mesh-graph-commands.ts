@@ -105,7 +105,7 @@ export const meshGraphCommandHandlers: Record<string, MedFamilyHandler> = {
                 };
             }
             let convergenceEvidence = null;
-            try { convergenceEvidence = collectGateConvergenceEvidence(meshId, gateId); } catch { /* enhancement only */ }
+            try { convergenceEvidence = await collectGateConvergenceEvidence(meshId, gateId); } catch { /* enhancement only */ }
             return {
                 success: true,
                 claimed: true,

@@ -25,6 +25,7 @@ import { execFileSync } from 'node:child_process';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMesh } from '../config/mesh-config.js';
 import type { MeshGraphGateRow } from './mesh-graph-types.js';
+import { resolveRootDefaultBranch } from './mesh-onboarding-plan.js';
 
 export interface GateCommitEvidence {
     sha: string;
@@ -39,7 +40,7 @@ export interface GateConvergenceEvidence {
     workspace: string;
     probedAt: string;
     /** Honesty marker: checked against local refs, no fetch was performed. */
-    probedAgainst: 'local origin/main (no fetch)';
+    probedAgainst: string;
     commits: GateCommitEvidence[];
     /** true = every probed commit is reachable; null = no commits to probe. */
     allReachedMain: boolean | null;
@@ -52,9 +53,9 @@ const GIT_PROBE_TIMEOUT_MS = 3_000;
 const MAX_PROBE_COMMITS = 12;
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/i;
 
-function isCommitReachable(workspace: string, sha: string): boolean | 'unknown' {
+function isCommitReachable(workspace: string, sha: string, defaultBranch: string): boolean | 'unknown' {
     try {
-        execFileSync('git', ['merge-base', '--is-ancestor', sha, 'origin/main'], {
+        execFileSync('git', ['merge-base', '--is-ancestor', sha, `origin/${defaultBranch}`], {
             cwd: workspace,
             timeout: GIT_PROBE_TIMEOUT_MS,
             stdio: ['ignore', 'ignore', 'ignore'],
@@ -62,7 +63,7 @@ function isCommitReachable(workspace: string, sha: string): boolean | 'unknown' 
         return true;
     } catch (e: any) {
         // Exit 1 is git's defined "not an ancestor" answer; everything else
-        // (unknown sha, not a repo, timeout, missing origin/main) is 'unknown'.
+        // (unknown sha, not a repo, timeout, missing origin/<defaultBranch>) is 'unknown'.
         return e && typeof e.status === 'number' && e.status === 1 ? false : 'unknown';
     }
 }
@@ -129,8 +130,14 @@ function collectUpstreamCommits(gate: MeshGraphGateRow): UpstreamCommitRef[] {
 /**
  * Build the convergence evidence for one gate, or null when nothing can be
  * said (unknown gate, no base workspace, no upstream commit artifacts).
+ *
+ * `defaultBranch` generalizes the previously hardcoded `origin/main`, via
+ * {@link resolveRootDefaultBranch} — `mesh.defaultBranch` → local (no-fetch)
+ * `origin/HEAD` symref → current checkout. On a `main`-default mesh this
+ * resolves to `'main'` and the probe stays byte-identical to the prior
+ * behavior.
  */
-export function collectGateConvergenceEvidence(meshId: string, gateId: string): GateConvergenceEvidence | null {
+export async function collectGateConvergenceEvidence(meshId: string, gateId: string): Promise<GateConvergenceEvidence | null> {
     try {
         const graphStore = MeshRuntimeStore.getInstance().graphStore();
         const gate = graphStore.getGate(gateId);
@@ -139,22 +146,24 @@ export function collectGateConvergenceEvidence(meshId: string, gateId: string): 
         if (!workspace) return null;
         const upstream = collectUpstreamCommits(gate);
         if (upstream.length === 0) return null;
+        const mesh = getMesh(meshId) as { defaultBranch?: string } | undefined;
+        const defaultBranch = await resolveRootDefaultBranch(workspace, mesh);
         const commits: GateCommitEvidence[] = upstream.map(ref => ({
             ...ref,
-            reachedMain: isCommitReachable(workspace, ref.sha),
+            reachedMain: isCommitReachable(workspace, ref.sha, defaultBranch),
         }));
         const allReachedMain = commits.every(c => c.reachedMain === true);
         return {
             workspace,
             probedAt: new Date().toISOString(),
-            probedAgainst: 'local origin/main (no fetch)',
+            probedAgainst: `local origin/${defaultBranch} (no fetch)`,
             commits,
             allReachedMain,
             ...(allReachedMain
                 ? {
-                    hint: 'Every upstream commit is already reachable from origin/main — the guarded work appears '
-                        + 'to have landed. Verify, then RELEASE this gate with these commits as evidence instead of '
-                        + 're-running the action. (Evidence never auto-releases a gate; the decision is yours.)',
+                    hint: `Every upstream commit is already reachable from origin/${defaultBranch} — the guarded work `
+                        + 'appears to have landed. Verify, then RELEASE this gate with these commits as evidence instead '
+                        + 'of re-running the action. (Evidence never auto-releases a gate; the decision is yours.)',
                 }
                 : {}),
         };

@@ -140,7 +140,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
         allowAutoPublishSubmoduleMainCommits: {
             type: 'boolean',
             default: false,
-            description: 'When true, Refinery may non-force publish submodule gitlink commits referenced by the refined root tree to each submodule origin/main after validation and patch-equivalence pass, then verify reachability.',
+            description: 'When true, Refinery may non-force publish submodule gitlink commits referenced by the refined root tree to each submodule\'s configured default branch after validation and patch-equivalence pass, then verify reachability.',
         },
         validation: {
             type: 'object',

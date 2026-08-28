@@ -127,20 +127,25 @@ export type SubmoduleGitlinkReachability = {
 };
 
 /**
- * Fast-forward + origin/main reachability for ONE changed gitlink, as tri-state
- * evidence.
+ * Fast-forward + default-branch reachability for ONE changed gitlink, as
+ * tri-state evidence.
  *
  * ★`probeRoot` is the refine node's WORKTREE, not the base repo. `<base>/<path>`
  * and `<worktree>/<path>` are independent checkouts with separate object stores
  * and separate remote-tracking refs; the base mirror routinely lacks the
- * branch-side submodule commit and carries a stale `origin/main`. Probing it is
- * the 2026-08-22 false-block, where a commit already on the submodule's main was
- * reported unreachable.
+ * branch-side submodule commit and carries a stale `origin/<defaultBranch>`.
+ * Probing it is the 2026-08-22 false-block, where a commit already on the
+ * submodule's default branch was reported unreachable.
  *
  * `baseRepoRoot` is still needed as the FETCH SOURCE: the base-side gitlink commit
  * may only exist in the base checkout, so — same discipline the gate body already
  * follows — {@link ensureSubmoduleCommitLocal} pulls both commits into the probed
  * store first, so a merely-absent object cannot degrade the probe.
+ *
+ * `defaultBranch` generalizes the previously hardcoded `origin/main` (resolve it
+ * with {@link resolveSubmoduleDefaultBranch} — `.gitmodules` → local remote HEAD
+ * → remote-advertised HEAD → `'main'` fallback); omitted callers keep probing
+ * `origin/main`, byte-identical to the prior behavior.
  *
  * An unanswerable probe leaves its boolean UNDEFINED and records the probe name in
  * `undeterminable`; it is never reported as `false`.
@@ -151,8 +156,9 @@ export function probeSubmoduleGitlinkReachability(input: {
     branchCommit?: string;
     probeRoot: string;
     baseRepoRoot: string;
+    defaultBranch?: string;
 }): SubmoduleGitlinkReachability {
-    const { path, baseCommit, branchCommit, probeRoot, baseRepoRoot } = input;
+    const { path, baseCommit, branchCommit, probeRoot, baseRepoRoot, defaultBranch } = input;
     const submoduleRepo = pathResolve(probeRoot, path);
     const baseSubmoduleRepo = pathResolve(baseRepoRoot, path);
     if (baseCommit) ensureSubmoduleCommitLocal(submoduleRepo, baseSubmoduleRepo, baseCommit);
@@ -167,7 +173,7 @@ export function probeSubmoduleGitlinkReachability(input: {
             if (ff === 'undeterminable') undeterminable.push('fastForward');
             else fastForward = ff;
         }
-        const reach = probeGitAncestry(submoduleRepo, branchCommit, 'refs/remotes/origin/main');
+        const reach = probeGitAncestry(submoduleRepo, branchCommit, `refs/remotes/origin/${defaultBranch || 'main'}`);
         if (reach === 'undeterminable') undeterminable.push('reachableFromOriginMain');
         else reachableFromOriginMain = reach;
     }

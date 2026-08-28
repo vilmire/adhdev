@@ -129,11 +129,11 @@ afterEach(() => {
 });
 
 describe('gate convergence evidence', () => {
-    it('reports allReachedMain with the release hint when every upstream commit is on origin/main', () => {
+    it('reports allReachedMain with the release hint when every upstream commit is on origin/main', async () => {
         const mesh = meshId('reached');
         const { gateId } = buildGateGraph(mesh, [{ sha: SHA_A, repo: 'oss' }, { sha: SHA_B }]);
 
-        const evidence = collectGateConvergenceEvidence(mesh, gateId);
+        const evidence = await collectGateConvergenceEvidence(mesh, gateId);
         expect(evidence).not.toBeNull();
         expect(evidence!.allReachedMain).toBe(true);
         expect(evidence!.hint).toContain('RELEASE');
@@ -144,13 +144,13 @@ describe('gate convergence evidence', () => {
         expect(gitMock.calls[0]).toEqual(['git', 'merge-base', '--is-ancestor', SHA_A, 'origin/main']);
     });
 
-    it('classifies exit 1 as not-reached (no hint) and other git failures as unknown (no throw)', () => {
+    it('classifies exit 1 as not-reached (no hint) and other git failures as unknown (no throw)', async () => {
         const mesh = meshId('mixed');
         gitMock.behavior.set(SHA_A, 'unreachable');
         gitMock.behavior.set(SHA_B, 'error');
         const { gateId } = buildGateGraph(mesh, [{ sha: SHA_A }, { sha: SHA_B }]);
 
-        const evidence = collectGateConvergenceEvidence(mesh, gateId);
+        const evidence = await collectGateConvergenceEvidence(mesh, gateId);
         expect(evidence).not.toBeNull();
         expect(evidence!.allReachedMain).toBe(false);
         expect(evidence!.hint).toBeUndefined();
@@ -158,30 +158,44 @@ describe('gate convergence evidence', () => {
         expect(evidence!.commits.find(c => c.sha === SHA_B)?.reachedMain).toBe('unknown');
     });
 
-    it('returns null when there is nothing to say', () => {
+    it('returns null when there is nothing to say', async () => {
         const mesh = meshId('nothing');
         // Unknown gate.
-        expect(collectGateConvergenceEvidence(mesh, randomUUID())).toBeNull();
+        expect(await collectGateConvergenceEvidence(mesh, randomUUID())).toBeNull();
         // No commit artifacts in the upstream envelope.
         const { gateId } = buildGateGraph(mesh, []);
-        expect(collectGateConvergenceEvidence(mesh, gateId)).toBeNull();
+        expect(await collectGateConvergenceEvidence(mesh, gateId)).toBeNull();
         // No base workspace on the mesh.
         const mesh2 = meshId('noworkspace');
         const { gateId: gate2 } = buildGateGraph(mesh2, [{ sha: SHA_A }]);
         meshConfig.workspace = undefined;
-        expect(collectGateConvergenceEvidence(mesh2, gate2)).toBeNull();
+        expect(await collectGateConvergenceEvidence(mesh2, gate2)).toBeNull();
     });
 
-    it('never mutates the gate or graph rows', () => {
+    it('never mutates the gate or graph rows', async () => {
         const mesh = meshId('readonly');
         const { gateId, graphId } = buildGateGraph(mesh, [{ sha: SHA_A }]);
         const gs = MeshRuntimeStore.getInstance().graphStore();
         const gateBefore = JSON.stringify(gs.getGate(gateId));
         const graphBefore = JSON.stringify(gs.getGraph(graphId));
 
-        collectGateConvergenceEvidence(mesh, gateId);
+        await collectGateConvergenceEvidence(mesh, gateId);
 
         expect(JSON.stringify(gs.getGate(gateId))).toBe(gateBefore);
         expect(JSON.stringify(gs.getGraph(graphId))).toBe(graphBefore);
+    });
+
+    it('resolves the probe branch from mesh.defaultBranch when set (master-default mesh)', async () => {
+        const mesh = meshId('masterdefault');
+        vi.mocked((await import('../../src/config/mesh-config.js')).getMesh).mockReturnValue({
+            nodes: [{ workspace: meshConfig.workspace }],
+            defaultBranch: 'master',
+        } as any);
+        const { gateId } = buildGateGraph(mesh, [{ sha: SHA_A }]);
+
+        const evidence = await collectGateConvergenceEvidence(mesh, gateId);
+        expect(evidence).not.toBeNull();
+        expect(evidence!.probedAgainst).toBe('local origin/master (no fetch)');
+        expect(gitMock.calls[0]).toEqual(['git', 'merge-base', '--is-ancestor', SHA_A, 'origin/master']);
     });
 });

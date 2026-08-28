@@ -260,8 +260,23 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         const name = typeof args?.name === 'string' ? args.name.trim() : '';
         const repoIdentity = typeof args?.repoIdentity === 'string' ? args.repoIdentity.trim() : '';
         const repoRemoteUrl = typeof args?.repoRemoteUrl === 'string' ? args.repoRemoteUrl.trim() : undefined;
-        const defaultBranch = typeof args?.defaultBranch === 'string' ? args.defaultBranch.trim() : undefined;
+        let defaultBranch = typeof args?.defaultBranch === 'string' ? args.defaultBranch.trim() : undefined;
         if (!name) return { success: false, error: 'name required' };
+        if (!defaultBranch) {
+            // Auto-detect (F18/root-axis): callers that go through the onboarding
+            // planner already supply defaultBranch (mesh-onboarding-plan.ts always
+            // resolves it into createArgs); this covers a DIRECT create_mesh call
+            // with no explicit branch, so a master-default repo does not silently
+            // inherit the 'main' fallback every downstream reader applies when the
+            // field is absent. Best-effort: detection failure must not block mesh
+            // creation, so an unresolved workspace/repo just leaves the field unset.
+            try {
+                const { resolveRootDefaultBranch } = await import('../../mesh/mesh-onboarding-plan.js');
+                const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : process.cwd();
+                const detected = await resolveRootDefaultBranch(workspace, undefined);
+                if (detected) defaultBranch = detected;
+            } catch { /* best-effort detection only */ }
+        }
         try {
             const { createMesh } = await import('../../config/mesh-config.js');
             const meshHost = args?.meshHost && typeof args.meshHost === 'object' && !Array.isArray(args.meshHost)

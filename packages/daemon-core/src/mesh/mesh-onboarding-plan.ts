@@ -296,6 +296,40 @@ async function resolveDefaultBranch(repoRoot: string, remoteName: string, curren
     return currentBranch;
 }
 
+/**
+ * The single root-axis (mesh/repo, NOT submodule) default-branch resolver,
+ * generalizing every prior hardcoded `origin/main` / `'main'` fallback in the
+ * mesh convergence/gate-evidence/status surfaces onto one priority order:
+ *
+ *   1. `mesh.defaultBranch` — an explicit, already-resolved record on the mesh
+ *      (set at `create_mesh` time, see {@link resolveDefaultBranch} above, which
+ *      this tier defers to when the mesh itself has no opinion yet).
+ *   2. the repo's local `origin/HEAD` symref (no network — same discipline as
+ *      {@link resolveSubmoduleDefaultBranch}'s tier 2).
+ *   3. the CURRENT checkout's branch, when neither of the above resolves —
+ *      matches {@link resolveDefaultBranch}'s final fallback so a brand-new
+ *      mesh with no remote HEAD set still gets a real branch name instead of a
+ *      guess.
+ *
+ * On a `main`-default repo with a `mesh.defaultBranch` of `'main'` (or unset,
+ * remote HEAD resolving to `main`) this is byte-identical to the prior
+ * hardcoded `origin/main` / `'main'` behavior — only a `master`/`trunk`/etc.
+ * default repo takes a different path.
+ */
+export async function resolveRootDefaultBranch(
+    repoRoot: string,
+    mesh: { defaultBranch?: string } | null | undefined,
+    opts: { remote?: string } = {},
+): Promise<string> {
+    const meshDefault = typeof mesh?.defaultBranch === 'string' ? mesh.defaultBranch.trim() : '';
+    if (meshDefault) return meshDefault;
+    const remote = opts.remote?.trim() || 'origin';
+    const symbolic = await git(repoRoot, ['symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`], true);
+    if (symbolic.startsWith(`${remote}/`)) return symbolic.slice(remote.length + 1);
+    const currentBranch = await git(repoRoot, ['symbolic-ref', '--quiet', '--short', 'HEAD'], true);
+    return currentBranch || 'main';
+}
+
 async function discoverGit(workspaceInput: string): Promise<MeshOnboardingDiscovery | MeshOnboardingPlanFailure> {
     const workspace = await canonicalPath(workspaceInput || process.cwd());
     const repoRootRaw = await git(workspace, ['rev-parse', '--show-toplevel'], true);
