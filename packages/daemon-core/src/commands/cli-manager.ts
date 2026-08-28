@@ -20,7 +20,7 @@ import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { shortHash } from '../system/hash.js';
-import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from '../mesh/coordinator-registry.js';
+import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
 import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
 import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
@@ -1493,6 +1493,13 @@ export class DaemonCliManager {
             const key = `${r.workspace}::${r.cliType}`;
             workspaceTypeCounts.set(key, (workspaceTypeCounts.get(key) || 0) + 1);
         }
+        // STALE-COORDINATOR-PRUNE: registry entries adopted through the workspace
+        // rebind fallback below. Such an entry belongs to a LIVE coordinator whose
+        // runtimeId changed across restart, so its registered sessionId is (by
+        // definition) absent from the live-runtime list — the post-loop prune must
+        // exempt it, or the fix would delete the very entry the fallback just used
+        // and reintroduce the badge loss on the NEXT restart.
+        const rebindAdoptedSessionIds = new Set<string>();
 
         for (const record of sessions) {
             if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
@@ -1578,6 +1585,7 @@ export class DaemonCliManager {
                     const siblingCount = workspaceTypeCounts.get(`${record.workspace}::${record.cliType}`) || 1;
                     if (!coordinatorPresentById && siblingCount === 1) {
                         coordinatorEntry = candidate;
+                        if (candidate.sessionId) rebindAdoptedSessionIds.add(candidate.sessionId);
                         LOG.info(
                             'CLI',
                             `↻ Rebound coordinator mark by workspace for ${record.runtimeKey || record.runtimeId} (mesh ${candidate.meshId} @ ${record.workspace}); registry key did not match runtimeId`
@@ -1657,6 +1665,34 @@ export class DaemonCliManager {
                 LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
             } catch (error: any) {
                 LOG.warn('CLI', `Failed to restore hosted runtime ${record.runtimeId}: ${error?.message || error}`);
+            }
+        }
+
+        // STALE-COORDINATOR-PRUNE (boot path only): when this is the full boot-time
+        // restore (no explicit records — an ad-hoc single-record restore must NEVER
+        // prune), the fetched list IS the set of live hosted runtimes, so any
+        // persisted coordinator entry whose sessionId is absent is a leftover from
+        // a previous daemon generation: unregisterMeshCoordinator only runs on
+        // explicit stop/exit paths, and an upgrade/restart takes none of them.
+        // Those stale entries accumulate in mesh-coordinators.json and permanently
+        // break the workspace rebind fallback's "exactly one registered
+        // coordinator" unambiguity condition above (the lost-coordinator-badge
+        // bug). Runs AFTER the restore loop so a live coordinator whose runtimeId
+        // changed (adopted via the rebind fallback) is exempted through
+        // rebindAdoptedSessionIds. The live-id set deliberately includes runtimes
+        // owned by OTHER manager tags (shouldRestoreHostedRuntime skips them, but
+        // they are live sessions whose entries must survive).
+        if (!records && typeof this.deps.listHostedCliRuntimes === 'function') {
+            const liveSessionIds = new Set<string>(restoredRuntimeIds);
+            for (const r of sessions) {
+                if (r?.runtimeId) liveSessionIds.add(r.runtimeId);
+            }
+            for (const sessionId of rebindAdoptedSessionIds) liveSessionIds.add(sessionId);
+            for (const entry of pruneDeadMeshCoordinators(liveSessionIds)) {
+                LOG.info(
+                    'CLI',
+                    `🧹 Pruned stale mesh coordinator entry ${entry.sessionId} (mesh ${entry.meshId}${entry.workspace ? ` @ ${entry.workspace}` : ''}, started ${new Date(entry.startedAt || 0).toISOString()}): session is not among the ${liveSessionIds.size} live hosted runtime(s) after daemon restart`
+                );
             }
         }
 

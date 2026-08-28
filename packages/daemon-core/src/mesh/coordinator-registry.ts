@@ -116,6 +116,37 @@ export function getCoordinatorForSession(sessionId: string): CoordinatorRegistry
     return _registry.get(sessionId);
 }
 
+/**
+ * Prune registry entries whose coordinator session is NOT among the live
+ * hosted runtimes the session-host reported after a daemon restart.
+ *
+ * unregisterMeshCoordinator only runs on explicit stop/exit paths (auto-clean,
+ * stopSessionWithMode, orphan force-remove) — a daemon upgrade/restart takes
+ * none of them, so dead coordinator entries accumulate in
+ * mesh-coordinators.json across boot generations. Those stale entries break
+ * the workspace-scoped coordinator rebind in restoreHostedSessions: its
+ * "exactly one registered coordinator" unambiguity condition goes permanently
+ * false, which is the mechanism behind the lost coordinator badge / unrouted
+ * mesh events after a restart.
+ *
+ * Callers MUST pass the FULL live-runtime id set (the boot-time restore
+ * batch) — never a partial/ad-hoc restore list, which would wipe live
+ * coordinators that simply were not in that batch. Entries whose sessionId
+ * appears in liveSessionIds are never removed; persisting happens once, only
+ * when something was actually pruned. Returns the pruned entries so the
+ * caller can audit-log what was removed and why.
+ */
+export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>): CoordinatorRegistryEntry[] {
+    const pruned: CoordinatorRegistryEntry[] = [];
+    for (const entry of [..._registry.values()]) {
+        if (liveSessionIds.has(entry.sessionId)) continue;
+        _registry.delete(entry.sessionId);
+        pruned.push(entry);
+    }
+    if (pruned.length > 0) saveRegistry();
+    return pruned;
+}
+
 /** List all coordinator entries for a given workspace path. */
 export function listCoordinatorsForWorkspace(workspace: string): CoordinatorRegistryEntry[] {
     return [..._registry.values()].filter(e => e.workspace === workspace);

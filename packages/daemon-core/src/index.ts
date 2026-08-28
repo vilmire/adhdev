@@ -293,7 +293,7 @@ export type {
   MeshOnboardingPlanSuccess,
   PlanMeshOnboardingOptions,
 } from './mesh/mesh-onboarding-plan.js';
-export { loadMeshCoordinatorRegistry, registerMeshCoordinator, unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from './mesh/coordinator-registry.js';
+export { loadMeshCoordinatorRegistry, registerMeshCoordinator, unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from './mesh/coordinator-registry.js';
 export type { CoordinatorRegistryEntry } from './mesh/coordinator-registry.js';
 export {
   MESH_REFINE_CONFIG_LOCATIONS,
