@@ -298,7 +298,7 @@ export async function meshGraphGateClaim(
         // evidence instead of re-running an already-landed action.
         let convergenceEvidence = null;
         try {
-            convergenceEvidence = collectGateConvergenceEvidence(ctx.mesh.id, gateId);
+            convergenceEvidence = await collectGateConvergenceEvidence(ctx.mesh.id, gateId);
         } catch { /* evidence is an enhancement — a probe fault never fails the claim */ }
         return JSON.stringify({
             success: true,
@@ -679,8 +679,8 @@ export async function meshGraphView(
                     if (gate.state !== 'awaiting_coordinator' && gate.state !== 'expired') continue;
                     probesLeft -= 1;
                     try {
-                        const evidence = collectGateConvergenceEvidence(ctx.mesh.id, gate.gateId);
-                        if (evidence) (gate as Record<string, unknown>).convergenceEvidence = evidence;
+                        const evidence = await collectGateConvergenceEvidence(ctx.mesh.id, gate.gateId);
+                        if (evidence) gate.convergenceEvidence = evidence;
                     } catch { /* fail-soft: the view never breaks on a probe fault */ }
                 }
             }

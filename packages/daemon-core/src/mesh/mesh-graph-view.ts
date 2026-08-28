@@ -41,6 +41,7 @@ import {
     type MeshDependencyFailure,
 } from './mesh-graph-derived-failure.js';
 import { parseCoordinatorGateBlock } from './mesh-graph-transition-runner.js';
+import type { GateConvergenceEvidence } from './mesh-graph-gate-evidence.js';
 import type {
     MeshGraphGateState,
     MeshGraphNodeState,
@@ -98,6 +99,8 @@ export interface MeshGraphGateView {
     eligibleCoordinatorSessionId?: string;
     /** Worker nodes this gate is currently holding. */
     blocking?: string[];
+    /** Optional, caller-requested local git evidence attached by graph-view surfaces. */
+    convergenceEvidence?: GateConvergenceEvidence;
 }
 
 export interface MeshGraphWorkspaceView {

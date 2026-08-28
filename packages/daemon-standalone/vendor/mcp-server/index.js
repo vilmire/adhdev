@@ -5148,7 +5148,7 @@ async function meshGraphGateClaim(ctx, args) {
     });
     let convergenceEvidence = null;
     try {
-      convergenceEvidence = (0, import_daemon_core6.collectGateConvergenceEvidence)(ctx.mesh.id, gateId);
+      convergenceEvidence = await (0, import_daemon_core6.collectGateConvergenceEvidence)(ctx.mesh.id, gateId);
     } catch {
     }
     return JSON.stringify({
@@ -5396,7 +5396,7 @@ async function meshGraphView(ctx, args) {
           if (gate.state !== "awaiting_coordinator" && gate.state !== "expired") continue;
           probesLeft -= 1;
           try {
-            const evidence = (0, import_daemon_core6.collectGateConvergenceEvidence)(ctx.mesh.id, gate.gateId);
+            const evidence = await (0, import_daemon_core6.collectGateConvergenceEvidence)(ctx.mesh.id, gate.gateId);
             if (evidence) gate.convergenceEvidence = evidence;
           } catch {
           }
