@@ -993,6 +993,7 @@ export {
   assertNoPlaintextHintTopics,
   defaultBeaconTopicScope,
   BEACON_ENV,
+  MAX_BEACON_GET_QUERIES,
   type BeaconMode,
   type BeaconCounters,
   type BeaconHostTransport,

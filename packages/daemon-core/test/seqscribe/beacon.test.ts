@@ -46,6 +46,7 @@ import {
     assertNoPlaintextHintTopics,
     BEACON_ENV,
     defaultBeaconTopicScope,
+    MAX_BEACON_GET_QUERIES,
     projectBeaconReport,
     resolveBeaconMode,
     type BeaconGetResponse,
@@ -491,5 +492,186 @@ describe('armBeacon — lifecycle against a real node', () => {
 
         // No push after close, and no throw from the teardown path.
         expect(fake.puts.length).toBe(before);
+    });
+
+    // ── Split-retry (design §7.1.2, owner-approved 2026-08-28) ────────────────
+    //
+    // These force a deterministic multi-topic scope via `topicScope`, since the
+    // library-derived default scope only ever contains the topics this node
+    // actually pushed to (single-topic in the tests above). A scriptable
+    // transport keyed by the exact topic slice it was called with drives the
+    // split/merge logic without needing a real oversized board.
+    describe('GET topic-split retry', () => {
+        const TOPICS4 = ['fleet.status', 'mesh.a.events', 'mesh.b.events', 'mesh.c.events'];
+
+        /** A transport whose `get()` behavior is scripted per exact topic slice. */
+        function makeScriptedTransport(
+            script: Map<string, BeaconGetResponse>,
+            opts: { onGet?: (topics: readonly string[]) => void } = {},
+        ): { transport: BeaconHostTransport; calls: string[][] } {
+            const calls: string[][] = [];
+            return {
+                calls,
+                transport: {
+                    async put(): Promise<void> {
+                        /* not exercised in this suite */
+                    },
+                    async get(topics: readonly string[]): Promise<BeaconGetResponse> {
+                        calls.push([...topics]);
+                        opts.onGet?.(topics);
+                        const key = [...topics].sort().join(',');
+                        const res = script.get(key);
+                        if (!res) throw new Error(`unscripted GET for topics=${key}`);
+                        return res;
+                    },
+                },
+            };
+        }
+
+        function reportFor(node: string, at: string, contig = 1): unknown {
+            return {
+                node,
+                at,
+                vectors: { 'fleet.status': { writers: { [node]: { contig, chain: CHAIN_A } } } },
+            };
+        }
+
+        it('truncated=0 issues exactly one query — the unchanged fast path', async () => {
+            const n = open();
+            const script = new Map<string, BeaconGetResponse>([
+                [
+                    [...TOPICS4].sort().join(','),
+                    { reports: [reportFor('adhdev-peer1', '2026-08-28T00:00:00.000Z')], truncated: 0 },
+                ],
+            ]);
+            const { transport, calls } = makeScriptedTransport(script);
+
+            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => TOPICS4 });
+            await settle();
+
+            expect(calls.length).toBe(1);
+            expect(calls[0]!.sort()).toEqual([...TOPICS4].sort());
+            expect(beacon!.counters().get).toBe(1);
+            expect(beacon!.counters().splitRetries).toBe(0);
+            expect(beacon!.counters().truncated).toBe(0);
+            beacon!.stop();
+        });
+
+        it('truncated>0 on a multi-topic scope bisects and merges peer reports by node', async () => {
+            const n = open();
+            const left = ['fleet.status', 'mesh.a.events'];
+            const right = ['mesh.b.events', 'mesh.c.events'];
+            const script = new Map<string, BeaconGetResponse>([
+                [
+                    [...TOPICS4].sort().join(','),
+                    { reports: [], truncated: 2 }, // whole response didn't fit
+                ],
+                [
+                    [...left].sort().join(','),
+                    { reports: [reportFor('adhdev-peerA', '2026-08-28T00:00:00.000Z', 7)], truncated: 0 },
+                ],
+                [
+                    [...right].sort().join(','),
+                    { reports: [reportFor('adhdev-peerB', '2026-08-28T00:00:01.000Z', 12)], truncated: 0 },
+                ],
+            ]);
+            const { transport, calls } = makeScriptedTransport(script);
+
+            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => TOPICS4 });
+            await settle();
+
+            // 1 initial + 2 split halves.
+            expect(calls.length).toBe(3);
+            expect(beacon!.counters().get).toBe(3);
+            expect(beacon!.counters().splitRetries).toBe(1);
+            // Both halves fit once split — nothing remains truncated.
+            expect(beacon!.counters().truncated).toBe(0);
+
+            // Both peers landed — one from each split half — proving the merge
+            // unions across halves rather than keeping only one side.
+            const staleness = n.node.staleness('fleet.status');
+            expect(staleness.behind['adhdev-peerA']).toBe(7);
+            expect(staleness.behind['adhdev-peerB']).toBe(12);
+            beacon!.stop();
+        });
+
+        it('single-topic residual truncation surfaces as the last-resort backstop', async () => {
+            const n = open();
+            const SOLO = ['fleet.status'];
+            const script = new Map<string, BeaconGetResponse>([
+                [SOLO.join(','), { reports: [], truncated: 5 }],
+            ]);
+            const { transport, calls } = makeScriptedTransport(script);
+
+            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => SOLO });
+            await settle();
+
+            // topics.length <= 1 — no split attempted, even though truncated>0.
+            expect(calls.length).toBe(1);
+            expect(beacon!.counters().splitRetries).toBe(0);
+            expect(beacon!.counters().truncated).toBe(5);
+            beacon!.stop();
+        });
+
+        it('duplicate node across split halves keeps the report with the newer `at`', async () => {
+            const n = open();
+            const left = ['fleet.status', 'mesh.a.events'];
+            const right = ['mesh.b.events', 'mesh.c.events'];
+            // Same peer node on both halves, distinguishable by `contig` so the
+            // survivor is unambiguous: if the merge kept the OLDER (left) report,
+            // staleness() would read contig=1; if it kept the newer (right)
+            // report, it reads contig=99. Duplication (both landing) is ruled out
+            // by construction — `staleness()` has exactly one entry per peer.
+            const older = {
+                node: 'adhdev-same00000000',
+                at: '2026-08-28T00:00:00.000Z',
+                vectors: { 'fleet.status': { writers: { 'adhdev-same00000000': { contig: 1, chain: CHAIN_A } } } },
+            };
+            const newer = {
+                node: 'adhdev-same00000000',
+                at: '2026-08-28T00:00:05.000Z',
+                vectors: { 'fleet.status': { writers: { 'adhdev-same00000000': { contig: 99, chain: CHAIN_B } } } },
+            };
+            const script = new Map<string, BeaconGetResponse>([
+                [[...TOPICS4].sort().join(','), { reports: [], truncated: 1 }],
+                [[...left].sort().join(','), { reports: [older], truncated: 0 }],
+                [[...right].sort().join(','), { reports: [newer], truncated: 0 }],
+            ]);
+            const { transport } = makeScriptedTransport(script);
+
+            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => TOPICS4 });
+            await settle();
+
+            expect(beacon!.counters().truncated).toBe(0);
+            const staleness = n.node.staleness('fleet.status');
+            expect(staleness.behind['adhdev-same00000000']).toBe(99);
+            beacon!.stop();
+        });
+
+        it('query cap stops recursion and exposes the residual as truncated', async () => {
+            const n = open();
+            // Every slice — no matter how small — reports truncated>0, forcing the
+            // splitter to recurse until the query budget is exhausted rather than
+            // stopping at a natural truncated=0 leaf.
+            const calls: string[][] = [];
+            const alwaysTruncated: BeaconHostTransport = {
+                async put(): Promise<void> {},
+                async get(topics: readonly string[]): Promise<BeaconGetResponse> {
+                    calls.push([...topics]);
+                    return { reports: [], truncated: topics.length };
+                },
+            };
+
+            const manyTopics = Array.from({ length: 64 }, (_, i) => `mesh.t${i}.events`);
+            const beacon = armBeacon(n, alwaysTruncated, { env: {}, topicScope: () => manyTopics });
+            await settle();
+
+            expect(calls.length).toBeLessThanOrEqual(MAX_BEACON_GET_QUERIES);
+            expect(beacon!.counters().get).toBeLessThanOrEqual(MAX_BEACON_GET_QUERIES);
+            // The cap was hit before every topic reached a truncated=0 leaf, so
+            // some residual truncation must remain — the recursion did not run away.
+            expect(beacon!.counters().truncated).toBeGreaterThan(0);
+            beacon!.stop();
+        });
     });
 });

@@ -279,18 +279,35 @@ export interface BeaconCounters {
     /** `get` calls that threw or rejected. */
     getFailed: number;
     /**
-     * Peer reports the SERVER dropped to fit its frame budget, summed over all
-     * GETs. Non-zero means `staleness()` is being computed from a subset of the
-     * fleet — which under-reports lag rather than asserting something false, but
-     * is worth seeing in the log because it means the board outgrew one frame.
+     * Peer reports that remained dropped after split-retry exhausted itself,
+     * summed over all invocations of `doGet`. Non-zero means `staleness()` is
+     * being computed from a subset of the fleet — which under-reports lag
+     * rather than asserting something false, but is worth seeing in the log
+     * because it means a single topic's own writer fan-out outgrew the frame
+     * budget (§7.1.2: the last-resort backstop, not the common case).
      */
     truncated: number;
     /** Reports the daemon-side projection rejected outright (never sent). */
     rejected: number;
+    /**
+     * Extra split-retry GETs issued beyond the first, summed over all
+     * invocations of `doGet`. Zero in the common case (server never truncates
+     * a small fleet's response) — non-zero is visibility into how often the
+     * board outgrew one frame and needed a second round trip.
+     */
+    splitRetries: number;
 }
 
 function emptyCounters(): BeaconCounters {
-    return { put: 0, putFailed: 0, get: 0, getFailed: 0, truncated: 0, rejected: 0 };
+    return {
+        put: 0,
+        putFailed: 0,
+        get: 0,
+        getFailed: 0,
+        truncated: 0,
+        rejected: 0,
+        splitRetries: 0,
+    };
 }
 
 // ─── Host transport contract ────────────────────────────────────────────────
@@ -301,6 +318,19 @@ export interface BeaconGetResponse {
     /** How many peers the server dropped to fit the frame budget, if it said. */
     truncated?: number;
 }
+
+/**
+ * Hard ceiling on GET round trips per `doGet()` invocation, including the
+ * first (design §7.1.2, owner-approved 2026-08-28: "split-retry, capped").
+ *
+ * A topic-list bisection needs at most `ceil(log2(N)) + 1` calls to reach every
+ * topic in isolation for N topics, and `MAX_TOPICS_PER_REPORT` bounds N at 512
+ * — so 16 is generous headroom for any real fleet shape while still being a
+ * hard backstop against runaway recursion if the split logic ever regresses.
+ * Hitting the cap ends the round with whatever residual `truncated` remains
+ * exposed, exactly like the single-topic backstop below.
+ */
+export const MAX_BEACON_GET_QUERIES = 16;
 
 /**
  * What a host must supply to arm the beacon.
@@ -345,6 +375,55 @@ export interface BeaconHandle {
      * Rejections are swallowed and counted, exactly like the library's own push.
      */
     pushNow(): Promise<void>;
+}
+
+/**
+ * Merge two split-retry halves' raw (pre-projection) reports by peer `node`.
+ *
+ * The two halves are topic-DISJOINT queries against the SAME fleet, so the
+ * common case is no overlap at all — the split is what let each half fit. But
+ * because the board is scoped to the caller's requested topics, not the whole
+ * report, a peer that carries topics on both sides of the split legitimately
+ * appears in both halves' results, once per side, each showing only its own
+ * topic slice. Union-of-topics (not last-write-wins) would be correct beacon
+ * semantics, but this function only ever sees RAW server output — merging
+ * topic sub-objects here would mean re-implementing the server's own
+ * sanitizer shape assumptions on unsanitized input. Simpler and just as safe:
+ * treat it like any other duplicate key and keep the one with the newer `at`,
+ * on the same reasoning `armBeacon`'s callers already apply to `staleness()` —
+ * a report that lost half its topics reads as "unknown" for those topics, the
+ * same degradation as a server-side drop, never a false negative.
+ */
+function mergeBeaconReportsByNode(left: unknown[], right: unknown[]): unknown[] {
+    const byNode = new Map<string, unknown>();
+    const unkeyed: unknown[] = [];
+
+    const ingest = (report: unknown): void => {
+        const node =
+            report && typeof report === 'object' && typeof (report as { node?: unknown }).node === 'string'
+                ? ((report as { node: string }).node)
+                : undefined;
+        if (!node) {
+            unkeyed.push(report);
+            return;
+        }
+        const existing = byNode.get(node);
+        if (!existing) {
+            byNode.set(node, report);
+            return;
+        }
+        const existingAt = (existing as { at?: unknown }).at;
+        const candidateAt = (report as { at?: unknown }).at;
+        const existingTime = typeof existingAt === 'string' ? Date.parse(existingAt) : NaN;
+        const candidateTime = typeof candidateAt === 'string' ? Date.parse(candidateAt) : NaN;
+        if (!Number.isNaN(candidateTime) && (Number.isNaN(existingTime) || candidateTime > existingTime)) {
+            byNode.set(node, report);
+        }
+    };
+
+    for (const r of left) ingest(r);
+    for (const r of right) ingest(r);
+    return [...byNode.values(), ...unkeyed];
 }
 
 /**
@@ -432,31 +511,15 @@ export function armBeacon(
         }
     };
 
-    /** Fetch, re-project, count. Returns the board for `setKnownVectors`. */
-    const doGet = async (): Promise<ProjectedBeaconReport[]> => {
+    /**
+     * One raw transport call. Counts `get`/`getFailed` — every call here is a
+     * real round trip, whether it is the first query or a split-retry half.
+     */
+    const rawQuery = async (topics: readonly string[]): Promise<BeaconGetResponse> => {
         try {
-            const res = await transport.get(lastScope);
+            const res = await transport.get(topics);
             counters.get++;
-            const truncated = typeof res?.truncated === 'number' ? res.truncated : 0;
-            if (truncated > 0) {
-                counters.truncated += truncated;
-                LOG.info(
-                    'Seqscribe',
-                    `beacon get: server truncated ${truncated} peer report(s) to fit the frame budget`,
-                );
-            }
-            // Re-project inbound reports too. The server sanitizes, but this
-            // node is what feeds them to `staleness()`, and a board seeded by an
-            // older build is exactly the case defence-in-depth is for.
-            const reports = Array.isArray(res?.reports) ? res.reports : [];
-            const clean = reports
-                .map((r) => projectBeaconReport(r))
-                .filter((r): r is ProjectedBeaconReport => r !== null);
-            LOG.info(
-                'Seqscribe',
-                `beacon get writer=${handle.writerId} peers=${clean.length} topics=${lastScope.length}`,
-            );
-            return clean;
+            return res;
         } catch (err) {
             counters.getFailed++;
             LOG.info(
@@ -465,6 +528,109 @@ export function armBeacon(
             );
             throw err;
         }
+    };
+
+    /**
+     * Split-retry (design §7.1.2, owner-approved 2026-08-28): when the server
+     * truncates a response, the DEFAULT recovery is to bisect the topic list
+     * and re-query each half, not to accept the drop. Each half is topic-scoped
+     * to the same set of nodes×writers per topic, so a truncated multi-topic
+     * response is very likely to fit once split (Enterprise sizing: ~55 KiB per
+     * topic against a 192 KiB server budget — see beacon-board.ts).
+     *
+     * Peer-drop survives as the LAST-RESORT BACKSTOP for the one case a split
+     * cannot fix: a single topic whose own node×writer fan-out alone exceeds
+     * the budget. That residual `truncated` is exposed as-is, exactly as
+     * before this change — callers already treat non-zero `truncated` as
+     * "staleness computed from a subset," never as a false negative.
+     *
+     * `queriesUsed` is a shared mutable counter (not a param thread) because
+     * every recursive branch must observe the SAME global budget — two
+     * siblings each independently capped at 16 would let the pair spend 32.
+     */
+    const queryWithSplitRetry = async (
+        topics: readonly string[],
+        queriesUsed: { count: number },
+    ): Promise<{ reports: unknown[]; truncated: number }> => {
+        if (queriesUsed.count >= MAX_BEACON_GET_QUERIES) {
+            // Budget exhausted before we could even try this slice. Report it
+            // fully truncated rather than silently returning nothing — the
+            // caller's board ends up short, which is the same "unknown, not
+            // wrong" degradation as a server-side drop.
+            return { reports: [], truncated: topics.length };
+        }
+
+        queriesUsed.count++;
+        const res = await rawQuery(topics);
+        const truncated = typeof res?.truncated === 'number' ? res.truncated : 0;
+        const reports = Array.isArray(res?.reports) ? res.reports : [];
+
+        if (truncated === 0 || topics.length <= 1) {
+            // Nothing to split further: either the response fit, or this is
+            // the single-topic backstop case — expose whatever truncated
+            // remains (§7.1.2's "consumers must defer sole-copy judgement").
+            return { reports, truncated };
+        }
+
+        // Budget must cover at least the two halves we are about to issue.
+        if (queriesUsed.count + 2 > MAX_BEACON_GET_QUERIES) {
+            return { reports, truncated };
+        }
+
+        const mid = Math.ceil(topics.length / 2);
+        const left = topics.slice(0, mid);
+        const right = topics.slice(mid);
+        counters.splitRetries++;
+
+        const [leftRes, rightRes] = await Promise.all([
+            queryWithSplitRetry(left, queriesUsed),
+            queryWithSplitRetry(right, queriesUsed),
+        ]);
+
+        return {
+            reports: mergeBeaconReportsByNode(leftRes.reports, rightRes.reports),
+            truncated: leftRes.truncated + rightRes.truncated,
+        };
+    };
+
+    /** Fetch, re-project, count. Returns the board for `setKnownVectors`. */
+    const doGet = async (): Promise<ProjectedBeaconReport[]> => {
+        const queriesUsed = { count: 0 };
+        let truncated = 0;
+        let reports: unknown[] = [];
+        try {
+            const res = await queryWithSplitRetry(lastScope, queriesUsed);
+            reports = res.reports;
+            truncated = res.truncated;
+        } catch (err) {
+            counters.getFailed++;
+            LOG.info(
+                'Seqscribe',
+                `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`,
+            );
+            throw err;
+        }
+
+        if (truncated > 0) {
+            counters.truncated += truncated;
+            LOG.info(
+                'Seqscribe',
+                `beacon get: ${truncated} peer report(s) remained truncated after split-retry ` +
+                    `(${queriesUsed.count} quer${queriesUsed.count === 1 ? 'y' : 'ies'})`,
+            );
+        }
+
+        // Re-project inbound reports too. The server sanitizes, but this
+        // node is what feeds them to `staleness()`, and a board seeded by an
+        // older build is exactly the case defence-in-depth is for.
+        const clean = reports
+            .map((r) => projectBeaconReport(r))
+            .filter((r): r is ProjectedBeaconReport => r !== null);
+        LOG.info(
+            'Seqscribe',
+            `beacon get writer=${handle.writerId} peers=${clean.length} topics=${lastScope.length}`,
+        );
+        return clean;
     };
 
     const libHandle = handle.node.beacon({
@@ -494,7 +660,8 @@ export function armBeacon(
             LOG.info(
                 'Seqscribe',
                 `beacon stopped writer=${handle.writerId} put=${counters.put}/${counters.put + counters.putFailed} ` +
-                    `get=${counters.get}/${counters.get + counters.getFailed} truncated=${counters.truncated} rejected=${counters.rejected}`,
+                    `get=${counters.get}/${counters.get + counters.getFailed} splitRetries=${counters.splitRetries} ` +
+                    `truncated=${counters.truncated} rejected=${counters.rejected}`,
             );
         },
         counters: () => ({ ...counters }),
