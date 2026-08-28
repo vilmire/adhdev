@@ -417,10 +417,25 @@ describe('cloud status seqscribe boundary', () => {
                 { topic: 'session.sess-1.transcript', peerId: 'peer-a', bytes: 1_048_576 },
                 { topic: 'mesh.mesh_abc.events', peerId: 'peer-b', bytes: 524_288 },
             ],
+            // Stage 4A read-path routing. Local-only for the dedup reason
+            // rather than the content one: these are RAW monotonic counters, so
+            // forwarding them would make every status frame unique and turn an
+            // idle daemon into a constant transmitter.
+            readRouting: {
+                fromReplica: 412,
+                fromLedger: 9,
+                fallbacks: { consumer_lag: 7, parity_mismatch: 2 },
+            },
         } as any);
 
         expect(payload.seqscribe).toEqual(healthy);
-        for (const local of ['applyRejects', 'stalledStreams', 'throughput', 'syncHotspots']) {
+        for (const local of [
+            'applyRejects',
+            'stalledStreams',
+            'throughput',
+            'syncHotspots',
+            'readRouting',
+        ]) {
             expect(payload.seqscribe).not.toHaveProperty(local);
         }
         // Belt and braces: no identifier from the hotspots survives anywhere in

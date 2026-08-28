@@ -63,7 +63,10 @@ import {
     startSeqscribeThroughputCollector,
     type SeqscribeThroughputCollector,
 } from '../seqscribe/throughput-collector.js';
-import { configureMeshReadReadinessCollector } from '../seqscribe/mesh-read-readiness.js';
+import {
+    configureMeshReadReadinessCollector,
+    meshReadRoutingCounters,
+} from '../seqscribe/mesh-read-readiness.js';
 import {
     configureMeshDualWrite,
     isMeshDualWriteActive,
@@ -729,6 +732,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                     // and peer ids and is local-only by contract.
                     includeLocalDiagnostics: true,
                     throughput: snapshot,
+                    // Stage 4A read-path routing. Local-only: raw counters that
+                    // would defeat the status-frame dedup, and the fallback
+                    // reason is the only surface that says WHICH readiness
+                    // condition is holding a mesh on the ledger.
+                    readRouting: meshReadRoutingCounters(),
                     dualWrite: {
                         active: isMeshDualWriteActive(),
                         failed: dual.failed,

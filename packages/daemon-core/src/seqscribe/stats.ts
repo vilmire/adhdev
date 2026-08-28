@@ -183,6 +183,38 @@ export interface SeqscribeStatusSummary {
      * to the server on any path.
      */
     syncHotspots?: { topic: string; peerId: string; bytes: number }[];
+    /**
+     * Stage 4A read-path routing: how many allow-listed reads this process
+     * answered from the replica versus the ledger, and why the ledger ones fell
+     * back (`mesh-read-readiness.ts` `MeshReadFallbackReason`).
+     *
+     * ★ Why this exists. The readiness gate is four fail-closed conditions, and
+     * until this field there was NO way to ask a live daemon which of them was
+     * holding. `parityPersistentMismatchBucket` covers condition 4 alone; the
+     * other three — topic/grant, quarantine, consumer catch-up — were visible
+     * only in a transition log line that prints once and scrolls away. That gap
+     * cost a real misdiagnosis: a healthy fleet (dualWrite on, parity clean) was
+     * read as "the gate is never called at all", because the observable surface
+     * could not distinguish a gate that was never reached from one that was
+     * reached and answered `consumer_lag`. `fallbacks` names the condition
+     * directly, so that question is now answerable from `get_status_metadata`.
+     *
+     * ★★ LOCAL-ONLY, for TWO independent reasons — either alone is sufficient:
+     *   1. These are RAW monotonic counters, not buckets. On the deduped status
+     *      frame they would change every tick and turn an idle daemon into a
+     *      constant transmitter — the failure this file's bucket discipline
+     *      exists to prevent.
+     *   2. They are per-process aggregates the server has no routing use for.
+     * The keys are fixed `MeshReadFallbackReason` enums and the values are
+     * integers; no mesh id, topic name or peer id appears, which is what makes
+     * the shape safe on this local surface at all.
+     */
+    readRouting?: {
+        fromReplica: number;
+        fromLedger: number;
+        /** Keyed by `MeshReadFallbackReason` — a fixed enum, never a mesh id. */
+        fallbacks: Record<string, number>;
+    };
 }
 
 export interface SummarizeOptions {
@@ -225,6 +257,16 @@ export interface SummarizeOptions {
      * everyone's numbers (seqscribe/throughput-collector.ts).
      */
     throughput?: SeqscribeThroughputSnapshot | null;
+    /**
+     * Stage 4A read-routing counters (`meshReadRoutingCounters()`). Only read
+     * when `includeLocalDiagnostics` is set — see the `readRouting` field for
+     * why this must not ride the deduped status frame.
+     */
+    readRouting?: {
+        fromReplica: number;
+        fromLedger: number;
+        fallbacks: Record<string, number>;
+    } | null;
 }
 
 export function summarizeSeqscribeStats(
@@ -277,9 +319,21 @@ export function summarizeSeqscribeStats(
             }
         }
         const snap = opts.throughput;
+        // Copy the counters rather than aliasing the module's live maps, so a
+        // later read cannot mutate a snapshot a caller is still holding.
+        const routing = opts.readRouting;
         localDiagnostics = {
             applyRejects,
             stalledStreams,
+            ...(routing
+                ? {
+                      readRouting: {
+                          fromReplica: routing.fromReplica,
+                          fromLedger: routing.fromLedger,
+                          fallbacks: { ...routing.fallbacks },
+                      },
+                  }
+                : {}),
             ...(snap
                 ? {
                       throughput: {

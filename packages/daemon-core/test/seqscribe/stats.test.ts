@@ -205,4 +205,60 @@ describe('summarizeSeqscribeStats', () => {
         );
         expect(summary.fgenAgeBucket).toBe(0);
     });
+
+    /**
+     * Stage 4A read-path routing on the LOCAL surface.
+     *
+     * The point of the field is diagnosing WHICH readiness condition is holding
+     * a mesh on the ledger. Before it, a live daemon could report a perfectly
+     * healthy replication picture (dualWrite armed, parity clean) while every
+     * read still fell back, and there was no way to tell that apart from the
+     * gate never being consulted at all — which is precisely the misdiagnosis
+     * that motivated this field.
+     */
+    describe('read-path routing counters (Stage 4A)', () => {
+        const routing = {
+            fromReplica: 412,
+            fromLedger: 9,
+            fallbacks: { consumer_lag: 7, parity_mismatch: 2 },
+        };
+
+        it('surfaces the counters and the per-reason fallback breakdown', () => {
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, includeLocalDiagnostics: true, readRouting: routing },
+            );
+
+            expect(summary.readRouting).toEqual(routing);
+            // The reason is the whole value of the field: it names the condition
+            // rather than only saying that *a* fallback happened.
+            expect(summary.readRouting?.fallbacks.consumer_lag).toBe(7);
+        });
+
+        it('omits the counters unless local diagnostics are requested', () => {
+            // The status reporter shares this projection with
+            // `get_status_metadata`. These are RAW monotonic counters, so if
+            // they rode the deduped status frame every heartbeat would hash
+            // differently and an idle daemon would transmit forever.
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, readRouting: routing },
+            );
+            expect(summary).not.toHaveProperty('readRouting');
+        });
+
+        it('copies the counters so a later read cannot mutate a held snapshot', () => {
+            const live = { fromReplica: 1, fromLedger: 0, fallbacks: { consumer_lag: 1 } };
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, includeLocalDiagnostics: true, readRouting: live },
+            );
+
+            live.fallbacks.consumer_lag = 99;
+            live.fromReplica = 99;
+
+            expect(summary.readRouting?.fallbacks.consumer_lag).toBe(1);
+            expect(summary.readRouting?.fromReplica).toBe(1);
+        });
+    });
 });
