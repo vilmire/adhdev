@@ -89,6 +89,7 @@ import {
     type MeshUpstreamOutput,
 } from './mesh-graph-input-binding.js';
 import { mergeWorktreeAffinityTag, resolveWorkspaceRefForMaterialize } from './mesh-graph-workspace-bind.js';
+import { expireWorkerTaskTokensForTask } from './worker-mcp-isolation.js';
 import {
     applyGraphCancelCascade,
     classifyGraphRollup,
@@ -354,6 +355,22 @@ export function commitTaskTerminalAndAdvanceGraph(
             : [] as string[];
         return { entry, committed: true, duplicate: false, materializedNodeIds };
     });
+    // WORKER-MCP (design §9.2.2): expire this task's worker tokens at the single
+    // terminal-acceptance chokepoint, so a token cannot outlive the task it
+    // authorizes. Bound to task terminal rather than session end because a
+    // session outlives its tasks (it is reused) — session-scoped expiry would
+    // leave a finished task reportable, breaking Phase B's attribution.
+    //
+    // Placed AFTER the transaction and outside its try, and written to be
+    // idempotent: the replay fence above re-enters with duplicate:true for an
+    // already-terminal row, so this runs more than once per task by design.
+    // Expiring on the duplicate pass is harmless — the tokens are already gone.
+    if (result.committed) {
+        try {
+            expireWorkerTaskTokensForTask(terminal.meshId, terminal.taskId);
+        } catch { /* expiry is best-effort — a stale token still fails Phase B's causal checks */ }
+    }
+
     // Step 9 — AFTER commit: drain the outbox (queue wake + delivery marks). No
     // provider/git/network work happened inside the transaction; the wake handler
     // only SCHEDULES the ordinary queue trigger (setImmediate) outside the lock.

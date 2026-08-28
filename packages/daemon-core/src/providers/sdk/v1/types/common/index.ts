@@ -185,6 +185,12 @@ export type MeshCoordinatorSystemPromptInjectionDef =
 export interface MeshCoordinatorDelegatedWorkerIsolationDef {
   env?: {
     unset?: ReadonlyArray<string>;
+    /**
+     * Environment variables set to a concrete value for delegated workers.
+     * Supports the `{{workerHome}}` placeholder (worker-private HOME).
+     * `unset` wins on conflict.
+     */
+    set?: Readonly<Record<string, string>>;
   };
   args?: ReadonlyArray<MeshCoordinatorDelegatedWorkerArgRuleDef>;
 }

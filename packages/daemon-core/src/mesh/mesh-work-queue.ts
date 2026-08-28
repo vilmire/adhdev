@@ -25,6 +25,7 @@ import {
 } from './mesh-graph-derived-failure.js';
 import { sessionIdsEquivalent, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, normalizeNodeCapabilitySlots, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
+import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import {
     PARK_REASON_PIN_EXPIRED,
     PARK_RETENTION_EXPIRED_REASON,
@@ -1074,6 +1075,21 @@ export function recordDirectDispatchTask(
             entry.attemptId = attempt.attemptId;
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
             recordTurnAck({ meshId, taskId, kind: 'delivered', attemptId: attempt.attemptId, sessionId: opts.assignedSessionId });
+            // WORKER-MCP (design §9.2.1, "★함정"): this path bypasses the queue
+            // claim, so a mint placed only at the claim seam would leave every
+            // `mesh_send_task --direct` worker tokenless — and once Phase B's
+            // verification is fail-closed, tokenless means the worker cannot
+            // report at all. Mint here too, off the SAME attempt this block just
+            // opened, so both arms bind identically.
+            if (isWorkerMcpEnabled()) {
+                mintWorkerTaskToken({
+                    meshId,
+                    taskId,
+                    attemptId: attempt.attemptId,
+                    ...(opts.assignedSessionId ? { sessionId: opts.assignedSessionId } : {}),
+                    ...(opts.assignedNodeId ? { nodeId: opts.assignedNodeId } : {}),
+                });
+            }
         } catch { /* best-effort — the assigned row is already recorded */ }
         // R2 / NOTIF-DROP: a mission-attributed DIRECT dispatch (mesh_send_task) has
         // already been handed to the transport by the time we materialise this assigned

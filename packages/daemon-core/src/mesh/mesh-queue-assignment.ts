@@ -62,6 +62,7 @@ import {
     __resetAutoLaunchOrphanNotifiedForTests,
 } from './mesh-autolaunch-integrity.js';
 import { allowedClassifiedDifficultiesForSession, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel } from './mesh-difficulty-floor.js';
+import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import {
     normalizeProviderPriority,
     isTerminalSessionStatus,
@@ -1218,6 +1219,30 @@ export function tryAssignQueueTask(
         MeshRuntimeStore.getInstance().updateQueueEntry(task);
     } catch (e: any) {
         LOG.warn('TurnLedger', `Failed to open turn attempt for task ${task.id} (dispatch proceeds on the legacy nonce path): ${e?.message || e}`);
+    }
+
+    // WORKER-MCP (design §9.2.1): mint the per-task worker token now that the
+    // attempt exists. This is the queue-claim arm; the direct-dispatch arm
+    // mints in recordDirectDispatchTask, because that path bypasses the claim
+    // entirely and a worker without a token fails closed once Phase B lands.
+    //
+    // Deliberately AFTER openTurnAttempt so the token carries a real attemptId:
+    // binding to the task alone would let a late report from a superseded
+    // dispatch land on the retry's row, which is the REDRIVE-DUP family.
+    // Best-effort like the attempt open above — a mint failure must not sink a
+    // dispatch that is otherwise sound.
+    if (isWorkerMcpEnabled()) {
+        try {
+            mintWorkerTaskToken({
+                meshId,
+                taskId: task.id,
+                attemptId: dispatchAttemptId,
+                sessionId,
+                nodeId,
+            });
+        } catch (e: any) {
+            LOG.warn('WorkerMcp', `Failed to mint worker task token for ${task.id}: ${e?.message || e}`);
+        }
     }
     // TURN-LEDGER (Stage 5): a prompt must never be injected into an attempt that has
     // already CONSUMED one. The fresh claim above normally guarantees a pre-consumed

@@ -427,9 +427,24 @@ export interface ProviderMeshCoordinatorConfig {
 }
 
 export interface MeshCoordinatorDelegatedWorkerIsolation {
-  /** Environment variables to unset for delegated worker sessions. */
+  /** Environment overrides applied to delegated worker sessions. */
   env?: {
+    /** Environment variables to unset for delegated worker sessions. */
     unset?: string[];
+    /**
+     * Environment variables to SET to a concrete value for delegated worker
+     * sessions. Distinct from `unset`, which writes `''` (the daemon's
+     * "clear this" marker) — `set` carries a real value the worker must see.
+     *
+     * Values may use `{{workerHome}}`, which expands to the worker-private
+     * HOME the daemon prepares for this launch. That placeholder is how a
+     * home-rooted provider (antigravity) redirects its `~`-based config and
+     * auth surface without daemon-core hard-coding the provider's paths.
+     * A value with no placeholder is passed through verbatim.
+     *
+     * `unset` wins on conflict: a key named in both is cleared, never set.
+     */
+    set?: Record<string, string>;
   };
   /** Spawn-argument rules applied before launching a delegated worker. */
   args?: MeshCoordinatorDelegatedWorkerArgRule[];

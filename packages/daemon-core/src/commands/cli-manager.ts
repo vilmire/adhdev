@@ -23,6 +23,7 @@ import { shortHash } from '../system/hash.js';
 import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
 import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
+import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
@@ -330,11 +331,26 @@ export interface CoordinatorDelegatedCliLaunchOptionsInput {
     cliArgs?: string[];
     env?: Record<string, string>;
     isolation?: MeshCoordinatorDelegatedWorkerIsolation;
+    /**
+     * WORKER-MCP: the provider's declared `meshCoordinator.mcpConfig`, used to
+     * write a worker-scoped config to the path the provider already names.
+     * Absent (or gate off) ⇒ prior behavior, unchanged.
+     */
+    mcpConfig?: {
+        mode?: string;
+        format?: string;
+        path?: string;
+        serverName?: string;
+    };
+    /** Stable per-launch key so two workers never share a private HOME. */
+    sessionKey?: string;
 }
 
 export interface CoordinatorDelegatedCliLaunchOptions {
     cliArgs: string[];
     env: Record<string, string>;
+    /** Set only when the worker-MCP gate produced an isolation surface. */
+    workerIsolation?: WorkerMcpIsolation;
 }
 
 function hasCliArg(args: string[], flag: string): boolean {
@@ -401,6 +417,59 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
     for (const key of input.isolation?.env?.unset || []) {
         if (typeof key === 'string' && key.trim()) envUnsets.add(key.trim());
     }
+
+    // WORKER-MCP (design §3). Returns null while the ADHDEV_WORKER_MCP gate is
+    // off, and every use below is guarded on that null — so gate-off output is
+    // byte-identical to the pre-feature behavior. This is the ONE place the
+    // config/HOME axis consults the flag.
+    const workerIsolation = resolveWorkerMcpIsolation({
+        providerType: input.cliType,
+        workspace: input.workspace,
+        sessionKey: input.sessionKey || input.workspace,
+        mcpConfig: input.mcpConfig,
+        // Phase A writes an EMPTY worker config (no servers). The worker tool
+        // surface and its server entry arrive in Phase B; until then the
+        // isolation win is simply that the coordinator's 60-tool entry is not
+        // in the file the worker reads.
+    });
+
+    // Provider-declared env VALUES (env.set), applied before the unset sweep so
+    // `unset` always wins on a key named by both — the clear is the stronger,
+    // safer outcome and keeping that order means a manifest can never
+    // resurrect a variable the daemon scrubs unconditionally.
+    //
+    // Only meaningful when the worker-MCP gate is on: `{{workerHome}}` expands
+    // to a worker-private HOME that only exists under the gate, so applying
+    // these with the gate off would export a placeholder-laden path.
+    const envSet = input.isolation?.env?.set;
+    if (workerIsolation && envSet && typeof envSet === 'object') {
+        for (const [rawKey, rawValue] of Object.entries(envSet)) {
+            const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+            if (!key || envUnsets.has(key)) continue;
+            if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
+            const expanded = expandWorkerIsolationPlaceholders(rawValue, workerIsolation);
+            if (expanded) env[key] = expanded;
+        }
+    }
+
+    // Point the worker at its private HOME. Without this the CLI still reads
+    // the real `~` and the whole private-HOME construction is inert — the
+    // directory would exist and simply never be consulted.
+    //
+    // Applied by the daemon rather than requiring a manifest `env.set` entry:
+    // the HOME redirection is a property of "this provider roots its config in
+    // ~", which the daemon already knows from WORKER_PRIVATE_HOME_SPECS. A
+    // provider can still override the variable NAME via env.set (above) for a
+    // CLI that uses something other than HOME; that declaration wins because it
+    // is applied first and this only fills HOME when unset.
+    if (workerIsolation?.workerHome && !envUnsets.has('HOME') && !env.HOME) {
+        env.HOME = workerIsolation.workerHome;
+        // win32 resolves the profile through USERPROFILE, not HOME.
+        if (process.platform === 'win32' && !env.USERPROFILE) {
+            env.USERPROFILE = workerIsolation.workerHome;
+        }
+    }
+
     for (const key of envUnsets) env[key] = '';
 
     for (const rule of input.isolation?.args || []) {
@@ -422,7 +491,7 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         }
     }
 
-    return { cliArgs, env };
+    return { cliArgs, env, ...(workerIsolation ? { workerIsolation } : {}) };
 }
 
 function isUuid(value: string): boolean {
@@ -1766,8 +1835,23 @@ export class DaemonCliManager {
                         cliArgs: args?.cliArgs,
                         env: args?.env,
                         isolation: provLookup?.meshCoordinator?.delegatedWorkerIsolation,
+                        // WORKER-MCP: the declared config path is what lets the
+                        // daemon write a worker config for the 6 providers that
+                        // declare no isolation rules of their own.
+                        mcpConfig: provLookup?.meshCoordinator?.mcpConfig,
+                        // Prefer the auto-launch task binding so two workers on
+                        // one workspace get distinct private HOMEs; fall back to
+                        // the mesh node, then the workspace alone.
+                        sessionKey: (typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
+                            ? settingsOverride.autoLaunchedForQueueTaskId.trim()
+                            : '')
+                            || (typeof settingsOverride?.meshNodeId === 'string' ? settingsOverride.meshNodeId.trim() : '')
+                            || dir,
                     })
                     : null;
+                if (delegatedLaunch?.workerIsolation?.notes.length) {
+                    LOG.info('WorkerMcp', `[${cliType}] ${delegatedLaunch.workerIsolation.notes.join('; ')}`);
+                }
                 // Untrusted-provider gate: an external source that ships JS
                 // hooks needs explicit user confirmation before its first
                 // launch. Dashboards add `confirmExternalUntrusted: true` to

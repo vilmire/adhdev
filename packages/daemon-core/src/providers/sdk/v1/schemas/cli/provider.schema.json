@@ -731,6 +731,15 @@
                     "type": "string",
                     "minLength": 1
                   }
+                },
+                "set": {
+                  "description": "Environment variables set to a concrete value for delegated worker sessions. Distinct from `unset` (which clears). Values may use the {{workerHome}} placeholder, expanded to the worker-private HOME the daemon prepares for the launch. `unset` wins on conflict.",
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
                 }
               }
             },

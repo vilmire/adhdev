@@ -444,6 +444,87 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).toEqual([])
   })
 
+  it('accepts delegated worker isolation env.set values', () => {
+    const result = validateProviderDefinition({
+      type: 'antigravity-cli',
+      name: 'Antigravity CLI',
+      category: 'cli',
+      spawn: { command: 'agy' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '~/.gemini/config/mcp_config.json',
+        },
+        delegatedWorkerIsolation: {
+          env: {
+            unset: ['ADHDEV_INLINE_MESH'],
+            set: { HOME: '{{workerHome}}' },
+          },
+        },
+      },
+    })
+
+    expect(result.errors).toEqual([])
+  })
+
+  it('rejects a non-object delegated worker isolation env.set', () => {
+    const result = validateProviderDefinition({
+      type: 'x-cli',
+      name: 'X',
+      category: 'cli',
+      spawn: { command: 'x' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        delegatedWorkerIsolation: { env: { set: ['HOME=/tmp'] } },
+      },
+    })
+
+    expect(result.errors).toContain('meshCoordinator.delegatedWorkerIsolation.env.set must be an object')
+  })
+
+  it('rejects an empty env.set value — clearing belongs to env.unset', () => {
+    // `''` is the daemon's unset marker (cli-manager writes it for env.unset).
+    // Accepting it here would give one string two meanings and let a manifest
+    // clear a variable through the `set` door.
+    const result = validateProviderDefinition({
+      type: 'x-cli',
+      name: 'X',
+      category: 'cli',
+      spawn: { command: 'x' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        delegatedWorkerIsolation: { env: { set: { HOME: '' } } },
+      },
+    })
+
+    expect(result.errors.some((e: string) => /env\.set\.HOME must be a non-empty string/.test(e))).toBe(true)
+  })
+
+  it('rejects a non-string env.set value', () => {
+    const result = validateProviderDefinition({
+      type: 'x-cli',
+      name: 'X',
+      category: 'cli',
+      spawn: { command: 'x' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        delegatedWorkerIsolation: { env: { set: { PORT: 8080 } } },
+      },
+    })
+
+    expect(result.errors.some((e: string) => /env\.set\.PORT must be a non-empty string/.test(e))).toBe(true)
+  })
+
   it('accepts mesh coordinator manual MCP metadata with actionable instructions', () => {
     const result = validateProviderDefinition({
       type: 'hermes-cli',

@@ -486,6 +486,26 @@ function validateMeshCoordinatorDelegatedWorkerIsolation(raw: unknown, errors: s
       if (unset !== undefined && (!Array.isArray(unset) || unset.some((key) => typeof key !== 'string' || !key.trim()))) {
         errors.push('meshCoordinator.delegatedWorkerIsolation.env.unset must be an array of non-empty strings')
       }
+      const set = (env as Record<string, unknown>).set
+      if (set !== undefined) {
+        if (!set || typeof set !== 'object' || Array.isArray(set)) {
+          errors.push('meshCoordinator.delegatedWorkerIsolation.env.set must be an object')
+        } else {
+          for (const [key, value] of Object.entries(set as Record<string, unknown>)) {
+            if (!key.trim()) {
+              errors.push('meshCoordinator.delegatedWorkerIsolation.env.set keys must be non-empty strings')
+              continue
+            }
+            // An empty value is rejected rather than accepted-as-clear: `''` is
+            // the daemon's unset marker (cli-manager writes it for env.unset),
+            // so allowing it here would give one string two meanings and let a
+            // manifest silently clear a variable through the `set` door.
+            if (typeof value !== 'string' || !value.trim()) {
+              errors.push(`meshCoordinator.delegatedWorkerIsolation.env.set.${key} must be a non-empty string (use env.unset to clear a variable)`)
+            }
+          }
+        }
+      }
     }
   }
   const args = isolation.args
