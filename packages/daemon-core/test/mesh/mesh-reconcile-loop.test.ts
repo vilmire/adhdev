@@ -32,11 +32,12 @@ import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, ge
 import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { reconcileDirectDispatchCompletionFromTranscript } from '../../src/mesh/mesh-events-stale.js'
-import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask, cancelTask } from '../../src/mesh/mesh-work-queue.js'
+import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, claimNextTask, reclaimStrandedAssignedTask, cancelTask, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir, appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
 import { recordTurnAck, recordTurnStage, openTurnAttempt, proposeTurnCompletion, getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests, evaluateRedrive } from '../../src/mesh/mesh-turn-ledger.js'
+import { CONSUME_GRACE_FLOOR_MS, CONSUME_GRACE_NATIVE_SOURCE_MS } from '../../src/mesh/mesh-consume-grace.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -2989,9 +2990,17 @@ describe('runMeshReconcileTick', () => {
     })
 
     // ── DELIVERED-NOT-CONSUMED short-grace re-drive (remote autoLaunch delivered≠consumed) ──
-    // > ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS (25s) but < ASSIGNED_STRANDED_DEADLINE_MS (5min):
-    // provably inside the short-grace re-drive window and well before the 5min confirm gate.
-    const UNCONSUMED_MS = 40_000
+    // Past the consume grace but < ASSIGNED_STRANDED_DEADLINE_MS (5min): provably inside the
+    // short-grace re-drive window and well before the 5min confirm gate.
+    //
+    // CONSUME-GRACE: the grace is provider-aware (mesh-consume-grace.ts) — the floor is
+    // CONSUME_GRACE_FLOOR_MS (90s), and a provider whose turn start is not a PTY event
+    // (emitsPtyTurnEvents:false) gets CONSUME_GRACE_NATIVE_SOURCE_MS (180s). These fixtures
+    // must therefore backdate past the grace that applies to the row UNDER TEST, not past a
+    // single flat constant. Both sit comfortably below the 5min confirm gate, which is what
+    // keeps these rows in the short-redrive branch rather than the stranded one.
+    const UNCONSUMED_MS = CONSUME_GRACE_FLOOR_MS + 15_000
+    const UNCONSUMED_NATIVE_SOURCE_MS = CONSUME_GRACE_NATIVE_SOURCE_MS + 15_000
 
     it('re-drives a delivered-but-unconsumed REMOTE (UNKNOWN) row only after the UNKNOWN grace (delivered, never acked, not generating)', async () => {
       const meshId = `mesh_phase25_unconsumed_${Date.now()}`
@@ -3340,7 +3349,7 @@ describe('runMeshReconcileTick', () => {
       })
     })
 
-    it('does NOT re-drive a delivered-but-unconsumed row still inside the 25s grace (no premature re-drive)', async () => {
+    it('does NOT re-drive a delivered-but-unconsumed row still inside the consume grace (no premature re-drive)', async () => {
       const meshId = `mesh_phase25_unconsumed_fresh_${Date.now()}`
       const nodeId = 'node_w'
       try {
@@ -3348,8 +3357,10 @@ describe('runMeshReconcileTick', () => {
     difficulty: 'medium',
 })
         const claimed = claimNextTask(meshId, nodeId, 'sess-fresh-remote', [])!
-        // Only 10s in — below ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS (25s): a slow
-        // generating_started still has room to arrive.
+        // Only 10s in — far below the consume grace: a slow generating_started still has
+        // room to arrive. This is the case the live incident got wrong at 26s, and the
+        // measured p50 boot→consume for every provider is above 5s, so 10s is squarely
+        // inside "still booting" for the whole fleet.
         backdateDispatch(meshId, claimed.id, 10_000)
         createSessionDelivery({ meshId, nodeId, sessionId: 'sess-fresh-remote', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
         hostMesh(meshId, nodeId)
@@ -3363,6 +3374,131 @@ describe('runMeshReconcileTick', () => {
       } finally {
         cleanup(meshId)
       }
+    })
+
+    // ── CONSUME-GRACE (live 2026-08-28: codex 3cd41be4, cursor 0aaa398c) ────────────
+    // The delivered→consumed judgement clock was a flat 25s, which measurement against the
+    // live ledger showed sat BELOW the p95 boot→consume latency of EVERY provider in the
+    // fleet (codex p95 31.6s, antigravity p95 37.5s, kimi p95 28.7s — and 7% of all 1,094
+    // successful consumes exceeded 25s). A codex worker that was booting normally was
+    // therefore re-driven 26s after its auto-launch completed, and its session was
+    // afterwards unrecoverable ("Session not found").
+    //
+    // The pair below pins BOTH directions, because a grace that only ever holds is just a
+    // disabled watchdog: a slow-but-live boot must survive, and a genuinely dead worker must
+    // still be recovered.
+    describe('consume grace — slow boot survives, genuine death still recovers', () => {
+      // ── INJECTION TEST ──────────────────────────────────────────────────────
+      // The load-bearing assertion for the whole change. Restore the 25s constant (or drop
+      // the provider-aware resolve) and this goes RED: 60s is past 25s, so the row would be
+      // re-driven exactly as it was live.
+      it('does NOT re-drive a worker still booting at 60s — past the OLD 25s clock, inside the new grace', async () => {
+        const meshId = `mesh_consume_grace_slow_boot_${Date.now()}`
+        const nodeId = 'node_w'
+        try {
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId, difficulty: 'medium' })
+          const claimed = claimNextTask(meshId, nodeId, 'sess-slow-boot', [])!
+          // 60s: comfortably past the old 25s clock (this is the window the live incident
+          // died in) and comfortably inside the new floor. A codex/antigravity cold boot
+          // lands here routinely — measured p99s are 247.6s and 37.5s respectively.
+          backdateDispatch(meshId, claimed.id, 60_000)
+          createSessionDelivery({ meshId, nodeId, sessionId: 'sess-slow-boot', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+          hostMesh(meshId, nodeId)
+
+          // Several ticks: the grace is a deadline, not a streak — no amount of ticking
+          // inside it may re-drive. (The UNKNOWN streak only starts once the grace is met.)
+          await runMeshReconcileTick(makeNoWorkerComponents())
+          await runMeshReconcileTick(makeNoWorkerComponents())
+          await runMeshReconcileTick(makeNoWorkerComponents())
+          await runMeshReconcileTick(makeNoWorkerComponents())
+
+          const row = getQueue(meshId).find(t => t.id === claimed.id)!
+          expect(row.status).toBe('assigned')
+          // Still bound to the SAME session — the worker was never torn off its task.
+          expect(row.assignedSessionId).toBe('sess-slow-boot')
+          expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      // ── OVERCORRECTION GUARD ────────────────────────────────────────────────
+      // The counterweight. Widening the grace must not turn the watchdog off: a delivery that
+      // was genuinely lost still has to be recovered, just later. Same fixture as above but
+      // past the grace — the ONLY difference is elapsed time.
+      it('STILL re-drives a genuinely lost delivery once the grace is met', async () => {
+        const meshId = `mesh_consume_grace_dead_${Date.now()}`
+        const nodeId = 'node_w'
+        try {
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId, difficulty: 'medium' })
+          const claimed = claimNextTask(meshId, nodeId, 'sess-dead', [])!
+          backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+          createSessionDelivery({ meshId, nodeId, sessionId: 'sess-dead', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+          hostMesh(meshId, nodeId)
+
+          // No local instance → UNKNOWN, so the bounded consecutive-UNKNOWN grace still
+          // applies on top of the time grace. Both must be satisfied before the re-drive.
+          await runMeshReconcileTick(makeNoWorkerComponents())
+          await runMeshReconcileTick(makeNoWorkerComponents())
+          expect(getQueue(meshId).find(t => t.id === claimed.id)!.status).toBe('assigned')
+
+          await runMeshReconcileTick(makeNoWorkerComponents())
+
+          const row = getQueue(meshId).find(t => t.id === claimed.id)!
+          expect(row.status).toBe('pending')
+          expect(row.assignedSessionId).toBeUndefined()
+          const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+          expect(reclaimed).toHaveLength(1)
+          expect((reclaimed[0].payload as any).reason).toBe('delivered_not_consumed_redrive')
+        } finally {
+          cleanup(meshId)
+        }
+      })
+
+      // ── REDRIVE-STALE-AUTOLAUNCH (live: cursor 0aaa398c never retried) ──────
+      // The reclaim clears every assigned* field but used to leave `autoLaunch` behind. That
+      // record describes the launch of the session being torn down, so the requeued row went
+      // back to 'pending' still advertising `status:'completed'` + the dead sessionId — which
+      // is exactly what the per-task await-claim guard reads as "a claim is already in flight,
+      // do not launch". The task then waited out that window and its 90→180→360s backoff
+      // against a session that no longer existed. Revert the `delete entry.autoLaunch` and
+      // this goes RED.
+      it('clears the stale autoLaunch record on re-drive so the requeued task can relaunch', async () => {
+        const meshId = `mesh_consume_grace_autolaunch_${Date.now()}`
+        const nodeId = 'node_w'
+        try {
+          enqueueTask(meshId, 'do work', { targetNodeId: nodeId, difficulty: 'medium' })
+          const claimed = claimNextTask(meshId, nodeId, 'sess-dead-al', [])!
+          backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+          createSessionDelivery({ meshId, nodeId, sessionId: 'sess-dead-al', taskId: claimed.id, kind: 'task', message: 'do work', status: 'delivered' })
+          // The auto-launch that spawned the (now doomed) session, recorded as it is live.
+          recordTaskAutoLaunch(meshId, claimed.id, {
+            status: 'completed',
+            nodeId,
+            sessionId: 'sess-dead-al',
+            providerType: 'cursor-cli',
+          })
+          expect(getQueue(meshId).find(t => t.id === claimed.id)!.autoLaunch?.status).toBe('completed')
+          hostMesh(meshId, nodeId)
+
+          await runMeshReconcileTick(makeNoWorkerComponents())
+          await runMeshReconcileTick(makeNoWorkerComponents())
+          await runMeshReconcileTick(makeNoWorkerComponents())
+
+          const row = getQueue(meshId).find(t => t.id === claimed.id)!
+          expect(row.status).toBe('pending')
+          // The await-claim guard suppresses a relaunch only for a `completed` record that
+          // still names a session. What must not survive is THAT record pointing at the dead
+          // session — whatever the requeued task's own subsequent launch attempt records in
+          // its place (here a 'skipped', since this fixture has no launchable provider) is
+          // the task making fresh progress, which is the opposite of the wedge.
+          const stillClaimsDeadSession = row.autoLaunch?.status === 'completed'
+            && row.autoLaunch?.sessionId === 'sess-dead-al'
+          expect(stillClaimsDeadSession).toBe(false)
+        } finally {
+          cleanup(meshId)
+        }
+      })
     })
 
     it('re-driven delivered-but-unconsumed task (UNKNOWN, past grace) is re-dispatched onto a now-idle worker the same tick', async () => {
@@ -3439,7 +3575,10 @@ describe('runMeshReconcileTick', () => {
     difficulty: 'medium',
 })
       const claimed = claimNextTask(meshId, nodeId, sessionId, [])!
-      backdateDispatch(meshId, claimed.id, UNCONSUMED_MS)
+      // CONSUME-GRACE: these rows are the emitsPtyTurnEvents:false class, whose grace is the
+      // wider CONSUME_GRACE_NATIVE_SOURCE_MS — backdate past THAT, or the row is still inside
+      // its grace and every assertion below would pass/fail for the wrong reason.
+      backdateDispatch(meshId, claimed.id, UNCONSUMED_NATIVE_SOURCE_MS)
       createSessionDelivery({ meshId, nodeId, sessionId, taskId: claimed.id, kind: 'task', message: 'investigate the failure', status: 'delivered' })
 
       // Locally present + idle → resolveSessionBusyVerdict IDLE_CONFIRMED (the immediate-redrive
@@ -3453,7 +3592,7 @@ describe('runMeshReconcileTick', () => {
         if (cmd !== 'read_chat') return { success: true }
         // status 'idle' throughout: the in-turn-progress poll must NOT depend on a
         // generating status — the whole point is that this class reads idle mid-task.
-        return { success: true, status: 'idle', messages: buildMessages(dispatchAt - UNCONSUMED_MS) }
+        return { success: true, status: 'idle', messages: buildMessages(dispatchAt - UNCONSUMED_NATIVE_SOURCE_MS) }
       })
       const components = {
         instanceManager: {

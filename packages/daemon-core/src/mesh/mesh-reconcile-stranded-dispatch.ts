@@ -57,6 +57,7 @@ import {
     noteRedriveBlocked,
     resolveTaskEvidenceSessionId,
 } from './mesh-turn-ledger.js';
+import { resolveConsumeGraceMs } from './mesh-consume-grace.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 import { notifyCoordinatorOfPinnedReclaim } from './mesh-dispatch-failed-notify.js';
 
@@ -93,7 +94,13 @@ const DELIVERED_NO_TURN_DEADLINE_MS = 15 * 60_000;
 // above normal native-source tool-call/model-thinking gaps and the reconcile cadence.
 const NATIVE_SOURCE_ACTIVITY_STALE_MS = 10 * 60_000;
 
-// DELIVERED-NOT-CONSUMED (remote autoLaunch delivered≠consumed gap): how long a row may sit
+// DELIVERED-NOT-CONSUMED (remote autoLaunch delivered≠consumed gap). The window itself now
+// lives in mesh-consume-grace.ts (resolveConsumeGraceMs) because it is PROVIDER-AWARE: the
+// flat 25s this comment used to introduce sat below the measured p95 boot→consume latency of
+// every provider in the fleet, so a normally-booting worker was routinely re-driven off a task
+// it was about to start (live 2026-08-28: codex 3cd41be4 re-driven at 26s, session then
+// unrecoverable). The rationale below still describes WHY this short path exists at all — how
+// long a row may sit
 // 'assigned' with a CONFIRMED delivery ('delivered') that was never CONSUMED ('acked' — the
 // worker's agent:generating_started never arrived) before the watchdog re-drives it. Far shorter
 // than DELIVERED_NO_TURN_DEADLINE_MS (15min): a remote autoLaunch marks markAutoLaunch(completed)
@@ -104,7 +111,6 @@ const NATIVE_SOURCE_ACTIVITY_STALE_MS = 10 * 60_000;
 // safely re-open the task after a SHORT grace (well above a normal generating_started round-trip so
 // a merely-slow start is never torn off) instead of waiting the full 15min turn budget. Floored
 // comfortably above the auto-launch cooldown so a legitimate late inject still has room to land.
-const ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS = 25_000;
 
 // RECLAIM-FALSEPOS: how many CONSECUTIVE UNKNOWN busy-verdict ticks (past the delivered-no-turn
 // deadline) must accumulate before a delivered row whose worker session cannot be positively
@@ -967,8 +973,16 @@ export async function recoverStrandedAssignedDispatches(
         // so PHASE 3 re-dispatches it this same tick onto a fresh idle session — idempotent: it only
         // mutates a still-'assigned' row, so a completion/ack that raced in already moved the row off
         // 'assigned' and this is a no-op.
+        // CONSUME-GRACE: the window is provider-aware (mesh-consume-grace.ts). It is resolved
+        // from the SAME transcript-authority profile the gate body already uses, read here from
+        // the claim-time row stamp so a REMOTE worker is classified too, and defaults to the
+        // floor when the profile is unknown. The former flat 25s constant sat below the p95
+        // boot→consume latency of every measured provider, so a normally-booting worker was
+        // routinely re-driven off a task it was about to start.
+        const consumeGraceProfile = resolveAssignedTranscriptProfile(components, row);
+        const consumeGraceMs = resolveConsumeGraceMs(consumeGraceProfile);
         if (
-            ageMs >= ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS
+            ageMs >= consumeGraceMs
             && ageMs < ASSIGNED_STRANDED_DEADLINE_MS
             && store.taskHasConfirmedDelivery(meshId, row.id)
             && !store.taskDeliveryConsumed(meshId, row.id)
@@ -1248,7 +1262,11 @@ export async function recoverStrandedAssignedDispatches(
                     });
                 }
                 try {
-                    markAttemptRedriven({ meshId, taskId: row.id, leaseDurationMs: ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS, nowMs });
+                    // The lease must cover the window the NEXT judgement uses, so it is the
+                    // same provider-aware grace the gate above entered on. Leaving it at the
+                    // old flat constant would expire the lease well before the re-driven
+                    // attempt is judged again.
+                    markAttemptRedriven({ meshId, taskId: row.id, leaseDurationMs: consumeGraceMs, nowMs });
                 } catch { /* best-effort durable lease */ }
                 const redriven = reclaimStrandedAssignedTask(meshId, row.id, {
                     reason: 'delivered_not_consumed_redrive',

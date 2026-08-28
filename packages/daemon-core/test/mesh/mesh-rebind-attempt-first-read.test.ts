@@ -50,6 +50,7 @@ import {
   openTurnAttempt,
 } from '../../src/mesh/mesh-turn-ledger.js'
 import { pollAssignedTaskTerminalEvidence } from '../../src/mesh/mesh-completion-synthesis.js'
+import { CONSUME_GRACE_FLOOR_MS } from '../../src/mesh/mesh-consume-grace.js'
 
 // The live incident (task f5edc912, 2026-07-31):
 //   HOLDER  = the session that claimed first and is genuinely generating
@@ -59,9 +60,12 @@ import { pollAssignedTaskTerminalEvidence } from '../../src/mesh/mesh-completion
 const HOLDER = 'f6196842'
 const REFUSED = '7c1ff72c'
 
-// Long enough to clear the 25s delivered-not-consumed redrive gate but under the
-// 15-min delivered-no-turn deadline: this is the window the incident fired in.
-const UNCONSUMED_MS = 60_000
+// Long enough to clear the delivered-not-consumed consume grace but under the 15-min
+// delivered-no-turn deadline: this is the window the incident fired in. Derived from the
+// grace itself (mesh-consume-grace.ts) rather than hard-coded — the grace is provider-aware
+// and was re-sized once already, and a stale literal here would silently park these rows
+// INSIDE the grace, where they can never reach the rebind logic under test.
+const UNCONSUMED_MS = CONSUME_GRACE_FLOOR_MS + 15_000
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }

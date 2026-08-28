@@ -1897,6 +1897,17 @@ export function reclaimStrandedAssignedTask(
         // rejects the ack and stops that worker — so the reclaimed+re-dispatched task is never
         // executed by the originally-assigned session (no duplicate execution).
         entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
+        // REDRIVE-STALE-AUTOLAUNCH: the autoLaunch record describes the launch of the session
+        // this reclaim is tearing down. Left in place it outlives its subject: the row returns
+        // to 'pending' still carrying `status:'completed'` + the dead sessionId, which is
+        // exactly what the per-task await-claim guard (mesh-queue-assignment) reads to mean "a
+        // claim for this task is already in flight, do not launch". So the requeued task waits
+        // out the await-claim window and its 90→180→360s backoff against a session that no
+        // longer exists, instead of being relaunched — observed live 2026-08-28 on cursor task
+        // 0aaa398c, which sat 'pending' with no assignment and no retry after its redrive.
+        // Clearing it is the same ownership-clear the assigned* fields above get, applied to
+        // the one field that also names the dead session. A fresh launch re-records it.
+        delete entry.autoLaunch;
         entry.strandedReclaimCount = reclaims;
         entry.updatedAt = now;
         // TURN-LEDGER (Stage 5): reassignment closes the CURRENT attempt (terminal

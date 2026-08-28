@@ -18,9 +18,13 @@
  *
  * Worst case is unchanged. On timeout the caller proceeds exactly as it does today,
  * optimistically. Nothing here extends a timeout, relaxes a gate, or alters the local path;
- * the redrive constants (`ASSIGNED_DELIVERED_UNCONSUMED_REDRIVE_MS`,
- * `RECLAIM_UNKNOWN_GRACE_TICKS`) are untouched. The only thing it changes is that the
- * judgement clock stops being started against a session that was never interactive.
+ * the redrive constants are untouched. The only thing it changes is that the judgement clock
+ * stops being started against a session that was never interactive.
+ *
+ * Note this barrier was NOT sufficient on its own: its 15s budget was consumed INSIDE the
+ * former 25s judgement window, leaving ~10s of real headroom, and it covers only the remote
+ * path. The window itself has since been re-sized against measured boot latency and made
+ * provider-aware — see mesh-consume-grace.ts.
  *
  * Split out of mesh-queue-assignment.ts (already near its file-size baseline) with the
  * readiness probe injected, so the barrier is testable without standing up a runtime store.
