@@ -370,6 +370,25 @@ export interface RepoMeshPolicy {
      */
     idleActiveMissionReminder?: boolean;
     /**
+     * Minutes a coordinator-LAUNCHED delegate session may sit idle before the daemon
+     * STOPS its CLI runtime (the session-host record is preserved, so the transcript
+     * stays inspectable). Default 30.
+     *
+     * Fills the gap left by the edge-triggered cleanups: sessionCleanupOnNodeRemove
+     * fires on node removal and magiSessionCleanup on a MAGI fan-out's terminal, so a
+     * one-off delegate on the BASE node (no node removal, no worktree, no MAGI marker)
+     * was never reclaimed and its CLI process leaked for the daemon's lifetime.
+     *
+     * Never applies to the coordinator session, to a session the owner opened directly
+     * (no launchedByCoordinator marker), or to a session still holding a non-terminal
+     * queue/direct task — see mesh-idle-session-reaper.ts.
+     *
+     * `0` (or false) disables the reaper entirely. Clamped to
+     * [MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES, MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES];
+     * see resolveDelegatedSessionIdleTtlMinutes.
+     */
+    delegatedSessionIdleTtlMinutes?: number | false;
+    /**
      * Whether a coordinator-dispatched worker's routine idle/completion push
      * notification is delivered to the owner every time ('always', the default —
      * historical behavior, byte-for-byte unchanged), or auto-silenced for the single
@@ -637,6 +656,20 @@ export interface RepoMeshNodePolicy {
     initSubmodulesOnClone?: boolean;
 }
 
+/**
+ * Idle TTL after which a coordinator-launched delegate session's CLI runtime is
+ * stopped. Owner decision 2026-08-28: 30 minutes.
+ */
+export const DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES = 30;
+/**
+ * Floor. Below 5 minutes the TTL starts racing normal delegate think-time — a
+ * delegate parked on a slow tool call or awaiting a human decision would be reaped
+ * mid-task — so a smaller positive value is clamped up rather than honored.
+ */
+export const MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES = 5;
+/** Ceiling (7 days). Beyond this the reaper is effectively off; use 0 to say so explicitly. */
+export const MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES = 7 * 24 * 60;
+
 export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requirePreTaskCheckpoint: false,
     requirePostTaskCheckpoint: true,
@@ -665,6 +698,9 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // Nudge the coordinator when the mesh is fully idle but active missions linger,
     // so a mission is never left drifting in `active` after its work is really done.
     idleActiveMissionReminder: true,
+    // Stop a coordinator-launched delegate's CLI runtime after 30 idle minutes
+    // (record preserved). Owner decision 2026-08-28. 0/false disables.
+    delegatedSessionIdleTtlMinutes: DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES,
     // Conservative default: every coordinator-dispatched worker completion still
     // notifies the owner. Opt into 'auto_silent_on_dispatch' to one-shot-silence the
     // routine idle push for a coordinator-driven task (approval/failure notifications
@@ -900,6 +936,30 @@ export function resolveMaxParallelTasks(value: unknown): number {
 }
 
 /**
+ * Resolve the delegate idle TTL in MINUTES from a raw policy value.
+ * Returns 0 when the reaper is disabled (explicit `0`, `false`, or a negative value).
+ * A missing/NaN value takes the default; any other positive value is clamped into
+ * [MIN, MAX] so a typo can neither disable the reaper silently nor make it aggressive
+ * enough to kill working delegates.
+ */
+export function resolveDelegatedSessionIdleTtlMinutes(value: unknown): number {
+    if (value === false || value === 0) return 0;
+    if (value === undefined || value === null) return DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
+    if (n <= 0) return 0;
+    return Math.max(
+        MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES,
+        Math.min(MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES, Math.floor(n)),
+    );
+}
+
+/** Same resolution, in milliseconds — what the reaper compares `lastActivityAt` against. */
+export function resolveDelegatedSessionIdleTtlMs(value: unknown): number {
+    return resolveDelegatedSessionIdleTtlMinutes(value) * 60_000;
+}
+
+/**
  * Normalize an autoFastForward sub-policy, filling defaults and dropping an
  * invalid maxBehind. Mirrors the (previously mesh-config-local) shape so the merge
  * always emits a fully-populated, valid autoFastForward object.
@@ -957,6 +1017,11 @@ export function mergeAndNormalizePolicy(
     }
     // Canonicalize magiSessionCleanup (accepts boolean shorthand / unset → default ON).
     policy.magiSessionCleanup = resolveMagiSessionCleanupMode(policy.magiSessionCleanup);
+    // Canonicalize the delegate idle TTL to a clamped minute count (0 = disabled), so
+    // the reaper and any policy reader can never disagree on what the TTL means.
+    policy.delegatedSessionIdleTtlMinutes = resolveDelegatedSessionIdleTtlMinutes(
+        policy.delegatedSessionIdleTtlMinutes,
+    );
     if (!SPAWNED_SESSION_VISIBILITY_MODES.has(policy.spawnedSessionVisibility as RepoMeshSpawnedSessionVisibility)) {
         policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY.spawnedSessionVisibility;
     }

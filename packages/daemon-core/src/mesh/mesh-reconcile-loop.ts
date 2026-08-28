@@ -73,6 +73,7 @@ import {
 import { pullRemoteNodeQueues } from './mesh-remote-event-pull.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from './mesh-worktree-retention.js';
+import { runIdleSessionReapPass, type IdleSessionReaperDeps } from './mesh-idle-session-reaper.js';
 import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js';
 import {
     reconcileUnterminatedDirectDispatches,
@@ -143,6 +144,17 @@ export { __resetUnresolvedForwardRejectionCountsForTests } from './mesh-reconcil
 // stale artifacts from the previous run should be swept).
 const DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1000; // 1h
 let lastDiskRetentionRunAt: number | undefined;
+
+// Idle delegated-session reaper throttle (PHASE 6.6). Deliberately NOT folded into
+// the hourly disk-retention block above: with a 30-minute TTL, an hourly cadence
+// would let a session idle up to ~90 minutes before its runtime is stopped. Five
+// minutes bounds the overshoot to TTL+5m while staying far off the ~4s tick. The
+// pass itself is cheap — one listSessions() plus two in-process store reads, no fs
+// walk and no git — so this cadence costs little. Same `undefined` = "never run yet"
+// semantics as the disk sweep: the first tick after a restart reclaims the backlog
+// that accumulated while the daemon was down.
+const IDLE_SESSION_REAP_INTERVAL_MS = 5 * 60 * 1000; // 5m
+let lastIdleSessionReapRunAt: number | undefined;
 
 // One reconcile tick. Two independent phases:
 //
@@ -578,6 +590,49 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                     } catch (e: any) {
                         LOG.warn('MeshReconcile', `Worktree-node retention failed for mesh ${mesh.id}: ${e?.message || e}`);
                     }
+                }
+            }
+        }
+    }
+
+    // ── PHASE 6.6: idle delegated-session reaper (5-minute cadence) ────────────
+    // Stop the CLI runtime of a coordinator-launched delegate idle past the mesh's
+    // delegatedSessionIdleTtlMinutes (default 30); the session-host RECORD is kept, so
+    // the transcript stays inspectable. This is the only AGE-triggered session cleanup:
+    // sessionCleanupOnNodeRemove and magiSessionCleanup are edge-triggered and never
+    // see a one-off base-node delegate, which therefore leaked its CLI process for the
+    // daemon's lifetime (27 live processes / 2.9GB RSS measured 2026-08-28).
+    //
+    // Runs BEFORE PHASE 2's early return so an MCP-only daemon (no live CLI
+    // coordinator) reaps too — that is precisely the configuration where the leak was
+    // observed. Needs the router for the shared cleanupMeshSessions stop executor.
+    // Per-mesh try/catch: a reap failure must never break reconciliation.
+    if (components.router) {
+        const nowMs = Date.now();
+        const reapDue = lastIdleSessionReapRunAt === undefined
+            || (nowMs - lastIdleSessionReapRunAt) >= IDLE_SESSION_REAP_INTERVAL_MS;
+        if (reapDue) {
+            lastIdleSessionReapRunAt = nowMs;
+            const router = components.router;
+            const reaperDeps: IdleSessionReaperDeps = {
+                listSessions: async () => {
+                    try { return await router.deps.sessionHostControl?.listSessions() ?? []; } catch { return []; }
+                },
+                cleanupMeshSessions: args => router.cleanupMeshSessions(
+                    args as Parameters<typeof router.cleanupMeshSessions>[0],
+                ),
+            };
+            for (const mesh of listMeshes()) {
+                const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+                if (!daemonHostsMesh(mesh, selfIds)) continue;
+                try {
+                    await runIdleSessionReapPass(reaperDeps, {
+                        meshId: mesh.id,
+                        policy: getMesh(mesh.id)?.policy,
+                        now: nowMs,
+                    });
+                } catch (e: any) {
+                    LOG.warn('MeshReconcile', `Idle session reap failed for mesh ${mesh.id}: ${e?.message || e}`);
                 }
             }
         }
