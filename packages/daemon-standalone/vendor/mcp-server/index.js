@@ -91,7 +91,10 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   // MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS), up to ~50s for that node's own probe+retry
   // chain (nodes run in parallel, so this is not multiplied by node count). 60s covers
   // that refresh path with headroom.
-  get_mesh: 6e4
+  get_mesh: 6e4,
+  // cleanup_mesh_sessions: Mutating command for cleaning up stale sessions,
+  // needs sufficient time to terminate processes and clear state.
+  cleanup_mesh_sessions: 6e4
 };
 var IPC_PROBE_RETRYABLE_COMMANDS = /* @__PURE__ */ new Set([
   "get_status_metadata",
