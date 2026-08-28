@@ -638,7 +638,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('If a delegated session appears stuck but has already produced a verified final summary or diff')
     // (7) Manual strict fast-forward convergence bypass when Refinery falsely blocks a clean branch.
     expect(prompt).toContain('converge by strict fast-forward')
-    expect(prompt).toContain('rebase the submodule commit onto the submodule `origin/main`')
+    expect(prompt).toContain("rebase the submodule commit onto the submodule's `origin/<default-branch>`")
     expect(prompt).toContain('NEVER force-push or reset; abort and report on any non-fast-forward')
   })
 
@@ -698,7 +698,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('require each submodule commit to be reachable from the configured submodule remote main branch')
     expect(prompt).toContain('`submodule_reachability_failed`')
     expect(prompt).toContain('keep the public convergence bucket as `blocked_review`')
-    expect(prompt).toContain('ask the user for explicit approval to push/publish the unreachable submodule commit(s) to submodule main')
+    expect(prompt).toContain("ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch")
     expect(prompt).toContain('then rerun `mesh_refine_node`')
     expect(prompt).toContain('Submodule reachability = publish-needed')
   })
