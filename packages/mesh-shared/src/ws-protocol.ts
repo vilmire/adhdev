@@ -27,7 +27,15 @@ export type DaemonToServerWsMsg =
     | 'command_result'
     | 'error'
     | 'agent_event'
-    | 'log';
+    | 'log'
+    /**
+     * seqscribe Beacon vectors (design §7.1). ONE daemon-initiated frame carries
+     * both directions — `op: 'put'` stores this node's content-free vector
+     * report, `op: 'get'` asks for the board — because the server has no way to
+     * wake itself: `DaemonConnectionDO` has neither an alarm nor a timer, and
+     * adding one would hit the most request-quota-pressured axis in the system.
+     */
+    | 'beacon_vectors';
 
 /** Server→daemon control messages the OSS engine reacts to. */
 export type ServerToDaemonWsMsg =
@@ -40,7 +48,14 @@ export type ServerToDaemonWsMsg =
     | 'force_update_required'
     | 'command'
     | 'agent_command'
-    | 'resolve_action';
+    | 'resolve_action'
+    /**
+     * Reply to a `beacon_vectors` GET, correlated by `requestId`. A PUT is
+     * fire-and-forget and gets no reply at all — the beacon is advisory, so a
+     * lost report costs one debounce cycle of prediction accuracy and nothing
+     * else, which is not worth an ack round trip.
+     */
+    | 'beacon_vectors_result';
 
 /** P2P signaling relayed through the server WS. */
 export type P2PSignalingWsMsg =
@@ -74,11 +89,13 @@ export type DashboardP2PMessageKind =
 
 export const DAEMON_TO_SERVER_WS_MSGS: readonly DaemonToServerWsMsg[] = [
     'auth', 'status_report', 'status_heartbeat', 'status_event', 'command_result', 'error', 'agent_event', 'log',
+    'beacon_vectors',
 ];
 
 export const SERVER_TO_DAEMON_WS_MSGS: readonly ServerToDaemonWsMsg[] = [
     'auth_ok', 'auth_error', 'machine_evicted', 'force_disconnect', 'token_revoked',
     'version_mismatch', 'force_update_required', 'command', 'agent_command', 'resolve_action',
+    'beacon_vectors_result',
 ];
 
 export function isDaemonToServerWsMsg(value: unknown): value is DaemonToServerWsMsg {

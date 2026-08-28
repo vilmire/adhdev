@@ -93,6 +93,21 @@ export interface SeqscribeNodeHandle {
     authorityEnabled: boolean;
     /** Non-null only on the coordinator with an authority configured. */
     finalityLoop: { stop(): void } | null;
+    /**
+     * Register a teardown callback to run inside `close()`, BEFORE `node.close()`.
+     *
+     * Exists for the Beacon transport (seqscribe/beacon.ts), which is armed
+     * later than node open — the cloud host has to hand it a WS transport that
+     * does not exist yet at this point — and must still be stopped when the node
+     * goes down, whoever initiates that. Without this the beacon would be torn
+     * down only on the paths that happen to hold its handle, and a `close()`
+     * from anywhere else would leave it armed against a closing node.
+     *
+     * ★ Ordering matters: these run before `node.close()`, so a stop callback may
+     * still touch the node. Callbacks are one-shot and a throwing one is
+     * swallowed — a teardown hook must never be able to block node shutdown.
+     */
+    onClose(fn: () => void): void;
     close(): Promise<void>;
 }
 
@@ -264,10 +279,26 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         `node open writer=${writerId} topics=${defs.length} authority=${authority ? 'on' : 'off'}${opts.isCoordinator ? ' role=coordinator' : ''}`,
     );
 
+    // Teardown callbacks registered after open (currently: the Beacon transport).
+    const closeCallbacks: (() => void)[] = [];
+
     let closed = false;
     const close = async (): Promise<void> => {
         if (closed) return;
         closed = true;
+        // Before finality/anomaly teardown and before node.close(), so a
+        // callback may still use the node (the beacon's stop() calls into it).
+        while (closeCallbacks.length > 0) {
+            const fn = closeCallbacks.shift()!;
+            try {
+                fn();
+            } catch (err) {
+                LOG.warn(
+                    'Seqscribe',
+                    `close callback failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+            }
+        }
         try {
             finalityLoop?.stop();
         } catch {
@@ -304,6 +335,19 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
         topics: defs,
         authorityEnabled: authority !== null,
         finalityLoop,
+        onClose: (fn: () => void) => {
+            // A callback registered after close() has already run would never
+            // fire, so run it immediately rather than silently dropping it.
+            if (closed) {
+                try {
+                    fn();
+                } catch {
+                    /* noop */
+                }
+                return;
+            }
+            closeCallbacks.push(fn);
+        },
         close,
     };
 }

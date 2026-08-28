@@ -1,0 +1,528 @@
+/**
+ * seqscribe Beacon — daemon-side transport (design §7.1 Stage D).
+ *
+ * The Beacon board answers one question for a node that wakes after a
+ * non-overlapping online window: "is there a change I have not seen?" The
+ * comparison lives entirely in `node.staleness()`; the board is dumb storage
+ * (§7.1.0). That makes the whole path ADVISORY — the library's `push()` already
+ * swallows transport rejections with a bare `.catch()`, so a beacon that never
+ * succeeds costs a prediction and nothing else. Sync is untouched.
+ *
+ * That property is the reason this file has no retry, no queue and no
+ * reconciliation: a lost report is superseded by the next one, and machinery to
+ * protect it would be machinery protecting a value that self-heals.
+ *
+ * ── Why the transport is injected ──────────────────────────────────────────
+ * `BeaconTransport` is a two-method interface (`put`/`get`) and the cloud daemon
+ * satisfies it over the server WS bridge. daemon-core cannot reach that: the
+ * WS client lives in the proprietary `packages/daemon-cloud`, and `check:boundaries`
+ * keeps `seqscribe/**` producer-neutral besides. So the host supplies the two
+ * callbacks and this module owns everything transport-independent — the content
+ * boundary, the env gate, the counters, the arming lifecycle. OSS standalone
+ * simply never injects one, and `armBeacon` returns null (§7.1.6: "transport
+ * absent → not started", standalone unaffected).
+ *
+ * ── What this module adds over calling `node.beacon(t)` directly ───────────
+ *  1. The daemon-side content projection (`projectBeaconReport`). CLAUDE.md's
+ *     "Beacon vector exception" permits topic-name keys and content-free
+ *     counters — nothing else. The server sanitizes too (beacon-board.ts), but
+ *     the boundary rule is defence in depth at every layer that can enforce it,
+ *     and this is the last one that sees the report before it leaves the machine.
+ *  2. The `ADHDEV_SEQSCRIBE_BEACON` gate, so a fleet can turn the path off
+ *     without a redeploy.
+ *  3. Content-free counters for the daemon log (§7.1.6 observability: ids and
+ *     counts, never values).
+ */
+
+import { LOG } from '../logging/logger.js';
+import type { SeqscribeNodeHandle } from './node.js';
+import { FLEET_STATUS_TOPIC, meshIdFromEventsTopic } from './topics.js';
+
+/** Env flag name. Mirrors FLEET_STATUS_ENV / MESH_DUAL_WRITE_ENV in role. */
+export const BEACON_ENV = 'ADHDEV_SEQSCRIBE_BEACON';
+
+export type BeaconMode = 'on' | 'off';
+
+/**
+ * Resolve the mode.
+ *
+ * ★ Defaults ON, and an UNRECOGNIZED value also resolves to `on`. That is the
+ * opposite of the fail-closed posture the dual-write legs use, and the
+ * difference is deliberate:
+ *
+ *   - The dual-write/read legs are a WRITE-then-READ substitution — an
+ *     unrecognized value there could silently promote a shadow leg to serving
+ *     reads, so ambiguity must resolve to the safe side.
+ *   - Beacon neither writes to a consumer nor serves a read. It uploads
+ *     content-free counters and feeds `staleness()`, which is advisory output no
+ *     code path acts on automatically. The worst case of wrongly resolving to
+ *     `on` is a debounced frame on an already-open WS; the worst case of wrongly
+ *     resolving to `off` is a silently dead feature that looks alive — the same
+ *     failure `resolveFleetStatusMode` cites when it stopped defaulting to off.
+ *
+ * So the asymmetry is not an oversight: `off` is an explicit, fully respected
+ * opt-out, and every other value keeps the advisory path alive and logs the typo
+ * once so it stays visible rather than being masked by the fallback.
+ */
+export function resolveBeaconMode(env: NodeJS.ProcessEnv = process.env): BeaconMode {
+    const raw = env[BEACON_ENV]?.trim().toLowerCase();
+    if (!raw) return 'on';
+    if (raw === 'off') return 'off';
+    if (raw === 'on') return 'on';
+    warnOnce(
+        `unrecognized ${BEACON_ENV}=${raw}; treating as 'on'. ` +
+            "Valid values are 'on' (default) and 'off'.",
+    );
+    return 'on';
+}
+
+let warnedUnrecognized = false;
+function warnOnce(message: string): void {
+    if (warnedUnrecognized) return;
+    warnedUnrecognized = true;
+    LOG.warn('Seqscribe', message);
+}
+
+/** Test-only: reset the once-per-process typo warning. */
+export function __resetBeaconWarnOnceForTest(): void {
+    warnedUnrecognized = false;
+}
+
+// ─── Content boundary ───────────────────────────────────────────────────────
+
+/**
+ * One writer's position in one topic, after projection.
+ *
+ * A DISCRIMINATED UNION mirroring the library's `WriterEntry`, not a bag of
+ * optionals: `staleness()` reads `"retired" in w ? w.finalSeq : w.contig`, so a
+ * half-populated entry would read as sequence `undefined` and poison the lag
+ * arithmetic on whoever consumes the board. An entry arrives complete in one of
+ * the two shapes or it is dropped — never coerced to a default.
+ *
+ * Shape-identical to the server's `SanitizedWriterEntry` (beacon-board.ts) on
+ * purpose: the two ends enforce the same allow-list, so a legacy daemon cannot
+ * land a field the server accepts and vice versa.
+ */
+export type ProjectedWriterEntry =
+    | { contig: number; chain: string; rgen?: number }
+    | { retired: true; finalSeq: number; finalChain: string; rgen: number };
+
+export interface ProjectedBeaconReport {
+    node: string;
+    at: string;
+    vectors: Record<string, { fgen?: number; writers: Record<string, ProjectedWriterEntry> }>;
+}
+
+/** 64-hex chain/state hash — `CHAIN_RE` in the library's codec. */
+const CHAIN_RE = /^[0-9a-f]{64}$/;
+
+/** `adhdev-<16 hex>` today; kept permissive but bounded and charset-fenced. */
+const WRITER_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Topic names are the one identifier-bearing axis Beacon may carry (CLAUDE.md
+ * "Beacon vector exception"). Bounded and charset-fenced so the key space cannot
+ * be used to smuggle prose.
+ */
+const TOPIC_RE = /^[A-Za-z0-9._*-]{1,160}$/;
+
+const MAX_TOPICS_PER_REPORT = 512;
+const MAX_WRITERS_PER_TOPIC = 512;
+
+function finiteCount(v: unknown): number | undefined {
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined;
+}
+
+function hash64(v: unknown): string | undefined {
+    return typeof v === 'string' && CHAIN_RE.test(v) ? v : undefined;
+}
+
+function projectWriterEntry(raw: unknown): ProjectedWriterEntry | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const v = raw as Record<string, unknown>;
+    const rgen = finiteCount(v.rgen);
+
+    if (v.retired === true) {
+        const finalSeq = finiteCount(v.finalSeq);
+        const finalChain = hash64(v.finalChain);
+        if (finalSeq === undefined || finalChain === undefined || rgen === undefined) return null;
+        return { retired: true, finalSeq, finalChain, rgen };
+    }
+
+    const contig = finiteCount(v.contig);
+    const chain = hash64(v.chain);
+    if (contig === undefined || chain === undefined) return null;
+    return rgen === undefined ? { contig, chain } : { contig, chain, rgen };
+}
+
+/**
+ * Project a report down to `{node, at, vectors}` before it leaves the machine.
+ *
+ * ★ ALLOW-LIST, NOT DENY-LIST. Same rule as the status path's four layers
+ * (CLAUDE.md "Server content boundary"): rewriting this as a `delete` of
+ * known-bad keys silently ships every field a future library version adds to
+ * `BeaconReport`. Only sequence numbers, chain hashes and generation counters
+ * survive — nothing payload-derived, in any form.
+ *
+ * `hints` is dropped WHOLESALE and unconditionally. Three reasons, in order of
+ * force:
+ *   1. CLAUDE.md's approved exception names "plaintext `hints` keys" as
+ *      explicitly out of scope, so shipping them would exceed the approval.
+ *   2. Hint keys are REGISTER keys, and the only register topic ADHDev defines
+ *      is `config.settings` — an `access: 'content'` topic (topics.ts).
+ *   3. The library gates hint production on a per-topic `hintKeys` policy field
+ *      that NO ADHDev topic sets, so `buildHints()` already returns `undefined`
+ *      today (upstream P27). This projection is what keeps that true if someone
+ *      later opts a topic in without revisiting the boundary — and
+ *      `assertNoPlaintextHintTopics` below is the louder guard on the same edge.
+ */
+export function projectBeaconReport(raw: unknown): ProjectedBeaconReport | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const v = raw as Record<string, unknown>;
+
+    const node = typeof v.node === 'string' && WRITER_ID_RE.test(v.node) ? v.node : null;
+    if (!node) return null;
+
+    const at =
+        typeof v.at === 'string' && !Number.isNaN(Date.parse(v.at))
+            ? new Date(v.at).toISOString()
+            : new Date(0).toISOString();
+
+    const vectors: ProjectedBeaconReport['vectors'] = {};
+    const rawVectors = v.vectors;
+    if (rawVectors && typeof rawVectors === 'object') {
+        let topicCount = 0;
+        for (const [topic, vec] of Object.entries(rawVectors as Record<string, unknown>)) {
+            if (topicCount >= MAX_TOPICS_PER_REPORT) break;
+            if (!TOPIC_RE.test(topic)) continue;
+            if (!vec || typeof vec !== 'object') continue;
+
+            const rawWriters = (vec as Record<string, unknown>).writers;
+            if (!rawWriters || typeof rawWriters !== 'object') continue;
+
+            const writers: Record<string, ProjectedWriterEntry> = {};
+            let writerCount = 0;
+            for (const [writerId, entry] of Object.entries(rawWriters as Record<string, unknown>)) {
+                if (writerCount >= MAX_WRITERS_PER_TOPIC) break;
+                if (!WRITER_ID_RE.test(writerId)) continue;
+                const clean = projectWriterEntry(entry);
+                if (!clean) continue;
+                writers[writerId] = clean;
+                writerCount++;
+            }
+
+            if (writerCount === 0) continue;
+            const fgen = finiteCount((vec as Record<string, unknown>).fgen);
+            vectors[topic] = fgen === undefined ? { writers } : { fgen, writers };
+            topicCount++;
+        }
+    }
+
+    return { node, at, vectors };
+}
+
+/**
+ * The hint-mode invariant, as an assertion rather than a comment.
+ *
+ * `hintKeys` is a PER-TOPIC POLICY field read by the library at push time
+ * (`BeaconHub.buildHints` → `topics.get(topic).policy.hintKeys`) — it is not a
+ * per-call option, so a host cannot ask for "hash mode" when it starts the
+ * beacon. The only way to control it is to control what the topic table
+ * declares, which makes this the enforcement point.
+ *
+ * Rule: a topic may declare `hintKeys: 'hash'` or omit the field. `'plain'` is
+ * forbidden — plaintext register keys on the server exceed CLAUDE.md's approved
+ * exception. Today every ADHDev topic omits it (so hints are structurally
+ * absent), and this assertion is what makes a future opt-in a deliberate,
+ * reviewed act rather than a one-word diff nobody connects to the boundary.
+ */
+export function assertNoPlaintextHintTopics(
+    defs: readonly { topic: string; policy: { hintKeys?: 'plain' | 'hash' } }[],
+): void {
+    const offenders = defs.filter((d) => d.policy.hintKeys === 'plain').map((d) => d.topic);
+    if (offenders.length === 0) return;
+    throw new Error(
+        `seqscribe beacon: topic(s) ${offenders.join(', ')} declare hintKeys:'plain'. ` +
+            "Only 'hash' (or omitting the field) is permitted — plaintext register keys on the " +
+            'server exceed the approved Beacon content-boundary exception (CLAUDE.md).',
+    );
+}
+
+// ─── Default GET scope ──────────────────────────────────────────────────────
+
+/**
+ * Default GET scope: metadata-class topics only (§7.1.2 / §7.1.4).
+ *
+ * Mirrors the server's `isMetadataClassTopic`. `session.*.transcript` is a
+ * content-class topic; its NAME is still only a name, but the approved exception
+ * makes carrying it a case-by-case call, so a caller has to ask explicitly.
+ *
+ * ★ Derived from the live vector map rather than a hardcoded list: mesh event
+ * topics are per-mesh, so the set is only knowable at runtime.
+ */
+export function defaultBeaconTopicScope(vectors: Readonly<Record<string, unknown>>): string[] {
+    return Object.keys(vectors).filter(
+        (topic) => topic === FLEET_STATUS_TOPIC || meshIdFromEventsTopic(topic) !== null,
+    );
+}
+
+// ─── Counters ───────────────────────────────────────────────────────────────
+
+/** Content-free counters (§7.1.6: identifiers and counts, never values). */
+export interface BeaconCounters {
+    /** Reports handed to the host transport's `put`. */
+    put: number;
+    /** `put` calls that threw or rejected. */
+    putFailed: number;
+    /** `get` calls that returned a board. */
+    get: number;
+    /** `get` calls that threw or rejected. */
+    getFailed: number;
+    /**
+     * Peer reports the SERVER dropped to fit its frame budget, summed over all
+     * GETs. Non-zero means `staleness()` is being computed from a subset of the
+     * fleet — which under-reports lag rather than asserting something false, but
+     * is worth seeing in the log because it means the board outgrew one frame.
+     */
+    truncated: number;
+    /** Reports the daemon-side projection rejected outright (never sent). */
+    rejected: number;
+}
+
+function emptyCounters(): BeaconCounters {
+    return { put: 0, putFailed: 0, get: 0, getFailed: 0, truncated: 0, rejected: 0 };
+}
+
+// ─── Host transport contract ────────────────────────────────────────────────
+
+export interface BeaconGetResponse {
+    /** Peer reports, already scoped by the server to the requested topics. */
+    reports: unknown[];
+    /** How many peers the server dropped to fit the frame budget, if it said. */
+    truncated?: number;
+}
+
+/**
+ * What a host must supply to arm the beacon.
+ *
+ * Deliberately NOT seqscribe's `BeaconTransport`: the host works in wire terms
+ * (a projected report to upload, a topic scope to request) and never needs the
+ * library's types. `armBeacon` adapts between the two, which is also what keeps
+ * the projection unskippable — there is no arrangement of these callbacks that
+ * reaches the library's `put` with an unprojected report.
+ */
+export interface BeaconHostTransport {
+    /** Upload this node's projected report. Rejection is tolerated and counted. */
+    put(report: ProjectedBeaconReport): Promise<void>;
+    /** Fetch the board, scoped to `topics`. Rejection is tolerated and counted. */
+    get(topics: readonly string[]): Promise<BeaconGetResponse>;
+}
+
+export interface ArmBeaconOptions {
+    env?: NodeJS.ProcessEnv;
+    /**
+     * Override the GET topic scope. Defaults to the metadata-class topics
+     * present in the node's own vectors (`defaultBeaconTopicScope`). A caller
+     * that wants a content-class topic's staleness passes it explicitly — which
+     * is the case-by-case decision CLAUDE.md requires, made visible at the call
+     * site instead of buried in a default.
+     */
+    topicScope?: (vectors: Readonly<Record<string, unknown>>) => string[];
+}
+
+export interface BeaconHandle {
+    stop(): void;
+    counters(): BeaconCounters;
+    /**
+     * Push a report NOW, outside the library's debounce.
+     *
+     * The one host-driven trigger, and it exists because of an upstream defect
+     * — see `armBeacon`'s note on `BeaconHub.stopped`. The cloud host calls this
+     * on each authenticated epoch so a reconnect re-seeds the board, since the
+     * library's own initial push happened once at arm time and its debounce only
+     * fires after an append that an idle daemon may never make.
+     *
+     * Rejections are swallowed and counted, exactly like the library's own push.
+     */
+    pushNow(): Promise<void>;
+}
+
+/**
+ * Arm the beacon on an open seqscribe node.
+ *
+ * Returns null — a no-op, not an error — when the env gate is off. A host with
+ * no transport simply does not call this (standalone), which is why there is no
+ * "transport absent" branch here: absence is expressed by not arming.
+ *
+ * ★ NO PERIODIC TIMER IS CREATED HERE, deliberately. The library owns the
+ * cadence: it pushes once on `start()` and then on a 5 s debounce after each
+ * applied append (`BeaconHub.notifyApplied` → `BEACON_DEBOUNCE_MS`), going
+ * completely silent when the node is idle. §7.1.2 depends on exactly that: an
+ * idle fleet emits ZERO beacon frames, so the status-report dedup floor
+ * (30 s × 10) is untouched and a quiet daemon does not become a chatty one.
+ * A heartbeat-paced timer on top would convert an idle-silent path into a
+ * periodic one and reintroduce the very failure the design avoided — so the
+ * cadence question is answered by the library, and the correct host
+ * contribution is nothing. The only host-driven push is `pushNow()`, which is
+ * edge-triggered on reconnect, not paced.
+ *
+ * ── ★ARM ONCE. `BeaconHub.stopped` is a ONE-WAY LATCH (upstream defect) ─────
+ * `BeaconHub.stop()` sets `this.stopped = true` and `start()` never clears it
+ * (`oss/vendor/seqscribe/src/beacon.ts`: assigned at lines 59 and 71, cleared
+ * nowhere). Since both `push()` and `notifyApplied()` bail on that flag, a
+ * stop-then-re-arm yields a beacon that is silent FOREVER — it accepts the
+ * `beacon()` call, returns a healthy-looking handle, and never pushes again.
+ *
+ * Measured on the real library (node.beacon → stop → node.beacon): the first
+ * arm produced 1 put, the re-arm produced 0.
+ *
+ * That silent-success shape is why this is worth a comment rather than a
+ * workaround note: a host that re-arms per reconnect would look correct in
+ * review, log "beacon armed" on every epoch, and report an empty board forever.
+ * So the host contract here is ARM ONCE PER NODE and drive reconnects with
+ * `pushNow()` instead. Recorded upstream as a P28-class defect (§8); when it is
+ * fixed, `pushNow` remains useful (a reconnect should re-seed the board eagerly
+ * rather than wait for the next append), so nothing here needs unwinding.
+ */
+export function armBeacon(
+    handle: SeqscribeNodeHandle,
+    transport: BeaconHostTransport,
+    opts: ArmBeaconOptions = {},
+): BeaconHandle | null {
+    const mode = resolveBeaconMode(opts.env ?? process.env);
+    if (mode === 'off') {
+        LOG.info('Seqscribe', `beacon disabled (${BEACON_ENV}=off)`);
+        return null;
+    }
+
+    // Fail fast if the topic table ever opts a topic into plaintext hints.
+    // Cheap, and it runs on the boot path where a throw is visible.
+    assertNoPlaintextHintTopics(handle.topics);
+
+    const counters = emptyCounters();
+    const scopeOf = opts.topicScope ?? defaultBeaconTopicScope;
+    let stopped = false;
+    // The scope is derived from the LAST report we projected: it is the same
+    // vector map the library just handed us, so GET asks about exactly the
+    // topics this node actually carries — no guessing, no stale list.
+    let lastScope: string[] = [];
+
+    /** Project, send, count. Shared by the library's push and `pushNow`. */
+    const doPut = async (rawReport: unknown): Promise<void> => {
+        const projected = projectBeaconReport(rawReport);
+        if (!projected) {
+            counters.rejected++;
+            // Not a throw: the library would swallow it anyway, and a rejected
+            // projection is a shape bug worth a counter, not an exception that
+            // pretends the transport failed.
+            LOG.warn('Seqscribe', 'beacon report failed the content projection; not sent');
+            return;
+        }
+        lastScope = scopeOf(projected.vectors);
+        try {
+            await transport.put(projected);
+            counters.put++;
+        } catch (err) {
+            counters.putFailed++;
+            LOG.info(
+                'Seqscribe',
+                `beacon put failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`,
+            );
+            throw err; // library's push() chains get() off put(); let it skip
+        }
+    };
+
+    /** Fetch, re-project, count. Returns the board for `setKnownVectors`. */
+    const doGet = async (): Promise<ProjectedBeaconReport[]> => {
+        try {
+            const res = await transport.get(lastScope);
+            counters.get++;
+            const truncated = typeof res?.truncated === 'number' ? res.truncated : 0;
+            if (truncated > 0) {
+                counters.truncated += truncated;
+                LOG.info(
+                    'Seqscribe',
+                    `beacon get: server truncated ${truncated} peer report(s) to fit the frame budget`,
+                );
+            }
+            // Re-project inbound reports too. The server sanitizes, but this
+            // node is what feeds them to `staleness()`, and a board seeded by an
+            // older build is exactly the case defence-in-depth is for.
+            const reports = Array.isArray(res?.reports) ? res.reports : [];
+            const clean = reports
+                .map((r) => projectBeaconReport(r))
+                .filter((r): r is ProjectedBeaconReport => r !== null);
+            LOG.info(
+                'Seqscribe',
+                `beacon get writer=${handle.writerId} peers=${clean.length} topics=${lastScope.length}`,
+            );
+            return clean;
+        } catch (err) {
+            counters.getFailed++;
+            LOG.info(
+                'Seqscribe',
+                `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`,
+            );
+            throw err;
+        }
+    };
+
+    const libHandle = handle.node.beacon({
+        async put(rawReport): Promise<void> {
+            if (stopped) return;
+            await doPut(rawReport);
+        },
+        async get(): Promise<never[]> {
+            if (stopped) return [];
+            // The library's BeaconReport is structurally wider (optional
+            // `hints`); a projected report satisfies it.
+            return (await doGet()) as never[];
+        },
+    });
+
+    LOG.info('Seqscribe', `beacon armed writer=${handle.writerId}`);
+
+    const beaconHandle: BeaconHandle = {
+        stop(): void {
+            if (stopped) return;
+            stopped = true;
+            try {
+                libHandle.stop();
+            } catch {
+                /* already stopped by node.close() */
+            }
+            LOG.info(
+                'Seqscribe',
+                `beacon stopped writer=${handle.writerId} put=${counters.put}/${counters.put + counters.putFailed} ` +
+                    `get=${counters.get}/${counters.get + counters.getFailed} truncated=${counters.truncated} rejected=${counters.rejected}`,
+            );
+        },
+        counters: () => ({ ...counters }),
+
+        async pushNow(): Promise<void> {
+            if (stopped) return;
+            try {
+                // `node.vectors()` is the same source `BeaconHub.push()` reads,
+                // so this produces the identical report the library would have.
+                await doPut({
+                    node: handle.writerId,
+                    at: new Date().toISOString(),
+                    vectors: handle.node.vectors(),
+                });
+                const board = await doGet();
+                if (!stopped) handle.node.setKnownVectors(board as never[]);
+            } catch {
+                // Advisory: mirrors the library's own `push().catch()`. Both
+                // legs already counted the failure before it got here.
+            }
+        },
+    };
+
+    // Tie teardown to node close as well: the node can be closed by a path that
+    // never saw this handle (daemon shutdown), and an armed beacon on a closing
+    // node would push against a dead core. `stop()` is idempotent, so a host
+    // that also calls it explicitly is fine.
+    handle.onClose(() => beaconHandle.stop());
+
+    return beaconHandle;
+}

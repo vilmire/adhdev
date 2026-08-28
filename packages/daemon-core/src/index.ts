@@ -984,6 +984,23 @@ export {
   type SeqscribeNodeHandle,
   type SeqscribeNodeOptions,
 } from './seqscribe/node.js';
+// Beacon vector transport (design §7.1 Stage D). Transport-agnostic: the cloud
+// daemon injects the WS legs, standalone never arms it.
+export {
+  armBeacon,
+  resolveBeaconMode,
+  projectBeaconReport,
+  assertNoPlaintextHintTopics,
+  defaultBeaconTopicScope,
+  BEACON_ENV,
+  type BeaconMode,
+  type BeaconCounters,
+  type BeaconHostTransport,
+  type BeaconGetResponse,
+  type ProjectedBeaconReport,
+  type ProjectedWriterEntry,
+  type ArmBeaconOptions,
+} from './seqscribe/beacon.js';
 export {
   safeMeshId,
   safeSessionId,
