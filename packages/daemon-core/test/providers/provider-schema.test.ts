@@ -534,4 +534,33 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).toEqual([])
     expect(result.warnings).toContain('disableUpstream is deprecated in provider definitions; use machine-level provider source policy instead')
   })
+
+  it('passes schema validation without allowInputDuringGeneration', () => {
+    const result = validateProviderDefinition({
+      type: 'future-cli',
+      name: 'Future CLI',
+      category: 'cli',
+      spawn: { command: 'future' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toEqual([])
+  })
+
+  it('warns when a manifest still declares the deprecated allowInputDuringGeneration field', () => {
+    const result = validateProviderDefinition({
+      type: 'legacy-cli',
+      name: 'Legacy CLI',
+      category: 'cli',
+      spawn: { command: 'legacy' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      allowInputDuringGeneration: true,
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toContain('Unknown provider field: allowInputDuringGeneration')
+  })
 })

@@ -323,7 +323,6 @@ export interface CliProviderManifest {
   sendKey?: string;
   submitStrategy?: 'wait_for_echo' | 'immediate';
   requirePromptEchoBeforeSubmit?: boolean;
-  allowInputDuringGeneration?: boolean;
   requiresFinalAssistantBeforeIdle?: boolean;
   augmentStaleSnapshot?: boolean;
   transcriptAuthority?: CliTranscriptAuthority;

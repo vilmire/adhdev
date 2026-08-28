@@ -221,8 +221,6 @@ export interface CliProviderModule {
     submitStrategy?: 'wait_for_echo' | 'immediate';
     /** Require the typed prompt to be visible on the PTY screen before sending Enter. */
     requirePromptEchoBeforeSubmit?: boolean;
-    /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
-    allowInputDuringGeneration?: boolean;
     /** When true, only transition to idle after the parsed transcript includes a final standard assistant message.
      *  Also selects the completion-timing FLOOR (mid-tool-valley-prone native source, e.g. codex/kimi/cursor/opencode):
      *  an idle-without-final-assistant holds the decoupled CANON-C completion under the min-elapsed floor. False = a
