@@ -94,6 +94,19 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // threw); the key is always present so a caller can tell "no node"
             // from an older daemon that never reported the field at all.
             seqscribe: ctx.deps.getSeqscribeStats?.() ?? null,
+            // Beacon staleness / sole-copy (design §7.1, mission b60d70b8).
+            //
+            // ★Unlike `seqscribe` above, this DOES carry topic names and peer
+            // writer ids — that is the feature ("which topic is how far
+            // ahead"), and it is why it appears on THIS local surface and on
+            // the P2P payload, but never on `status_report` to the server. The
+            // approved Beacon content exception (CLAUDE.md) covers the beacon
+            // BOARD path; it does not widen the status path's allow-list.
+            //
+            // null = no beacon armed (standalone never arms one) or none yet on
+            // this daemon, so it stays distinguishable from an older daemon
+            // that never reported the field.
+            beacon: ctx.deps.getBeaconDiagnostics?.() ?? null,
         };
     },
 

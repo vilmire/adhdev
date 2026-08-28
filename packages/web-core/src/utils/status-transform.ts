@@ -166,6 +166,10 @@ export function statusPayloadToEntries(
         ...(payload.terminalBackend && { terminalBackend: payload.terminalBackend }),
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),
         ...(payload.availableProviders && { availableProviders: payload.availableProviders }),
+        // seqscribe Beacon staleness / sole-copy (design §7.1). P2P-only by
+        // construction: the server status path never carries this field, so a
+        // WS-sourced payload simply omits it and the badge stays hidden.
+        ...(payload.beacon && { beacon: payload.beacon }),
         _sessionListAuthoritative: Array.isArray(payload.sessions),
         cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
     } as DaemonData)

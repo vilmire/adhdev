@@ -3048,6 +3048,14 @@
             "runtimePolling": "ランタイムポーリング",
             "transportRelay": "TURN リレー — 直接接続に失敗しました",
             "transportDirect": "直接接続 (STUN/host)",
+            "beacon": {
+                "behindLabel": "{{count}}件 遅延",
+                "behindTooltip": "このマシンはピアより {{count}} 件遅れています(最大トピック: {{topic}})。",
+                "soleCopyLabel": "唯一保持の可能性",
+                "soleCopyTooltip": "このマシンが {{count}} 個のトピックの {{entries}} 件を唯一保持している可能性があります。ピアは未確認です。",
+                "deferredLabel": "判定保留",
+                "deferredTooltip": "ピアボードが切り詰められたため、唯一保持の判定を保留しました — 比較対象がフリート全体ではありません。"
+            },
             "noAgentsRunning": "実行中のエージェントはまだありません",
             "launchCta": "起動 →"
         },

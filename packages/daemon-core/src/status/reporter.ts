@@ -13,7 +13,7 @@ import {
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
-import type { CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
+import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import { recordFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
@@ -385,6 +385,16 @@ export interface StatusReporterDeps {
      * aggregates — see seqscribe/stats.ts for why the values are coarse.
      */
     getSeqscribeStats?: () => SeqscribeStatusSummary | null;
+    /**
+     * Beacon staleness / sole-copy advisory (design §7.1, mission b60d70b8).
+     *
+     * ★ Read ONLY into the P2P payload below — never into
+     * `buildCloudStatusReportPayload`. Unlike `getSeqscribeStats`, this value
+     * carries topic names and peer writer ids: that is the feature, and it is
+     * why it stays on the P2P/local side of the boundary. The Beacon content
+     * exception (CLAUDE.md) covers the beacon BOARD path, not the status path.
+     */
+    getBeaconDiagnostics?: () => BeaconDiagnosticsSummary | null;
 }
 
 /**
@@ -682,6 +692,14 @@ export class DaemonStatusReporter {
         }
 
 // ═══ Assemble payload (P2P — required data only) ═══
+        // Read once per report. A throwing diagnostics getter must never take
+        // the status report with it: this whole path is advisory (§7.1.0).
+        let beaconDiagnostics: BeaconDiagnosticsSummary | null = null;
+        try {
+            beaconDiagnostics = this.deps.getBeaconDiagnostics?.() ?? null;
+        } catch {
+            beaconDiagnostics = null;
+        }
         const payload: Record<string, any> = {
             ...buildStatusSnapshot({
                 allStates,
@@ -704,6 +722,14 @@ export class DaemonStatusReporter {
                 profile: 'live',
             }),
             screenshotUsage: this.deps.getScreenshotUsage?.() || null,
+            // ★ Beacon staleness/sole-copy rides the P2P payload ONLY (mission
+            // b60d70b8). It carries topic names and peer writer ids, which the
+            // server status path forbids — and it cannot leak there, because the
+            // server frame is built separately by
+            // `buildCloudStatusReportPayload` from `allStates`, never from this
+            // object. Omitted entirely when no beacon is armed, so "absent"
+            // stays distinguishable from "armed but empty".
+            ...(beaconDiagnostics ? { beacon: beaconDiagnostics } : {}),
         };
 
 // ═══ P2P transmit ═══

@@ -3053,6 +3053,14 @@
             "runtimePolling": "Sondeo de runtime",
             "transportRelay": "Relé TURN — falló la conexión directa",
             "transportDirect": "Conexión directa (STUN/host)",
+            "beacon": {
+                "behindLabel": "{{count}} por detrás",
+                "behindTooltip": "Esta máquina está {{count}} entradas por detrás de sus pares (tema con mayor retraso: {{topic}}).",
+                "soleCopyLabel": "copia única",
+                "soleCopyTooltip": "Esta máquina podría tener la única copia de {{entries}} entradas en {{count}} tema(s). Los pares no las han confirmado.",
+                "deferredLabel": "no determinable",
+                "deferredTooltip": "La verificación de copia única se aplazó: el tablero de pares se truncó, así que las máquinas comparadas son solo parte de la flota."
+            },
             "noAgentsRunning": "Aún no hay agentes en ejecución",
             "launchCta": "Iniciar →"
         },

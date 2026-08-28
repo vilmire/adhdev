@@ -3048,6 +3048,14 @@
             "runtimePolling": "运行时轮询",
             "transportRelay": "TURN 中继 — 直连失败",
             "transportDirect": "直接连接 (STUN/host)",
+            "beacon": {
+                "behindLabel": "落后 {{count}} 条",
+                "behindTooltip": "此机器比对等节点落后 {{count}} 条(最多的主题：{{topic}})。",
+                "soleCopyLabel": "可能唯一副本",
+                "soleCopyTooltip": "此机器可能是 {{count}} 个主题中 {{entries}} 条记录的唯一持有者。对等节点尚未确认。",
+                "deferredLabel": "无法判定",
+                "deferredTooltip": "对等看板被截断，因此推迟了唯一副本判定 — 比较对象并非整个集群。"
+            },
             "noAgentsRunning": "尚无运行中的代理",
             "launchCta": "启动 →"
         },

@@ -4,6 +4,7 @@
 
 import type {
     AgentSessionStream,
+    BeaconDiagnosticsSummary,
     MachineInfo,
     DetectedIdeInfo,
     WorkspaceEntry,
@@ -34,6 +35,7 @@ export type {
     AcpConfigOption,
     AcpMode,
     StatusReportPayload,
+    BeaconDiagnosticsSummary,
     MachineInfo,
     DetectedIdeInfo,
     WorkspaceEntry,
@@ -171,6 +173,17 @@ export interface BaseDaemonData {
         screenshotActive?: boolean;
     };
     detectedIdes?: DetectedIdeInfo[];
+    /**
+     * seqscribe Beacon staleness / sole-copy advisory (design §7.1).
+     *
+     * ★ Arrives over P2P ONLY. The server WS status path carries no beacon
+     * field at all (`buildCloudStatusReportPayload` is a fixed-key allow-list
+     * that excludes it), because this object holds topic names and peer writer
+     * ids. So a machine card renders the badge only when the dashboard has a
+     * live P2P link — which is correct: it is advisory replication detail, not
+     * routing metadata, and the cloud is not supposed to know it.
+     */
+    beacon?: BeaconDiagnosticsSummary;
     machineNickname?: string | null;
     machineId?: string | null;
     sessionCapabilities?: string[];

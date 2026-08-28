@@ -35,6 +35,11 @@
  */
 
 import { LOG } from '../logging/logger.js';
+import {
+    computeBeaconDiagnostics,
+    type BeaconBoardSnapshot,
+    type BeaconDiagnostics,
+} from './beacon-diagnostics.js';
 import type { SeqscribeNodeHandle } from './node.js';
 import { FLEET_STATUS_TOPIC, meshIdFromEventsTopic } from './topics.js';
 
@@ -374,6 +379,21 @@ export interface BeaconHandle {
      * Rejections are swallowed and counted, exactly like the library's own push.
      */
     pushNow(): Promise<void>;
+    /**
+     * The consumer read (mission b60d70b8): per-peer/per-topic lag and
+     * sole-copy candidates, derived from the LAST captured board.
+     *
+     * ★ Issues NO transport call. §7.1.2's load-bearing property is that an
+     * idle fleet emits zero Beacon frames, which is what leaves the status
+     * dedup floor intact — so a diagnostics read (a dashboard render, a
+     * `get_status_metadata`) must be free. It reads what the beacon's own
+     * push/pushNow cycle last observed and reports `boardAgeMs`/`stale` so the
+     * caller can judge freshness rather than trigger a refresh.
+     *
+     * Returns diagnostics with `stale: true` and no peers before the first
+     * successful GET — an honest "I don't know yet", never a fabricated zero.
+     */
+    diagnostics(): BeaconDiagnostics;
 }
 
 /**
@@ -480,6 +500,11 @@ export function armBeacon(
     // vector map the library just handed us, so GET asks about exactly the
     // topics this node actually carries — no guessing, no stale list.
     let lastScope: string[] = [];
+    // The last board this beacon observed, retained purely so `diagnostics()`
+    // can be a free read (see the note on BeaconHandle.diagnostics). Null until
+    // the first successful GET — which `computeBeaconDiagnostics` reports as
+    // `stale: true`, not as an empty-but-fresh board.
+    let lastBoard: BeaconBoardSnapshot | null = null;
 
     /** Project, send, count. Shared by the library's push and `pushNow`. */
     const doPut = async (rawReport: unknown): Promise<void> => {
@@ -621,6 +646,16 @@ export function armBeacon(
         const clean = reports
             .map((r) => projectBeaconReport(r))
             .filter((r): r is ProjectedBeaconReport => r !== null);
+        // Retain the board for `diagnostics()`. ★ `truncated` is carried with
+        // it, not discarded: it is what forces every sole-copy verdict to
+        // `'unknown'` (§7.1.2.1), so dropping it here would silently convert a
+        // deferred judgement into a confident wrong one.
+        lastBoard = {
+            reports: clean,
+            truncated,
+            topicScope: [...lastScope],
+            capturedAt: Date.now(),
+        };
         LOG.info(
             'Seqscribe',
             `beacon get writer=${handle.writerId} peers=${clean.length} topics=${lastScope.length}`,
@@ -677,6 +712,27 @@ export function armBeacon(
                 // Advisory: mirrors the library's own `push().catch()`. Both
                 // legs already counted the failure before it got here.
             }
+        },
+
+        diagnostics(): BeaconDiagnostics {
+            // `node.vectors()` is a pure getter (unlike `stats()`, which drains
+            // interval counters — see throughput-collector.ts), so reading it
+            // per call is free and always current.
+            let localVectors: Record<string, { writers?: Record<string, unknown> }> = {};
+            try {
+                localVectors = handle.node.vectors() as typeof localVectors;
+            } catch {
+                // A closing node still deserves an honest answer about the
+                // board rather than a thrown diagnostics call.
+            }
+            return computeBeaconDiagnostics({
+                node: handle.writerId,
+                localVectors,
+                board: lastBoard,
+                // ★ Advisory only, and empty today: upstream P27 has no `hints`
+                // producer, so `staleness().keyStale` never populates. Left
+                // unwired rather than fabricated — see readKeyStaleAdvisory.
+            });
         },
     };
 

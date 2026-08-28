@@ -1009,6 +1009,103 @@ export interface SeqscribeStatusSummary {
     parityFieldMismatchBucket?: number;
 }
 
+/**
+ * Beacon staleness / sole-copy advisory (design §7.1, mission b60d70b8).
+ *
+ * ★★ LOCAL AND P2P ONLY — NEVER THE SERVER STATUS PATH.
+ *
+ * This is the one seqscribe shape that deliberately carries TOPIC NAMES and
+ * PEER WRITER IDS, because "which topic is how far ahead" is the feature
+ * itself; erasing the topic axis leaves nothing (§7.1.4). CLAUDE.md's approved
+ * "Beacon vector exception" covers the BEACON BOARD path — the daemon PUT/GET
+ * against the server DO. It does NOT widen the status path, whose daemon-side
+ * allow-list (`seqscribe/stats.ts`) still excludes topic names outright.
+ *
+ * So this type may appear on:
+ *   - `StatusReportPayload` (the P2P rich payload — never projected to the server)
+ *   - `get_status_metadata` (a local read)
+ *
+ * and must never be added to `SeqscribeStatusSummary`,
+ * `CloudStatusReportPayload`, or `buildCloudSeqscribeSummary`. The regression
+ * that pins this is `test/status/cloud-status-content-boundary.test.ts`, which
+ * plants a canary here and asserts it does not reach the server frame.
+ *
+ * Field docs live on the producing types in `seqscribe/beacon-diagnostics.ts`;
+ * this is the structural mirror so web packages can type the payload without a
+ * value import from daemon-core.
+ *
+ * ── ★ No elapsed-time fields on this wire shape ────────────────────────────
+ * The in-process type (`BeaconDiagnostics`) carries `boardAgeMs` /
+ * `lastSeenAgeMs`, which are convenient for a local reader. They are
+ * DELIBERATELY ABSENT here, and `toBeaconDiagnosticsSummary` strips them.
+ *
+ * Every status frame is deduped by hashing the payload minus `timestamp`
+ * (`sendP2PPayload`, and the server path's own hash). An age recomputed on each
+ * report changes on every tick, so carrying one would make each frame unique,
+ * defeat the dedup, and turn an idle daemon into a constant transmitter — the
+ * same failure `seqscribe/stats.ts` buckets its counters to avoid, and the one
+ * §7.1.2 depends on NOT happening (a Beacon that made idle daemons chatty would
+ * break the status dedup floor it was designed to leave alone).
+ *
+ * Absolute instants (`boardAt`, `lastSeen`) are stable between reports and let
+ * the consumer derive age at render time, which is where it is actually wanted.
+ */
+export interface BeaconDiagnosticsSummary {
+    /** This node's beacon id (= its seqscribe writerId). */
+    node: string;
+    /** Peers seen on the last board, worst-lag first. */
+    peers: Array<{
+        node: string;
+        behind: number;
+        topics: Array<{ node: string; topic: string; behind: number }>;
+        /** ISO-8601 instant — NOT an elapsed age. See the note above. */
+        lastSeen: string;
+    }>;
+    /** Max `behind` across all peers/topics — the headline number for a badge. */
+    maxBehind: number;
+    /**
+     * Positions this node may hold alone. ★ `verdict: 'unknown'` is a real
+     * answer, not a missing one — see `soleCopyDeferred`.
+     */
+    soleCopy: Array<{
+        topic: string;
+        writer: string;
+        localSeq: number;
+        bestPeerSeq: number | null;
+        unreplicated: number;
+        verdict: 'sole-copy' | 'replicated' | 'unknown';
+        unknownReason?: 'truncated' | 'no-board';
+    }>;
+    /** Peer reports the server dropped to fit the frame budget. */
+    truncated: number;
+    /**
+     * True when `truncated > 0`. ★ While this is true every sole-copy verdict
+     * is `'unknown'` by construction (§7.1.2.1) — a consumer must not render a
+     * "safely replicated" affordance from a deferred judgement.
+     */
+    soleCopyDeferred: boolean;
+    /** Topics the last GET asked about. */
+    topicScope: string[];
+    /**
+     * ISO-8601 board capture time, or null before the first successful GET.
+     *
+     * A stable instant, not an age — see the dedup note above. A consumer that
+     * wants "how old" computes it against its own clock at render time.
+     */
+    boardAt: string | null;
+    /**
+     * ★ ADVISORY ONLY — never a correctness gate (§5.7a). Empty in production
+     * today: upstream P27 has no `hints` producer, so `staleness().keyStale`
+     * never populates.
+     */
+    keyStaleAdvisory: Array<{
+        topic: string;
+        key: string;
+        latestKnown: unknown;
+        haveLocally: boolean;
+    }>;
+}
+
 /** Minimal daemon->cloud status payload used for routing, fallback, and server APIs. */
 export interface CloudStatusReportPayload {
     sessions: RoutingSessionEntry[];
@@ -1047,4 +1144,19 @@ export interface StatusReportPayload {
     terminalBackend?: TerminalBackendStatus;
     /** Available providers (present in StatusSnapshot, optional in raw payload) */
     availableProviders?: AvailableProviderInfo[];
+    /**
+     * Beacon staleness / sole-copy advisory (mission b60d70b8).
+     *
+     * ★ P2P ONLY. Despite this interface's "daemon → server" header, the
+     * SERVER-bound frame is not this object — it is
+     * `CloudStatusReportPayload`, built by `buildCloudStatusReportPayload`
+     * (status/reporter.ts), which is a fixed-key allow-list that re-lists every
+     * field it forwards. This field is therefore structurally unable to reach
+     * the server, and that is exactly why it may live here: the P2P DataChannel
+     * is the rich path, and topic names + peer writer ids are permitted there.
+     *
+     * Absent when no beacon is armed (standalone never arms one) or before the
+     * first board arrives — absent stays distinguishable from "fresh and empty".
+     */
+    beacon?: BeaconDiagnosticsSummary;
 }

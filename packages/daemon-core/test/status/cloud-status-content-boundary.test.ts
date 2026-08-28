@@ -431,3 +431,119 @@ describe('cloud status seqscribe boundary', () => {
         expect(wire).not.toContain('peer-a');
     });
 });
+
+/**
+ * ★Beacon diagnostics must not reach the server status path (mission b60d70b8).
+ *
+ * This is the subtlest boundary in the seqscribe integration, because the answer
+ * is "yes" on one path and "no" on another:
+ *
+ *   - CLAUDE.md's approved "Beacon vector exception" (design §7.1.4, D10) lets
+ *     TOPIC NAMES reach the server on the BEACON BOARD path — the daemon's
+ *     `beacon_vectors` PUT/GET frames. "Which topic is how far ahead" is the
+ *     feature; erasing the topic axis leaves nothing.
+ *   - It does NOT widen the STATUS path. `seqscribe/stats.ts` still excludes
+ *     topic names outright there, because aggregates alone are sufficient.
+ *
+ * The consumer surface produces a per-topic, per-peer object — exactly the
+ * shape the status path forbids — and puts it on `StatusReportPayload` (the P2P
+ * rich payload). That is safe only because the SERVER frame is built by
+ * `buildCloudStatusReportPayload` from a different input, through a fixed-key
+ * allow-list. These tests are what keep that true: adding `beacon` to
+ * `buildCloudSeqscribeSummary`, or rewriting either projection as a deny-list,
+ * turns them red.
+ */
+describe('★beacon diagnostics never reach the server status frame', () => {
+    const healthy = {
+        topics: 4, peers: 2, peersReady: 2, pendingBucket: 0, consumerLagBucket: 0,
+        queueBucket: 0, fgenAgeBucket: 0, quarantined: false, authority: true,
+        dualWrite: false, dualWriteFailedBucket: 0, dualWriteDroppedBucket: 0,
+        dualWriteBackfilledBucket: 0, parityMismatchBucket: 0, parityRan: false,
+        parityMissingInShadowBucket: 0, parityExtraInShadowBucket: 0, parityFieldMismatchBucket: 0,
+    };
+
+    /** A realistic diagnostics object, carrying every identifier class it legitimately holds. */
+    const beacon = {
+        node: 'adhdev-0123456789abcdef',
+        peers: [
+            {
+                node: 'adhdev-fedcba9876543210',
+                behind: 42,
+                topics: [
+                    { node: 'adhdev-fedcba9876543210', topic: 'mesh.mesh_abc.events', behind: 42 },
+                    { node: 'adhdev-fedcba9876543210', topic: 'session.sess-1.transcript', behind: 7 },
+                ],
+                lastSeen: '2026-08-28T00:00:00.000Z',
+            },
+        ],
+        maxBehind: 42,
+        soleCopy: [
+            {
+                topic: 'session.sess-1.transcript',
+                writer: 'adhdev-0123456789abcdef',
+                localSeq: 20, bestPeerSeq: 12, unreplicated: 8, verdict: 'sole-copy',
+            },
+        ],
+        truncated: 0,
+        soleCopyDeferred: false,
+        topicScope: ['fleet.status', 'mesh.mesh_abc.events'],
+        boardAt: '2026-08-28T00:00:00.000Z',
+        keyStaleAdvisory: [],
+    };
+
+    it('the server payload has no `beacon` field even when one is planted on the input', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, {
+            ...healthy,
+            beacon,
+        } as any);
+
+        expect(payload).not.toHaveProperty('beacon');
+        expect(payload.seqscribe).not.toHaveProperty('beacon');
+        expect(payload.seqscribe).toEqual(healthy);
+    });
+
+    it('★CANARY: no topic name, peer writer id or sole-copy verdict is serialized anywhere', () => {
+        const payload = buildCloudStatusReportPayload([], undefined, 1, {
+            ...healthy,
+            beacon,
+            // The flatter shapes a careless widening might take instead.
+            beaconMaxBehind: 42,
+            beaconTopics: ['mesh.mesh_abc.events', 'session.sess-1.transcript'],
+            beaconSoleCopy: beacon.soleCopy,
+        } as any);
+        const wire = JSON.stringify(payload);
+
+        for (const leaked of [
+            'mesh.mesh_abc.events',      // mesh id in a topic name
+            'session.sess-1.transcript', // ★ a CONTENT-class topic's name
+            'mesh_abc',
+            'sess-1',
+            'adhdev-fedcba9876543210',   // peer writer id
+            'adhdev-0123456789abcdef',   // our own writer id
+            'sole-copy',
+            'fleet.status',
+        ]) {
+            expect(wire, `server frame leaked: ${leaked}`).not.toContain(leaked);
+        }
+        for (const key of ['beacon', 'beaconMaxBehind', 'beaconTopics', 'beaconSoleCopy']) {
+            expect(payload.seqscribe).not.toHaveProperty(key);
+        }
+    });
+
+    it('the P2P payload shape and the server payload shape are genuinely different objects', () => {
+        // The reason the field above is safe on `StatusReportPayload`: the
+        // server frame is not a projection OF that object — it is built
+        // separately from the session list. A regression that started deriving
+        // the server frame from the P2P payload would make `beacon` reachable,
+        // so this pins the two as independent.
+        const payload = buildCloudStatusReportPayload(
+            [{ id: 's1', providerType: 'claude-cli', beacon } as any],
+            undefined,
+            1,
+            healthy as any,
+        );
+
+        expect(payload.sessions[0]).not.toHaveProperty('beacon');
+        expect(JSON.stringify(payload)).not.toContain('adhdev-fedcba9876543210');
+    });
+});

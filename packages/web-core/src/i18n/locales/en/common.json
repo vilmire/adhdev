@@ -3048,6 +3048,14 @@
             "runtimePolling": "Runtime polling",
             "transportRelay": "TURN relay — direct connection failed",
             "transportDirect": "Direct connection (STUN/host)",
+            "beacon": {
+                "behindLabel": "behind {{count}}",
+                "behindTooltip": "This machine is behind its peers by {{count}} entries (worst topic: {{topic}}).",
+                "soleCopyLabel": "sole copy",
+                "soleCopyTooltip": "This machine may hold the only copy of {{entries}} entries across {{count}} topic(s). Peers have not confirmed them.",
+                "deferredLabel": "can't tell",
+                "deferredTooltip": "Sole-copy check was deferred: the peer board was truncated, so the machines compared against are only part of the fleet."
+            },
             "noAgentsRunning": "No agents running yet",
             "launchCta": "Launch →"
         },

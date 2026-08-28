@@ -52,6 +52,10 @@ import { applyProcessHardening } from './process-hardening.js';
 import { startEventLoopMonitor } from './event-loop-monitor.js';
 import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
 import { loadStoredFleetSecret } from '../seqscribe/fleet-secret.js';
+import {
+    toBeaconDiagnosticsSummary,
+    type BeaconDiagnostics,
+} from '../seqscribe/beacon-diagnostics.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../seqscribe/node.js';
 import { startConvergenceProbe, type ProbeHandle } from '../seqscribe/probe.js';
 import { summarizeSeqscribeStats } from '../seqscribe/stats.js';
@@ -207,6 +211,23 @@ export interface DaemonComponents {
     // The single `node.stats()` reader (seqscribe/throughput-collector.ts).
     // Everything else reads its published snapshot.
     seqscribeCollector?: SeqscribeThroughputCollector;
+    /**
+     * The armed Beacon, once a host has armed one (design §7.1, mission b60d70b8).
+     *
+     * ★ WRITTEN BY THE HOST, NOT BY THIS MODULE. The beacon needs a transport
+     * that only the cloud daemon has (a WS bridge), and it is armed on the first
+     * AUTHENTICATED EPOCH — long after `initDaemonComponents` returns. So this
+     * is a slot the host fills (`armSeqscribeBeacon` in daemon-cloud), which is
+     * what lets the router's `getBeaconDiagnostics` closure below read it at
+     * call time.
+     *
+     * Stays undefined on standalone, which never arms a beacon — and that is
+     * the whole "transport absent → not started" contract (§7.1.6), not a gap.
+     *
+     * Typed structurally rather than as `BeaconHandle` so this interface does
+     * not drag the beacon module into every consumer of DaemonComponents.
+     */
+    seqscribeBeacon?: { diagnostics(): BeaconDiagnostics } | null;
 }
 
 export interface DaemonDevSupportOptions {
@@ -633,6 +654,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // reads the snapshot, which is a pure getter.
     // See seqscribe/throughput-collector.ts.
     let seqscribeCollector: SeqscribeThroughputCollector | undefined;
+    // Same holder trick as `seqscribeNodeRef` above, one step later: the beacon
+    // is armed by the HOST after this function returns, so the router's
+    // `getBeaconDiagnostics` closure cannot capture a value — it captures the
+    // components object and reads the slot at call time.
+    let componentsRef: DaemonComponents | undefined;
     const router = new DaemonCommandRouter({
         commandHandler,
         cliManager,
@@ -716,6 +742,34 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 return null;
             }
         },
+        // Beacon staleness / sole-copy for `get_status_metadata` (§7.1, mission
+        // b60d70b8). A getter for the same reason as getSeqscribeStats — but
+        // one level more so: the beacon is armed by the HOST on its first
+        // authenticated epoch, long after this router is constructed, so the
+        // closure reads `components.seqscribeBeacon` at call time.
+        //
+        // ★Unlike getSeqscribeStats above, the value here DOES carry topic
+        // names and peer writer ids. That is the feature, and it is why it is
+        // exposed on this LOCAL surface (and the P2P payload) only — never on
+        // status_report. `buildCloudSeqscribeSummary` is a fixed-key allow-list
+        // that could not forward it even by accident.
+        //
+        // `diagnostics()` performs no I/O: it reads the last board the beacon
+        // captured, so an on-demand `get_status_metadata` cannot turn into a
+        // Beacon traffic source (§7.1.2's idle-silence property).
+        getBeaconDiagnostics: () => {
+            const beacon = componentsRef?.seqscribeBeacon;
+            if (!beacon) return null;
+            try {
+                return toBeaconDiagnosticsSummary(beacon.diagnostics());
+            } catch (error) {
+                LOG.info(
+                    'Seqscribe',
+                    `beacon diagnostics unavailable for get_status_metadata: ${error instanceof Error ? error.message : String(error)}`,
+                );
+                return null;
+            }
+        },
     });
 
     poller = new AgentStreamPoller({
@@ -749,6 +803,8 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         onMeshCoordinatorEventForwarded: config.onMeshCoordinatorEventForwarded,
         statusInstanceId: config.statusInstanceId,
     };
+    // Publish to the holder the router's getBeaconDiagnostics closure reads.
+    componentsRef = components;
 
     // 10a. Open the process-wide seqscribe node. The auth_ok-delivered fleet
     // secret is read explicitly here and passed as the stored fallback; the

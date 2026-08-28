@@ -31,6 +31,7 @@ export type {
   RoutingSessionEntry,
   P2PStatusSummary,
   SeqscribeStatusSummary,
+  BeaconDiagnosticsSummary,
   DaemonStatusEventPayload,
   DashboardStatusEventPayload,
   SessionTransport,
@@ -1001,7 +1002,27 @@ export {
   type ProjectedBeaconReport,
   type ProjectedWriterEntry,
   type ArmBeaconOptions,
+  type BeaconHandle,
 } from './seqscribe/beacon.js';
+// Beacon CONSUMER surface (mission b60d70b8) — staleness/sole-copy as data a
+// dashboard and `get_status_metadata` can read. ★ LOCAL/P2P ONLY: these carry
+// topic names and peer writer ids, so they must never be added to
+// `buildCloudSeqscribeSummary` (status/reporter.ts) — see the file header.
+export {
+  computeBeaconDiagnostics,
+  summarizeSoleCopy,
+  readKeyStaleAdvisory,
+  toBeaconDiagnosticsSummary,
+  BEACON_BOARD_TTL_MS,
+  type BeaconDiagnostics,
+  type BeaconPeerDiagnostics,
+  type BeaconPeerTopicLag,
+  type BeaconSoleCopyCandidate,
+  type BeaconBoardSnapshot,
+  type BeaconKeyStaleAdvisory,
+  type SoleCopyVerdict,
+  type SoleCopyUnknownReason,
+} from './seqscribe/beacon-diagnostics.js';
 export {
   safeMeshId,
   safeSessionId,

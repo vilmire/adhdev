@@ -36,7 +36,7 @@ import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../m
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
-import type { SeqscribeStatusSummary } from '../shared-types.js';
+import type { BeaconDiagnosticsSummary, SeqscribeStatusSummary } from '../shared-types.js';
 import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision, mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { readMeshConfigFromDisk, statMeshConfigFile } from '../config/mesh-config.js';
 import { resolve as pathResolve } from 'path';
@@ -183,6 +183,23 @@ export interface CommandRouterDeps {
      * Absent (or returning null) when replication is unavailable.
      */
     getSeqscribeStats?: () => SeqscribeStatusSummary | null;
+    /**
+     * Beacon staleness/sole-copy diagnostics (design §7.1, mission b60d70b8).
+     *
+     * ★ Unlike `getSeqscribeStats` above, this DOES carry topic names and peer
+     * writer ids — that is the feature ("which topic is how far ahead"), and it
+     * is why the value is LOCAL/P2P ONLY. It reaches `get_status_metadata` and
+     * the P2P rich payload; it must never be added to
+     * `buildCloudSeqscribeSummary` or any other server-bound projection. The
+     * Beacon content exception (CLAUDE.md) covers the BOARD path, not the
+     * status path.
+     *
+     * A getter for the same reasons as `getSeqscribeStats`: the beacon is armed
+     * on the first authenticated epoch, long after the router is built, and the
+     * numbers must be read at call time. Null when no beacon is armed —
+     * standalone never arms one.
+     */
+    getBeaconDiagnostics?: () => BeaconDiagnosticsSummary | null;
 }
 
 export interface CommandRouterResult {

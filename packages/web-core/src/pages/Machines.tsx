@@ -14,6 +14,7 @@ import {
 import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
+import BeaconAdvisoryBadge from '../components/BeaconAdvisoryBadge'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle, IconLink } from '../components/Icons'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
@@ -323,6 +324,14 @@ export default function MachinesPage() {
                                                     {transport === 'relay' ? <><IconShuffle size={10} /> relay</> : <><IconLink size={10} /> direct</>}
                                                 </span>
                                             )}
+                                            {/*
+                                              seqscribe Beacon advisory (§7.1): "behind N" / "sole copy".
+                                              Renders nothing when caught up, when no board has arrived, or
+                                              when the board is stale — so a machine with healthy replication
+                                              (and every WS-only machine, since beacon rides P2P alone) looks
+                                              exactly as it does today.
+                                            */}
+                                            <BeaconAdvisoryBadge beacon={machine.daemonIde?.beacon} />
                                             <div
                                                 className="w-2 h-2 rounded-full"
                                                 style={{
