@@ -4,6 +4,19 @@
  * This module does not switch a consumer. It only evaluates the four pieces of
  * evidence that a later cutover must provide. Missing/unknown evidence is a
  * refusal, because the existing WS path remains authoritative.
+ *
+ * ★ Currently uncalled outside its own test — this is intentional, not dead
+ * code to clean up. Unlike `mesh.<id>.events`, `fleet.status` has no legacy
+ * read path to cut over: the daemon never read peer status from a file or DB,
+ * so there is nothing for a "primary" mode to replace, and `FleetStatusMode`
+ * stays `'shadow' | 'off'` (see docs/design/2026-08-26-seqscribe-integration-
+ * plan.md §5, "fleet.status primary 승격 — 설계 노트", decided 2026-08-28,
+ * recommendation C). This evaluator is kept, not deleted, because its four
+ * conditions become load-bearing again if the legacy WS `status_report`
+ * publish is ever retired (§5's "레거시 WS 발행 중단은 후속 Stage 몫") — that
+ * would introduce a real cutover for the first time. Re-evaluate wiring this
+ * in only if that retirement is separately approved; do not wire it in to
+ * satisfy an otherwise-unrelated task.
  */
 
 import type { SeqscribeNodeHandle } from './node.js';
