@@ -1,11 +1,15 @@
 /**
- * Low-level git readers shared by the Refinery's gitlink paths.
+ * Low-level git readers and gitlink gates shared by the Refinery's submodule
+ * paths.
  *
  * Extracted verbatim from `mesh-refine-gates.ts` (pure move — no behaviour
- * change) so that `mesh-refine-submodule-converge.ts` can use them without
- * importing the gates module back (which would be circular). Both
- * `mesh-refine-gates.ts` and `mesh-refine-submodule-converge.ts` import from
- * here; nothing here imports either of them.
+ * change) so that `mesh-refine-submodule-converge.ts` can use the readers
+ * without importing the gates module back (which would be circular), and —
+ * as of the file-size decomposition that moved `truncateValidationOutput`
+ * and `runMeshRefineSubmoduleReachabilityGate` here — so `mesh-refine-gates.ts`
+ * itself can stay under the repo's file-size gate. `mesh-refine-gates.ts`
+ * re-exports this module wholesale (`export *`), so existing importers of
+ * the gates module are unaffected; nothing here imports the gates module back.
  */
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
@@ -14,10 +18,37 @@ import { resolve as pathResolve } from 'path';
 import { LOG } from '../logging/logger.js';
 
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
+import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
 export const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
 
 export const REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
+
+// Head+tail budget (was head-only 2000 chars — see REFINE-LOG-TRUNCATION). A
+// gate command's failing assertion (e.g. "Test Files 1 failed") lands at the
+// END of stdout/stderr, but a head-only cut kept only the command-startup
+// prelude (sibling-daemon banners, git "empty repository" warnings) and threw
+// away the verdict every time. Applied uniformly across all six call sites
+// (not just the failing-gate path): the six sites mix genuine gate-command
+// runs with rare exception handlers, and splitting the budget by call site
+// would require guessing which callers are "hot" vs "rare" without evidence.
+// A short passing output is unaffected either way (values under the budget
+// are returned unmodified), so the uniform 8000 does not grow the common-case
+// payload. Downstream cap: MESH_COMPLETION_SURFACE_MAX_CHARS = 16_000 in
+// mesh-events-utils.ts comfortably exceeds this 8000 budget, so nothing is
+// re-truncated on the way to the coordinator.
+const REFINE_VALIDATION_SUMMARY_HEAD_CHARS = 2_000;
+const REFINE_VALIDATION_SUMMARY_TAIL_CHARS = 6_000;
+const REFINE_VALIDATION_SUMMARY_CHARS = REFINE_VALIDATION_SUMMARY_HEAD_CHARS + REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
+
+export function truncateValidationOutput(value: unknown): string {
+    const text = typeof value === 'string' ? value : value == null ? '' : String(value);
+    if (text.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text;
+    const head = text.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
+    const tail = text.slice(text.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
+    const omitted = text.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
+    return `${head}\n[... ${omitted} chars omitted ...]\n${tail}`;
+}
 
 /** The gitlink (mode 160000) paths whose recorded commit differs between two refs. */
 export function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef: string): string[] {
@@ -630,4 +661,315 @@ export function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmodu
     }
     parts.push('Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main.');
     return parts.join(' ');
+}
+
+export async function runMeshRefineSubmoduleReachabilityGate(
+    repoRoot: string,
+    mergedTree: string,
+    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string } = {},
+): Promise<MeshRefineSubmoduleReachabilitySummary> {
+    const startedAt = Date.now();
+    const entries: MeshRefineSubmoduleReachabilityEntry[] = [];
+    try {
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        const runGit = async (cwd: string, args: string[]): Promise<string> => {
+            const { stdout } = await execFileAsync(GIT, args, {
+                cwd,
+                encoding: 'utf8',
+                timeout: 30_000,
+                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+                windowsHide: true,
+            });
+            return String(stdout || '');
+        };
+        // ★Tri-state (see verifyRemoteBranchContainsCommit): a failed fetch is
+        // 'undeterminable', NOT the same value as git's "not an ancestor". The
+        // shared-catch predecessor could push on a fetch failure.
+        const verifyRemoteMainContainsCommit = (submodulePath: string, commit: string, branch = 'main') =>
+            verifyRemoteBranchContainsCommit(runGit, submodulePath, commit, branch);
+        const publishCommitToRemoteMain = async (submodulePath: string, commit: string, branch = 'main'): Promise<{ stdout: string; stderr: string; refspec: string }> => {
+            const refspec = `${commit}:refs/heads/${branch}`;
+            const { stdout, stderr } = await execFileAsync(GIT, ['push', 'origin', refspec], {
+                cwd: submodulePath,
+                encoding: 'utf8',
+                timeout: 30_000,
+                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+                windowsHide: true,
+            });
+            return { stdout: String(stdout || ''), stderr: String(stderr || ''), refspec };
+        };
+        const importCommitFromWorktreeSubmodule = async (submodulePath: string, worktreeSubmodulePath: string, commit: string): Promise<boolean> => {
+            if (!fs.existsSync(worktreeSubmodulePath)) return false;
+            try {
+                await runGit(worktreeSubmodulePath, ['cat-file', '-e', `${commit}^{commit}`]);
+            } catch {
+                return false;
+            }
+            await runGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', worktreeSubmodulePath, commit]);
+            await runGit(submodulePath, ['cat-file', '-e', `${commit}^{commit}`]);
+            return true;
+        };
+        /**
+         * Gap #2 (parallel-refine twin): a gitlink commit can be unreachable from
+         * origin/<default> yet have an EQUIVALENT commit already published there —
+         * a sibling job merged the same content and pushed it (same tree, different
+         * SHA; real case: local twin d8e3acb7 vs published 67dab44d, identical
+         * trees). Publishing the twin would mint duplicate history; the remedy is
+         * to converge the gitlink to the published commit. Detected by tree
+         * equality against recent commits on the freshly-fetched remote ref.
+         * Fail-safe: any git error (commit not local, ref missing) returns
+         * undefined and the historical publish-required path runs unchanged.
+         *
+         * ★Per-candidate errors are caught PER CANDIDATE, not by the outer catch.
+         * A single unreadable tree object used to abort the whole loop and report
+         * "no twin", silently discarding every remaining candidate — and "no twin"
+         * is what permits the auto-publish push below. A partial enumeration
+         * failure must not be reported as a complete negative; skip the bad
+         * candidate and keep looking.
+         */
+        const findEquivalentPublishedCommit = async (submodulePath: string, commit: string, remoteRef: string): Promise<string | undefined> => {
+            try {
+                const targetTree = (await runGit(submodulePath, ['rev-parse', `${commit}^{tree}`])).trim();
+                if (!targetTree) return undefined;
+                const candidates = (await runGit(submodulePath, ['rev-list', '--max-count=100', remoteRef]))
+                    .split('\n').map(s => s.trim()).filter(Boolean);
+                for (const candidate of candidates) {
+                    let tree = '';
+                    try {
+                        tree = (await runGit(submodulePath, ['rev-parse', `${candidate}^{tree}`])).trim();
+                    } catch {
+                        continue; // unreadable candidate — keep scanning the rest
+                    }
+                    if (tree && tree === targetTree) return candidate;
+                }
+            } catch { /* no equivalence evidence */ }
+            return undefined;
+        };
+
+        const treeOutput = await runGit(repoRoot, ['ls-tree', '-r', '-z', mergedTree]);
+        const gitlinks = treeOutput
+            .split('\0')
+            .filter(Boolean)
+            .map(record => {
+                const match = /^160000\s+commit\s+([0-9a-f]{40})\t(.+)$/.exec(record);
+                return match ? { commit: match[1], path: match[2] } : null;
+            })
+            .filter((entry): entry is { commit: string; path: string } => !!entry);
+
+        for (const gitlink of gitlinks) {
+            const submodulePath = pathResolve(repoRoot, gitlink.path);
+            const entry: MeshRefineSubmoduleReachabilityEntry = {
+                path: gitlink.path,
+                commit: gitlink.commit,
+                reachable: false,
+            };
+            // Resolved lazily once the submodule checkout/remote are confirmed; defaults
+            // to 'main' so error messages emitted before resolution stay byte-identical
+            // to the pre-generalization behavior on a main-default repo.
+            let submoduleDefaultBranch = 'main';
+            try {
+                if (!fs.existsSync(submodulePath)) {
+                    entry.error = `Submodule checkout missing at ${gitlink.path}`;
+                    entry.publishRequired = true;
+                    if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                        entry.autoPublishAllowed = true;
+                        entry.autoPublishAttempted = false;
+                        entry.autoPublishSkippedReason = `submodule checkout missing at ${gitlink.path}; cannot perform non-force push to origin/main`;
+                    }
+                    entries.push(entry);
+                    continue;
+                }
+
+                entry.checkedLocal = true;
+                try {
+                    await runGit(submodulePath, ['cat-file', '-e', `${gitlink.commit}^{commit}`]);
+                    entry.localReachable = true;
+                } catch {
+                    entry.localReachable = false;
+                    if (options.allowAutoPublishSubmoduleMainCommits === true && options.worktreeRoot) {
+                        try {
+                            const imported = await importCommitFromWorktreeSubmodule(submodulePath, pathResolve(options.worktreeRoot, gitlink.path), gitlink.commit);
+                            if (imported) {
+                                entry.localReachable = true;
+                                entry.importedFromWorktree = true;
+                            }
+                        } catch (importError: any) {
+                            entry.autoPublishSkippedReason = `candidate commit was not present in the source checkout and could not be imported from worktree submodule: ${truncateValidationOutput(importError?.stderr || importError?.message || String(importError))}`;
+                        }
+                    }
+                    // Probe the submodule remote before allowing cleanup/completion.
+                }
+
+                try {
+                    entry.remote = 'origin';
+                    let remoteUrl = '';
+                    try {
+                        remoteUrl = (await runGit(submodulePath, ['remote', 'get-url', 'origin'])).trim();
+                        if (!remoteUrl) throw new Error('origin remote has no URL');
+                        entry.remoteUrl = remoteUrl;
+                    } catch {
+                        entry.error = 'Submodule remote reachability check failed: no configured origin remote';
+                        entry.publishRequired = true;
+                        if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                            entry.autoPublishAllowed = true;
+                            entry.autoPublishAttempted = false;
+                            entry.autoPublishSkippedReason = 'submodule origin remote is not configured; cannot perform non-force push to origin/main';
+                        }
+                        entries.push(entry);
+                        continue;
+                    }
+                    // Generalize the submodule's default branch (F18): '.gitmodules'
+                    // branch → local remote HEAD → remote-advertised HEAD → 'main'. On a
+                    // main-default submodule this resolves to 'main' and every ref target
+                    // below is byte-identical to the prior hardcoded path.
+                    submoduleDefaultBranch = await resolveSubmoduleDefaultBranch({
+                        submoduleRepoPath: submodulePath,
+                        superprojectWorkspace: repoRoot,
+                        submodulePath: gitlink.path,
+                    });
+                    entry.remoteMainBranch = submoduleDefaultBranch;
+                    const verdict = await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                    if (verdict.state === 'contained') {
+                        entry.fetchedFromOrigin = true;
+                        entry.remoteReachable = true;
+                        entry.remoteMainReachable = true;
+                        entry.reachable = true;
+                    } else if (verdict.state === 'undeterminable') {
+                        // ★We never obtained an answer (fetch failed, or an operand
+                        // did not resolve). This is NOT evidence the commit is
+                        // unpublished, so it must not prescribe — much less perform
+                        // — a publish. Leave `remoteMainReachable` UNDEFINED rather
+                        // than false, and keep `publishRequired` false so the
+                        // auto-publish push cannot fire on absent evidence. The gate
+                        // still FAILS (reachable stays false), so the merge blocks;
+                        // the operator is told we could not judge, not that the
+                        // commit needs pushing.
+                        const e: any = verdict.error;
+                        entry.remoteMainUndeterminable = true;
+                        entry.publishRequired = false;
+                        const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                        entry.error = `Submodule remote main reachability for origin/${submoduleDefaultBranch} could not be determined (the remote was not successfully consulted): ${details}. This is not evidence that ${gitlink.commit} is unpublished — resolve the remote access problem and re-run; Refinery will not publish on an undetermined verdict.`;
+                        if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                            entry.autoPublishAllowed = true;
+                            entry.autoPublishAttempted = false;
+                            entry.autoPublishSkippedReason = `remote main containment for origin/${submoduleDefaultBranch} could not be determined, so Refinery will not push — a failed fetch is not proof the commit is unpublished`;
+                        }
+                    } else {
+                        const e: any = verdict.error;
+                        entry.remoteReachable = false;
+                        entry.remoteMainReachable = false;
+                        // Gap #2: before prescribing "publish", check whether the freshly
+                        // fetched origin/<default> already carries an EQUIVALENT commit
+                        // (identical tree) — the parallel-refine twin case. Publishing a
+                        // same-content twin is wrong; converging the gitlink to the
+                        // published commit is the remedy. Only the ancestry-only verdict
+                        // ("not an ancestor", on a fetch that SUCCEEDED) reaches here —
+                        // the undeterminable branch above intercepts every case where the
+                        // remote was not actually consulted — so this is exactly the stale
+                        // / twin misjudgment the publish prescription got wrong.
+                        const equivalentPublished = await findEquivalentPublishedCommit(submodulePath, gitlink.commit, `refs/remotes/origin/${submoduleDefaultBranch}`);
+                        if (equivalentPublished) {
+                            entry.equivalentPublishedCommit = equivalentPublished;
+                            entry.publishRequired = false;
+                            entry.error = `Submodule commit ${gitlink.commit} is not reachable from origin/${submoduleDefaultBranch}, but an equivalent commit ${equivalentPublished} (identical tree) is already published there; converge the gitlink to the published commit instead of publishing a same-content twin.`;
+                            if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                                entry.autoPublishAllowed = true;
+                                entry.autoPublishAttempted = false;
+                                entry.autoPublishSkippedReason = `an equivalent commit (${equivalentPublished}) is already published on origin/${submoduleDefaultBranch}; publishing a same-content twin is wrong — converge the gitlink to the published commit instead`;
+                            }
+                        } else {
+                            entry.publishRequired = true;
+                            const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                            entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
+                            if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
+                                entry.autoPublishAllowed = true;
+                                entry.autoPublishAttempted = true;
+                                try {
+                                    const publish = await publishCommitToRemoteMain(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                                    entry.autoPublishRefspec = publish.refspec;
+                                    entry.publishStdout = truncateValidationOutput(publish.stdout);
+                                    entry.publishStderr = truncateValidationOutput(publish.stderr);
+                                    entry.autoPublishSucceeded = true;
+                                    // The verify is now tri-state and no longer throws, so
+                                    // check it explicitly — treating a non-'contained'
+                                    // verdict as success would make post-publish
+                                    // verification vacuous.
+                                    const postPublish = await verifyRemoteMainContainsCommit(submodulePath, gitlink.commit, submoduleDefaultBranch);
+                                    if (postPublish.state !== 'contained') {
+                                        entry.autoPublishVerified = false;
+                                        const postDetails = truncateValidationOutput(
+                                            (postPublish as { error: any }).error?.stderr
+                                            || (postPublish as { error: any }).error?.message
+                                            || String((postPublish as { error: any }).error),
+                                        );
+                                        if (postPublish.state === 'undeterminable') entry.remoteMainUndeterminable = true;
+                                        else entry.remoteMainReachable = false;
+                                        entry.error = `Submodule auto-publish to origin/${submoduleDefaultBranch} reported success but post-publish verification did not confirm containment (${postPublish.state}): ${postDetails}`;
+                                    } else {
+                                        entry.fetchedFromOrigin = true;
+                                        entry.remoteReachable = true;
+                                        entry.remoteMainReachable = true;
+                                        entry.autoPublishVerified = true;
+                                        entry.publishRequired = false;
+                                        entry.reachable = true;
+                                        entry.error = undefined;
+                                    }
+                                } catch (publishError: any) {
+                                    entry.autoPublishSucceeded = false;
+                                    entry.autoPublishVerified = false;
+                                    const publishDetails = truncateValidationOutput(publishError?.stderr || publishError?.message || String(publishError));
+                                    entry.error = `Submodule auto-publish to origin/${submoduleDefaultBranch} failed or could not be verified: ${publishDetails}`;
+                                }
+                            } else if (options.allowAutoPublishSubmoduleMainCommits === true) {
+                                entry.autoPublishAllowed = true;
+                                entry.autoPublishAttempted = false;
+                                entry.autoPublishSkippedReason = entry.autoPublishSkippedReason
+                                    || `candidate commit is not reachable in the source checkout or worktree submodule, so Refinery cannot push it to origin/${submoduleDefaultBranch}`;
+                            }
+                        }
+                    }
+                } catch (e: any) {
+                    entry.remoteReachable = false;
+                    entry.remoteMainReachable = false;
+                    entry.publishRequired = true;
+                    const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
+                    entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
+                }
+            } catch (e: any) {
+                entry.error = truncateValidationOutput(e?.message || String(e));
+                entry.publishRequired = true;
+            }
+            entries.push(entry);
+        }
+
+        const unreachable = entries.filter(entry => !entry.reachable);
+        return {
+            status: unreachable.length ? 'failed' : 'passed',
+            checked: entries.length,
+            unreachable: unreachable.map(entry => ({ ...entry, publishRequired: entry.publishRequired !== false })),
+            entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: entry.publishRequired !== false }),
+            durationMs: Date.now() - startedAt,
+            autoPublishAllowed: options.allowAutoPublishSubmoduleMainCommits === true,
+            autoPublishPolicySource: options.autoPublishPolicySource,
+        };
+    } catch (e: any) {
+        // ★`!== false`, not a hard `true`: an entry that already reached a
+        // determined verdict of "no publish needed" — the twin case, or an
+        // undetermined remote-main probe — must keep it. Overwriting those with
+        // `true` because a LATER gitlink threw would resurrect the publish
+        // prescription this gate exists to withhold.
+        const unreachable = entries.filter(entry => !entry.reachable).map(entry => ({ ...entry, publishRequired: entry.publishRequired !== false }));
+        return {
+            status: 'failed',
+            checked: entries.length,
+            unreachable,
+            entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: entry.publishRequired !== false }),
+            durationMs: Date.now() - startedAt,
+            autoPublishAllowed: options.allowAutoPublishSubmoduleMainCommits === true,
+            autoPublishPolicySource: options.autoPublishPolicySource,
+            error: truncateValidationOutput(e?.message || String(e)),
+        };
+    }
 }
