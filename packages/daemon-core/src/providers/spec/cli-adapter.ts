@@ -83,6 +83,99 @@ function stripAnsi(text: string): string {
     return s.replace(ANSI_OSC_DCS_RE, '').replace(ANSI_CSI_RE, '');
 }
 
+export interface KimiAuthBillingFailure {
+    errorReason: 'auth_failed' | 'billing_failed';
+    failureKind: 'auth' | 'billing';
+    message: string;
+}
+
+/**
+ * KIMI-AUTH-BILLING-LIVE: classify only strong Kimi CLI failure markers.
+ *
+ * Spec-backed CLIs run inside one PTY, so stdout and stderr are intentionally
+ * merged by node-pty. The live adapter therefore retains a small output tail
+ * and applies this classifier both as chunks arrive and when the process exits.
+ * A bare 403 is deliberately absent, and so is a bare `[provider.auth_error]`
+ * tag: Kimi answers 403 for managed-usage exhaustion as well as for real
+ * authorization faults, so the verdict comes from the accompanying entitlement
+ * wording, exactly as the quota fetcher decides it from the response body. That
+ * is why the live line "[provider.auth_error] 403 You've reached your 5-hour
+ * usage limit" classifies as billing rather than auth — misreading it as auth
+ * would send an operator to re-login against a credential that is actually fine.
+ * Canonical messages never echo the raw PTY tail (which may contain credentials
+ * or user data).
+ */
+/**
+ * True when the tail carries a machine-emitted provider failure envelope, as
+ * opposed to prose that merely mentions limits. This is the live-PTY stand-in
+ * for the quota fetcher's "we already know this is a 403" precondition: it is
+ * what separates the incident line "[provider.auth_error] 403 You've reached
+ * your 5-hour usage limit" from an agent narrating the quota source file.
+ */
+function hasProviderFailureEnvelope(text: string): boolean {
+    return /\bprovider\.[a-z_]*error\b/.test(text)
+        || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text)
+        || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
+}
+
+export function detectKimiAuthBillingFailure(output: string, _exitCode?: number): KimiAuthBillingFailure | null {
+    const text = stripAnsi(output).replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text) return null;
+
+    const billing = [
+        /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
+        /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
+        /\bpayment_required\b/,
+        /\binsufficient\s+(?:balance|credits?)\b/,
+        // Entitlement exhaustion. The wording mirrors the quota fetcher's
+        // USAGE_LIMIT_BODY_PATTERN (quota/fetchers/kimi.ts) so the live path and
+        // the polled path agree on what "the plan is spent" looks like, but it is
+        // NOT reused verbatim: the fetcher matches an HTTP error body already
+        // known to be a 403, whereas this scans merged PTY output from a coding
+        // agent that frequently *discusses* quota code ("reading kimi.ts to
+        // understand the usage limit pattern"). Bare limit wording is therefore
+        // not sufficient — it must be carried by an actual provider failure
+        // envelope (a provider error tag or an HTTP 403/402 status), which is the
+        // structural equivalent of the fetcher's status precondition.
+        //
+        // Kimi states the limit as a rolling window ("your 5-hour usage limit")
+        // as well as per cycle ("usage limit for this billing cycle"), and the
+        // qualifier sits between the noun and "limit", so the reached/exceeded
+        // verb stays optional after it.
+        ...(hasProviderFailureEnvelope(text)
+            ? [
+                /\b(?:usage|quota|credit)\s+limit\b/,
+                /\bquota\s*(?:exhausted|refresh)/,
+                /\bbilling\s+cycle\b/,
+            ]
+            : []),
+    ].some(pattern => pattern.test(text));
+    if (billing) {
+        return {
+            errorReason: 'billing_failed',
+            failureKind: 'billing',
+            message: 'Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying.',
+        };
+    }
+
+    const auth = [
+        /\b(?:authentication|authorization|login)\s*(?:error|failed|required)\b/,
+        /\b(?:access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)?(?:expired|invalid|rejected|revoked)\b/,
+        /\b(?:token_expired|invalid_token)\b/,
+        /\b(?:unauthorized|http\s*401|status(?:\s+code)?\s*[:=]?\s*401)\b/,
+        /\b(?:not\s+(?:logged|signed)\s+in)\b/,
+        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/,
+    ].some(pattern => pattern.test(text));
+    if (auth) {
+        return {
+            errorReason: 'auth_failed',
+            failureKind: 'auth',
+            message: 'Kimi authentication failed (the access token is expired or rejected). Run "kimi login" in this environment before retrying.',
+        };
+    }
+    return null;
+}
+
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -180,6 +273,10 @@ export class SpecCliAdapter implements CliAdapter {
     private jsonLineTail = '';
     private exited = false;
     private spawned = false;
+    /** Bounded merged PTY output tail used only for Kimi auth/billing classification. */
+    private kimiFailureOutputTail = '';
+    private kimiAuthBillingFailure: KimiAuthBillingFailure | null = null;
+    private lastExitCode: number | null = null;
     private providerSessionId: string | undefined;
     /** Wall clock at the moment spawn() ran. Used as the cutoff for
      *  native-history file selection so a prior session's transcript
@@ -276,6 +373,21 @@ export class SpecCliAdapter implements CliAdapter {
 
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
+        // A strong live Kimi auth/billing marker outranks generic process liveness.
+        // Returning `error` makes CliProviderInstance emit agent:stopped with the
+        // typed reason, rather than allowing an idle/exit edge to masquerade as a
+        // zero-byte completion or a generic crash eligible for blind recovery.
+        if (this.kimiAuthBillingFailure) {
+            return {
+                status: 'error',
+                messages: [],
+                activeModal: null,
+                activeInteractivePrompt: this.activeInteractivePrompt,
+                errorMessage: this.kimiAuthBillingFailure.message,
+                errorReason: this.kimiAuthBillingFailure.errorReason,
+                ...sessionFields,
+            };
+        }
         if (this.exited) return { status: 'stopped', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         if (!this.spawned) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
 
@@ -1034,6 +1146,8 @@ export class SpecCliAdapter implements CliAdapter {
             current_modal: this.latestModal,
             activeInteractivePrompt: this.activeInteractivePrompt,
             exited: this.exited,
+            exitCode: this.lastExitCode,
+            kimiFailureKind: this.kimiAuthBillingFailure?.failureKind ?? null,
             screen,
             sections,
             stateHistory: this.driver.getStateHistory(),
@@ -1120,6 +1234,7 @@ export class SpecCliAdapter implements CliAdapter {
                 this.statusCallback?.();
                 return;
             case 'pty_data':
+                this.observeKimiAuthBillingOutput(ev.chunk);
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
@@ -1128,7 +1243,12 @@ export class SpecCliAdapter implements CliAdapter {
                 return;
             case 'exit':
                 this.exited = true;
-                this.statusCallback?.();
+                this.lastExitCode = ev.exit_code;
+                // Some CLIs repaint the failure off-screen before exit. Re-run the
+                // classifier against the retained tail at the exit seam. The observer
+                // invokes statusCallback only when it discovers a new typed failure;
+                // otherwise this branch publishes the ordinary stopped transition.
+                if (!this.observeKimiAuthBillingOutput('', ev.exit_code)) this.statusCallback?.();
                 return;
             case 'spec_error':
                 LOG.warn('SpecAdapter', `[${this.cliType}] spec reload error: ${ev.errors.join('; ')}`);
@@ -1136,6 +1256,19 @@ export class SpecCliAdapter implements CliAdapter {
             default:
                 return;
         }
+    }
+
+    private observeKimiAuthBillingOutput(chunk: string, exitCode?: number): boolean {
+        if (this.cliType !== 'kimi' || this.kimiAuthBillingFailure) return false;
+        if (chunk) {
+            this.kimiFailureOutputTail = `${this.kimiFailureOutputTail}${stripAnsi(chunk)}`.slice(-16 * 1024);
+        }
+        const failure = detectKimiAuthBillingFailure(this.kimiFailureOutputTail, exitCode);
+        if (!failure) return false;
+        this.kimiAuthBillingFailure = failure;
+        LOG.warn('SpecAdapter', `[kimi] ${failure.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? 'pending'}); automatic provider retry must be suppressed`);
+        this.statusCallback?.();
+        return true;
     }
 
     /**

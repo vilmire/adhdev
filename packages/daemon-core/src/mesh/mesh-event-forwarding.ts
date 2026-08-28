@@ -4,7 +4,7 @@ import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext } from './mesh-ledger.js';
 import type { SessionRecoveryContext } from './mesh-ledger.js';
-import { updateSessionTaskStatus, enqueueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
+import { updateSessionTaskStatus, enqueueTask, requeueTask, updateDirectDispatchStatus, cleanupTerminalDirectDispatches, getActiveDirectDispatches, hasPendingDependents, getQueue } from './mesh-work-queue.js';
 import { markSessionDeliveriesTerminal, updateSessionDeliveryStatus, consumeSessionDelivery } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
@@ -103,6 +103,39 @@ export function bootstrapQueueTaskCountsAsHandled(
         return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
     }
     return true;
+}
+
+/**
+ * KIMI-HOLLOW-COMPLETION: the narrow admission predicate for a completion
+ * proposal whose producer explicitly proved that its final assistant content
+ * is zero bytes and whose evidence grade is insufficient.
+ *
+ * A structured worker/tool report is completion evidence independent of chat
+ * text, so it is excluded even when a version-skewed producer also carries the
+ * two weak text fields. Missing length is UNKNOWN, not zero: only the explicit
+ * numeric 0 reproduces incident f20f5a85 and spends a retry.
+ */
+export function shouldRequeueHollowCompletion(metadataEvent: Record<string, unknown>): boolean {
+    const diagnostic = metadataEvent.completionDiagnostic
+        && typeof metadataEvent.completionDiagnostic === 'object'
+        && !Array.isArray(metadataEvent.completionDiagnostic)
+        ? metadataEvent.completionDiagnostic as Record<string, unknown>
+        : undefined;
+    if (diagnostic?.finalAssistantContentLength !== 0) return false;
+    if (readNonEmptyString(metadataEvent.evidenceLevel) !== 'insufficient') return false;
+    if (readWorkerResultMetadata(metadataEvent)) return false;
+    if (readNonEmptyString(diagnostic.finalSummarySource) === 'tool_report') return false;
+    return true;
+}
+
+function nonRetryableProviderFailureReason(metadataEvent: Record<string, unknown>): 'auth_failed' | 'billing_failed' | null {
+    const diagnostic = metadataEvent.completionDiagnostic
+        && typeof metadataEvent.completionDiagnostic === 'object'
+        && !Array.isArray(metadataEvent.completionDiagnostic)
+        ? metadataEvent.completionDiagnostic as Record<string, unknown>
+        : undefined;
+    const reason = readNonEmptyString(diagnostic?.reason) || readNonEmptyString(metadataEvent.errorReason);
+    return reason === 'auth_failed' || reason === 'billing_failed' ? reason : null;
 }
 
 // The set of coordinator-daemon ids this daemon answers to when draining the
@@ -729,6 +762,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // preserved because the row still flips TERMINAL (failed), just not to 'completed'.
     // Set in the agent:generating_completed branch; read by the ledger append below.
     let forcedTimeoutNoResponse = false;
+    // KIMI-HOLLOW-COMPLETION: first explicit zero-byte/insufficient proposal is
+    // requeued; a repeat naturally reaches requeueTask's maxRetries failure.
+    let hollowCompletionDisposition: 'requeued' | 'max_retries_exhausted' | null = null;
     // Fix B: direct-dispatch taskId used to attribute the terminal ledger entry when no
     // work-queue row matches (resolved BEFORE markSessionTerminal flips the dispatch terminal).
     let directDispatchTaskIdForLedger: string | undefined;
@@ -764,7 +800,50 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 && (args.metadataEvent.completionDiagnostic
                     && typeof args.metadataEvent.completionDiagnostic === 'object'
                     && (args.metadataEvent.completionDiagnostic as Record<string, unknown>).emittedAfterFinalizationTimeout === true) === true;
-            completedTaskForLedger = markSessionTerminal(sessionId, forcedTimeoutNoResponse ? 'failed' : 'completed', eventTimestamp, { tentativeIfDirect: isFalseIdle });
+            const hollowTaskId = readNonEmptyString(args.metadataEvent.taskId);
+            const hollowAssignedTask = hollowTaskId
+                ? (() => { try { return MeshRuntimeStore.getInstance().findQueueEntryById(args.meshId, hollowTaskId); } catch { return undefined; } })()
+                : undefined;
+            // Gate only the queue row this event currently owns. A stale replay against
+            // a pending row, or a provider event arriving after worker_tool_report already
+            // terminalized the row, must never reopen or spend another retry.
+            if (!forcedTimeoutNoResponse
+                && hollowAssignedTask?.status === 'assigned'
+                && shouldRequeueHollowCompletion(args.metadataEvent)) {
+                endTaskDispatchInFlight(args.meshId, hollowTaskId);
+                const meshMaxRetries = (() => {
+                    try { return getMesh(args.meshId)?.policy?.maxTaskRetries; } catch { return undefined; }
+                })();
+                const retried = requeueTask(args.meshId, hollowTaskId, {
+                    reason: 'hollow_completion_empty_final_content',
+                    maxRetries: hollowAssignedTask.maxRetries ?? meshMaxRetries ?? 1,
+                });
+                if (retried) {
+                    hollowCompletionDisposition = retried.status === 'failed'
+                        ? 'max_retries_exhausted'
+                        : 'requeued';
+                    completedTaskForLedger = { id: retried.id, taskMode: retried.taskMode };
+                    markSessionDeliveriesTerminal(args.meshId, sessionId, 'failed');
+                    const hollowCompletion = {
+                        detected: true,
+                        reason: 'empty_final_assistant_content',
+                        requeued: hollowCompletionDisposition === 'requeued',
+                        maxRetriesExhausted: hollowCompletionDisposition === 'max_retries_exhausted',
+                        requeueCount: retried.requeueCount ?? 0,
+                        maxRetries: hollowAssignedTask.maxRetries ?? meshMaxRetries ?? 1,
+                    };
+                    args.metadataEvent.reviewRecommended = true;
+                    args.metadataEvent.hollowCompletion = hollowCompletion;
+                    args.metadataEvent.completionDiagnostic = {
+                        ...(args.metadataEvent.completionDiagnostic as Record<string, unknown>),
+                        hollowCompletion,
+                    };
+                    LOG.warn('MeshQueue', `Rejected zero-byte insufficient completion for task ${hollowTaskId} (session ${sessionId}); ${hollowCompletionDisposition === 'requeued' ? `requeued attempt ${hollowCompletion.requeueCount}/${hollowCompletion.maxRetries}` : 'max retries exhausted — failed'}`);
+                }
+            }
+            if (!hollowCompletionDisposition) {
+                completedTaskForLedger = markSessionTerminal(sessionId, forcedTimeoutNoResponse ? 'failed' : 'completed', eventTimestamp, { tentativeIfDirect: isFalseIdle });
+            }
             if (nodeId && providerType) {
                 // OVEREAGER-REMOTE-IDLE (Defect A+B): re-register the now-idle remote session into
                 // the remote-idle store, symmetric with the agent:ready branch. Previously
@@ -809,7 +888,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             // A forced-termination (finalization timeout, no response) is NOT a completion
             // — dependents are not woken off it; the derived-failure machinery owns them.
             const completedTaskId = completedTaskForLedger?.id;
-            if (completedTaskId && !forcedTimeoutNoResponse && hasPendingDependents(args.meshId, completedTaskId)) {
+            if (completedTaskId && !forcedTimeoutNoResponse && !hollowCompletionDisposition && hasPendingDependents(args.meshId, completedTaskId)) {
                 setImmediate(() => {
                     triggerMeshQueue(components, args.meshId).catch((e: any) => {
                         LOG.warn('MeshQueue', `Dependent wake after task ${completedTaskId} failed: ${e?.message || e}`);
@@ -1149,7 +1228,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
     // FINALIZATION-TIMEOUT-FORCE: the forced-termination flip above recorded the row as
     // 'failed' — the ledger entry must say the same (task_failed), not task_completed.
-    const ledgerKind = forcedTimeoutNoResponse ? 'task_failed' as const : EVENT_TO_LEDGER_KIND[args.event];
+    const ledgerKind = hollowCompletionDisposition === 'requeued'
+        ? undefined
+        : hollowCompletionDisposition === 'max_retries_exhausted' || forcedTimeoutNoResponse
+            ? 'task_failed' as const
+            : EVENT_TO_LEDGER_KIND[args.event];
     if (ledgerKind) {
         try {
             const ledgerNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined;
@@ -1187,6 +1270,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     completionDiagnostic: args.metadataEvent.completionDiagnostic && typeof args.metadataEvent.completionDiagnostic === 'object'
                         ? args.metadataEvent.completionDiagnostic
                         : undefined,
+                    ...(args.metadataEvent.hollowCompletion && typeof args.metadataEvent.hollowCompletion === 'object'
+                        ? { hollowCompletion: args.metadataEvent.hollowCompletion }
+                        : {}),
                     evidence: completionEvidence,
                     // B2: evidenceLevel lets coordinator know when completion evidence is insufficient.
                     // NOTIF Defect-2b: ONLY source==='default' (no parseable answer at all) is
@@ -1253,7 +1339,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
     let recoveryContext: SessionRecoveryContext | null = null;
     if (args.event === 'agent:stopped') {
-        try {
+        const providerFailureReason = nonRetryableProviderFailureReason(args.metadataEvent);
+        if (providerFailureReason) {
+            // Authentication/billing cannot heal through another immediate launch.
+            // The failed queue row and task_failed ledger remain visible, but no new
+            // task/session is created and no retry budget is burned blindly.
+            LOG.warn('MeshRecovery', `Suppressing automatic recovery after non-retryable provider failure (${providerFailureReason}) for ${args.nodeLabel}`);
+        } else try {
             const mesh = getMesh(args.meshId);
             const maxRetries = mesh?.policy?.maxTaskRetries ?? 1;
 

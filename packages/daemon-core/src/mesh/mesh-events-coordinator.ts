@@ -30,4 +30,5 @@ export {
     handleMeshForwardEvent,
     resolveForwardEventMeshId,
     setupMeshEventForwarding,
+    shouldRequeueHollowCompletion,
 } from './mesh-event-forwarding.js';

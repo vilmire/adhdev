@@ -310,6 +310,16 @@ export function buildMeshSystemMessage(args: {
             return `[System] ${args.nodeLabel} already has completion evidence${metadata}. The no-progress monitor reconciled the terminal handoff and marked the session complete; wait for the queued completion event/status refresh before doing any manual transcript check.`;
         }
         const reviewRecommended = args.metadataEvent.reviewRecommended === true;
+        const hollowCompletion = readRecord(args.metadataEvent.hollowCompletion)
+            || readRecord(readRecord(args.metadataEvent.completionDiagnostic)?.hollowCompletion);
+        if (hollowCompletion?.detected === true) {
+            const requeueCount = typeof hollowCompletion.requeueCount === 'number' ? hollowCompletion.requeueCount : 0;
+            const maxRetries = typeof hollowCompletion.maxRetries === 'number' ? hollowCompletion.maxRetries : 1;
+            if (hollowCompletion.maxRetriesExhausted === true) {
+                return `[System] ${args.nodeLabel} returned an empty final response with insufficient evidence${metadata}. The bounded retry was already used (${requeueCount}/${maxRetries}), so the task failed through max_retries_exceeded instead of being recorded as completed. Inspect the provider failure/authentication state before retrying manually.`;
+            }
+            return `[System] ${args.nodeLabel} returned an empty final response with insufficient evidence${metadata}. The completion was rejected and the same task was requeued (${requeueCount}/${maxRetries}); it was NOT recorded as completed.`;
+        }
         // FINALIZATION-TIMEOUT-FORCE (2026-08-18 false-completion fix): the worker's
         // completion was emitted only because the finalization wait expired with no
         // confirmed final assistant (the 92d11091 shape: "completed" with an empty
@@ -407,6 +417,15 @@ export function buildMeshSystemMessage(args: {
         return lines.join('\n');
     }
     if (args.event === 'agent:stopped') {
+        const failureDiagnostic = readRecord(args.metadataEvent.completionDiagnostic);
+        const providerFailureReason = readNonEmptyString(failureDiagnostic?.reason)
+            || readNonEmptyString(args.metadataEvent.errorReason);
+        if (providerFailureReason === 'auth_failed' || providerFailureReason === 'billing_failed') {
+            const kind = providerFailureReason === 'billing_failed' ? 'billing/subscription' : 'authentication';
+            const detail = readNonEmptyString(failureDiagnostic?.errorMessage)
+                || readNonEmptyString(args.metadataEvent.finalSummary);
+            return `[System] ${args.nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same unavailable Kimi entitlement does not waste retries.${detail ? ` ${detail}` : ''}`;
+        }
         const rc = args.recoveryContext;
         if (rc && rc.consecutiveNodeFailures > 0) {
             const parts = [

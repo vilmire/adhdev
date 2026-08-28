@@ -51,7 +51,7 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
   fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode,
 }))
 
-import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
+import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, shouldRequeueHollowCompletion, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { isWeakCompletionMetadata } from '../../src/mesh/mesh-events-utils.js'
 import { __clearMeshPendingEventsForTests, __persistUnstampedPendingEventForTests } from '../../src/mesh/mesh-events-pending.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches, recordTaskAutoLaunch, reclaimStrandedAssignedTask } from '../../src/mesh/mesh-work-queue.js'
@@ -1882,6 +1882,80 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('KIMI-HOLLOW-COMPLETION: requeues the f20f5a85 zero-byte insufficient completion once, then naturally fails through maxRetries without task_completed', () => {
+    const meshId = `mesh_kimi_hollow_completion_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: { maxTaskRetries: 1 },
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'reproduce incident f20f5a85', {
+        difficulty: 'medium',
+        maxRetries: 1,
+      })
+      expect(claimNextTask(meshId, 'node_child_1', 'kimi-session-1')?.id).toBe(queued.id)
+      const { components } = createComponents(meshId)
+
+      const hollowFixture = (sessionId: string, timestamp: number) => ({
+        event: 'agent:generating_completed',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: sessionId,
+        providerType: 'kimi',
+        taskId: queued.id,
+        timestamp,
+        finalSummary: '',
+        evidenceLevel: 'insufficient',
+        completionDiagnostic: {
+          source: 'clean_final_assistant',
+          cleanPath: true,
+          finalAssistantPresent: true,
+          finalAssistantContentLength: 0,
+        },
+      })
+
+      expect(handleMeshForwardEvent(components, hollowFixture('kimi-session-1', Date.now())))
+        .toEqual({ success: true, forwarded: 0 })
+      expect(getQueue(meshId)).toMatchObject([{
+        id: queued.id,
+        status: 'pending',
+        requeueCount: 1,
+        requeueReason: 'hollow_completion_empty_final_content',
+      }])
+      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')).toHaveLength(0)
+
+      expect(claimNextTask(meshId, 'node_child_1', 'kimi-session-2')?.id).toBe(queued.id)
+      expect(handleMeshForwardEvent(components, hollowFixture('kimi-session-2', Date.now() + 1_000)))
+        .toEqual({ success: true, forwarded: 0 })
+
+      const exhausted = getQueue(meshId).find(task => task.id === queued.id)
+      expect(exhausted).toMatchObject({ status: 'failed', requeueCount: 1 })
+      expect(exhausted?.cancelReason).toContain('max_retries_exceeded')
+      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')).toHaveLength(0)
+      expect(readLedgerEntries(meshId).some(entry => entry.kind === 'task_failed'
+        && entry.payload.taskId === queued.id
+        && (entry.payload as any).hollowCompletion?.maxRetriesExhausted === true)).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('KIMI-HOLLOW-COMPLETION false-positive guard: only an unstructured zero-byte insufficient proposal is requeued', () => {
+    const base = {
+      evidenceLevel: 'insufficient',
+      completionDiagnostic: { finalAssistantContentLength: 0 },
+    }
+    expect(shouldRequeueHollowCompletion(base)).toBe(true)
+    expect(shouldRequeueHollowCompletion({ ...base, workerResult: { status: 'completed' } })).toBe(false)
+    expect(shouldRequeueHollowCompletion({ ...base, structuredResult: { outcome: 'completed' } })).toBe(false)
+    expect(shouldRequeueHollowCompletion({ ...base, evidenceLevel: 'reported' })).toBe(false)
+    expect(shouldRequeueHollowCompletion({ ...base, completionDiagnostic: { finalAssistantContentLength: 1 } })).toBe(false)
+    expect(shouldRequeueHollowCompletion({ evidenceLevel: 'insufficient', completionDiagnostic: {} })).toBe(false)
+  })
+
   it('D1: a transient LOCAL dispatch rejection returns the task to pending with a retryable dispatch_failed ledger entry (not terminal failed)', async () => {
     // Regression: the local-dispatch catch in tryAssignQueueTask used to mark the task
     // terminal 'failed' with no ledger and no retry, while the remote-dispatch catch
@@ -3044,6 +3118,60 @@ describe('setupMeshEventForwarding', () => {
       })
       expect(readLedgerEntries(meshId).some(entry => entry.kind === 'task_failed' && entry.payload.taskId === queued.id)).toBe(true)
       expect(readLedgerEntries(meshId).some(entry => entry.kind === 'recovery_attempted')).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('KIMI-AUTH-BILLING-LIVE: records the assigned task failed but suppresses blind recovery/relaunch for a typed billing stop', () => {
+    const meshId = `mesh_kimi_billing_stop_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: { maxTaskRetries: 3 },
+      })
+      const queued = enqueueTask(meshId, 'task blocked by expired Kimi subscription', {
+        difficulty: 'medium',
+        maxRetries: 3,
+      })
+      expect(claimNextTask(meshId, 'node_child_1', 'kimi-session-auth')?.id).toBe(queued.id)
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'kimi-session-auth',
+        providerType: 'kimi',
+        payload: { taskId: queued.id, message: 'task blocked by expired Kimi subscription' },
+      })
+      const launch = vi.fn(() => Promise.resolve({ success: true, sessionId: 'must-not-launch' }))
+      const components = {
+        instanceManager: { getByCategory: vi.fn(() => []) },
+        cliManager: { handleCliCommand: launch },
+      } as any
+
+      expect(handleMeshForwardEvent(components, {
+        event: 'agent:stopped',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'kimi-session-auth',
+        providerType: 'kimi',
+        taskId: queued.id,
+        finalSummary: 'Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying.',
+        completionDiagnostic: {
+          reason: 'billing_failed',
+          errorMessage: 'Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying.',
+        },
+      })).toEqual({ success: true, forwarded: 0 })
+
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('failed')
+      expect(getQueue(meshId).find(task => task.id === queued.id)?.requeueCount ?? 0).toBe(0)
+      expect(launch).not.toHaveBeenCalled()
+      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'recovery_attempted')).toHaveLength(0)
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].metadataEvent.recoveryContext).toBeUndefined()
+      expect(pending[0].coordinatorMessage).toMatch(/non-retryable billing\/subscription failure/i)
+      expect(pending[0].coordinatorMessage).toMatch(/Automatic recovery was suppressed/i)
     } finally {
       cleanupMeshFiles(meshId)
     }

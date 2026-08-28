@@ -43,6 +43,7 @@ export {
     triggerMeshQueue,
     handleMeshForwardEvent,
     setupMeshEventForwarding,
+    shouldRequeueHollowCompletion,
     isMeshCoordinatorEvent,
     __resetIdleAutoFastForwardForTests,
     __resetMeshWorkspaceCacheForTests,

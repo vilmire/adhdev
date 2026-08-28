@@ -56,6 +56,7 @@ export interface ActiveChatData {
 export type ProviderErrorReason =
     | 'not_installed'   // CLI/ACP binary not found
     | 'auth_failed'     // Authentication/API key error
+    | 'billing_failed'  // Subscription/payment/managed-usage entitlement error
     | 'spawn_error'     // Process spawn failure
     | 'init_failed'     // Initialization/handshake failure
     | 'parse_error'     // Provider parser/adapter script failure
