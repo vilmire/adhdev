@@ -313,7 +313,26 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
             { provider: 'claude-cli', model: 'opus', difficulty: ['difficult'], maxParallel: 1 },
             { provider: 'codex-cli', model: 'gpt-5.6-sol', difficulty: ['difficult'], maxParallel: 1 },
         ], {
-            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 80, windowMinutes: 10080, resetsAt: Date.now() + 2 * 60 * MIN } }),
+            // ★Quota SETUP retuned 2026-08-28 for the rebalanced expiry-risk
+            // formula (remaining² / (remaining + 100 × timeLeftFraction)).
+            // The subject of this test is the opus→sonnet CAPACITY DEMOTION and
+            // what the ledger can reconstruct from it — claude-cli winning the
+            // quota order is only the premise that gets it there. The old
+            // numbers (claude 20% remaining / 2h left vs codex 60%/5d) made
+            // claude win only because the previous formula rewarded a NEAR
+            // reset; under the rebalance that is exactly the starved-codex
+            // case, so codex legitimately outranks it and the demotion scenario
+            // never starts. Retuned so claude-cli is the honest winner on the
+            // NEW axis: 40% remaining with 1 day left (risk ~29.5) beats
+            // codex's 60%/5d (risk ~27.4).
+            //
+            // ★40% is also deliberately AT sessionAxisWeeklyHeadroomPercent
+            // (the default 40), which keeps the WEEKLY axis governing — the 2′
+            // conditional gate needs every candidate STRICTLY above the
+            // threshold to switch. Raising claude's weekly remaining any higher
+            // flips the ranking to the session axis, where okQuota's default
+            // session window carries no resetsAt and every risk reads 0.
+            'claude-cli': okQuota('claude-cli', { weekly: { usedPercent: 60, windowMinutes: 10080, resetsAt: Date.now() + 24 * 60 * MIN } }),
             'codex-cli': okQuota('codex-cli', { weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: Date.now() + 5 * 24 * 60 * MIN } }),
         });
         const resolved = await resolve(node, undefined, 'difficult', 'today-difficult-task');

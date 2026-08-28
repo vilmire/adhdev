@@ -112,14 +112,33 @@ describe('mesh route preview', () => {
             { provider: 'fitness-first', model: 'model-a', difficulty: ['difficult'], maxParallel: 1 },
             { provider: 'quota-first', model: 'model-b', difficulty: ['difficult'], maxParallel: 1 },
         ], {
+            // ★Fixture retuned 2026-08-28 for the rebalanced expiry-risk
+            // formula (remaining² / (remaining + 100 × timeLeftFraction)).
+            // The SUBJECT here is unchanged — Stage 3 quota REVERSING the
+            // Stage 1 fitness winner, and the diagnostics that explain it —
+            // only the numbers that produce a reversal moved. The old fixture
+            // (fitness-first 100% just-reset vs quota-first 20% one minute
+            // from its reset) relied on the previous formula scoring a far
+            // reset ~0; the rebalance treats a large remainder with time left
+            // as OVER-SUPPLIED, so that shape no longer reverses.
+            // The fixture has to satisfy THREE constraints at once:
+            //   1. fitness-first must win Stage 1 — the spread bonus is
+            //      proportional to REMAINING, so it needs the larger remainder.
+            //   2. quota-first must win Stage 3 — it needs the higher expiry
+            //      RISK, which the rebalanced formula drives off time LEFT.
+            //   3. the WEEKLY axis must govern (asserted below), so at least
+            //      one candidate must sit at/below the 40% headroom threshold.
+            // fitness-first 50% with a full 7 days (risk ~16.7) vs quota-first
+            // 40% with ~6 hours left (risk ~36.7) satisfies all three: the
+            // larger remainder still loses to the one that is about to expire.
             'fitness-first': quota('fitness-first', {
-                weeklyRemaining: 100,
+                weeklyRemaining: 50,
                 weeklyResetsAt: NOW + 7 * DAY,
                 sessionRemaining: 100,
             }),
             'quota-first': quota('quota-first', {
-                weeklyRemaining: 20,
-                weeklyResetsAt: NOW + MIN,
+                weeklyRemaining: 40,
+                weeklyResetsAt: NOW + 6 * 60 * MIN,
                 sessionRemaining: 100,
             }),
         });
@@ -131,7 +150,12 @@ describe('mesh route preview', () => {
         );
 
         expect(predicted.predictedWinner?.providerType).toBe(actual.providerType);
-        expect(predicted.stages.fitness[0]).toMatchObject({ providerType: 'fitness-first', total: 131 });
+        // total 116 = base 1 + difficulty 100 + spread bonus 15 (the bonus is
+        // proportional to REMAINING, and fitness-first sits at 50% of the
+        // spreadBonusMax 30). It was 131 while the fixture gave it a 100%
+        // remainder; the 2026-08-28 fixture retune above lowered the remainder,
+        // not the bonus rule.
+        expect(predicted.stages.fitness[0]).toMatchObject({ providerType: 'fitness-first', total: 116 });
         expect(predicted.stages.quota).toMatchObject({
             fitnessWinner: 'fitness-first',
             winner: 'quota-first',
@@ -255,14 +279,33 @@ describe('mesh route preview — reordering evidence', () => {
             { provider: 'fitness-first', model: 'model-a', difficulty: ['difficult'], maxParallel: 1 },
             { provider: 'quota-first', model: 'model-b', difficulty: ['difficult'], maxParallel: 1 },
         ], {
+            // ★Fixture retuned 2026-08-28 for the rebalanced expiry-risk
+            // formula (remaining² / (remaining + 100 × timeLeftFraction)).
+            // The SUBJECT here is unchanged — Stage 3 quota REVERSING the
+            // Stage 1 fitness winner, and the diagnostics that explain it —
+            // only the numbers that produce a reversal moved. The old fixture
+            // (fitness-first 100% just-reset vs quota-first 20% one minute
+            // from its reset) relied on the previous formula scoring a far
+            // reset ~0; the rebalance treats a large remainder with time left
+            // as OVER-SUPPLIED, so that shape no longer reverses.
+            // The fixture has to satisfy THREE constraints at once:
+            //   1. fitness-first must win Stage 1 — the spread bonus is
+            //      proportional to REMAINING, so it needs the larger remainder.
+            //   2. quota-first must win Stage 3 — it needs the higher expiry
+            //      RISK, which the rebalanced formula drives off time LEFT.
+            //   3. the WEEKLY axis must govern (asserted below), so at least
+            //      one candidate must sit at/below the 40% headroom threshold.
+            // fitness-first 50% with a full 7 days (risk ~16.7) vs quota-first
+            // 40% with ~6 hours left (risk ~36.7) satisfies all three: the
+            // larger remainder still loses to the one that is about to expire.
             'fitness-first': quota('fitness-first', {
-                weeklyRemaining: 100,
+                weeklyRemaining: 50,
                 weeklyResetsAt: NOW + 7 * DAY,
                 sessionRemaining: 100,
             }),
             'quota-first': quota('quota-first', {
-                weeklyRemaining: 20,
-                weeklyResetsAt: NOW + MIN,
+                weeklyRemaining: 40,
+                weeklyResetsAt: NOW + 6 * 60 * MIN,
                 sessionRemaining: 100,
             }),
         });
@@ -279,19 +322,23 @@ describe('mesh route preview — reordering evidence', () => {
         expect(loser?.gate.outcome).toBe('clear');
         expect(winner?.gate.outcome).toBe('clear');
 
-        // quota-first: 20% remaining, weekly window all but elapsed → nearly
-        // all of that remainder evaporates at the imminent reset.
+        // quota-first: 40% remaining with only ~6 hours of its weekly window
+        // left — nearly all of that remainder evaporates at the reset
+        // (risk ~36.7), which is why it outranks the LARGER remainder below.
         expect(winner?.ranking?.axis).toBe('weekly');
-        expect(winner?.ranking?.remainingPercent).toBe(20);
-        expect(winner!.ranking!.risk).toBeGreaterThan(19);
+        expect(winner?.ranking?.remainingPercent).toBe(40);
+        expect(winner!.ranking!.risk).toBeGreaterThan(30);
         expect(winner?.ranking).not.toHaveProperty('confidence');
         expect(winner?.ranking).not.toHaveProperty('rankedRisk');
         expect(winner?.ranking?.clearOrderIndex).toBe(0);
 
-        // fitness-first: a full remainder whose window has just reset scores
-        // ~0 — there is plenty of time left to spend it.
-        expect(loser?.ranking?.remainingPercent).toBe(100);
-        expect(loser!.ranking!.risk).toBe(0);
+        // fitness-first: a LARGER 50% remainder, but a full 7 days to spend it
+        // → comfortably on pace, so low expiry risk (~16.7). Note it is NOT
+        // zero — under the 2026-08-28 rebalance a distant reset is no longer
+        // read as "safe", which is precisely the starvation bias removed.
+        expect(loser?.ranking?.remainingPercent).toBe(50);
+        expect(loser!.ranking!.risk).toBeGreaterThan(0);
+        expect(loser!.ranking!.risk).toBeLessThan(30);
         expect(loser?.ranking?.clearOrderIndex).toBe(1);
 
         // The decision in one comparison: the reversal is the raw risk gap.

@@ -752,28 +752,54 @@ describe('rankProvidersByQuotaGate — selection-loop gate + weekly expiry-risk 
         expect(ranked.clear).toEqual(['claude-cli', 'kimi']);
     });
 
-    it('a large remainder right AFTER a reset scores ~0 risk — size alone must not win', () => {
+    // ★INVERTED 2026-08-28 (owner-ratified) — this test previously asserted
+    // ['claude-cli', 'kimi'] under risk = remaining × ELAPSED-fraction, whose
+    // premise was "a large remainder right after a reset scores ~0, so size
+    // alone must not win". That premise IS the CLIFF the rebalance removes:
+    // deferring a big remainder because its reset is far away is exactly what
+    // strands it unspent (a 7d window clears ~14 points/day at even pace, so
+    // 99% is already behind schedule the moment the window opens, while the
+    // 20% one can lose at most 20 points). The size-alone concern it was
+    // guarding is now carried by the DIVERGENCE GUARD test below, which pins
+    // the bound that actually matters: a tiny remainder at the reset edge
+    // still cannot beat a substantial one.
+    it('a large remainder with a distant reset is spent EARLY — over-supply outranks a small imminent loss', () => {
         const node = nodeWithQuota({
-            // 99% left but the window has 7 full days to go (just reset)...
+            // 99% left with 7 full days to go (just reset) → risk ~49.3.
+            // Over-supplied: it cannot be burned at even pace, so spread it in now.
             kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(1, NOW + 7 * DAY) }),
-            // ...vs 20% left evaporating in 2h — the certain loss comes first.
+            // 20% left evaporating in 2h → risk ~18.9. A certain but SMALL loss.
             'claude-cli': okQuota({ weekly: weeklyWindow(80, NOW + 2 * 60 * MIN) }),
         });
-        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
-            .toEqual(['claude-cli', 'kimi']);
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW);
+        expect(ranked.clear).toEqual(['kimi', 'claude-cli']);
+        // Pin the direction explicitly: risk must be driven by time REMAINING,
+        // so the just-reset candidate carries real (not ~0) risk.
+        const kimiRisk = ranked.rankingEvidence.find(e => e.providerType === 'kimi')?.risk ?? 0;
+        expect(kimiRisk).toBeGreaterThan(40);
     });
 
+    // ★UNCHANGED ASSERTION, and that is the point: this is the guard that keeps
+    // the rebalanced formula from becoming plain remaining/timeLeft ("required
+    // burn rate"), which diverges as timeLeft → 0. The saturating form keeps
+    // risk ≤ remaining identically, so the bound survives the 2026-08-28
+    // rebalance untouched — only the losing candidate's score moved.
     it('DIVERGENCE GUARD: a tiny remainder at the reset edge must NOT beat a 90% remainder', () => {
         const node = nodeWithQuota({
             // 16% is the smallest remainder that passes the weekly gate (15%
-            // threshold) — even it caps at risk ~16 (risk ≤ remaining by
-            // construction) despite being 1 minute from its reset...
+            // threshold) — even 1 minute from its reset it caps at risk ~16
+            // (risk ≤ remaining by construction)...
             kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(84, NOW + MIN) }),
-            // ...while 90% with 4 of 7 days left scores ~38.6.
+            // ...while 90% with 4 of 7 days left scores ~55.1.
             'claude-cli': okQuota({ weekly: weeklyWindow(10, NOW + 4 * DAY) }),
         });
-        expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
-            .toEqual(['claude-cli', 'kimi']);
+        const ranked = rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW);
+        expect(ranked.clear).toEqual(['claude-cli', 'kimi']);
+        // The bound itself, not just the resulting order: no candidate's risk
+        // may exceed its own remaining, at any distance from the reset.
+        for (const e of ranked.rankingEvidence) {
+            expect(e.risk!).toBeLessThanOrEqual(e.remainingPercent! + 1e-9);
+        }
     });
 
     it('keeps the caller order on a weekly tie (same remaining, same reset — stable sort)', () => {
@@ -852,6 +878,99 @@ describe('rankProvidersByQuotaGate — selection-loop gate + weekly expiry-risk 
 
     it('exposes the dedicated all-gated skip reason constant (non-actionable WAIT)', () => {
         expect(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON).toBe('all_providers_quota_gated');
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // BALANCE REGRESSION (2026-08-28). Pins the two biases the risk rebalance
+    // removed. Injection check for red/green: restore the old formula in
+    // expiryRiskScore —
+    //     return remainingPercent * (1 - timeLeftFraction);
+    // — and every test in this block fails.
+    // ═══════════════════════════════════════════════════════════════════════
+    describe('expiry-risk balance — starvation and cliff', () => {
+        // The exact fleet reading the owner reported: codex holding the LARGEST
+        // remainder with the FARTHEST reset took zero dispatches all day, while
+        // claude — already the most consumed — kept winning and drained first.
+        // Old formula: codex 5.66 < kimi 21.43 < claude 22.14 (codex LAST).
+        // New formula: codex 27.67 > kimi 23.33 > claude 16.13 (codex FIRST).
+        const measuredFleet = () => nodeWithQuota({
+            codex: okQuota({ provider: 'codex', weekly: weeklyWindow(34, NOW + 6.4 * DAY) }),   // 66% left, 6.4d
+            'claude-cli': okQuota({ weekly: weeklyWindow(69, NOW + 2 * DAY) }),                 // 31% left, 2d
+            kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(50, NOW + 4 * DAY) }),       // 50% left, 4d
+        });
+
+        it('STARVATION: a far-reset provider holding the largest remainder is no longer ranked last', () => {
+            const ranked = rankProvidersByQuotaGate(
+                measuredFleet(), ['kimi', 'claude-cli', 'codex'], null, NOW);
+            expect(ranked.gated).toEqual([]);
+            // codex must LEAD, not trail: it is the most over-supplied relative
+            // to the time it has left to burn it.
+            expect(ranked.clear).toEqual(['codex', 'kimi', 'claude-cli']);
+        });
+
+        it('STARVATION: ranking is monotone in over-supply, so no candidate is structurally unreachable', () => {
+            const ranked = rankProvidersByQuotaGate(
+                measuredFleet(), ['kimi', 'claude-cli', 'codex'], null, NOW);
+            const risk = Object.fromEntries(
+                ranked.rankingEvidence.map(e => [e.providerType, e.risk!]));
+            // The measured spread must stay well-separated — a near-tie would
+            // let caller order silently decide and reintroduce the starvation.
+            expect(risk.codex).toBeGreaterThan(risk.kimi);
+            expect(risk.kimi).toBeGreaterThan(risk['claude-cli']);
+            expect(risk.codex).toBeCloseTo(27.67, 1);
+            expect(risk.kimi).toBeCloseTo(23.33, 1);
+            expect(risk['claude-cli']).toBeCloseTo(16.13, 1);
+        });
+
+        it('CLIFF: a big remainder outranks a small one EARLY, before its window runs out', () => {
+            // Same provider, same 80% remainder, two points in its window.
+            // Under the old formula the early reading scored ~11 (deferred) and
+            // only spiked near the reset — by which point it could not be burnt.
+            const early = rankProvidersByQuotaGate(nodeWithQuota({
+                codex: okQuota({ provider: 'codex', weekly: weeklyWindow(20, NOW + 6 * DAY) }),  // 80%, 6d left
+                'claude-cli': okQuota({ weekly: weeklyWindow(60, NOW + 6 * DAY) }),              // 40%, 6d left
+            }), ['claude-cli', 'codex'], null, NOW);
+            expect(early.clear).toEqual(['codex', 'claude-cli']);
+        });
+
+        it('CLIFF: risk RISES as the reset approaches — same remainder, later in the window', () => {
+            const riskAt = (daysLeft: number) => {
+                const node = nodeWithQuota({
+                    // session: null keeps this measuring the WEEKLY axis. With a
+                    // readable session window the 2′ conditional gate would
+                    // switch axes here (80% weekly clears the 40% headroom
+                    // threshold) and the evidence would report the session risk.
+                    codex: okQuota({
+                        provider: 'codex',
+                        session: null,
+                        weekly: weeklyWindow(20, NOW + daysLeft * DAY),
+                    }),
+                });
+                const ranked = rankProvidersByQuotaGate(node, ['codex'], null, NOW);
+                expect(ranked.rankingEvidence[0].axis).toBe('weekly');
+                return ranked.rankingEvidence[0].risk!;
+            };
+            const far = riskAt(6);
+            const mid = riskAt(3);
+            const near = riskAt(0.5);
+            // Monotone urgency, but bounded: never above the 80% remainder.
+            expect(far).toBeLessThan(mid);
+            expect(mid).toBeLessThan(near);
+            expect(near).toBeLessThanOrEqual(80);
+            // ★And the far reading is NOT ~0 — that collapse is what starved
+            // codex. A distant reset on a large remainder is evidence of
+            // over-supply, not of safety.
+            expect(far).toBeGreaterThan(20);
+        });
+
+        it('preserves the even-spend axis: at an equal reset the larger remainder still wins', () => {
+            const sameReset = NOW + 5 * DAY;
+            const ranked = rankProvidersByQuotaGate(nodeWithQuota({
+                kimi: okQuota({ provider: 'kimi', weekly: weeklyWindow(80, sameReset) }),        // 20%
+                'claude-cli': okQuota({ weekly: weeklyWindow(40, sameReset) }),                  // 60%
+            }), ['kimi', 'claude-cli'], null, NOW);
+            expect(ranked.clear).toEqual(['claude-cli', 'kimi']);
+        });
     });
 });
 

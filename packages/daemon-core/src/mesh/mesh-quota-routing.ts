@@ -684,6 +684,29 @@ const DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
  *  weekly one. */
 const DEFAULT_SESSION_WINDOW_MINUTES = 5 * 60;
 
+/**
+ * The expiry-risk score itself, split out so the formula is testable in
+ * isolation from snapshot plumbing (clock skew, window authority, fail-open).
+ *
+ *   risk = remaining² / (remaining + 100 × timeLeftFraction)
+ *
+ * = remaining × the share of it that even-pace consumption cannot clear in the
+ * time left. HIGHER = spend this provider SOONER. See expiryRiskForRanking for
+ * the full rationale, the biases this replaced, and the divergence guard.
+ *
+ * @param remainingPercent 0..100 headroom left on the axis.
+ * @param timeLeftFraction 0..1 share of the window still to run — time
+ *        REMAINING, not elapsed. 1 = just reset, 0 = at the reset edge.
+ * @returns 0..remainingPercent, monotone increasing in remainingPercent and
+ *          monotone decreasing in timeLeftFraction.
+ */
+function expiryRiskScore(remainingPercent: number, timeLeftFraction: number): number {
+    // remaining = 0 zeroes the denominator too; nothing left to lose ⇒ no risk.
+    if (!(remainingPercent > 0)) return 0;
+    return (remainingPercent * remainingPercent)
+        / (remainingPercent + 100 * timeLeftFraction);
+}
+
 /** Ranking metric for one candidate on one window axis, or undefined when even
  *  the axis's REMAINING is unknown (no snapshot, no such window, unreadable
  *  measurement, or a window whose resetsAt has passed). */
@@ -699,19 +722,65 @@ interface ExpiryRisk {
  * ('weekly' or 'session') is likely to EVAPORATE unused at the window reset if
  * it is not consumed now.
  *
- *   risk = remainingPercent × elapsedFraction
- *   elapsedFraction = clamp(1 − timeLeft/windowMs, 0, 1)
+ *   risk = remaining² / (remaining + 100 × timeLeftFraction)
+ *   timeLeftFraction = clamp((resetsAt − reporterNow) / windowMs, 0, 1)
  *
- * i.e. the remaining headroom weighted by how much of the window is already
- * gone. A full remainder right after a reset scores ~0 (plenty of time to
- * spend it — a big remainder alone must NOT win); the same remainder minutes
- * before the reset scores ~its full value (every unused point is a certain
- * loss). Deliberately NOT remaining/timeLeft ("required burn rate"): that
- * diverges as timeLeft → 0 and would let a 1% remainder outrank a 90% one.
- * Here risk ≤ remainingPercent by construction, so a trivial remainder can
- * never beat a substantial one except when the substantial one's window has
- * literally just reset (elapsedFraction < 1/90) — where deferring it is
- * correct anyway.
+ * Read it as remaining × the UNSPENDABLE SHARE of that remainder:
+ *
+ *   risk = remaining × [ remaining / (remaining + 100 × timeLeftFraction) ]
+ *
+ * The bracket is the fraction of the remainder that EVEN-PACE consumption
+ * cannot clear in the time left. "Even pace" is the only pace this module can
+ * assume — it has no burn-rate history and deliberately acquires none (see the
+ * DIVERGENCE GUARD below) — so it compares each provider's remainder against
+ * the 100 × timeLeftFraction points an evenly-paced consumer would still get
+ * through. A provider holding more than that is over-supplied and its excess
+ * is on track to evaporate; the more lopsided the ratio, the higher the risk.
+ *
+ * ★REPLACED remaining × elapsedFraction (73f3146d) 2026-08-28 — owner-directed,
+ * on measured fleet data. That formula was use-it-or-lose-it in intent but
+ * produced two biases, and they were two faces of ONE error: it treated a
+ * distant reset as evidence of SAFETY, when a distant reset on a large
+ * remainder is exactly what predicts loss.
+ *
+ *   STARVATION. elapsedFraction is small early in a window, so a provider with
+ *   a far reset scored near zero no matter how much it was holding. Measured
+ *   2026-08-28: codex at 66% weekly remaining with 6.4 days to reset scored
+ *   5.66 — dead last behind claude (31%/2d → 22.14) and kimi (50%/4d → 21.43)
+ *   — and took ZERO dispatches all day while claude, already the most consumed,
+ *   kept winning and drained first.
+ *
+ *   CLIFF. The same shape deferred a large remainder until its window was
+ *   nearly gone, at which point risk finally spiked but no time remained to
+ *   burn it. The formula meant to prevent evaporation was CAUSING it.
+ *
+ * The new form fixes both from one change of variable — it is driven by time
+ * REMAINING against the remainder, not time ELAPSED. codex's 66%/6.4d now
+ * scores 27.67 and leads (66%/6.4d needs ~10.3 points/day of attention to
+ * clear; claude's 31%/2d needs ~15.5 but is a far smaller total loss if
+ * missed), so the over-supplied provider is spread into EARLY, not left to
+ * expire late.
+ *
+ * ★DIVERGENCE GUARD (the reason this is not plain "required burn rate").
+ * remaining/timeLeft — the model rejected when 73f3146d was written, and still
+ * rejected — diverges as timeLeft → 0, letting a 1% remainder at the reset
+ * edge outrank a 90% one. This form is its SATURATING counterpart: the same
+ * urgency signal, bounded. Because the denominator carries `remaining` as its
+ * own floor, risk ≤ remaining identically (equality only at timeLeft = 0), so
+ * a trivial remainder can never beat a substantial one — a 1% remainder at the
+ * literal reset edge tops out at 1.0, far below a 90% remainder's 55.1 with
+ * days to spare. Verified across the full (remaining, timeLeft) grid: zero
+ * bound violations, monotone increasing in remaining, monotone decreasing in
+ * time left. No parameter, no tuning knob, no burn-rate history.
+ *
+ * ★WHAT THIS INTENTIONALLY CHANGED: a large remainder right after a reset is
+ * no longer deferred behind a small one near its reset (99%/7d now leads
+ * 20%/2h, 49.25 vs 18.88). That inversion IS the cliff fix — deferring the big
+ * remainder is precisely what strands it — and is owner-ratified, not
+ * incidental. A 7-day window clears ~14 points/day at even pace, so a 99%
+ * remainder is already behind schedule the moment the window opens, while the
+ * 20% one can lose at most 20 points. Do not "restore" the old ordering here
+ * without reopening that decision.
  *
  * ONE formula, both axes: the session (~5h) and weekly (~7d) windows report
  * the same shape (usedPercent/windowMinutes/resetsAt), so the axis selects
@@ -764,8 +833,8 @@ function expiryRiskForRanking(
     const fallbackMinutes = axis === 'session' ? DEFAULT_SESSION_WINDOW_MINUTES : DEFAULT_WEEKLY_WINDOW_MINUTES;
     const windowMs = (Number.isFinite(windowMinutes) && windowMinutes > 0
         ? windowMinutes : fallbackMinutes) * 60 * 1000;
-    const elapsedFraction = Math.min(1, Math.max(0, 1 - (resetsAt - reporterNowMs) / windowMs));
-    return { remainingPercent: remaining, risk: remaining * elapsedFraction };
+    const timeLeftFraction = Math.min(1, Math.max(0, (resetsAt - reporterNowMs) / windowMs));
+    return { remainingPercent: remaining, risk: expiryRiskScore(remaining, timeLeftFraction) };
 }
 
 /**
@@ -787,16 +856,26 @@ export interface ProviderQuotaRankingEvidence {
      *  'weekly' while session mode is active if its session window is
      *  unreadable (the fail-open fallback in the comparator). */
     axis: 'weekly' | 'session';
-    /** remaining × elapsedFraction on `axis`. Absent when the axis has no
-     *  readable reading (this candidate sorts last on the unknown rule). */
+    /** Expiry-risk score on `axis`: remaining² / (remaining + 100 ×
+     *  timeLeftFraction) — see expiryRiskScore. HIGHER = spend SOONER, and the
+     *  sort is DESC, so the largest risk is `clear[0]`.
+     *
+     *  ★Direction changed 2026-08-28: this used to be remaining ×
+     *  ELAPSED-fraction, which scored a far reset LOW. It is now driven by time
+     *  REMAINING, so a big remainder with a distant reset scores HIGH (it is
+     *  over-supplied and on track to expire). A reading taken across that
+     *  boundary is not comparable with an older one.
+     *
+     *  Absent when the axis has no readable reading (this candidate sorts last
+     *  on the unknown rule). */
     risk?: number;
     /** Remaining headroom on `axis`, the risk tie-break. */
     remainingPercent?: number;
 }
 
 export interface ProviderQuotaGateRanking {
-    /** Gate-clear providers, best first: weekly EXPIRY-RISK DESC (remaining ×
-     *  elapsed window fraction) — or SESSION (5h)
+    /** Gate-clear providers, best first: weekly EXPIRY-RISK DESC (remaining² /
+     *  (remaining + 100 × time-left fraction)) — or SESSION (5h)
      *  expiry-risk DESC while every weekly-readable candidate clears
      *  sessionAxisWeeklyHeadroomPercent — then remaining DESC on a risk tie,
      *  providers with NO readable reading LAST, and the
@@ -819,13 +898,24 @@ export interface ProviderQuotaGateRanking {
  * and split them into gate-clear vs gate-blocked, so a gated first-choice
  * provider falls through to the node's NEXT provider instead of skipping the
  * whole node. Owner-confirmed sort: gate-clear candidates are ordered by
- * weekly EXPIRY RISK, descending (weeklyExpiryRiskForRanking) — an unused
+ * weekly EXPIRY RISK, descending (expiryRiskForRanking) — an unused
  * weekly remainder EVAPORATES at the window reset, so the provider to spend
  * first is the one whose remainder is least likely to be consumable in the
  * time left, not merely the largest. Equal reset time ⇒ the larger remainder
- * wins (risk is proportional to remaining at equal elapsed fraction, and
- * remaining is the explicit risk-tie breaker), so the original
- * "spread the 7-day budget evenly" axis is preserved as a special case.
+ * wins (risk is monotone increasing in remaining at equal time left, verified
+ * across the grid, and remaining is the explicit risk-tie breaker), so the
+ * original "spread the 7-day budget evenly" axis is preserved as a special
+ * case.
+ *
+ * ★The risk formula was REBALANCED 2026-08-28 (owner-directed) from remaining ×
+ * elapsed-fraction to remaining² / (remaining + 100 × time-left-fraction). The
+ * old shape starved providers with distant resets (measured: codex at 66%/6.4d
+ * ranked last and took zero dispatches for a day) and created a CLIFF by
+ * deferring large remainders until too late to burn them. The full derivation,
+ * the two biases, and the divergence guard live on expiryRiskScore /
+ * expiryRiskForRanking — read those before changing the ordering. Nothing else
+ * in this function changed: the gate layer, the unknown-last rule, the session
+ * axis gate and the stable-sort tie-break are all untouched.
  *
  * SESSION-AXIS CONDITIONAL GATE (owner-confirmed 2′ design): the weekly axis
  * governs only while the weekly budget is the binding constraint. When EVERY
