@@ -207,6 +207,71 @@ export interface BeaconBoardSnapshot {
 }
 
 /**
+ * Per-topic replication shape, as far as diagnostics arithmetic cares.
+ *
+ * ★ WHY THIS EXISTS — the "boy who cried wolf" defect (2026-08-28).
+ *
+ * Both `behind` and `soleCopy` are computed by comparing a peer's position
+ * against OUR OWN position in `node.vectors()`. That comparison is only
+ * meaningful on a topic where we are *supposed* to hold the peer's entries —
+ * i.e. a `full-sync` topic, where lagging behind is a real, closable gap.
+ *
+ * On a `subscribe-only` topic it is meaningless, and confidently wrong:
+ * `fleet.status` and `session.*.transcript` are ring topics whose peer entries
+ * arrive over a connection-scoped SUB and live in an in-memory slot map
+ * (see `fleet-status-peer-view.ts` — "ring payloads are in-memory and
+ * subscribe-only by contract"). They are NEVER written into our vectors. So
+ * `mine` is permanently 0 for every peer writer, and the arithmetic reports:
+ *
+ *   - `behind` = the peer's ENTIRE LIFETIME append count, growing forever and
+ *     never closing (observed live at 8,425 on rc.32, identical on all three
+ *     machines because `maxBehind` just tracks the busiest peer); and
+ *   - `sole-copy` for EVERY position we hold, because no peer ever reports the
+ *     topic back into a place this comparison can see.
+ *
+ * A badge that is on permanently carries no information. Excluding non-
+ * replicating topics is therefore not a threshold tweak or a display filter —
+ * it removes a comparison whose inputs do not mean what the arithmetic assumes.
+ * `mesh.<id>.events` is `full-sync` and stays in scope: its `behind` is a real
+ * convergence number.
+ */
+export interface BeaconTopicReplication {
+    /**
+     * True when this node locally replicates peer entries for the topic — i.e.
+     * `full-sync`. False for `subscribe-only`.
+     */
+    replicates: boolean;
+    /**
+     * Ring capacity, when the topic has ring retention. Bounds `unreplicated`:
+     * a ring holds at most `size` entries, so claiming more than that could be
+     * lost is arithmetically impossible regardless of what `localSeq` says.
+     */
+    ringSize?: number;
+}
+
+/**
+ * Topic replication policy, keyed by topic name.
+ *
+ * Absent topic ⇒ treated as replicating. That default keeps this a targeted
+ * exclusion rather than a silent whitelist: a caller that supplies no policy at
+ * all (or a topic defined after the map was built) gets exactly the previous
+ * behaviour, and only topics KNOWN to be subscribe-only are dropped.
+ */
+export type BeaconTopicPolicyMap = Readonly<Record<string, BeaconTopicReplication>>;
+
+/**
+ * Whether a topic's local-vs-peer position comparison is meaningful.
+ *
+ * Single decision point, so the "unknown ⇒ replicating" default cannot drift
+ * between the `behind` loop and the `soleCopy` loop.
+ */
+function replicatesLocally(policy: BeaconTopicPolicyMap | undefined, topic: string): boolean {
+    if (!policy) return true;
+    const entry = policy[topic];
+    return entry ? entry.replicates : true;
+}
+
+/**
  * Decide one sole-copy verdict.
  *
  * ★ THE discipline point for rule 1 in the header. Every verdict in this module
@@ -236,6 +301,24 @@ export function summarizeSoleCopy(args: {
     return { verdict: args.bestPeerSeq < args.localSeq ? 'sole-copy' : 'replicated' };
 }
 
+/**
+ * Bound an `unreplicated` count by the topic's ring capacity.
+ *
+ * `localSeq` is a monotonic sequence, not a live entry count: on a ring topic
+ * the log holds at most `size` entries and older ones are already evicted. So
+ * `localSeq - bestPeerSeq` can name a number of entries this node does not
+ * actually still hold, and "12,000 entries exist only here" is impossible when
+ * the ring is 50. Capping keeps the figure to what could genuinely be lost.
+ *
+ * Full-retention topics pass through unchanged — there the subtraction is exact.
+ */
+function capUnreplicated(raw: number, policy: BeaconTopicReplication | undefined): number {
+    if (raw <= 0) return 0;
+    const ring = policy?.ringSize;
+    if (typeof ring !== 'number' || !Number.isFinite(ring) || ring <= 0) return raw;
+    return Math.min(raw, ring);
+}
+
 /** Read a writer entry's effective sequence — retired entries seal at `finalSeq`. */
 function writerSeq(entry: unknown): number | null {
     if (!entry || typeof entry !== 'object') return null;
@@ -259,6 +342,14 @@ export function computeBeaconDiagnostics(args: {
     now?: number;
     /** ★ Advisory only (§5.7a); never a correctness gate. */
     keyStaleAdvisory?: BeaconKeyStaleAdvisory[];
+    /**
+     * Per-topic replication shape. Topics that do NOT replicate peer entries
+     * locally are excluded from both `behind` and `soleCopy` — see
+     * {@link BeaconTopicReplication} for why that is a correctness fix and not
+     * a display filter. Omitted ⇒ every topic treated as replicating (previous
+     * behaviour).
+     */
+    topicPolicy?: BeaconTopicPolicyMap;
 }): BeaconDiagnostics {
     const now = args.now ?? Date.now();
     const board = args.board;
@@ -279,6 +370,10 @@ export function computeBeaconDiagnostics(args: {
         const topics: BeaconPeerTopicLag[] = [];
         let worst = 0;
         for (const [topic, vec] of Object.entries(report.vectors ?? {})) {
+            // ★ A subscribe-only topic's peer entries never land in our
+            // vectors, so `mine` is structurally 0 and this lag would be the
+            // peer's whole history. Not a gap — a category error.
+            if (!replicatesLocally(args.topicPolicy, topic)) continue;
             let topicBehind = 0;
             for (const [writer, entry] of Object.entries(vec?.writers ?? {})) {
                 const theirs = writerSeq(entry);
@@ -311,6 +406,11 @@ export function computeBeaconDiagnostics(args: {
     // fleet is missing collectively, not what would be lost if this machine died.
     const soleCopy: BeaconSoleCopyCandidate[] = [];
     for (const [topic, vec] of Object.entries(args.localVectors)) {
+        // ★ Same exclusion as the lag loop. On a subscribe-only topic no peer
+        // report can ever confirm our position, so `bestPeerSeq` is always null
+        // and `summarizeSoleCopy` returns 'sole-copy' for EVERY entry we hold —
+        // a permanent, content-free alarm.
+        if (!replicatesLocally(args.topicPolicy, topic)) continue;
         for (const [writer, entry] of Object.entries(vec?.writers ?? {})) {
             const localSeq = writerSeq(entry);
             if (localSeq === null || localSeq <= 0) continue;
@@ -339,7 +439,10 @@ export function computeBeaconDiagnostics(args: {
                 writer,
                 localSeq,
                 bestPeerSeq,
-                unreplicated: verdict === 'sole-copy' ? localSeq - (bestPeerSeq ?? 0) : 0,
+                unreplicated:
+                    verdict === 'sole-copy'
+                        ? capUnreplicated(localSeq - (bestPeerSeq ?? 0), args.topicPolicy?.[topic])
+                        : 0,
                 verdict,
                 ...(unknownReason ? { unknownReason } : {}),
             });

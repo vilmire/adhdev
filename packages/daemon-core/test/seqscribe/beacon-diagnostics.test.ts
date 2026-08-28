@@ -36,6 +36,7 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     armBeacon,
+    buildTopicPolicyMap,
     type BeaconGetResponse,
     type BeaconHostTransport,
     type ProjectedBeaconReport,
@@ -47,7 +48,7 @@ import {
     type BeaconBoardSnapshot,
 } from '../../src/seqscribe/beacon-diagnostics.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
-import { FLEET_STATUS_TOPIC, meshEventsTopic } from '../../src/seqscribe/topics.js';
+import { baseTopicDefinitions, FLEET_STATUS_TOPIC, meshEventsTopic } from '../../src/seqscribe/topics.js';
 
 const CHAIN_A = 'a'.repeat(64);
 const CHAIN_B = 'b'.repeat(64);
@@ -82,29 +83,62 @@ function writers(entries: Record<string, number>): Record<string, { contig: numb
     return out;
 }
 
+/**
+ * A second full-sync topic, so the multi-topic lag test can exercise "worst of
+ * several" without reaching for a subscribe-only ring.
+ *
+ * ★ It must be full-sync. Using `fleet.status` here (as this file originally
+ * did) builds a state production can never reach — see TOPIC_POLICY below.
+ */
+const MESH_TOPIC_B = meshEventsTopic('mesh_def456');
+
+/**
+ * ★ The topic replication table, mirroring `topics.ts`.
+ *
+ * This is the fixture correction the badge-semantics fix turns on. The previous
+ * version of this file placed a PEER's writer inside our own local vectors for
+ * `fleet.status`:
+ *
+ *     [FLEET_STATUS_TOPIC]: { writers: writers({ [ME]: 10, [PEER_A]: 3 }) }
+ *
+ * That state is unreachable in production. `fleet.status` is `subscribe-only`,
+ * so it is granted `serve` (never `full`), the library's `mutualFull()` gate is
+ * permanently false, and peer entries are never applied into our log — the peer
+ * writerId never appears in `vectors()` at all. The fixture asserted a lag of 7
+ * (10 − 3) that no live daemon can produce; live, `mine` is 0 and the "lag" is
+ * the peer's entire lifetime append count. Testing against the impossible state
+ * is exactly why the permanent-badge defect passed a green suite.
+ */
+const TOPIC_POLICY = {
+    [FLEET_STATUS_TOPIC]: { replicates: false, ringSize: 50 },
+    [MESH_TOPIC]: { replicates: true },
+    [MESH_TOPIC_B]: { replicates: true },
+};
+
 describe('computeBeaconDiagnostics — per-peer, per-topic lag (①wake-up lag)', () => {
     it('measures how far each peer is ahead of THIS node, per topic', () => {
         const d = computeBeaconDiagnostics({
             node: ME,
             localVectors: {
-                [FLEET_STATUS_TOPIC]: { writers: writers({ [ME]: 10, [PEER_A]: 3 }) },
+                [MESH_TOPIC_B]: { writers: writers({ [ME]: 10, [PEER_A]: 3 }) },
                 [MESH_TOPIC]: { writers: writers({ [ME]: 5 }) },
             },
             board: board([
                 report(PEER_A, {
                     // 7 ahead of our 3 on its own writer, level on ours.
-                    [FLEET_STATUS_TOPIC]: { writers: writers({ [PEER_A]: 10, [ME]: 10 }) },
+                    [MESH_TOPIC_B]: { writers: writers({ [PEER_A]: 10, [ME]: 10 }) },
                     // We hold nothing of PEER_A here → 4 behind.
                     [MESH_TOPIC]: { writers: writers({ [PEER_A]: 4 }) },
                 }),
             ]),
+            topicPolicy: TOPIC_POLICY,
             now: 1_000_000,
         });
 
         expect(d.peers).toHaveLength(1);
         const peer = d.peers[0]!;
         expect(peer.node).toBe(PEER_A);
-        expect(peer.topics.find((t) => t.topic === FLEET_STATUS_TOPIC)?.behind).toBe(7);
+        expect(peer.topics.find((t) => t.topic === MESH_TOPIC_B)?.behind).toBe(7);
         expect(peer.topics.find((t) => t.topic === MESH_TOPIC)?.behind).toBe(4);
         // Headline = the worst single topic, not the sum: it answers "how far
         // behind am I at worst", which is what a badge shows.
@@ -526,5 +560,221 @@ describe('armBeacon().diagnostics() — against a real node', () => {
         expect(d.stale).toBe(true);
         expect(d.peers).toEqual([]);
         beacon.stop();
+    });
+});
+
+/**
+ * ★ THE "BOY WHO CRIED WOLF" REGRESSION (2026-08-28).
+ *
+ * Live on rc.32, all three fleet machines showed a permanent `behind 8425` and
+ * a permanent `sole-copy`. Neither was a replication failure: both came from
+ * running the local-vs-peer comparison on `fleet.status`, a `subscribe-only`
+ * ring whose peer entries never enter `node.vectors()` (grant is `serve`, so
+ * `mutualFull()` is permanently false and `applyExternal` never runs for a peer
+ * writer).
+ *
+ * With `mine` structurally pinned at 0, `behind` degenerates into the peer's
+ * whole lifetime append count — monotonically growing, never closing — and
+ * `bestPeerSeq` is always null, so every position we hold is judged sole-copy.
+ *
+ * ── Red/green injection (gate checklist ①) ─────────────────────────────────
+ * These tests are written as PAIRS. Each first asserts the OLD behaviour by
+ * omitting `topicPolicy` (the pre-fix code path exactly), then asserts the
+ * fixed behaviour with the policy supplied. Delete the `replicatesLocally`
+ * guards from either loop in beacon-diagnostics.ts and the second half of each
+ * pair goes red while the first half stays green — proving the assertions bite
+ * on the fix itself and not on incidental fixture shape.
+ */
+describe('computeBeaconDiagnostics — subscribe-only topics are excluded (badge semantics)', () => {
+    /**
+     * The live shape.
+     *
+     * ★ On `fleet.status` we hold ONLY our own writer — that is the whole
+     * point: a subscribe-only grant means `PEER_A` never enters our vectors.
+     * On the full-sync `MESH_TOPIC` we DO hold the peer's writer (at 40, five
+     * behind their 45), because there replication genuinely happens.
+     */
+    const liveVectors = {
+        [FLEET_STATUS_TOPIC]: { writers: writers({ [ME]: 12 }) },
+        [MESH_TOPIC]: { writers: writers({ [ME]: 40, [PEER_A]: 40 }) },
+    };
+    const liveBoard = () =>
+        board([
+            report(PEER_A, {
+                // 8425 lifetime appends on a ring topic we never replicate.
+                // ★ The peer does NOT echo our writer back: it never received
+                // our fleet.status entries into ITS log either — the topic is
+                // subscribe-only in both directions. That absence is what makes
+                // `bestPeerSeq` null and every local position read as sole-copy.
+                [FLEET_STATUS_TOPIC]: { writers: writers({ [PEER_A]: 8425 }) },
+                // A genuine, closable 5-entry gap on a full-sync topic.
+                [MESH_TOPIC]: { writers: writers({ [PEER_A]: 45, [ME]: 40 }) },
+            }),
+        ]);
+
+    it('RED (pre-fix): without a topic policy, a subscribe-only ring reports the peer lifetime as lag', () => {
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            localVectors: liveVectors,
+            board: liveBoard(),
+            now: 1_000_000,
+        });
+
+        // This is the defect, reproduced: 8425 − 0.
+        expect(d.peers[0]!.topics.find((t) => t.topic === FLEET_STATUS_TOPIC)?.behind).toBe(8425);
+        expect(d.maxBehind).toBe(8425);
+    });
+
+    it('GREEN: a subscribe-only topic contributes ZERO lag; full-sync lag survives', () => {
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            localVectors: liveVectors,
+            board: liveBoard(),
+            topicPolicy: TOPIC_POLICY,
+            now: 1_000_000,
+        });
+
+        // The ring is gone from the lag arithmetic entirely — not clamped, not
+        // thresholded: it never had a meaningful value to report.
+        expect(d.peers[0]!.topics.find((t) => t.topic === FLEET_STATUS_TOPIC)).toBeUndefined();
+        // ★ The real convergence number is untouched. This is what keeps the
+        // fix from being "turn the badge off".
+        expect(d.peers[0]!.topics.find((t) => t.topic === MESH_TOPIC)?.behind).toBe(5);
+        expect(d.maxBehind).toBe(5);
+    });
+
+    it('RED (pre-fix): without a topic policy, every subscribe-only position is judged sole-copy', () => {
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            localVectors: liveVectors,
+            board: liveBoard(),
+            now: 1_000_000,
+        });
+
+        // No peer report can ever confirm our fleet.status position, so the
+        // pre-fix code calls it sole-copy — permanently.
+        const ring = d.soleCopy.find((s) => s.topic === FLEET_STATUS_TOPIC);
+        expect(ring?.verdict).toBe('sole-copy');
+    });
+
+    it('GREEN: a subscribe-only topic yields no sole-copy candidate at all', () => {
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            localVectors: liveVectors,
+            board: liveBoard(),
+            topicPolicy: TOPIC_POLICY,
+            now: 1_000_000,
+        });
+
+        expect(d.soleCopy.find((s) => s.topic === FLEET_STATUS_TOPIC)).toBeUndefined();
+    });
+
+    it('a full-sync topic still reports a genuine sole-copy (the fix is not a blanket mute)', () => {
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            // We are ahead of every peer on a topic we DO replicate: a real
+            // "only this machine has these entries" signal.
+            localVectors: { [MESH_TOPIC]: { writers: writers({ [ME]: 40 }) } },
+            board: board([report(PEER_A, { [MESH_TOPIC]: { writers: writers({ [ME]: 30 }) } })]),
+            topicPolicy: TOPIC_POLICY,
+            now: 1_000_000,
+        });
+
+        const found = d.soleCopy.find((s) => s.topic === MESH_TOPIC);
+        expect(found?.verdict).toBe('sole-copy');
+        expect(found?.unreplicated).toBe(10);
+    });
+
+    it('an unknown topic defaults to replicating, so the exclusion stays targeted', () => {
+        // A topic absent from the policy map (e.g. defined after the map was
+        // built) must behave exactly as it did before this change — the map is
+        // an exclusion list, never an allow-list.
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            localVectors: { 'topic.unlisted': { writers: writers({ [ME]: 3 }) } },
+            board: board([
+                report(PEER_A, { 'topic.unlisted': { writers: writers({ [PEER_A]: 9, [ME]: 3 }) } }),
+            ]),
+            topicPolicy: TOPIC_POLICY,
+            now: 1_000_000,
+        });
+
+        expect(d.peers[0]!.topics.find((t) => t.topic === 'topic.unlisted')?.behind).toBe(9);
+    });
+});
+
+describe('computeBeaconDiagnostics — ring topics cap unreplicated (P2)', () => {
+    it('bounds unreplicated by ring size rather than by raw sequence distance', () => {
+        // A ring holds at most `size` entries; older ones are already evicted.
+        // So a 10,000-wide sequence gap cannot mean 10,000 entries live only
+        // here. This is a general rule — with P0 in force `fleet.status` no
+        // longer reaches it, but any future subscribe-capable ring does.
+        const RING_TOPIC = 'ring.sample';
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            localVectors: { [RING_TOPIC]: { writers: writers({ [ME]: 10_000 }) } },
+            board: board([report(PEER_A, { [RING_TOPIC]: { writers: writers({ [ME]: 5 }) } })]),
+            topicPolicy: { [RING_TOPIC]: { replicates: true, ringSize: 50 } },
+            now: 1_000_000,
+        });
+
+        const found = d.soleCopy.find((s) => s.topic === RING_TOPIC);
+        expect(found?.verdict).toBe('sole-copy');
+        // Raw distance would be 9,995; the ring can only hold 50.
+        expect(found?.unreplicated).toBe(50);
+        // The raw sequences are still reported truthfully — only the derived
+        // "how much could be lost" figure is bounded.
+        expect(found?.localSeq).toBe(10_000);
+        expect(found?.bestPeerSeq).toBe(5);
+    });
+
+    it('leaves a full-retention topic uncapped', () => {
+        const d = computeBeaconDiagnostics({
+            node: ME,
+            localVectors: { [MESH_TOPIC]: { writers: writers({ [ME]: 900 }) } },
+            board: board([report(PEER_A, { [MESH_TOPIC]: { writers: writers({ [ME]: 5 }) } })]),
+            topicPolicy: TOPIC_POLICY,
+            now: 1_000_000,
+        });
+
+        expect(d.soleCopy.find((s) => s.topic === MESH_TOPIC)?.unreplicated).toBe(895);
+    });
+});
+
+describe('buildTopicPolicyMap — derives the policy from the live topic table', () => {
+    it('marks subscribe-only topics as non-replicating and carries ring size', () => {
+        const map = buildTopicPolicyMap({
+            topics: [
+                {
+                    topic: FLEET_STATUS_TOPIC,
+                    policy: { replication: 'subscribe-only', retention: { mode: 'ring', size: 50 } },
+                },
+                {
+                    topic: MESH_TOPIC,
+                    policy: { replication: 'full-sync', retention: { mode: 'full' } },
+                },
+            ],
+        });
+
+        expect(map[FLEET_STATUS_TOPIC]).toEqual({ replicates: false, ringSize: 50 });
+        // No ringSize key at all for a full-retention topic, so `capUnreplicated`
+        // passes it through untouched.
+        expect(map[MESH_TOPIC]).toEqual({ replicates: true });
+    });
+
+    it('treats an unrecognised replication mode as replicating', () => {
+        const map = buildTopicPolicyMap({
+            topics: [{ topic: 'topic.future', policy: { replication: 'some-future-mode' } }],
+        });
+        expect(map['topic.future']?.replicates).toBe(true);
+    });
+
+    it('agrees with the real topic table: fleet.status is excluded, mesh events are not', () => {
+        // Pins the fix to the ACTUAL production policies rather than to a
+        // hand-written fixture — if topics.ts ever flips fleet.status to
+        // full-sync, this fails and the exclusion gets re-examined.
+        const map = buildTopicPolicyMap({ topics: baseTopicDefinitions(['mesh_abc123']) });
+        expect(map[FLEET_STATUS_TOPIC]?.replicates).toBe(false);
+        expect(map[MESH_TOPIC]?.replicates).toBe(true);
     });
 });

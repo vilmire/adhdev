@@ -108,7 +108,7 @@ export { isCliConv, isAcpConv } from './components/dashboard/types'
 export {
     formatIdeType, formatUptime, formatBytes, getAgentDisplayName,
     isCliEntry, dedupeAgents, isAgentActive,
-    buildProviderMaps, PLATFORM_ICONS, groupByMachine,
+    buildProviderMaps, PLATFORM_ICONS, groupByMachine, countDaemonFleetSessions,
     getMachineNickname, getMachineHostnameLabel, getMachineDisplayName,
 } from './utils/daemon-utils'
 export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'

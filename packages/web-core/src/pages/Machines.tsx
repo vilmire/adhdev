@@ -12,6 +12,7 @@ import {
     buildProviderMaps, PLATFORM_ICONS,
     formatUptime, formatBytes,
     isAgentActive, groupByMachine, getWorkspaceDisplayLabel,
+    countDaemonFleetSessions,
 } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
@@ -284,6 +285,14 @@ export default function MachinesPage() {
                                     ? 'var(--accent-primary-light)'
                                     : '#64748b'
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
+                        // ★ A SEPARATE count for the peer-view badge only. The
+                        // badge compares against a remote daemon's
+                        // `countFleetSessions`, which uses a different rule than
+                        // `totalAgents` on four axes (children, dedupe, IDE
+                        // bucket, owner attribution) — comparing the two made
+                        // the badge read "diverged" permanently. `totalAgents`
+                        // is untouched and remains what the card displays.
+                        const fleetComparableCount = countDaemonFleetSessions(daemons, machine.machineId)
                         const fleetPeerEntry = fleetPeerEntriesByDaemon.get(
                             canonicalDaemonId(machine.daemonIde.id)
                                 || canonicalDaemonId(machine.machineId)
@@ -358,7 +367,7 @@ export default function MachinesPage() {
                                             <FleetStatusPeerViewBadge
                                                 peer={fleetPeerEntry}
                                                 wsOnline={isOnline}
-                                                wsSessionCount={totalAgents}
+                                                wsSessionCount={fleetComparableCount}
                                             />
                                             <div
                                                 className="w-2 h-2 rounded-full"

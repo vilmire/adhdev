@@ -161,6 +161,62 @@ export function isAcpEntry(entry: { transport?: string }): boolean {
     return entry.transport === 'acp'
 }
 
+/**
+ * Count a daemon's top-level sessions using the DAEMON's own category rule.
+ *
+ * ★ WHY THIS IS NOT `ideSessions.length + cliSessions.length + acpSessions.length`.
+ *
+ * The `fleet.status` peer-view badge compares a number this dashboard computed
+ * against a number a REMOTE DAEMON computed (`countFleetSessions`, daemon-core
+ * `status/reporter.ts`). Until this helper existed, the two sides counted
+ * different things and the badge showed "diverged" permanently — a second
+ * cried-wolf alarm, alongside the beacon one. The definitions disagreed on four
+ * independent axes, every one of which can shift the total on its own:
+ *
+ *  1. **Children.** The daemon counts categories for `!parentId` sessions only.
+ *     `MachineGroup` arrays are built from flattened entries where a nested
+ *     agent can surface as its own row.
+ *  2. **Dedupe.** `groupByMachine` collapses entries sharing a
+ *     `getMachineSessionDedupeKey` (one logical session seen twice). The daemon
+ *     counts raw sessions and does no such collapse.
+ *  3. **The IDE bucket.** `groupByMachine` files anything that is not
+ *     `isCliEntry`/`isAcpEntry` — both of which test `transport` ALONE — into
+ *     `ideSessions` as an `else` fallback. The daemon requires
+ *     `kind === 'workspace' && transport === 'cdp-page'` explicitly, so a
+ *     `transport: 'none'` row counts on the dashboard and not on the daemon.
+ *  4. **Attribution.** `groupByMachine` re-homes a mesh-delegated session onto
+ *     its `ownerDaemonId` (the worker). The daemon counts what IT reported,
+ *     under its own `daemonId`.
+ *
+ * So this counts from the RAW entry list with the daemon's rule, deliberately
+ * skipping dedupe and owner re-attribution. It exists only to make the badge's
+ * comparison well-posed; `totalAgents` remains the number shown to the user,
+ * because the displayed count should follow the dashboard's own presentation.
+ *
+ * Keep this in sync with `countFleetSessions` — the two are a matched pair, and
+ * `fleet-status-peer-view-badge.test.tsx` pins them against shared fixtures.
+ */
+export function countDaemonFleetSessions(
+    entries: readonly DaemonData[],
+    daemonId: string,
+): number {
+    let count = 0
+    for (const entry of entries) {
+        // Machine-level rows are the daemon itself, not a session it counts.
+        if (entry.type === 'adhdev-daemon') continue
+        // ★ Attribution by reporting daemon, NOT by ownerDaemonId: the peer
+        // number we compare against was produced by whoever reported it.
+        if (!daemonIdsEquivalent(entry.daemonId || '', daemonId)) continue
+        // ★ Top-level only — mirrors the daemon's `!session.parentId`.
+        if (entry.parentSessionId) continue
+        // ★ Explicit kind+transport pairs, never an `else` bucket.
+        if (entry.sessionKind === 'workspace' && entry.transport === 'cdp-page') count++
+        else if (entry.sessionKind === 'agent' && entry.transport === 'pty') count++
+        else if (entry.sessionKind === 'agent' && entry.transport === 'acp') count++
+    }
+    return count
+}
+
 /** Per-platform icon — now rendered as SVG at component level, kept for compat */
 export const PLATFORM_ICONS: Record<string, string> = {}
 

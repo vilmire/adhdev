@@ -40,6 +40,7 @@ import {
     readKeyStaleAdvisory,
     type BeaconBoardSnapshot,
     type BeaconDiagnostics,
+    type BeaconTopicPolicyMap,
 } from './beacon-diagnostics.js';
 import type { SeqscribeNodeHandle } from './node.js';
 import { FLEET_STATUS_TOPIC, meshIdFromEventsTopic } from './topics.js';
@@ -278,6 +279,51 @@ export function assertNoPlaintextHintTopics(
             "Only 'hash' (or omitting the field) is permitted — plaintext register keys on the " +
             'server exceed the approved Beacon content-boundary exception (CLAUDE.md).',
     );
+}
+
+// ─── Topic replication policy (diagnostics input) ───────────────────────────
+
+/**
+ * Project the node's live topic table into the shape `computeBeaconDiagnostics`
+ * needs to decide which topics its local-vs-peer comparison is valid on.
+ *
+ * ★ WHY: `behind` and `soleCopy` both compare a peer's sequence against OUR
+ * position in `node.vectors()`. That only means something on a `full-sync`
+ * topic. A `subscribe-only` topic is granted `serve`, never `full`, so the
+ * library's `mutualFull()` gate is permanently false and peer entries are never
+ * applied into our log — the peer writer simply never appears in `vectors()`.
+ * Comparing against it therefore reports the peer's entire lifetime as "behind"
+ * and every local entry as "sole-copy", forever. See
+ * `BeaconTopicReplication` in beacon-diagnostics.ts for the full account.
+ *
+ * Structurally typed rather than taking `TopicDefinition[]` so a test can build
+ * a table inline without constructing a node.
+ */
+export function buildTopicPolicyMap(
+    handle: {
+        topics: readonly {
+            topic: string;
+            policy: {
+                replication?: string;
+                retention?: { mode?: string; size?: number };
+            };
+        }[];
+    },
+): BeaconTopicPolicyMap {
+    const map: Record<string, { replicates: boolean; ringSize?: number }> = {};
+    for (const def of handle.topics ?? []) {
+        const ring = def.policy?.retention;
+        const ringSize =
+            ring?.mode === 'ring' && typeof ring.size === 'number' ? ring.size : undefined;
+        map[def.topic] = {
+            // Only `subscribe-only` is excluded. Anything else — including an
+            // unrecognised future mode — keeps the previous behaviour, so this
+            // stays a targeted exclusion rather than a silent allow-list.
+            replicates: def.policy?.replication !== 'subscribe-only',
+            ...(ringSize !== undefined ? { ringSize } : {}),
+        };
+    }
+    return map;
 }
 
 // ─── Default GET scope ──────────────────────────────────────────────────────
@@ -820,6 +866,12 @@ export function armBeacon(
                 node: handle.writerId,
                 localVectors,
                 board: lastBoard,
+                // ★ Read from the live definition table on every call, not once
+                // at arm time: per-session transcript topics are defined on
+                // demand (topics.ts `baseTopicDefinitions`), so a map snapshot
+                // taken at boot would miss them and let a subscribe-only ring
+                // back into the arithmetic.
+                topicPolicy: buildTopicPolicyMap(handle),
                 // ★ Advisory only (§5.7a). Query the hash keys peers actually
                 // advertised; the upstream reader chooses the raw max seq
                 // across writers, so this must never become a correctness gate.
