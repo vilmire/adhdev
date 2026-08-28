@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
+import type { FleetStatusPeerEntry } from '@adhdev/daemon-core'
+import { canonicalDaemonId } from '@adhdev/mesh-shared'
 import { useDaemons } from '../compat'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
@@ -15,6 +17,7 @@ import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
 import BeaconAdvisoryBadge from '../components/BeaconAdvisoryBadge'
+import FleetStatusPeerViewBadge from '../components/FleetStatusPeerViewBadge'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle, IconLink } from '../components/Icons'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
@@ -89,6 +92,21 @@ export default function MachinesPage() {
     const retryConnection = daemonCtx.retryConnection
     const { labels: providerLabels } = buildProviderMaps(daemons)
     const machines = groupByMachine(daemons, providerLabels)
+    // Every rich P2P daemon payload carries what THAT daemon received from its
+    // seqscribe peers. Fold those observations by target daemon and retain the
+    // newest one, so a card can cross-check its WS routing view even when the
+    // observation arrived through a different machine's P2P link.
+    const fleetPeerEntriesByDaemon = useMemo(() => {
+        const entries = new Map<string, FleetStatusPeerEntry>()
+        for (const source of daemons) {
+            for (const peer of source.fleetStatusPeerView?.peers || []) {
+                const key = canonicalDaemonId(peer.daemonId) || peer.daemonId
+                const current = entries.get(key)
+                if (!current || Date.parse(peer.at) > Date.parse(current.at)) entries.set(key, peer)
+            }
+        }
+        return entries
+    }, [daemons])
     const machineIdsKey = Array.from(new Set(machines.map((machine) => machine.machineId).filter(Boolean))).join('|')
     const onlineCount = machines.filter(m => m.daemonIde.status === 'online').length
 
@@ -266,6 +284,11 @@ export default function MachinesPage() {
                                     ? 'var(--accent-primary-light)'
                                     : '#64748b'
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
+                        const fleetPeerEntry = fleetPeerEntriesByDaemon.get(
+                            canonicalDaemonId(machine.daemonIde.id)
+                                || canonicalDaemonId(machine.machineId)
+                                || machine.daemonIde.id,
+                        )
 
                         return (
                             <div
@@ -332,6 +355,11 @@ export default function MachinesPage() {
                                               exactly as it does today.
                                             */}
                                             <BeaconAdvisoryBadge beacon={machine.daemonIde?.beacon} />
+                                            <FleetStatusPeerViewBadge
+                                                peer={fleetPeerEntry}
+                                                wsOnline={isOnline}
+                                                wsSessionCount={totalAgents}
+                                            />
                                             <div
                                                 className="w-2 h-2 rounded-full"
                                                 style={{

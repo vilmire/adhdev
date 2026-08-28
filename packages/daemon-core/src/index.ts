@@ -32,6 +32,9 @@ export type {
   P2PStatusSummary,
   SeqscribeStatusSummary,
   BeaconDiagnosticsSummary,
+  FleetStatusPeerEntry,
+  FleetStatusPeerViewDiagnostics,
+  FleetStatusPeerView,
   DaemonStatusEventPayload,
   DashboardStatusEventPayload,
   SessionTransport,
@@ -608,7 +611,7 @@ export type {
 } from './commands/upgrade-helper.js';
 
 // ── Status ──
-export { DaemonStatusReporter, buildCloudStatusReportPayload } from './status/reporter.js';
+export { DaemonStatusReporter, buildCloudStatusReportPayload, projectFleetStatusEntry } from './status/reporter.js';
 export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected, isCoordinatorSpawnedHiddenWorker, resolveSurfaceHidden, resolveMuted, resolveSpawnedSessionHideMute } from './status/builders.js';
 export { buildStatusSnapshot, buildMachineInfo, buildAvailableProviders, getLastDisplayMessage } from './status/snapshot.js';
 export { getDaemonBuildInfo } from './build-info.js';
@@ -1184,6 +1187,11 @@ export {
   type FleetStatusReadinessInput,
   type FleetStatusReadinessReason,
 } from './seqscribe/fleet-status-readiness.js';
+export {
+  createFleetStatusPeerViewConsumer,
+  FLEET_STATUS_SUB_VIEW,
+  type FleetStatusPeerViewConsumer,
+} from './seqscribe/fleet-status-peer-view.js';
 export {
   startMeshParityLoop,
   PARITY_INTERVAL_MS,

@@ -36,7 +36,7 @@ import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../m
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
-import type { BeaconDiagnosticsSummary, SeqscribeStatusSummary } from '../shared-types.js';
+import type { BeaconDiagnosticsSummary, FleetStatusPeerView, SeqscribeStatusSummary } from '../shared-types.js';
 import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision, mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { readMeshConfigFromDisk, statMeshConfigFile } from '../config/mesh-config.js';
 import { resolve as pathResolve } from 'path';
@@ -200,6 +200,11 @@ export interface CommandRouterDeps {
      * standalone never arms one.
      */
     getBeaconDiagnostics?: () => BeaconDiagnosticsSummary | null;
+    /**
+     * Latest fixed-key status entries received through per-peer seqscribe SUBs.
+     * Local/P2P only; null when the node/consumer is unavailable.
+     */
+    getFleetStatusPeerView?: () => FleetStatusPeerView | null;
 }
 
 export interface CommandRouterResult {

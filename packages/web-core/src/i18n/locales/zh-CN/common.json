@@ -3056,6 +3056,11 @@
                 "deferredLabel": "无法判定",
                 "deferredTooltip": "对等看板被截断，因此推迟了唯一副本判定 — 比较对象并非整个集群。"
             },
+            "fleetPeer": {
+                "label": "seqscribe 对等视图",
+                "divergedLabel": "seqscribe 不一致",
+                "tooltip": "WS 路由：{{wsState}}，{{wsCount}} 个会话。seqscribe 对等视图：{{peerState}}，{{peerCount}} 个会话（{{age}} 秒前）。"
+            },
             "noAgentsRunning": "尚无运行中的代理",
             "launchCta": "启动 →"
         },

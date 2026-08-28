@@ -13,7 +13,7 @@ import {
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
-import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
+import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import { recordFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
@@ -330,6 +330,69 @@ export function fleetStatusEntry(input: {
 
 // ─── Daemon dependency interface ──────────────────────
 
+const FLEET_DAEMON_ID_RE = /^[A-Za-z0-9._:-]{1,160}$/;
+
+function fleetCount(value: unknown): number | null {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Re-apply the complete `fleet.status` allow-list on the receiving side.
+ *
+ * Metadata peers are still inputs at a package boundary. Copying every
+ * permitted key by name ensures an injected nickname, session array, dynamic
+ * map, or future producer field cannot enter the local peer view merely because
+ * it arrived in a valid ring row. Invalid required fields reject the whole row;
+ * unknown fields are dropped.
+ */
+export function projectFleetStatusEntry(raw: unknown): FleetStatusEntry | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const value = raw as Record<string, unknown>;
+    if (typeof value.daemonId !== 'string' || !FLEET_DAEMON_ID_RE.test(value.daemonId)) return null;
+    if (typeof value.at !== 'string' || Number.isNaN(Date.parse(value.at))) return null;
+    if (!['online', 'reconnecting', 'offline'].includes(String(value.onlineState))) return null;
+    if (typeof value.p2pActive !== 'boolean') return null;
+    if (!value.sessionCounts || typeof value.sessionCounts !== 'object' || Array.isArray(value.sessionCounts)) {
+        return null;
+    }
+
+    const rawCounts = value.sessionCounts as Record<string, unknown>;
+    const ideCount = fleetCount(rawCounts.ideCount);
+    const cliCount = fleetCount(rawCounts.cliCount);
+    const acpCount = fleetCount(rawCounts.acpCount);
+    const idleCount = fleetCount(rawCounts.idleCount);
+    const generatingCount = fleetCount(rawCounts.generatingCount);
+    const waitingApprovalCount = fleetCount(rawCounts.waitingApprovalCount);
+    const erroredCount = fleetCount(rawCounts.erroredCount);
+    if (
+        ideCount === null || cliCount === null || acpCount === null || idleCount === null ||
+        generatingCount === null || waitingApprovalCount === null || erroredCount === null
+    ) {
+        return null;
+    }
+
+    const seqscribe = value.seqscribe && typeof value.seqscribe === 'object' && !Array.isArray(value.seqscribe)
+        ? buildCloudSeqscribeSummary(value.seqscribe as SeqscribeStatusSummary)
+        : undefined;
+
+    return {
+        daemonId: value.daemonId,
+        at: new Date(value.at).toISOString(),
+        onlineState: value.onlineState as FleetOnlineState,
+        p2pActive: value.p2pActive,
+        sessionCounts: {
+            ideCount,
+            cliCount,
+            acpCount,
+            idleCount,
+            generatingCount,
+            waitingApprovalCount,
+            erroredCount,
+        },
+        ...(seqscribe ? { seqscribe } : {}),
+    };
+}
+
 export interface StatusReporterDeps {
     // sendMessage reports delivery by return value: the cloud ServerConnection
     // returns false when the socket is not in a sendable state (mid-reconnect) or
@@ -395,6 +458,13 @@ export interface StatusReporterDeps {
      * exception (CLAUDE.md) covers the beacon BOARD path, not the status path.
      */
     getBeaconDiagnostics?: () => BeaconDiagnosticsSummary | null;
+    /**
+     * Latest fleet.status entries received from seqscribe SUB peers.
+     *
+     * ★ Rich P2P/local only. The server frame is independently projected by
+     * buildCloudStatusReportPayload and never reads this getter.
+     */
+    getFleetStatusPeerView?: () => FleetStatusPeerView | null;
 }
 
 /**
@@ -700,6 +770,12 @@ export class DaemonStatusReporter {
         } catch {
             beaconDiagnostics = null;
         }
+        let fleetStatusPeerView: FleetStatusPeerView | null = null;
+        try {
+            fleetStatusPeerView = this.deps.getFleetStatusPeerView?.() ?? null;
+        } catch {
+            fleetStatusPeerView = null;
+        }
         const payload: Record<string, any> = {
             ...buildStatusSnapshot({
                 allStates,
@@ -730,6 +806,11 @@ export class DaemonStatusReporter {
             // object. Omitted entirely when no beacon is armed, so "absent"
             // stays distinguishable from "armed but empty".
             ...(beaconDiagnostics ? { beacon: beaconDiagnostics } : {}),
+            // Phase 4 Stage 2: latest fixed-key status received from each
+            // seqscribe SUB peer. This is a cross-check beside the WS routing
+            // view, not a replacement. The server frame below has no field for
+            // it and continues to be built from its existing allow-list.
+            ...(fleetStatusPeerView ? { fleetStatusPeerView } : {}),
         };
 
 // ═══ P2P transmit ═══

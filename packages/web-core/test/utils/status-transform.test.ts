@@ -43,6 +43,41 @@ function createPayload(overrides: Partial<StatusReportPayload> = {}): StatusRepo
 }
 
 describe('statusPayloadToEntries', () => {
+    it('preserves the P2P-only fleet.status peer view on the daemon entry', () => {
+        const fleetStatusPeerView = {
+            peers: [{
+                daemonId: 'daemon_mach_peer',
+                at: '2026-08-28T05:59:55.000Z',
+                onlineState: 'online' as const,
+                p2pActive: true,
+                sessionCounts: {
+                    ideCount: 1,
+                    cliCount: 2,
+                    acpCount: 0,
+                    idleCount: 2,
+                    generatingCount: 1,
+                    waitingApprovalCount: 0,
+                    erroredCount: 0,
+                },
+            }],
+            diagnostics: {
+                subscribedPeers: 1,
+                receivedEntries: 3,
+                comparedEntries: 3,
+                matchedEntries: 3,
+                mismatchedEntries: 0,
+                invalidEntries: 0,
+                viewReplacements: 2,
+            },
+        }
+
+        const entries = statusPayloadToEntries(createPayload({ fleetStatusPeerView }), {
+            daemonId: 'machine-observer',
+        })
+
+        expect(entries[0].fleetStatusPeerView).toEqual(fleetStatusPeerView)
+    })
+
     it('scopes CLI and ACP entry ids and instance ids by daemon while keeping raw session ids for compatibility', () => {
         const cliSession = createSession({
             id: 'shared-session',

@@ -3056,6 +3056,11 @@
                 "deferredLabel": "판정 보류",
                 "deferredTooltip": "피어 보드가 잘려서(truncated) 유일 보유 판정을 보류했습니다 — 비교 대상이 플릿 전체가 아닙니다."
             },
+            "fleetPeer": {
+                "label": "seqscribe 피어",
+                "divergedLabel": "seqscribe 불일치",
+                "tooltip": "WS 라우팅: {{wsState}}, 세션 {{wsCount}}개. seqscribe 피어 뷰: {{peerState}}, 세션 {{peerCount}}개 ({{age}}초 전)."
+            },
             "noAgentsRunning": "실행 중인 에이전트 없음",
             "launchCta": "실행 →"
         },

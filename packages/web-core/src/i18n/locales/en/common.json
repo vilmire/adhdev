@@ -3056,6 +3056,11 @@
                 "deferredLabel": "can't tell",
                 "deferredTooltip": "Sole-copy check was deferred: the peer board was truncated, so the machines compared against are only part of the fleet."
             },
+            "fleetPeer": {
+                "label": "seqscribe peer",
+                "divergedLabel": "seqscribe differs",
+                "tooltip": "WS routing: {{wsState}}, {{wsCount}} sessions. seqscribe peer view: {{peerState}}, {{peerCount}} sessions ({{age}}s ago)."
+            },
             "noAgentsRunning": "No agents running yet",
             "launchCta": "Launch →"
         },

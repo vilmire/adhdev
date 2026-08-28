@@ -55,6 +55,7 @@ import { DaemonStatusReporter } from '../../src/status/reporter.js'
 function createReporter(overrides: {
   serverConnected?: boolean
   p2pConnected?: boolean
+  fleetStatusPeerView?: Record<string, unknown>
 } = {}) {
   const sendStatus = vi.fn()
   const sendStatusEvent = vi.fn()
@@ -88,6 +89,7 @@ function createReporter(overrides: {
       collectStatesByCategory: () => [],
     },
     getScreenshotUsage: () => null,
+    getFleetStatusPeerView: () => overrides.fleetStatusPeerView as any ?? null,
   })
 
   return { reporter, sendStatus, sendStatusEvent, sendMessage }
@@ -141,6 +143,35 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
       providerType: 'hermes-cli',
       status: 'idle',
     })
+  })
+
+  it('exposes the SUB peer view on rich P2P status but never on the server status_report', async () => {
+    const fleetStatusPeerView = {
+      peers: [{
+        daemonId: 'daemon_mach_peer',
+        at: '2026-04-21T12:09:59.000Z',
+        onlineState: 'online',
+        p2pActive: true,
+        sessionCounts: {
+          ideCount: 1, cliCount: 0, acpCount: 0, idleCount: 1,
+          generatingCount: 0, waitingApprovalCount: 0, erroredCount: 0,
+        },
+      }],
+      diagnostics: {
+        subscribedPeers: 1, receivedEntries: 1, comparedEntries: 1,
+        matchedEntries: 1, mismatchedEntries: 0, invalidEntries: 0,
+        viewReplacements: 1,
+      },
+      serverBoundaryCanary: 'FLEET_STATUS_PEER_VIEW_MUST_STAY_P2P_ONLY',
+    }
+    const { reporter, sendStatus, sendMessage } = createReporter({ fleetStatusPeerView })
+
+    await reporter.sendUnifiedStatusReport({ reason: 'fleet-status-boundary' })
+
+    expect(sendStatus.mock.calls[0]?.[0]?.fleetStatusPeerView).toBe(fleetStatusPeerView)
+    const serverPayload = sendMessage.mock.calls.find(([type]) => type === 'status_report')?.[1]
+    expect(serverPayload).not.toHaveProperty('fleetStatusPeerView')
+    expect(JSON.stringify(serverPayload)).not.toContain('FLEET_STATUS_PEER_VIEW_MUST_STAY_P2P_ONLY')
   })
 
   it('debounces rapid p2p status changes while preserving full status payloads', async () => {

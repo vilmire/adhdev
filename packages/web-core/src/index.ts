@@ -71,6 +71,8 @@ export type { CliTerminalHandle } from './components/CliTerminal'
 export { default as ConnectionBadge } from './components/ConnectionBadge'
 export { default as BeaconAdvisoryBadge } from './components/BeaconAdvisoryBadge'
 export type { BeaconAdvisoryBadgeProps } from './components/BeaconAdvisoryBadge'
+export { default as FleetStatusPeerViewBadge, FLEET_STATUS_PEER_FRESH_MS } from './components/FleetStatusPeerViewBadge'
+export type { FleetStatusPeerViewBadgeProps } from './components/FleetStatusPeerViewBadge'
 export { default as StatCard } from './components/StatCard'
 export { default as Card } from './components/Card'
 export type { CardProps, CardPadding, CardRadius } from './components/Card'
@@ -349,4 +351,3 @@ export type {
 
 // ── CSS ──
 // Import '@adhdev/web-core/index.css' in your app entry
-

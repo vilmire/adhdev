@@ -170,6 +170,10 @@ export function statusPayloadToEntries(
         // construction: the server status path never carries this field, so a
         // WS-sourced payload simply omits it and the badge stays hidden.
         ...(payload.beacon && { beacon: payload.beacon }),
+        // Phase 4 Stage 2 receive-side cross-check. Also P2P-only by
+        // construction; an empty view is meaningful and must overwrite an
+        // older non-empty view after the last SUB peer disconnects.
+        ...(payload.fleetStatusPeerView && { fleetStatusPeerView: payload.fleetStatusPeerView }),
         _sessionListAuthoritative: Array.isArray(payload.sessions),
         cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
     } as DaemonData)

@@ -107,6 +107,12 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // this daemon, so it stays distinguishable from an older daemon
             // that never reported the field.
             beacon: ctx.deps.getBeaconDiagnostics?.() ?? null,
+            // Phase 4 Stage 2 receive-side fleet view. This is a pure local
+            // snapshot of fixed-key entries delivered by connection-scoped
+            // seqscribe SUBs; it neither polls nor touches the server status
+            // path. Raw numeric receive/comparison counters live alongside the
+            // entries because no content or dynamic-key map is present.
+            fleetStatusPeerView: ctx.deps.getFleetStatusPeerView?.() ?? null,
         };
     },
 

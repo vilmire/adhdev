@@ -1105,6 +1105,63 @@ export interface BeaconDiagnosticsSummary {
     }>;
 }
 
+/**
+ * One peer-authored `fleet.status` ring entry after the receiving daemon has
+ * re-applied the fixed-key content boundary.
+ *
+ * Structurally mirrors `FleetStatusEntry` in status/reporter.ts. It is repeated
+ * here because `StatusReportPayload` is the shared wire-type module and must not
+ * import its producer. Keep the two in lock-step: identifiers, enums, booleans
+ * and counters only — never machine nicknames, session arrays, dynamic maps or
+ * any other free text.
+ */
+export interface FleetStatusPeerEntry {
+    daemonId: string;
+    at: string;
+    onlineState: 'online' | 'reconnecting' | 'offline';
+    p2pActive: boolean;
+    sessionCounts: {
+        ideCount: number;
+        cliCount: number;
+        acpCount: number;
+        idleCount: number;
+        generatingCount: number;
+        waitingApprovalCount: number;
+        erroredCount: number;
+    };
+    seqscribe?: SeqscribeStatusSummary;
+}
+
+/** Content-free receive-side validation counters for the SUB consumer. */
+export interface FleetStatusPeerViewDiagnostics {
+    /** Live peer subscriptions currently feeding the view. */
+    subscribedPeers: number;
+    /** Tail rows observed before schema or peer-identity validation. */
+    receivedEntries: number;
+    /** Schema-valid rows whose daemonId was compared with the serving peer. */
+    comparedEntries: number;
+    /** Compared rows whose daemon identity matched the serving peer. */
+    matchedEntries: number;
+    /** Compared rows rejected because the serving peer claimed another daemon. */
+    mismatchedEntries: number;
+    /** Rows rejected by the fixed-key schema projection. */
+    invalidEntries: number;
+    /** Times a peer's latest-only local snapshot was installed or replaced. */
+    viewReplacements: number;
+}
+
+/**
+ * Phase 4 Stage 2 receive surface: latest `fleet.status` entry per SUB peer.
+ *
+ * ★ LOCAL AND P2P ONLY. This is received peer state, not server routing state.
+ * It may appear on the rich P2P StatusReportPayload and get_status_metadata,
+ * but never on CloudStatusReportPayload or its fixed-key builder.
+ */
+export interface FleetStatusPeerView {
+    peers: FleetStatusPeerEntry[];
+    diagnostics: FleetStatusPeerViewDiagnostics;
+}
+
 /** Minimal daemon->cloud status payload used for routing, fallback, and server APIs. */
 export interface CloudStatusReportPayload {
     sessions: RoutingSessionEntry[];
@@ -1158,4 +1215,12 @@ export interface StatusReportPayload {
      * first board arrives — absent stays distinguishable from "fresh and empty".
      */
     beacon?: BeaconDiagnosticsSummary;
+    /**
+     * Latest fixed-key fleet.status entry received from each seqscribe SUB peer.
+     *
+     * ★ P2P ONLY, alongside `beacon`. `buildCloudStatusReportPayload` does not
+     * accept or forward this field, so the always-on server routing/push path is
+     * unchanged and cannot acquire peer-received state by accidental spread.
+     */
+    fleetStatusPeerView?: FleetStatusPeerView;
 }

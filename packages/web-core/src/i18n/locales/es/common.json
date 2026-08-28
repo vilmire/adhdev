@@ -3061,6 +3061,11 @@
                 "deferredLabel": "no determinable",
                 "deferredTooltip": "La verificación de copia única se aplazó: el tablero de pares se truncó, así que las máquinas comparadas son solo parte de la flota."
             },
+            "fleetPeer": {
+                "label": "par seqscribe",
+                "divergedLabel": "seqscribe difiere",
+                "tooltip": "Enrutamiento WS: {{wsState}}, {{wsCount}} sesiones. Vista del par seqscribe: {{peerState}}, {{peerCount}} sesiones (hace {{age}} s)."
+            },
             "noAgentsRunning": "Aún no hay agentes en ejecución",
             "launchCta": "Iniciar →"
         },

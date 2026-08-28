@@ -3056,6 +3056,11 @@
                 "deferredLabel": "判定保留",
                 "deferredTooltip": "ピアボードが切り詰められたため、唯一保持の判定を保留しました — 比較対象がフリート全体ではありません。"
             },
+            "fleetPeer": {
+                "label": "seqscribe ピア",
+                "divergedLabel": "seqscribe 不一致",
+                "tooltip": "WS ルーティング: {{wsState}}、{{wsCount}} セッション。seqscribe ピアビュー: {{peerState}}、{{peerCount}} セッション ({{age}}秒前)。"
+            },
             "noAgentsRunning": "実行中のエージェントはまだありません",
             "launchCta": "起動 →"
         },

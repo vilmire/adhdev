@@ -71,6 +71,10 @@ import {
 } from '../seqscribe/mesh-dual-write.js';
 import { configureFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
 import { configureFleetStatusParity } from '../seqscribe/fleet-status-parity.js';
+import {
+    createFleetStatusPeerViewConsumer,
+    type FleetStatusPeerViewConsumer,
+} from '../seqscribe/fleet-status-peer-view.js';
 import { meshParityCounters } from '../seqscribe/mesh-parity.js';
 import { startMeshParityLoop, type MeshParityLoopHandle } from '../mesh/mesh-parity-loop.js';
 import {
@@ -228,6 +232,11 @@ export interface DaemonComponents {
      * not drag the beacon module into every consumer of DaemonComponents.
      */
     seqscribeBeacon?: { diagnostics(): BeaconDiagnostics } | null;
+    /**
+     * Phase 4 Stage 2 per-peer ring-tail SUB owner. The cloud transport attaches
+     * READY PeerHandles; core owns projection, replacement semantics and reads.
+     */
+    seqscribeFleetStatusPeerView?: FleetStatusPeerViewConsumer;
 }
 
 export interface DaemonDevSupportOptions {
@@ -771,6 +780,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 return null;
             }
         },
+        // Phase 4 Stage 2: pure local snapshot of statuses received through
+        // per-peer SUB tail subscriptions. The cloud host supplies PeerHandles
+        // after this core assembly returns; the slot is read at call time.
+        getFleetStatusPeerView: () => componentsRef?.seqscribeFleetStatusPeerView?.snapshot() ?? null,
     });
 
     poller = new AgentStreamPoller({
@@ -815,6 +828,16 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     components.seqscribeNode = tryOpenDaemonSeqscribeNode({ daemonId: config.statusInstanceId });
     // Publish to the holder the router's getSeqscribeStats closure reads.
     seqscribeNodeRef = components.seqscribeNode;
+    if (components.seqscribeNode) {
+        try {
+            components.seqscribeFleetStatusPeerView = createFleetStatusPeerViewConsumer(components.seqscribeNode);
+        } catch (error) {
+            LOG.warn(
+                'Seqscribe',
+                `fleet.status SUB consumer unavailable: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+    }
 
     // Start the throughput collector — the process's single `node.stats()`
     // reader (library P24 drains the interval counters on every read, so any
@@ -1004,7 +1027,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         cliManager, instanceManager, cdpManagers,
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
         eventLoopMonitor, seqscribeNode, seqscribeProbe, seqscribeParityLoop,
-        seqscribeCollector,
+        seqscribeCollector, seqscribeFleetStatusPeerView,
     } = components;
 
     // 1. Stop timers
@@ -1036,6 +1059,8 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // Same for the fleet.status leg — a status tick racing shutdown must not
     // append into a node step 7 is about to close.
     try { configureFleetStatusShadow(null); } catch { /* noop */ }
+    // Connection-scoped ring SUBs must close before node.close().
+    try { seqscribeFleetStatusPeerView?.stop(); } catch { /* noop */ }
     // Detach the read model too, so its per-mesh onEntry consumers are
     // unsubscribed before step 7 closes the node. A consumer still registered
     // when the node closes would touch the store after the owner lock released.

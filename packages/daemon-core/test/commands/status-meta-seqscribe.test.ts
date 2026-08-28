@@ -49,6 +49,44 @@ const HEALTHY: SeqscribeStatusSummary = {
 }
 
 describe('get_status_metadata — seqscribe replication health', () => {
+    it('includes the local fleet.status SUB peer snapshot and receive counters', async () => {
+        const fleetStatusPeerView = {
+            peers: [{
+                daemonId: 'daemon_mach_peer',
+                at: '2026-08-28T00:00:00.000Z',
+                onlineState: 'online',
+                p2pActive: true,
+                sessionCounts: {
+                    ideCount: 1,
+                    cliCount: 0,
+                    acpCount: 0,
+                    idleCount: 1,
+                    generatingCount: 0,
+                    waitingApprovalCount: 0,
+                    erroredCount: 0,
+                },
+            }],
+            diagnostics: {
+                subscribedPeers: 1,
+                receivedEntries: 2,
+                comparedEntries: 2,
+                matchedEntries: 2,
+                mismatchedEntries: 0,
+                invalidEntries: 0,
+                viewReplacements: 1,
+            },
+        }
+        const result: any = await statusMetaHandlers.get_status_metadata(
+            { deps: baseDeps({ getFleetStatusPeerView: () => fleetStatusPeerView }) },
+            {},
+        )
+
+        expect(result.fleetStatusPeerView).toEqual(fleetStatusPeerView)
+        for (const value of Object.values(result.fleetStatusPeerView.diagnostics)) {
+            expect(typeof value).toBe('number')
+        }
+    })
+
     it('carries the aggregate summary when a node is open', async () => {
         const getSeqscribeStats = vi.fn(() => HEALTHY)
         const result: any = await statusMetaHandlers.get_status_metadata(
