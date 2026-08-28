@@ -5,6 +5,7 @@ import * as path from 'path';
 import { join } from 'path';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
 import { getConfigDir } from '../../src/config/config.js';
+import { validateCliProviderManifest } from '../../src/providers/sdk/v1/validators/manifest.js';
 
 function writeProvider(root: string, category: string, type: string, data: Record<string, unknown>) {
   const dir = join(root, category, type);
@@ -287,6 +288,38 @@ describe('ProviderLoader settings schema', () => {
     }
     userDir = '';
     testConfig = { providerSettings: {}, machineProviders: {}, ideSettings: {} };
+  });
+
+  it('loads a v1 manifest with removed fields while reporting schema and deprecation warnings', () => {
+    const logs: string[] = [];
+    const manifest = {
+      type: 'legacy-cli',
+      name: 'Legacy CLI',
+      category: 'cli',
+      binary: 'legacy',
+      spawn: { command: 'legacy' },
+      allowInputDuringGeneration: true,
+    };
+    writeV1Provider(userDir, 'cli', 'legacy-cli', manifest);
+
+    const loader = new ProviderLoader({
+      userDir,
+      disableUpstream: true,
+      channelStore: null,
+      logFn: (message) => logs.push(message),
+    });
+    loader.loadAll();
+
+    const schemaResult = validateCliProviderManifest(manifest);
+    expect(schemaResult.ok).toBe(false);
+    expect(schemaResult.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        keyword: 'additionalProperties',
+        message: 'unexpected property "allowInputDuringGeneration"',
+      }),
+    ]));
+    expect(loader.resolve('legacy-cli')).toBeDefined();
+    expect(logs).toContainEqual(expect.stringContaining('Unknown provider field: allowInputDuringGeneration'));
   });
 
   it('adds synthetic autoApprove (default off) for providers that do not declare it', () => {

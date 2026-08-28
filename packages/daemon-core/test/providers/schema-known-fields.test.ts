@@ -14,7 +14,7 @@
  * fields that the v1 schemas do not describe.)
  */
 import { describe, expect, it } from 'vitest';
-import { DEPRECATED_SCHEMA_FIELDS, KNOWN_PROVIDER_FIELDS } from '../../src/providers/provider-schema.js';
+import { KNOWN_PROVIDER_FIELDS } from '../../src/providers/provider-schema.js';
 import cliSchema from '../../src/providers/sdk/v1/schemas/cli/provider.schema.json';
 import acpSchema from '../../src/providers/sdk/v1/schemas/acp/provider.schema.json';
 
@@ -23,22 +23,18 @@ function schemaProps(schema: { properties?: Record<string, unknown> }): string[]
 }
 
 describe('v1 schema properties are known to the loader', () => {
-    it('every CLI schema property is in KNOWN_PROVIDER_FIELDS or DEPRECATED_SCHEMA_FIELDS', () => {
-        const allowed = new Set([...KNOWN_PROVIDER_FIELDS, ...DEPRECATED_SCHEMA_FIELDS]);
-        const missing = schemaProps(cliSchema).filter((k) => !allowed.has(k));
+    it('every CLI schema property is in KNOWN_PROVIDER_FIELDS', () => {
+        const missing = schemaProps(cliSchema).filter((k) => !KNOWN_PROVIDER_FIELDS.has(k));
         expect(missing).toEqual([]);
     });
 
-    it('every ACP schema property is in KNOWN_PROVIDER_FIELDS or DEPRECATED_SCHEMA_FIELDS', () => {
-        const allowed = new Set([...KNOWN_PROVIDER_FIELDS, ...DEPRECATED_SCHEMA_FIELDS]);
-        const missing = schemaProps(acpSchema).filter((k) => !allowed.has(k));
+    it('every ACP schema property is in KNOWN_PROVIDER_FIELDS', () => {
+        const missing = schemaProps(acpSchema).filter((k) => !KNOWN_PROVIDER_FIELDS.has(k));
         expect(missing).toEqual([]);
     });
 
-    it('deprecated schema fields are not also treated as known by the loader', () => {
-        for (const field of DEPRECATED_SCHEMA_FIELDS) {
-            expect(KNOWN_PROVIDER_FIELDS.has(field)).toBe(false);
-        }
+    it('does not expose the removed allowInputDuringGeneration field', () => {
+        expect(schemaProps(cliSchema)).not.toContain('allowInputDuringGeneration');
     });
 
     it('schemas actually have a meaningful property set (guard against empty parse)', () => {

@@ -103,16 +103,6 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'tier',
 ])
 
-// Fields that are no longer read by the daemon but still appear in the vendored
-// v1 JSON schemas. Removing them from the schemas would break provider manifests
-// in the adhdev-providers submodule that still declare them, because the
-// submodule validator compiles the schemas with additionalProperties: false.
-// The runtime loader therefore emits an "Unknown provider field" warning for
-// these, surfacing the deprecation without rejecting the manifest.
-export const DEPRECATED_SCHEMA_FIELDS = new Set<string>([
-  'allowInputDuringGeneration',
-])
-
 const VALUE_CONTROL_TYPES = new Set<ProviderControlType>(['select', 'toggle', 'cycle', 'slider'])
 
 export interface ProviderValidationResult {

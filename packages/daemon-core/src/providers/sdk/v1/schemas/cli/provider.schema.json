@@ -288,11 +288,6 @@
       "default": false,
       "description": "When true, daemon waits for the typed prompt to be visible in the PTY screen before sending sendKey."
     },
-    "allowInputDuringGeneration": {
-      "type": "boolean",
-      "default": false,
-      "description": "When true, daemon permits sending a new prompt mid-generation."
-    },
     "requiresFinalAssistantBeforeIdle": {
       "type": "boolean",
       "default": false,
