@@ -748,12 +748,10 @@ export function isFailureRetryDue(provider: QuotaProvider, now: number = Date.no
  * window halves the backfill floor — the single biggest remaining source of
  * unsolicited third-party calls on an idle machine, since the backfill is by
  * design the one refresh that fires with no demand behind it. The cost of a
- * wider window (routing may act on a reading up to an hour old) is bounded by
- * the two things landed alongside it: the confidence-discount ranking already
- * de-weights an AGED snapshot rather than trusting it flatly, and force refresh
- * gives anyone who needs the number NOW a way to get it without shortening the
- * window for everyone. ★Widening this WITHOUT force refresh would be the bad
- * trade; do not undo one and keep the other.
+ * wider fallback window is bounded by per-window resetsAt when present, and
+ * force refresh gives anyone who needs the number NOW a way to get it without
+ * shortening the window for everyone. ★Widening this WITHOUT force refresh
+ * would be the bad trade; do not undo one and keep the other.
  */
 export const QUOTA_ROUTABLE_MAX_AGE_MS = 60 * 60 * 1000;
 

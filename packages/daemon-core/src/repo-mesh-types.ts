@@ -439,12 +439,11 @@ export interface RepoMeshQuotaRoutingPolicy {
      * party: quota/refresh.ts pins QUOTA_ROUTABLE_MAX_AGE_MS to this value and
      * backfills any snapshot that ages past it, so the threshold IS the
      * unsolicited-fetch floor. Doubling it halves that floor. What keeps the
-     * looser window honest is not this constant but its two companions —
-     * mesh-quota-routing.ts already de-weights an AGED snapshot via the
-     * confidence discount instead of trusting it flatly, and an explicit force
-     * refresh (`adhdev quota --refresh`) exists for anyone who needs the
-     * current number now. Generous enough to absorb reporter↔coordinator clock
-     * skew, as before.
+     * looser window honest is not this constant but the window boundary:
+     * resetsAt supersedes age whenever present, while this threshold remains
+     * the fallback for unstamped windows. An explicit force refresh (`adhdev
+     * quota --refresh`) exists for anyone who needs the current number now.
+     * Generous enough to absorb reporter↔coordinator clock skew, as before.
      */
     staleAfterMs?: number;
     /**

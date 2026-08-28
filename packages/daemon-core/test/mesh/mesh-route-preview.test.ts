@@ -241,8 +241,8 @@ describe('mesh route preview', () => {
 /**
  * These cases exist because the preview used to report a Stage 3 reversal
  * WITHOUT reporting why: `fitnessWinner` named the loser, `selectionRank: 0`
- * sat on it, `gate.outcome` said 'clear' for both, and the risk/confidence
- * numbers the sort actually compared were computed and discarded. Two
+ * sat on it, `gate.outcome` said 'clear' for both, and the risk numbers the
+ * sort actually compared were computed and discarded. Two
  * independent investigations read that output and disagreed about whether the
  * reversal was a bug. The assertions below pin the evidence, not the ordering
  * — the ordering is owned by the reversal case above and by
@@ -283,9 +283,9 @@ describe('mesh route preview — reordering evidence', () => {
         // all of that remainder evaporates at the imminent reset.
         expect(winner?.ranking?.axis).toBe('weekly');
         expect(winner?.ranking?.remainingPercent).toBe(20);
-        expect(winner?.ranking?.confidence).toBe(1);
         expect(winner!.ranking!.risk).toBeGreaterThan(19);
-        expect(winner!.ranking!.rankedRisk).toBeCloseTo(winner!.ranking!.risk!, 10);
+        expect(winner?.ranking).not.toHaveProperty('confidence');
+        expect(winner?.ranking).not.toHaveProperty('rankedRisk');
         expect(winner?.ranking?.clearOrderIndex).toBe(0);
 
         // fitness-first: a full remainder whose window has just reset scores
@@ -294,8 +294,37 @@ describe('mesh route preview — reordering evidence', () => {
         expect(loser!.ranking!.risk).toBe(0);
         expect(loser?.ranking?.clearOrderIndex).toBe(1);
 
-        // The decision in one comparison: the reversal is a rankedRisk gap.
-        expect(winner!.ranking!.rankedRisk!).toBeGreaterThan(loser!.ranking!.rankedRisk!);
+        // The decision in one comparison: the reversal is the raw risk gap.
+        expect(winner!.ranking!.risk!).toBeGreaterThan(loser!.ranking!.risk!);
+    });
+
+    it('shows a stale reading winning at full risk with no confidence discount fields', () => {
+        detectCliMocks.detected.add('fresh-claude').add('stale-codex');
+        const node = nodeWith([
+            { provider: 'fresh-claude', difficulty: ['difficult'] },
+            { provider: 'stale-codex', difficulty: ['difficult'] },
+        ], {
+            'fresh-claude': quota('fresh-claude', {
+                weeklyRemaining: 20,
+                weeklyResetsAt: NOW + MIN,
+                sessionRemaining: 20,
+            }),
+            'stale-codex': quota('stale-codex', {
+                weeklyRemaining: 80,
+                weeklyResetsAt: NOW + 5 * DAY,
+                sessionRemaining: 20,
+                updatedAt: NOW - 145 * MIN,
+            }),
+        });
+
+        const result = preview(node);
+        const byProvider = new Map(result.quotaDiagnostics.map(entry => [entry.providerType, entry]));
+        expect(result.stages.fitness[0].providerType).toBe('fresh-claude');
+        expect(result.stages.quota.winner).toBe('stale-codex');
+        expect(byProvider.get('stale-codex')!.ranking!.risk!)
+            .toBeGreaterThan(byProvider.get('fresh-claude')!.ranking!.risk!);
+        expect(byProvider.get('stale-codex')?.ranking).not.toHaveProperty('confidence');
+        expect(byProvider.get('stale-codex')?.ranking).not.toHaveProperty('rankedRisk');
     });
 
     it('names the input order as input, and states the axis it ranked on', () => {

@@ -80,9 +80,9 @@ afterEach(() => {
 describe('quota routing policy — resolution & persistence economy', () => {
     it('resolves the owner-confirmed defaults when unset', () => {
         expect(resolveQuotaRoutingPolicy(undefined)).toEqual({
-            // 60 min since 2026-08-21 (owner decision) — the widened window is
-            // paid for by the confidence discount + explicit force refresh, and
-            // quota/refresh.ts pins QUOTA_ROUTABLE_MAX_AGE_MS to the same value.
+            // 60 min since 2026-08-21 (owner decision); it remains the fallback
+            // for windows without resetsAt, and quota/refresh.ts pins
+            // QUOTA_ROUTABLE_MAX_AGE_MS to the same value.
             staleAfterMs: 60 * MIN,
             sessionMinRemainingPercent: 10,
             sessionResetImminentMs: 5 * MIN,
@@ -802,7 +802,7 @@ describe('rankProvidersByQuotaGate — selection-loop gate + weekly expiry-risk 
     // "unknown" is now strictly NO READABLE WINDOW — never measured, or a
     // reading with no such window. A snapshot that is merely no longer current
     // but still CARRIES numbers is a RETAINED reading and competes on the
-    // ranking axis at a discount; see the AGED/STRUCTURAL tests below. Both
+    // ranking axis at full weight; see the retained-reading tests below. Both
     // candidates here are genuinely unreadable, which is why the assertion is
     // unchanged.
     it('sorts candidates with NO READABLE weekly window below every readable one, caller order among themselves', () => {
@@ -953,19 +953,18 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
     // RETAINED READINGS section of rankProvidersByQuotaGate).
     //
     // What survives unchanged is the part that was actually about the SESSION
-    // AXIS: a stale snapshot is not a CURRENT reading, so it must never be
-    // treated as one. What changes is the consequence — it is now a RETAINED
-    // reading that competes at a discount instead of being partitioned out.
+    // AXIS. What changes in the 2026-08-28 owner decision is that a retained
+    // reading competes at exactly the same weight as a fresh reading until its
+    // resetsAt boundary passes.
     //
     // The inputs below are the old test's verbatim, and the expected order
     // flips, for a reason worth stating: kimi's session window resets in 20
-    // MINUTES holding 70% unused (raw risk 65.3) while claude-cli's resets in
-    // 4.5 hours (raw risk 7.0). Even discounted to AGED confidence, kimi ranks
-    // 26.1 vs 7.0. The old partition was suppressing a genuinely urgent
+    // MINUTES holding 70% unused (risk 65.3) while claude-cli's resets in
+    // 4.5 hours (risk 7.0). The old partition was suppressing a genuinely urgent
     // expiry signal purely because the reading was 45 minutes old — spending
     // kimi first here is the correct answer on the axis this module exists to
     // implement.
-    it('session reading AGED: it ranks at a discount, and a truly imminent expiry still wins', () => {
+    it('session reading AGED: it ranks at full weight, and a truly imminent expiry wins', () => {
         const agedSession = okQuota({
             session: sessionWindow(30, NOW + 20 * MIN),            // 70% left, resets in 20m
             weekly: weeklyWindow(40, NOW + 5 * DAY),
@@ -982,10 +981,10 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
             .toEqual(['kimi', 'claude-cli']);
     });
 
-    it('an AGED reading does NOT win on equal raw risk — the confidence discount decides', () => {
-        // Identical windows on both candidates, so raw risk ties exactly and
-        // ONLY confidence separates them. This is the guard that the discount
-        // is real and directional: retained never outranks current at par.
+    it('a stale reading ties a fresh reading with identical values — caller order decides', () => {
+        // Identical windows on both candidates make risk tie exactly. Age must
+        // add no hidden tie-break: the stable sort preserves the stale
+        // candidate's input position.
         const node = nodeWithQuota({
             kimi: okQuota({
                 provider: 'kimi',
@@ -999,7 +998,7 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
             }),
         });
         expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
-            .toEqual(['claude-cli', 'kimi']);
+            .toEqual(['kimi', 'claude-cli']);
     });
 
     // Unknown-last on the 5h axis too: a session-measured candidate outranks a
@@ -1079,7 +1078,7 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
         // Still an exhaustive toEqual — the ranking evidence is part of the
         // return now, and with nothing measured every entry must be BARE:
         // an axis label and no numbers. An evidence block carrying invented
-        // risk/confidence here would be exactly the "assumed full" failure the
+        // risk here would be exactly the "assumed full" failure the
         // module header bans, so it is asserted, not loosened away.
         expect(rankProvidersByQuotaGate(nodeWithQuota(undefined), ['kimi', 'claude-cli', 'codex'], null, NOW))
             .toEqual({
@@ -1129,9 +1128,8 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
         metadata: { source: 'statusline', failureKind: 'no-data' },
     });
 
-    /** kimi's AGED shape: a transient carry-forward. Deliberately NOT
-     *  'no-data' — kimi's channel repairs itself on the next refresh tick,
-     *  which is exactly the distinction under test. */
+    /** kimi's AGED shape: a transient carry-forward with proven last-good
+     *  windows. Fetch failure does not invalidate those windows before reset. */
     const kimiAged = (weeklyUsed: number, resetsAt: number | null, ageMs = 90 * MIN) => okQuota({
         provider: 'kimi',
         status: 'error',
@@ -1145,8 +1143,7 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
     it('★the observed case: a stale claude is SELECTABLE against a fresh grok', () => {
         // grok is fresh but only 34% weekly remaining and 6 days from its
         // reset → very little is about to evaporate (raw risk ~4.9).
-        // claude retains 85% weekly with 1 day to go → raw risk ~72.9, and
-        // even at STRUCTURAL confidence (0.7) that is ~51.0.
+        // claude retains 85% weekly with 1 day to go → risk ~72.9.
         const node = nodeWithQuota({
             'grok-cli': okQuota({ provider: 'grok-cli', session: null, weekly: weeklyWindow(66, NOW + 6 * DAY) }),
             'claude-cli': claudeStructural(15, NOW + DAY),
@@ -1171,21 +1168,18 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
             .toBe('claude-cli');
     });
 
-    it('STRUCTURAL outranks AGED at identical measured numbers — waiting repairs one and never the other', () => {
-        // Same windows, same age, same raw risk. The ONLY difference is the
-        // failureKind, so this isolates the classification itself.
+    it('structural and transient stale readings tie at identical measured values', () => {
+        // Same windows, same age, same risk. failureKind must not affect
+        // ranking; the stable sort keeps the caller order.
         const node = nodeWithQuota({
             kimi: kimiAged(20, NOW + DAY),
             'claude-cli': claudeStructural(20, NOW + DAY),
         });
-        // Caller order puts kimi first; only the confidence tier can flip it.
         expect(rankProvidersByQuotaGate(node, ['kimi', 'claude-cli'], null, NOW).clear)
-            .toEqual(['claude-cli', 'kimi']);
+            .toEqual(['kimi', 'claude-cli']);
     });
 
-    it('classification is by failureKind, not by provider name', () => {
-        // The SAME provider id ranks differently purely on the kind it
-        // reports — so no provider-name list could be producing this result.
+    it('failureKind does not change the rank of an otherwise identical reading', () => {
         const structural = nodeWithQuota({
             kimi: okQuota({
                 provider: 'kimi', status: 'error', session: null,
@@ -1197,22 +1191,65 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
         // Both STRUCTURAL now → exact tie on every axis → caller order holds.
         expect(rankProvidersByQuotaGate(structural, ['kimi', 'claude-cli'], null, NOW).clear)
             .toEqual(['kimi', 'claude-cli']);
-        // Flip ONLY kimi's failureKind to a transient one → it drops below.
+        // Flip ONLY kimi's failureKind to a transient one: order is unchanged.
         const aged = nodeWithQuota({
             kimi: kimiAged(20, NOW + DAY),
             'claude-cli': claudeStructural(20, NOW + DAY),
         });
         expect(rankProvidersByQuotaGate(aged, ['kimi', 'claude-cli'], null, NOW).clear)
-            .toEqual(['claude-cli', 'kimi']);
+            .toEqual(['kimi', 'claude-cli']);
     });
 
-    it('a retained reading never outranks a CURRENT one of equal raw risk', () => {
+    it('a retained reading ranks identically to a fresh reading with equal values', () => {
         const node = nodeWithQuota({
             'claude-cli': claudeStructural(40, NOW + 5 * DAY),
             'grok-cli': okQuota({ provider: 'grok-cli', session: null, weekly: weeklyWindow(40, NOW + 5 * DAY) }),
         });
         expect(rankProvidersByQuotaGate(node, ['claude-cli', 'grok-cli'], null, NOW).clear)
-            .toEqual(['grok-cli', 'claude-cli']);
+            .toEqual(['claude-cli', 'grok-cli']);
+    });
+
+    it('★145-minute-stale last-good windows beat a fresh reading when measured risk is higher', () => {
+        const node = nodeWithQuota({
+            codex: okQuota({
+                provider: 'codex', status: 'error', session: null,
+                weekly: weeklyWindow(20, NOW + 5 * DAY), // 80% left, risk ~22.9
+                updatedAt: NOW - 145 * MIN,
+                error: 'token expired',
+                metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true },
+            }),
+            'claude-cli': okQuota({
+                session: null,
+                weekly: weeklyWindow(80, NOW + MIN), // 20% left, risk ~20
+            }),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['claude-cli', 'codex'], null, NOW);
+        expect(ranked.clear).toEqual(['codex', 'claude-cli']);
+        expect(ranked.rankingEvidence[0]).toMatchObject({
+            providerType: 'codex',
+            axis: 'weekly',
+            remainingPercent: 80,
+        });
+        expect(ranked.rankingEvidence[0].risk!).toBeGreaterThan(ranked.rankingEvidence[1].risk!);
+        expect(ranked.rankingEvidence[0]).not.toHaveProperty('confidence');
+        expect(ranked.rankingEvidence[0]).not.toHaveProperty('rankedRisk');
+    });
+
+    it('a reading whose resetsAt passed is unknown and sorts below a live reading', () => {
+        const node = nodeWithQuota({
+            codex: okQuota({
+                provider: 'codex', session: null,
+                weekly: weeklyWindow(0, NOW - MIN),
+                updatedAt: NOW - 145 * MIN,
+            }),
+            'claude-cli': okQuota({
+                session: null,
+                weekly: weeklyWindow(80, NOW + MIN),
+            }),
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['codex', 'claude-cli'], null, NOW);
+        expect(ranked.clear).toEqual(['claude-cli', 'codex']);
+        expect(ranked.rankingEvidence[1]).toEqual({ providerType: 'codex', axis: 'weekly' });
     });
 
     it('★REVERSE DIRECTION: a genuinely exhausted provider is still GATED, never merely out-ranked', () => {
@@ -1251,7 +1288,7 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
         expect(ranked.gated[0].block.reason).toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
     });
 
-    it('a provider with NO reading at all is still last — the discount needs a real measurement', () => {
+    it('a provider with NO reading at all is still last — ranking needs a real measurement', () => {
         const node = nodeWithQuota({
             'claude-cli': claudeStructural(90, NOW + 6 * DAY),  // retained, tiny risk
             // codex: no entry at all
@@ -1292,18 +1329,18 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
     });
 
     describe('quotaRiskSnapshotForCandidates — the reading is self-describing', () => {
-        it('annotates a RETAINED reading with its confidence and the discounted rank', () => {
+        it('reports a retained reading with the risk compared by the sort', () => {
             const node = nodeWithQuota({ 'claude-cli': claudeStructural(20, NOW + DAY) });
             const [snapshot] = quotaRiskSnapshotForCandidates(node, ['claude-cli'], null, NOW);
             expect(snapshot.providerType).toBe('claude-cli');
             expect(snapshot.axis).toBe('weekly');
             expect(snapshot.remainingPercent).toBe(80);
-            expect(snapshot.confidence).toBe(0.7);
-            // rankedRisk is what the sort compared — risk scaled by confidence.
-            expect(snapshot.rankedRisk).toBeCloseTo(snapshot.risk! * 0.7, 10);
+            expect(snapshot.risk).toBeGreaterThan(0);
+            expect(snapshot).not.toHaveProperty('confidence');
+            expect(snapshot).not.toHaveProperty('rankedRisk');
         });
 
-        it('omits the annotation for a CURRENT reading — no payload cost in the common case', () => {
+        it('uses the same diagnostic shape for a fresh reading', () => {
             const node = nodeWithQuota({
                 'grok-cli': okQuota({ provider: 'grok-cli', session: null, weekly: weeklyWindow(40, NOW + DAY) }),
             });
@@ -1329,7 +1366,7 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
             }));
         });
 
-        it('distinguishes the two retained tiers', () => {
+        it('does not expose stale-age trust tiers', () => {
             const node = nodeWithQuota({
                 'claude-cli': claudeStructural(20, NOW + DAY),
                 kimi: kimiAged(20, NOW + DAY),
@@ -1338,8 +1375,10 @@ describe('rankProvidersByQuotaGate — retained readings compete (2026-08-20 str
                 quotaRiskSnapshotForCandidates(node, ['claude-cli', 'kimi'], null, NOW)
                     .map(s => [s.providerType, s]),
             );
-            expect(byProvider.get('claude-cli')!.confidence).toBe(0.7);
-            expect(byProvider.get('kimi')!.confidence).toBe(0.4);
+            expect(byProvider.get('claude-cli')?.risk).toBeCloseTo(byProvider.get('kimi')!.risk!, 10);
+            expect(byProvider.get('claude-cli')?.remainingPercent).toBe(byProvider.get('kimi')?.remainingPercent);
+            expect(byProvider.get('claude-cli')).not.toHaveProperty('confidence');
+            expect(byProvider.get('kimi')).not.toHaveProperty('rankedRisk');
         });
     });
 });

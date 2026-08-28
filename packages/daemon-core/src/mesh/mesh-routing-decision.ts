@@ -99,8 +99,8 @@ export interface ProviderQuotaGateDiagnostic {
     };
     /**
      * ★WHY this gate-clear candidate placed where it did — the numbers the
-     * Stage 3 sort actually compared (risk, confidence, rankedRisk) and the
-     * window axis it read them on. Present only for candidates that reached
+     * Stage 3 sort actually compared (`risk`) and the window axis it read it
+     * on. Present only for candidates that reached
      * the ranking (gate outcome clear/fail-open); gated and
      * not-evaluated-floor candidates were never sorted, so they carry none.
      *

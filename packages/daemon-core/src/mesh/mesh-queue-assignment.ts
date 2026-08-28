@@ -1728,14 +1728,13 @@ async function resolveUsableProvider(
 
     // QUOTA GATE, inside the loop: split the usable candidates by the gate and
     // order the survivors by EXPIRY RISK, descending (remaining × elapsed window
-    // fraction × reading confidence — an unused remainder evaporates at the
+    // fraction — an unused remainder evaporates at the
     // window reset, so the least-consumable-in-time remainder is spent first;
     // the owner-confirmed dynamic priority). Fail-open is inherited from
-    // evaluateProviderQuotaGate unchanged: missing / stale / unmarked transient
-    // readings are never BLOCKED, and a no-longer-current reading that still
-    // carries real windows RANKS at a confidence discount instead of sorting
-    // unconditionally last (rankProvidersByQuotaGate, RETAINED READINGS — the
-    // fleet-wide stranding that fixed). ALL-gated is reported under its own
+    // evaluateProviderQuotaGate unchanged: missing/unreadable readings are
+    // never BLOCKED, and a wall-clock-stale reading whose window has not reset
+    // ranks at the same weight as a fresh one instead of becoming progressively
+    // less selectable. ALL-gated is reported under its own
     // reason so a quota WAIT is never conflated with a slot config error.
     const selection = selectProviderWithDiagnostics({
         node, nodeId, meshId, task: task!, taskId, quotaRouting, quotaFactsContext,

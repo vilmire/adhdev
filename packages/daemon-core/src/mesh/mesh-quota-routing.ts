@@ -44,13 +44,12 @@
  * is the FALLBACK, not the primary rule). A non-'ok' entry participates only
  * when metadata.lastGoodWindows proves the retained windows' provenance.
  *
- * ★"Inert" is about GATING and BONUSING, not about ORDERING. An old reading
- * still may not exclude anyone and still contributes no fitness bonus — that
- * is unchanged. But rankProvidersByQuotaGate does ORDER on it, at a confidence
- * discount, because ordering is a comparison among candidates that will all
- * run: refusing to compare does not avoid a decision, it just makes the
- * decision "always last" (see the RETAINED READINGS section there, and the
- * fleet-wide claude stranding it fixes).
+ * Ranking follows that same boundary rule: once a reading exists, wall-clock
+ * age does not weaken it. rankProvidersByQuotaGate compares the measured risk
+ * at full weight until the window resets; only a missing/unreadable reading or
+ * an expired window is unknown. This avoids the self-reinforcing loop where a
+ * provider whose quota refreshes only while selected becomes less selectable
+ * the longer it remains idle.
  *
  * ONE hard-block exception: a FRESH 'error' snapshot whose metadata.failureKind
  * is 'quota-exhausted' (the provider's own "usage limit reached" answer, e.g.
@@ -686,79 +685,13 @@ const DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
 const DEFAULT_SESSION_WINDOW_MINUTES = 5 * 60;
 
 /** Ranking metric for one candidate on one window axis, or undefined when even
- *  the axis's REMAINING is unknown (no snapshot / non-'ok' / no retained
- *  reading / no such window reported). */
+ *  the axis's REMAINING is unknown (no snapshot, no such window, unreadable
+ *  measurement, or a window whose resetsAt has passed). */
 interface ExpiryRisk {
     remainingPercent: number;
     /** Expiry-risk score — see rankProvidersByQuotaGate. Bounded by
      *  remainingPercent, so it can never diverge. */
     risk: number;
-    /** How much this reading is trusted as a description of the provider RIGHT
-     *  NOW, 0..1. 1 = a fresh 'ok' snapshot. Below 1 = a RETAINED reading (the
-     *  numbers were really measured, they are just no longer current), which
-     *  ranks on the same axis at a discount rather than being partitioned out.
-     *  See CONFIDENCE below and the RETAINED-READING section of
-     *  rankProvidersByQuotaGate. */
-    confidence: number;
-}
-
-/**
- * CONFIDENCE tiers for a ranking reading.
- *
- * A reading is either CURRENT (a fresh 'ok' snapshot — full confidence) or
- * RETAINED: real measured numbers whose freshness window has passed. Retained
- * readings used to be indistinguishable from "never measured" and were sorted
- * unconditionally last; they are now ranked on the same expiry-risk axis at a
- * discount, which is what lets a structurally-unmeasurable provider compete.
- *
- * The two retained tiers differ by whether WAITING would help:
- *
- *  - STRUCTURAL (`no-data`): the provider exposes no outbound quota interface,
- *    so a reading only exists while a session is open — Claude Code's
- *    statusline bridge is the canonical case (quota/fetchers/claude.ts), and
- *    Antigravity's empty-bucket answer is the other. This is a STEADY STATE,
- *    not a transient one. Waiting produces nothing; only being SELECTED does,
- *    which is precisely the self-reinforcing loop this tier exists to break:
- *    a session must run to measure it → it is never picked while unmeasured →
- *    no session runs. Discounted the LEAST of the retained tiers, because the
- *    alternative is a provider that can never be measured at all.
- *
- *  - AGED (everything else — a transient carry-forward, an 'ok' snapshot past
- *    staleAfterMs): the channel works and the next refresh tick genuinely will
- *    produce a current number. Discounted MORE, because deferring to a
- *    measured candidate costs nothing here — the reading repairs itself.
- *
- * Both sit strictly below 1, so a CURRENT reading always outranks a retained
- * one of equal raw risk. Neither is 0, so a retained reading always outranks a
- * candidate with no reading at all. That total order — current > structural >
- * aged > nothing — is the whole of the policy, and it is derived from the
- * snapshot's own machine-readable fields, never from a provider name.
- */
-const CONFIDENCE_CURRENT = 1;
-const CONFIDENCE_RETAINED_STRUCTURAL = 0.7;
-const CONFIDENCE_RETAINED_AGED = 0.4;
-
-/**
- * Failure kinds meaning "the capture channel is healthy but holds no CURRENT
- * reading, and only a SESSION produces one" — see the STRUCTURAL tier above and
- * the 'no-data' documentation in quota/types.ts.
- *
- * ★Deliberately a FAILURE-KIND test, never a provider-name list. Any fetcher
- * that reports 'no-data' is declaring this property about itself, so a new
- * provider with the same shape is classified correctly the day it lands, with
- * no edit here. A hardcoded ['claude-cli', ...] would have to be found and
- * updated by whoever adds the next one — which is exactly how the fleet-wide
- * claude stranding went unnoticed.
- */
-const STRUCTURALLY_UNMEASURABLE_FAILURE_KINDS: ReadonlySet<string> = new Set(['no-data']);
-
-/**
- * Is this snapshot's inability to report a CURRENT reading structural (only a
- * session refreshes it) rather than a transient gap the refresh timer closes?
- */
-function isStructurallyUnmeasurable(quota: MeshNodeFactsProviderQuota): boolean {
-    const kind = (quota as any).metadata?.failureKind;
-    return typeof kind === 'string' && STRUCTURALLY_UNMEASURABLE_FAILURE_KINDS.has(kind);
 }
 
 /**
@@ -795,16 +728,14 @@ function isStructurallyUnmeasurable(quota: MeshNodeFactsProviderQuota): boolean 
  * a reset stamp remains readable with risk 0 — no evidence of imminent loss
  * means no invented urgency.
  *
- * RETAINED readings (see CONFIDENCE above) are admitted here rather than
- * rejected: a snapshot that carries real windows but is no longer current
- * yields its measured risk with a confidence below 1, which the sort applies
- * as a discount. Only a snapshot with NO readable window at all — never
- * measured, opted out, or a failure that erased its numbers — still returns
- * undefined, because there is genuinely nothing to rank it on.
+ * Retained readings are admitted here rather than rejected: once a snapshot
+ * carries a real window, its measured risk is trusted at the same weight as a
+ * freshly fetched reading until that window resets. Only a snapshot with NO
+ * readable window at all — never measured, opted out, a failure that erased
+ * its numbers, or a window past resetsAt — returns undefined.
  *
  * ★What is NOT admitted: this function never invents a reading. Every number
- * it returns was measured by the provider at some point. The confidence tier
- * describes how long ago, not how much was guessed.
+ * it returns was measured by the provider at some point.
  */
 function expiryRiskForRanking(
     node: any,
@@ -817,16 +748,6 @@ function expiryRiskForRanking(
     const entry = quotaEntryFor(node, providerType, context, now);
     if (!entry) return undefined;
     const { facts, quota } = entry;
-    // CONFIDENCE resolution. A fresh 'ok' snapshot is current; anything else
-    // that still carries a readable window is a RETAINED reading, tiered by
-    // whether waiting would repair it. A non-'ok' snapshot with no window
-    // survives to the `remaining === undefined` bail below.
-    const fresh = isQuotaSnapshotFresh(facts, quota, policy, now);
-    const confidence = quota.status === 'ok' && fresh
-        ? CONFIDENCE_CURRENT
-        : isStructurallyUnmeasurable(quota)
-            ? CONFIDENCE_RETAINED_STRUCTURAL
-            : CONFIDENCE_RETAINED_AGED;
     const window = axis === 'session' ? quota.session : quota.weekly;
     // Keep ranking on the same per-window authority boundary as the launch
     // gate and spread bonus. In particular, an already-reset window is not
@@ -835,24 +756,16 @@ function expiryRiskForRanking(
     const remaining = remainingPercent(window);
     if (remaining === undefined) return undefined;
     const resetsAt = Number(window?.resetsAt);
-    if (!Number.isFinite(resetsAt) || resetsAt <= 0) return { remainingPercent: remaining, risk: 0, confidence };
+    if (!Number.isFinite(resetsAt) || resetsAt <= 0) return { remainingPercent: remaining, risk: 0 };
     const ageMs = quotaSnapshotAgeMs(facts, quota, now);
-    if (!Number.isFinite(ageMs)) return { remainingPercent: remaining, risk: 0, confidence };
+    if (!Number.isFinite(ageMs)) return { remainingPercent: remaining, risk: 0 };
     const reporterNowMs = Number(quota.updatedAt) + ageMs;
     const windowMinutes = Number(window?.windowMinutes);
     const fallbackMinutes = axis === 'session' ? DEFAULT_SESSION_WINDOW_MINUTES : DEFAULT_WEEKLY_WINDOW_MINUTES;
     const windowMs = (Number.isFinite(windowMinutes) && windowMinutes > 0
         ? windowMinutes : fallbackMinutes) * 60 * 1000;
     const elapsedFraction = Math.min(1, Math.max(0, 1 - (resetsAt - reporterNowMs) / windowMs));
-    return { remainingPercent: remaining, risk: remaining * elapsedFraction, confidence };
-}
-
-/** The ranking score for one reading: its expiry risk scaled by how much the
- *  reading is trusted to still describe the provider (see CONFIDENCE). This is
- *  the ONE place the discount is applied, so both window axes and every
- *  observability reader agree on what "rank" means. */
-function rankedRisk(reading: ExpiryRisk): number {
-    return reading.risk * reading.confidence;
+    return { remainingPercent: remaining, risk: remaining * elapsedFraction };
 }
 
 /**
@@ -877,20 +790,16 @@ export interface ProviderQuotaRankingEvidence {
     /** remaining × elapsedFraction on `axis`. Absent when the axis has no
      *  readable reading (this candidate sorts last on the unknown rule). */
     risk?: number;
-    /** The reading's trust tier, 1 / 0.7 / 0.4 — see the CONFIDENCE tiers. */
-    confidence?: number;
-    /** `risk × confidence` — the value the comparator actually sorted on. */
-    rankedRisk?: number;
     /** Remaining headroom on `axis`, the risk tie-break. */
     remainingPercent?: number;
 }
 
 export interface ProviderQuotaGateRanking {
     /** Gate-clear providers, best first: weekly EXPIRY-RISK DESC (remaining ×
-     *  elapsed window fraction × reading CONFIDENCE) — or SESSION (5h)
+     *  elapsed window fraction) — or SESSION (5h)
      *  expiry-risk DESC while every weekly-readable candidate clears
-     *  sessionAxisWeeklyHeadroomPercent — then confidence DESC and remaining
-     *  DESC on a risk tie, providers with NO readable reading LAST, and the
+     *  sessionAxisWeeklyHeadroomPercent — then remaining DESC on a risk tie,
+     *  providers with NO readable reading LAST, and the
      *  caller's original order preserved within each group (stable sort). */
     clear: string[];
     /** Gate-blocked providers with their blocks, in the caller's order. */
@@ -965,27 +874,22 @@ export interface ProviderQuotaGateRanking {
  *
  * The fix keeps the partition's real insight — a measured reading must beat an
  * unmeasured one — and drops only its absoluteness. A candidate carrying REAL
- * measured windows that are no longer current now ranks on the SAME expiry-risk
- * axis, scaled by a CONFIDENCE factor below 1 (see the CONFIDENCE tiers). So:
- *
- *   - a current reading still outranks a retained one of equal raw risk;
- *   - a retained reading with substantial risk CAN outrank a current reading
- *     with little — which is the competition that was missing;
- *   - a structurally-unmeasurable provider is discounted less than a merely
- *     aged one, because waiting repairs the second and never the first.
+ * measured windows that are no longer fresh ranks on the SAME expiry-risk
+ * axis at full weight until resetsAt passes. Staleness describes the refresh
+ * surface; it does not reduce trust in the last successful measurement.
  *
  * The two original rejections still hold and are still rejected:
  *   - unknown-first ("assumed full") would let an unmeasurable provider win
  *     every contest — the sort becomes meaningless AND it preferentially
  *     overloads the one provider that declined to be measured, the exact
- *     failure mode the module header bans. The confidence discount is bounded
- *     by a REAL past measurement, so it can never behave this way.
+ *     failure mode the module header bans. Ranking is still bounded by a REAL
+ *     measurement, so it can never behave this way.
  *   - treating unknown as blocked would silently strand opted-out providers
  *     (quotaEnabled === false), violating the fail-open contract.
  *
  * NO-READING-AT-ALL candidates (never measured, opted out, or a failure that
  * erased the numbers) are still sorted LAST, unchanged: there is nothing to
- * discount, so there is nothing to rank. They remain gate-CLEAR and are picked
+ * compare, so there is nothing to rank. They remain gate-CLEAR and are picked
  * when everything above them is gated, exactly as before.
  *
  * ★What this deliberately does NOT do: it never promotes a candidate over a
@@ -1000,11 +904,11 @@ export interface ProviderQuotaGateRanking {
  * group by the stable sort, so whenever quota has nothing to add the
  * selection is byte-identical to what it was before.
  *
- * Being out-ranked and being BLOCKED are different things: a fail-open
- * candidate (missing / stale / an unmarked transient reading) is never blocked
- * — it only lands in the unknown group. A transient error with fresh retained
- * last-good windows may still be blocked by those measured windows. The
- * fail-open contract of evaluateProviderQuotaGate is inherited unchanged.
+ * Being out-ranked and being BLOCKED are different things: a candidate with
+ * no readable window is never blocked — it only lands in the unknown group. A
+ * transient error with retained last-good windows may still be blocked by
+ * those measured windows until their reset boundary. The fail-open contract
+ * of evaluateProviderQuotaGate is inherited unchanged.
  */
 export function rankProvidersByQuotaGate(
     node: any,
@@ -1027,13 +931,9 @@ export function rankProvidersByQuotaGate(
     // weekly-readable candidate at all there is nothing to rank on either
     // axis and the caller order survives untouched.
     //
-    // RETAINED readings participate in this gate on their remainingPercent,
-    // undiscounted, and that is deliberate: the gate asks "is anyone's weekly
-    // budget tight?", which is a question about the MEASUREMENT, not about how
-    // current it is. Discounting here would let an aged reading of a nearly
-    // exhausted weekly window read as roomy and unlock session-axis harvesting
-    // against a budget that is actually tight — the confidence discount
-    // belongs on the ordering, not on the protection.
+    // Retained readings participate in this gate on their measured
+    // remainingPercent: staleness does not change what the reading says, and
+    // the same full-trust rule applies to both protection and ordering.
     const headroomPercent = resolveQuotaRoutingPolicy(policy).sessionAxisWeeklyHeadroomPercent;
     const weeklyMeasured = [...weeklyByProvider.values()].filter((w): w is ExpiryRisk => w !== undefined);
     const sessionAxisActive = weeklyMeasured.length > 0
@@ -1044,9 +944,9 @@ export function rankProvidersByQuotaGate(
     clear.sort((a, b) => {
         const wa = weeklyByProvider.get(a);
         const wb = weeklyByProvider.get(b);
-        // NO reading at all still sorts last — nothing to rank on. A RETAINED
+        // NO reading at all still sorts last — nothing to rank on. A retained
         // reading is NOT in this branch: it has real numbers and competes
-        // below via its confidence-discounted risk.
+        // below at the same weight as a fresh reading.
         if (wa === undefined && wb === undefined) return 0; // both unreadable: keep caller order
         if (wa === undefined) return 1;
         if (wb === undefined) return -1;
@@ -1054,9 +954,7 @@ export function rankProvidersByQuotaGate(
             const sa = sessionByProvider.get(a);
             const sb = sessionByProvider.get(b);
             if (sa !== undefined && sb !== undefined) {
-                const ra = rankedRisk(sa);
-                const rb = rankedRisk(sb);
-                if (rb !== ra) return rb - ra; // session expiry risk DESC (confidence-discounted)
+                if (sb.risk !== sa.risk) return sb.risk - sa.risk; // session expiry risk DESC
                 if (sb.remainingPercent !== sa.remainingPercent) {
                     return sb.remainingPercent - sa.remainingPercent; // session remaining tie-break
                 }
@@ -1066,15 +964,10 @@ export function rankProvidersByQuotaGate(
             // below is the fail-open fallback — an unreadable 5h axis never
             // changes what the weekly axis would have decided.
         }
-        const ra = rankedRisk(wa);
-        const rb = rankedRisk(wb);
-        if (rb !== ra) return rb - ra; // expiry risk DESC (confidence-discounted)
-        // Risk tie (e.g. equal reset time, or two zero-risk readings): the more
-        // TRUSTED reading wins first — a current reading beats a retained one
-        // that happens to score the same — then the larger weekly remainder,
-        // the original even-spend axis. A further tie keeps the caller order
-        // (stable sort).
-        if (wb.confidence !== wa.confidence) return wb.confidence - wa.confidence;
+        if (wb.risk !== wa.risk) return wb.risk - wa.risk; // expiry risk DESC
+        // Risk tie (e.g. equal reset time, or two zero-risk readings): the
+        // larger weekly remainder is the original even-spend axis. A further
+        // tie keeps the caller order (stable sort), regardless of reading age.
         return wb.remainingPercent - wa.remainingPercent;
     });
     // Ranking evidence is derived AFTER the sort, from the same maps the
@@ -1091,8 +984,6 @@ export function rankProvidersByQuotaGate(
             axis,
             ...(reading ? {
                 risk: reading.risk,
-                confidence: reading.confidence,
-                rankedRisk: rankedRisk(reading),
                 remainingPercent: reading.remainingPercent,
             } : {}),
         };
@@ -1239,17 +1130,8 @@ export interface ProviderQuotaRiskSnapshot {
      *  unreadable and the comparator falls back. */
     axis: 'weekly' | 'session';
     remainingPercent?: number;
-    /** Raw expiry risk, BEFORE the confidence discount. */
+    /** Expiry risk compared directly by the ranking. */
     risk?: number;
-    /** Reading confidence 0..1 (see the CONFIDENCE tiers). Emitted only when
-     *  it is NOT 1, i.e. only for a RETAINED reading — a current reading needs
-     *  no annotation, and omitting it keeps the common case's payload
-     *  byte-identical to before this field existed. */
-    confidence?: number;
-    /** `risk × confidence` — what the sort actually compared. Emitted only
-     *  alongside `confidence`, for the same reason: when confidence is 1 this
-     *  equals `risk` and repeating it would be pure payload. */
-    rankedRisk?: number;
 }
 
 export function quotaRiskSnapshotForCandidates(
@@ -1282,9 +1164,6 @@ export function quotaRiskSnapshotForCandidates(
             ...(w ? {
                 remainingPercent: w.remainingPercent,
                 risk: w.risk,
-                ...(w.confidence !== CONFIDENCE_CURRENT
-                    ? { confidence: w.confidence, rankedRisk: rankedRisk(w) }
-                    : {}),
             } : {}),
         };
     });
