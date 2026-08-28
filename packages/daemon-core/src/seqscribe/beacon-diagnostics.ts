@@ -29,13 +29,11 @@
  *     point; every caller goes through it.
  *
  *  2. **`keyStale` is ADVISORY-ONLY and must never gate correctness** (§5.7a).
- *     It is named `keyStaleAdvisory` for exactly that reason: the field is
- *     structurally `undefined` today (upstream P27 — no producer emits `hints`,
- *     so `staleness().keyStale` never populates), and if P27 ever lands it will
- *     describe a REGISTER key on a content-class topic. A caller that turns it
- *     into a write gate would be gating on a value that is absent in production
- *     and, once present, derived from data the content boundary does not permit
- *     us to trust for enforcement. Advisory display is the whole contract.
+ *     It is named `keyStaleAdvisory` for exactly that reason. P27 now supplies
+ *     hash-only REGISTER-key hints, but the reader picks the raw maximum `seq`
+ *     across writers rather than a total order. A caller that turns it into a
+ *     write gate would therefore be enforcing a known wire-shape approximation.
+ *     Advisory display is the whole contract.
  *
  * ── Why the board is cached rather than re-fetched ────────────────────────
  * A diagnostics read must not become a traffic source. §7.1.2's central
@@ -140,10 +138,9 @@ export interface BeaconSoleCopyCandidate {
  * The advisory pre-write hint (§5.7a / upstream P27).
  *
  * ★ Named `…Advisory` on purpose: this must never become a correctness gate.
- * Today it is always absent — the library reads `report.hints` but no producer
- * writes it (P27), so `staleness().keyStale` is structurally `undefined`. The
- * field exists so that the shape is already correct if P27 lands, and so that a
- * reviewer sees the word "advisory" at every use site.
+ * The key is a 64-hex digest, never the authored register key. The library's
+ * reader selects the raw maximum sequence across writers (§5.7a), so the field
+ * remains advisory and the name keeps that constraint visible at every use site.
  */
 export interface BeaconKeyStaleAdvisory {
     topic: string;
@@ -187,8 +184,7 @@ export interface BeaconDiagnostics {
     /** True when there is no board, or it is older than {@link BEACON_BOARD_TTL_MS}. */
     stale: boolean;
     /**
-     * ★ ADVISORY ONLY — never gate a write on this (§5.7a). Empty today
-     * (upstream P27 has no `hints` producer).
+     * ★ ADVISORY ONLY — never gate a write on this (§5.7a).
      */
     keyStaleAdvisory: BeaconKeyStaleAdvisory[];
 }
@@ -261,7 +257,7 @@ export function computeBeaconDiagnostics(args: {
     localVectors: Readonly<Record<string, { writers?: Record<string, unknown> }>>;
     board: BeaconBoardSnapshot | null;
     now?: number;
-    /** ★ Advisory only (§5.7a). Empty today — upstream P27 emits no hints. */
+    /** ★ Advisory only (§5.7a); never a correctness gate. */
     keyStaleAdvisory?: BeaconKeyStaleAdvisory[];
 }): BeaconDiagnostics {
     const now = args.now ?? Date.now();
@@ -364,7 +360,7 @@ export function computeBeaconDiagnostics(args: {
         boardAt: board ? new Date(board.capturedAt).toISOString() : null,
         boardAgeMs,
         stale: boardAgeMs === null || boardAgeMs > BEACON_BOARD_TTL_MS,
-        // ★ Advisory only — see BeaconKeyStaleAdvisory. Always empty today.
+        // ★ Advisory only — see BeaconKeyStaleAdvisory.
         keyStaleAdvisory: args.keyStaleAdvisory ?? [],
     };
 }
@@ -372,10 +368,9 @@ export function computeBeaconDiagnostics(args: {
 /**
  * Read `staleness(topic).keyStale` for a set of (topic, key) pairs.
  *
- * ★ ADVISORY ONLY (§5.7a). Returns `[]` in production today because upstream
- * P27 has no `hints` producer — see the type doc. Kept as a separate function
- * so the P27 landing has one place to be exercised, and so the always-empty
- * result is an observable fact rather than an assumption.
+ * ★ ADVISORY ONLY (§5.7a). Callers pass the hash keys admitted from peer
+ * reports. The upstream reader chooses the raw maximum `seq` across writers,
+ * not the producer's total order, so the result must never gate correctness.
  */
 export function readKeyStaleAdvisory(
     handle: Pick<SeqscribeNodeHandle, 'node'>,

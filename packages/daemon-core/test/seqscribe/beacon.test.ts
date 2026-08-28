@@ -3,16 +3,17 @@
  *
  * ── What this file proves ───────────────────────────────────────────────────
  *  (a) CONTENT BOUNDARY. `projectBeaconReport` is an ALLOW-LIST: free text,
- *      entry payloads and `hints` planted anywhere in a report do not survive
- *      into what the transport is handed. This mirrors the server-side canary
+ *      entry payloads and malformed/plaintext hints planted anywhere in a
+ *      report do not survive into what the transport is handed. This mirrors
+ *      the server-side canary
  *      (packages/server/test/beacon-board-content-boundary.test.ts) on the
  *      daemon side, which is the layer that decides what leaves the machine.
  *  (b) HINTS ARE HASH-ONLY, ENFORCED. `hintKeys` is a per-TOPIC POLICY the
  *      library reads at push time, not a per-call option — so the enforcement
  *      point is the topic table, and `assertNoPlaintextHintTopics` is what makes
  *      opting a topic into `'plain'` a loud failure instead of a one-word diff.
- *      Also pinned: the ADHDev topic table declares no `hintKeys` at all today,
- *      so hints are structurally absent (upstream P27).
+ *      Also pinned: only the register-class `config.settings` topic opts into
+ *      hash mode; append-class topics stay out because they need host supply.
  *  (c) TRANSPORT ROUND TRIP. put→get is driven through an injected fake, which
  *      is the whole point of the transport-agnostic split: daemon-core has no
  *      WS and `check:boundaries` keeps it that way.
@@ -40,6 +41,7 @@
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     armBeacon,
@@ -57,6 +59,7 @@ import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe
 import {
     ASSISTANT_JOURNAL_TOPIC,
     baseTopicDefinitions,
+    CONFIG_SETTINGS_TOPIC,
     FLEET_STATUS_TOPIC,
     meshEventsTopic,
     sessionTranscriptTopic,
@@ -147,7 +150,7 @@ describe('projectBeaconReport — daemon-side content boundary (§7.1.4 / CLAUDE
         const serialized = JSON.stringify(projected);
         expect(serialized).not.toContain(SECRET);
         expect(serialized).not.toContain('preserve-root');
-        // hints dropped wholesale — key names included.
+        // The plaintext hint was dropped wholesale — key name included.
         expect(serialized).not.toContain('hints');
         expect(serialized).not.toContain('security.autoApprove');
         expect(projected).not.toHaveProperty('hints');
@@ -218,16 +221,38 @@ describe('projectBeaconReport — daemon-side content boundary (§7.1.4 / CLAUDE
     });
 });
 
-describe('hints are hash-only, and today structurally absent', () => {
-    it('★the ADHDev topic table declares no hintKeys at all (upstream P27)', () => {
-        // Pinning the CURRENT state: no topic opts in, so BeaconHub.buildHints()
-        // returns undefined and `staleness().keyStale` is always undefined. This
-        // is why §7.1.0 drops feature ② from the Stage C~E success criteria — a
-        // future opt-in should have to change this assertion deliberately.
+describe('hints are hash-only and register-scoped', () => {
+    it('★opts in config.settings only; append-class topics remain host-path-only', () => {
         const defs = baseTopicDefinitions(['mesh_abc']);
-        for (const def of defs) {
+        expect(defs.find((def) => def.topic === CONFIG_SETTINGS_TOPIC)?.policy.hintKeys).toBe('hash');
+        for (const def of defs.filter((definition) => definition.policy.kind === 'append')) {
+            // Upstream P27 cannot derive per-key hints for append topics; ADHDev
+            // supplies no host hints callback, so opting these in would do nothing.
             expect(def.policy.hintKeys).toBeUndefined();
         }
+    });
+
+    it('admits only 64-hex keys with exact content-free [writer, seq] values', () => {
+        const hash = 'b'.repeat(64);
+        const projected = projectBeaconReport({
+            node: 'adhdev-0123456789abcdef',
+            at: '2026-08-28T00:00:00.000Z',
+            vectors: {},
+            hints: {
+                [CONFIG_SETTINGS_TOPIC]: {
+                    [hash]: ['adhdev-aaaaaaaaaaaaaaaa', 4],
+                    'security.autoApprove': ['adhdev-aaaaaaaaaaaaaaaa', 5],
+                    ['c'.repeat(64)]: ['writer id with prose', 6],
+                    ['d'.repeat(64)]: ['adhdev-aaaaaaaaaaaaaaaa', 7, 'CANARY_EXTRA'],
+                },
+            },
+        });
+
+        expect(projected?.hints).toEqual({
+            [CONFIG_SETTINGS_TOPIC]: { [hash]: ['adhdev-aaaaaaaaaaaaaaaa', 4] },
+        });
+        expect(JSON.stringify(projected)).not.toContain('security.autoApprove');
+        expect(JSON.stringify(projected)).not.toContain('CANARY_EXTRA');
     });
 
     it("accepts 'hash' and omitted, and throws on 'plain'", () => {
@@ -298,11 +323,14 @@ describe('armBeacon — lifecycle against a real node', () => {
         rmSync(dir, { recursive: true, force: true });
     });
 
-    function open(constants?: { BEACON_DEBOUNCE_MS: number }): SeqscribeNodeHandle {
+    function open(
+        constants?: { BEACON_DEBOUNCE_MS: number },
+        withAuthority = false,
+    ): SeqscribeNodeHandle {
         handle = openSeqscribeNode({
             dbPath: join(dir, 'seqscribe.db'),
             meshIds: ['mesh_abc123'],
-            env: {},
+            env: withAuthority ? { ADHDEV_SEQSCRIBE_FLEET_SECRET: 'beacon-test-secret' } : {},
             storedFleetSecret: null,
             ...(constants ? { constants } : {}),
         });
@@ -330,6 +358,27 @@ describe('armBeacon — lifecycle against a real node', () => {
         }
 
         expect(beacon!.counters().put).toBeGreaterThanOrEqual(1);
+        beacon!.stop();
+    });
+
+    it('★P27: the register fold emits only the SHA-256 key and GET requests its topic', async () => {
+        const node = open({ BEACON_DEBOUNCE_MS: 10 }, true);
+        const rawKey = 'ui.theme';
+        const fake = makeFakeTransport();
+
+        const beacon = armBeacon(node, fake.transport, { env: {} });
+        await settle();
+        const entryId = await node.node.register(CONFIG_SETTINGS_TOPIC).set(rawKey, 'dark');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await settle();
+
+        const hash = createHash('sha256').update(rawKey, 'utf8').digest('hex');
+        expect(fake.puts.at(-1)?.hints).toEqual({
+            [CONFIG_SETTINGS_TOPIC]: { [hash]: [entryId[1], entryId[2]] },
+        });
+        expect(JSON.stringify(fake.puts.at(-1))).not.toContain(rawKey);
+        expect(fake.gets.at(-1)).toContain(CONFIG_SETTINGS_TOPIC);
+        expect(() => assertNoPlaintextHintTopics(node.topics)).not.toThrow();
         beacon!.stop();
     });
 
@@ -446,6 +495,38 @@ describe('armBeacon — lifecycle against a real node', () => {
         expect(staleness.keyStale).toBeUndefined();
 
         expect(beacon!.counters().get).toBeGreaterThanOrEqual(1);
+        beacon!.stop();
+    });
+
+    it('turns an inbound hash hint into a real keyStaleAdvisory value', async () => {
+        const node = open(undefined, true);
+        const keyHash = 'e'.repeat(64);
+        const peer = 'adhdev-peerpeerpeer01';
+        const fake = makeFakeTransport({
+            board: [{
+                node: peer,
+                at: '2026-08-28T00:00:00.000Z',
+                vectors: {
+                    [CONFIG_SETTINGS_TOPIC]: {
+                        writers: { [peer]: { contig: 4, chain: CHAIN_A } },
+                    },
+                },
+                hints: { [CONFIG_SETTINGS_TOPIC]: { [keyHash]: [peer, 4] } },
+            }],
+        });
+
+        const beacon = armBeacon(node, fake.transport, { env: {} });
+        await settle();
+
+        expect(fake.gets[0]).toContain(CONFIG_SETTINGS_TOPIC);
+        expect(beacon!.diagnostics().keyStaleAdvisory).toEqual([{
+            topic: CONFIG_SETTINGS_TOPIC,
+            key: keyHash,
+            latestKnown: [CONFIG_SETTINGS_TOPIC, peer, 4],
+            haveLocally: false,
+        }]);
+        // ★No correctness gate is derived from the advisory (§5.7a).
+        expect(beacon!.diagnostics()).not.toHaveProperty('writeBlocked');
         beacon!.stop();
     });
 

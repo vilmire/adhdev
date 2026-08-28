@@ -23,8 +23,8 @@
  *
  * ── ★ ADVISORY, never a gate (§5.7a) ───────────────────────────────────────
  * Nothing here blocks, disables, or warns-before an action. It is a badge and a
- * tooltip. `keyStaleAdvisory` in particular is display-only and empty in
- * production today (upstream P27 emits no `hints`).
+ * tooltip. `keyStaleAdvisory` in particular is display-only; its hash-only
+ * keys and raw-seq selection must never disable or block an action.
  *
  * ── Deliberately small ──────────────────────────────────────────────────────
  * Badge + tooltip, no panel, no drill-down. Beacon data is advisory replication

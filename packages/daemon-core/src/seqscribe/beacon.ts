@@ -37,6 +37,7 @@
 import { LOG } from '../logging/logger.js';
 import {
     computeBeaconDiagnostics,
+    readKeyStaleAdvisory,
     type BeaconBoardSnapshot,
     type BeaconDiagnostics,
 } from './beacon-diagnostics.js';
@@ -116,6 +117,8 @@ export interface ProjectedBeaconReport {
     node: string;
     at: string;
     vectors: Record<string, { fgen?: number; writers: Record<string, ProjectedWriterEntry> }>;
+    /** Hash-only register-key hints; values are content-free writer positions. */
+    hints?: Record<string, Record<string, [string, number]>>;
 }
 
 /** 64-hex chain/state hash — `CHAIN_RE` in the library's codec. */
@@ -133,6 +136,7 @@ const TOPIC_RE = /^[A-Za-z0-9._*-]{1,160}$/;
 
 const MAX_TOPICS_PER_REPORT = 512;
 const MAX_WRITERS_PER_TOPIC = 512;
+const MAX_HINTS_PER_TOPIC = 512;
 
 function finiteCount(v: unknown): number | undefined {
     return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined;
@@ -160,26 +164,49 @@ function projectWriterEntry(raw: unknown): ProjectedWriterEntry | null {
     return rgen === undefined ? { contig, chain } : { contig, chain, rgen };
 }
 
+/** Allow-list the P27 wire shape: topic → 64-hex key digest → [writer, seq]. */
+function projectHints(raw: unknown): ProjectedBeaconReport['hints'] | undefined {
+    if (!raw || typeof raw !== 'object') return undefined;
+
+    const hints: NonNullable<ProjectedBeaconReport['hints']> = {};
+    let topicCount = 0;
+    for (const [topic, rawTopicHints] of Object.entries(raw as Record<string, unknown>)) {
+        if (topicCount >= MAX_TOPICS_PER_REPORT) break;
+        if (!TOPIC_RE.test(topic) || !rawTopicHints || typeof rawTopicHints !== 'object') continue;
+
+        const topicHints: Record<string, [string, number]> = {};
+        let hintCount = 0;
+        for (const [keyHash, rawPosition] of Object.entries(rawTopicHints as Record<string, unknown>)) {
+            if (hintCount >= MAX_HINTS_PER_TOPIC) break;
+            if (!CHAIN_RE.test(keyHash)) continue;
+            if (!Array.isArray(rawPosition) || rawPosition.length !== 2) continue;
+            const writer =
+                typeof rawPosition[0] === 'string' && WRITER_ID_RE.test(rawPosition[0])
+                    ? rawPosition[0]
+                    : undefined;
+            const seq = finiteCount(rawPosition[1]);
+            if (writer === undefined || seq === undefined) continue;
+            topicHints[keyHash] = [writer, seq];
+            hintCount++;
+        }
+
+        if (hintCount === 0) continue;
+        hints[topic] = topicHints;
+        topicCount++;
+    }
+    return topicCount > 0 ? hints : undefined;
+}
+
 /**
- * Project a report down to `{node, at, vectors}` before it leaves the machine.
+ * Project a report down to `{node, at, vectors, hints?}` before it leaves the machine.
  *
  * ★ ALLOW-LIST, NOT DENY-LIST. Same rule as the status path's four layers
  * (CLAUDE.md "Server content boundary"): rewriting this as a `delete` of
  * known-bad keys silently ships every field a future library version adds to
  * `BeaconReport`. Only sequence numbers, chain hashes and generation counters
- * survive — nothing payload-derived, in any form.
- *
- * `hints` is dropped WHOLESALE and unconditionally. Three reasons, in order of
- * force:
- *   1. CLAUDE.md's approved exception names "plaintext `hints` keys" as
- *      explicitly out of scope, so shipping them would exceed the approval.
- *   2. Hint keys are REGISTER keys, and the only register topic ADHDev defines
- *      is `config.settings` — an `access: 'content'` topic (topics.ts).
- *   3. The library gates hint production on a per-topic `hintKeys` policy field
- *      that NO ADHDev topic sets, so `buildHints()` already returns `undefined`
- *      today (upstream P27). This projection is what keeps that true if someone
- *      later opts a topic in without revisiting the boundary — and
- *      `assertNoPlaintextHintTopics` below is the louder guard on the same edge.
+ * survive — nothing payload-derived, in any form. P27 `hints` are the one
+ * additive shape: only 64-hex key digests with `[writerId, seq]` values survive.
+ * Plaintext register keys and malformed/arbitrary values are still dropped.
  */
 export function projectBeaconReport(raw: unknown): ProjectedBeaconReport | null {
     if (!raw || typeof raw !== 'object') return null;
@@ -223,7 +250,8 @@ export function projectBeaconReport(raw: unknown): ProjectedBeaconReport | null 
         }
     }
 
-    return { node, at, vectors };
+    const hints = projectHints(v.hints);
+    return hints ? { node, at, vectors, hints } : { node, at, vectors };
 }
 
 /**
@@ -237,9 +265,8 @@ export function projectBeaconReport(raw: unknown): ProjectedBeaconReport | null 
  *
  * Rule: a topic may declare `hintKeys: 'hash'` or omit the field. `'plain'` is
  * forbidden — plaintext register keys on the server exceed CLAUDE.md's approved
- * exception. Today every ADHDev topic omits it (so hints are structurally
- * absent), and this assertion is what makes a future opt-in a deliberate,
- * reviewed act rather than a one-word diff nobody connects to the boundary.
+ * exception. `config.settings` is deliberately opted into hash mode; this
+ * assertion keeps any future plaintext opt-in a loud boot-time failure.
  */
 export function assertNoPlaintextHintTopics(
     defs: readonly { topic: string; policy: { hintKeys?: 'plain' | 'hash' } }[],
@@ -356,11 +383,10 @@ export interface BeaconHostTransport {
 export interface ArmBeaconOptions {
     env?: NodeJS.ProcessEnv;
     /**
-     * Override the GET topic scope. Defaults to the metadata-class topics
-     * present in the node's own vectors (`defaultBeaconTopicScope`). A caller
-     * that wants a content-class topic's staleness passes it explicitly — which
-     * is the case-by-case decision CLAUDE.md requires, made visible at the call
-     * site instead of buried in a default.
+     * Override the GET topic scope. Defaults to metadata-class topics present
+     * in the node's own vectors plus topics this node actually defined with
+     * `hintKeys:'hash'`. The latter is the reviewed content-class exception;
+     * provisional nodes that did not define `config.settings` do not request it.
      */
     topicScope?: (vectors: Readonly<Record<string, unknown>>) => string[];
 }
@@ -494,12 +520,25 @@ export function armBeacon(
     assertNoPlaintextHintTopics(handle.topics);
 
     const counters = emptyCounters();
-    const scopeOf = opts.topicScope ?? defaultBeaconTopicScope;
+    const scopeOf =
+        opts.topicScope ??
+        ((vectors: Readonly<Record<string, unknown>>): string[] => [
+            ...new Set([
+                ...defaultBeaconTopicScope(vectors),
+                ...handle.topics
+                    .filter((definition) => definition.policy.hintKeys === 'hash')
+                    .map((definition) => definition.topic),
+            ]),
+        ]);
     let stopped = false;
-    // The scope is derived from the LAST report we projected: it is the same
-    // vector map the library just handed us, so GET asks about exactly the
-    // topics this node actually carries — no guessing, no stale list.
+    // The vector portion of the scope is derived from the LAST report we
+    // projected. Hash-hint topics come from this node's live definition table,
+    // so a stale reader can ask for a register key it does not hold yet.
     let lastScope: string[] = [];
+    // `pushNow()` bypasses the library's private buildHints(). Preserve the last
+    // library-produced, already-projected hint set so reconnect re-seeding does
+    // not erase it from the server board; the next applied write refreshes it.
+    let lastLocalHints: ProjectedBeaconReport['hints'];
     // The last board this beacon observed, retained purely so `diagnostics()`
     // can be a free read (see the note on BeaconHandle.diagnostics). Null until
     // the first successful GET — which `computeBeaconDiagnostics` reports as
@@ -517,6 +556,7 @@ export function armBeacon(
             LOG.warn('Seqscribe', 'beacon report failed the content projection; not sent');
             return;
         }
+        lastLocalHints = projected.hints;
         lastScope = scopeOf(projected.vectors);
         try {
             await transport.put(projected);
@@ -699,12 +739,15 @@ export function armBeacon(
         async pushNow(): Promise<void> {
             if (stopped) return;
             try {
-                // `node.vectors()` is the same source `BeaconHub.push()` reads,
-                // so this produces the identical report the library would have.
+                // `node.vectors()` is the same source `BeaconHub.push()` reads.
+                // P27 hint derivation is private to the library, so preserve
+                // its last projected hint set rather than clearing it on the
+                // server during reconnect re-seeding.
                 await doPut({
                     node: handle.writerId,
                     at: new Date().toISOString(),
                     vectors: handle.node.vectors(),
+                    ...(lastLocalHints ? { hints: lastLocalHints } : {}),
                 });
                 const board = await doGet();
                 if (!stopped) handle.node.setKnownVectors(board as never[]);
@@ -729,9 +772,24 @@ export function armBeacon(
                 node: handle.writerId,
                 localVectors,
                 board: lastBoard,
-                // ★ Advisory only, and empty today: upstream P27 has no `hints`
-                // producer, so `staleness().keyStale` never populates. Left
-                // unwired rather than fabricated — see readKeyStaleAdvisory.
+                // ★ Advisory only (§5.7a). Query the hash keys peers actually
+                // advertised; the upstream reader chooses the raw max seq
+                // across writers, so this must never become a correctness gate.
+                keyStaleAdvisory: readKeyStaleAdvisory(
+                    handle,
+                    [...new Map(
+                        (lastBoard?.reports ?? [])
+                            .filter((report) => report.node !== handle.writerId)
+                            .flatMap((report) =>
+                                Object.entries(report.hints ?? {}).flatMap(([topic, topicHints]) =>
+                                    Object.keys(topicHints).map((key) => [
+                                        `${topic}\0${key}`,
+                                        { topic, key },
+                                    ] as const),
+                                ),
+                            ),
+                    ).values()],
+                ),
             });
         },
     };

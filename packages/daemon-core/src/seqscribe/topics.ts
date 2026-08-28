@@ -210,6 +210,9 @@ export function configSettingsPolicy(): TopicPolicy {
         retention: { mode: 'full' },
         replication: 'full-sync',
         access: 'content',
+        // P27 derives pre-write hints directly from the register fold. Hash
+        // mode keeps authored setting keys off the Beacon board.
+        hintKeys: 'hash',
         finalityAuthority: ADHDEV_AUTHORITY_ID,
         conflict: {
             default: 'lww',

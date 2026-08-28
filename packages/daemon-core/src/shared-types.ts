@@ -1094,9 +1094,8 @@ export interface BeaconDiagnosticsSummary {
      */
     boardAt: string | null;
     /**
-     * ★ ADVISORY ONLY — never a correctness gate (§5.7a). Empty in production
-     * today: upstream P27 has no `hints` producer, so `staleness().keyStale`
-     * never populates.
+     * ★ ADVISORY ONLY — never a correctness gate (§5.7a). Keys are 64-hex
+     * digests; the upstream reader selects the raw max seq across writers.
      */
     keyStaleAdvisory: Array<{
         topic: string;

@@ -13,9 +13,9 @@
  *  (c) ★TRUNCATION IS REPORTED, NOT SWALLOWED. `truncated` survives onto the
  *      wire shape, because it is what a consumer needs to know its sole-copy
  *      column is deferred.
- *  (d) ★keyStale IS ADVISORY-ONLY (§5.7a). The field is named `keyStaleAdvisory`,
- *      is empty in production (upstream P27 emits no `hints`), and nothing in
- *      the pipeline derives a gate from it.
+ *  (d) ★keyStale IS ADVISORY-ONLY (§5.7a). The field is named
+ *      `keyStaleAdvisory`, carries hash-only keys, and nothing in the pipeline
+ *      derives a gate from its raw-seq approximation.
  *  (e) ★NO ELAPSED-TIME FIELD REACHES THE WIRE. Every status frame is deduped by
  *      hashing the payload; an age recomputed per report would make each frame
  *      unique and turn an idle daemon into a constant transmitter — the exact
@@ -300,7 +300,7 @@ describe('★computeBeaconDiagnostics — sole-copy candidates (③sole-copy awa
     });
 });
 
-describe('★keyStale is advisory-only, and empty today (§5.7a / upstream P27)', () => {
+describe('★keyStale is advisory-only (§5.7a / upstream P27)', () => {
     it('exposes the advisory list under an explicitly advisory name, empty by default', () => {
         const d = computeBeaconDiagnostics({
             node: ME,
@@ -314,9 +314,7 @@ describe('★keyStale is advisory-only, and empty today (§5.7a / upstream P27)'
         // `keyStale` invites.
         expect(d).toHaveProperty('keyStaleAdvisory');
         expect(d).not.toHaveProperty('keyStale');
-        // Empty in production: upstream P27 has no `hints` producer, so
-        // `staleness().keyStale` never populates. Pinning the CURRENT state so
-        // that a P27 landing is a deliberate change here.
+        // Reports without hints preserve the old empty behavior exactly.
         expect(d.keyStaleAdvisory).toEqual([]);
     });
 
@@ -327,7 +325,7 @@ describe('★keyStale is advisory-only, and empty today (§5.7a / upstream P27)'
             board: board([]),
             now: 1_000_000,
             keyStaleAdvisory: [
-                { topic: 'config.settings', key: 'hashed-key', latestKnown: ['t', 'w', 4], haveLocally: false },
+                { topic: 'config.settings', key: 'a'.repeat(64), latestKnown: ['t', 'w', 4], haveLocally: false },
             ],
         });
 
