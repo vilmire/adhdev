@@ -729,6 +729,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                     parity: {
                         runs: parity.runs,
                         mismatches: parity.mismatches,
+                        persistentMismatches: parity.persistentMismatches,
                         missingInShadow: parity.missingInShadow,
                         extraInShadow: parity.extraInShadow,
                         fieldMismatch: parity.fieldMismatch,

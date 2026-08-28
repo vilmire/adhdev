@@ -80,11 +80,25 @@
  *     previous resolution made. Rejection (unsubscribe, node close) also clears
  *     it, leaving the mesh on the ledger, which is the safe direction.
  *
- *  4. PARITY CLEAN. Zero mismatches observed since boot. This is the condition
- *     the whole staged rollout was built to produce: Stage 3 exists so that the
- *     cutover has evidence rather than optimism. A mismatch means the projection
- *     and the ledger disagree somewhere, and until that is understood the
- *     replicated store does not get to answer questions.
+ *  4. PARITY CLEAN. Zero mismatches that SURVIVED a repair attempt
+ *     (`persistentMismatches`). This is the condition the whole staged rollout
+ *     was built to produce: Stage 3 exists so that the cutover has evidence
+ *     rather than optimism. A mismatch means the projection and the ledger
+ *     disagree somewhere, and until that is understood the replicated store does
+ *     not get to answer questions.
+ *
+ *     ★ It is deliberately NOT the raw cumulative `mismatches` count. That
+ *     counter's expected production value is nonzero — the mcp-server process
+ *     appends ledger entries with no armed shadow leg (a PROCESS boundary; see
+ *     seqscribe/mesh-dual-write.ts), every sweep reports them
+ *     `missing_in_shadow`, and the backfill then repairs them. Because
+ *     `mismatches` is cumulative and never decreases, gating on it latched this
+ *     condition closed on the first ordinary sweep and never reopened, which
+ *     silently disabled the cutover fleet-wide. `persistentMismatches` counts a
+ *     `missing_in_shadow` only when a LATER sweep reports the same id again —
+ *     i.e. the backfill did not repair it — and counts `field_mismatch` /
+ *     `extra_in_shadow` on sight, since neither is repairable. Real divergence
+ *     still blocks; the expected self-healing cycle no longer does.
  *
  * ── What this gate deliberately does NOT check ─────────────────────────────
  * Peer count and peer readiness. A mesh whose peers are all offline still has a
@@ -382,10 +396,31 @@ export function evaluateMeshReadReadiness(meshId: string): MeshReadReadiness {
         return { ready: false, reason: 'consumer_lag' };
     }
 
-    // ★ The Stage 3 evidence condition. Any mismatch since boot blocks the
-    // cutover for every mesh — parity counters are process-wide, and a
-    // projection bug is not plausibly confined to one mesh.
-    if (meshParityCounters().mismatches > 0) return { ready: false, reason: 'parity_mismatch' };
+    // ★ The Stage 3 evidence condition: a mismatch that SURVIVED a repair
+    // attempt blocks the cutover for every mesh — parity counters are
+    // process-wide, and a projection bug is not plausibly confined to one mesh.
+    //
+    // ── Why this is `persistentMismatches` and not `mismatches` ─────────────
+    // `mismatches` is cumulative-since-boot and never decreases, and its
+    // EXPECTED production value is nonzero: the mcp-server process appends
+    // ledger entries with no armed shadow leg (a process boundary, not a bug —
+    // see mesh-dual-write.ts), so every 15-minute sweep finds them
+    // `missing_in_shadow` and the backfill mirrors them. Gating on
+    // `mismatches > 0` therefore latched this condition CLOSED on the first
+    // ordinary sweep after boot and never reopened — a permanent, silent,
+    // fleet-wide block of the cutover, with the data provably repaired seconds
+    // later and every subsequent sweep comparing clean.
+    //
+    // `persistentMismatches` counts only what the repair could not fix: a
+    // `missing_in_shadow` id reported AGAIN by a later sweep, plus
+    // `field_mismatch` and `extra_in_shadow` on sight (neither is backfillable).
+    // That is the design's own real-failure signal, so the condition still
+    // blocks on every genuine divergence — it just stops treating the expected
+    // cross-process gap as one. Detection is untouched: `mismatches` still
+    // counts everything and the mismatch logs are unchanged.
+    if (meshParityCounters().persistentMismatches > 0) {
+        return { ready: false, reason: 'parity_mismatch' };
+    }
 
     return { ready: true, reason: null };
 }

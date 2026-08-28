@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
     runMeshParityCheck,
+    meshParityCounters,
     __resetMeshParityForTests,
     type ParityLedgerEntry,
 } from '../../src/seqscribe/mesh-parity.js';
@@ -221,5 +222,110 @@ describe('runMeshParityCheck — pinned scan interval (P21)', () => {
         // topic's archive floor open until abandonment.
         expect(after.length).toBe(before.length);
         expect(after.filter((c) => c.consumer.startsWith('stage3-mesh-parity'))).toEqual([]);
+    });
+});
+
+/**
+ * `persistentMismatches` — the readiness gate's condition 4.
+ *
+ * The distinction these pin is the one that makes the Phase 2 default flip
+ * safe. `mismatches` is cumulative-since-boot and its EXPECTED production
+ * value is nonzero: the mcp-server process appends ledger entries with no
+ * armed shadow leg, every sweep reports them `missing_in_shadow`, and the
+ * backfill repairs them between sweeps. Gating the read cutover on that
+ * counter latched it closed on the first ordinary sweep, fleet-wide and
+ * permanently. `persistentMismatches` counts only what a repair opportunity
+ * did NOT fix, which is the design's own real-failure signal.
+ */
+describe('runMeshParityCheck — persistent vs. healed mismatches', () => {
+    it('does not count a missing entry that a later sweep no longer reports', async () => {
+        const handle = await openNode('healed');
+
+        const entry = ledgerEntry({ id: 'healed-1', timestamp: '2026-01-01T00:00:00.000Z' });
+
+        // Sweep 1: the entry is missing from the shadow — detected and counted
+        // as a mismatch, but NOT yet as persistent. The backfill has not had
+        // its chance.
+        const first = await runMeshParityCheck(handle, MESH_ID, [entry]);
+        expect(first.mismatches.map((m) => m.kind)).toEqual(['missing_in_shadow']);
+        expect(meshParityCounters().mismatches).toBe(1);
+        expect(meshParityCounters().persistentMismatches).toBe(0);
+
+        // The repair lands.
+        await writeShadowRecord(handle, entry);
+
+        // Sweep 2 is clean, and the cumulative counter still records that
+        // detection happened — evidence is preserved, not erased.
+        const second = await runMeshParityCheck(handle, MESH_ID, [entry]);
+        expect(second.mismatches).toEqual([]);
+        expect(meshParityCounters().mismatches).toBe(1);
+        expect(meshParityCounters().persistentMismatches).toBe(0);
+    });
+
+    it('counts a missing entry that a later sweep reports again', async () => {
+        const handle = await openNode('persistent');
+
+        const entry = ledgerEntry({ id: 'persist-1', timestamp: '2026-01-01T00:00:00.000Z' });
+
+        await runMeshParityCheck(handle, MESH_ID, [entry]);
+        expect(meshParityCounters().persistentMismatches).toBe(0);
+
+        // Nothing repaired it. The recurrence is the real-failure signal.
+        await runMeshParityCheck(handle, MESH_ID, [entry]);
+        expect(meshParityCounters().persistentMismatches).toBe(1);
+
+        // And it keeps counting while it stays broken.
+        await runMeshParityCheck(handle, MESH_ID, [entry]);
+        expect(meshParityCounters().persistentMismatches).toBe(2);
+    });
+
+    it('counts field_mismatch immediately — it is not repairable', async () => {
+        const handle = await openNode('field');
+
+        const entry = ledgerEntry({ id: 'field-1', timestamp: '2026-01-01T00:00:00.000Z' });
+        await writeShadowRecord(handle, entry);
+
+        // Same id, divergent projected field. The backfill refuses this class
+        // by design (re-mirroring would erase the evidence), so there is no
+        // repair opportunity to wait for.
+        const result = await runMeshParityCheck(handle, MESH_ID, [
+            { ...entry, kind: 'different_kind' },
+        ]);
+        expect(result.mismatches.map((m) => m.kind)).toEqual(['field_mismatch']);
+        expect(meshParityCounters().persistentMismatches).toBe(1);
+    });
+
+    it('tracks pending ids per mesh, so a clean sweep on one cannot heal another', async () => {
+        const OTHER_MESH = 'parity-window-mesh-other';
+        const handle = openSeqscribeNode({
+            dbPath: join(tmpDir('per-mesh'), 'seq.db'),
+            env: {},
+            storedFleetSecret: null,
+            meshIds: [MESH_ID, OTHER_MESH],
+        });
+        handles.push(handle);
+
+        // The SAME id in both meshes — the case a globally-keyed pending set
+        // would confuse. Mesh A gets repaired; mesh B never does.
+        const entry = ledgerEntry({ id: 'shared-id', timestamp: '2026-01-01T00:00:00.000Z' });
+
+        await runMeshParityCheck(handle, MESH_ID, [entry]);
+        await runMeshParityCheck(handle, OTHER_MESH, [entry]);
+        expect(meshParityCounters().persistentMismatches).toBe(0);
+
+        // Repair mesh A only.
+        await handle.node
+            .log(meshEventsTopic(MESH_ID))
+            .append(MESH_EVENT_ENTRY_KIND, projectMeshLedgerEntry(entry));
+
+        // A's sweep is clean and must NOT clear B's pending id.
+        const a = await runMeshParityCheck(handle, MESH_ID, [entry]);
+        expect(a.mismatches).toEqual([]);
+        expect(meshParityCounters().persistentMismatches).toBe(0);
+
+        // ★ B still reports it, and that recurrence must still count.
+        const b = await runMeshParityCheck(handle, OTHER_MESH, [entry]);
+        expect(b.mismatches.map((m) => m.kind)).toEqual(['missing_in_shadow']);
+        expect(meshParityCounters().persistentMismatches).toBe(1);
     });
 });

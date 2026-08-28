@@ -59,6 +59,7 @@ describe('summarizeSeqscribeStats', () => {
             dualWriteDroppedBucket: 0,
             dualWriteBackfilledBucket: 0,
             parityMismatchBucket: 0,
+            parityPersistentMismatchBucket: 0,
             parityRan: false,
             parityMissingInShadowBucket: 0,
             parityExtraInShadowBucket: 0,
@@ -72,7 +73,14 @@ describe('summarizeSeqscribeStats', () => {
             {
                 authorityEnabled: true,
                 dualWrite: { active: true, failed: 4, dropped: 250, backfilled: 40 },
-                parity: { runs: 3, mismatches: 24, missingInShadow: 9, extraInShadow: 15, fieldMismatch: 0 },
+                parity: {
+                    runs: 3,
+                    mismatches: 24,
+                    persistentMismatches: 2,
+                    missingInShadow: 9,
+                    extraInShadow: 15,
+                    fieldMismatch: 0,
+                },
             },
         );
 
@@ -94,10 +102,19 @@ describe('summarizeSeqscribeStats', () => {
         // which lands at 4), so this pins the bucketing rather than a constant.
         expect(summary.dualWriteBackfilledBucket).toBe(3);
         expect(summary.dualWriteBackfilledBucket).not.toBe(40);
-        // The combined `parityMismatchBucket` (4, from mismatches=24) answers
-        // "is Stage 4 blocked"; the per-class axes answer "blocked by what" —
-        // each bucketed independently against its OWN raw count, not derived
-        // from the combined total, so they need not sum to it.
+        // ★ `parityPersistentMismatchBucket` answers "is the read cutover
+        // blocked"; the combined `parityMismatchBucket` answers only "was
+        // anything ever detected", which is EXPECTED to be nonzero in normal
+        // operation (mcp-server appends, repaired by the backfill). The two are
+        // bucketed independently from their own raw counts, so a healthy daemon
+        // reads as mismatch-nonzero + persistent-zero.
+        expect(summary.parityPersistentMismatchBucket).toBe(2); // 2 → [1,10)
+        expect(summary.parityPersistentMismatchBucket).not.toBe(
+            summary.parityMismatchBucket,
+        );
+        // The per-class axes answer "blocked by what" — each bucketed
+        // independently against its OWN raw count, not derived from the
+        // combined total, so they need not sum to it.
         expect(summary.parityMissingInShadowBucket).toBe(2); // 9 → [1,10)
         expect(summary.parityExtraInShadowBucket).toBe(3); // 15 → [10,100)
         expect(summary.parityFieldMismatchBucket).toBe(0); // 0 → none

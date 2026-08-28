@@ -25,9 +25,11 @@
  *     worse failure than a shadow that skips records, and the skip is counted.
  *
  * ── Off means off, and primary is a SUPERSET of shadow ─────────────────────
- * `ADHDEV_SEQSCRIBE_MESH` (design §3): `shadow` (default) writes the shadow leg;
- * `off` makes every entry point an immediate return, so the daemon behaves
- * byte-identically to a build without this file.
+ * `ADHDEV_SEQSCRIBE_MESH` (design §3): `primary` (★ the default since the Phase
+ * 2 flip) writes the shadow leg AND serves allow-listed reads from it; `shadow`
+ * writes the leg without moving any read; `off` makes every entry point an
+ * immediate return, so the daemon behaves byte-identically to a build without
+ * this file. `shadow` and `off` are the rollback path.
  *
  * ★ Stage 4A adds `primary`, and the important property is that it does NOT
  * turn the shadow off. `primary` = shadow's writes and parity checking, PLUS a
@@ -143,8 +145,19 @@ export const MAX_INFLIGHT = 512;
 /**
  * Resolve the mode. The three values are explicit; anything else is `shadow`.
  *
- * ★ Note the asymmetry, which is deliberate. An unrecognized value falls back
- * to `shadow` — NOT to `off` and NOT to `primary`:
+ * ── ★ Phase 2 default flip: ABSENT now means `primary` ─────────────────────
+ * An unset flag is the production posture of the entire fleet, so this line is
+ * what actually turns the read cutover on. It is safe to default because the
+ * mode is only ONE of two independent permissions: every switched read must
+ * ALSO pass the per-mesh readiness gate (mesh-read-readiness.ts), which is
+ * fail-closed on all four of its conditions and falls back to the ledger. The
+ * mode says what the operator intends; readiness says whether this mesh's
+ * replica can actually answer right now. Defaulting the intent does not weaken
+ * the check.
+ *
+ * ★ Note the asymmetry, which is deliberate and is NOT changed by the flip. An
+ * unrecognized value still falls back to `shadow` — NOT to `off` and NOT to
+ * `primary`:
  *
  *   · not `off`, because the flag exists to disable a default-on write leg, and
  *     a typo must not silently stop replication.
@@ -153,17 +166,23 @@ export const MAX_INFLIGHT = 512;
  *     the legacy ledger, which is the store that cannot be wrong. A typo may
  *     cost replication observability; it must never redirect reads.
  *
+ * The distinction that keeps both rules coherent: ABSENT is a deployment
+ * default the operator never spoke to, and it resolves to the mode this phase
+ * ships. A value the operator DID write but that cannot be parsed is a stated
+ * intent we failed to understand, and guessing `primary` there would move reads
+ * on the strength of a typo. Explicit `shadow` and `off` remain the rollback.
+ *
  * The unrecognized value is still logged once so it is visible as a typo.
  */
 export function resolveMeshDualWriteMode(env: NodeJS.ProcessEnv = process.env): MeshDualWriteMode {
     const raw = env[MESH_DUAL_WRITE_ENV]?.trim().toLowerCase();
-    if (!raw) return 'shadow';
+    if (!raw) return 'primary';
     if (raw === 'off') return 'off';
     if (raw === 'shadow') return 'shadow';
     if (raw === 'primary') return 'primary';
     warnOnce(
         `unrecognized ${MESH_DUAL_WRITE_ENV}=${raw}; treating as 'shadow' (reads stay on the ledger). ` +
-            "Valid values are 'shadow' (default), 'primary' and 'off'.",
+            "Valid values are 'primary' (the default when unset), 'shadow' and 'off'.",
     );
     return 'shadow';
 }

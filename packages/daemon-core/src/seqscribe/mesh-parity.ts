@@ -109,6 +109,37 @@ export interface MeshParityCounters {
     fieldMismatch: number;
     /** Sum of the three mismatch classes — the number Stage 4 needs at zero. */
     mismatches: number;
+    /**
+     * Mismatches that SURVIVED a repair attempt — the readiness gate's actual
+     * evidence condition (mesh-read-readiness.ts condition 4).
+     *
+     * ★ Why `mismatches` alone could not be that condition, and why this is not
+     * a weakening of it:
+     *
+     * `mismatches` is cumulative since boot and never decreases — deliberately,
+     * because it is the Stage 3 evidence record and erasing it would erase the
+     * proof the cutover rests on. But the EXPECTED steady state in production
+     * is nonzero: the mcp-server process appends ledger entries with no armed
+     * shadow leg (a PROCESS boundary — see mesh-dual-write.ts), so every sweep
+     * finds `missing_in_shadow` entries which the backfill then mirrors. Gating
+     * the cutover on `mismatches > 0` therefore latched CLOSED on the first
+     * ordinary sweep and stayed closed forever, process-wide, even though the
+     * data was repaired seconds later and every later sweep compared clean.
+     *
+     * The discriminator the design already names is recurrence: "a mismatch
+     * that survives a backfill into the next sweep is a REAL replication
+     * failure, cleanly distinguishable from the expected cross-process gap."
+     * This counter is that signal. An id reported `missing_in_shadow` twice —
+     * i.e. still missing after a sweep that had the chance to repair it —
+     * counts here and blocks the cutover permanently, exactly as before.
+     *
+     * `field_mismatch` and `extra_in_shadow` count here IMMEDIATELY, on first
+     * observation, because neither is repairable: the backfill refuses both by
+     * design (re-mirroring a divergent record would erase the evidence, and an
+     * extra has no ledger row to mirror). For those classes "survived a repair
+     * attempt" is true the moment they are seen.
+     */
+    persistentMismatches: number;
     /** Comparisons run since process start. */
     runs: number;
 }
@@ -119,8 +150,24 @@ const counters: MeshParityCounters = {
     extraInShadow: 0,
     fieldMismatch: 0,
     mismatches: 0,
+    persistentMismatches: 0,
     runs: 0,
 };
+
+/**
+ * Ledger ids reported `missing_in_shadow` by a PREVIOUS sweep and not yet seen
+ * repaired, keyed by mesh.
+ *
+ * ★ Keyed per mesh because the id space is per mesh, and an entry is only
+ * "still missing" relative to the mesh whose topic should hold it.
+ *
+ * An id is removed as soon as a later sweep does NOT report it — that sweep is
+ * positive evidence the repair landed. So this set holds exactly the entries
+ * that are between "reported once" and "confirmed repaired", and an id that is
+ * still in it when the SAME sweep reports it again is the recurrence that
+ * `persistentMismatches` counts.
+ */
+const pendingMissing = new Map<string, Set<string>>();
 
 /** A single disagreement, for logging and for tests. */
 export interface MeshParityMismatch {
@@ -399,6 +446,36 @@ export async function runMeshParityCheck(
     counters.fieldMismatch += field;
     counters.mismatches += result.mismatches.length;
 
+    // ── Persistence: which of these SURVIVED a repair attempt ────────────────
+    // See `persistentMismatches`. The unrepairable classes count on sight; only
+    // `missing_in_shadow` gets the one-sweep grace the backfill needs, and it
+    // gets exactly one.
+    counters.persistentMismatches += extra + field;
+
+    const previouslyMissing = pendingMissing.get(meshId) ?? new Set<string>();
+    const stillMissing = new Set<string>();
+    for (const m of result.mismatches) {
+        if (m.kind !== 'missing_in_shadow') continue;
+        stillMissing.add(m.id);
+        if (previouslyMissing.has(m.id)) {
+            // Reported again after a sweep that could have repaired it. This is
+            // the real-failure signal, not the cross-process gap.
+            counters.persistentMismatches++;
+            LOG.warn(
+                'Seqscribe',
+                `parity mismatch PERSISTED across sweeps mesh=${meshId} entry=${shortId(m.id)} ` +
+                    `ledgerKind=${m.ledgerKind ?? 'unknown'} — the backfill did not repair it; ` +
+                    'the mesh read cutover stays on the ledger',
+            );
+        }
+    }
+    // ★ Replace rather than merge: an id absent from THIS sweep's mismatches was
+    // repaired (or fell off the compared tail), and either way it is no longer
+    // evidence of a failure. Merging would make the set grow-only and turn a
+    // single healed entry into a permanent block — the very wedge this replaces.
+    if (stillMissing.size > 0) pendingMissing.set(meshId, stillMissing);
+    else pendingMissing.delete(meshId);
+
     if (result.mismatches.length > 0) {
         // ★ Identifiers and field NAMES only — never a field value (§6.1).
         for (const m of result.mismatches.slice(0, MISMATCH_LOG_CAP)) {
@@ -439,5 +516,7 @@ export function __resetMeshParityForTests(): void {
     counters.extraInShadow = 0;
     counters.fieldMismatch = 0;
     counters.mismatches = 0;
+    counters.persistentMismatches = 0;
     counters.runs = 0;
+    pendingMissing.clear();
 }

@@ -104,11 +104,27 @@ export interface SeqscribeStatusSummary {
     /**
      * Bucketed count of parity mismatches observed since boot.
      *
-     * ★ This is the number Stage 4 needs at 0 before the read-path cutover.
+     * ★ DETECTION, not the gate. A nonzero value here is EXPECTED in normal
+     * operation: the mcp-server process appends ledger entries with no armed
+     * shadow leg, every sweep reports them, and the backfill repairs them (see
+     * the process-boundary note in mesh-dual-write.ts). Read it together with
+     * `parityPersistentMismatchBucket` — this one nonzero while that one is 0 is
+     * the self-healing cycle working as designed.
      * Bucketed rather than raw for the dedup reason above — a nonzero bucket is
      * the signal; the exact count lives in the daemon log and `get_status_metadata`.
      */
     parityMismatchBucket: number;
+    /**
+     * Bucketed count of mismatches that SURVIVED a repair attempt.
+     *
+     * ★ THIS is the number the read-path cutover needs at 0 — it is the
+     * readiness gate's actual condition 4 (mesh-read-readiness.ts). A
+     * `missing_in_shadow` counts here only once a later sweep reports the same
+     * id again; `field_mismatch` and `extra_in_shadow` count on sight, being
+     * unrepairable. Nonzero means a genuine replication failure and the whole
+     * process has fallen back to the ledger.
+     */
+    parityPersistentMismatchBucket: number;
     /** True once at least one parity comparison has run. */
     parityRan: boolean;
     /**
@@ -183,6 +199,8 @@ export interface SummarizeOptions {
     parity?: {
         runs: number;
         mismatches: number;
+        /** Mismatches that survived a repair attempt — the cutover's gate. */
+        persistentMismatches?: number;
         /** Per-class breakdown. Omitted → each axis reported as 0. */
         missingInShadow?: number;
         extraInShadow?: number;
@@ -294,6 +312,10 @@ export function summarizeSeqscribeStats(
         dualWriteDroppedBucket: bucket(opts.dualWrite?.dropped ?? 0, BACKLOG_BUCKETS),
         dualWriteBackfilledBucket: bucket(opts.dualWrite?.backfilled ?? 0, BACKLOG_BUCKETS),
         parityMismatchBucket: bucket(opts.parity?.mismatches ?? 0, BACKLOG_BUCKETS),
+        parityPersistentMismatchBucket: bucket(
+            opts.parity?.persistentMismatches ?? 0,
+            BACKLOG_BUCKETS,
+        ),
         parityRan: (opts.parity?.runs ?? 0) > 0,
         parityMissingInShadowBucket: bucket(opts.parity?.missingInShadow ?? 0, BACKLOG_BUCKETS),
         parityExtraInShadowBucket: bucket(opts.parity?.extraInShadow ?? 0, BACKLOG_BUCKETS),
