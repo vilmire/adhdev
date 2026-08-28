@@ -100,6 +100,11 @@ test('local bare get_mesh IPC deadline covers the refresh-path responder worst c
   assert.ok(ipc > 15_000);
 });
 
+test('local bare cleanup_mesh_sessions IPC deadline gets 60s mutating budget', () => {
+  const ipc = getTimeoutMs('cleanup_mesh_sessions', '');
+  assert.equal(ipc, 60_000);
+});
+
 // Static invariant sweep: every heavy/probe verb this file knows about must keep
 // IPC (here) >= its documented relay/responder floor. A future command added to one
 // tier without the other regresses silently unless this list is extended alongside it.
@@ -114,6 +119,7 @@ test('invariant sweep: IPC deadline >= documented relay/responder floor for ever
     ['get_runtime_snapshot', SESSION_HOST_RESPONDER_MS],
     ['session_host_get_diagnostics', SESSION_HOST_RESPONDER_MS],
     ['get_mesh', GET_MESH_REFRESH_WORST_CASE_MS],
+    ['cleanup_mesh_sessions', 60_000],
   ];
   for (const [verb, floor] of floors) {
     const ipc = getTimeoutMs(verb, '');

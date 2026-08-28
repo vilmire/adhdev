@@ -82,6 +82,9 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   // chain (nodes run in parallel, so this is not multiplied by node count). 60s covers
   // that refresh path with headroom.
   get_mesh: 60_000,
+  // cleanup_mesh_sessions: Mutating command for cleaning up stale sessions,
+  // needs sufficient time to terminate processes and clear state.
+  cleanup_mesh_sessions: 60_000,
 };
 
 // IPC-PROBE-TIMEOUT-RETRY (2026-08-18 RCA, verdict D — whole-process freeze):
