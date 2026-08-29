@@ -43,6 +43,60 @@ function createPayload(overrides: Partial<StatusReportPayload> = {}): StatusRepo
 }
 
 describe('statusPayloadToEntries', () => {
+    it('keeps Beacon diagnostics on the payload producer instead of rebinding them to the transport target', () => {
+        const coordinatorBeacon = {
+            node: 'writer-coordinator',
+            peers: [],
+            maxBehind: 0,
+            soleCopy: [{
+                topic: 'mesh.mesh_dead.events',
+                writer: 'writer-coordinator',
+                localSeq: 431,
+                bestPeerSeq: null,
+                unreplicated: 431,
+                verdict: 'sole-copy' as const,
+            }],
+            truncated: 0,
+            soleCopyDeferred: false,
+            topicScope: ['mesh.mesh_dead.events'],
+            boardAt: '2026-08-29T02:00:00.000Z',
+            keyStaleAdvisory: [],
+        }
+        const remoteBeacon = {
+            ...coordinatorBeacon,
+            node: 'writer-remote',
+            soleCopy: [{
+                ...coordinatorBeacon.soleCopy[0],
+                writer: 'writer-remote',
+                localSeq: 17,
+                unreplicated: 17,
+            }],
+        }
+
+        const mismatched = statusPayloadToEntries(createPayload({
+            instanceId: 'daemon_mach_coordinator',
+            beacon: coordinatorBeacon,
+        }), {
+            daemonId: 'daemon_mach_remote',
+            existingDaemon: {
+                id: 'daemon_mach_remote',
+                type: 'adhdev-daemon',
+                status: 'online',
+                beacon: coordinatorBeacon,
+            },
+        })
+        const matched = statusPayloadToEntries(createPayload({
+            instanceId: 'daemon_mach_remote',
+            beacon: remoteBeacon,
+        }), {
+            daemonId: 'daemon_mach_remote',
+        })
+
+        expect(mismatched[0].beacon).toBeUndefined()
+        expect(matched[0].beacon).toEqual(remoteBeacon)
+        expect(matched[0].beacon?.soleCopy[0]?.unreplicated).toBe(17)
+    })
+
     it('preserves the P2P-only fleet.status peer view on the daemon entry', () => {
         const fleetStatusPeerView = {
             peers: [{

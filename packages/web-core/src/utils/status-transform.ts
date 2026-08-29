@@ -8,6 +8,7 @@
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
  */
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import type { DaemonData } from '../types'
 import {
     mergeSessionEntrySummary,
@@ -127,6 +128,7 @@ export function statusPayloadToEntries(
     const { daemonId, existingDaemon, existingEntries, timestamp: tsOverride } = options
     const ts = tsOverride || payload.timestamp || Date.now()
     const sessions = payload.sessions || []
+    const beaconSourceMatches = daemonIdsEquivalent(daemonId, payload.instanceId)
     const { topLevel, childrenByParent } = groupChildSessions(sessions)
     const existingSessionMap = buildExistingSessionMap(existingEntries, daemonId)
     const mergedMachine = payload.machine
@@ -167,9 +169,15 @@ export function statusPayloadToEntries(
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),
         ...(payload.availableProviders && { availableProviders: payload.availableProviders }),
         // seqscribe Beacon staleness / sole-copy (design §7.1). P2P-only by
-        // construction: the server status path never carries this field, so a
-        // WS-sourced payload simply omits it and the badge stays hidden.
-        ...(payload.beacon && { beacon: payload.beacon }),
+        // construction: the server status path never carries this field.
+        //
+        // `beacon` diagnoses the payload PRODUCER, not the transport target the
+        // caller asked us to key this entry under. A routed/misattributed rich
+        // payload must therefore clear an older contaminated value instead of
+        // painting its producer-local finding onto another machine's card.
+        // Sparse metadata payloads omit the field and still preserve an existing
+        // good value through the leading existingDaemon spread.
+        ...(payload.beacon && { beacon: beaconSourceMatches ? payload.beacon : undefined }),
         // Phase 4 Stage 2 receive-side cross-check. Also P2P-only by
         // construction; an empty view is meaningful and must overwrite an
         // older non-empty view after the last SUB peer disconnects.

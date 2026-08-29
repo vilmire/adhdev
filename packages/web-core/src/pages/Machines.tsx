@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import type { FleetStatusPeerEntry } from '@adhdev/daemon-core'
-import { canonicalDaemonId } from '@adhdev/mesh-shared'
+import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import { useDaemons } from '../compat'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
@@ -298,6 +298,23 @@ export default function MachinesPage() {
                                 || canonicalDaemonId(machine.machineId)
                                 || machine.daemonIde.id,
                         )
+                        // `beacon` describes the daemon that PRODUCED the rich
+                        // P2P payload. Unlike a fleet.status peer entry, it is
+                        // not a diagnosis of every machine mentioned by that
+                        // payload and must never be rebound transitively.
+                        //
+                        // Cloud status ingestion keys an entry by the transport
+                        // target while retaining the producer's `instanceId`.
+                        // Require those identities to agree before putting the
+                        // producer-local advisory on this card. A missing or
+                        // mismatched identity means "no diagnostics for this
+                        // machine", so the honest rendering is no badge.
+                        const machineBeacon = daemonIdsEquivalent(
+                            machine.daemonIde.id,
+                            machine.daemonIde.instanceId,
+                        )
+                            ? machine.daemonIde.beacon
+                            : undefined
 
                         return (
                             <div
@@ -363,7 +380,7 @@ export default function MachinesPage() {
                                               (and every WS-only machine, since beacon rides P2P alone) looks
                                               exactly as it does today.
                                             */}
-                                            <BeaconAdvisoryBadge beacon={machine.daemonIde?.beacon} />
+                                            <BeaconAdvisoryBadge beacon={machineBeacon} />
                                             <FleetStatusPeerViewBadge
                                                 peer={fleetPeerEntry}
                                                 wsOnline={isOnline}
