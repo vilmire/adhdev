@@ -90,6 +90,7 @@ import {
 } from './mesh-graph-input-binding.js';
 import { mergeWorktreeAffinityTag, resolveWorkspaceRefForMaterialize } from './mesh-graph-workspace-bind.js';
 import { expireWorkerTaskTokensForTask } from './worker-mcp-isolation.js';
+import { discardWorkerMailboxForTask } from './worker-mailbox.js';
 import {
     applyGraphCancelCascade,
     classifyGraphRollup,
@@ -369,6 +370,12 @@ export function commitTaskTerminalAndAdvanceGraph(
         try {
             expireWorkerTaskTokensForTask(terminal.meshId, terminal.taskId);
         } catch { /* expiry is best-effort — a stale token still fails Phase B's causal checks */ }
+        // E-T0 (design §9.2 G): an undelivered mailbox memo for a task that just
+        // went terminal can never be delivered — there is no future tool call to
+        // ride on. Discard alongside the token so neither outlives the task.
+        try {
+            discardWorkerMailboxForTask(terminal.meshId, terminal.taskId);
+        } catch { /* best-effort, same as the token expiry above */ }
     }
 
     // Step 9 — AFTER commit: drain the outbox (queue wake + delivery marks). No
