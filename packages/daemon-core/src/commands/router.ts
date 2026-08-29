@@ -695,6 +695,7 @@ export class DaemonCommandRouter {
             getCachedAggregateMeshStatus: this.getCachedAggregateMeshStatus.bind(this),
             rememberAggregateMeshStatus: this.rememberAggregateMeshStatus.bind(this),
             execute: this.execute.bind(this),
+            markWorktreeBootstrapTerminalState: this.markWorktreeBootstrapTerminalState.bind(this),
             aggregateMeshStatusCache: this.aggregateMeshStatusCache,
             swrRefreshInFlight: this.swrRefreshInFlight,
             runningRefineJobs: this.runningRefineJobs,

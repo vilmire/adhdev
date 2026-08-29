@@ -22,7 +22,14 @@ import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 
 export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
     mesh_forward_event: async (ctx: HighFamilyContext, args: any) => {
-        return handleMeshForwardEvent({ instanceManager: ctx.deps.instanceManager } as any, args as Record<string, unknown>);
+        // WORKTREE-BOOTSTRAP-COORD-STATE: a forwarded worktree_bootstrap_complete/_failed event
+        // must stamp the terminal bootstrap state into the coordinator's inline mesh view via
+        // router.markWorktreeBootstrapTerminalState. The handler only has `ctx.deps`, which does
+        // NOT expose the router itself, so we pass the bound method explicitly.
+        return handleMeshForwardEvent({
+            instanceManager: ctx.deps.instanceManager,
+            router: { markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState },
+        } as any, args as Record<string, unknown>);
     },
 
     get_pending_mesh_events: async (ctx: HighFamilyContext, args: any) => {
