@@ -14,6 +14,7 @@ import { meshNodeLogsHandlers } from '../../src/commands/low-family/mesh-node-lo
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
 import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mailbox.js'
 import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-peer-context.js'
+import { transcriptReplicaHandlers } from '../../src/commands/low-family/transcript-replica.js'
 
 // RF-ROUTER LOW family extraction: the registry must carry exactly the commands
 // removed from executeDaemonCommand's switch, and each handler must return the same
@@ -64,14 +65,19 @@ const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', '
 const WORKER_MAILBOX_CMDS = ['deposit_worker_mailbox', 'worker_drain_mailbox']
 // WORKER-MCP D: the worker's read-only sibling-context lookup (design §6).
 const WORKER_PEER_CONTEXT_CMDS = ['worker_peer_context_pull']
+// Phase 3 §8 unit 3: daemon-local transcript replica IPC (design §4,
+// "별도 프로세스 경계") — mcp-server reaches the seqscribe-node-owning
+// daemon through these two commands instead of opening seqscribe.db itself.
+const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcript_replica']
 
 describe('low-family registry', () => {
-  it('registers all 55 LOW family commands once, no overlap', () => {
+  it('registers all 57 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
+      ...TRANSCRIPT_REPLICA_CMDS,
     ]
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
@@ -91,6 +97,7 @@ describe('low-family registry', () => {
     expect(Object.keys(workerReportHandlers)).toEqual(WORKER_REPORT_CMDS)
     expect(Object.keys(workerMailboxHandlers)).toEqual(WORKER_MAILBOX_CMDS)
     expect(Object.keys(workerPeerContextHandlers)).toEqual(WORKER_PEER_CONTEXT_CMDS)
+    expect(Object.keys(transcriptReplicaHandlers)).toEqual(TRANSCRIPT_REPLICA_CMDS)
   })
 
   // The lists above are written by hand, which is what makes them a real gate:
@@ -109,7 +116,7 @@ describe('low-family registry', () => {
       diagnosticsHandlers, statusMetaHandlers, coordinatorPromptHandlers,
       notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
       meshNodeLogsHandlers, workerReportHandlers, workerMailboxHandlers,
-      workerPeerContextHandlers,
+      workerPeerContextHandlers, transcriptReplicaHandlers,
     ].flatMap((handlers) => Object.keys(handlers))
 
     expect(new Set(union).size).toBe(union.length)
