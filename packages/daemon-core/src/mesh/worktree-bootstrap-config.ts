@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
+import { pickBestTransitGitStatus } from '@adhdev/mesh-shared';
 import {
     isMeshConfigRecord,
     normalizeMeshCommandConfig,
@@ -284,23 +285,104 @@ export function isWorktreeBootstrapStaleRunning(
     }
 }
 
+/** Minimal clean-tree verdict shared by {@link isRemoteWorktreeBootstrapStaleRunning} — deliberately
+ *  NOT imported from mesh-node-identity.ts's deriveMeshNodeHealthFromGit/getGitSubmoduleDriftState
+ *  (the canonical health classifier) to avoid a two-file import cycle: that module will need to
+ *  import isRemoteWorktreeBootstrapStaleRunning from HERE for finalizeMeshNodeStatus's mirrored
+ *  bootstrap gate. Deliberately stricter than the local execFileSync check above (no
+ *  gitlink-pointer-move exemption) — conservative is the right default for a remote-sourced verdict. */
+function isTransitGitStatusCleanEnough(git: Record<string, unknown> | null | undefined): boolean {
+    if (!git || git.isGitRepo !== true || !git.branch) return false;
+    const submodules = Array.isArray(git.submodules) ? git.submodules : [];
+    for (const entry of submodules) {
+        const submodule = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
+        if (submodule.dirty === true || submodule.outOfSync === true || submodule.error) return false;
+    }
+    const changes = Number(git.staged || 0) + Number(git.modified || 0)
+        + Number(git.untracked || 0) + Number(git.deleted || 0) + Number(git.renamed || 0);
+    return changes === 0;
+}
+
+/**
+ * Remote counterpart of {@link isWorktreeBootstrapStaleRunning}. That check can only verify
+ * clean-ness via a local `git status` shell-out, so its `!existsSync(workspace)` guard
+ * unconditionally returns false for a node whose workspace lives on a DIFFERENT machine — the one
+ * worktree kind the stale-'running' backstop could never recover, permanently deferring a remote
+ * node whose terminal bootstrap stamp never reached this coordinator (dropped P2P event, a
+ * clone-reply race, etc — see the mesh_status/queue view-divergence this backstop closes).
+ *
+ * A remote node still carries equivalent proof of liveness, just sourced from P2P instead of a
+ * local shell-out: mesh_status's live git probe stamps `node.lastGit`/`node.last_git`
+ * (recordInlineMeshDirectGitTruth in mesh-node-identity.ts) whenever it reaches the node directly.
+ * A clean snapshot taken AFTER the bootstrap's startedAt/updatedAt is exactly the same evidence the
+ * local check demands — the bootstrap work has settled since it began. Same conservative defaults
+ * as the local check: no probe yet, or a probe predating the bootstrap start, leaves the gate
+ * closed.
+ */
+export function isRemoteWorktreeBootstrapStaleRunning(
+    node: {
+        worktreeBootstrap?: { status?: string; startedAt?: string; updatedAt?: string; completedAt?: string };
+        workspace?: string;
+        lastGit?: unknown;
+        last_git?: unknown;
+        lastProbe?: unknown;
+        last_probe?: unknown;
+    } | undefined,
+    nowMs: number = Date.now(),
+): boolean {
+    const wb = node?.worktreeBootstrap;
+    if (!wb || wb.status !== 'running') return false;
+    const startedRaw = wb.updatedAt || wb.startedAt;
+    if (!startedRaw) return false;
+    const startedMs = Date.parse(startedRaw);
+    if (!Number.isFinite(startedMs)) return false;
+    if (nowMs - startedMs <= WORKTREE_BOOTSTRAP_STALE_RUNNING_MS) return false;
+    const workspace = typeof node?.workspace === 'string' ? node.workspace.trim() : '';
+    // Only the remote case (no local workspace to verify) is this function's job — a
+    // locally-verifiable workspace is the sibling check's responsibility.
+    if (!workspace || existsSync(workspace)) return false;
+    // The probe's OWN recorded time lives on the envelope (`lastGit.checkedAt`), stamped by
+    // recordInlineMeshDirectGitTruth (mesh-node-identity.ts) when the P2P probe actually ran.
+    // pickBestTransitGitStatus's returned `lastCheckedAt` is NOT that value — it always reflects
+    // either an explicit override or the CURRENT wall clock (mesh-shared normalizeGitStatus), so
+    // reading it here would make every call "after start" regardless of when the probe really ran.
+    const rawGit = readRecord(node?.lastGit) ?? readRecord((node as any)?.last_git);
+    const checkedAt = typeof rawGit?.checkedAt === 'number' ? rawGit.checkedAt : undefined;
+    if (checkedAt === undefined || checkedAt <= startedMs) return false;
+    const git = pickBestTransitGitStatus(node as Record<string, unknown>, {});
+    if (!git) return false;
+    return isTransitGitStatusCleanEnough(git as unknown as Record<string, unknown>);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
 /**
  * COMPLETION-PROPAGATION F7 (C2): the single shared consume-ready / bootstrap-pending defer
  * predicate. A task must NOT be injected into a worktree node whose bootstrap is still 'running'
  * — the provider is not yet ready to consume input, so the inject lands in the input buffer and
  * is silently swallowed (empty session). Both the remote dispatch guard (the router agent_command
  * handler) and the local queue-claim gate (tryAssignQueueTask) route through THIS predicate so
- * they agree on exactly when to defer. Returns true = defer. The stale-'running' backstop
- * (isWorktreeBootstrapStaleRunning) is honored here too: a 'running' state far older than any real
- * bootstrap whose worktree is git-clean is treated as silently complete (do NOT defer), so a node
- * whose terminal stamp never reached this daemon is not stranded forever.
+ * they agree on exactly when to defer. Returns true = defer. The stale-'running' backstops
+ * (isWorktreeBootstrapStaleRunning for a local workspace, isRemoteWorktreeBootstrapStaleRunning for
+ * a remote one) are honored here too: a 'running' state far older than any real bootstrap whose
+ * worktree is proven clean is treated as silently complete (do NOT defer), so a node whose terminal
+ * stamp never reached this daemon is not stranded forever — local or remote alike.
  */
 export function shouldDeferDispatchForBootstrap(
-    node: { worktreeBootstrap?: { status?: string; startedAt?: string; updatedAt?: string; completedAt?: string }; workspace?: string } | undefined,
+    node: {
+        worktreeBootstrap?: { status?: string; startedAt?: string; updatedAt?: string; completedAt?: string };
+        workspace?: string;
+        lastGit?: unknown;
+        last_git?: unknown;
+        lastProbe?: unknown;
+        last_probe?: unknown;
+    } | undefined,
     nowMs: number = Date.now(),
 ): boolean {
     if (node?.worktreeBootstrap?.status !== 'running') return false;
-    return !isWorktreeBootstrapStaleRunning(node, nowMs);
+    return !(isWorktreeBootstrapStaleRunning(node, nowMs) || isRemoteWorktreeBootstrapStaleRunning(node, nowMs));
 }
 
 export interface WorktreeBootstrapConfigLoadResult {

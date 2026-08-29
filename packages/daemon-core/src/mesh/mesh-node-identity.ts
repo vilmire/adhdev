@@ -23,6 +23,7 @@ import type { MeshReportedMemberState } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from '../mesh/mesh-warmup-deadline.js';
+import { isWorktreeBootstrapStaleRunning, isRemoteWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import * as fs from 'fs';
 import { workingDirBasename } from '../providers/working-dir.js';
 import { readMeshTimeoutEnvMs, MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
@@ -1520,10 +1521,21 @@ export function finalizeMeshNodeStatus(args: {
             return;
         }
         if (bootstrap.status === 'running' && bootstrap.required !== false) {
-            status.launchReady = false;
-            status.launchBlockedReason = 'worktree_bootstrap_running';
-            status.launchBlockedMessage = 'Required worktree bootstrap is still running; wait for it to finish before launching an agent into this node.';
-            return;
+            // Stale-'running' backstop (mirrors the auto-launch gate's shouldDeferDispatchForBootstrap
+            // — see worktree-bootstrap-config.ts): a 'running' state far older than any real
+            // bootstrap, proven clean/settled since, means the terminal stamp likely never reached
+            // this daemon's mesh view. Without this, mesh_status's launchReady stayed permanently
+            // false for exactly the node class shouldDeferDispatchForBootstrap already recovers —
+            // a REMOTE worktree node has no local workspace to shell-`git status` into, so only the
+            // remote (P2P transit-git) variant of the backstop can ever apply here. Node stays
+            // silently treated as bootstrap-complete: fall through to the formula below instead of
+            // early-returning launchReady:false.
+            if (!(isWorktreeBootstrapStaleRunning(node, Date.now()) || isRemoteWorktreeBootstrapStaleRunning(node, Date.now()))) {
+                status.launchReady = false;
+                status.launchBlockedReason = 'worktree_bootstrap_running';
+                status.launchBlockedMessage = 'Required worktree bootstrap is still running; wait for it to finish before launching an agent into this node.';
+                return;
+            }
         }
     }
     const connectionState = readStringValue(readObjectRecord(status.connection).state);

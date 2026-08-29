@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { resolveWin32Executable } from '../../src/cli-adapters/resolve-executable.js'
 import {
   isWorktreeBootstrapStaleRunning,
+  isRemoteWorktreeBootstrapStaleRunning,
+  shouldDeferDispatchForBootstrap,
   evaluateWorktreeBootstrapState,
   WORKTREE_BOOTSTRAP_STALE_RUNNING_MS,
   type WorktreeBootstrapState,
@@ -232,5 +234,121 @@ describe("FIX (a-residual) — evaluateWorktreeBootstrapState keeps persisted 'c
     const evaluated = evaluateWorktreeBootstrapState(mesh, workspace, null)
     expect(evaluated.status).toBe('stale')
     expect(evaluated.staleReason).toBe('never_ran')
+  })
+})
+
+// M-MESH-INFRA-0829 defect 5-b [A]: isWorktreeBootstrapStaleRunning's `!existsSync(workspace)`
+// guard always returns false for a REMOTE worktree node (workspace lives on another machine),
+// so a remote node whose terminal bootstrap stamp never reached this coordinator was the one
+// worktree kind the stale-'running' backstop could never recover — permanently deferred/
+// launchReady:false. isRemoteWorktreeBootstrapStaleRunning closes that gap using the node's own
+// P2P-sourced transit git truth (node.lastGit / node.last_git) as the equivalent liveness proof.
+describe('M-MESH-INFRA-0829 [A] — isRemoteWorktreeBootstrapStaleRunning backstop', () => {
+  const STARTED = '2026-01-01T00:00:00.000Z'
+  const startedMs = Date.parse(STARTED)
+  const stale = startedMs + WORKTREE_BOOTSTRAP_STALE_RUNNING_MS + 60_000
+  const fresh = startedMs + 60_000
+  const REMOTE_WORKSPACE = '/nonexistent/remote/machine/path/worktree' // never exists on this host
+
+  const cleanGitStatus = {
+    isGitRepo: true,
+    branch: 'main',
+    headCommit: 'abc123',
+    staged: 0,
+    modified: 0,
+    untracked: 0,
+    deleted: 0,
+    renamed: 0,
+    submodules: [{ path: 'oss', commit: 'deadbeef', dirty: false, outOfSync: false }],
+  }
+
+  const dirtyGitStatus = { ...cleanGitStatus, untracked: 1 }
+
+  const outOfSyncSubmoduleGitStatus = {
+    ...cleanGitStatus,
+    submodules: [{ path: 'oss', commit: 'deadbeef', dirty: false, outOfSync: true }],
+  }
+
+  // `checkedAt` here is the OUTER lastGit envelope timestamp recordInlineMeshDirectGitTruth
+  // stamps (mesh-node-identity.ts) — distinct from any inner status.lastCheckedAt, which
+  // pickBestTransitGitStatus never surfaces reliably (see the implementation comment).
+  const remoteGit = (checkedAt: number, status: Record<string, unknown> = cleanGitStatus) => ({
+    checkedAt,
+    status,
+  })
+
+  it('returns false when bootstrap is not running', () => {
+    const node = { worktreeBootstrap: { status: 'complete', startedAt: STARTED }, workspace: REMOTE_WORKSPACE, lastGit: remoteGit(stale) }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, stale)).toBe(false)
+  })
+
+  it('returns false while still within the stale window (genuinely in-progress bootstrap)', () => {
+    const node = { worktreeBootstrap: { status: 'running', startedAt: STARTED }, workspace: REMOTE_WORKSPACE, lastGit: remoteGit(fresh) }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, fresh)).toBe(false)
+  })
+
+  it('returns false when no transit git truth has ever reached this node (no probe yet)', () => {
+    const node = { worktreeBootstrap: { status: 'running', startedAt: STARTED }, workspace: REMOTE_WORKSPACE }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, stale)).toBe(false)
+  })
+
+  it('returns false when the only git snapshot predates the bootstrap start (proves nothing about settling)', () => {
+    const node = {
+      worktreeBootstrap: { status: 'running', startedAt: STARTED },
+      workspace: REMOTE_WORKSPACE,
+      lastGit: remoteGit(startedMs - 60_000),
+    }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, stale)).toBe(false)
+  })
+
+  it('returns true for a stale running bootstrap with a CLEAN post-start remote git snapshot', () => {
+    const node = {
+      worktreeBootstrap: { status: 'running', startedAt: STARTED },
+      workspace: REMOTE_WORKSPACE,
+      lastGit: remoteGit(startedMs + 5 * 60_000),
+    }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, stale)).toBe(true)
+  })
+
+  it('returns false for a stale running bootstrap whose remote snapshot is DIRTY (must keep deferring)', () => {
+    const node = {
+      worktreeBootstrap: { status: 'running', startedAt: STARTED },
+      workspace: REMOTE_WORKSPACE,
+      lastGit: remoteGit(startedMs + 5 * 60_000, dirtyGitStatus),
+    }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, stale)).toBe(false)
+  })
+
+  it('returns false when a submodule is genuinely outOfSync (not merely gitlink-pointer clean)', () => {
+    const node = {
+      worktreeBootstrap: { status: 'running', startedAt: STARTED },
+      workspace: REMOTE_WORKSPACE,
+      lastGit: remoteGit(startedMs + 5 * 60_000, outOfSyncSubmoduleGitStatus),
+    }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, stale)).toBe(false)
+  })
+
+  it('defers to the LOCAL check (returns false) when the workspace actually exists on this host', () => {
+    // tmpdir() always exists — this node is locally-verifiable, so the remote variant must not apply.
+    const node = {
+      worktreeBootstrap: { status: 'running', startedAt: STARTED },
+      workspace: tmpdir(),
+      lastGit: remoteGit(startedMs + 5 * 60_000),
+    }
+    expect(isRemoteWorktreeBootstrapStaleRunning(node, stale)).toBe(false)
+  })
+
+  it('shouldDeferDispatchForBootstrap stops deferring once the remote backstop confirms clean+settled', () => {
+    const node = {
+      worktreeBootstrap: { status: 'running', startedAt: STARTED },
+      workspace: REMOTE_WORKSPACE,
+      lastGit: remoteGit(startedMs + 5 * 60_000),
+    }
+    expect(shouldDeferDispatchForBootstrap(node, stale)).toBe(false)
+  })
+
+  it('shouldDeferDispatchForBootstrap keeps deferring a remote node with no recovery evidence', () => {
+    const node = { worktreeBootstrap: { status: 'running', startedAt: STARTED }, workspace: REMOTE_WORKSPACE }
+    expect(shouldDeferDispatchForBootstrap(node, stale)).toBe(true)
   })
 })
