@@ -17,7 +17,7 @@
  * again, and retrying with the corrected key always works.
  */
 
-import { ALL_MESH_TOOLS, MESH_CHANGE_IMPACT_CONFIG_TOOL, MESH_REFINE_CONFIG_TOOL } from './mesh-tool-schemas.js';
+import { ALL_MESH_TOOLS, MESH_CHANGE_IMPACT_CONFIG_TOOL, MESH_NOTIFY_WORKER_TOOL, MESH_REFINE_CONFIG_TOOL } from './mesh-tool-schemas.js';
 
 export interface ToolSchemaLike {
     name: string;
@@ -106,6 +106,14 @@ const MESH_ALIAS_TOOL: Record<string, ToolSchemaLike> = {
     mesh_change_impact_config_schema: MESH_CHANGE_IMPACT_CONFIG_TOOL,
     mesh_validate_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
     mesh_suggest_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
+    // E-T0: NOT in ALL_MESH_TOOLS on purpose (server.ts publishes it only when
+    // the worker-MCP flag is on, so ListTools stays byte-identical when off —
+    // see the tool's own doc comment in mesh-tool-schemas.ts). Registered here
+    // unconditionally anyway: this map only affects validation of a call that
+    // names the tool explicitly, and the daemon-side handler still refuses the
+    // call when the flag is off, so a harmless, always-present entry is simpler
+    // than threading the flag through this file too.
+    mesh_notify_worker: MESH_NOTIFY_WORKER_TOOL,
 };
 
 /**

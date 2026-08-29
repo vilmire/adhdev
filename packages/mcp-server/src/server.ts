@@ -36,7 +36,7 @@ import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
 import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
-  ALL_MESH_TOOLS, MESH_PLAN_ONBOARDING_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL,
+  ALL_MESH_TOOLS, MESH_PLAN_ONBOARDING_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_NOTIFY_WORKER_TOOL,
   meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
   meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshGraphView, meshGraphGateClaim, meshGraphGateRelease, meshGraphGateAbandon,
@@ -46,7 +46,7 @@ import {
   meshCloneNode, meshRemoveNode, meshCleanupWorktreeNodes, meshRefineNode,
   meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
   meshChangeImpactConfig,
-  meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert,
+  meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert, meshNotifyWorker,
   meshMissionList, meshReviewInbox,
   meshMagiReview, meshMagiCollect,
   meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig,
@@ -56,7 +56,7 @@ import {
 import type { MeshContext } from './tools/mesh-tools.js';
 import { rejectUnknownMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
 import {
-  ALL_WORKER_TOOLS, readWorkerCredentials, reportCompletion, progressUpdate,
+  ALL_WORKER_TOOLS, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
 } from './tools/worker-tools.js';
 
 /**
@@ -159,6 +159,29 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: workerTools }));
 
+    // E-T0 (design §7.1): every worker tool response — whichever tool was
+    // called — gets any pending urgent mailbox memo appended before it goes
+    // back over stdio. This is the piggyback: no new delivery channel, just
+    // one extra daemon round-trip riding on a response that was going out
+    // anyway. Applied here, wrapping the WHOLE switch, rather than inside each
+    // case — the design is explicit that it applies to "whichever tool" the
+    // worker calls, not just the reporting tools, and a single wrap point is
+    // the only way to guarantee that without repeating it five times.
+    async function withMailboxPiggyback(
+      response: { content: Array<{ type: 'text'; text: string }>; isError?: boolean },
+    ): Promise<typeof response> {
+      const mailboxText = await drainMailbox(transport, credentials);
+      if (!mailboxText) return response;
+      const content = [...response.content];
+      const last = content[content.length - 1];
+      if (last && last.type === 'text') {
+        content[content.length - 1] = { ...last, text: last.text + mailboxText };
+      } else {
+        content.push({ type: 'text', text: mailboxText.trimStart() });
+      }
+      return { ...response, content };
+    }
+
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = (args ?? {}) as Record<string, any>;
@@ -166,36 +189,40 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       const workerTool = workerToolByName.get(name);
       if (workerTool) {
         const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a);
-        if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
+        if (unknownArgsError) return withMailboxPiggyback({ content: [{ type: 'text', text: unknownArgsError }], isError: true });
       }
 
       try {
         switch (name) {
           case 'report_completion': {
             const result = await reportCompletion(transport, credentials, a);
-            return { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) };
+            return withMailboxPiggyback({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
           }
           case 'progress_update': {
             const result = await progressUpdate(transport, credentials, a);
-            return { content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) };
+            return withMailboxPiggyback({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
+          }
+          case 'peer_context_pull': {
+            const result = await peerContextPull(transport, credentials, a);
+            return withMailboxPiggyback({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
           }
           case 'git_status': {
             const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
-            return { content: [{ type: 'text', text }] };
+            return withMailboxPiggyback({ content: [{ type: 'text', text }] });
           }
           case 'git_log': {
             const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
-            return { content: [{ type: 'text', text }] };
+            return withMailboxPiggyback({ content: [{ type: 'text', text }] });
           }
           case 'git_diff': {
             const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
-            return { content: [{ type: 'text', text }] };
+            return withMailboxPiggyback({ content: [{ type: 'text', text }] });
           }
           default:
-            return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+            return withMailboxPiggyback({ content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true });
         }
       } catch (err: any) {
-        return { content: [{ type: 'text', text: `Error: ${err?.message ?? String(err)}` }], isError: true };
+        return withMailboxPiggyback({ content: [{ type: 'text', text: `Error: ${err?.message ?? String(err)}` }], isError: true });
       }
     });
 
@@ -309,7 +336,16 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       throw new Error(`Unknown resource: ${req.params.uri}`);
     });
 
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: ALL_MESH_TOOLS }));
+    // E-T0 (design §7.1): `mesh_notify_worker` is published ONLY when the
+    // worker-MCP flag is on, so a flag-off coordinator's ListTools response is
+    // byte-identical to before E-T0 existed (the promise every worker-MCP phase
+    // has kept since Phase A). `isWorkerMcpEnabled` is a pure env-flag read — see
+    // its doc comment in daemon-core's index.ts for why mcp-server is allowed to
+    // import it directly rather than going through a transport command.
+    const { isWorkerMcpEnabled } = await import('@adhdev/daemon-core');
+    const meshTools = isWorkerMcpEnabled() ? [...ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL] : ALL_MESH_TOOLS;
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: meshTools }));
 
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
@@ -335,6 +371,13 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_queue_cancel': text = await meshQueueCancel(meshCtx, a as any); break;
           case 'mesh_queue_requeue': text = await meshQueueRequeue(meshCtx, a as any); break;
           case 'mesh_send_task': text = await meshSendTask(meshCtx, a as any); break;
+          case 'mesh_notify_worker':
+            if (!isWorkerMcpEnabled()) {
+              text = JSON.stringify({ success: false, error: 'worker_mcp_disabled' });
+            } else {
+              text = await meshNotifyWorker(meshCtx, a as any);
+            }
+            break;
           case 'mesh_read_chat': text = await meshReadChat(meshCtx, a as any); break;
           case 'mesh_read_debug': text = await meshReadDebug(meshCtx, a as any); break;
           case 'mesh_read_terminal': text = await meshReadTerminal(meshCtx, a as any); break;

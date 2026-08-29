@@ -1457,6 +1457,40 @@ export const MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
     },
 };
 
+/**
+ * E-T0 (design §7.1) — deposit an urgent memo into a delegated worker's
+ * mailbox. Delivered on the worker's NEXT MCP tool response (report_completion,
+ * progress_update, peer_context_pull, even git_status — whichever it calls
+ * first), never mid-turn: this repo has no hook infrastructure to interrupt a
+ * generating turn (§7.3), and T3's destructive interrupt is a different,
+ * much costlier tool for a different situation (aborts the turn outright).
+ *
+ * ★NOT in `ALL_MESH_TOOLS` — this tool is published only when the worker-MCP
+ * flag is on (server.ts gates it explicitly), so a flag-off coordinator's
+ * ListTools response stays byte-identical to before E-T0 existed. See
+ * `mesh-tools-session.ts`'s `meshNotifyWorker` for the implementation and
+ * `commands/low-family/worker-mailbox.ts` for the daemon-side gate that backs
+ * this up even if a caller invokes the tool name without it being listed.
+ */
+export const MESH_NOTIFY_WORKER_TOOL = {
+    name: 'mesh_notify_worker',
+    description: 'Send an urgent memo to a delegated worker\'s task. Delivered on the worker\'s NEXT MCP tool call '
+        + '(report_completion / progress_update / peer_context_pull / git_status — whichever it calls first), '
+        + 'NOT instantly — this does not interrupt a running generation turn. Use for something the worker needs '
+        + 'to know before it finishes (a changed requirement, a reason to stop) that does not justify aborting its '
+        + "turn outright (mesh_send_task's delivery_mode: 'interrupt' does that, destructively). Requires ADHDEV_WORKER_MCP "
+        + 'to be enabled on the target daemon; refused otherwise.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID (from mesh_list_nodes) — the node the worker is running on.' },
+            task_id: { type: 'string', description: 'The worker\'s task ID (from mesh_view_queue / mesh_task_history).' },
+            message: { type: 'string', description: 'The urgent memo text, in your own words. Kept short — this rides inside a tool response, not a full document.' },
+        },
+        required: ['node_id', 'task_id', 'message'],
+    },
+};
+
 export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_ROUTE_PREVIEW_TOOL,

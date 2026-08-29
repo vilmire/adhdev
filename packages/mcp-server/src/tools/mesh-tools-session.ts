@@ -1063,6 +1063,59 @@ export async function meshSendTask(
     }
 }
 
+/**
+ * E-T0 (design §7.1) — deposit an urgent memo into a delegated worker's
+ * mailbox. Routed to whichever daemon owns `node_id` via `findNodeWithRefresh`
+ * + `commandForNode` — the SAME resolution `meshSendTask` above uses, because
+ * a worker's owning daemon is not necessarily this coordinator's own (a mesh
+ * spans machines). The receiving daemon's `deposit_worker_mailbox` low-family
+ * handler is the actual gate (flag check + "does this daemon know this task");
+ * this function is a thin dispatch wrapper around it.
+ */
+export async function meshNotifyWorker(
+    ctx: MeshContext,
+    args: { node_id?: string; task_id?: string; message?: string },
+): Promise<string> {
+    const nodeId = readString(args.node_id);
+    const taskId = readString(args.task_id);
+    const message = readString(args.message);
+    if (!nodeId || !taskId || !message) {
+        return JSON.stringify({
+            success: false,
+            error: 'invalid_input',
+            detail: 'node_id, task_id and message are all required',
+        });
+    }
+
+    let node;
+    try {
+        node = await findNodeWithRefresh(ctx, nodeId);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: 'node_not_found', detail: e?.message || String(e) });
+    }
+
+    const result = unwrapCommandPayload(await commandForNode(ctx, node, 'deposit_worker_mailbox', {
+        meshId: ctx.mesh.id,
+        taskId,
+        text: message,
+    }));
+
+    if (result?.success !== true) {
+        return JSON.stringify({
+            success: false,
+            error: result?.error || 'unknown_error',
+            ...(result?.detail ? { detail: result.detail } : {}),
+        });
+    }
+    return JSON.stringify({
+        success: true,
+        messageId: result.messageId,
+        pending: result.pending,
+        note: "Delivered on the worker's next MCP tool response (E-T0 mailbox piggyback) — not instantaneous. "
+            + 'If the worker is deep in a long generation turn without calling a tool, it will not see this until it does.',
+    });
+}
+
 export async function meshReadChat(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean },

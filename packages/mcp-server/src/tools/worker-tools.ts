@@ -148,7 +148,31 @@ export const PROGRESS_UPDATE_TOOL = {
   },
 };
 
-export const ALL_WORKER_TOOLS = [REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL];
+export const PEER_CONTEXT_PULL_TOOL = {
+  name: 'peer_context_pull',
+  description:
+    'Read-only lookup of what sibling tasks in THIS mesh are doing or have left behind — their status and any '
+    + 'handoff notes they recorded (design decision D). Does not include transcripts. This is a SUPPLEMENT: '
+    + 'relevant handoff notes are already enclosed automatically in your task prompt when it was dispatched — '
+    + 'call this when you want more than what was enclosed, e.g. before touching a file another agent might also '
+    + 'be working on.',
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      scope: {
+        type: 'string',
+        enum: ['mesh', 'same_mission'],
+        description: "'mesh' (default) — every sibling task in this mesh. 'same_mission' — only tasks sharing your mission.",
+      },
+      topic: {
+        type: 'string',
+        description: 'Optional filter: only return peers whose handoff note mentions this substring (case-insensitive).',
+      },
+    },
+  },
+};
+
+export const ALL_WORKER_TOOLS = [REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL];
 
 /**
  * Map the tool's snake_case wire shape onto the daemon's camelCase report.
@@ -241,4 +265,57 @@ export async function progressUpdate(
     text: `progress_update refused (${result?.error || 'unknown_error'}).`,
     isError: true,
   };
+}
+
+export async function peerContextPull(
+  transport: CommandTransport,
+  credentials: WorkerCredentials,
+  args: Record<string, any>,
+): Promise<WorkerToolResult> {
+  const scope = args?.scope === 'same_mission' ? 'same_mission' : undefined;
+  const topic = typeof args?.topic === 'string' && args.topic.trim() ? args.topic.trim() : undefined;
+  const result: any = await transport.command('worker_peer_context_pull', {
+    ...credentials,
+    ...(scope ? { scope } : {}),
+    ...(topic ? { topic } : {}),
+  });
+
+  if (result?.success !== true) {
+    const reason = result?.error || 'unknown_error';
+    const hint = result?.hint ? `\n${result.hint}` : '';
+    return { text: `peer_context_pull refused (${reason}).${hint}`, isError: true };
+  }
+
+  const peers = Array.isArray(result.peers) ? result.peers : [];
+  if (!peers.length) {
+    return { text: 'No sibling task context found for this mesh (in this scope).' };
+  }
+  const lines = peers.map((p: any) => JSON.stringify(p));
+  const omitted = typeof result.omitted === 'number' && result.omitted > 0
+    ? `\n(${result.omitted} further peer(s) omitted to fit the response — the most recently updated are shown.)`
+    : '';
+  return { text: `${peers.length} sibling task(s) in scope '${result.scope}':\n${lines.join('\n')}${omitted}` };
+}
+
+/**
+ * E-T0 (mailbox piggyback): drain any pending urgent memo for the caller's
+ * current task and render it as the block a worker tool response appends.
+ * Never throws — a mailbox check must not be the reason an otherwise-successful
+ * tool call fails to return.
+ */
+export async function drainMailbox(
+  transport: CommandTransport,
+  credentials: WorkerCredentials,
+): Promise<string | null> {
+  try {
+    const result: any = await transport.command('worker_drain_mailbox', { ...credentials });
+    if (result?.success !== true) return null;
+    const messages = Array.isArray(result.messages) ? result.messages : [];
+    if (!messages.length) return null;
+    const heading = messages.length > 1 ? 'Urgent messages from the coordinator' : 'Urgent message from the coordinator';
+    const lines = messages.map((m: any, i: number) => `${i + 1}. ${typeof m?.text === 'string' ? m.text : ''}`);
+    return `\n\n---\n\n## ${heading}\n\n${lines.join('\n')}\n`;
+  } catch {
+    return null;
+  }
 }
