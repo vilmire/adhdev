@@ -278,6 +278,46 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
         expect(ranked.clear).toEqual(['codex-cli']);
         expect(ranked.gated.map(entry => entry.providerType)).toEqual(['kimi']);
     });
+
+    // ★REGRESSION: expired session/weekly readings must not gate (M-MESH-INFRA-0829).
+    // The window-boundary-validity decision (oss 5c65c5d4) says a measured window
+    // is authoritative only until its own resetsAt; after that the reading describes
+    // a previous window and must fail open. isWindowTrustworthy enforces this, and
+    // evaluateProviderQuotaGate re-asserts it at the gate level.
+    it('fails OPEN on a session window whose resetsAt has already passed', () => {
+        const node = nodeWithQuota({
+            'codex-cli': okQuota({
+                provider: 'codex-cli',
+                session: { usedPercent: 97, windowMinutes: 300, resetsAt: NOW - 5 * MIN },
+                weekly: { usedPercent: 50, windowMinutes: 10080, resetsAt: NOW + 7 * 24 * 60 * MIN },
+            }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'codex-cli', null, NOW)).toBeNull();
+    });
+
+    it('fails OPEN on a weekly window whose resetsAt has already passed', () => {
+        const node = nodeWithQuota({
+            'codex-cli': okQuota({
+                provider: 'codex-cli',
+                session: { usedPercent: 50, windowMinutes: 300, resetsAt: NOW + 60 * MIN },
+                weekly: { usedPercent: 97, windowMinutes: 10080, resetsAt: NOW - 5 * MIN },
+            }),
+        });
+        expect(evaluateProviderQuotaGate(node, 'codex-cli', null, NOW)).toBeNull();
+    });
+
+    it('still gates a session window that is below threshold BEFORE its resetsAt passes', () => {
+        const node = nodeWithQuota({
+            'codex-cli': okQuota({
+                provider: 'codex-cli',
+                session: { usedPercent: 97, windowMinutes: 300, resetsAt: NOW + 5 * MIN },
+                weekly: { usedPercent: 50, windowMinutes: 10080, resetsAt: NOW + 7 * 24 * 60 * MIN },
+            }),
+        });
+        const block = evaluateProviderQuotaGate(node, 'codex-cli', null, NOW);
+        expect(block?.reason).toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
+        expect(block?.window).toBe('session');
+    });
 });
 
 describe('evaluateProviderQuotaGate — absent-entry fail-open observability', () => {

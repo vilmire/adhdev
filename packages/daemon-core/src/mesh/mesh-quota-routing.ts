@@ -556,15 +556,46 @@ function isWindowTrustworthy(
     policy: RepoMeshQuotaRoutingPolicy | null | undefined,
     now: number,
 ): boolean {
+    return !isWindowExpired(window, facts, quota, now)
+        && isWindowBoundaryKnown(window, facts, quota, policy, now);
+}
+
+function isWindowBoundaryKnown(
+    window: { resetsAt?: number | null } | null | undefined,
+    facts: { reportedAt: number },
+    quota: { updatedAt: number },
+    policy: RepoMeshQuotaRoutingPolicy | null | undefined,
+    now: number,
+): boolean {
     const resetsAt = Number(window?.resetsAt);
     if (!Number.isFinite(resetsAt) || resetsAt <= 0) {
         return isQuotaSnapshotFresh(facts, quota, policy, now);
     }
+    return true;
+}
+
+/**
+ * Has a measured window's own reset boundary already passed? Used directly by
+ * the gate layer: a window whose reset is in the past describes a previous
+ * window and must never be used as a reason to block a claim. The same
+ * clock-skew-safe reporter-now estimate as isWindowTrustworthy is used.
+ *
+ * A missing or unparseable resetsAt stamp is NOT considered expired by this
+ * boundary check; it falls back to wall-clock freshness via isWindowBoundaryKnown.
+ */
+function isWindowExpired(
+    window: { resetsAt?: number | null } | null | undefined,
+    facts: { reportedAt: number },
+    quota: { updatedAt: number },
+    now: number,
+): boolean {
+    const resetsAt = Number(window?.resetsAt);
+    if (!Number.isFinite(resetsAt) || resetsAt <= 0) return false;
     const ageMs = quotaSnapshotAgeMs(facts, quota, now);
     if (!Number.isFinite(ageMs)) return false;
     const reporterNowMs = Number(quota.updatedAt) + ageMs;
     if (!Number.isFinite(reporterNowMs)) return false;
-    return resetsAt > reporterNowMs;
+    return reporterNowMs >= resetsAt;
 }
 
 /**
@@ -645,12 +676,19 @@ export function evaluateProviderQuotaGate(
         // BOTH drop out the snapshot fails open exactly as before.
         sessionTrustworthy = isWindowTrustworthy(quota.session, facts, quota, policy, now);
         weeklyTrustworthy = isWindowTrustworthy(quota.weekly, facts, quota, policy, now);
-        if (!sessionTrustworthy && !weeklyTrustworthy) {
-            if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
-                logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);
-            }
-            return null; // no window survives its own boundary → fail open
+    }
+    // GATE-LEVEL DEFENSE: isWindowTrustworthy already discards windows whose
+    // own resetsAt has passed, but re-assert the invariant here so a boundary
+    // regression cannot turn an expired reading into a block reason. A session
+    // or weekly window whose reset boundary is behind the reporter's clock
+    // describes a previous window and must never be used to deny a claim.
+    if (sessionTrustworthy && isWindowExpired(quota.session, facts, quota, now)) sessionTrustworthy = false;
+    if (weeklyTrustworthy && isWindowExpired(quota.weekly, facts, quota, now)) weeklyTrustworthy = false;
+    if (quota.status === 'ok' && !sessionTrustworthy && !weeklyTrustworthy) {
+        if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
+            logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);
         }
+        return null; // no window survives its own boundary → fail open
     }
     const resolved = resolveQuotaRoutingPolicy(policy);
     const session = remainingPercent(quota.session);
