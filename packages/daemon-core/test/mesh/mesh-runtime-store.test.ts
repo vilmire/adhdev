@@ -1638,6 +1638,25 @@ describe('mesh-runtime-store', () => {
             expect(db.getRemoteIdleSessions(MESH_B).map(s => s.sessionId)).toEqual(['sess-b']);
         });
 
+        it('remote_idle_sessions: an entry past its own expiresAt is never returned as a live candidate', () => {
+            // CLAIM-RETRY-LOOP-LIFECYCLE (M-MESH-INFRA-0829 defect 5, evidence 4): expiry
+            // pruning used to be a side effect of processing a NEW agent:ready event only —
+            // no periodic timer. A node whose worker never sends another agent:ready (broken
+            // bootstrap, removed node) left its row past its 5-minute TTL forever, and the
+            // auto-launch drain kept reading it as claimable, re-logging the bootstrap-gate
+            // warning every ~4s for hours. getRemoteIdleSessions must enforce its own row's
+            // expiresAt rather than relying on prune-on-agent:ready to have already run.
+            const db = MeshRuntimeStore.getInstance()
+            const meshId = 'mesh_expiry_check'
+            db.setRemoteIdleSession(meshId, 'node_stuck', 'sess-stuck', 'claude-cli', Date.now() - 1_000)
+            db.setRemoteIdleSession(meshId, 'node_live', 'sess-live', 'claude-cli', Date.now() + 60_000)
+
+            const rows = db.getRemoteIdleSessions(meshId)
+
+            expect(rows.map(s => s.sessionId)).toEqual(['sess-live'])
+            expect(rows.some(s => s.sessionId === 'sess-stuck')).toBe(false)
+        })
+
         it('mesh_completion_fingerprints: a completion in mesh A does NOT suppress dedup in mesh B', () => {
             const db = MeshRuntimeStore.getInstance();
             // Same fingerprint body recorded under mesh A only.

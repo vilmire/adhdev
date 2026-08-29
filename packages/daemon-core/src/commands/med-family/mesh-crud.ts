@@ -21,11 +21,13 @@ import {
 import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../../mesh/mesh-events.js';
 import { noteRecentlyClonedNode } from '../../mesh/mesh-clone-grace.js';
+import { readNonEmptyString } from '../../mesh/mesh-events-utils.js';
 import { loadConfig } from '../../config/config.js';
 import {
     hydrateInlineMeshDirectTruth,
     normalizeProviderRoles,
     readMeshNodeMachineId,
+    readMeshNodeDaemonId,
 } from '../router.js';
 import type { CommandRouterResult } from '../router.js';
 import type { GitRepoIdentity } from '../../git/git-types.js';
@@ -1345,6 +1347,27 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 }
             }
 
+            // CLAIM-RETRY-LOOP-LIFECYCLE (M-MESH-INFRA-0829 defect 5, evidence 4): a removed
+            // node must not leave a remote_idle_sessions row behind. deleteRemoteIdleSession
+            // only ever fires on a SUCCESSFUL claim (mesh-queue-assignment.ts), so a node
+            // removed while its bootstrap/claim was stuck (never claimed) had no path to clear
+            // its row — the ~4s auto-launch drain (getRemoteIdleSessions) kept matching it
+            // against a node that no longer exists and re-logging the bootstrap-gate warning
+            // indefinitely. Best-effort: a purge failure must not block the removal response.
+            // CLAIM-RETRY-LOOP-LIFECYCLE (M-MESH-INFRA-0829 defect 5, evidence 4): a removed
+            // node must not leave a remote_idle_sessions row behind. deleteRemoteIdleSession
+            // only ever fires on a SUCCESSFUL claim (mesh-queue-assignment.ts), so a node
+            // removed while its bootstrap/claim was stuck (never claimed) had no path to clear
+            // its row — the ~4s auto-launch drain (getRemoteIdleSessions) kept matching it
+            // against a node that no longer exists and re-logging the bootstrap-gate warning
+            // indefinitely. Best-effort: a purge failure must not block the removal response.
+            if (removed) {
+                try {
+                    const { MeshRuntimeStore } = await import('../../mesh/mesh-runtime-store.js');
+                    MeshRuntimeStore.getInstance().deleteRemoteIdleSessionsForNode(meshId, nodeId);
+                } catch { /* best-effort cleanup */ }
+            }
+
             // WORKTREE-DELETED-WHILE-RUNNING: record the DIRECTORY deletion on its
             // own, independently of membership removal.
             //
@@ -1532,6 +1555,27 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
             }
 
+            // REMOTE-CLONE-SELF-IDENTITY: this branch executes ON the source node's OWN
+            // machine (either genuinely local, or the receiving end of the forward branch
+            // above with `_meshDirectDispatch: true`). sourceNode is therefore THIS daemon's
+            // own record of itself, and a machine's own self/base node routinely carries NO
+            // daemonId at all — the onboarding add_mesh_node step never stamps one (a node
+            // never needs to address itself), unlike buildMemberJoinNode's join-time payload,
+            // which DOES fall back to the joining daemon's own statusInstanceId when the
+            // source record lacks one. clone_mesh_node had no equivalent fallback: a clone clones
+            // sourceNode.daemonId verbatim, so an empty self-daemonId propagated straight through
+            // to the new node. For a same-machine clone this is harmless (the coordinator never
+            // needs to address a local node remotely), but for a REMOTE-forwarded clone the
+            // resulting node ships back to a DIFFERENT coordinator that can only reach this
+            // worktree over P2P via daemonId — with none, every remote probe/pull silently no-ops
+            // forever: buildMeshNodeCapabilityTags falls back to the CALLER's own process.platform/
+            // arch (mislabeling the node's real OS), and the node's machine identity never
+            // resolves past its raw id. Mirror buildMemberJoinNode's fallback here.
+            const effectiveDaemonId = readMeshNodeDaemonId(sourceNode as any) || readNonEmptyString(ctx.deps.statusInstanceId) || undefined;
+            const effectiveMachineId = readMeshNodeMachineId(sourceNode as any)
+                || (() => { try { return readNonEmptyString(loadConfig().machineId); } catch { return ''; } })()
+                || undefined;
+
             const repoRoot = sourceNode.repoRoot || sourceNode.workspace;
             // Mesh-policy override for where worktrees are physically placed. When
             // unset, createWorktree defaults to <home>/.adhdev/worktrees. The cleanup
@@ -1567,8 +1611,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     id: `node_${randomUUID().replace(/-/g, '')}`,
                     workspace: result.worktreePath,
                     repoRoot: result.worktreePath,
-                    daemonId: sourceNode.daemonId,
-                    machineId: sourceNode.machineId ?? (sourceNode as any).machine_id,
+                    daemonId: effectiveDaemonId,
+                    machineId: effectiveMachineId,
                     userOverrides: { ...(sourceNode.userOverrides || {}) },
                     policy: clonedPolicy as any,
                     isLocalWorktree: true,
@@ -1592,8 +1636,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         id: node.id,
                         workspace: result.worktreePath,
                         repoRoot: result.worktreePath,
-                        daemonId: sourceNode.daemonId,
-                        machineId: sourceNode.machineId ?? (sourceNode as any).machine_id,
+                        daemonId: effectiveDaemonId,
+                        machineId: effectiveMachineId,
                         userOverrides: { ...(sourceNode.userOverrides || {}) },
                         isLocalWorktree: true,
                         worktreeBranch: result.branch,
@@ -1608,8 +1652,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 node = addNode(meshId, {
                     workspace: result.worktreePath,
                     repoRoot: result.worktreePath,
-                    daemonId: sourceNode.daemonId,
-                    machineId: sourceNode.machineId ?? (sourceNode as any).machine_id,
+                    daemonId: effectiveDaemonId,
+                    machineId: effectiveMachineId,
                     userOverrides: { ...(sourceNode.userOverrides || {}) },
                     isLocalWorktree: true,
                     worktreeBranch: result.branch,

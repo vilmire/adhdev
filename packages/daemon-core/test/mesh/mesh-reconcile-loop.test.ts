@@ -1129,6 +1129,79 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
+  it('REMOTE-CLONE-EVENT-PULL-BLINDSPOT: PHASE 1 polls a worktree node cloned from a remote base node even though it never reached local config', async () => {
+    // Regression for the coordinator-side half of M-MESH-INFRA-0829 defect 5: a
+    // worktree cloned from a REMOTE base node (clone_mesh_node's forward branch)
+    // is registered ONLY in the router's inline mesh cache (seedRemoteClonedWorktreeNode)
+    // — it never reaches local config (meshes.json), which is all `listMeshes()`
+    // returns. Before the fix, PHASE 1 iterated the raw config-only mesh and never
+    // polled this node's daemon at all, so its worktree_bootstrap_complete sat on
+    // the remote daemon forever and the claim gate never opened.
+    const meshId = `mesh_reconcile_remote_clone_blindspot_${Date.now()}`
+    try {
+      const sink: any[] = []
+      const coordinator = makeCoordinator(meshId, 'idle', sink)
+
+      // Local base node (this daemon, 'test-machine' per the mocked loadConfig) — must
+      // never be polled, isolating the assertion below to the remote worktree node.
+      const baseNode = { id: 'node_base', workspace: '/repo/base', daemonId: 'test-machine' }
+      // Present ONLY in the inline cache — exactly what seedRemoteClonedWorktreeNode
+      // produces for a remote-forwarded clone_mesh_node, and what local config
+      // (meshes.json / listMeshes()) never receives.
+      const clonedWorktreeNode = {
+        id: 'node_worktree_remote',
+        workspace: '/repo/worktree-remote',
+        daemonId: 'daemon-worktree-remote',
+        isLocalWorktree: true,
+        worktreeBootstrap: { status: 'running', startedAt: new Date().toISOString() },
+      }
+
+      const remoteEvent = {
+        event: 'worktree_bootstrap_complete',
+        meshId,
+        nodeLabel: "Node 'node_worktree_remote'",
+        nodeId: 'node_worktree_remote',
+        metadataEvent: { timestamp: Date.now(), worktreePath: clonedWorktreeNode.workspace },
+        queuedAt: Date.now(),
+      }
+
+      const dispatchMeshCommand = vi.fn(async (daemonId: string, command: string) => {
+        if (command === 'get_pending_mesh_events' && daemonId === 'daemon-worktree-remote') {
+          return { success: true, events: [remoteEvent] }
+        }
+        return { success: true, events: [] }
+      })
+
+      // Local config only ever saw the base node — the cloned worktree node is
+      // config-invisible, exactly like the real remote-clone-cache-seed path.
+      meshConfigMocks.listMeshes.mockReturnValue([{ id: meshId, nodes: [baseNode] }])
+
+      let markedTerminal = false
+      const components: any = {
+        ...makeComponents([coordinator], dispatchMeshCommand),
+        router: {
+          getCachedInlineMesh: (id: string) => (id === meshId ? { id: meshId, nodes: [baseNode, clonedWorktreeNode] } : undefined),
+          markWorktreeBootstrapTerminalState: () => { markedTerminal = true },
+        },
+      }
+
+      await runMeshReconcileTick(components)
+
+      // The worktree node's daemon WAS polled, even though it is absent from
+      // local config — proof PHASE 1 now sees the merged (inline-aware) node list.
+      expect(dispatchMeshCommand).toHaveBeenCalledWith(
+        'daemon-worktree-remote',
+        'get_pending_mesh_events',
+        expect.objectContaining({ meshId }),
+      )
+      // And the pulled bootstrap-complete event was actually processed (stamped
+      // onto the coordinator's view), not just fetched and discarded.
+      expect(markedTerminal).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   describe('EVENT-DELIVERY-DELAY fix(a): peer-connected pre-check in PHASE 1 pull', () => {
     // The pull loop must not sink into a degraded peer's 90s connect-timeout. When the
     // mesh peer telemetry getter reports a non-'connected' state for a node, that node

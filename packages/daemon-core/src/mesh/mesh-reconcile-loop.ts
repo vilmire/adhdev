@@ -80,7 +80,7 @@ import {
     autoPruneStaleDirectDispatches,
 } from './mesh-completion-synthesis.js';
 import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
-import { runContinuousAutoFastForwardScan, runPendingCoordinatorCatchupScan } from './mesh-queue-assignment.js';
+import { runContinuousAutoFastForwardScan, runPendingCoordinatorCatchupScan, getMeshWithCache } from './mesh-queue-assignment.js';
 import {
     reclaimOrphanedTurnAttempts,
     reclaimQueueTerminatedTurnAttempts,
@@ -254,6 +254,20 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // Cloud-only (dispatchMeshCommand present). Runs whether or not a live CLI
     // coordinator exists — this is what lets an MCP/LLM coordinator ever see a
     // remote worker's completion.
+    //
+    // REMOTE-CLONE-EVENT-PULL-BLINDSPOT: pullRemoteNodeQueues iterates `mesh.nodes`
+    // to decide which remote daemons to poll. A worktree node cloned from a REMOTE
+    // base node (clone_mesh_node's forward branch) is registered ONLY in the
+    // router's inline mesh cache via seedRemoteClonedWorktreeNode — it never reaches
+    // local config (meshes.json), which is all `listMeshes()` returns. Passing the
+    // raw config-only mesh here meant such a node's daemon was NEVER polled: its
+    // queued worktree_bootstrap_complete (and every other event) sat on the remote
+    // daemon forever, so markWorktreeBootstrapTerminalState never stamped the
+    // coordinator's view, worktreeBootstrap.status stayed 'running', and the
+    // auto-launch claim gate (shouldDeferDispatchForBootstrap) deferred the node
+    // indefinitely — the exact same view getMeshWithCache already unions for the
+    // claim path itself (see its doc comment, CLAIMSTALL fix). Union the inline
+    // cache here too so PHASE 1 polls every node the claim/status paths already see.
     if (dispatchMeshCommand) {
         for (const mesh of listMeshes()) {
             // Expand to every id-form this daemon answers to for this mesh (runtime
@@ -261,8 +275,9 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             // and the remote pull filter, so a worker stamp in any form is recovered.
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
+            const nodeAwareMesh = getMeshWithCache(components, mesh.id) ?? mesh;
             try {
-                await pullRemoteNodeQueues(components, mesh, localDaemonId, selfIds);
+                await pullRemoteNodeQueues(components, nodeAwareMesh, localDaemonId, selfIds);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Remote node pull failed for mesh ${mesh.id}: ${e?.message || e}`);
             }

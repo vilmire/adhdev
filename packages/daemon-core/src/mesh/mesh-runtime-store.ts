@@ -1790,9 +1790,10 @@ export class MeshRuntimeStore {
     }
 
     getRemoteIdleSessions(meshId: string): Array<{ nodeId: string; sessionId: string; providerType: string; expiresAt: number; metadata?: any }> {
-        // MESH-ISOLATION-LEAK: always mesh-scoped. A bare (cross-mesh) read here is what
-        // let mesh B claim mesh A's idle session when both share a nodeId.
-        const rows = this.db.prepare('SELECT node_id, session_id, provider_type, expires_at, metadata FROM remote_idle_sessions WHERE mesh_id = ?').all(meshId) as Array<any>;
+        // MESH-ISOLATION-LEAK: always mesh-scoped (cross-mesh nodeId collision).
+        // CLAIM-RETRY-LOOP-LIFECYCLE: enforce expiry here too — pruneExpiredRemoteIdleSessions
+        // only runs on a NEW agent:ready, so a dead/removed node's row never got pruned.
+        const rows = this.db.prepare('SELECT node_id, session_id, provider_type, expires_at, metadata FROM remote_idle_sessions WHERE mesh_id = ? AND expires_at > ?').all(meshId, Date.now()) as Array<any>;
         return rows.map(r => ({
             nodeId: r.node_id,
             sessionId: r.session_id,
@@ -1804,6 +1805,12 @@ export class MeshRuntimeStore {
 
     deleteRemoteIdleSession(meshId: string, nodeId: string, sessionId: string): void {
         this.db.prepare('DELETE FROM remote_idle_sessions WHERE mesh_id = ? AND node_id = ? AND session_id = ?').run(meshId, nodeId, sessionId);
+    }
+
+    // CLAIM-RETRY-LOOP-LIFECYCLE: deleteRemoteIdleSession above fires only on a successful
+    // claim; called from remove_mesh_node to clear a node's row on removal instead.
+    deleteRemoteIdleSessionsForNode(meshId: string, nodeId: string): void {
+        this.db.prepare('DELETE FROM remote_idle_sessions WHERE mesh_id = ? AND node_id = ?').run(meshId, nodeId);
     }
 
     pruneExpiredRemoteIdleSessions(): void {
