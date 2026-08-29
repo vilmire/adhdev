@@ -52,6 +52,7 @@ import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trac
 import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
 import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { isTerminalTurnStage } from '../mesh/mesh-turn-ledger.js';
+import { isWorkerMcpEnabled } from '../mesh/worker-mcp-isolation.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText, normalizeApprovalLabel } from './approval-utils.js';
@@ -423,6 +424,33 @@ export class CliProviderInstance implements ProviderInstance {
     // from "genuinely generating". This timestamp is that discriminator. 0 = no task
     // injected since boot (ad-hoc/non-mesh turns fall back to the plain turn-started check).
     private meshTaskInjectedAt = 0;
+    // WORKER-MCP T2 precursor (docs/design/2026-08-28-worker-mcp.md §8 R1 gap):
+    // turn-aware history of mesh task attachments, oldest-first. This exists to
+    // fix the misattribution race a future busy-injection feature would hit —
+    // meshActiveTaskId is last-write-wins, so a second attach before the first
+    // task's turn completes clobbers it (NOTIF-MISDELIVER / TASK-MSG-MISROUTE).
+    // Nothing in this file makes that overlap reachable today: mesh policy still
+    // queues busy sessions (mesh-delivery-policy.ts), auto-pick still filters to
+    // idle sessions only (mcp-server mesh-tools-internal.ts), and the FSM's
+    // canSendNow() still hard-requires 'idle' before writing to the PTY
+    // (providers/spec/fsm-driver.ts) — none of those three gates are touched
+    // here. This array is the PRECONDITION a later T2 change would need before
+    // it could safely loosen any of them.
+    // Populated ONLY when ADHDEV_WORKER_MCP is on, and only ever read back
+    // through isWorkerMcpEnabled()-gated branches below — with the flag off the
+    // array stays permanently empty and every consumer falls through to the
+    // exact prior scalar-only behavior (byte-identical).
+    private meshTaskAttachmentHistory: Array<{
+        taskId: string;
+        attemptId?: string;
+        dispatchNonce?: number;
+        injectedAt: number;
+    }> = [];
+    // Safety cap: overlapping attachments should stay in the single digits in
+    // practice (one per still-completing turn). A runaway growth here would
+    // mean detachMeshAssignment stopped popping entries, which is a bug worth
+    // surfacing loudly rather than an unbounded array.
+    private static readonly MESH_TASK_ATTACHMENT_HISTORY_CAP = 8;
     private settings: Record<string, any> = {};
     private monitor: StatusMonitor;
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
@@ -1095,6 +1123,25 @@ export class CliProviderInstance implements ProviderInstance {
         // that would otherwise fire generating_completed before generating_started).
         if (assignment.taskId && assignment.taskId.trim()) {
             this.meshTaskInjectedAt = Date.now();
+            // WORKER-MCP T2 precursor: record this attachment in the turn-aware
+            // history too, gated the same as everything else on this field (see
+            // the field doc comment). Off-flag this is a no-op push into an array
+            // nothing ever reads, so it changes no observable behavior — guard it
+            // anyway to keep the off-path a true no-op.
+            if (isWorkerMcpEnabled()) {
+                this.meshTaskAttachmentHistory.push({
+                    taskId: assignment.taskId,
+                    attemptId: assignment.attemptId,
+                    dispatchNonce: assignment.dispatchNonce,
+                    injectedAt: this.meshTaskInjectedAt,
+                });
+                if (this.meshTaskAttachmentHistory.length > CliProviderInstance.MESH_TASK_ATTACHMENT_HISTORY_CAP) {
+                    const dropped = this.meshTaskAttachmentHistory.shift();
+                    LOG.warn('MeshTaskAttach', `[${this.instanceId}] turn-aware attachment history exceeded cap `
+                        + `(${CliProviderInstance.MESH_TASK_ATTACHMENT_HISTORY_CAP}) — dropped stale entry for task ${dropped?.taskId}. `
+                        + 'This means detachMeshAssignment stopped popping completed entries.');
+                }
+            }
         }
         this.settings = {
             ...this.settings,
@@ -1147,8 +1194,31 @@ export class CliProviderInstance implements ProviderInstance {
      * injects a benign task-less notification). A NON-launched session (a plain CLI
      * session adopted by mesh_send_task --direct, launchedByCoordinator falsy)
      * keeps the original full clear so an ad-hoc session is never left pinned.
+     *
+     * WORKER-MCP T2 precursor: on a launched-member session, if the turn-aware
+     * history (meshTaskAttachmentHistory) still holds a PENDING attachment after
+     * popping the one that just completed, its identity is restored onto the
+     * scalar fields instead of being left cleared. Without this, a task that
+     * attached while an earlier one was still completing would have its
+     * meshActiveTaskId silently wiped by the earlier task's detach — pushEvent's
+     * next lifecycle event for the pending task would then carry no taskId at
+     * all. Scoped to the launched-member branch only: that is the queue-worker
+     * path attachMeshAssignment actually serves today (mesh-queue-assignment.ts
+     * claim arm + recordDirectDispatchTask), and it is the only branch that
+     * already preserves session state across a detach. Flag OFF or a single
+     * attachment in flight (today's only reachable case — see the field's doc
+     * comment): history is empty or already down to zero after the shift, so
+     * `pending` is undefined and this branch is byte-identical to before.
      */
     detachMeshAssignment(): void {
+        // Pop the just-completed attachment BEFORE touching settings, mirroring
+        // the order pushEvent uses (resolve via completingTurnTaskId, then call
+        // this). Flag off: history is always empty, so `pending` stays undefined.
+        let pending: { taskId: string; attemptId?: string; dispatchNonce?: number } | undefined;
+        if (isWorkerMcpEnabled() && this.meshTaskAttachmentHistory.length > 0) {
+            this.meshTaskAttachmentHistory.shift();
+            pending = this.meshTaskAttachmentHistory[0];
+        }
         if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
         // Session-level member: keep membership, drop only the task-level markers.
         if (this.settings.launchedByCoordinator === true) {
@@ -1156,7 +1226,14 @@ export class CliProviderInstance implements ProviderInstance {
             // REDRIVE-DUP: clear the task-level dispatch nonce with the task marker.
             const { meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, ...rest } = this.settings;
             void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId;
-            this.settings = rest;
+            this.settings = pending
+                ? {
+                    ...rest,
+                    meshActiveTaskId: pending.taskId,
+                    ...(pending.attemptId ? { meshActiveAttemptId: pending.attemptId } : {}),
+                    ...(typeof pending.dispatchNonce === 'number' ? { meshActiveDispatchNonce: pending.dispatchNonce } : {}),
+                }
+                : rest;
             this.adapter.updateRuntimeSettings?.(this.settings);
             return;
         }
@@ -2390,8 +2467,21 @@ export class CliProviderInstance implements ProviderInstance {
      * backward-compat alias for the "current/last assignment" and is the source of the
      * NOTIF-MISDELIVER / TASK-MSG-MISROUTE race: a second task attaching before this
      * turn completes overwrites it. Returns undefined for a non-task ad-hoc turn.
+     *
+     * WORKER-MCP T2 precursor: when the flag is on and the turn-aware history has
+     * an entry, it is consulted FIRST and wins over both the (dead-in-practice —
+     * see SpecCliAdapter, docs/design/2026-08-28-worker-mcp.md §4.1) per-turn
+     * adapter binding and the scalar. The oldest attachment is the one whose turn
+     * is currently completing: only one turn is ever physically in flight on the
+     * PTY (canSendNow() untouched by this change), so completions arrive in the
+     * same order tasks were attached — FIFO. Flag off, or exactly one attachment
+     * in flight (today's only reachable case): the history head IS the scalar
+     * value, so this branch changes nothing observable.
      */
     private completingTurnTaskId(): string | undefined {
+        if (isWorkerMcpEnabled() && this.meshTaskAttachmentHistory.length > 0) {
+            return this.meshTaskAttachmentHistory[0].taskId;
+        }
         const turnTaskId = this.adapter?.currentTurnTaskId;
         if (typeof turnTaskId === 'string' && turnTaskId.trim()) return turnTaskId;
         const scalar = this.settings.meshActiveTaskId;
@@ -2421,18 +2511,32 @@ export class CliProviderInstance implements ProviderInstance {
      *    so non-mesh completion is unaffected.
      * Fails CLOSED for the injected-but-not-started window; open once the injected turn is
      * genuinely underway (preserving the rc.480/481 completion-fires win).
+     *
+     * WORKER-MCP T2 precursor: `meshTaskInjectedAt` is itself a last-write-wins
+     * scalar — a second attach while an earlier task's turn is still completing
+     * would bump it forward and make THAT task's genuine completion look
+     * premature (turnStartedAt, anchored on the earlier attach, would no longer
+     * be > the bumped injectedAt). When the flag is on and the turn-aware history
+     * is non-empty, the OLDEST entry's own injectedAt is used instead — the same
+     * FIFO head completingTurnTaskId() resolves against. Flag off, or a single
+     * attachment in flight (today's only reachable case): the history head's
+     * injectedAt IS meshTaskInjectedAt (set in the same attach call), so this is
+     * byte-identical to before.
      */
     private injectedTaskHasStartedGenerating(): boolean {
         const turnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
             ? (this.adapter as any).currentTurnStartedAt as number
             : 0;
         const turnStarted = Number.isFinite(turnStartedAt) && turnStartedAt > 0;
-        if (this.meshTaskInjectedAt <= 0) {
+        const injectedAt = (isWorkerMcpEnabled() && this.meshTaskAttachmentHistory.length > 0)
+            ? this.meshTaskAttachmentHistory[0].injectedAt
+            : this.meshTaskInjectedAt;
+        if (injectedAt <= 0) {
             // No mesh task injected since boot — plain "a turn has started" suffices.
             return turnStarted;
         }
         // A task was injected: the producing turn must have STARTED after that injection.
-        return turnStarted && turnStartedAt > this.meshTaskInjectedAt;
+        return turnStarted && turnStartedAt > injectedAt;
     }
 
     // EVTTRACE correlation context for this session's completion lifecycle. taskId is
