@@ -57,6 +57,7 @@ import {
     autoLaunchAwaitClaimBackoff,
     awaitClaimWindowMs,
     remoteSessionAppearsLive,
+    claimAfterRemoteAutoLaunch,
     AUTO_LAUNCH_REMOTE_IDLE_TTL_MS,
     AUTO_LAUNCH_AWAIT_CLAIM_MS,
     __clearAwaitClaimBackoffForTests,
@@ -336,14 +337,24 @@ function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
         if (!localId) continue;
         const inlineMatch = cachedNodes.find((cachedNode: any) => meshNodeIdMatches(cachedNode, localId));
         if (!inlineMatch) continue;
-        if (!inlineBootstrapIsFresher(inlineMatch.worktreeBootstrap, localNode.worktreeBootstrap)) continue;
+        const bootstrapFresher = inlineBootstrapIsFresher(inlineMatch.worktreeBootstrap, localNode.worktreeBootstrap);
+        // Dual-source (5-c / 5-b C): mesh_status stamps lastGit on the INLINE node; the claim
+        // view used to take the config node verbatim whenever bootstrap wasn't fresher, so
+        // shouldDeferDispatchForBootstrap never saw the P2P git evidence and the stale-running
+        // backstop could not open. Overlay lastGit independently of bootstrap freshness.
+        const inlineGit = inlineMatch.lastGit ?? inlineMatch.last_git;
+        if (!bootstrapFresher && !inlineGit) continue;
         if (!overlaid) {
             overlaidLocalNodes = [...localNodes];
             overlaid = true;
         }
-        // Keep the config node's static fields; overlay only the dynamic worktreeBootstrap
-        // runtime substate (fresher terminal stamp / epoch) — config identity is unchanged.
-        overlaidLocalNodes[i] = { ...localNode, worktreeBootstrap: inlineMatch.worktreeBootstrap };
+        // Keep the config node's static fields; overlay only dynamic runtime substate
+        // (fresher terminal stamp / epoch, and live lastGit). Config identity is unchanged.
+        overlaidLocalNodes[i] = {
+            ...localNode,
+            ...(bootstrapFresher ? { worktreeBootstrap: inlineMatch.worktreeBootstrap } : {}),
+            ...(inlineGit ? { lastGit: inlineGit, last_git: inlineGit } : {}),
+        };
     }
     if (!cacheOnly.length && !overlaid) return localMesh;
     return { ...localMesh, nodes: [...overlaidLocalNodes, ...cacheOnly] };
@@ -994,7 +1005,14 @@ export function tryAssignQueueTask(
             return readNonEmptyString(inlineNode?.worktreeBootstrap?.status) ? inlineNode : undefined;
         } catch { return undefined; }
     })();
-    const bootstrapGateNode = inlineBootstrapNode ?? node;
+    // Dual-source (5-c): inline is authoritative for bootstrap status but often lacks lastGit.
+    const bootstrapGateNode = (() => {
+        const base = inlineBootstrapNode ?? node;
+        if (!base) return base;
+        const git = (inlineBootstrapNode as any)?.lastGit ?? (inlineBootstrapNode as any)?.last_git
+            ?? (node as any)?.lastGit ?? (node as any)?.last_git;
+        return git ? { ...base, lastGit: git, last_git: git } : base;
+    })();
     if ((bootstrapGateNode as { worktreeBootstrap?: { status?: string } } | undefined)?.worktreeBootstrap?.status === 'running') {
         // Fix (3) safety net + F7: shouldDeferDispatchForBootstrap returns false when the 'running'
         // state is stale (older than the backstop AND git-clean) — treat that as silently complete
@@ -2470,6 +2488,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
                                 isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId),
                             }).catch(() => false);
+                            // Symmetric with the local path's post-wait tryAssignQueueTask.
+                            claimAfterRemoteAutoLaunch(components, meshId, nodeId, remoteSessionId, effectiveProviderType, tryAssignQueueTask);
                         }
                         return true;
                     }

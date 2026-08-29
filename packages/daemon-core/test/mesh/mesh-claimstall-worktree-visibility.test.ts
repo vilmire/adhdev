@@ -385,4 +385,21 @@ describe('getMeshWithCache — bootstrap runtime overlay precedence', () => {
 
     expect(findNode(merged, WORKTREE_NODE_ID)?.worktreeBootstrap?.startedAt).toBe(newerStartedAt)
   })
+
+  it('(g) config running without lastGit + inline lastGit → merged view carries lastGit even when bootstrap is not fresher', () => {
+    // 5-c dual-source: mesh_status stamps lastGit on the inline node; the claim view used
+    // to keep the config node verbatim when bootstrap wasn't fresher, so the stale-running
+    // backstop never saw the P2P git evidence. Overlay lastGit independently.
+    const startedAt = new Date().toISOString()
+    meshConfigMocks.getMesh.mockReturnValue({ id: meshId, policy: {}, nodes: [baseNode, configWorktree({ status: 'running', startedAt })] })
+    const inlineWt = configWorktree({ status: 'running', startedAt })
+    inlineWt.lastGit = { checkedAt: Date.now(), status: { isGitRepo: true, branch: 'main', staged: 0, modified: 0, untracked: 0, deleted: 0, renamed: 0 } }
+    const components = componentsWithInline([baseNode, inlineWt])
+
+    const merged = getMeshWithCache(components, meshId)
+    const node = findNode(merged, WORKTREE_NODE_ID)
+    expect(node?.worktreeBootstrap?.status).toBe('running')
+    expect(node?.lastGit?.status?.branch).toBe('main')
+    expect(node?.last_git?.status?.branch).toBe('main')
+  })
 })

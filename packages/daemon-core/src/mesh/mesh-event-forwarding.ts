@@ -55,6 +55,10 @@ import {
     AUTO_LAUNCH_AWAIT_CLAIM_MS,
 } from './mesh-queue-assignment.js';
 import {
+    markRemoteSessionGenerating,
+    markRemoteSessionIdle,
+} from './mesh-autolaunch-integrity.js';
+import {
     sweepExpiredRemoteIdleSessions,
     readEventTimestamp,
     resolveGraphEnvelopeWorkerResult,
@@ -861,6 +865,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 // it (claimed:true, no auto-launch), and injects exactly once. Skip a false-idle
                 // (mid-turn / no-final-assistant) completion — that session is NOT genuinely idle.
                 if (!isFalseIdle) {
+                    markRemoteSessionIdle(args.meshId, sessionId);
                     sweepExpiredRemoteIdleSessions();
                     try {
                         MeshRuntimeStore.getInstance().setRemoteIdleSession(args.meshId, nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
@@ -963,6 +968,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 worktreeBootstrapPending = node?.worktreeBootstrap?.status === 'running';
             } catch { /* best-effort: unknown bootstrap state → do not defer (prior behavior) */ }
 
+            markRemoteSessionIdle(args.meshId, sessionId);
             sweepExpiredRemoteIdleSessions();
             try {
                 MeshRuntimeStore.getInstance().setRemoteIdleSession(args.meshId, nodeId, sessionId, providerType, Date.now() + REMOTE_IDLE_SESSION_TTL_MS);
@@ -992,6 +998,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             } catch { /* best-effort */ }
         }
         if (sessionId) {
+            markRemoteSessionGenerating(args.meshId, sessionId);
             // CANON-B: a generating_started that echoes its taskId acks exactly the dispatch
             // and the delivery for THAT task — not every in-flight dispatch/delivery on the
             // session. A session that already holds a freshly-dispatched (still 'dispatched')
@@ -1146,6 +1153,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             } catch { /* best-effort */ }
         }
         if (sessionId) {
+            markRemoteSessionIdle(args.meshId, sessionId);
             // CANON-B: prefer the echoed taskId; session heuristic is the fallback.
             directDispatchTaskIdForLedger = readNonEmptyString(args.metadataEvent.taskId)
                 || resolveActiveDirectDispatchTaskId(args.meshId, sessionId);

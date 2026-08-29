@@ -394,3 +394,80 @@ export function driveExpiredAwaitClaim(
     recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim_backoff', nodeId, sessionId });
     return 'backoff';
 }
+
+// AUTOLAUNCH-REMOTE-CLAIM (M-MESH-INFRA-0829 defect 5-c). The LOCAL auto-launch path waits for
+// readiness then calls tryAssignQueueTask. The REMOTE path waited the same 15s for agent:ready
+// to land in remote_idle_sessions and then returned WITHOUT claiming, hoping the event/reconcile
+// path would fire. Live (rc.43, 2026-08-30): antigravity-cli session e55126a4 launched on
+// node_de3c0072 and never emitted agent:ready (only monitor:no_progress 3 min later); the 15s
+// wait timed out; the task stayed pending with an empty TUI prompt. Providers with
+// emitsPtyTurnEvents:false have no other life signal, so "the claim still fires via the normal
+// event path" was a lie for that class.
+//
+// This helper is the remote counterpart of the local post-wait claim. It:
+//   1. Refuses to claim when generating_started has been observed for the session (fail-closed:
+//      a truly mid-turn worker must not be injected into).
+//   2. Registers the session as a remote-idle candidate with a FRESH expiresAt
+//      (now + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS) so getRemoteIdleSessions' `expires_at > now`
+//      filter cannot drop a just-spawned row — the 5-b expiry-filter reverse-effect.
+//   3. Calls the injected assignQueueTask (tryAssignQueueTask). Bootstrap/quota/ff gates
+//      inside that funnel stay fail-closed; a refused claim leaves the registered idle row
+//      for the 4s drain / bootstrap-complete refire to retry.
+export type RemoteAutoLaunchClaimResult = 'claimed' | 'registered' | 'skipped_generating' | 'no_session';
+
+const remoteGeneratingSessions = new Set<string>();
+function remoteGeneratingKey(meshId: string, sessionId: string): string {
+    return `${meshId}::${sessionId}`;
+}
+
+export function markRemoteSessionGenerating(meshId: string, sessionId: string): void {
+    if (!meshId || !sessionId) return;
+    remoteGeneratingSessions.add(remoteGeneratingKey(meshId, sessionId));
+}
+
+export function markRemoteSessionIdle(meshId: string, sessionId: string): void {
+    if (!meshId || !sessionId) return;
+    remoteGeneratingSessions.delete(remoteGeneratingKey(meshId, sessionId));
+}
+
+export function isRemoteSessionMarkedGenerating(meshId: string, sessionId: string): boolean {
+    if (!meshId || !sessionId) return false;
+    return remoteGeneratingSessions.has(remoteGeneratingKey(meshId, sessionId));
+}
+
+/** @internal Test-only: clear the generating-mark set between cases. */
+export function __resetRemoteGeneratingMarksForTests(): void {
+    remoteGeneratingSessions.clear();
+}
+
+export function claimAfterRemoteAutoLaunch(
+    components: DaemonComponents,
+    meshId: string,
+    nodeId: string,
+    sessionId: string | undefined,
+    providerType: string,
+    assignQueueTask: (components: DaemonComponents, meshId: string, nodeId: string, sessionId: string, providerType: string) => boolean,
+): RemoteAutoLaunchClaimResult {
+    if (!sessionId) return 'no_session';
+    if (isRemoteSessionMarkedGenerating(meshId, sessionId)) {
+        LOG.info('MeshQueue', `Remote auto-launch claim skipped for session ${sessionId} on node ${nodeId} (mesh ${meshId}): generating_started observed — fail-closed, will not inject into a mid-turn worker`);
+        return 'skipped_generating';
+    }
+    try {
+        MeshRuntimeStore.getInstance().setRemoteIdleSession(
+            meshId,
+            nodeId,
+            sessionId,
+            providerType,
+            Date.now() + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS,
+        );
+    } catch { /* best-effort register; claim may still proceed with the explicit session id */ }
+    const assigned = assignQueueTask(components, meshId, nodeId, sessionId, providerType);
+    if (assigned) {
+        try {
+            MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId, nodeId, sessionId);
+        } catch { /* best-effort */ }
+        return 'claimed';
+    }
+    return 'registered';
+}
