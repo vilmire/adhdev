@@ -724,6 +724,20 @@ export class DaemonCommandRouter {
     updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
         const incomingId = normalizeMeshNodeId(node);
         if (!mesh || !Array.isArray(mesh.nodes) || !incomingId) return;
+        // M-MESH-INFRA-0829 [C]: honor removal tombstones here too. Every OTHER inline-cache
+        // write path (warmInlineMeshCache, getMeshForCommand's reconcile branch) already filters
+        // through applyInlineMeshNodeTombstones before merging — this direct single-node writer
+        // was the one gap. Its two hydrate-on-miss callers (markWorktreeBootstrapTerminalState's
+        // shell upsert, seedRemoteClonedWorktreeNode's clone-reply merge) both react to late/
+        // replayed/best-effort P2P events for a node id that "isn't in the cache" — which is
+        // exactly true immediately after mesh_remove_node tombstones and evicts it. Without this
+        // check a stray post-removal event silently resurrects the node. Same clearing rule as
+        // applyInlineMeshNodeTombstones: a genuine re-registration (workspace really is back) still
+        // wins.
+        if (this.isInlineMeshNodeTombstoned(meshId, incomingId, node)) {
+            LOG.info('Mesh', `[NodeMembershipMerge] mesh=${meshId} droppedNodeId=${incomingId} reason=tombstoned_removal source=updateInlineMeshNode`);
+            return;
+        }
         const idx = mesh.nodes.findIndex((entry: any) => meshNodeIdMatches(entry, incomingId));
         if (idx >= 0) mesh.nodes[idx] = node;
         else mesh.nodes.push(node);
@@ -919,6 +933,22 @@ export class DaemonCommandRouter {
             this.removedInlineMeshNodeIds.set(meshId, set);
         }
         set.add(nodeId);
+    }
+
+    /** Single-node counterpart of {@link applyInlineMeshNodeTombstones}, for a direct
+     *  single-node writer (updateInlineMeshNode) rather than a whole-mesh merge. Same rule:
+     *  a tombstoned node id is dropped unless its workspace is genuinely back on disk, in
+     *  which case the tombstone clears and the write proceeds normally. */
+    private isInlineMeshNodeTombstoned(meshId: string, nodeId: string, node: any): boolean {
+        const tombstones = this.removedInlineMeshNodeIds.get(meshId);
+        if (!tombstones?.size || !tombstones.has(nodeId)) return false;
+        const workspace = readStringValue(node?.workspace);
+        if (workspace && fs.existsSync(workspace)) {
+            tombstones.delete(nodeId);
+            if (tombstones.size === 0) this.removedInlineMeshNodeIds.delete(meshId);
+            return false;
+        }
+        return true;
     }
 
     /** Filter an incoming inline mesh against this mesh's tombstones before it is
