@@ -121,6 +121,16 @@ const claudeQuota = (over: Record<string, any> = {}) => ({
   ...over,
 })
 
+const codexQuota = (over: Record<string, any> = {}) => ({
+  provider: 'codex-cli',
+  status: 'ok',
+  session: { usedPercent: 50, windowMinutes: 300, resetsAt: null },
+  weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: null },
+  updatedAt: Date.now(),
+  error: null,
+  ...over,
+})
+
 function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __clearMeshLedgerForTests(meshId)
@@ -153,8 +163,11 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
         sessionId: 'sess-quota',
         providerType: 'claude-cli',
         reason: expect.any(String),
+        trigger: 'idle_claim_scan',
         previouslyBlocked: false,
       })
+      expect((entries[0].payload as any).pinOverride).toBeUndefined()
+      expect((entries[0].payload as any).candidateTaskId).toBeUndefined()
     } finally {
       cleanup(meshId)
     }
@@ -205,6 +218,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
       expect(entries.length).toBeGreaterThanOrEqual(2)
       expect(entries.every(e => (e.payload as any).phase === 'blocked')).toBe(true)
+      expect(entries.every(e => (e.payload as any).trigger === 'idle_claim_scan')).toBe(true)
     } finally {
       cleanup(meshId)
     }
@@ -251,6 +265,45 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
 
       const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
       expect(entries).toHaveLength(0)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('records "overridden_by_pin" (not "blocked") when a provider-pinned task is claimed through a low quota gate', async () => {
+    const meshId = `mesh_quota_ledger_pin_override_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [quotaNode({ 'codex-cli': codexQuota({ weekly: { usedPercent: 86, windowMinutes: 10080, resetsAt: null } }) })], { weeklyMinRemainingPercent: 25 })
+      const components = createComponents(meshId, [
+        { sessionId: 'sess-codex', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'codex-cli' },
+      ])
+      const pinnedTaskId = `task-pin-${randomUUID().slice(0, 8)}`
+      enqueueTask(meshId, 'pinned codex work', {
+        id: pinnedTaskId,
+        targetNodeId: NODE_ID,
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        requiredTags: ['provider=codex-cli'],
+      })
+
+      const result = await triggerMeshQueue(components, meshId)
+      expect(result.claimed).toBe(true)
+
+      const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
+      expect(entries).toHaveLength(1)
+      expect(entries[0].payload).toMatchObject({
+        phase: 'overridden_by_pin',
+        nodeId: NODE_ID,
+        sessionId: 'sess-codex',
+        providerType: 'codex-cli',
+        reason: 'provider_quota_weekly_low',
+        window: 'weekly',
+        remainingPercent: 14,
+        thresholdPercent: 25,
+        trigger: 'idle_claim_scan',
+        pinOverride: true,
+        candidateTaskId: pinnedTaskId,
+      })
     } finally {
       cleanup(meshId)
     }
