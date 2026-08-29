@@ -138,6 +138,33 @@ export interface SeqscribeStatusSummary {
     parityExtraInShadowBucket: number;
     parityFieldMismatchBucket: number;
 
+    // ── §8 unit 2: transcript single-observation publisher + parity ────────
+    // Same bucket discipline as the mesh dual-write/parity fields above,
+    // `transcript*`-prefixed rather than `dualWrite*`/`parity*` so the two
+    // legs (mesh events shadow vs. session transcript publisher) never share a
+    // key. `transcriptParityPersistentMismatchBucket` mirrors
+    // `parityPersistentMismatchBucket`'s omission from
+    // `buildCloudSeqscribeSummary` (status/reporter.ts) below — kept local-only
+    // for consistency with that existing asymmetry, not a new decision.
+    /** True when the transcript publisher is configured (mode != off). */
+    transcriptPublish: boolean;
+    /** Bucketed count of complete revisions handed to the publish sink. */
+    transcriptPublishedBucket: number;
+    /** Bucketed count of publish-sink failures. */
+    transcriptPublishFailedBucket: number;
+    /** Bucketed count of stable-hash observations that produced no new revision. */
+    transcriptDedupedBucket: number;
+    /** Bucketed count of `projection_oversize` rejections (design §3.3/§7.2 item 3). */
+    transcriptOversizedBucket: number;
+    /** Bucketed count of sessions dropped at `MAX_TRACKED_SESSIONS`. */
+    transcriptDroppedBucket: number;
+    /** True once at least one transcript parity comparison has run. */
+    transcriptParityRan: boolean;
+    /** Bucketed count of transcript parity mismatches observed since boot. */
+    transcriptParityMismatchBucket: number;
+    /** LOCAL-ONLY — see the header note above. Mismatches that survived a repair attempt. */
+    transcriptParityPersistentMismatchBucket: number;
+
     // ── LOCAL-ONLY replication diagnostics (library P22/P24) ────────────────
     // ★ Everything below is deliberately ABSENT from the cloud projection.
     // `buildCloudSeqscribeSummary` (status/reporter.ts) is a fixed-key
@@ -237,6 +264,21 @@ export interface SummarizeOptions {
         missingInShadow?: number;
         extraInShadow?: number;
         fieldMismatch?: number;
+    };
+    /** §8 unit 2 transcript publisher counters. Omitted → reported as inactive/zero. */
+    transcript?: {
+        active: boolean;
+        published: number;
+        publishFailed: number;
+        deduped: number;
+        oversized: number;
+        dropped: number;
+    };
+    /** §8 unit 2 transcript parity counters. Omitted → reported as never-run. */
+    transcriptParity?: {
+        runs: number;
+        mismatches: number;
+        persistentMismatches?: number;
     };
     /**
      * Include the LOCAL-ONLY P22/P24 diagnostics (applyRejects, stalledStreams,
@@ -374,6 +416,18 @@ export function summarizeSeqscribeStats(
         parityMissingInShadowBucket: bucket(opts.parity?.missingInShadow ?? 0, BACKLOG_BUCKETS),
         parityExtraInShadowBucket: bucket(opts.parity?.extraInShadow ?? 0, BACKLOG_BUCKETS),
         parityFieldMismatchBucket: bucket(opts.parity?.fieldMismatch ?? 0, BACKLOG_BUCKETS),
+        transcriptPublish: opts.transcript?.active ?? false,
+        transcriptPublishedBucket: bucket(opts.transcript?.published ?? 0, BACKLOG_BUCKETS),
+        transcriptPublishFailedBucket: bucket(opts.transcript?.publishFailed ?? 0, BACKLOG_BUCKETS),
+        transcriptDedupedBucket: bucket(opts.transcript?.deduped ?? 0, BACKLOG_BUCKETS),
+        transcriptOversizedBucket: bucket(opts.transcript?.oversized ?? 0, BACKLOG_BUCKETS),
+        transcriptDroppedBucket: bucket(opts.transcript?.dropped ?? 0, BACKLOG_BUCKETS),
+        transcriptParityRan: (opts.transcriptParity?.runs ?? 0) > 0,
+        transcriptParityMismatchBucket: bucket(opts.transcriptParity?.mismatches ?? 0, BACKLOG_BUCKETS),
+        transcriptParityPersistentMismatchBucket: bucket(
+            opts.transcriptParity?.persistentMismatches ?? 0,
+            BACKLOG_BUCKETS,
+        ),
         ...localDiagnostics,
     };
 }

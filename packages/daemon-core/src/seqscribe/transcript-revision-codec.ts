@@ -383,7 +383,16 @@ export class TranscriptRevisionAssembler {
 
         let json: string;
         try {
-            json = new TextDecoder('utf-8', { fatal: true }).decode(combined);
+            // ★ `ignoreBOM: false` is explicit, not decorative: DOM's
+            // `TextDecoderOptions` makes it optional, but `@cloudflare/workers-types`'
+            // `TextDecoderConstructorOptions` (what `packages/server`'s
+            // DOM-less `lib: ["ES2022"]` tsconfig resolves `TextDecoder` from,
+            // since this file became reachable from that package's typecheck
+            // via §8 unit 2's `transcript-publisher.ts` import chain) requires
+            // it. Omitting it type-checks fine under a DOM lib and fails only
+            // under the Workers lib — exactly the asymmetry that let it ship
+            // unnoticed in unit 1.
+            json = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(combined);
         } catch {
             return { status: 'rejected', reason: 'invalid_utf8' };
         }

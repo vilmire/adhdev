@@ -282,6 +282,14 @@ describe('cloud status seqscribe boundary', () => {
         parityMissingInShadowBucket: 0,
         parityExtraInShadowBucket: 0,
         parityFieldMismatchBucket: 0,
+        transcriptPublish: false,
+        transcriptPublishedBucket: 0,
+        transcriptPublishFailedBucket: 0,
+        transcriptDedupedBucket: 0,
+        transcriptOversizedBucket: 0,
+        transcriptDroppedBucket: 0,
+        transcriptParityRan: false,
+        transcriptParityMismatchBucket: 0,
     };
 
     it('omits the field entirely when no seqscribe node is running', () => {
@@ -382,6 +390,14 @@ describe('cloud status seqscribe boundary', () => {
             parityMissingInShadowBucket: 0,
             parityExtraInShadowBucket: 0,
             parityFieldMismatchBucket: 0,
+            transcriptPublish: false,
+            transcriptPublishedBucket: 0,
+            transcriptPublishFailedBucket: 0,
+            transcriptDedupedBucket: 0,
+            transcriptOversizedBucket: 0,
+            transcriptDroppedBucket: 0,
+            transcriptParityRan: false,
+            transcriptParityMismatchBucket: 0,
         });
     });
 
@@ -475,6 +491,9 @@ describe('★beacon diagnostics never reach the server status frame', () => {
         dualWrite: false, dualWriteFailedBucket: 0, dualWriteDroppedBucket: 0,
         dualWriteBackfilledBucket: 0, parityMismatchBucket: 0, parityRan: false,
         parityMissingInShadowBucket: 0, parityExtraInShadowBucket: 0, parityFieldMismatchBucket: 0,
+        transcriptPublish: false, transcriptPublishedBucket: 0, transcriptPublishFailedBucket: 0,
+        transcriptDedupedBucket: 0, transcriptOversizedBucket: 0, transcriptDroppedBucket: 0,
+        transcriptParityRan: false, transcriptParityMismatchBucket: 0,
     };
 
     /** A realistic diagnostics object, carrying every identifier class it legitimately holds. */

@@ -114,6 +114,7 @@ import {
 } from '../runtime-defaults.js';
 import type { SessionModalState } from '../providers/provider-instance.js';
 import type { DebugTraceEvent } from '../logging/debug-trace.js';
+import { markTranscriptSessionDirty } from '../seqscribe/transcript-publisher.js';
 
 /**
  * Transport sink injected by each daemon. The registry never sees WS framing
@@ -671,6 +672,12 @@ export class TopicSubscriptionRegistry {
     markChatOutputActivity(sessionId: string): void {
         const cfg = this.opts.chatTail;
         if (!sessionId || !(cfg?.isCliSession?.(sessionId) ?? false)) return;
+        // §8 unit 2 dirty trigger (design §5.2): "no-subscriber 상태에서도 live
+        // production이 멈추지 않게 기존 markChatOutputActivity ... 가
+        // TranscriptProjectionService.markDirty(sessionId)를 호출한다." Safe
+        // no-op until a later unit configures a service — see
+        // seqscribe/transcript-publisher.ts's header.
+        markTranscriptSessionDirty(sessionId);
         this.chatOutputActiveAt.set(sessionId, this.now());
         if (this.chatOutputFlushTimer) return;
         if (cfg?.scheduleGate && !cfg.scheduleGate()) return;

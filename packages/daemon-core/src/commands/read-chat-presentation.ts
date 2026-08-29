@@ -20,6 +20,8 @@ import {
     normalizeReadChatMessages,
     normalizeReadChatTailLimit,
 } from './read-chat-message-filters.js';
+import { buildTranscriptObservationFromReadChat } from './transcript-observation-builder.js';
+import { notifyTranscriptObservation } from '../seqscribe/transcript-publisher.js';
 
 function shouldPreserveReadChatPayloadField(key: string): boolean {
     return key === 'messageSource' || key === 'transcriptProvenance';
@@ -244,6 +246,7 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
     const visibleMessages = includeActivity
         ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m))
         : filterUserFacingChatMessages(filteredMessages);
+
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
     const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
     const preservedPayloadFields = Object.fromEntries(Object.entries(payload).filter(([key]) => shouldPreserveReadChatPayloadField(key)));
@@ -252,6 +255,44 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
     }
     if (preservedPayloadFields.transcriptProvenance) {
         preservedPayloadFields.transcriptProvenance = updateMessageSourceReturnedCount(preservedPayloadFields.transcriptProvenance, sync.messages.length);
+    }
+
+    // ── §8 unit 2 choke point (design §5.2) ─────────────────────────────────
+    // "buildReadChatCommandResult의 validation/source selection 뒤, tail
+    // slicing 전에 typed TranscriptObservation을 만든다." The observation still
+    // carries `visibleMessages` (the FULL set this read observed, never
+    // `sync.messages`'s request-specific tailLimit slice) — `sync` only had to
+    // be computed first here because `preservedPayloadFields.messageSource`'s
+    // returnedCount is refreshed from it above, and this block reuses that
+    // same `preservedPayloadFields` object as the observation's provenance.
+    // Fire-and-forget and exception-swallowed: `notifyTranscriptObservation` is
+    // a safe no-op until a later unit (§8 unit 3+) calls
+    // `configureTranscriptProjection`, and even once configured it must NEVER
+    // be able to break this read.
+    try {
+        const observation = buildTranscriptObservationFromReadChat({
+            sessionId: sessionIdHint || presentationSessionIdHint,
+            historySessionId: typeof validatedPayload.historySessionId === 'string' ? validatedPayload.historySessionId : null,
+            providerType: providerHint || turnPresentation.providerType || '',
+            providerSessionId: typeof validatedPayload.providerSessionId === 'string' ? validatedPayload.providerSessionId : null,
+            status: effectiveStatus,
+            providerObservedStatus: legacyStatus,
+            title: typeof validatedPayload.title === 'string' ? validatedPayload.title : null,
+            activeModal: validatedPayload.activeModal ?? null,
+            activeInteractivePrompt: validatedPayload.activeInteractivePrompt ?? null,
+            turn: turnPresentation.authority === 'turn_reducer' ? turnPresentation : null,
+            provenance: preservedPayloadFields,
+            messages: visibleMessages,
+            coverage: {
+                mode: 'full',
+                totalMessageCount: messages.length,
+                returnedMessageCount: visibleMessages.length,
+                omittedBefore: false,
+            },
+        });
+        if (observation) notifyTranscriptObservation(observation.sessionId, observation);
+    } catch {
+        // Transcript projection must never be able to break read_chat itself.
     }
     const returnedDebugReadChat = debugReadChat
         ? {

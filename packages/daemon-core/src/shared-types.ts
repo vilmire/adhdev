@@ -1007,6 +1007,28 @@ export interface SeqscribeStatusSummary {
     parityExtraInShadowBucket?: number;
     /** Bucketed count of `field_mismatch` mismatches (0 = none). */
     parityFieldMismatchBucket?: number;
+
+    // ── §8 unit 2: transcript single-observation publisher + parity ────────
+    // Same bucket/boolean discipline as the fields above. See
+    // seqscribe/stats.ts SeqscribeStatusSummary for the full field docs.
+    // transcriptParityPersistentMismatchBucket is deliberately absent here —
+    // LOCAL-ONLY, same asymmetry as parityPersistentMismatchBucket's absence.
+    /** Whether the transcript publisher is configured (mode != off). */
+    transcriptPublish?: boolean;
+    /** Bucketed count of complete revisions handed to the publish sink (0 = none). */
+    transcriptPublishedBucket?: number;
+    /** Bucketed count of publish-sink failures (0 = none). */
+    transcriptPublishFailedBucket?: number;
+    /** Bucketed count of stable-hash observations that produced no new revision (0 = none). */
+    transcriptDedupedBucket?: number;
+    /** Bucketed count of `projection_oversize` rejections (0 = none). */
+    transcriptOversizedBucket?: number;
+    /** Bucketed count of sessions dropped at MAX_TRACKED_SESSIONS (0 = none). */
+    transcriptDroppedBucket?: number;
+    /** Whether at least one transcript parity comparison has run. */
+    transcriptParityRan?: boolean;
+    /** Bucketed count of transcript parity mismatches observed since boot (0 = none). */
+    transcriptParityMismatchBucket?: number;
 }
 
 /**

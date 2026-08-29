@@ -64,6 +64,18 @@ describe('summarizeSeqscribeStats', () => {
             parityMissingInShadowBucket: 0,
             parityExtraInShadowBucket: 0,
             parityFieldMismatchBucket: 0,
+            // §8 unit 2: transcript single-observation publisher + parity —
+            // same "report inactive/zero, never omit" discipline as the
+            // dualWrite/parity block above.
+            transcriptPublish: false,
+            transcriptPublishedBucket: 0,
+            transcriptPublishFailedBucket: 0,
+            transcriptDedupedBucket: 0,
+            transcriptOversizedBucket: 0,
+            transcriptDroppedBucket: 0,
+            transcriptParityRan: false,
+            transcriptParityMismatchBucket: 0,
+            transcriptParityPersistentMismatchBucket: 0,
         });
     });
 
@@ -135,7 +147,13 @@ describe('summarizeSeqscribeStats', () => {
         );
 
         const serialized = JSON.stringify(summary);
-        for (const identifier of ['sess-abc123', 'mesh_deadbeef', 'peer-secret-1', 'transcript']) {
+        // Full topic names, not the bare word "transcript" — §8 unit 2 adds
+        // legitimate `transcript*`-prefixed FIELD NAMES (transcriptPublish,
+        // transcriptParityRan, ...) to this same summary object, so a bare
+        // substring check on the word itself would flag its own field names as
+        // a false-positive leak. What must never appear is the session/mesh id
+        // EMBEDDED IN a topic name.
+        for (const identifier of ['sess-abc123', 'mesh_deadbeef', 'peer-secret-1', 'session.sess-abc123.transcript', 'mesh.mesh_deadbeef.events']) {
             expect(serialized).not.toContain(identifier);
         }
         for (const value of Object.values(summary)) {

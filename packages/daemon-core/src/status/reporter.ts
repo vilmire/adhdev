@@ -120,6 +120,16 @@ function buildCloudSeqscribeSummary(
         parityMissingInShadowBucket: count(seqscribe.parityMissingInShadowBucket),
         parityExtraInShadowBucket: count(seqscribe.parityExtraInShadowBucket),
         parityFieldMismatchBucket: count(seqscribe.parityFieldMismatchBucket),
+        // §8 unit 2. transcriptParityPersistentMismatchBucket stays LOCAL-ONLY,
+        // absent here — same asymmetry as parityPersistentMismatchBucket above.
+        transcriptPublish: seqscribe.transcriptPublish === true,
+        transcriptPublishedBucket: count(seqscribe.transcriptPublishedBucket),
+        transcriptPublishFailedBucket: count(seqscribe.transcriptPublishFailedBucket),
+        transcriptDedupedBucket: count(seqscribe.transcriptDedupedBucket),
+        transcriptOversizedBucket: count(seqscribe.transcriptOversizedBucket),
+        transcriptDroppedBucket: count(seqscribe.transcriptDroppedBucket),
+        transcriptParityRan: seqscribe.transcriptParityRan === true,
+        transcriptParityMismatchBucket: count(seqscribe.transcriptParityMismatchBucket),
     };
 }
 
