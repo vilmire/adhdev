@@ -58,6 +58,20 @@ export interface HighFamilyContext {
      */
     execute: (cmd: string, args: any, source?: string) => Promise<CommandRouterResult>;
 
+    /**
+     * Bound `DaemonCommandRouter.markWorktreeBootstrapTerminalState`. The
+     * `mesh_forward_event` handler must stamp a worktree bootstrap terminal
+     * transition (complete/failed) into the coordinator's inline mesh view so
+     * the claim gate observes it — the handler only has `ctx.deps`, which does
+     * NOT expose the router itself.
+     */
+    markWorktreeBootstrapTerminalState: (
+        meshId: string,
+        nodeId: string,
+        status: 'complete' | 'failed',
+        opts?: { workspace?: string },
+    ) => void;
+
     /** Router's aggregate-status memory cache (`.has()` probe in mesh_status). */
     aggregateMeshStatusCache: Map<string, { builtAt: number; snapshot: any; queueRevision: string }>;
 

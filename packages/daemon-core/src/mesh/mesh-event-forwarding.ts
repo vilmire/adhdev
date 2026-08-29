@@ -1201,7 +1201,11 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     bootstrapWorkspace ? { workspace: bootstrapWorkspace } : undefined,
                 );
             } catch (e: any) {
-                LOG.warn('MeshQueue', `Failed to stamp terminal bootstrap state for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);
+                LOG.error('MeshQueue', `Failed to stamp terminal bootstrap state for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);
+                // Surface the failure loudly instead of silently swallowing it. The pending-event
+                // queue will retry delivery on the next reconcile tick / remote pull if this is a
+                // forwarded event, and the caller of a direct mesh_forward_event will see an error.
+                throw e;
             }
         }
         // BOOTSTRAP-MSG: detect whether the queue re-fire below has a task to auto-claim for
