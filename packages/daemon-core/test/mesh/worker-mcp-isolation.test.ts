@@ -332,9 +332,25 @@ describe('antigravity worker-private HOME', () => {
     const realHome = fakeGeminiHome()
     chmodSync(join(realHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), 0o644)
     const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
-    expect(() => prepareWorkerPrivateHome(spec, {
+    const attempt = () => prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-perm-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase6-'),
-    })).toThrow(/insecure_source/)
+    })
+    // The owner-only check itself is gated off on win32 in production
+    // (worker-mcp-isolation.ts: `entry.requireOwnerOnly && process.platform
+    // !== 'win32'`), and deliberately so: chmod on Windows cannot express
+    // POSIX group/other bits independently of the owner bit — empirically,
+    // fs.statSync(...).mode collapses to 0o666 (writable) or 0o444
+    // (read-only) no matter what chmod target is used (0o600, 0o644, ...),
+    // so "owner-only vs group/other-readable" is not a distinction Windows
+    // can report through this API. Enforcing the POSIX check anyway would
+    // reject EVERY credential file on Windows (default-created files are
+    // 0o666), not just loose ones. Pin the real win32 contract instead of
+    // asserting a POSIX-only guarantee that does not hold there.
+    if (process.platform === 'win32') {
+      expect(attempt).not.toThrow()
+      return
+    }
+    expect(attempt).toThrow(/insecure_source/)
   })
 
   it('errors when the required auth file is absent', () => {

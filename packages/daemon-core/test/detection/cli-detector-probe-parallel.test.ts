@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import type { ProviderLoader } from '../../src/providers/provider-loader.js';
 
 /**
@@ -65,7 +66,18 @@ function makeStubLoader(entries: Array<{ id: string; command: string }>): Provid
 // Fake, always-"installed" absolute-path commands so resolveDetectionPath's
 // isExplicitCommandPath short-circuit fires and existsSync must also pass —
 // point at this test file itself (guaranteed to exist) as the "binary".
-const FAKE_BIN = new URL(import.meta.url).pathname;
+//
+// MUST go through fileURLToPath, not raw `.pathname`: on win32 a file URL's
+// `.pathname` keeps the leading slash before the drive letter
+// ("/C:/Users/..."), which `path.isAbsolute` happily accepts but
+// `fs.existsSync` never resolves — the explicit-path short-circuit in
+// resolveCommandPath (src/detection/cli-detector.ts) then silently returns
+// null, detectCLIs falls through to a `where` lookup for that literal
+// (nonexistent) path, and the per-provider version-probe fan-out this suite
+// exists to verify never fires at all (observed: 1 exec call instead of 3+ —
+// the `where` fallback, not a version probe). fileURLToPath is the correct,
+// platform-safe URL->path conversion and is a no-op on POSIX.
+const FAKE_BIN = fileURLToPath(import.meta.url);
 
 describe('detectCLIs intra-provider version-probe parallelism', () => {
     beforeEach(() => {
