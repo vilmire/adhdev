@@ -12,6 +12,8 @@ import { daemonLifecycleHandlers } from '../../src/commands/low-family/daemon-li
 import { meshLedgerHandlers } from '../../src/commands/low-family/mesh-ledger.js'
 import { meshNodeLogsHandlers } from '../../src/commands/low-family/mesh-node-logs.js'
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
+import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mailbox.js'
+import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-peer-context.js'
 
 // RF-ROUTER LOW family extraction: the registry must carry exactly the commands
 // removed from executeDaemonCommand's switch, and each handler must return the same
@@ -57,14 +59,19 @@ const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh
 const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
 // WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
 const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_progress_update']
+// WORKER-MCP E-T0: the mailbox piggyback (design §7.1) — coordinator-side deposit
+// (routed cross-daemon via mesh_notify_worker) and the worker-side drain.
+const WORKER_MAILBOX_CMDS = ['deposit_worker_mailbox', 'worker_drain_mailbox']
+// WORKER-MCP D: the worker's read-only sibling-context lookup (design §6).
+const WORKER_PEER_CONTEXT_CMDS = ['worker_peer_context_pull']
 
 describe('low-family registry', () => {
-  it('registers all 50 LOW family commands once, no overlap', () => {
+  it('registers all 55 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
-      ...WORKER_REPORT_CMDS,
+      ...WORKER_REPORT_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
     ]
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
@@ -82,6 +89,8 @@ describe('low-family registry', () => {
     expect(Object.keys(meshLedgerHandlers)).toEqual(MESH_LEDGER_CMDS)
     expect(Object.keys(meshNodeLogsHandlers)).toEqual(MESH_NODE_LOGS_CMDS)
     expect(Object.keys(workerReportHandlers)).toEqual(WORKER_REPORT_CMDS)
+    expect(Object.keys(workerMailboxHandlers)).toEqual(WORKER_MAILBOX_CMDS)
+    expect(Object.keys(workerPeerContextHandlers)).toEqual(WORKER_PEER_CONTEXT_CMDS)
   })
 
   // The lists above are written by hand, which is what makes them a real gate:
@@ -99,7 +108,8 @@ describe('low-family registry', () => {
       sessionHostHandlers, specProviderDevHandlers, refineConfigHandlers,
       diagnosticsHandlers, statusMetaHandlers, coordinatorPromptHandlers,
       notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
-      meshNodeLogsHandlers, workerReportHandlers,
+      meshNodeLogsHandlers, workerReportHandlers, workerMailboxHandlers,
+      workerPeerContextHandlers,
     ].flatMap((handlers) => Object.keys(handlers))
 
     expect(new Set(union).size).toBe(union.length)
