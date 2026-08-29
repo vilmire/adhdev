@@ -26,6 +26,7 @@ import { killIdeProcess, isIdeRunning } from '../launch.js';
 import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
+import { activateKnownMeshTopics } from '../seqscribe/mesh-dual-write.js';
 import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
@@ -293,6 +294,28 @@ function normalizeCommandArgsWithInteractionId(args: any): Record<string, unknow
         base._interactionId = createInteractionId();
     }
     return base;
+}
+
+/**
+ * Read only the established mesh-scope envelope fields carried by daemon
+ * commands. This is intentionally not a recursive payload scan: authored task
+ * content must never become a topic name. Every accepted value is already a
+ * status/P2P mesh identifier class (`meshId`, `meshContext.meshId`, an inline
+ * mesh record id, or a launched session's `settings.meshNodeFor`).
+ */
+function meshIdsRevealedByCommandArgs(args: unknown): string[] {
+    const root = readObjectRecord(args);
+    const meshContext = readObjectRecord(root.meshContext);
+    const inlineMesh = readObjectRecord(root.inlineMesh);
+    const settings = readObjectRecord(root.settings);
+    const ids = [
+        readStringValue(root.meshId),
+        readStringValue(root.meshNodeFor),
+        readStringValue(meshContext.meshId),
+        readStringValue(inlineMesh.id),
+        readStringValue(settings.meshNodeFor),
+    ].filter((value): value is string => value !== undefined);
+    return [...new Set(ids)];
 }
 
 /**
@@ -1019,6 +1042,22 @@ export class DaemonCommandRouter {
         const logSource = normalizeCommandSource(source);
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
         const interactionId = typeof normalizedArgs._interactionId === 'string' ? normalizedArgs._interactionId : undefined;
+
+        // REMOTE-MESH-TOPIC-DISCOVERY: meshes.json is machine-local and is
+        // normally populated only on the coordinator. A remote daemon therefore
+        // learns its mesh scope from the P2P command/task envelopes above. Arm
+        // both per-mesh topics as soon as that existing identifier arrives; the
+        // seqscribe activation hook re-advertises grants on live peer sessions.
+        const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
+        if (revealedMeshIds.length > 0) {
+            const activated = activateKnownMeshTopics(revealedMeshIds);
+            if (activated > 0) {
+                LOG.info(
+                    'Seqscribe',
+                    `activated ${activated} mesh topic scope(s) from runtime command ${cmd}`,
+                );
+            }
+        }
 
         recordDebugTrace({
             interactionId,

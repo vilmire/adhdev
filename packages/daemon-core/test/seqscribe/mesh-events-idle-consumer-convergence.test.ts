@@ -1,16 +1,27 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Channel } from 'seqscribe';
+
+const isolatedConfig = vi.hoisted(() => {
+    const previous = process.env.ADHDEV_CONFIG_DIR;
+    const path = `/tmp/adhdev-mesh-runtime-topic-test-${process.pid}`;
+    process.env.ADHDEV_CONFIG_DIR = path;
+    return { path, previous };
+});
+
+import { DaemonCommandRouter } from '../../src/commands/router.js';
+import { listMeshesReadOnly } from '../../src/config/mesh-config.js';
 import {
     activateKnownMeshTopics,
     configureMeshDualWrite,
+    onTopicActivated,
     recordMeshEventShadow,
     __resetMeshDualWriteForTests,
 } from '../../src/seqscribe/mesh-dual-write.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
-import { meshEventsTopic } from '../../src/seqscribe/topics.js';
+import { meshEventsTopic, meshHandoffTopic } from '../../src/seqscribe/topics.js';
 
 /**
  * `mesh.<id>.events` replication to an IDLE peer — the live stall this suite pins.
@@ -33,28 +44,37 @@ import { meshEventsTopic } from '../../src/seqscribe/topics.js';
  * did not exist.
  *
  * ── What these tests pin ───────────────────────────────────────────────────
- * The first test is the RED/GREEN one: reverting `activateKnownMeshTopics` (or
- * its boot call) leaves the consumer at zero entries forever, because nothing
- * else in the system will ever define the topic on a node that does not write.
+ * The first test is the asymmetric RED/GREEN one: reverting runtime discovery
+ * in `DaemonCommandRouter.execute` leaves the empty-registry remote consumer at
+ * zero entries forever. The remaining tests retain the original boot/manual
+ * activation coverage from rc.35.
  *
- * ★ Both nodes are opened WITHOUT `meshIds`, deliberately: passing them would
- * define the topic at boot and paper over the exact gap under test.
+ * ★ The asymmetric test opens only the coordinator with `meshIds`; its remote
+ * consumer, and both nodes in the original cases, omit them deliberately.
  */
 
 const MESH_ID = 'idle-consumer-mesh';
 const TOPIC = meshEventsTopic(MESH_ID);
+const HANDOFF_TOPIC = meshHandoffTopic(MESH_ID);
+const FLEET_SECRET = 'idle-consumer-convergence-test-secret';
 
 const tmpDirs: string[] = [];
 const handles: SeqscribeNodeHandle[] = [];
 
-function openNode(name: string): SeqscribeNodeHandle {
+function openNode(
+    name: string,
+    options: { meshIds?: readonly string[]; withAuthority?: boolean } = {},
+): SeqscribeNodeHandle {
     const dir = mkdtempSync(join(tmpdir(), `adhdev-idlesync-${name}-`));
     tmpDirs.push(dir);
     const handle = openSeqscribeNode({
         dbPath: join(dir, 'seq.db'),
-        env: {},
+        env: options.withAuthority
+            ? { ADHDEV_SEQSCRIBE_FLEET_SECRET: FLEET_SECRET }
+            : {},
         storedFleetSecret: null,
-        // ★ No meshIds — this is the production shape and the whole point.
+        // ★ Default: no meshIds — the production remote-consumer shape.
+        ...(options.meshIds ? { meshIds: options.meshIds } : {}),
     });
     handles.push(handle);
     return handle;
@@ -68,6 +88,12 @@ afterEach(async () => {
     for (const dir of tmpDirs.splice(0)) {
         rmSync(dir, { recursive: true, force: true });
     }
+});
+
+afterAll(() => {
+    rmSync(isolatedConfig.path, { recursive: true, force: true });
+    if (isolatedConfig.previous === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+    else process.env.ADHDEV_CONFIG_DIR = isolatedConfig.previous;
 });
 
 async function waitFor(cond: () => boolean, label: string, timeoutMs = 10_000): Promise<void> {
@@ -141,7 +167,96 @@ function entryCount(handle: SeqscribeNodeHandle): number {
     return handle.node.stats().topics[TOPIC]?.logRows ?? 0;
 }
 
+function topicEntryCount(handle: SeqscribeNodeHandle, topic: string): number {
+    return handle.node.stats().topics[topic]?.logRows ?? 0;
+}
+
+function createRemoteCommandRouter(): DaemonCommandRouter {
+    return new DaemonCommandRouter({
+        commandHandler: { handle: async () => ({ success: false }) } as any,
+        cliManager: { handleCliCommand: async () => ({ success: true }) } as any,
+        cdpManagers: new Map(),
+        providerLoader: { resolve: () => null, getMeta: () => null } as any,
+        instanceManager: {
+            collectAllStates: () => [],
+            listInstanceIds: () => [],
+            getInstance: () => null,
+        } as any,
+        detectedIdes: { value: [] },
+        sessionRegistry: {} as any,
+    });
+}
+
 describe('mesh.<id>.events convergence to an idle (non-writing) peer', () => {
+    it('activates an empty-registry remote consumer when a mesh task reveals its mesh id', async () => {
+        // The coordinator owns meshes.json, so it knows the mesh at boot and opens
+        // both per-mesh topics. The remote consumer deliberately has NO meshIds:
+        // this is the live asymmetric registry shape that the boot-only fix missed.
+        const writer = openNode('registry-owner', { meshIds: [MESH_ID], withAuthority: true });
+        const consumer = openNode('empty-registry-consumer', { withAuthority: true });
+
+        await writer.node.log(TOPIC).append('mesh.event', entry('remote-e1') as any);
+        await writer.node.log(HANDOFF_TOPIC).append('worker.handoff', {
+            taskId: 'task-remote-e1',
+            recordedAt: new Date().toISOString(),
+            intent: 'preserve remote discovery coverage',
+            touchedFiles: [],
+        } as any);
+
+        configureMeshDualWrite(consumer);
+        // Exact boot result on the remote node: its isolated config directory
+        // has no meshes.json, so the existing boot activation is a no-op.
+        const remoteRegistryMeshIds = listMeshesReadOnly().map((mesh) => mesh.id);
+        expect(remoteRegistryMeshIds).toEqual([]);
+        expect(activateKnownMeshTopics(remoteRegistryMeshIds)).toBe(0);
+        expect(consumer.topics.some((d) => d.topic === TOPIC)).toBe(false);
+        expect(consumer.topics.some((d) => d.topic === HANDOFF_TOPIC)).toBe(false);
+
+        const [chW, chC] = channelPair();
+        const peerW = writer.node.attach(chW, {
+            peerId: 'empty-registry-consumer',
+            peerClass: 'content',
+            grants: deriveGrants(writer),
+        });
+        const peerC = consumer.node.attach(chC, {
+            peerId: 'registry-owner',
+            peerClass: 'content',
+            grants: deriveGrants(consumer),
+        });
+        // Production's SeqscribeDataChannelRouter subscribes to the same hook
+        // and updates every reconnect handle. This direct pair mirrors that P15
+        // grant replacement so the test covers an ALREADY-ATTACHED peer.
+        const unsubscribe = onTopicActivated(consumer, () => {
+            peerC.updateGrants(deriveGrants(consumer));
+        });
+        await waitFor(
+            () => peerW.state() === 'ready' && peerC.state() === 'ready',
+            'pre-discovery sync handshake',
+        );
+
+        const result = await createRemoteCommandRouter().execute('agent_command', {
+            cliType: 'codex-cli',
+            action: 'stop',
+            meshContext: {
+                meshId: MESH_ID,
+                nodeId: 'node-remote-consumer',
+                taskId: 'task-remote-e1',
+            },
+        }, 'p2p');
+        expect(result.success).toBe(true);
+
+        expect(consumer.topics.some((d) => d.topic === TOPIC)).toBe(true);
+        expect(consumer.topics.some((d) => d.topic === HANDOFF_TOPIC)).toBe(true);
+        expect(deriveGrants(consumer)[TOPIC]).toBe('full');
+        expect(deriveGrants(consumer)[HANDOFF_TOPIC]).toBe('full');
+        await waitFor(
+            () => topicEntryCount(consumer, TOPIC) === 1
+                && topicEntryCount(consumer, HANDOFF_TOPIC) === 1,
+            'events and handoff backlogs replicated after runtime discovery',
+        );
+        unsubscribe();
+    });
+
     it('replicates a writer backlog to a peer that never writes the mesh', async () => {
         const writer = openNode('writer');
         const consumer = openNode('consumer');

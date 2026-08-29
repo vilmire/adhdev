@@ -51,17 +51,18 @@
  *
  * ── Topic definition is lazy, and that has a limit ─────────────────────────
  * `openSeqscribeNode` is called with NO `meshIds` in production
- * (boot/daemon-lifecycle.ts), so `mesh.<id>.events` is not defined at boot —
- * a daemon does not know its mesh set that early. We therefore define the
- * topic on first write for a mesh, which the library permits any time before
- * close.
+ * (boot/daemon-lifecycle.ts), so per-mesh topics are not defined at node open —
+ * a daemon does not know its mesh set that early. We define the events topic on
+ * first write and define both events + handoff when a mesh scope is discovered,
+ * which the library permits any time before close.
  *
  * ★ On-first-WRITE alone is not enough, and that was a live replication stall.
  * A node that only CONSUMES a mesh never writes, so it never defines the topic,
  * never grants it, and `mutualFull` stays false forever — which silently
  * disables every sync path for that pair. `activateKnownMeshTopics` below
- * closes this by defining the topic for known meshes at boot; see its
- * doc-comment for the full mechanism.
+ * closes this at boot for coordinator-local meshes and at runtime when a remote
+ * daemon receives a mesh-scoped P2P command; see its doc-comment for the full
+ * mechanism.
  *
  * ── Runtime topic activation: the Stage 2 limitation, now CLOSED ───────────
  * This header used to record a known gap: the transport's per-peer `grants`
@@ -75,10 +76,11 @@
  * below is this module's half of it. The choreography (host-guide §1.5) is:
  *
  *   1. `defineTopic(topic, policy)` on BOTH endpoints — `ensureTopic` does our
- *      side; the peer daemon runs identical code, either at boot for a mesh it
- *      already knows (`activateKnownMeshTopics`) or on its first write for one
- *      it does not. Boot activation is what makes a peer that never writes
- *      reach step 2 at all.
+ *      events side and `ensureHandoffTopic` its content companion. A coordinator
+ *      activates locally-known meshes at boot; a remote daemon activates when a
+ *      P2P command/task reveals `meshId`; a writer also activates events on its
+ *      first append. Discovery is what makes a peer that never writes reach
+ *      step 2 at all.
  *   2. `updateGrants(fullNewMap)` on EACH side's handle — the transport's job,
  *      driven by the notification this module emits.
  *
@@ -133,7 +135,12 @@ import {
     projectMeshLedgerEntry,
     toJsonValue,
 } from './mesh-event-projection.js';
-import { meshEventsPolicy, meshEventsTopic } from './topics.js';
+import {
+    meshEventsPolicy,
+    meshEventsTopic,
+    meshHandoffPolicy,
+    meshHandoffTopic,
+} from './topics.js';
 
 /** Env flag name (design §3 step 1). */
 export const MESH_DUAL_WRITE_ENV = 'ADHDEV_SEQSCRIBE_MESH';
@@ -204,7 +211,7 @@ export interface MeshDualWriteCounters {
     failed: number;
     /** Records skipped because the in-flight cap was reached. */
     dropped: number;
-    /** Meshes whose topic could not be defined (fatal for that mesh only). */
+    /** Per-mesh topics that could not be defined (fatal for that topic only). */
     topicErrors: number;
     /**
      * Records mirrored LATE, by the parity loop's backfill, rather than inline
@@ -254,6 +261,16 @@ const counters: MeshDualWriteCounters = {
 
 /** Topics we have already defined (or failed to define) on the current node. */
 const definedTopics = new Map<string, boolean>();
+
+/**
+ * Mesh ids learned before or after the seqscribe node is armed.
+ *
+ * The command router can receive a mesh-scoped P2P command during the narrow
+ * boot window before `configureMeshDualWrite`. Remembering the id makes runtime
+ * discovery level-triggered rather than edge-triggered: arming replays the set,
+ * so one early task cannot be the only discovery signal and still be lost.
+ */
+const discoveredMeshIds = new Set<string>();
 
 /** The node the shadow writes to. Null until wired, which is the normal state
  * for a daemon whose seqscribe node failed to open — dual-write then no-ops. */
@@ -325,7 +342,7 @@ function listenersFor(node: SeqscribeNodeHandle): Set<TopicActivatedListener> {
  * replicates for, and re-derives its full grant map + calls `updateGrants` on
  * every live peer whenever it fires. Returns an unsubscribe function.
  *
- * Fires ONLY for topics defined after boot (the lazy `mesh.<id>.events` path).
+ * Fires ONLY for topics defined after boot (runtime mesh events/handoff paths).
  * Boot-time topics are already in the map the transport builds at construction,
  * so re-announcing them would be a no-op update per peer for no reason.
  */
@@ -385,6 +402,9 @@ export function configureMeshDualWrite(
     } else if (node) {
         LOG.info('Seqscribe', `mesh dual-write disabled (${MESH_DUAL_WRITE_ENV}=off)`);
     }
+    if (node && discoveredMeshIds.size > 0) {
+        activateMeshTopicsNow(discoveredMeshIds);
+    }
 }
 
 /**
@@ -440,8 +460,74 @@ function ensureTopic(node: SeqscribeNodeHandle, meshId: string): string | null {
 }
 
 /**
- * Define `mesh.<id>.events` for meshes this daemon already knows about, without
- * waiting for a local write.
+ * Ensure the content-class handoff companion for a discovered mesh exists.
+ *
+ * This deliberately shares the events topic's P14/P15 announcement path: the
+ * transport must replace grants on already-attached peers after either topic is
+ * defined. An authority-less node cannot define content topics by design, so
+ * it skips the handoff leg while still activating the metadata events topic.
+ */
+function ensureHandoffTopic(node: SeqscribeNodeHandle, meshId: string): string | null {
+    if (!node.authorityEnabled) return null;
+
+    const topic = meshHandoffTopic(meshId);
+    const known = definedTopics.get(topic);
+    if (known === true) return topic;
+    if (known === false) return null;
+
+    if (node.topics.some((d) => d.topic === topic)) {
+        definedTopics.set(topic, true);
+        return topic;
+    }
+
+    try {
+        const policy = meshHandoffPolicy();
+        node.node.defineTopic(topic, policy);
+        node.topics.push({ topic, policy });
+        definedTopics.set(topic, true);
+        LOG.info('Seqscribe', `mesh handoff topic defined topic=${topic}`);
+        announceTopicActivated(node, topic);
+        return topic;
+    } catch (error) {
+        definedTopics.set(topic, false);
+        counters.topicErrors++;
+        LOG.warn(
+            'Seqscribe',
+            `handoff replication disabled for this mesh — defineTopic failed topic=${topic}: ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        );
+        return null;
+    }
+}
+
+function activateMeshTopicsNow(meshIds: Iterable<string>): number {
+    const node = activeNode;
+    if (!node) return 0;
+    let activated = 0;
+    for (const meshId of meshIds) {
+        const eventTopic = meshEventsTopic(meshId);
+        const handoffTopic = meshHandoffTopic(meshId);
+        const eventWasKnown = definedTopics.has(eventTopic);
+        const handoffWasKnown = definedTopics.has(handoffTopic);
+
+        // The events leg follows ADHDEV_SEQSCRIBE_MESH's rollback switch. The
+        // handoff leg is an independent feature and remains available when the
+        // mesh read/write shadow is disabled, matching boot topic registration.
+        if (activeMode !== 'off') ensureTopic(node, meshId);
+        ensureHandoffTopic(node, meshId);
+
+        if ((!eventWasKnown && definedTopics.get(eventTopic) === true)
+            || (!handoffWasKnown && definedTopics.get(handoffTopic) === true)) {
+            activated++;
+        }
+    }
+    return activated;
+}
+
+/**
+ * Define the events/handoff topic pair for meshes this daemon learns about,
+ * without waiting for a local write.
  *
  * ── Why lazy-on-write is not sufficient ────────────────────────────────────
  * `mutualFull(topic)` (seqscribe session.ts) is true only when BOTH endpoints
@@ -458,36 +544,34 @@ function ensureTopic(node: SeqscribeNodeHandle, meshId: string): string | null {
  * topic was never selected for a sync round — because from the transport's
  * point of view the topic does not exist on that pair.
  *
- * This closes it by defining the topic for every locally-known mesh at boot.
- * `announceTopicActivated` then drives the same P14/P15 grant re-advertisement
- * the write path uses, so a topic that becomes mutual triggers the library's
- * immediate HAVE round and the backlog converges without waiting for a write
- * that may never come.
+ * The coordinator supplies its machine-local mesh registry at boot. Remote
+ * daemons cannot: `~/.adhdev/meshes.json` is not replicated there. Their common
+ * command router instead calls this function when an existing P2P envelope
+ * reveals `meshId` (`meshContext`, `inlineMesh`, or session settings). The id is
+ * remembered if it arrives before node arming, then replayed at configure time.
+ * `announceTopicActivated` drives P14/P15 grant re-advertisement, so a topic that
+ * becomes mutual triggers an immediate HAVE round and the backlog converges.
  *
  * ── Cost ───────────────────────────────────────────────────────────────────
- * Bounded by the local mesh count (a handful), and it adds no new traffic
- * pattern: a defined-but-empty topic contributes one vector entry to the HAVE
- * rounds that already run. It does NOT append anything.
+ * Bounded by the meshes this daemon is configured for or actually receives a
+ * command for (a handful), and it adds no new traffic pattern: each empty topic
+ * contributes one vector entry to existing HAVE rounds. It appends nothing.
  *
  * Never throws — a mesh whose topic cannot be defined is skipped and counted by
- * the existing `ensureTopic` failure cache, exactly as on the write path.
- * Returns the number of topics newly activated (for logging and tests).
+ * the existing failure cache. Authority-less nodes still activate metadata
+ * events but intentionally skip content-class handoff. Returns the number of
+ * mesh scopes with at least one newly activated topic (for logging and tests).
  */
 export function activateKnownMeshTopics(meshIds: readonly string[]): number {
-    const node = activeNode;
-    if (!node || activeMode === 'off') return 0;
-    let activated = 0;
+    const normalizedMeshIds: string[] = [];
     for (const meshId of meshIds) {
-        const topic = meshEventsTopic(meshId);
-        // `ensureTopic` is the single definition path: it adopts a boot-defined
-        // topic, caches failures, keeps `node.topics` truthful and announces the
-        // activation. Counting on the definedTopics transition rather than on
-        // its return value keeps this to genuinely-new topics, so a re-arm does
-        // not re-log a no-op.
-        const before = definedTopics.get(topic);
-        if (ensureTopic(node, meshId) !== null && before === undefined) activated++;
+        if (typeof meshId !== 'string') continue;
+        const normalized = meshId.trim();
+        if (!normalized) continue;
+        discoveredMeshIds.add(normalized);
+        normalizedMeshIds.push(normalized);
     }
-    return activated;
+    return activateMeshTopicsNow(normalizedMeshIds);
 }
 
 /**
@@ -714,6 +798,7 @@ export function __resetMeshDualWriteForTests(): void {
     activeNode = null;
     activeMode = 'shadow';
     definedTopics.clear();
+    discoveredMeshIds.clear();
     inflight = 0;
     warnedOnce.clear();
     counters.written = 0;

@@ -928,14 +928,14 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         configureHandoffNotesSeqscribe(components.seqscribeNode ?? null);
         configureHandoffNoteSink(storeHandoffNote);
         if (components.seqscribeNode) {
-            // ★ Define `mesh.<id>.events` for meshes we already know about,
-            // instead of waiting for a local write.
+            // ★ Define the events/handoff pair for meshes we already know
+            // about, instead of waiting for a local write or command discovery.
             //
-            // The topic is otherwise defined lazily on this daemon's first mesh
-            // append, and a node that only CONSUMES a mesh never makes one. Its
-            // grant map therefore never carries the topic, `mutualFull` stays
-            // false on every peer pair, and the whole sync engine — HAVE
-            // vectors, WANT rounds, anti-entropy — skips it silently. The
+            // Events are otherwise defined lazily on this daemon's first mesh
+            // append, and a node that only CONSUMES a mesh never makes one.
+            // Handoff is write-independent but has the same mutual grant need.
+            // Without activation, `mutualFull` stays false and the sync engine
+            // — HAVE vectors, WANT rounds, anti-entropy — skips it silently. The
             // observed symptom was a writer's unreplicated count climbing
             // monotonically while its logs showed the topic was never once
             // selected for a sync round. See `activateKnownMeshTopics`.
@@ -949,7 +949,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 if (activated > 0) {
                     LOG.info(
                         'Seqscribe',
-                        `activated ${activated} known mesh event topic(s) at boot — ` +
+                        `activated ${activated} known mesh topic scope(s) at boot — ` +
                             'consumers converge without waiting for a local write',
                     );
                 }
