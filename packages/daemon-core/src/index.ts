@@ -1078,6 +1078,10 @@ export {
 // topic. Read paths are unchanged — Stage 4 owns the cutover.
 export {
   configureMeshDualWrite,
+  // Boot-time topic activation: without it a mesh CONSUMER never defines
+  // `mesh.<id>.events`, so the pair never becomes mutual-full and the writer's
+  // backlog never replicates.
+  activateKnownMeshTopics,
   recordMeshEventShadow,
   // The cross-process REPAIR path: mirrors ledger entries appended by a process
   // with no armed shadow leg (the mcp-server). Driven by the parity loop.

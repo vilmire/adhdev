@@ -56,6 +56,13 @@
  * topic on first write for a mesh, which the library permits any time before
  * close.
  *
+ * ★ On-first-WRITE alone is not enough, and that was a live replication stall.
+ * A node that only CONSUMES a mesh never writes, so it never defines the topic,
+ * never grants it, and `mutualFull` stays false forever — which silently
+ * disables every sync path for that pair. `activateKnownMeshTopics` below
+ * closes this by defining the topic for known meshes at boot; see its
+ * doc-comment for the full mechanism.
+ *
  * ── Runtime topic activation: the Stage 2 limitation, now CLOSED ───────────
  * This header used to record a known gap: the transport's per-peer `grants`
  * map was snapshotted at SeqscribeDataChannelRouter construction, so a topic
@@ -68,8 +75,10 @@
  * below is this module's half of it. The choreography (host-guide §1.5) is:
  *
  *   1. `defineTopic(topic, policy)` on BOTH endpoints — `ensureTopic` does our
- *      side; the peer daemon runs identical code and does its own on first
- *      write for the same mesh.
+ *      side; the peer daemon runs identical code, either at boot for a mesh it
+ *      already knows (`activateKnownMeshTopics`) or on its first write for one
+ *      it does not. Boot activation is what makes a peer that never writes
+ *      reach step 2 at all.
  *   2. `updateGrants(fullNewMap)` on EACH side's handle — the transport's job,
  *      driven by the notification this module emits.
  *
@@ -428,6 +437,57 @@ function ensureTopic(node: SeqscribeNodeHandle, meshId: string): string | null {
         );
         return null;
     }
+}
+
+/**
+ * Define `mesh.<id>.events` for meshes this daemon already knows about, without
+ * waiting for a local write.
+ *
+ * ── Why lazy-on-write is not sufficient ────────────────────────────────────
+ * `mutualFull(topic)` (seqscribe session.ts) is true only when BOTH endpoints
+ * grant the topic `full`, and each side derives its grant map from its OWN
+ * defined topic set. Every sync path is gated on it: `processPeerVectors` skips
+ * a non-mutual topic outright, `serveHave` omits it from the advertised
+ * vectors, and `queueWant` is therefore never reached. Anti-entropy still fires
+ * on schedule — it simply cannot see the topic.
+ *
+ * So "define on first write" deadlocks for a PURE CONSUMER. A node that
+ * participates in a mesh but has not itself appended a mesh event never defines
+ * the topic, never grants it, and never pulls the writer's backlog. The writer
+ * accumulates unreplicated entries monotonically while its own logs show the
+ * topic was never selected for a sync round — because from the transport's
+ * point of view the topic does not exist on that pair.
+ *
+ * This closes it by defining the topic for every locally-known mesh at boot.
+ * `announceTopicActivated` then drives the same P14/P15 grant re-advertisement
+ * the write path uses, so a topic that becomes mutual triggers the library's
+ * immediate HAVE round and the backlog converges without waiting for a write
+ * that may never come.
+ *
+ * ── Cost ───────────────────────────────────────────────────────────────────
+ * Bounded by the local mesh count (a handful), and it adds no new traffic
+ * pattern: a defined-but-empty topic contributes one vector entry to the HAVE
+ * rounds that already run. It does NOT append anything.
+ *
+ * Never throws — a mesh whose topic cannot be defined is skipped and counted by
+ * the existing `ensureTopic` failure cache, exactly as on the write path.
+ * Returns the number of topics newly activated (for logging and tests).
+ */
+export function activateKnownMeshTopics(meshIds: readonly string[]): number {
+    const node = activeNode;
+    if (!node || activeMode === 'off') return 0;
+    let activated = 0;
+    for (const meshId of meshIds) {
+        const topic = meshEventsTopic(meshId);
+        // `ensureTopic` is the single definition path: it adopts a boot-defined
+        // topic, caches failures, keeps `node.topics` truthful and announces the
+        // activation. Counting on the definedTopics transition rather than on
+        // its return value keeps this to genuinely-new topics, so a re-arm does
+        // not re-log a no-op.
+        const before = definedTopics.get(topic);
+        if (ensureTopic(node, meshId) !== null && before === undefined) activated++;
+    }
+    return activated;
 }
 
 /**
