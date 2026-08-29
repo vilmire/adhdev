@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'f
 import { randomUUID } from 'crypto';
 import { resolveConfigDir } from './config-dir.js';
 import { IDENTITY, TRACK } from '../track-identity.js';
+import { isSecretLikeEnvKey } from './env-overrides.js';
 import type { WorkspaceEntry } from './workspaces.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
@@ -215,6 +216,18 @@ export interface ADHDevConfig {
      * `fit` opt-in restores xterm fit-based sizing for advanced users.
      */
     terminalSizingMode?: 'measured' | 'fit';
+
+    /**
+     * Persisted daemon-scoped env/feature-flag overrides, applied to
+     * `process.env` at boot (see `config/env-overrides.ts`) so a flag like
+     * `ADHDEV_WORKER_MCP=on` survives a restart/upgrade without relying on an
+     * external launcher to re-inject it. Explicit `process.env` always wins —
+     * a key here is only a fallback for when the process wasn't started with
+     * it set. Set/unset via `adhdev config env set|unset` (see
+     * cli/config-commands.ts). Secret/identity-shaped keys are rejected at
+     * apply time, never here — see `isSecretLikeEnvKey`.
+     */
+    envOverrides?: Record<string, string>;
 }
 
 const DEFAULT_CONFIG: ADHDevConfig = {
@@ -244,6 +257,7 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     providerSourceMode: 'normal',
     updateChannel: 'stable',
     terminalSizingMode: 'measured',
+    envOverrides: {},
 };
 
 const MACHINE_ID_PREFIX = 'mach_';
@@ -305,6 +319,25 @@ function resolveQuotaShowAccountEmail(parsed: Record<string, any>): boolean {
         return asBoolean(parsed.quotaShowAccountEmail, fallback);
     }
     return fallback;
+}
+
+/**
+ * Normalize `envOverrides`, dropping anything that isn't a plain string->string
+ * entry and — defense in depth alongside the apply-time check in
+ * `applyDaemonEnvOverrides` — any secret/identity-shaped key. This means a
+ * rejected key never even round-trips through config.json, not just that it's
+ * skipped when applied.
+ */
+function normalizeEnvOverrides(value: unknown): Record<string, string> {
+    if (!isPlainObject(value)) return {};
+    const result: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(value)) {
+        if (typeof key !== 'string' || !key.trim()) continue;
+        if (typeof raw !== 'string') continue;
+        if (isSecretLikeEnvKey(key)) continue;
+        result[key] = raw;
+    }
+    return result;
 }
 
 function normalizeMachineProviders(value: unknown): Record<string, MachineProviderConfig> {
@@ -376,6 +409,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
                 ? 'stable'
                 : TRACK,
         terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
+        envOverrides: normalizeEnvOverrides(parsed.envOverrides),
     };
 }
 

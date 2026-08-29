@@ -219,6 +219,8 @@ export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 
 // ── Config ──
 export { loadConfig, saveConfig, resetConfig, clearAuthCredentials, isSetupComplete, markSetupComplete, updateConfig, setQuotaShowAccountEmail, getConfigDir, getDaemonDataDir } from './config/config.js';
+export { applyDaemonEnvOverrides, isSecretLikeEnvKey } from './config/env-overrides.js';
+export type { EnvOverrideApplyResult } from './config/env-overrides.js';
 export { isCrossTrackConfigDirOverride, otherTrackConfigDir } from './config/config-dir.js';
 export {
   classifyVolatilePath,

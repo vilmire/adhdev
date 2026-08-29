@@ -35,6 +35,7 @@ import {
     DEFAULT_CDP_SCAN_INTERVAL_MS,
 } from '../runtime-defaults.js';
 import { loadConfig, getConfigDir } from '../config/config.js';
+import { applyDaemonEnvOverrides } from '../config/env-overrides.js';
 import { configDirChannelMismatch } from '../config/config-dir.js';
 import { isPreviewReleaseChannel, PROVIDER_CHANNEL_ENV_VAR } from '../providers/channel/contract.js';
 import { readUpgradeFailureNotice } from '../commands/upgrade-helper.js';
@@ -306,6 +307,25 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     installGlobalInterceptor();
     loadMeshCoordinatorRegistry();
 
+    // 1.1 Apply persisted daemon env/flag overrides (config.json `envOverrides`)
+    // to process.env BEFORE anything below reads a feature flag. Explicit
+    // process.env always wins — this only fills in what a launcher didn't
+    // already set. Must run before `loadConfig()` below is used for anything
+    // flag-sensitive (providerSourceMode/channel resolution reads env too),
+    // and as early as possible relative to every lazy env-flag read elsewhere
+    // in the daemon (e.g. isWorkerMcpEnabled()). See config/env-overrides.ts —
+    // this cannot retroactively fix a module-load-time top-level constant an
+    // earlier import already evaluated from process.env.
+    const envOverrideResult = applyDaemonEnvOverrides(
+        loadConfig().envOverrides,
+        process.env,
+        (msg) => LOG.warn('EnvOverrides', msg),
+    );
+    const appliedOverrideKeys = Object.keys(envOverrideResult.applied);
+    if (appliedOverrideKeys.length > 0) {
+        LOG.info('EnvOverrides', `Applied ${appliedOverrideKeys.length} persisted env override(s) from config.json: ${appliedOverrideKeys.join(', ')}`);
+    }
+
     // 1.5 Post-restart rollback visibility. The detached upgrade helper leaves
     // `daemon-upgrade-last-error.txt` on failure and removes it only after a
     // successful install/re-spawn, so a notice still present at boot means the
@@ -351,6 +371,9 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             LOG.info('Providers', `Recorded explicit providerChannel=${migration.channel} in config (migrated from build-track/updateChannel derivation)`);
         }
     } catch { /* best-effort — the resolver's fallback chain still applies */ }
+    // Re-read after the migration above (and after step 1.1's env-override
+    // read, which ran too early to see a channel migration that hadn't
+    // happened yet) so this reflects any config.json write either just made.
     const appConfig = loadConfig();
     const providerSourceMode = appConfig.providerSourceMode || 'normal';
     const disableUpstream = providerSourceMode === 'no-upstream';
