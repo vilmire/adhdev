@@ -52,7 +52,7 @@ import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trac
 import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
 import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { isTerminalTurnStage } from '../mesh/mesh-turn-ledger.js';
-import { isWorkerMcpEnabled } from '../mesh/worker-mcp-isolation.js';
+import { isWorkerMcpEnabled } from '../runtime-defaults.js'; // layer-neutral — see runtime-defaults.ts for why this isn't imported from mesh/worker-mcp-isolation.js
 import { mergePendingMeshTaskAttachment, popCompletedMeshTaskAttachment, pushMeshTaskAttachment, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
