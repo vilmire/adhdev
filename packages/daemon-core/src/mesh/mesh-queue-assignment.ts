@@ -29,7 +29,8 @@ import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, canonicalDaemonId, expandDaemonIdForms, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, withStatusProbeMarker, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
-import { evaluateProviderQuotaGate, quotaSpreadBonusByProvider, recordLastQuotaRanking, recordLastQuotaRankingOutcome, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
+import { quotaSpreadBonusByProvider, recordLastQuotaRanking, recordLastQuotaRankingOutcome, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
+import { evaluateQuotaClaimGateForAssignment } from './mesh-queue-claim-gate.js';
 import { findTerminalLedgerEvidenceForTask, hasUnterminalDirectDispatchLedgerEntry } from './mesh-events-stale.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
@@ -46,7 +47,7 @@ import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadT
 import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { notifyCoordinatorOfPinnedDispatchFailure } from './mesh-dispatch-failed-notify.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCount, nodeHasActiveAssignment, sessionHasActiveAssignment, meshHasExplicitSlots, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, orderSlotsForProviderSelection, bestSlotForTask, scoreSlotForTask, nodeActiveLoad, activeProviderAssignedCount, slotCoversTaskDifficulty, slotDifficultyTierForTask, taskRequiresDifficultyFloor, slotHasCapacity, slotCapacityRemaining, resolveLaunchAxis, type RankableNode, type IdleCandidate, type FitnessTask } from './mesh-scheduling-fitness.js';
-import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearQuotaClaimBlockState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimBlockTransition, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
+import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quota-fallback.js';
 import {
@@ -890,17 +891,6 @@ function resolveClaimingSessionTranscriptProfile(
     }
 }
 
-function providerPinOverrideCandidateTaskId(meshId: string, providerType: string): string | undefined {
-    const pending = getQueue(meshId, { status: ['pending'] });
-    for (const task of pending) {
-        const tags = task.requiredTags ?? [];
-        if (tags.includes(`provider=${providerType}`)) {
-            return task.id;
-        }
-    }
-    return undefined;
-}
-
 export function tryAssignQueueTask(
     components: DaemonComponents,
     meshId: string,
@@ -952,47 +942,14 @@ export function tryAssignQueueTask(
         return false;
     }
 
-    // QUOTA GATE (claim path): the same evaluateProviderQuotaGate the auto-launch
-    // loop applies before SPAWNING a session also gates an idle session's CLAIM —
-    // otherwise an idle session on a quota-exhausted node would pull the pending
-    // task the launch gate deliberately left queued. Same WAIT semantics: the
-    // window resets, so the block is not actionable — the task stays pending
-    // (return false without touching its status) and the drain simply moves on to
-    // the next candidate / re-fires on the next tick. Reads only the in-memory
-    // nodeFacts bundle or same-daemon clone source (synchronous; never triggers a
-    // quota fetch). Missing/stale/unmarked non-'ok' snapshots fail OPEN exactly as
-    // in the launch path; fresh last-good windows remain measurable. Log-only
-    // like the lease defer above — no ledger entry, so a repeatedly gated claim
-    // does not flood the ledger every drain tick.
-    //
-    // PIN OVERRIDE: when a pending task is explicitly pinned to this provider via
-    // requiredTags (e.g. provider=codex-cli), the pin is authoritative: the claim
-    // proceeds and the ledger records 'overridden_by_pin' instead of 'blocked', so
-    // an operator can later see "the gate was low but the pin was honored". The
-    // candidate task id is included in the ledger context to distinguish this from
-    // an idle-session scan blocked on some other task.
-    const pinCandidateTaskId = providerPinOverrideCandidateTaskId(meshId, providerType);
-    const isPinOverride = !!pinCandidateTaskId;
-    const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null, Date.now(), quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader));
-    if (quotaClaimTrace) quotaClaimTrace.evaluated += 1;
-    if (quotaClaimBlock) {
-        const observation = {
-            nodeId,
-            sessionId,
-            providerType,
-            block: quotaClaimBlock,
-            context: { trigger, candidateTaskId: pinCandidateTaskId, pinOverride: isPinOverride },
-        };
-        if (isPinOverride) {
-            logQuotaClaimBlockTransition(meshId, observation, 'overridden_by_pin');
-        } else {
-            logQuotaClaimBlockTransition(meshId, observation, 'blocked');
-            quotaClaimTrace?.blocked.push(observation);
-            return false;
-        }
-    } else {
-        clearQuotaClaimBlockState(meshId, nodeId, sessionId, providerType);
-        if (quotaClaimTrace) quotaClaimTrace.clear += 1;
+    // QUOTA GATE (claim path) + PIN OVERRIDE: see mesh-queue-claim-gate.ts for the
+    // full rationale (same evaluateProviderQuotaGate the auto-launch loop applies
+    // before spawning also gates an idle session's claim; a task pinned to this
+    // provider via requiredTags overrides the gate and logs 'overridden_by_pin'
+    // instead of 'blocked'). Returns true when the claim must be refused — the
+    // task stays pending (return false without touching its status).
+    if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
+        return false;
     }
 
     // WORKTREE-CLAIM-GATE-BYPASS: the SINGLE claim-time gate for the worktree-bootstrap defer.
