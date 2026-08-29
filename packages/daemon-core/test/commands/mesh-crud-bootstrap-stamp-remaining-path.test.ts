@@ -34,6 +34,8 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events.js'
 import { getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
+import { triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
+import { LOG } from '../../src/logging/logger.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -137,6 +139,12 @@ function emitLikePostFix(components: any, payload: ReturnType<typeof bootstrapCo
 function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __resetMeshRuntimeStoreForTests()
+}
+
+/** Lets a `setImmediate(...)`-scheduled callback (injectMeshSystemMessage's queue
+ *  re-fire) run and settle before assertions inspect its side effects. */
+function flushSetImmediate(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
 }
 
 describe('MESH-CRUD-BOOTSTRAP-STAMP-REMAINING-PATH — clone_mesh_node local emit lacked the router stamp', () => {
@@ -246,6 +254,166 @@ describe('MESH-CRUD-BOOTSTRAP-STAMP-REMAINING-PATH — clone_mesh_node local emi
       const bootstrapEvents = pending.filter(e => e.event === 'worktree_bootstrap_complete' && e.nodeId === result.node.id)
       expect(bootstrapEvents.length).toBeGreaterThan(0)
     } finally {
+      cleanup(meshId)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * MESH-CRUD-BOOTSTRAP-REFIRE-SHIM
+ *
+ * The fix above (markWorktreeBootstrapTerminalState) stops the stamp itself from
+ * throwing, but a successful stamp schedules `setImmediate(() => triggerMeshQueue
+ * (components, meshId))` inside injectMeshSystemMessage — reusing the SAME shim
+ * object as `components`, since that's the exact argument handleMeshForwardEvent
+ * was called with. triggerMeshQueue's very first line (getMeshWithCache) calls
+ * `components.router?.getCachedInlineMesh(meshId)` unconditionally — only the
+ * `.router` property access is optional-chained, not the method call — so a shim
+ * whose `router` object provides markWorktreeBootstrapTerminalState but not
+ * getCachedInlineMesh throws `components.router?.getCachedInlineMesh is not a
+ * function`, caught by triggerMeshQueue's own `.catch` and WARN-logged instead of
+ * escaping:
+ *
+ *   [WRN] [MeshQueue] Queue re-fire after worktree_bootstrap_complete failed
+ *   (mesh ...): components.router?.getCachedInlineMesh is not a function
+ *
+ * The stamp still lands (this is why the ERR from the first remaining-path fix is
+ * gone), but the queue re-fire silently does nothing, so the deferred claim is
+ * stranded until the next natural trigger instead of draining immediately.
+ */
+describe('MESH-CRUD-BOOTSTRAP-REFIRE-SHIM — queue re-fire lacked getCachedInlineMesh on the router shim', () => {
+  beforeEach(() => {
+    __resetMeshRuntimeStoreForTests()
+  })
+  afterEach(() => { vi.clearAllMocks() })
+
+  it('red regression (primitive): triggerMeshQueue throws when the router shim lacks getCachedInlineMesh', async () => {
+    const meshId = `mesh_refire_red_prim_${randomUUID().slice(0, 8)}`
+    try {
+      const components = {
+        instanceManager: { getByCategory: vi.fn(() => []) },
+        router: { markWorktreeBootstrapTerminalState: vi.fn() },
+      } as any
+      await expect(triggerMeshQueue(components, meshId)).rejects.toThrow(/getCachedInlineMesh is not a function/)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('green fix (primitive): triggerMeshQueue succeeds once getCachedInlineMesh is bound onto the shim', async () => {
+    const meshId = `mesh_refire_green_prim_${randomUUID().slice(0, 8)}`
+    try {
+      const components = {
+        instanceManager: { getByCategory: vi.fn(() => []) },
+        router: {
+          markWorktreeBootstrapTerminalState: vi.fn(),
+          getCachedInlineMesh: vi.fn(() => undefined),
+        },
+      } as any
+      const result = await triggerMeshQueue(components, meshId)
+      expect(result.success).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('red regression (control-flow): the pre-getCachedInlineMesh-fix shim used by emitBootstrapEvent WARN-logs a failed re-fire', async () => {
+    const meshId = `mesh_refire_red_flow_${randomUUID().slice(0, 8)}`
+    const nodeId = 'node_wt_owned'
+    const workspace = `/repo/${meshId}`
+    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+    try {
+      // Mirrors the emitBootstrapEvent shim shape BEFORE this fix: the router
+      // stamp is bound, but getCachedInlineMesh is not.
+      const components = {
+        instanceManager: { getInstance: vi.fn(() => undefined), getByCategory: vi.fn(() => []) },
+        router: { markWorktreeBootstrapTerminalState: vi.fn() },
+      } as any
+      handleMeshForwardEvent(components, bootstrapCompletePayload(meshId, nodeId, workspace) as any)
+
+      await flushSetImmediate()
+      await flushSetImmediate()
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        'MeshQueue',
+        expect.stringMatching(/Queue re-fire after worktree_bootstrap_complete failed.*getCachedInlineMesh is not a function/),
+      )
+    } finally {
+      warnSpy.mockRestore()
+      cleanup(meshId)
+    }
+  })
+
+  it('green fix (control-flow): the post-fix shim used by emitBootstrapEvent re-fires the queue without a WARN', async () => {
+    const meshId = `mesh_refire_green_flow_${randomUUID().slice(0, 8)}`
+    const nodeId = 'node_wt_owned'
+    const workspace = `/repo/${meshId}`
+    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+    try {
+      // Mirrors the emitBootstrapEvent shim shape AFTER this fix: both the stamp
+      // and getCachedInlineMesh are bound onto the router shim.
+      const components = {
+        instanceManager: { getInstance: vi.fn(() => undefined), getByCategory: vi.fn(() => []) },
+        router: {
+          markWorktreeBootstrapTerminalState: vi.fn(),
+          getCachedInlineMesh: vi.fn(() => undefined),
+        },
+      } as any
+      handleMeshForwardEvent(components, bootstrapCompletePayload(meshId, nodeId, workspace) as any)
+
+      await flushSetImmediate()
+      await flushSetImmediate()
+
+      const reFireFailures = warnSpy.mock.calls.filter(([category, msg]) =>
+        category === 'MeshQueue' && typeof msg === 'string' && msg.includes('Queue re-fire after'))
+      expect(reFireFailures).toHaveLength(0)
+    } finally {
+      warnSpy.mockRestore()
+      cleanup(meshId)
+    }
+  })
+
+  it('green fix (end-to-end): clone_mesh_node through the real router re-fires the queue without a WARN', async () => {
+    const { dir, repoRoot } = await createRepo('adhdev-mesh-crud-bootstrap-refire-')
+    const meshId = 'mesh-crud-bootstrap-refire-shim'
+    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+    try {
+      const router = createRouter()
+      const inlineMesh: any = {
+        id: meshId,
+        name: 'Bootstrap Refire Shim Mesh',
+        repoIdentity: 'example/bootstrap-refire-shim',
+        defaultBranch: 'main',
+        policy: { worktreeBaseDir: join(dir, 'worktrees') },
+        coordinator: {},
+        nodes: [
+          { id: 'node-source', workspace: repoRoot, repoRoot, daemonId: 'daemon-local', userOverrides: {}, policy: { providerPriority: ['codex-cli'], initSubmodulesOnClone: false } },
+        ],
+      }
+
+      const result: any = await router.execute('clone_mesh_node', {
+        meshId,
+        sourceNodeId: 'node-source',
+        branch: 'feat/bootstrap-refire-shim',
+        inlineMesh,
+      })
+
+      expect(result.success).toBe(true)
+
+      // emitBootstrapEvent's handleMeshForwardEvent call is synchronous, but the queue
+      // re-fire it schedules on success is `setImmediate(() => triggerMeshQueue(...))` —
+      // flush a couple of ticks so that callback (and its own internal awaits) settle
+      // before asserting on its side effects (the WARN it would log on failure).
+      await flushSetImmediate()
+      await flushSetImmediate()
+      await flushSetImmediate()
+
+      const reFireFailures = warnSpy.mock.calls.filter(([category, msg]) =>
+        category === 'MeshQueue' && typeof msg === 'string' && msg.includes('Queue re-fire after'))
+      expect(reFireFailures).toHaveLength(0)
+    } finally {
+      warnSpy.mockRestore()
       cleanup(meshId)
       await rm(dir, { recursive: true, force: true })
     }

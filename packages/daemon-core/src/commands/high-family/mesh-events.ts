@@ -26,9 +26,19 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         // must stamp the terminal bootstrap state into the coordinator's inline mesh view via
         // router.markWorktreeBootstrapTerminalState. The handler only has `ctx.deps`, which does
         // NOT expose the router itself, so we pass the bound method explicitly.
+        //
+        // WORKTREE-BOOTSTRAP-REFIRE-SHIM: a successful stamp schedules
+        // setImmediate(() => triggerMeshQueue(components, meshId)) using this SAME shim
+        // object as `components` — triggerMeshQueue unconditionally calls
+        // components.router.getCachedInlineMesh(meshId), so it must be bound here too or
+        // the re-fire throws "getCachedInlineMesh is not a function" (WARN-logged, silently
+        // dropped) instead of draining the deferred claim.
         return handleMeshForwardEvent({
             instanceManager: ctx.deps.instanceManager,
-            router: { markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState },
+            router: {
+                markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState,
+                getCachedInlineMesh: ctx.getCachedInlineMesh,
+            },
         } as any, args as Record<string, unknown>);
     },
 

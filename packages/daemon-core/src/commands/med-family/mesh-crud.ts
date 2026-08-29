@@ -1752,11 +1752,28 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         // queuePendingMeshCoordinatorEvent fallback below, not swallow it —
                         // otherwise the coordinator never even gets a queued event to pull and
                         // recovers only via the stale-running backstop (30-40 min later).
+                        //
+                        // WORKTREE-BOOTSTRAP-REFIRE-SHIM (3rd remaining path): stamping success
+                        // schedules `setImmediate(() => triggerMeshQueue(components, meshId))`
+                        // inside injectMeshSystemMessage — using this SAME shim object, since it
+                        // is the exact `components` argument handleMeshForwardEvent was called
+                        // with. triggerMeshQueue's first line (getMeshWithCache) unconditionally
+                        // calls `components.router.getCachedInlineMesh(meshId)` (only the
+                        // `.router` access itself is optional-chained, not the method call), so
+                        // a router shim missing that method throws
+                        // "components.router?.getCachedInlineMesh is not a function" — caught
+                        // by triggerMeshQueue's own .catch and only WARN-logged, so it does not
+                        // escape here, but the queue re-fire silently does nothing and the
+                        // deferred claim is stranded until the next natural trigger. Bind it
+                        // alongside markWorktreeBootstrapTerminalState for the same reason.
                         try {
                             const forwarded = handleMeshForwardEvent(
                                 {
                                     instanceManager: ctx.deps.instanceManager,
-                                    router: { markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState },
+                                    router: {
+                                        markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState,
+                                        getCachedInlineMesh: ctx.getCachedInlineMesh,
+                                    },
                                 } as any,
                                 { event, meshId, nodeId: node.id, workspace: result.worktreePath, metadataEvent },
                             );

@@ -72,6 +72,19 @@ export interface HighFamilyContext {
         opts?: { workspace?: string },
     ) => void;
 
+    /**
+     * Bound `DaemonCommandRouter.getCachedInlineMesh`. A successful stamp above
+     * schedules `setImmediate(() => triggerMeshQueue(components, meshId))` inside
+     * injectMeshSystemMessage, reusing this SAME shim as `components` — and
+     * triggerMeshQueue's first line unconditionally calls
+     * `components.router.getCachedInlineMesh(meshId)` (only the `.router` access
+     * is optional-chained, not the method call). Without this bound, the queue
+     * re-fire throws "components.router?.getCachedInlineMesh is not a function"
+     * (WARN-logged, not surfaced) and silently does nothing instead of draining
+     * the deferred claim.
+     */
+    getCachedInlineMesh: (meshId: string, inlineMesh?: unknown) => any | undefined;
+
     /** Router's aggregate-status memory cache (`.has()` probe in mesh_status). */
     aggregateMeshStatusCache: Map<string, { builtAt: number; snapshot: any; queueRevision: string }>;
 

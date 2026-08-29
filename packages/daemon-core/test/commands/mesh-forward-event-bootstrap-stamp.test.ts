@@ -30,10 +30,11 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { meshEventsHandlers } from '../../src/commands/high-family/mesh-events.js'
 import { handleMeshForwardEvent } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
+import { LOG } from '../../src/logging/logger.js'
 
 const NODE_ID = 'node_wt_remote'
 
-function createMinimalContext(stamp = vi.fn()) {
+function createMinimalContext(stamp = vi.fn(), getCachedInlineMesh?: (...args: any[]) => any) {
   return {
     deps: {
       instanceManager: {
@@ -46,12 +47,19 @@ function createMinimalContext(stamp = vi.fn()) {
     rememberAggregateMeshStatus: vi.fn(),
     execute: vi.fn(async () => ({ success: true })),
     markWorktreeBootstrapTerminalState: stamp,
+    getCachedInlineMesh,
     aggregateMeshStatusCache: new Map(),
     swrRefreshInFlight: new Set(),
     runningRefineJobs: new Map(),
     inlineMeshCache: new Map(),
     meshGitProbeCache: new Map(),
   } as any
+}
+
+/** Lets a `setImmediate(...)`-scheduled callback (injectMeshSystemMessage's queue
+ *  re-fire) run and settle before assertions inspect its side effects. */
+function flushSetImmediate(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
 }
 
 function createStampArgs(meshId: string) {
@@ -131,6 +139,68 @@ describe('MESH-FORWARD-EVENT-BOOTSTRAP-STAMP — remote daemon lacks the coordin
         expect.objectContaining({ workspace: `/repo/${NODE_ID}` }),
       )
     } finally {
+      cleanup(meshId)
+    }
+  })
+})
+
+/**
+ * MESH-FORWARD-EVENT-REFIRE-SHIM
+ *
+ * Same remaining gap as MESH-CRUD-BOOTSTRAP-REFIRE-SHIM, on the other
+ * handleMeshForwardEvent caller: a successful stamp above schedules
+ * `setImmediate(() => triggerMeshQueue(components, meshId))` reusing this SAME
+ * `{ instanceManager, router: {...} }` shim as `components`. triggerMeshQueue's
+ * first line calls `components.router.getCachedInlineMesh(meshId)`
+ * unconditionally, so HighFamilyContext (and this handler's shim) needed
+ * getCachedInlineMesh bound too — it previously wasn't even part of the type.
+ */
+describe('MESH-FORWARD-EVENT-REFIRE-SHIM — mesh_forward_event queue re-fire lacked getCachedInlineMesh on the router shim', () => {
+  beforeEach(() => {
+    __resetMeshRuntimeStoreForTests()
+  })
+  afterEach(() => { vi.clearAllMocks() })
+
+  it('red regression: without ctx.getCachedInlineMesh bound, the queue re-fire WARN-logs a failure', async () => {
+    const meshId = `mesh_forward_refire_red_${randomUUID().slice(0, 8)}`
+    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+    try {
+      // getCachedInlineMesh omitted — mirrors HighFamilyContext before this fix.
+      const ctx = createMinimalContext(vi.fn(), undefined)
+
+      const result = await meshEventsHandlers.mesh_forward_event(ctx, createStampArgs(meshId))
+      expect(result).toMatchObject({ success: true })
+
+      await flushSetImmediate()
+      await flushSetImmediate()
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        'MeshQueue',
+        expect.stringMatching(/Queue re-fire after worktree_bootstrap_complete failed.*getCachedInlineMesh is not a function/),
+      )
+    } finally {
+      warnSpy.mockRestore()
+      cleanup(meshId)
+    }
+  })
+
+  it('green fix: with ctx.getCachedInlineMesh bound, the queue re-fire completes without a WARN', async () => {
+    const meshId = `mesh_forward_refire_green_${randomUUID().slice(0, 8)}`
+    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+    try {
+      const ctx = createMinimalContext(vi.fn(), vi.fn(() => undefined))
+
+      const result = await meshEventsHandlers.mesh_forward_event(ctx, createStampArgs(meshId))
+      expect(result).toMatchObject({ success: true })
+
+      await flushSetImmediate()
+      await flushSetImmediate()
+
+      const reFireFailures = warnSpy.mock.calls.filter(([category, msg]) =>
+        category === 'MeshQueue' && typeof msg === 'string' && msg.includes('Queue re-fire after'))
+      expect(reFireFailures).toHaveLength(0)
+    } finally {
+      warnSpy.mockRestore()
       cleanup(meshId)
     }
   })
