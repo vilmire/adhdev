@@ -123,15 +123,27 @@ describe('worker mailbox — deposit/drain/discard', () => {
 
 describe('deposit_worker_mailbox low-family handler', () => {
   it('is a no-op refusal when the worker-MCP gate is off (byte-identical promise)', async () => {
-    expect(isWorkerMcpEnabled({} as NodeJS.ProcessEnv)).toBe(false)
-    const taskId = uniqueTaskId()
-    seedQueueEntry('m', taskId)
-    const result: any = await workerMailboxHandlers.deposit_worker_mailbox(
-      {} as any,
-      { meshId: 'm', taskId, text: 'urgent' },
-    )
-    expect(result).toMatchObject({ success: false, error: 'worker_mcp_disabled' })
-    expect(peekWorkerMailboxCount('m', taskId)).toBe(0)
+    // The handler resolves the gate against process.env (the production
+    // default of isWorkerMcpEnabled), so pin the ambient var off for this
+    // test: a daemon/CI shell that exports ADHDEV_WORKER_MCP=on (e.g. a
+    // preview session host, or a daemon with a persisted env override) would
+    // otherwise flip the gate on and break the byte-identical-off promise.
+    const originalEnv = process.env.ADHDEV_WORKER_MCP
+    delete process.env.ADHDEV_WORKER_MCP
+    try {
+      expect(isWorkerMcpEnabled({} as NodeJS.ProcessEnv)).toBe(false)
+      const taskId = uniqueTaskId()
+      seedQueueEntry('m', taskId)
+      const result: any = await workerMailboxHandlers.deposit_worker_mailbox(
+        {} as any,
+        { meshId: 'm', taskId, text: 'urgent' },
+      )
+      expect(result).toMatchObject({ success: false, error: 'worker_mcp_disabled' })
+      expect(peekWorkerMailboxCount('m', taskId)).toBe(0)
+    } finally {
+      if (originalEnv === undefined) delete process.env.ADHDEV_WORKER_MCP
+      else process.env.ADHDEV_WORKER_MCP = originalEnv
+    }
   })
 
   describe('with the gate on', () => {
