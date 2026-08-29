@@ -68,10 +68,12 @@ import {
     meshReadRoutingCounters,
 } from '../seqscribe/mesh-read-readiness.js';
 import {
+    activateKnownMeshTopics,
     configureMeshDualWrite,
     isMeshDualWriteActive,
     meshDualWriteCounters,
 } from '../seqscribe/mesh-dual-write.js';
+import { listMeshesReadOnly } from '../config/mesh-config.js';
 import { configureFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
 import { configureHandoffNotesSeqscribe, storeHandoffNote } from '../mesh/worker-handoff-notes.js';
 import { configureHandoffNoteSink } from '../mesh/worker-report.js';
@@ -926,6 +928,37 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         configureHandoffNotesSeqscribe(components.seqscribeNode ?? null);
         configureHandoffNoteSink(storeHandoffNote);
         if (components.seqscribeNode) {
+            // ★ Define `mesh.<id>.events` for meshes we already know about,
+            // instead of waiting for a local write.
+            //
+            // The topic is otherwise defined lazily on this daemon's first mesh
+            // append, and a node that only CONSUMES a mesh never makes one. Its
+            // grant map therefore never carries the topic, `mutualFull` stays
+            // false on every peer pair, and the whole sync engine — HAVE
+            // vectors, WANT rounds, anti-entropy — skips it silently. The
+            // observed symptom was a writer's unreplicated count climbing
+            // monotonically while its logs showed the topic was never once
+            // selected for a sync round. See `activateKnownMeshTopics`.
+            //
+            // Must run AFTER configureMeshDualWrite (it needs the armed node)
+            // and it appends nothing — it only defines topics and re-advertises
+            // grants.
+            try {
+                const meshIds = listMeshesReadOnly().map((m) => m.id).filter(Boolean);
+                const activated = activateKnownMeshTopics(meshIds);
+                if (activated > 0) {
+                    LOG.info(
+                        'Seqscribe',
+                        `activated ${activated} known mesh event topic(s) at boot — ` +
+                            'consumers converge without waiting for a local write',
+                    );
+                }
+            } catch (error) {
+                LOG.warn(
+                    'Seqscribe',
+                    `boot mesh topic activation skipped: ${error instanceof Error ? error.message : String(error)}`,
+                );
+            }
             // GC durable cursors older builds left behind: pre-P17 read-model
             // generation names (`…#2`) and pre-P21 per-sweep parity nonces.
             // Each one holds the topic's §7.6 archive floor open until removed,
