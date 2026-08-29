@@ -18,6 +18,7 @@ import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import { recordFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
 import { observeFleetStatusWsProjection } from '../seqscribe/fleet-status-parity.js';
+import { markTranscriptSessionDirty } from '../seqscribe/transcript-publisher.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
 // `type: string`, leaving the primary status_report producer outside the only
 // typed protocol surface (which lived in the proprietary consumer package).
@@ -689,6 +690,15 @@ export class DaemonStatusReporter {
         LOG.info('StatusEvent', `${event.event} (${event.providerType || event.ideType || ''})`);
         const serverEvent = this.buildServerStatusEvent(event);
         if (!serverEvent) return;
+        // §8 unit 3 dirty trigger (design §5.2's "status-change/finalizing
+        // hook"): a per-session status transition — most notably
+        // `agent:generating_completed` (the finalizing→terminal edge) and the
+        // `agent:waiting_approval`/`agent:waiting_choice` pair the approval-
+        // push exception (CLAUDE.md) already trusts with `targetSessionId` —
+        // is exactly the kind of change that can happen with no new PTY output
+        // byte, so `markChatOutputActivity`'s trigger alone would miss it.
+        // Safe no-op until configureTranscriptProjection is armed.
+        if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId);
         // Dashboard delivery is P2P-only, but the server still receives the event
         // for push notifications, webhook dispatch, and audit-side effects.
         this.deps.p2p?.sendStatusEvent(serverEvent);

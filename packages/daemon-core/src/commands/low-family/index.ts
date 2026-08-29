@@ -20,6 +20,7 @@ import { meshNodeLogsHandlers } from './mesh-node-logs.js';
 import { workerReportHandlers } from './worker-report.js';
 import { workerMailboxHandlers } from './worker-mailbox.js';
 import { workerPeerContextHandlers } from './worker-peer-context.js';
+import { transcriptReplicaHandlers } from './transcript-replica.js';
 import type { LowFamilyRegistry } from './types.js';
 
 export type { LowFamilyContext, LowFamilyHandler, LowFamilyRegistry } from './types.js';
@@ -39,5 +40,6 @@ export const lowFamilyRegistry: LowFamilyRegistry = new Map(
         ...workerReportHandlers,
         ...workerMailboxHandlers,
         ...workerPeerContextHandlers,
+        ...transcriptReplicaHandlers,
     }),
 );

@@ -361,8 +361,18 @@ export function onTopicActivated(
  * Announce a runtime-defined topic to one node's subscribers. Never throws and
  * never lets one listener's failure stop another: a transport that cannot
  * re-advertise must not break the ledger write this call is nested inside.
+ *
+ * ★ Exported (not just used by `ensureTopic`/`ensureHandoffTopic` below) so
+ * `seqscribe/transcript-activation.ts` (§8 unit 3) can reuse the SAME
+ * node-scoped listener registry for per-session transcript topics instead of
+ * standing up a parallel one — this is the "기존 mesh runtime activation ...
+ * 패턴을 일반화한다" the transcript design (§3.1) calls for. The registry is
+ * keyed on the node handle (`listenersFor`), so any module announcing through
+ * it reaches the exact same subscribers (today: the cloud/standalone
+ * transport's grant re-derivation) regardless of which module fired the
+ * definition.
  */
-function announceTopicActivated(node: SeqscribeNodeHandle, topic: string): void {
+export function announceTopicActivated(node: SeqscribeNodeHandle, topic: string): void {
     for (const listener of listenersFor(node)) {
         try {
             listener(topic);

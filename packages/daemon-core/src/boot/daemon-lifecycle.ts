@@ -89,6 +89,10 @@ import {
     configureMeshReadModel,
     pruneStaleConsumersAtBoot,
 } from '../seqscribe/mesh-read-model.js';
+import { configureTranscriptProjection } from '../seqscribe/transcript-publisher.js';
+import { createLiveTranscriptPublisher } from '../seqscribe/transcript-publish-runtime.js';
+import { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
+import { TranscriptTopicClaimRegistry } from '../seqscribe/transcript-topic-claim.js';
 
 // ─── Init Config ───
 
@@ -245,6 +249,14 @@ export interface DaemonComponents {
      * READY PeerHandles; core owns projection, replacement semantics and reads.
      */
     seqscribeFleetStatusPeerView?: FleetStatusPeerViewConsumer;
+    /**
+     * §8 unit 3 — subscriber-side transcript replica store
+     * (seqscribe/transcript-replica-store.ts). Undefined when the seqscribe
+     * node failed to open. `read_transcript_replica`/`ensure_transcript_
+     * subscription` (low-family/transcript-replica.ts) are its only readers
+     * in THIS unit — no roster consumer calls it yet (§8 units 5-8).
+     */
+    transcriptReplicaStore?: TranscriptReplicaStore;
 }
 
 export interface DaemonDevSupportOptions {
@@ -819,6 +831,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         // per-peer SUB tail subscriptions. The cloud host supplies PeerHandles
         // after this core assembly returns; the slot is read at call time.
         getFleetStatusPeerView: () => componentsRef?.seqscribeFleetStatusPeerView?.snapshot() ?? null,
+        // §8 unit 3: read_transcript_replica/ensure_transcript_subscription's
+        // data source. Constructed at step 10a below, after the node opens —
+        // same holder-slot pattern as the getters above.
+        getTranscriptReplicaStore: () => componentsRef?.transcriptReplicaStore ?? null,
+        // resolveTranscriptPeer intentionally left unset — see its doc comment
+        // in router.ts (CommandRouterDeps). Not wired in this unit.
     });
 
     poller = new AgentStreamPoller({
@@ -950,6 +968,54 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         // same-machine enclosure keeps working, cross-machine does not.
         configureHandoffNotesSeqscribe(components.seqscribeNode ?? null);
         configureHandoffNoteSink(storeHandoffNote);
+        // §8 unit 3 ("dynamic transcript activation + daemon replica store"):
+        // arm the publisher §8 unit 2 built against this real node, and stand
+        // up the subscriber-side replica store. One claim registry instance is
+        // shared by both — design §3.5's fail-closed raw-id claim is a
+        // process-local primitive that must see every claim attempt for this
+        // node, from whichever side (publish or subscribe) makes it first.
+        if (components.seqscribeNode) {
+            const node = components.seqscribeNode;
+            const transcriptClaims = new TranscriptTopicClaimRegistry();
+            components.transcriptReplicaStore = new TranscriptReplicaStore(node, transcriptClaims);
+            const transcriptOwnerDaemonId = node.daemonId ?? node.writerId;
+            configureTranscriptProjection({
+                daemonId: () => transcriptOwnerDaemonId,
+                writerId: () => node.writerId,
+                publishRevision: createLiveTranscriptPublisher(node, transcriptClaims, transcriptOwnerDaemonId),
+                // PULL trigger source for markTranscriptSessionDirty (the
+                // status-change/post-chat hooks wired in status/reporter.ts
+                // and commands/router.ts). Re-enters the SAME internal
+                // read_chat pipeline read-chat-presentation.ts's choke point
+                // already instruments — that choke point calls
+                // notifyTranscriptObservation (PUSH) as a side effect, so this
+                // collector does not need to return an observation itself: by
+                // the time this await resolves, TranscriptProjectionService's
+                // OWN in-flight guard (this session is already `inFlight`
+                // because markDirty is what triggered this call) has queued
+                // the nested observe() into `pendingObservation`, and
+                // `settle()` publishes it right after this pull returns.
+                // Returning null here is therefore correct, not "nothing to
+                // do" — see transcript-publisher.ts's `settle()`.
+                collectObservation: async (sessionId: string) => {
+                    try {
+                        await commandHandler.handle('read_chat', { targetSessionId: sessionId });
+                    } catch {
+                        /* best-effort pull — a failed internal read_chat just means
+                           this markDirty tick found nothing fresh */
+                    }
+                    return null;
+                },
+                onOversize: (sessionId) => {
+                    LOG.warn(
+                        'Seqscribe',
+                        `transcript projection oversize session=${sessionId.length <= 8 ? sessionId : `${sessionId.slice(0, 8)}…`} — caller must fall back to legacy read_chat/chat_history`,
+                    );
+                },
+            });
+        } else {
+            configureTranscriptProjection(null);
+        }
         if (components.seqscribeNode) {
             // ★ Define the events/handoff pair for meshes we already know
             // about, instead of waiting for a local write or command discovery.
@@ -1099,7 +1165,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         cliManager, instanceManager, cdpManagers,
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
         eventLoopMonitor, seqscribeNode, seqscribeProbe, seqscribeParityLoop,
-        seqscribeCollector, seqscribeFleetStatusPeerView,
+        seqscribeCollector, seqscribeFleetStatusPeerView, transcriptReplicaStore,
     } = components;
 
     // 1. Stop timers
@@ -1133,6 +1199,13 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     try { configureFleetStatusShadow(null); } catch { /* noop */ }
     // Connection-scoped ring SUBs must close before node.close().
     try { seqscribeFleetStatusPeerView?.stop(); } catch { /* noop */ }
+    // §8 unit 3: stop the publisher BEFORE its per-session SUBs, and stop the
+    // SUBs before node.close() — same ordering reasoning as the fleet.status
+    // leg above. A markDirty/observe racing shutdown after this point becomes
+    // a no-op (configureTranscriptProjection(null)) rather than an append/SUB
+    // callback touching a node step 7 is about to close.
+    try { configureTranscriptProjection(null); } catch { /* noop */ }
+    try { transcriptReplicaStore?.stop(); } catch { /* noop */ }
     // Detach the read model too, so its per-mesh onEntry consumers are
     // unsubscribed before step 7 closes the node. A consumer still registered
     // when the node closes would touch the store after the owner lock released.

@@ -27,6 +27,9 @@ import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { activateKnownMeshTopics } from '../seqscribe/mesh-dual-write.js';
+import { markTranscriptSessionDirty } from '../seqscribe/transcript-publisher.js';
+import type { PeerHandle } from 'seqscribe';
+import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
@@ -206,6 +209,27 @@ export interface CommandRouterDeps {
      * Local/P2P only; null when the node/consumer is unavailable.
      */
     getFleetStatusPeerView?: () => FleetStatusPeerView | null;
+    /**
+     * §8 unit 3 ("dynamic transcript activation + daemon replica store") — the
+     * `ensure_transcript_subscription`/`read_transcript_replica` daemon-local
+     * commands' data source (low-family/transcript-replica.ts). A getter for
+     * the same reason as `getSeqscribeStats`: the store is constructed after
+     * the seqscribe node opens, which happens after the router does. Null when
+     * the node failed to open.
+     */
+    getTranscriptReplicaStore?: () => TranscriptReplicaStore | null;
+    /**
+     * Resolve a live `PeerHandle` for a remote daemon's seqscribe channel, so
+     * `ensure_transcript_subscription` can attach a SUB to the session owner's
+     * connection. ★NOT WIRED in §8 unit 3 — no caller currently supplies this;
+     * the peer connection lives in the cloud/standalone TRANSPORT layer
+     * (`packages/daemon-cloud`, `oss/packages/daemon-standalone`), which
+     * daemon-core does not reach into. Absent (undefined) means the command
+     * answers `ipc_unavailable` rather than silently no-op-ing — see the
+     * handler for the reasoning. A later unit wires this from whichever
+     * daemon owns the peer map.
+     */
+    resolveTranscriptPeer?: (ownerDaemonId: string) => Promise<PeerHandle | null> | PeerHandle | null;
 }
 
 export interface CommandRouterResult {
@@ -1097,8 +1121,19 @@ export class DaemonCommandRouter {
             });
 
             // 3. Post-chat command callback
-            if (CHAT_COMMANDS.includes(cmd) && this.deps.onPostChatCommand) {
-                this.deps.onPostChatCommand();
+            if (CHAT_COMMANDS.includes(cmd)) {
+                // §8 unit 3 dirty trigger (design §5.2's "post-chat hook" —
+                // this callback is literally that hook, already firing for
+                // every send_chat/new_chat/switch_chat/set_mode/change_model
+                // regardless of transport). Safe no-op until
+                // configureTranscriptProjection is armed (boot/daemon-
+                // lifecycle.ts) — same pattern as markChatOutputActivity's
+                // call in subscriptions/topic-registry.ts.
+                const dirtySessionId = typeof normalizedArgs?.targetSessionId === 'string'
+                    ? normalizedArgs.targetSessionId.trim()
+                    : '';
+                if (dirtySessionId) markTranscriptSessionDirty(dirtySessionId);
+                this.deps.onPostChatCommand?.();
             }
 
             return handlerResult;
