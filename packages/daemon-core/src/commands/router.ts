@@ -657,6 +657,7 @@ export class DaemonCommandRouter {
             deps: this.deps,
             getMeshForCommand: this.getMeshForCommand.bind(this),
             getCachedInlineMesh: this.getCachedInlineMesh.bind(this),
+            markWorktreeBootstrapTerminalState: this.markWorktreeBootstrapTerminalState.bind(this),
             requireMeshHostMutationOwner: this.requireMeshHostMutationOwner.bind(this),
             invalidateAggregateMeshStatus: this.invalidateAggregateMeshStatus.bind(this),
             updateInlineMeshNode: this.updateInlineMeshNode.bind(this),

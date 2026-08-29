@@ -61,6 +61,22 @@ export interface MedFamilyContext {
     /** Bound `DaemonCommandRouter.getCachedInlineMesh`. */
     getCachedInlineMesh: (meshId: string, inlineMesh?: unknown) => any | undefined;
 
+    /**
+     * Bound `DaemonCommandRouter.markWorktreeBootstrapTerminalState`. `clone_mesh_node`'s
+     * post-bootstrap emit (worktree_bootstrap_complete/_failed) runs on the WORKER
+     * daemon that owns the cloned worktree and calls handleMeshForwardEvent locally
+     * (in-process, before falling back to queuePendingMeshCoordinatorEvent) — that
+     * local call needs the same bound stamp the HIGH-family mesh_forward_event
+     * handler supplies, or it throws on `components.router.markWorktreeBootstrapTerminalState`
+     * (the handler only has `ctx.deps`, which does NOT expose the router itself).
+     */
+    markWorktreeBootstrapTerminalState: (
+        meshId: string,
+        nodeId: string,
+        status: 'complete' | 'failed',
+        opts?: { workspace?: string },
+    ) => void;
+
     /** Bound `DaemonCommandRouter.requireMeshHostMutationOwner` (owner gate). */
     requireMeshHostMutationOwner: (meshId: string, inlineMesh: unknown, operation: string) => Promise<CommandRouterResult | null>;
 

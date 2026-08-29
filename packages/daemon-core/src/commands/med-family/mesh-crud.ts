@@ -1741,11 +1741,27 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         ...(extraPayload || {}),
                     };
                     if (typeof ctx.deps.instanceManager?.getByCategory === 'function') {
-                        const forwarded = handleMeshForwardEvent(
-                            { instanceManager: ctx.deps.instanceManager } as any,
-                            { event, meshId, nodeId: node.id, workspace: result.worktreePath, metadataEvent },
-                        );
-                        if (forwarded?.success === true) return;
+                        // WORKTREE-BOOTSTRAP-COORD-STATE (remaining path): this runs on the
+                        // WORKER daemon that owns the cloned worktree (clone_mesh_node forwards
+                        // the clone+bootstrap to the source node's machine), so the in-process
+                        // handleMeshForwardEvent call below needs the same bound router stamp
+                        // the HIGH-family mesh_forward_event handler supplies — otherwise it
+                        // throws on `components.router.markWorktreeBootstrapTerminalState`
+                        // (ctx.deps does NOT expose the router itself). Isolated in its own
+                        // try/catch: a thrown stamp failure must still fall through to the
+                        // queuePendingMeshCoordinatorEvent fallback below, not swallow it —
+                        // otherwise the coordinator never even gets a queued event to pull and
+                        // recovers only via the stale-running backstop (30-40 min later).
+                        try {
+                            const forwarded = handleMeshForwardEvent(
+                                {
+                                    instanceManager: ctx.deps.instanceManager,
+                                    router: { markWorktreeBootstrapTerminalState: ctx.markWorktreeBootstrapTerminalState },
+                                } as any,
+                                { event, meshId, nodeId: node.id, workspace: result.worktreePath, metadataEvent },
+                            );
+                            if (forwarded?.success === true) return;
+                        } catch { /* falls through to the queue fallback below */ }
                     }
                     queuePendingMeshCoordinatorEvent({
                         event,
