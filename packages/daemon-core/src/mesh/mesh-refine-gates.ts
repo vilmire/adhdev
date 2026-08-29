@@ -1943,6 +1943,7 @@ export async function runMeshRefineValidationGate(
                 const result = await execFileAsync(spawn.file, spawn.args, {
                     cwd,
                     encoding: 'utf8',
+                    windowsHide: true,
                     timeout,
                     maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
                     env: { ...process.env, CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
@@ -2002,6 +2003,7 @@ export async function runMeshRefineValidationGate(
             const result = await execFileAsync(spawn.file, spawn.args, {
                 cwd,
                 encoding: 'utf8',
+                windowsHide: true,
                 timeout,
                 maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
                 env: { ...process.env, CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },

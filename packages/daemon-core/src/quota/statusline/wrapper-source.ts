@@ -179,6 +179,7 @@ const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', ORIGINAL_COM
 
 const child = spawn(shell, shellArgs, {
     stdio: ['pipe', 'inherit', 'inherit'],
+    windowsHide: true,
     windowsVerbatimArguments: process.platform === 'win32',
 });
 

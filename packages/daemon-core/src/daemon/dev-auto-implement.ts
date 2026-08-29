@@ -320,6 +320,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
         cwd: providerDir,
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: spawn.shell ?? false,
+        windowsHide: true,
         env: { ...process.env, ...(spawn.env || {}) },
       });
       ctx.autoImplProcess = child;
@@ -494,6 +495,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       child = spawnFn(isWin ? 'cmd.exe' : 'sh', [isWin ? '/c' : '-c', shellCmd], {
         cwd: providerDir,
         shell: false,
+        windowsHide: true,
         timeout: 900000,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {

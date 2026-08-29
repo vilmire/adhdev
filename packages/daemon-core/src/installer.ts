@@ -134,6 +134,7 @@ export async function isExtensionInstalled(
     try {
         const { stdout } = await execAsync(`"${ide.cliCommand}" --list-extensions`, {
             encoding: 'utf-8',
+            windowsHide: true,
             timeout: 15000,
         });
 

@@ -20,7 +20,7 @@ import { exec, spawn, spawnSync } from 'child_process';
 
 async function execQuiet(command: string, options: any = {}): Promise<string> {
     return new Promise((resolve) => {
-        exec(command, options, (error, stdout) => {
+        exec(command, { windowsHide: true, ...options }, (error, stdout) => {
             if (error) return resolve('');
             resolve(stdout.toString());
         });

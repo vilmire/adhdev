@@ -121,6 +121,7 @@ export function resolveDeps(overrides: QuotaFetchDeps = {}): Required<QuotaFetch
                 spawn(command, args, {
                     env: options.env,
                     stdio: ['pipe', 'pipe', 'pipe'],
+                    windowsHide: true,
                 }) as ChildProcessWithoutNullStreams as unknown as QuotaChildProcess),
         readFile: overrides.readFile ?? ((filePath) => fsReadFile(filePath, 'utf-8')),
         setTimeout: overrides.setTimeout ?? ((handler, ms) => setTimeout(handler, ms)),

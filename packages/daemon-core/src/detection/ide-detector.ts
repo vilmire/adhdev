@@ -121,6 +121,7 @@ export async function getIdeVersion(
     try {
         const { stdout } = await execAsync(`"${cliCommand}" --version`, {
             encoding: 'utf-8',
+            windowsHide: true,
             timeout: 10000,
         });
         return stdout.trim().split('\n')[0] || null;

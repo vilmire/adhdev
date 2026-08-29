@@ -349,6 +349,7 @@ export class DevServer implements DevServerContext {
     try {
       const child = spawnFn(spawn.command, [...(spawn.args || [])], {
         shell: spawn.shell ?? false,
+        windowsHide: true,
         timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -864,6 +865,7 @@ export class DevServer implements DevServerContext {
       const args = [...(spawn.args || []), message];
       const child = spawnFn(spawn.command, args, {
         shell: spawn.shell ?? false,
+        windowsHide: true,
         timeout: timeout,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, ...(spawn.env || {}) },
