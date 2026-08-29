@@ -330,6 +330,13 @@ export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEviden
 export { isMeshTestPollution, isSyntheticTestMeshId, isSyntheticTestCoordinatorSession } from './mesh/mesh-test-pollution.js';
 export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext, MeshTaskCompletionEvidence, MeshWorkerResultArtifact, MeshProcessArtifact, MeshValidationResultArtifact } from './mesh/mesh-ledger.js';
 export { recordSessionUsage, readSessionUsage, summarizeMeshUsage, getUsageDir, MAX_SESSIONS_PER_MESH, USAGE_MAX_AGE_MS } from './mesh/mesh-usage-store.js';
+// WORKER-MCP: pure env-flag read, no daemon state — same category as
+// isTaskReadonly/DEFAULT_QUOTA_ROUTING_POLICY above, which is why mcp-server
+// (a separate process/package) is allowed to import it directly rather than
+// going through a transport command. Used to gate `mesh_notify_worker`'s
+// publication in ListTools so a flag-off mesh coordinator sees the exact
+// pre-E-T0 tool count (design's "게이트 off ⇒ byte-identical" promise, §7.1).
+export { isWorkerMcpEnabled } from './mesh/worker-mcp-isolation.js';
 export type { MeshSessionUsage, MeshUsageSummary, EvictedUsageRollup } from './mesh/mesh-usage-store.js';
 export { foldUsageRecords, sumSessionUsage, makeUsage, totalTokens, isEmptyUsage, readTokenCount } from './providers/native-history/usage-normalize.js';
 export type { NativeUsage, NativeUsageRecord, NativeUsageMode, SessionUsageTotals } from './providers/native-history/usage-normalize.js';

@@ -18,6 +18,7 @@ import { daemonLifecycleHandlers } from './daemon-lifecycle.js';
 import { meshLedgerHandlers } from './mesh-ledger.js';
 import { meshNodeLogsHandlers } from './mesh-node-logs.js';
 import { workerReportHandlers } from './worker-report.js';
+import { workerMailboxHandlers } from './worker-mailbox.js';
 import type { LowFamilyRegistry } from './types.js';
 
 export type { LowFamilyContext, LowFamilyHandler, LowFamilyRegistry } from './types.js';
@@ -35,5 +36,6 @@ export const lowFamilyRegistry: LowFamilyRegistry = new Map(
         ...meshLedgerHandlers,
         ...meshNodeLogsHandlers,
         ...workerReportHandlers,
+        ...workerMailboxHandlers,
     }),
 );
