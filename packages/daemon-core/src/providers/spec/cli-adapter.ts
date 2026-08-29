@@ -22,6 +22,7 @@ import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.j
 import { lastContiguousNumberedBlock } from './evaluator.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import { detectBackgroundTaskActive } from './background-task-detector.js';
+import { extractAntigravityScreenAssistantMessages } from './antigravity-screen-messages.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { NativeHistoryConfig, Control, ControlAction } from './types.js';
@@ -488,7 +489,7 @@ export class SpecCliAdapter implements CliAdapter {
         const bg = this.detectBackgroundTask();
         return {
             ...status,
-            messages: this.readClaudeScreenAssistantMessages(),
+            messages: this.readScreenAssistantMessages(),
             ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
             backgroundTaskSupport: bg.support ?? 'unknown',
             ...(bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}),
@@ -1177,7 +1178,7 @@ export class SpecCliAdapter implements CliAdapter {
                 if (nhResult && Array.isArray(nhResult.messages)) messages = nhResult.messages;
             } catch { /* best-effort */ }
         } else {
-            messages = this.readClaudeScreenAssistantMessages();
+            messages = this.readScreenAssistantMessages();
         }
         return {
             cliType: this.cliType,
@@ -1406,6 +1407,30 @@ export class SpecCliAdapter implements CliAdapter {
         const clean = stripAnsi(screenText);
         const match = clean.match(/(?:gpt-|o\d|codex-)[^\n·]*·[^\n·]*·\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
         return match?.[1] || this.providerSessionId;
+    }
+
+    /**
+     * PTY-scrape assistant bubbles for the live parse / spec-debug snapshot.
+     *
+     * Native-history remains the completion-path authority
+     * (`chatMessagesOwnedExternally`). This scrape is the fail-closed
+     * fallback the gate already consults via getScriptParsedStatus().messages
+     * when the on-disk transcript has no final standard assistant — which is
+     * the antigravity layout where the JSON report is on screen under
+     * `● Bash(...)` but never lands as a step_type-15 field-20 answer.
+     */
+    private readScreenAssistantMessages(): ChatMessage[] {
+        if (this.cliType === 'claude-cli') return this.readClaudeScreenAssistantMessages();
+        if (this.cliType === 'antigravity-cli') {
+            let screenText = '';
+            try {
+                screenText = this.driver.snapshot();
+            } catch {
+                return [];
+            }
+            return extractAntigravityScreenAssistantMessages(screenText);
+        }
+        return [];
     }
 
     private readClaudeScreenAssistantMessages(): ChatMessage[] {
@@ -1950,7 +1975,7 @@ export class SpecCliAdapter implements CliAdapter {
                 // Ignore native history read errors in debug state
             }
         } else {
-            messages = this.readClaudeScreenAssistantMessages();
+            messages = this.readScreenAssistantMessages();
         }
 
         const latestState = this.latestState;

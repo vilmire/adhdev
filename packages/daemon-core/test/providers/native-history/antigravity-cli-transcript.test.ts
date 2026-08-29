@@ -800,6 +800,27 @@ describe('antigravity-cli-transcript — readSession (.db SQLite)', () => {
     expect(combined).not.toContain('Prioritizing Tool Usage');
   });
 
+  it('extracts a JSON model answer at field 20→1 (mesh-worker report is a real answer, not tool-arg recovery)', async () => {
+    // Complementary to the tool-arg filter above: when the JSON IS the
+    // assistant's final answer (stored at the known field path), the reader
+    // must surface it. isPlausibleMessageText rejects JSON, so a missed
+    // field-20 path would drop this turn — the PTY extractor is the
+    // fallback for answers that never land here.
+    const jsonAnswer = '{\n  "status": "completed",\n  "rca": "engine PTY parser is Claude-only"\n}';
+    const dbPath = await makeConversationDb(SESSION_E, [
+      { step_type: 14, payload: encodeUserStep('report as JSON') },
+      { step_type: 15, payload: encodeModelStep({ answer: jsonAnswer }) },
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/antigravity-cli-transcript.js');
+    const result = await readSession(dbPath, SESSION_E);
+
+    expect(result).not.toBeNull();
+    expect(result!.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(result!.messages[1].content).toContain('"status": "completed"');
+    expect(result!.messages[1].kind).toBe('standard');
+  });
+
   it('returns null for a .db without a steps table', async () => {
     const dir = path.join(antigravityRoot(), 'conversations');
     fs.mkdirSync(dir, { recursive: true });
