@@ -5,11 +5,21 @@ import {
     type ProviderQuotaGateBlock,
 } from './mesh-quota-routing.js';
 
+export interface QuotaClaimGateContext {
+    /** What triggered this claim evaluation — e.g. 'idle_claim_scan', 'auto_launch', 'direct_dispatch'. */
+    trigger?: string;
+    /** The id of the queued task this session was trying to claim, when known. */
+    candidateTaskId?: string;
+    /** True when the provider was pinned by requiredTags and the gate was overridden to let the claim proceed. */
+    pinOverride?: boolean;
+}
+
 export interface QuotaClaimGateObservation {
     nodeId: string;
     sessionId: string;
     providerType: string;
     block: ProviderQuotaGateBlock;
+    context?: QuotaClaimGateContext;
 }
 
 export interface QuotaClaimDrainTrace {
@@ -17,6 +27,8 @@ export interface QuotaClaimDrainTrace {
     evaluated: number;
     clear: number;
 }
+
+export type QuotaClaimGatePhase = 'blocked' | 'cleared' | 'overridden_by_pin';
 
 // Claim reconciliation runs every few seconds. Keep the existing per-candidate gate
 // diagnostic, but emit it only when that candidate's gate verdict changes instead of
@@ -44,36 +56,56 @@ function rememberBounded(map: Map<string, string>, key: string, value: string): 
     }
 }
 
-export function logQuotaClaimBlockTransition(meshId: string, observation: QuotaClaimGateObservation): void {
+export function logQuotaClaimBlockTransition(
+    meshId: string,
+    observation: QuotaClaimGateObservation,
+    phase: QuotaClaimGatePhase = 'blocked',
+): void {
     const key = quotaClaimBlockKey(meshId, observation);
-    const fingerprint = `${observation.block.reason}:${observation.block.window}:${observation.block.remainingPercent}:${observation.block.thresholdPercent}`;
+    // Include the phase in the fingerprint so a transition from blocked → overridden_by_pin
+    // (or back) is recorded as a distinct event, not swallowed by the unchanged-fingerprint guard.
+    const fingerprint = `${phase}:${observation.block.reason}:${observation.block.window}:${observation.block.remainingPercent}:${observation.block.thresholdPercent}`;
     if (lastQuotaClaimBlockLog.get(key) === fingerprint) return;
     const wasBlocked = lastQuotaClaimBlockLog.has(key);
     rememberBounded(lastQuotaClaimBlockLog, key, fingerprint);
-    LOG.info('MeshQueue', `QUOTA GATE: deferring queue claim for node ${observation.nodeId} (${observation.sessionId}): ${quotaClaimBlockDescription(observation.providerType, observation.block)} — trying remaining provider candidates; the task stays pending only if none can claim`);
-    // QUOTA-CLAIM-GATE-LEDGER: record only the transition INTO a block (or a changed block
-    // reason/window while already blocked), never a steady-state repeat — mirrors the log
+
+    const overrideNote = phase === 'overridden_by_pin'
+        ? ' (provider pinned by requiredTags — gate overridden to honor the pin)'
+        : '';
+    LOG.info('MeshQueue', `QUOTA GATE: ${phase === 'overridden_by_pin' ? 'allowing' : 'deferring'} queue claim for node ${observation.nodeId} (${observation.sessionId}): ${quotaClaimBlockDescription(observation.providerType, observation.block)}${overrideNote}${phase === 'blocked' ? ' — trying remaining provider candidates; the task stays pending only if none can claim' : ''}`);
+    // QUOTA-CLAIM-GATE-LEDGER: record only the transition INTO a phase (or a changed block
+    // reason/window while already in that phase), never a steady-state repeat — mirrors the log
     // fingerprint above exactly so the ledger and the log agree on what counts as "new".
     // Without this, a provider pinned via requiredTags (the MAGI kind-panel case — no
     // fallback candidate to escape to) that goes quota-exhausted leaves NO ledger trace at
     // all while its replica parks pending indefinitely.
     try {
+        const payload: Record<string, unknown> = {
+            phase,
+            nodeId: observation.nodeId,
+            sessionId: observation.sessionId,
+            providerType: observation.providerType,
+            reason: observation.block.reason,
+            window: observation.block.window,
+            remainingPercent: observation.block.remainingPercent,
+            thresholdPercent: observation.block.thresholdPercent,
+            previouslyBlocked: wasBlocked,
+        };
+        if (observation.context?.trigger) {
+            payload.trigger = observation.context.trigger;
+        }
+        if (observation.context?.candidateTaskId) {
+            payload.candidateTaskId = observation.context.candidateTaskId;
+        }
+        if (observation.context?.pinOverride) {
+            payload.pinOverride = true;
+        }
         appendLedgerEntry(meshId, {
             kind: 'quota_claim_gate',
             nodeId: observation.nodeId,
             sessionId: observation.sessionId,
             providerType: observation.providerType,
-            payload: {
-                phase: 'blocked',
-                nodeId: observation.nodeId,
-                sessionId: observation.sessionId,
-                providerType: observation.providerType,
-                reason: observation.block.reason,
-                window: observation.block.window,
-                remainingPercent: observation.block.remainingPercent,
-                thresholdPercent: observation.block.thresholdPercent,
-                previouslyBlocked: wasBlocked,
-            },
+            payload,
         });
     } catch { /* best-effort: diagnostics must never break the claim path */ }
 }

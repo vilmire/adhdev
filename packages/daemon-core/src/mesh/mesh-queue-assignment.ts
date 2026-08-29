@@ -890,6 +890,17 @@ function resolveClaimingSessionTranscriptProfile(
     }
 }
 
+function providerPinOverrideCandidateTaskId(meshId: string, providerType: string): string | undefined {
+    const pending = getQueue(meshId, { status: ['pending'] });
+    for (const task of pending) {
+        const tags = task.requiredTags ?? [];
+        if (tags.includes(`provider=${providerType}`)) {
+            return task.id;
+        }
+    }
+    return undefined;
+}
+
 export function tryAssignQueueTask(
     components: DaemonComponents,
     meshId: string,
@@ -902,6 +913,7 @@ export function tryAssignQueueTask(
     // entry records source:'queue' with just the resolved provider from the claimed row.
     routingDecision?: MeshTaskRoutingDecision,
     quotaClaimTrace?: QuotaClaimDrainTrace,
+    trigger: string = 'queue_claim',
 ): boolean {
     const mesh = getMeshWithCache(components, meshId);
     // Match with the shared 3-form normalizer (id / nodeId / node_id), not raw
@@ -952,16 +964,36 @@ export function tryAssignQueueTask(
     // in the launch path; fresh last-good windows remain measurable. Log-only
     // like the lease defer above — no ledger entry, so a repeatedly gated claim
     // does not flood the ledger every drain tick.
+    //
+    // PIN OVERRIDE: when a pending task is explicitly pinned to this provider via
+    // requiredTags (e.g. provider=codex-cli), the pin is authoritative: the claim
+    // proceeds and the ledger records 'overridden_by_pin' instead of 'blocked', so
+    // an operator can later see "the gate was low but the pin was honored". The
+    // candidate task id is included in the ledger context to distinguish this from
+    // an idle-session scan blocked on some other task.
+    const pinCandidateTaskId = providerPinOverrideCandidateTaskId(meshId, providerType);
+    const isPinOverride = !!pinCandidateTaskId;
     const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null, Date.now(), quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader));
     if (quotaClaimTrace) quotaClaimTrace.evaluated += 1;
     if (quotaClaimBlock) {
-        const observation = { nodeId, sessionId, providerType, block: quotaClaimBlock };
-        logQuotaClaimBlockTransition(meshId, observation);
-        quotaClaimTrace?.blocked.push(observation);
-        return false;
+        const observation = {
+            nodeId,
+            sessionId,
+            providerType,
+            block: quotaClaimBlock,
+            context: { trigger, candidateTaskId: pinCandidateTaskId, pinOverride: isPinOverride },
+        };
+        if (isPinOverride) {
+            logQuotaClaimBlockTransition(meshId, observation, 'overridden_by_pin');
+        } else {
+            logQuotaClaimBlockTransition(meshId, observation, 'blocked');
+            quotaClaimTrace?.blocked.push(observation);
+            return false;
+        }
+    } else {
+        clearQuotaClaimBlockState(meshId, nodeId, sessionId, providerType);
+        if (quotaClaimTrace) quotaClaimTrace.clear += 1;
     }
-    clearQuotaClaimBlockState(meshId, nodeId, sessionId, providerType);
-    if (quotaClaimTrace) quotaClaimTrace.clear += 1;
 
     // WORKTREE-CLAIM-GATE-BYPASS: the SINGLE claim-time gate for the worktree-bootstrap defer.
     // tryAssignQueueTask is the one funnel every claim path flows through — the event-driven
@@ -1998,7 +2030,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readNonEmptyString(
                         (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, alNodeId)) : undefined)?.workspace,
                     )))) {
-                        if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider)) {
+                        if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, undefined, undefined, 'auto_launch')) {
                             clearClaimDeferralForNode(meshId, alNodeId);
                             recordAutoLaunchEvent(meshId, { phase: 'completed', taskId: task.id, reason: 'fast_forward_deferred_claim_redriven', nodeId: alNodeId, sessionId: alSessionId });
                             LOG.info('MeshQueue', `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
@@ -2543,7 +2575,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         executedSlot: slotDecision.slot,
                         demotionReason,
                     });
-                    tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision);
+                    tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, undefined, 'auto_launch');
                     return true;
                 } catch (e: any) {
                     markAutoLaunch(meshId, task.id, { status: 'failed', error: e?.message || String(e), nodeId });
@@ -2699,7 +2731,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
 
     const quotaClaimTrace: QuotaClaimDrainTrace = { blocked: [], evaluated: 0, clear: 0 };
     const assignIdleCandidate = (candidate: IdleCandidate): void => {
-        const assigned = tryAssignQueueTask(components, meshId, candidate.nodeId, candidate.sessionId, candidate.providerType, undefined, quotaClaimTrace);
+        const assigned = tryAssignQueueTask(components, meshId, candidate.nodeId, candidate.sessionId, candidate.providerType, undefined, quotaClaimTrace, 'idle_claim_scan');
         if (assigned && candidate.origin === 'remote') {
             try {
                 MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId, candidate.nodeId, candidate.sessionId);
@@ -2828,7 +2860,7 @@ export function runIdleMaintenanceThenAssignQueue(components: DaemonComponents, 
         maybeAutoFastForwardIdleNode(components, args)
             .finally(() => {
                 try {
-                    tryAssignQueueTask(components, args.meshId, args.nodeId, args.sessionId, args.providerType);
+                    tryAssignQueueTask(components, args.meshId, args.nodeId, args.sessionId, args.providerType, undefined, undefined, 'idle_maintenance');
                 } catch (e: any) {
                     LOG.warn('MeshQueue', `Failed to assign idle queue task after maintenance for ${args.nodeId}: ${e?.message || e}`);
                 }

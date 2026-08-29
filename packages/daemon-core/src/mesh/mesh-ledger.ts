@@ -310,10 +310,13 @@ export type MeshLedgerKind =
     // logQuotaClaimBlockTransition / clearQuotaClaimBlockState's existing log fingerprinting so
     // the ledger records exactly the same state transitions the log line already dedupes on,
     // never a steady-state repeat.
-    // payload: { nodeId, sessionId, providerType, phase: 'blocked' | 'cleared',
-    //            reason?, window?, remainingPercent?, thresholdPercent?, previouslyBlocked? }
-    //            (reason/window/remainingPercent/thresholdPercent/previouslyBlocked present
-    //            only on phase:'blocked'; 'cleared' carries just the identity fields.)
+// payload: { nodeId, sessionId, providerType, phase: 'blocked' | 'cleared' | 'overridden_by_pin',
+//            reason?, window?, remainingPercent?, thresholdPercent?, previouslyBlocked?,
+//            trigger?, candidateTaskId?, pinOverride? }
+//            (reason/window/remainingPercent/thresholdPercent/previouslyBlocked present
+//            on phase:'blocked' and 'overridden_by_pin'; 'cleared' carries just the identity
+//            fields. trigger/candidateTaskId/pinOverride are added by the claim path to
+//            disambiguate idle-session scans from pin-override dispatches.)
     | 'quota_claim_gate'
     ;
 
