@@ -8,7 +8,7 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
 import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
-import { isWithinCloneBootstrapGrace } from './mesh-clone-grace.js';
+import { isWithinCloneBootstrapGraceDurable } from './mesh-clone-grace.js';
 import { loadConfig } from '../config/config.js';
 import { SLOT_MODEL_ABSENT_SKIP_REASON } from './slot-model-enforcement.js';
 import { isLocalAutoLaunchNode, resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
@@ -117,7 +117,7 @@ export function isTargetNodeTransientlyUnresolved(mesh: any, task: MeshWorkQueue
         && !isWorktreeBootstrapStaleRunning(node)) {
         return true;
     }
-    return isWithinCloneBootstrapGrace(targetNodeId);
+    return isWithinCloneBootstrapGraceDurable(task.meshId, targetNodeId);
 }
 
 // ---------------------------------------------------------------------------
@@ -504,7 +504,7 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // auto-clears, not a permanent routing miss — never page the coordinator for it (the
     // reason classifier upstream already routes the common case to the transient reason; this
     // is the single-funnel backstop for any path that still labels it as the permanent reason).
-    if (reason === 'target_node_id_unmatched' && isWithinCloneBootstrapGrace(readNonEmptyString(nodeId))) return;
+    if (reason === 'target_node_id_unmatched' && isWithinCloneBootstrapGraceDurable(meshId, readNonEmptyString(nodeId))) return;
     const dedupKey = `${meshId}:${taskId}`;
     if (lastActionableSkipNotified.get(dedupKey) === reason) return;
     lastActionableSkipNotified.set(dedupKey, reason!);
