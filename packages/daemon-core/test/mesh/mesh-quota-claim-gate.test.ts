@@ -300,6 +300,30 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
     }
   })
 
+  it('ALLOWS the claim when the session resetsAt has already passed (expired reading must not gate)', async () => {
+    const meshId = `mesh_quota_claim_expired_session_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [quotaNode({
+        'claude-cli': claudeQuota({
+          session: { usedPercent: 97, windowMinutes: 300, resetsAt: Date.now() - 5 * MIN },
+        }),
+      })])
+      const components = createComponents(meshId, [
+        { sessionId: 'sess-expired', workingDir: NODE_WS, meshNodeId: NODE_ID },
+      ])
+      const task = enqueueTask(meshId, 'do expired-session work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+
+      const result = await triggerMeshQueue(components, meshId)
+
+      expect(result.claimed).toBe(true)
+      expect(result.newlyAssignedTasks).toEqual([
+        expect.objectContaining({ id: task.id, nodeId: NODE_ID, sessionId: 'sess-expired' }),
+      ])
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('fails OPEN when the reported quota is unusable (error status / stale / absent)', async () => {
     const meshId = `mesh_quota_claim_failopen_${randomUUID().slice(0, 8)}`
     try {
