@@ -59,38 +59,53 @@ const CLI_X: FixtureProviderSpec = {
   },
 };
 
-const hasSystemTar = (() => {
+/**
+ * Which `tar` actually resolves on PATH varies by machine, even on win32:
+ * Git for Windows commonly puts MSYS GNU tar ahead of the OS-bundled bsdtar,
+ * but on a machine where System32's tar.exe (bsdtar/libarchive, bundled since
+ * Windows 10 1803) resolves first — or is the only `tar` present at all —
+ * there is no GNU tar in the picture. The two flavors need OPPOSITE handling
+ * below, so detect the actual flavor from `tar --version` rather than
+ * inferring it from `process.platform`: GNU tar prints "tar (GNU tar)";
+ * bsdtar prints "bsdtar ... libarchive ...".
+ *
+ * ★Confirmed by running the resolved binary directly: on a Windows machine
+ * with only System32\tar.exe (bsdtar 3.8.8) on PATH, passing --force-local
+ * (previously gated on `process.platform === 'win32'` alone) fails outright
+ * with "tar.exe: Option --force-local is not supported" (exit 1) — this was
+ * the win32 CI failure this rewrite fixes, not a platform gap to skip.
+ */
+const systemTarInfo = (() => {
   try {
-    execFileSync('tar', ['--version'], { stdio: 'ignore' });
-    return true;
+    const version = execFileSync('tar', ['--version'], { encoding: 'utf8' });
+    return { available: true, isGnuTar: /GNU tar/i.test(version) };
   } catch {
-    return false;
+    return { available: false, isGnuTar: false };
   }
 })();
+const hasSystemTar = systemTarInfo.available;
 
 /** Env for system-tar invocations: keep macOS bsdtar from adding AppleDouble (._*) entries. */
 const SYSTEM_TAR_ENV = { ...process.env, COPYFILE_DISABLE: '1' };
 
 /**
- * The `tar` resolved first on PATH under Git for Windows is MSYS GNU tar,
- * which mishandles a backslash-separated Windows path ("C:\Users\...") for
+ * GNU tar mishandles a backslash-separated Windows path ("C:\Users\...") for
  * both the archive (`-f`) and directory (`-C`) arguments — the backslashes
  * defeat its own path translation and it fails with a garbled "Cannot open"
- * path. Forward-slash form ("C:/Users/...") round-trips correctly. Only
- * applied on win32 — on POSIX this is unneeded and, more importantly,
- * bsdtar (macOS) doesn't need forward-slash conversion.
+ * path. Forward-slash form ("C:/Users/...") round-trips correctly. bsdtar
+ * (Windows OR macOS) accepts a native backslash path as-is and needs no
+ * conversion — confirmed above.
  */
-const forSystemTar = (p: string): string => (process.platform === 'win32' ? p.replace(/\\/g, '/') : p);
+const forSystemTar = (p: string): string => (systemTarInfo.isGnuTar ? p.replace(/\\/g, '/') : p);
 
 /**
  * `--force-local` tells GNU tar an archive path containing a colon is a
  * literal local file, not a `[user@]host:file` remote-tape spec — every
- * Windows absolute path ("C:\...") matches that pattern otherwise. Only
- * needed for the MSYS GNU tar resolved on PATH under Git for Windows.
- * bsdtar (macOS) does NOT support this flag and errors out on it, so it
- * must not be passed there.
+ * Windows absolute path ("C:\...") matches that pattern otherwise. Needed
+ * only for GNU tar. bsdtar (Windows OR macOS) does NOT support this flag at
+ * all and exits nonzero when it's passed — confirmed above.
  */
-const forceLocalArgs = (): string[] => (process.platform === 'win32' ? ['--force-local'] : []);
+const forceLocalArgs = (): string[] => (systemTarInfo.isGnuTar ? ['--force-local'] : []);
 
 /** Pack `srcDir` (contents at top level) into a .tar.gz — pure Node, no system tar. */
 async function packTarGz(srcDir: string, destTar: string): Promise<void> {
