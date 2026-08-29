@@ -612,6 +612,70 @@ describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
     expect(writes).toEqual(['1']);
     expect(adapter.activeInteractivePrompt).toBe(MULTI_PROMPT);
   });
+
+  // RESIDUAL FOCUS-GUARD GAP (live defect, 2026-08-29): a 3-choice + "Other"
+  // (Type something.) AskUserQuestion answered via the freeform field was
+  // rejected with "Claude TUI review page is not focused for the active
+  // interactive prompt" — the plain settle budget (tuned against a one-digit
+  // option select) gave up before the review page finished repainting the
+  // typed answer. This end-to-end run proves setInteractivePromptResponse
+  // actually derives usedFreeform from the response and forwards it, by
+  // simulating a review repaint slower than the plain budget but within the
+  // widened freeform one.
+  const FREEFORM_PROMPT = {
+    promptId: 'ask-freeform-1',
+    origin: 'cli' as const,
+    providerType: 'claude-cli',
+    createdAt: 0,
+    questions: [{
+      questionId: 'q1',
+      question: '무엇을 내시겠어요?',
+      header: '가위바위보',
+      multiSelect: false,
+      options: [{ label: '바위' }, { label: '가위' }, { label: '보' }, { label: 'Type something.' }],
+      allowFreeform: true,
+    }],
+  };
+
+  it('submits a freeform (Other) answer through a slow review repaint that the plain budget would miss', async () => {
+    const screen = renderPromptQuestionScreen(FREEFORM_PROMPT);
+    let confirmedFreeform = false;
+    let staleSnapshotsAfterConfirm = 0;
+    let isReview = false;
+    let currentScreen = screen;
+    const adapter = makeAdapter(screen);
+    adapter.driver = {
+      snapshot: () => {
+        if (confirmedFreeform && !isReview) {
+          staleSnapshotsAfterConfirm += 1;
+          // Settles on the 7th post-confirm sample (~720ms of polling) — past
+          // the plain 600ms/5-sample budget, inside the widened freeform one.
+          if (staleSnapshotsAfterConfirm > 6) {
+            isReview = true;
+            currentScreen = renderPromptReviewScreen(FREEFORM_PROMPT);
+          }
+        }
+        return currentScreen;
+      },
+      dispatch: (event: any) => {
+        if (event?.kind !== 'pty_write') return;
+        // The freeform branch's own confirm Enter is the first '\r' written;
+        // the final submit Enter (after assertFocusedClaudeTuiReview resolves)
+        // is a second, later one this test never reaches if the fix regresses.
+        if (event.data === '\r' && !confirmedFreeform) confirmedFreeform = true;
+      },
+    };
+    adapter.activeInteractivePrompt = FREEFORM_PROMPT;
+    adapter.interactivePromptTransport = 'tui';
+
+    await adapter.setInteractivePromptResponse({
+      promptId: 'ask-freeform-1',
+      answers: { q1: { selectedLabels: [], freeformText: 'x' } },
+    });
+
+    expect(adapter.activeInteractivePrompt).toBeNull();
+    expect(adapter.interactivePromptTransport).toBeNull();
+  }, 10000);
 });
 
 describe('SpecCliAdapter — codex-cli footer identity', () => {
