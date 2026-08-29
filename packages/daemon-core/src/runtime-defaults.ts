@@ -1,3 +1,18 @@
+// Trunk flag for the worker-MCP feature (docs/design/2026-08-28-worker-mcp.md). Default OFF.
+// Lives here (layer-neutral) rather than in mesh/worker-mcp-isolation.ts so both
+// mesh/** and providers/** can read it without a cross-layer value import
+// (import-boundary gate) — mesh/worker-mcp-isolation.ts re-exports it for its
+// existing consumers. Read through a function (not a module-level const) so
+// tests can flip the variable per-case without module-cache surgery, and so a
+// daemon that has the flag toggled in its environment does not need a rebuild
+// to see it.
+export function isWorkerMcpEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    const raw = env.ADHDEV_WORKER_MCP;
+    if (typeof raw !== 'string') return false;
+    const value = raw.trim().toLowerCase();
+    return value === '1' || value === 'true' || value === 'on' || value === 'yes';
+}
+
 export const DEFAULT_CDP_SCAN_INTERVAL_MS = 30_000;
 export const DEFAULT_CDP_DISCOVERY_INTERVAL_MS = 30_000;
 
