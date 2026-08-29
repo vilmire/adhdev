@@ -426,6 +426,17 @@ export function buildMeshSystemMessage(args: {
                 || readNonEmptyString(args.metadataEvent.finalSummary);
             return `[System] ${args.nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same unavailable Kimi entitlement does not waste retries.${detail ? ` ${detail}` : ''}`;
         }
+        // Quota/usage-window exhaustion is DISTINCT from billing: the account is
+        // fine, the window is spent. Recovery is deliberately NOT suppressed
+        // here — the quota routing gate (mesh-quota-routing.ts) blocks relaunch
+        // onto this provider until a fresh reading shows the window reset, so
+        // the mesh naturally waits rather than hammering a known-exhausted
+        // account.
+        if (providerFailureReason === 'quota_exceeded') {
+            const detail = readNonEmptyString(failureDiagnostic?.errorMessage)
+                || readNonEmptyString(args.metadataEvent.finalSummary);
+            return `[System] ${args.nodeLabel} stopped because the provider's usage quota is exhausted${metadata}. This is not a billing or auth problem — it resets automatically at the next window boundary, and ADHDev will resume work on it once quota is available.${detail ? ` ${detail}` : ''}`;
+        }
         const rc = args.recoveryContext;
         if (rc && rc.consecutiveNodeFailures > 0) {
             const parts = [

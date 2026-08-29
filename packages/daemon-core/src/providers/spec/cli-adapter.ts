@@ -84,8 +84,8 @@ function stripAnsi(text: string): string {
 }
 
 export interface KimiAuthBillingFailure {
-    errorReason: 'auth_failed' | 'billing_failed';
-    failureKind: 'auth' | 'billing';
+    errorReason: 'auth_failed' | 'billing_failed' | 'quota_exceeded';
+    failureKind: 'auth' | 'billing' | 'quota';
     message: string;
 }
 
@@ -100,8 +100,16 @@ export interface KimiAuthBillingFailure {
  * authorization faults, so the verdict comes from the accompanying entitlement
  * wording, exactly as the quota fetcher decides it from the response body. That
  * is why the live line "[provider.auth_error] 403 You've reached your 5-hour
- * usage limit" classifies as billing rather than auth — misreading it as auth
- * would send an operator to re-login against a credential that is actually fine.
+ * usage limit" classifies as QUOTA exhaustion rather than billing or auth —
+ * misreading it as auth would send an operator to re-login against a credential
+ * that is actually fine, and misreading it as billing (an incident fixed
+ * 2026-08-29: the classifier folded quota wording into the billing bucket and
+ * told the operator to "renew the subscription" when the account was current
+ * and merely rate-limited by usage) suppresses automatic recovery FOREVER for a
+ * condition that heals on its own once the window resets. Billing stays a
+ * separate, genuinely non-retryable bucket for wording that names the account
+ * itself as the problem (expired/cancelled subscription, payment required,
+ * insufficient credits) rather than a spent usage window.
  * Canonical messages never echo the raw PTY tail (which may contain credentials
  * or user data).
  */
@@ -122,33 +130,42 @@ export function detectKimiAuthBillingFailure(output: string, _exitCode?: number)
     const text = stripAnsi(output).replace(/\s+/g, ' ').trim().toLowerCase();
     if (!text) return null;
 
+    // Entitlement EXHAUSTION — the account is fine, the usage window is spent.
+    // The wording mirrors the quota fetcher's USAGE_LIMIT_BODY_PATTERN
+    // (quota/fetchers/kimi.ts) so the live path and the polled path agree on
+    // what "the plan is spent" looks like, but it is NOT reused verbatim: the
+    // fetcher matches an HTTP error body already known to be a 403, whereas
+    // this scans merged PTY output from a coding agent that frequently
+    // *discusses* quota code ("reading kimi.ts to understand the usage limit
+    // pattern"). Bare limit wording is therefore not sufficient — it must be
+    // carried by an actual provider failure envelope (a provider error tag or
+    // an HTTP 403/402 status), which is the structural equivalent of the
+    // fetcher's status precondition.
+    //
+    // Kimi states the limit as a rolling window ("your 5-hour usage limit") as
+    // well as per cycle ("usage limit for this billing cycle"), and the
+    // qualifier sits between the noun and "limit", so the reached/exceeded verb
+    // stays optional after it. This bucket is checked BEFORE billing so a
+    // usage-limit envelope never falls through into the non-retryable bucket
+    // below — the incident this file exists to prevent.
+    const quota = hasProviderFailureEnvelope(text) && [
+        /\b(?:usage|quota|credit)\s+limit\b/,
+        /\bquota\s*(?:exhausted|refresh)/,
+        /\bbilling\s+cycle\b/,
+    ].some(pattern => pattern.test(text));
+    if (quota) {
+        return {
+            errorReason: 'quota_exceeded',
+            failureKind: 'quota',
+            message: 'Kimi usage quota reached — the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets.',
+        };
+    }
+
     const billing = [
         /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
         /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
         /\bpayment_required\b/,
         /\binsufficient\s+(?:balance|credits?)\b/,
-        // Entitlement exhaustion. The wording mirrors the quota fetcher's
-        // USAGE_LIMIT_BODY_PATTERN (quota/fetchers/kimi.ts) so the live path and
-        // the polled path agree on what "the plan is spent" looks like, but it is
-        // NOT reused verbatim: the fetcher matches an HTTP error body already
-        // known to be a 403, whereas this scans merged PTY output from a coding
-        // agent that frequently *discusses* quota code ("reading kimi.ts to
-        // understand the usage limit pattern"). Bare limit wording is therefore
-        // not sufficient — it must be carried by an actual provider failure
-        // envelope (a provider error tag or an HTTP 403/402 status), which is the
-        // structural equivalent of the fetcher's status precondition.
-        //
-        // Kimi states the limit as a rolling window ("your 5-hour usage limit")
-        // as well as per cycle ("usage limit for this billing cycle"), and the
-        // qualifier sits between the noun and "limit", so the reached/exceeded
-        // verb stays optional after it.
-        ...(hasProviderFailureEnvelope(text)
-            ? [
-                /\b(?:usage|quota|credit)\s+limit\b/,
-                /\bquota\s*(?:exhausted|refresh)/,
-                /\bbilling\s+cycle\b/,
-            ]
-            : []),
     ].some(pattern => pattern.test(text));
     if (billing) {
         return {
@@ -1287,7 +1304,10 @@ export class SpecCliAdapter implements CliAdapter {
         const failure = detectKimiAuthBillingFailure(this.kimiFailureOutputTail, exitCode);
         if (!failure) return false;
         this.kimiAuthBillingFailure = failure;
-        LOG.warn('SpecAdapter', `[kimi] ${failure.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? 'pending'}); automatic provider retry must be suppressed`);
+        const suppressionNote = failure.failureKind === 'quota'
+            ? 'this PTY session will not be blindly restarted; the mesh may retry once quota resets'
+            : 'automatic provider retry must be suppressed';
+        LOG.warn('SpecAdapter', `[kimi] ${failure.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? 'pending'}); ${suppressionNote}`);
         this.statusCallback?.();
         return true;
     }

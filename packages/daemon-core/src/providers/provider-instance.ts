@@ -56,7 +56,8 @@ export interface ActiveChatData {
 export type ProviderErrorReason =
     | 'not_installed'   // CLI/ACP binary not found
     | 'auth_failed'     // Authentication/API key error
-    | 'billing_failed'  // Subscription/payment/managed-usage entitlement error
+    | 'billing_failed'  // Subscription/payment/account-entitlement error (NOT retryable — the account itself is the problem)
+    | 'quota_exceeded'  // Usage window/quota exhausted while the account is otherwise fine — retryable once the window resets
     | 'spawn_error'     // Process spawn failure
     | 'init_failed'     // Initialization/handshake failure
     | 'parse_error'     // Provider parser/adapter script failure

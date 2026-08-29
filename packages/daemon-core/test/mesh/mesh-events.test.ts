@@ -3177,6 +3177,60 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('KIMI-QUOTA-VS-BILLING: does NOT suppress recovery for a typed quota-exhaustion stop, unlike a billing stop', () => {
+    const meshId = `mesh_kimi_quota_stop_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: { maxTaskRetries: 3 },
+      })
+      const queued = enqueueTask(meshId, 'task blocked by exhausted Kimi usage window', {
+        difficulty: 'medium',
+        maxRetries: 3,
+      })
+      expect(claimNextTask(meshId, 'node_child_1', 'kimi-session-quota')?.id).toBe(queued.id)
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'kimi-session-quota',
+        providerType: 'kimi',
+        payload: { taskId: queued.id, message: 'task blocked by exhausted Kimi usage window' },
+      })
+      const components = {
+        instanceManager: { getByCategory: vi.fn(() => []) },
+        cliManager: { handleCliCommand: vi.fn(() => Promise.resolve({ success: true, sessionId: 'retry-session-1' })) },
+      } as any
+
+      expect(handleMeshForwardEvent(components, {
+        event: 'agent:stopped',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'kimi-session-quota',
+        providerType: 'kimi',
+        taskId: queued.id,
+        finalSummary: 'Kimi usage quota reached — the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets.',
+        completionDiagnostic: {
+          reason: 'quota_exceeded',
+          errorMessage: 'Kimi usage quota reached — the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets.',
+        },
+      })).toEqual({ success: true, forwarded: 0 })
+
+      // Unlike the billing stop above: recovery context IS built and a
+      // recovery_attempted ledger entry IS recorded — quota exhaustion is a
+      // WAIT, not a permanent, non-retryable failure.
+      expect(readLedgerEntries(meshId).some(entry => entry.kind === 'recovery_attempted')).toBe(true)
+      const pending = drainPendingMeshCoordinatorEvents(meshId)
+      expect(pending).toHaveLength(1)
+      expect(pending[0].metadataEvent.recoveryContext).toBeDefined()
+      expect(pending[0].coordinatorMessage).toMatch(/usage quota is exhausted/i)
+      expect(pending[0].coordinatorMessage).not.toMatch(/non-retryable billing/i)
+      expect(pending[0].coordinatorMessage).not.toMatch(/Automatic recovery was suppressed/i)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('suppresses duplicate completion replays from relay/backfill paths for the same logical event', async () => {
     const meshId = `mesh_completion_dedupe_${Date.now()}`
     try {
