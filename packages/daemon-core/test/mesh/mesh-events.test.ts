@@ -37,6 +37,10 @@ const fastForwardMocks = vi.hoisted(() => ({
   fastForwardMeshNode: vi.fn(),
 }))
 
+const readyWaitMocks = vi.hoisted(() => ({
+  waitForRemoteSessionReady: vi.fn(async () => false),
+}))
+
 vi.mock('../../src/config/mesh-config.js', () => ({
   getMesh: meshConfigMocks.getMesh,
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
@@ -51,6 +55,14 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({
   fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode,
 }))
 
+vi.mock('../../src/mesh/mesh-remote-ready-wait.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/mesh/mesh-remote-ready-wait.js')>()
+  return {
+    ...actual,
+    waitForRemoteSessionReady: (...args: unknown[]) => readyWaitMocks.waitForRemoteSessionReady(...args),
+  }
+})
+
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, queuePendingMeshCoordinatorEvent, reconcileDirectDispatchCompletionFromTranscript, runMeshReconcileTick, setupMeshEventForwarding, shouldRequeueHollowCompletion, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { isWeakCompletionMetadata } from '../../src/mesh/mesh-events-utils.js'
 import { __clearMeshPendingEventsForTests, __persistUnstampedPendingEventForTests } from '../../src/mesh/mesh-events-pending.js'
@@ -60,6 +72,7 @@ import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
 import { peekUnresolvedDelegateForwards } from '../../src/mesh/mesh-unresolved-forward-outbox.js'
+import { markRemoteSessionGenerating, __resetRemoteGeneratingMarksForTests } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { LOG } from '../../src/logging/logger.js'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating'; statusInstanceId?: string }) {
@@ -114,6 +127,9 @@ function cleanupMeshFiles(meshId: string) {
   __resetMeshRuntimeStoreForTests()
   __resetIdleAutoFastForwardForTests()
   __resetMeshWorkspaceCacheForTests()
+  __resetRemoteGeneratingMarksForTests()
+  readyWaitMocks.waitForRemoteSessionReady.mockReset()
+  readyWaitMocks.waitForRemoteSessionReady.mockImplementation(async () => false)
   meshConfigMocks.listMeshes.mockReset()
   meshConfigMocks.listMeshes.mockReturnValue([])
   fastForwardMocks.fastForwardMeshNode.mockReset()
@@ -3844,7 +3860,10 @@ describe('setupMeshEventForwarding', () => {
     // Root fix: a remote queue task with no idle session must FORWARD launch_cli to the
     // node's daemon (mirroring mesh_launch_session) instead of being permanently skipped
     // with remote_auto_launch_unsupported. The local cliManager.launch_cli path must NOT
-    // fire for a remote node; dispatchMeshCommand must be called exactly once.
+    // fire for a remote node; launch_cli must be forwarded exactly once.
+    // AUTOLAUNCH-REMOTE-CLAIM (5-c): after the ready wait the remote path claims through
+    // tryAssignQueueTask (symmetric with local). The old "task stays pending until
+    // agent:ready round-trips" wedge was the defect this claim closes.
     const meshId = `mesh_auto_launch_remote_forward_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -3889,25 +3908,34 @@ describe('setupMeshEventForwarding', () => {
           meshCoordinatorNodeId: 'node_remote_1',
         }),
       })
-      // Task stays pending until the remote worker's agent:ready is forwarded back and
-      // the normal claim path assigns it — remote launch is async, not an immediate claim.
+      expect(readyWaitMocks.waitForRemoteSessionReady).toHaveBeenCalled()
+      expect(readyWaitMocks.waitForRemoteSessionReady.mock.calls[0][2]).toBe('remote-session-1')
+      // Post-wait claim landed: the task is assigned into the launched session and the
+      // prompt was dispatched over the same remote transport.
       const [entry] = getQueue(meshId)
-      expect(entry.status).toBe('pending')
+      expect(entry.status).toBe('assigned')
+      expect(entry.assignedNodeId).toBe('node_remote_1')
+      expect(entry.assignedSessionId).toBe('remote-session-1')
       expect(entry.autoLaunch?.status).toBe('completed')
+      expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon_remote_machine', 'agent_command', expect.objectContaining({
+        targetSessionId: 'remote-session-1',
+        action: 'send_chat',
+      }))
     } finally {
       cleanupMeshFiles(meshId)
     }
   })
 
   it('does not re-forward launch_cli for a task whose remote auto-launch is still awaiting its claim', async () => {
-    // Regression (remote queue auto-launch claim loop): the remote launch is async — the
-    // task stays pending until the worker's agent:ready round-trips back and claims it.
-    // The reconcile loop re-runs triggerMeshQueue every few seconds, well within that
-    // round trip, and the per-(mesh,node) cooldown is only 5s. Without a per-TASK guard
-    // every tick fired a fresh launch_cli for the same still-pending task, spawning a new
-    // orphan worker session each time (observed live: dozens of sessions for one task).
-    // The await-claim guard keys on autoLaunch.status==='completed' + a recent updatedAt and
-    // skips re-launching until the claim lands or the window lapses.
+    // Regression (remote queue auto-launch claim loop): the reconcile loop re-runs
+    // triggerMeshQueue every few seconds, and the per-(mesh,node) cooldown is only 5s.
+    // Without a per-TASK guard every tick fired a fresh launch_cli for the same task,
+    // spawning a new orphan worker session each time (observed live: dozens of sessions
+    // for one task). The await-claim guard keys on autoLaunch.status==='completed' + a
+    // recent updatedAt and skips re-launching.
+    // AUTOLAUNCH-REMOTE-CLAIM (5-c): the first tick now claims after the ready wait
+    // (status → assigned). Subsequent ticks must STILL not re-forward launch_cli — the
+    // duplicate-spawn guard is independent of whether that claim landed.
     const meshId = `mesh_auto_launch_await_claim_${Date.now()}`
     try {
       meshConfigMocks.getMesh.mockReturnValue({
@@ -3928,10 +3956,11 @@ describe('setupMeshEventForwarding', () => {
       const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
       components.dispatchMeshCommand = dispatchMeshCommand
 
-      // First tick forwards launch_cli once and records autoLaunch.status='completed'.
+      // First tick forwards launch_cli once, then claims the launched session.
       await triggerMeshQueue(components, meshId)
       expect(getQueue(meshId)[0].autoLaunch?.status).toBe('completed')
-      expect(getQueue(meshId)[0].status).toBe('pending')
+      expect(getQueue(meshId)[0].status).toBe('assigned')
+      expect(getQueue(meshId)[0].assignedSessionId).toBe('remote-session-1')
 
       // Subsequent ticks (still within the await-claim window) must NOT forward again.
       await triggerMeshQueue(components, meshId)
@@ -3940,8 +3969,56 @@ describe('setupMeshEventForwarding', () => {
       const launchForwards = dispatchMeshCommand.mock.calls.filter(([, command]: [string, string]) => command === 'launch_cli')
       expect(launchForwards).toHaveLength(1)
       expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      // Duplicate inject is also suppressed: send_chat fired on the claiming tick only.
+      expect(dispatchMeshCommand.mock.calls.filter(([, command]: [string, string]) => command === 'agent_command')).toHaveLength(1)
       // The guard skip must NOT clobber the 'completed' autoLaunch record (that record is the
       // guard's own state for the next tick — overwriting it would reopen the duplicate hole).
+      expect(getQueue(meshId)[0].autoLaunch?.status).toBe('completed')
+      expect(getQueue(meshId)[0].autoLaunch?.sessionId).toBe('remote-session-1')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does not re-forward launch_cli when a generating remote auto-launch fail-closes the claim', async () => {
+    // Companion to the subsequent-ticks guard above: when generating_started was observed
+    // the post-wait claim is fail-closed and the task stays pending. The duplicate-spawn
+    // guard must still hold in that pending window — subsequent ticks must not launch a
+    // second session, and must not clobber the completed autoLaunch record that the
+    // await-claim skip keys on.
+    const meshId = `mesh_auto_launch_await_claim_generating_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{
+          id: 'node_remote_1',
+          workspace: '/repo/remote-worktree',
+          health: 'online',
+          daemonId: 'daemon_remote_machine',
+          machineId: 'mach_remote',
+          policy: { providerPriority: ['hermes-cli'] },
+        }],
+        policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+      const dispatchMeshCommand = vi.fn(async () => ({ success: true, sessionId: 'remote-session-1' }))
+      components.dispatchMeshCommand = dispatchMeshCommand
+      markRemoteSessionGenerating(meshId, 'remote-session-1')
+
+      await triggerMeshQueue(components, meshId)
+      expect(getQueue(meshId)[0].autoLaunch?.status).toBe('completed')
+      expect(getQueue(meshId)[0].status).toBe('pending')
+      expect(dispatchMeshCommand.mock.calls.filter(([, command]: [string, string]) => command === 'agent_command')).toHaveLength(0)
+
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+
+      expect(dispatchMeshCommand.mock.calls.filter(([, command]: [string, string]) => command === 'launch_cli')).toHaveLength(1)
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      expect(dispatchMeshCommand.mock.calls.filter(([, command]: [string, string]) => command === 'agent_command')).toHaveLength(0)
+      expect(getQueue(meshId)[0].status).toBe('pending')
       expect(getQueue(meshId)[0].autoLaunch?.status).toBe('completed')
       expect(getQueue(meshId)[0].autoLaunch?.sessionId).toBe('remote-session-1')
     } finally {
