@@ -30,6 +30,7 @@
  * serving the last verified complete one.
  */
 
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { jcs, sha256HexUtf8, type JsonValue } from 'seqscribe';
 import type { ReplicatedTranscriptSnapshotV1 } from './transcript-projection.js';
 
@@ -340,9 +341,18 @@ export class TranscriptRevisionAssembler {
         // complete against.
         this.inFlight = null;
 
+        // ★ Strict on purpose: begin and commit are two `LogEntry.kind`s written
+        // from ONE `identity` object inside a single `encodeTranscriptRevision`
+        // call (see `{ ...identity }` spread into both below) — never two
+        // different "resolve my own daemon id" call sites at different times.
+        // A mismatch here can only mean a spliced/corrupted envelope pair (a
+        // commit that does not belong to this begin), which is exactly what
+        // this check must catch — canonicalizing would let a commit forged
+        // with a differently-formatted-but-equivalent producerDaemonId slip an
+        // unrelated revision past the pairing check.
         if (
             commit.sessionId !== inFlight.identity.sessionId ||
-            commit.producerDaemonId !== inFlight.identity.producerDaemonId ||
+            commit.producerDaemonId !== inFlight.identity.producerDaemonId || // canon-ok: begin/commit envelope self-consistency (one identity object, one encode call), not cross-path daemon-id resolution — see comment above
             commit.producerWriterId !== inFlight.identity.producerWriterId ||
             commit.producerEpoch !== inFlight.identity.producerEpoch ||
             commit.revision !== inFlight.identity.revision
@@ -396,8 +406,18 @@ export class TranscriptRevisionAssembler {
         if (snapshot.sessionId !== inFlight.identity.sessionId) {
             return { status: 'rejected', reason: 'wrong_session' };
         }
+        // Unlike the begin/commit envelope pairing above, the snapshot BODY's
+        // `producerDaemonId` is populated by the publisher's observation
+        // builder (§8 unit 2), a separate call site from whatever stamped the
+        // envelope identity at `encodeTranscriptRevision` time. Two "resolve my
+        // own daemon id" call sites in one producer process is exactly the
+        // cross-path variance `daemonIdsEquivalent` exists for (see
+        // fleet-status-peer-view.ts:157 for the same pattern: wire-embedded
+        // daemonId vs. a separately-tracked identity) — a raw `!==` here would
+        // reject a legitimate revision merely because one side used
+        // `mach_X` and the other `daemon_mach_X` for the same machine.
         if (
-            snapshot.producerDaemonId !== inFlight.identity.producerDaemonId ||
+            !daemonIdsEquivalent(snapshot.producerDaemonId, inFlight.identity.producerDaemonId) ||
             snapshot.producerWriterId !== inFlight.identity.producerWriterId ||
             snapshot.producerEpoch !== inFlight.identity.producerEpoch ||
             snapshot.revision !== inFlight.identity.revision
