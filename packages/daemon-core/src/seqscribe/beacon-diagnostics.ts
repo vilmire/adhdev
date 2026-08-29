@@ -356,6 +356,24 @@ export function computeBeaconDiagnostics(args: {
     const reports = board?.reports ?? [];
     const truncated = board?.truncated ?? 0;
     const haveBoard = board !== null;
+    // A missing peer position is evidence only when the board actually
+    // compared that topic. The host intentionally scopes Beacon GETs to the
+    // approved metadata/hint topics; `localVectors` is wider and also contains
+    // content topics such as assistant.journal. Walking that wider map and
+    // treating an out-of-scope peer position as absent turns "not requested"
+    // into "nobody has it" — the live rc.36 false sole-copy alarm.
+    //
+    // Include report keys as defence in depth for an auth seed or a legacy
+    // transport whose recorded request scope is empty but whose response is
+    // already scoped. With no board, keep the previous unknown/no-board
+    // candidates: the UI hides them until boardAt exists, while diagnostics
+    // callers retain the distinction between "not checked" and "safe".
+    const comparedTopics = board
+        ? new Set([
+            ...board.topicScope,
+            ...reports.flatMap((report) => Object.keys(report.vectors ?? {})),
+        ])
+        : null;
 
     // ── Per-peer lag ────────────────────────────────────────────────────────
     // Compared against THIS node's positions, which is what makes the number
@@ -406,6 +424,10 @@ export function computeBeaconDiagnostics(args: {
     // fleet is missing collectively, not what would be lost if this machine died.
     const soleCopy: BeaconSoleCopyCandidate[] = [];
     for (const [topic, vec] of Object.entries(args.localVectors)) {
+        // A complete board can prove "no peer reported this topic" only for a
+        // topic inside its comparison scope. Outside the scope, absence is an
+        // intentional content-boundary omission, not a sole-copy signal.
+        if (comparedTopics && !comparedTopics.has(topic)) continue;
         // ★ Same exclusion as the lag loop. On a subscribe-only topic no peer
         // report can ever confirm our position, so `bestPeerSeq` is always null
         // and `summarizeSoleCopy` returns 'sole-copy' for EVERY entry we hold —

@@ -48,7 +48,13 @@ import {
     type BeaconBoardSnapshot,
 } from '../../src/seqscribe/beacon-diagnostics.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
-import { baseTopicDefinitions, FLEET_STATUS_TOPIC, meshEventsTopic } from '../../src/seqscribe/topics.js';
+import {
+    ASSISTANT_JOURNAL_TOPIC,
+    baseTopicDefinitions,
+    CONFIG_SETTINGS_TOPIC,
+    FLEET_STATUS_TOPIC,
+    meshEventsTopic,
+} from '../../src/seqscribe/topics.js';
 
 const CHAIN_A = 'a'.repeat(64);
 const CHAIN_B = 'b'.repeat(64);
@@ -331,6 +337,58 @@ describe('★computeBeaconDiagnostics — sole-copy candidates (③sole-copy awa
         // Stale ≠ withheld: an idle daemon's board is SUPPOSED to age, and that
         // must read as "quiet", not "broken".
         expect(old.boardAt).not.toBeNull();
+    });
+});
+
+describe('★computeBeaconDiagnostics — live rc.36 board-scope asymmetry', () => {
+    it('does not call a local content topic sole-copy when the Beacon board never compared that topic', () => {
+        // Captured from the four live rc.36 daemons on 2026-08-29. Every
+        // daemon independently reported its own matching status.instanceId and
+        // a distinct beacon.node, so the four identical machine-card badges
+        // were NOT a web source-rebinding bug. The asymmetric inputs were:
+        //
+        //   local vectors: assistant.journal, all four writers, 435 entries
+        //   GET scope:     mesh.*.events + fleet.status + config.settings
+        //   peer reports:  no assistant.journal vector (content boundary)
+        //
+        // Pre-fix, the sole-copy loop walked ALL local vectors even though the
+        // complete board had never asked about assistant.journal. bestPeerSeq
+        // was therefore null on every daemon, reproducing the exact live
+        // "435 entries / 4 positions" false alarm four times.
+        const LIVE_LOCAL_NODE = 'adhdev-0614e50744234f5f';
+        const LIVE_WRITERS = {
+            'adhdev-03feba33a9460c59': 111,
+            'adhdev-c3b4ace87a73721b': 111,
+            'adhdev-255d76815a6dbc09': 107,
+            [LIVE_LOCAL_NODE]: 106,
+        };
+        const liveBoard = board([
+            report(LIVE_LOCAL_NODE, {}),
+            report('adhdev-03feba33a9460c59', {}),
+            report('adhdev-255d76815a6dbc09', {}),
+            report('adhdev-c3b4ace87a73721b', {}),
+        ], {
+            topicScope: [MESH_TOPIC, FLEET_STATUS_TOPIC, CONFIG_SETTINGS_TOPIC],
+            capturedAt: Date.parse('2026-08-29T02:32:26.839Z'),
+        });
+
+        const d = computeBeaconDiagnostics({
+            node: LIVE_LOCAL_NODE,
+            localVectors: {
+                [ASSISTANT_JOURNAL_TOPIC]: { writers: writers(LIVE_WRITERS) },
+            },
+            board: liveBoard,
+            topicPolicy: {
+                [ASSISTANT_JOURNAL_TOPIC]: { replicates: true },
+                [MESH_TOPIC]: { replicates: true },
+                [FLEET_STATUS_TOPIC]: { replicates: false, ringSize: 50 },
+                [CONFIG_SETTINGS_TOPIC]: { replicates: true },
+            },
+            now: Date.parse('2026-08-29T02:32:27.000Z'),
+        });
+
+        expect(d.maxBehind).toBe(0);
+        expect(d.soleCopy).toEqual([]);
     });
 });
 
