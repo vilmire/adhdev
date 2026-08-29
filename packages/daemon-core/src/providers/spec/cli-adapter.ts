@@ -872,18 +872,20 @@ export class SpecCliAdapter implements CliAdapter {
             // written, then require the matching review page for final Enter.
             // A mismatch fails closed and deliberately leaves the held prompt
             // intact so a stale response cannot operate another picker.
+            let usedFreeform = false;
             for (const question of prompt.questions) {
                 const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
                     ...prompt,
                     questions: [question],
                 }, response).slice(0, -1); // final Enter belongs to the review page below
+                if (response.answers[question.questionId]?.freeformText?.trim()) usedFreeform = true;
                 for (const step of questionSteps) {
                     this.assertFocusedClaudeTuiQuestion(question);
                     this.driver.dispatch({ kind: 'pty_write', data: step });
                     await new Promise(resolve => setTimeout(resolve, 180));
                 }
             }
-            await this.assertFocusedClaudeTuiReview(prompt);
+            await this.assertFocusedClaudeTuiReview(prompt, usedFreeform);
             this.driver.dispatch({ kind: 'pty_write', data: '\r' });
             await new Promise(resolve => setTimeout(resolve, 180));
         } else {
@@ -1455,6 +1457,25 @@ export class SpecCliAdapter implements CliAdapter {
     private static readonly CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS = 600;
 
     /**
+     * Review-page settle budget for a FREEFORM ("Other" / "Type something.")
+     * answer specifically (residual gap after rc.34's settle-poll fix, live
+     * defect 2026-08-29). CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS was tuned against a
+     * plain option-select transition — a single digit keypress that flips
+     * straight to the review page with no reflow. A freeform confirm keystroke
+     * instead commits a typed (possibly multi-byte/CJK, possibly wrapped)
+     * string that the TUI must additionally lay out into the review echo
+     * before the picker settles, which measurably exceeds the 600ms/5-sample
+     * budget on a slower or higher-latency (remote CDP) link — the settle poll
+     * exhausts on a still-question-shaped frame and assertFocusedClaudeTuiReview
+     * fails closed with "Claude TUI review page is not focused for the active
+     * interactive prompt" even though the review page was only moments away.
+     * A short-lived retry from the caller then succeeds once real time has
+     * passed, which is why the daemon log shows no repeated failures for a
+     * question that visibly took over a minute to answer end-to-end.
+     */
+    private static readonly CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS = 1800;
+
+    /**
      * Clear a held interactive prompt once the user has resolved it directly
      * in the terminal (the choice picker leaves the screen without going
      * through setInteractivePromptResponse). The approval path already does
@@ -1689,10 +1710,19 @@ export class SpecCliAdapter implements CliAdapter {
      * uses (snapshotSettledClaudeTuiPage) and accept the first frame that reads
      * as the review page; on timeout fall through to the last frame so a
      * genuinely wrong screen still fails closed with its real content.
+     *
+     * `usedFreeform` widens the budget to CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
+     * (residual gap, live defect 2026-08-29): the last keystroke for a
+     * freeform ("Type something." / Other) answer commits a typed string that
+     * the TUI must additionally lay out into the review echo, which the plain
+     * option-select budget above does not budget time for.
      */
-    private async snapshotSettledClaudeTuiReview(): Promise<string> {
+    private async snapshotSettledClaudeTuiReview(usedFreeform: boolean): Promise<string> {
         let screenText = this.readClaudeTuiSnapshotForAnswer();
-        const deadline = Date.now() + SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
+        const budgetMs = usedFreeform
+            ? SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
+            : SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
+        const deadline = Date.now() + budgetMs;
         while (Date.now() < deadline) {
             if (!readFocusedClaudeTuiQuestion(screenText) && isClaudeTuiReviewScreen(screenText)) return screenText;
             await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
@@ -1701,11 +1731,19 @@ export class SpecCliAdapter implements CliAdapter {
         return screenText;
     }
 
-    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt): Promise<void> {
-        const screenText = await this.snapshotSettledClaudeTuiReview();
+    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, usedFreeform: boolean): Promise<void> {
+        const screenText = await this.snapshotSettledClaudeTuiReview(usedFreeform);
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (focused || !isClaudeTuiReviewScreen(screenText)) {
             const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
+            // Log here, not just throw: the caller (mesh-events.ts
+            // interactive_prompt_response handler) returns this over the P2P
+            // command response as a plain { success: false } object with no
+            // LOG.* call of its own, so without a line here this failure class
+            // leaves NO trace in the daemon log — confirmed live 2026-08-29,
+            // where a dashboard-visible "review page is not focused" error had
+            // zero matching log output.
+            LOG.warn('SpecAdapter', `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (usedFreeform=${usedFreeform})${observed}`);
             throw new Error(`Claude TUI review page is not focused for the active interactive prompt${observed}`);
         }
 

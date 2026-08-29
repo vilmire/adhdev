@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useBaseDaemons } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
@@ -40,6 +40,19 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
     if (!foundSession) return null
     return foundSession.prompt.promptId === dismissedPromptId ? null : foundSession
   }, [dismissedPromptId, foundSession])
+
+  // STALE-BANNER GUARD (live defect 2026-08-29): responseError previously
+  // stayed set until the next submit() call or an explicit reopen(). A failed
+  // submit on one AskUserQuestion — including a false-negative focus-guard
+  // rejection that a near-immediate retry then resolved — could leave its
+  // error banner showing over a LATER, unrelated question once the picker
+  // moved on, since nothing cleared it in between. Clear it whenever the
+  // held prompt's identity changes (a new question, or none) so an error can
+  // only ever be attributed to the question currently on screen.
+  const activePromptId = foundSession?.prompt.promptId ?? null
+  useEffect(() => {
+    setResponseError(null)
+  }, [activePromptId])
 
   const submit = useCallback(async (selection: InteractivePromptSelection) => {
     if (!promptSession) return
