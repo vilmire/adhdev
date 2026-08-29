@@ -47,7 +47,7 @@ test('the worker toolset is minimal and shares NO tool name with mesh mode', () 
   for (const tool of ALL_WORKER_TOOLS) {
     assert.ok(!meshNames.has(tool.name), `worker tool ${tool.name} must not be a mesh tool`);
   }
-  assert.deepEqual(ALL_WORKER_TOOLS.map(t => t.name).sort(), ['progress_update', 'report_completion']);
+  assert.deepEqual(ALL_WORKER_TOOLS.map(t => t.name).sort(), ['peer_context_pull', 'progress_update', 'report_completion']);
 });
 
 test('no worker tool takes a task id — attribution is never caller-supplied', () => {

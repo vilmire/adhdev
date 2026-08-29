@@ -227,6 +227,7 @@ export {
     MESH_MAGI_KIND_PANEL_LIST_TOOL,
     MESH_REFINE_PLAN_TOOL,
     MESH_REVIEW_INBOX_TOOL,
+    MESH_NOTIFY_WORKER_TOOL,
     ALL_MESH_TOOLS,
 } from './mesh-tool-schemas.js';
 

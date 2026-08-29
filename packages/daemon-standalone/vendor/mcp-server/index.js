@@ -2261,6 +2261,19 @@ var MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL = {
     }
   }
 };
+var MESH_NOTIFY_WORKER_TOOL = {
+  name: "mesh_notify_worker",
+  description: "Send an urgent memo to a delegated worker's task. Delivered on the worker's NEXT MCP tool call (report_completion / progress_update / peer_context_pull / git_status \u2014 whichever it calls first), NOT instantly \u2014 this does not interrupt a running generation turn. Use for something the worker needs to know before it finishes (a changed requirement, a reason to stop) that does not justify aborting its turn outright (mesh_send_task's delivery_mode: 'interrupt' does that, destructively). Requires ADHDEV_WORKER_MCP to be enabled on the target daemon; refused otherwise.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node_id: { type: "string", description: "Target node ID (from mesh_list_nodes) \u2014 the node the worker is running on." },
+      task_id: { type: "string", description: "The worker's task ID (from mesh_view_queue / mesh_task_history)." },
+      message: { type: "string", description: "The urgent memo text, in your own words. Kept short \u2014 this rides inside a tool response, not a full document." }
+    },
+    required: ["node_id", "task_id", "message"]
+  }
+};
 var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_ROUTE_PREVIEW_TOOL,
@@ -9122,6 +9135,42 @@ async function meshSendTask(ctx, args) {
     return JSON.stringify(failure);
   }
 }
+async function meshNotifyWorker(ctx, args) {
+  const nodeId = readString(args.node_id);
+  const taskId = readString(args.task_id);
+  const message = readString(args.message);
+  if (!nodeId || !taskId || !message) {
+    return JSON.stringify({
+      success: false,
+      error: "invalid_input",
+      detail: "node_id, task_id and message are all required"
+    });
+  }
+  let node;
+  try {
+    node = await findNodeWithRefresh(ctx, nodeId);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: "node_not_found", detail: e?.message || String(e) });
+  }
+  const result = unwrapCommandPayload(await commandForNode(ctx, node, "deposit_worker_mailbox", {
+    meshId: ctx.mesh.id,
+    taskId,
+    text: message
+  }));
+  if (result?.success !== true) {
+    return JSON.stringify({
+      success: false,
+      error: result?.error || "unknown_error",
+      ...result?.detail ? { detail: result.detail } : {}
+    });
+  }
+  return JSON.stringify({
+    success: true,
+    messageId: result.messageId,
+    pending: result.pending,
+    note: "Delivered on the worker's next MCP tool response (E-T0 mailbox piggyback) \u2014 not instantaneous. If the worker is deep in a long generation turn without calling a tool, it will not see this until it does."
+  });
+}
 async function meshReadChat(ctx, args) {
   const node = await findOptionalNodeWithRefresh(ctx, args.node_id);
   if (!node) {
@@ -10413,7 +10462,25 @@ var PROGRESS_UPDATE_TOOL = {
     required: ["note"]
   }
 };
-var ALL_WORKER_TOOLS = [REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL];
+var PEER_CONTEXT_PULL_TOOL = {
+  name: "peer_context_pull",
+  description: "Read-only lookup of what sibling tasks in THIS mesh are doing or have left behind \u2014 their status and any handoff notes they recorded (design decision D). Does not include transcripts. This is a SUPPLEMENT: relevant handoff notes are already enclosed automatically in your task prompt when it was dispatched \u2014 call this when you want more than what was enclosed, e.g. before touching a file another agent might also be working on.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      scope: {
+        type: "string",
+        enum: ["mesh", "same_mission"],
+        description: "'mesh' (default) \u2014 every sibling task in this mesh. 'same_mission' \u2014 only tasks sharing your mission."
+      },
+      topic: {
+        type: "string",
+        description: "Optional filter: only return peers whose handoff note mentions this substring (case-insensitive)."
+      }
+    }
+  }
+};
+var ALL_WORKER_TOOLS = [REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL];
 function toDaemonReport(a) {
   const notes = a.handoff_notes;
   return {
@@ -10472,6 +10539,50 @@ async function progressUpdate(transport, credentials, args) {
     text: `progress_update refused (${result?.error || "unknown_error"}).`,
     isError: true
   };
+}
+async function peerContextPull(transport, credentials, args) {
+  const scope = args?.scope === "same_mission" ? "same_mission" : void 0;
+  const topic = typeof args?.topic === "string" && args.topic.trim() ? args.topic.trim() : void 0;
+  const result = await transport.command("worker_peer_context_pull", {
+    ...credentials,
+    ...scope ? { scope } : {},
+    ...topic ? { topic } : {}
+  });
+  if (result?.success !== true) {
+    const reason = result?.error || "unknown_error";
+    const hint = result?.hint ? `
+${result.hint}` : "";
+    return { text: `peer_context_pull refused (${reason}).${hint}`, isError: true };
+  }
+  const peers = Array.isArray(result.peers) ? result.peers : [];
+  if (!peers.length) {
+    return { text: "No sibling task context found for this mesh (in this scope)." };
+  }
+  const lines = peers.map((p) => JSON.stringify(p));
+  const omitted = typeof result.omitted === "number" && result.omitted > 0 ? `
+(${result.omitted} further peer(s) omitted to fit the response \u2014 the most recently updated are shown.)` : "";
+  return { text: `${peers.length} sibling task(s) in scope '${result.scope}':
+${lines.join("\n")}${omitted}` };
+}
+async function drainMailbox(transport, credentials) {
+  try {
+    const result = await transport.command("worker_drain_mailbox", { ...credentials });
+    if (result?.success !== true) return null;
+    const messages = Array.isArray(result.messages) ? result.messages : [];
+    if (!messages.length) return null;
+    const heading = messages.length > 1 ? "Urgent messages from the coordinator" : "Urgent message from the coordinator";
+    const lines = messages.map((m, i) => `${i + 1}. ${typeof m?.text === "string" ? m.text : ""}`);
+    return `
+
+---
+
+## ${heading}
+
+${lines.join("\n")}
+`;
+  } catch {
+    return null;
+  }
 }
 
 // src/help.ts
@@ -11665,7 +11776,15 @@ var MESH_ALIAS_TOOL = {
   mesh_suggest_refine_config: MESH_REFINE_CONFIG_TOOL,
   mesh_change_impact_config_schema: MESH_CHANGE_IMPACT_CONFIG_TOOL,
   mesh_validate_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
-  mesh_suggest_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL
+  mesh_suggest_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
+  // E-T0: NOT in ALL_MESH_TOOLS on purpose (server.ts publishes it only when
+  // the worker-MCP flag is on, so ListTools stays byte-identical when off —
+  // see the tool's own doc comment in mesh-tool-schemas.ts). Registered here
+  // unconditionally anyway: this map only affects validation of a call that
+  // names the tool explicitly, and the daemon-side handler still refuses the
+  // call when the flag is off, so a harmless, always-present entry is simpler
+  // than threading the flag through this file too.
+  mesh_notify_worker: MESH_NOTIFY_WORKER_TOOL
 };
 function rejectUnknownMeshToolArgs(name, args) {
   const tool = MESH_TOOL_BY_NAME.get(name) ?? MESH_ALIAS_TOOL[name];
@@ -11710,41 +11829,57 @@ async function startMcpServer(opts) {
       { capabilities: { tools: {} } }
     );
     server2.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: workerTools }));
+    async function withMailboxPiggyback(response) {
+      const mailboxText = await drainMailbox(transport, credentials);
+      if (!mailboxText) return response;
+      const content = [...response.content];
+      const last = content[content.length - 1];
+      if (last && last.type === "text") {
+        content[content.length - 1] = { ...last, text: last.text + mailboxText };
+      } else {
+        content.push({ type: "text", text: mailboxText.trimStart() });
+      }
+      return { ...response, content };
+    }
     server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = args ?? {};
       const workerTool = workerToolByName.get(name);
       if (workerTool) {
         const unknownArgsError = unknownToolArgsError(name, workerTool.inputSchema?.properties, a);
-        if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
+        if (unknownArgsError) return withMailboxPiggyback({ content: [{ type: "text", text: unknownArgsError }], isError: true });
       }
       try {
         switch (name) {
           case "report_completion": {
             const result = await reportCompletion(transport, credentials, a);
-            return { content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} };
+            return withMailboxPiggyback({ content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} });
           }
           case "progress_update": {
             const result = await progressUpdate(transport, credentials, a);
-            return { content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} };
+            return withMailboxPiggyback({ content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} });
+          }
+          case "peer_context_pull": {
+            const result = await peerContextPull(transport, credentials, a);
+            return withMailboxPiggyback({ content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} });
           }
           case "git_status": {
             const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
-            return { content: [{ type: "text", text }] };
+            return withMailboxPiggyback({ content: [{ type: "text", text }] });
           }
           case "git_log": {
             const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
-            return { content: [{ type: "text", text }] };
+            return withMailboxPiggyback({ content: [{ type: "text", text }] });
           }
           case "git_diff": {
             const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
-            return { content: [{ type: "text", text }] };
+            return withMailboxPiggyback({ content: [{ type: "text", text }] });
           }
           default:
-            return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
+            return withMailboxPiggyback({ content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true });
         }
       } catch (err) {
-        return { content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true };
+        return withMailboxPiggyback({ content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true });
       }
     });
     const stdioTransport2 = new import_stdio.StdioServerTransport();
@@ -11836,7 +11971,9 @@ async function startMcpServer(opts) {
       }
       throw new Error(`Unknown resource: ${req.params.uri}`);
     });
-    server2.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: ALL_MESH_TOOLS }));
+    const { isWorkerMcpEnabled } = await import("@adhdev/daemon-core");
+    const meshTools = isWorkerMcpEnabled() ? [...ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL] : ALL_MESH_TOOLS;
+    server2.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: meshTools }));
     server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = args ?? {};
@@ -11883,6 +12020,13 @@ async function startMcpServer(opts) {
             break;
           case "mesh_send_task":
             text = await meshSendTask(meshCtx, a);
+            break;
+          case "mesh_notify_worker":
+            if (!isWorkerMcpEnabled()) {
+              text = JSON.stringify({ success: false, error: "worker_mcp_disabled" });
+            } else {
+              text = await meshNotifyWorker(meshCtx, a);
+            }
             break;
           case "mesh_read_chat":
             text = await meshReadChat(meshCtx, a);
