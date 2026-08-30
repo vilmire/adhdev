@@ -20,6 +20,16 @@
  * and an encoder call to a live `append` is §8 unit 3
  * ("dynamic transcript activation + daemon replica store").
  *
+ * ── Portable on purpose: no `Buffer` ────────────────────────────────────────
+ * §8 unit 5 ("web chat pane consumer cutover") reuses THIS module inside a
+ * browser module worker (`oss/packages/web-core/src/transcript-transport`),
+ * which has no Node `Buffer` global. Byte handling below therefore uses
+ * `Uint8Array`/`TextEncoder`/`TextDecoder` and the local `bytesToBase64`/
+ * `base64ToBytes` helpers — never `Buffer` — so the exact same compiled output
+ * runs under Node (daemon/mcp-server/server) and an evergreen browser Worker
+ * with byte-identical results. `atob`/`btoa` are global in both runtimes
+ * (Node 18+, every evergreen browser).
+ *
  * ── Ring is not durable — begin/commit is host visibility, not finality ────
  * `session.*.transcript` is a `ring` topic, explicitly exempt from seqscribe
  * finality/archive/durable-snapshot guarantees (SPEC.md §"ring exemption";
@@ -54,6 +64,34 @@ export const MAX_TRANSCRIPT_REVISION_ROWS = 240;
 
 /** `MAX_TRANSCRIPT_REVISION_ROWS` minus the begin and commit rows. */
 export const MAX_TRANSCRIPT_REVISION_CHUNKS = MAX_TRANSCRIPT_REVISION_ROWS - 2;
+
+// ─── Portable byte/base64 helpers (no `Buffer`) ─────────────────────────────
+
+/** `Uint8Array` → base64, via a binary string — safe under Node and browsers. */
+function bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+    return btoa(binary);
+}
+
+/** base64 → `Uint8Array`. Throws (caller catches) on non-base64 input. */
+function base64ToBytes(base64: string): Uint8Array {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+
+function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.length;
+    }
+    return out;
+}
 
 // ─── Wire envelope shapes ────────────────────────────────────────────────
 
@@ -122,7 +160,7 @@ export function encodeTranscriptRevision(
     now: () => string = () => new Date().toISOString(),
 ): TranscriptRevisionEncodeResult {
     const json = jcs(snapshot as unknown as JsonValue);
-    const bytes = Buffer.from(json, 'utf8');
+    const bytes = new TextEncoder().encode(json);
     const snapshotSha256 = sha256HexUtf8(json);
     const chunkCount = Math.max(1, Math.ceil(bytes.length / TRANSCRIPT_REVISION_CHUNK_BYTES));
 
@@ -150,7 +188,7 @@ export function encodeTranscriptRevision(
             revision: identity.revision,
             index,
             chunks: chunkCount,
-            dataBase64: slice.toString('base64'),
+            dataBase64: bytesToBase64(slice),
         });
     }
 
@@ -215,7 +253,7 @@ interface InFlightRevision {
     totalChunks: number;
     snapshotBytes: number;
     snapshotSha256: string;
-    chunkBuffers: Map<number, Buffer>;
+    chunkBuffers: Map<number, Uint8Array>;
 }
 
 /**
@@ -326,7 +364,14 @@ export class TranscriptRevisionAssembler {
             return { status: 'rejected', reason: 'invalid_base64' };
         }
 
-        inFlight.chunkBuffers.set(chunk.index, Buffer.from(chunk.dataBase64, 'base64'));
+        let decoded: Uint8Array;
+        try {
+            decoded = base64ToBytes(chunk.dataBase64);
+        } catch {
+            this.inFlight = null;
+            return { status: 'rejected', reason: 'invalid_base64' };
+        }
+        inFlight.chunkBuffers.set(chunk.index, decoded);
         return { status: 'chunk_accepted' };
     }
 
@@ -370,13 +415,13 @@ export class TranscriptRevisionAssembler {
             return { status: 'rejected', reason: 'missing_chunk' };
         }
 
-        const ordered: Buffer[] = [];
+        const ordered: Uint8Array[] = [];
         for (let index = 0; index < inFlight.totalChunks; index++) {
             const buf = inFlight.chunkBuffers.get(index);
             if (!buf) return { status: 'rejected', reason: 'missing_chunk' };
             ordered.push(buf);
         }
-        const combined = Buffer.concat(ordered);
+        const combined = concatBytes(ordered);
         if (combined.length !== inFlight.snapshotBytes) {
             return { status: 'rejected', reason: 'byte_count_mismatch' };
         }

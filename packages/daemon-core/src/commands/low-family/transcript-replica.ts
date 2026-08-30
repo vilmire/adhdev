@@ -17,16 +17,15 @@
  * rather than pretending to succeed; a later unit wires the resolver from
  * whichever daemon owns the peer map.
  *
- * These fallback reason strings are drawn from the closed union design §4
- * defines for EVERY roster consumer's fallback ("mode_not_primary |
- * consumer_not_enabled | no_node | authority_unavailable | topic_undefined |
- * topic_not_granted | owner_mismatch | no_complete_revision |
- * revision_invalid | projection_oversize | coverage_insufficient |
- * stale_active_session | quarantined | parity_mismatch | ipc_unavailable |
- * stats_error") — reused now, before any roster consumer exists, so the
- * vocabulary does not fork later.
+ * These fallback reason strings are drawn from `TranscriptConsumerFallbackReason`
+ * (`mesh/transcript-read-model-consumers.ts`), the closed union design §4
+ * defines for EVERY roster consumer's fallback — reused now, before any
+ * roster consumer existed, so the vocabulary would not fork later. §8 unit 5
+ * adds the first two roster consumers (`web_chat_pane`,
+ * `web_warm_mobile_preview`) against that same type.
  */
 
+import type { TranscriptConsumerFallbackReason } from '../../mesh/transcript-read-model-consumers.js';
 import type { LowFamilyHandler } from './types.js';
 
 function readKeyArgs(args: any): { ownerDaemonId: string; rawSessionId: string } | null {
@@ -37,24 +36,30 @@ function readKeyArgs(args: any): { ownerDaemonId: string; rawSessionId: string }
     return { ownerDaemonId, rawSessionId };
 }
 
+// `no_node` and `ipc_unavailable` are both in `TranscriptConsumerFallbackReason`
+// — asserted here so a future rename of either literal in the roster type
+// fails this file's typecheck instead of silently drifting.
+const NO_NODE: TranscriptConsumerFallbackReason = 'no_node';
+const IPC_UNAVAILABLE: TranscriptConsumerFallbackReason = 'ipc_unavailable';
+
 export const transcriptReplicaHandlers: Record<string, LowFamilyHandler> = {
     ensure_transcript_subscription: async (ctx, args) => {
         const key = readKeyArgs(args);
         if (!key) return { success: false, error: 'ownerDaemonId and rawSessionId required' };
 
         const store = ctx.deps.getTranscriptReplicaStore?.();
-        if (!store) return { success: true, ready: false, reason: 'no_node' };
+        if (!store) return { success: true, ready: false, reason: NO_NODE };
 
         const resolvePeer = ctx.deps.resolveTranscriptPeer;
-        if (!resolvePeer) return { success: true, ready: false, reason: 'ipc_unavailable' };
+        if (!resolvePeer) return { success: true, ready: false, reason: IPC_UNAVAILABLE };
 
         let peer;
         try {
             peer = await resolvePeer(key.ownerDaemonId);
         } catch {
-            return { success: true, ready: false, reason: 'ipc_unavailable' };
+            return { success: true, ready: false, reason: IPC_UNAVAILABLE };
         }
-        if (!peer) return { success: true, ready: false, reason: 'ipc_unavailable' };
+        if (!peer) return { success: true, ready: false, reason: IPC_UNAVAILABLE };
 
         const result = store.ensureSubscription(key, peer);
         if (!result.ok) return { success: true, ready: false, reason: result.reason };
@@ -66,7 +71,7 @@ export const transcriptReplicaHandlers: Record<string, LowFamilyHandler> = {
         if (!key) return { success: false, error: 'ownerDaemonId and rawSessionId required' };
 
         const store = ctx.deps.getTranscriptReplicaStore?.();
-        if (!store) return { success: true, available: false, reason: 'no_node' };
+        if (!store) return { success: true, available: false, reason: NO_NODE };
 
         const read = store.getReplica(key);
         if (!read.available) return { success: true, available: false, reason: read.reason };

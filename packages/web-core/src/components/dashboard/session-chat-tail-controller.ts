@@ -28,6 +28,24 @@ export interface SessionChatTailSnapshot {
    * pre-A2 subscriptions.
    */
   messageSource?: Record<string, unknown>
+  /**
+   * (§8 unit 5) Which transport produced `liveMessages` — design §5.6's
+   * single-source-of-truth telemetry field: "rollback이 두 소스 merge로 변질되지
+   * 않게 source 선택 결과를 응답에 transcriptReadSource: replica|legacy와
+   * reason으로 단일 표기한다." Defaults to 'legacy' — every existing
+   * `session.chat_tail`/`read_chat` update path is unaffected; only a mapped
+   * transcript-replica update (`transcript-chat-pane-adapter.ts`) sets 'replica'.
+   */
+  transcriptReadSource: 'replica' | 'legacy'
+  /** Set with `transcriptReadSource` when it flips back to 'legacy' — never set for a session that never tried the replica. */
+  transcriptFallbackReason?: string
+  /**
+   * Ring/SNAP-reset discontinuity carried by a replica update (design §3.7's
+   * "이전 내용 생략" signal). False for every legacy update.
+   */
+  omittedBefore: boolean
+  /** A replica-sourced tail whose freshness gate did not hold (design §5.5's "stale idle UI"). False for every legacy update. */
+  stale: boolean
 }
 
 export interface SessionChatHistoryPageRequest {
@@ -135,6 +153,9 @@ function buildEmptySnapshot(tailLimit = DEFAULT_TAIL_LIMIT): SessionChatTailSnap
     historyOffset: 0,
     hasMoreHistory: true,
     historyError: null,
+    transcriptReadSource: 'legacy',
+    omittedBefore: false,
+    stale: false,
   }
 }
 
@@ -495,6 +516,27 @@ function readUpdateStringField(update: SessionChatTailUpdate, field: 'sessionId'
   return typeof value === 'string' ? value : ''
 }
 
+/**
+ * (§8 unit 5) `transcript-chat-pane-adapter.ts`'s mapped update sets
+ * `transcriptReadSource: 'replica'` explicitly; every legacy
+ * `session.chat_tail`/`read_chat` update has no such field, which reads as
+ * 'legacy' — the correct default, never a guess.
+ */
+function readUpdateTranscriptReadSource(update: SessionChatTailUpdate): 'replica' | 'legacy' {
+  const value = (update as SessionChatTailUpdate & { transcriptReadSource?: unknown }).transcriptReadSource
+  return value === 'replica' ? 'replica' : 'legacy'
+}
+
+function readUpdateBooleanField(update: SessionChatTailUpdate, field: 'omittedBefore' | 'stale'): boolean {
+  const value = (update as SessionChatTailUpdate & Record<typeof field, unknown>)[field]
+  return value === true
+}
+
+function readUpdateOptionalStringField(update: SessionChatTailUpdate, field: 'transcriptFallbackReason'): string | undefined {
+  const value = (update as SessionChatTailUpdate & Record<typeof field, unknown>)[field]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
 export class SessionChatTailController {
   private manager: SubscriptionManager
   private sendData?: (daemonId: string, data: any) => boolean
@@ -582,6 +624,23 @@ export class SessionChatTailController {
     this.snapshot = {
       ...buildEmptySnapshot(this.snapshot.cursor.tailLimit),
       hasLiveSnapshot: true,
+    }
+    this.emit()
+  }
+
+  /**
+   * (§8 unit 5, design §5.6) Record that the replica read fell back to legacy
+   * for this session — telemetry only, never touches `liveMessages`. Never
+   * merges two sources: this only flips the `transcriptReadSource`/
+   * `transcriptFallbackReason` labels on whatever `liveMessages` the next
+   * legacy update (or the current one) already carries.
+   */
+  reportTranscriptReplicaFallback(reason: string): void {
+    if (this.snapshot.transcriptReadSource === 'legacy' && this.snapshot.transcriptFallbackReason === reason) return
+    this.snapshot = {
+      ...this.snapshot,
+      transcriptReadSource: 'legacy',
+      transcriptFallbackReason: reason,
     }
     this.emit()
   }
@@ -823,6 +882,17 @@ export class SessionChatTailController {
       // (A3) Track latest source decision for the debug badge / SourceTimeline.
       // Read-only consumption; daemon is source of truth.
       messageSource: incomingMessageSource,
+      // (§8 unit 5) A legacy `session.chat_tail`/`read_chat` update never sets
+      // these three fields, so they default to the "legacy, no discontinuity"
+      // reading — only a mapped transcript-replica update
+      // (transcript-chat-pane-adapter.ts) sets transcriptReadSource:'replica'
+      // and/or omittedBefore/stale.
+      transcriptReadSource: readUpdateTranscriptReadSource(update),
+      omittedBefore: readUpdateBooleanField(update, 'omittedBefore'),
+      stale: readUpdateBooleanField(update, 'stale'),
+      ...(readUpdateOptionalStringField(update, 'transcriptFallbackReason') !== undefined
+        ? { transcriptFallbackReason: readUpdateOptionalStringField(update, 'transcriptFallbackReason') }
+        : {}),
     }
     this.emit()
   }

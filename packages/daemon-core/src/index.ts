@@ -1215,3 +1215,23 @@ export {
   type MeshParityLoopHandle,
   type MeshParityLoopOptions,
 } from './mesh/mesh-parity-loop.js';
+// §8 unit 5 ("web chat pane consumer cutover"): type-only, zero-runtime-cost
+// re-export of the `session.<safeSessionId>.transcript` wire contract (§8
+// unit 1) so web-core's roster adapter can type-import
+// `ReplicatedTranscriptSnapshotV1` from the root barrel WITHOUT a value
+// import — the root-barrel-value-import ban (see meshSurfaceHelpers.ts's own
+// note) only forbids pulling runtime code (logger/fs) into a browser bundle;
+// an `export type` is erased at compile time and carries none of that.
+export type {
+  ReplicatedTranscriptSnapshotV1,
+  ReplicatedTranscriptMessageV1,
+  ReplicatedTranscriptTerminalMarkerV1,
+  ReplicatedTranscriptCoverageV1,
+  ReplicatedTranscriptProvenanceV1,
+  ReplicatedTranscriptModalV1,
+  ReplicatedTranscriptPromptV1,
+  ReplicatedTranscriptTurnV1,
+  TranscriptMessageBubbleState,
+  TranscriptTerminalOutcome,
+  TranscriptCoverageMode,
+} from './seqscribe/transcript-projection.js';

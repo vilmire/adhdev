@@ -423,6 +423,16 @@ export default function ChatPane({
                     <SessionInfoButton sessionId={activeConv.sessionId} daemonId={activeConv.daemonId} conv={activeConv} />
                 </div>
             </div>
+            {/* (§8 unit 5, design §3.7) A transcript-replica SNAP reset discards the
+                ring's in-flight/older rows; the live tail restarts from whatever the
+                next verified-complete revision carries. This is a UI cache-reset
+                signal, not data loss (provider-native/ADHDev JSONL history is
+                untouched) — "Load older" still reaches it via chat_history. */}
+            {chatTailState.omittedBefore && (
+                <div className="px-3 py-1.5 text-2xs text-center opacity-60 border-b border-[var(--border-color,rgba(255,255,255,0.08))]">
+                    {t('chatPane.replicaOmittedBefore')}
+                </div>
+            )}
             <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}
