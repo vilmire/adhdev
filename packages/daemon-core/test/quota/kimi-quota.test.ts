@@ -24,6 +24,22 @@ function makeKimiHome(credentials: unknown | null): string {
     return home;
 }
 
+function writeManagedKimiConfig(home: string, oauthKey: string, baseUrl: string): void {
+    writeFileSync(
+        join(home, 'config.toml'),
+        [
+            '[providers."managed:kimi-code"]',
+            'type = "kimi"',
+            `base_url = "${baseUrl}"`,
+            '',
+            '[providers."managed:kimi-code".oauth]',
+            'storage = "file"',
+            `key = "${oauthKey}"`,
+            '',
+        ].join('\n'),
+    );
+}
+
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): QuotaFetchResponse {
     return {
         ok: status >= 200 && status < 300,
@@ -104,6 +120,38 @@ describe('fetchKimiQuota', () => {
 
         expect(stub.calls).toEqual(['https://example.test/v9/usages']);
         expect(stub.headers[0]?.Authorization).toBe('Bearer secret-token');
+    });
+
+    it('follows the managed provider OAuth ref instead of a stale legacy credential', async () => {
+        const home = makeKimiHome({
+            access_token: 'stale-legacy-token',
+            expires_at: Math.floor(NOW / 1000) - 1,
+        });
+        const activeKey = 'kimi-code-env-test';
+        writeFileSync(
+            join(home, 'credentials', `${activeKey}.json`),
+            JSON.stringify({ access_token: 'fresh-active-token', expires_at: FRESH_EXPIRY }),
+        );
+        writeManagedKimiConfig(home, `oauth/${activeKey}`, 'https://active.kimi.test/coding/v1');
+        const stub = stubFetch(jsonResponse({ usage: { limit: 10, used: 2 } }));
+
+        const quota = await fetchKimiQuota(deps(home, stub.fetch));
+
+        expect(quota.status).toBe('ok');
+        expect(stub.calls).toEqual(['https://active.kimi.test/coding/v1/usages']);
+        expect(stub.headers[0]?.Authorization).toBe('Bearer fresh-active-token');
+    });
+
+    it('does not fall back to a leftover legacy token when the configured OAuth credential is missing', async () => {
+        const home = makeKimiHome({ access_token: 'legacy-token', expires_at: FRESH_EXPIRY });
+        writeManagedKimiConfig(home, 'oauth/kimi-code-env-missing', 'https://active.kimi.test/coding/v1');
+        const stub = stubFetch(jsonResponse({ usage: { limit: 10, used: 2 } }));
+
+        const quota = await fetchKimiQuota(deps(home, stub.fetch));
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('missing-credentials');
+        expect(stub.calls).toEqual([]);
     });
 
     it('reports unavailable (not error) when the credentials file is absent', async () => {

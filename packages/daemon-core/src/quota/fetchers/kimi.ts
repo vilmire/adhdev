@@ -2,11 +2,12 @@
  * Kimi Code quota fetcher.
  *
  * Auth philosophy (see CLAUDE.md): ADHDev does NOT manage provider API keys.
- * We read the access token the Kimi CLI already wrote to disk and use it for a
- * single authenticated GET. We never refresh, rotate or rewrite that file —
- * Kimi's refresh flow rotates the refresh token, so writing it back from here
- * would log out a live `kimi` session. When the token has expired we simply
- * report "cannot query" and let the CLI refresh it on its next run.
+ * We follow the managed provider's OAuth ref in Kimi's config, read the access
+ * token the CLI already wrote to disk, and use it for a single authenticated
+ * GET. We never refresh, rotate or rewrite that file — Kimi's refresh flow
+ * rotates the refresh token, so writing it back from here would log out a live
+ * `kimi` session. When the token has expired we simply report "cannot query"
+ * and let the CLI refresh it on its next run.
  *
  * Endpoint/field facts (base URL, `/usages`, the `usage` + `limits` shape and
  * the `KIMI_CODE_HOME` / `KIMI_CODE_BASE_URL` env overrides) were established
@@ -40,13 +41,82 @@ function kimiHome(env: NodeJS.ProcessEnv): string {
     return override ? override : path.join(os.homedir(), '.kimi-code');
 }
 
-function credentialsPath(env: NodeJS.ProcessEnv): string {
-    return path.join(kimiHome(env), 'credentials', 'kimi-code.json');
+interface ManagedKimiSettings {
+    oauthKey?: string;
+    baseUrl?: string;
 }
 
-function baseUrl(env: NodeJS.ProcessEnv): string {
+/** Parse the single-line TOML string form Kimi writes for these fields. */
+function tomlStringValue(line: string, key: 'base_url' | 'key'): string | undefined {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const basic = line.match(new RegExp(`^\\s*${escapedKey}\\s*=\\s*("(?:\\\\.|[^"\\\\])*")\\s*(?:#.*)?$`));
+    if (basic?.[1]) {
+        try {
+            const value = JSON.parse(basic[1]);
+            return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+    const literal = line.match(new RegExp(`^\\s*${escapedKey}\\s*=\\s*'([^']*)'\\s*(?:#.*)?$`));
+    return literal?.[1]?.trim() || undefined;
+}
+
+/**
+ * Read only the managed Kimi provider fields needed to mirror the CLI's token
+ * lookup. This intentionally is not a general TOML parser: Kimi writes both as
+ * single-line strings, and falling back to the legacy defaults is safer than
+ * rejecting credentials because an unrelated config feature uses new syntax.
+ */
+function readManagedKimiSettings(env: NodeJS.ProcessEnv): ManagedKimiSettings {
+    let raw: string;
+    try {
+        raw = fs.readFileSync(path.join(kimiHome(env), 'config.toml'), 'utf-8');
+    } catch {
+        return {};
+    }
+
+    let section: 'provider' | 'oauth' | null = null;
+    const settings: ManagedKimiSettings = {};
+    for (const line of raw.split(/\r?\n/)) {
+        const header = line.trim().match(/^\[\s*(.*?)\s*\](?:\s*#.*)?$/)?.[1];
+        if (header !== undefined) {
+            if (/^providers\s*\.\s*["']managed:kimi-code["']\s*$/.test(header)) {
+                section = 'provider';
+            } else if (/^providers\s*\.\s*["']managed:kimi-code["']\s*\.\s*oauth\s*$/.test(header)) {
+                section = 'oauth';
+            } else {
+                section = null;
+            }
+            continue;
+        }
+        if (section === 'provider') {
+            settings.baseUrl = tomlStringValue(line, 'base_url') ?? settings.baseUrl;
+        } else if (section === 'oauth') {
+            settings.oauthKey = tomlStringValue(line, 'key') ?? settings.oauthKey;
+        }
+    }
+    return settings;
+}
+
+function credentialsPath(env: NodeJS.ProcessEnv, oauthKey?: string): string {
+    // Mirrors Kimi CLI's `_credentials_path`: strip `oauth/`, keep the final
+    // component, and store it under credentials/<name>.json. A configured ref
+    // is authoritative — silently falling back to the leftover legacy token is
+    // the exact failure mode that pinned quota to an expired credential.
+    const configuredName = oauthKey?.replace(/^oauth\//, '').split('/').at(-1)?.trim();
+    const name = configuredName
+        && configuredName !== '.'
+        && configuredName !== '..'
+        && path.basename(configuredName) === configuredName
+        ? configuredName
+        : 'kimi-code';
+    return path.join(kimiHome(env), 'credentials', `${name}.json`);
+}
+
+function baseUrl(env: NodeJS.ProcessEnv, configured?: string): string {
     const override = env.KIMI_CODE_BASE_URL?.trim();
-    return (override ? override : DEFAULT_BASE_URL).replace(/\/+$/, '');
+    return (override || configured || DEFAULT_BASE_URL).replace(/\/+$/, '');
 }
 
 interface KimiCredentials {
@@ -82,8 +152,8 @@ function parseCredentials(raw: string): CredentialsResult {
     return { kind: 'ok', credentials: { accessToken, expiresAt } };
 }
 
-function readCredentials(deps: Required<QuotaFetchDeps>): CredentialsResult {
-    const file = credentialsPath(deps.env);
+function readCredentials(deps: Required<QuotaFetchDeps>, oauthKey?: string): CredentialsResult {
+    const file = credentialsPath(deps.env, oauthKey);
     let raw: string;
     try {
         raw = fs.readFileSync(file, 'utf-8');
@@ -244,7 +314,8 @@ export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
     assertInjectedNetworkFetchInTest(overrides, 'fetchKimiQuota');
     const deps = resolveDeps(overrides);
 
-    const credentialsResult = readCredentials(deps);
+    const settings = readManagedKimiSettings(deps.env);
+    const credentialsResult = readCredentials(deps, settings.oauthKey);
     if (credentialsResult.kind === 'missing') {
         return quotaFailure('kimi', 'unavailable', 'Not signed in to Kimi Code', {
             source: 'oauth',
@@ -270,7 +341,7 @@ export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
     }
 
     try {
-        const response = await deps.fetch(`${baseUrl(deps.env)}/usages`, {
+        const response = await deps.fetch(`${baseUrl(deps.env, settings.baseUrl)}/usages`, {
             headers: {
                 Authorization: `Bearer ${credentials.accessToken}`,
                 Accept: 'application/json',
