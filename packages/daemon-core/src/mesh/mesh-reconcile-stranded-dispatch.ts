@@ -1969,64 +1969,14 @@ export function reconcileUnsettledTerminalAttempts(
     const meshId = mesh.id;
     const store = MeshRuntimeStore.getInstance();
     const terminalOutcomes = Array.from(TURN_TERMINAL_OUTCOMES);
-    
-    if (!terminalOutcomes.length) return 0;
-    const placeholders = terminalOutcomes.map(() => '?').join(', ');
-    
-    const sql = `
-        SELECT q.payload AS queue_payload,
-               a.*
-        FROM mesh_queue q
-        INNER JOIN mesh_turn_attempts a ON a.mesh_id = q.mesh_id AND a.task_id = q.id
-        WHERE q.mesh_id = ?
-          AND q.status IN (${placeholders})
-          AND (a.terminal_outcome IS NULL OR a.terminal_outcome = '')
-          AND a.stage NOT IN (${placeholders})
-          AND a.attempt_seq = (SELECT MAX(attempt_seq) FROM mesh_turn_attempts a2
-                               WHERE a2.mesh_id = q.mesh_id AND a2.task_id = q.id)
-    `;
-    
-    // Bypass MeshRuntimeStore file-size limits by using its db handle directly.
-    // The alternative is extracting a new query file or raising the limit.
-    const db = (store as any).db;
-    const unsettledRows = db.prepare(sql).all(
-        meshId,
-        ...terminalOutcomes,
-        ...terminalOutcomes
-    ) as Array<Record<string, unknown>>;
+    const unsettledRows = store.getUnsettledTerminalQueueRowsAndAttempts(meshId, terminalOutcomes);
     
     if (!unsettledRows.length) return 0;
     
     const nowMs = Date.now();
     let settled = 0;
 
-    for (const r of unsettledRows) {
-        const row = JSON.parse(r.queue_payload as string) as import('./mesh-work-queue.js').MeshWorkQueueEntry;
-        
-        // map attempt row
-        const attempt = {
-            attemptId: r.attempt_id as string,
-            meshId: r.mesh_id as string,
-            taskId: r.task_id as string,
-            attemptSeq: r.attempt_seq as number,
-            nodeId: r.node_id as string | null,
-            sessionId: r.session_id as string | null,
-            providerType: r.provider_type as string | null,
-            coordinatorDaemonId: r.coordinator_daemon_id as string | null,
-            coordinatorSessionId: r.coordinator_session_id as string | null,
-            dispatchNonce: r.dispatch_nonce as number | null,
-            stage: r.stage as string,
-            redriveCount: r.redrive_count as number,
-            leaseDeadlineMs: r.lease_deadline_ms as number | null,
-            acceptedAt: r.accepted_at as string | null,
-            deliveredAt: r.delivered_at as string | null,
-            consumedAt: r.consumed_at as string | null,
-            terminalOutcome: r.terminal_outcome as string | null,
-            terminalReason: r.terminal_reason as string | null,
-            terminalAt: r.terminal_at as string | null,
-            createdAt: r.created_at as string,
-            updatedAt: r.updated_at as string,
-        };
+    for (const { queueRow: row, attempt } of unsettledRows) {
 
         // Grace is anchored on the ATTEMPT's own updatedAt, NOT the queue row's: the
         // store force-stamps queue updated_at to now on every write, so an unrelated

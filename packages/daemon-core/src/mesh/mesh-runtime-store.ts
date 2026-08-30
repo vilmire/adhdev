@@ -13,8 +13,7 @@ import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { selectClaimCandidate } from './mesh-claim-refusal.js';
-import type { MeshClaimRefusal, MeshClaimRefusalReason } from './mesh-claim-refusal.js';
+import { selectClaimCandidate, type MeshClaimRefusal, type MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 // Pure move (file-size gate): row shapes/mappers + the retention sweep now live in
@@ -22,9 +21,9 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // below, and re-exported at the bottom of this file so every existing import path
 // (`from './mesh-runtime-store.js'`) keeps working unchanged — barrel-preserving,
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
-import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange } from './mesh-runtime-store-turn-rows.js';
-import type { MeshTurnAttemptRow, MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
+import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
 import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, type TurnEventRow } from './mesh-turn-event-queries.js';
+import { selectUnsettledTerminalQueueRowsAndAttempts } from './mesh-unsettled-terminal-queries.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
@@ -3332,6 +3331,7 @@ export class MeshRuntimeStore {
 
     /** Turn events for one task, oldest first. SQL: mesh-turn-event-queries.ts. */
     listTurnEventsForTask(meshId: string, taskId: string): Omit<TurnEventRow, 'taskId'>[] { return selectTurnEventsForTask(this.db, meshId, taskId); }
+    getUnsettledTerminalQueueRowsAndAttempts(meshId: string, outcomes: string[]) { return selectUnsettledTerminalQueueRowsAndAttempts(this.db, meshId, outcomes); }
 
     /** By-KIND turn-event queries. SQL + index rationale: mesh-turn-event-queries.ts. */
     listTurnEventsByKind(meshId: string, kind: string, limit = 200): TurnEventRow[] { return selectTurnEventsByKind(this.db, meshId, kind, limit); }
