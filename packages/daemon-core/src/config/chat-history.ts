@@ -158,9 +158,45 @@ function isAdjacentHistoryDuplicate(
     agentType: string,
     previous: Pick<HistoryMessage, 'role' | 'content' | 'kind'> | null | undefined,
     next: Pick<HistoryMessage, 'role' | 'content' | 'kind'> | null | undefined,
+    signatureFor: (
+        agentType: string,
+        message: Pick<HistoryMessage, 'role' | 'content' | 'kind'>,
+    ) => string = buildHistoryMessageSignature,
 ): boolean {
     if (!previous || !next) return false;
-    return buildHistoryMessageSignature(agentType, previous) === buildHistoryMessageSignature(agentType, next);
+    return signatureFor(agentType, previous) === signatureFor(agentType, next);
+}
+
+/**
+ * Preserve the historical adjacent/last-turn duplicate rules while computing
+ * each normalized signature once per record. Large assistant/tool payloads used
+ * to pass through normalizeHistoryComparable up to four times in one paging
+ * pass (as both `previous` and `lastTurn`).
+ */
+function dedupeAdjacentHistoryMessages(agentType: string, messages: HistoryMessage[]): HistoryMessage[] {
+    const deduped: HistoryMessage[] = [];
+    let lastTurn: HistoryMessage | null = null;
+    const signatureCache = new WeakMap<object, string>();
+    const signatureFor = (
+        currentAgentType: string,
+        message: Pick<HistoryMessage, 'role' | 'content' | 'kind'>,
+    ): string => {
+        const key = message as object;
+        const cached = signatureCache.get(key);
+        if (cached !== undefined) return cached;
+        const signature = buildHistoryMessageSignature(currentAgentType, message);
+        signatureCache.set(key, signature);
+        return signature;
+    };
+
+    for (const message of messages) {
+        const previous = deduped[deduped.length - 1];
+        if (isAdjacentHistoryDuplicate(agentType, previous, message, signatureFor)) continue;
+        if (message.role !== 'system' && isAdjacentHistoryDuplicate(agentType, lastTurn, message, signatureFor)) continue;
+        deduped.push(message);
+        if (message.role !== 'system') lastTurn = message;
+    }
+    return deduped;
 }
 
 function collapseReplayAssistantTurns(messages: HistoryMessage[], historyBehavior?: ProviderHistoryBehavior): HistoryMessage[] {
@@ -1113,15 +1149,7 @@ export class ChatHistoryWriter {
                 }
 
                 next.sort((a, b) => a.receivedAt - b.receivedAt);
-                const dedupedAdjacent: HistoryMessage[] = [];
-                let lastTurn: HistoryMessage | null = null;
-                for (const entry of next) {
-                    const previous = dedupedAdjacent[dedupedAdjacent.length - 1];
-                    if (isAdjacentHistoryDuplicate(agentType, previous, entry)) continue;
-                    if (entry.role !== 'system' && isAdjacentHistoryDuplicate(agentType, lastTurn, entry)) continue;
-                    dedupedAdjacent.push(entry);
-                    if (entry.role !== 'system') lastTurn = entry;
-                }
+                const dedupedAdjacent = dedupeAdjacentHistoryMessages(agentType, next);
                 const collapsed = collapseReplayAssistantTurns(dedupedAdjacent, historyBehavior);
                 if (collapsed.length === 0) {
                     fs.unlinkSync(filePath);
@@ -1206,15 +1234,7 @@ function pageHistoryRecords(
         .map((message) => sanitizeHistoryMessage(agentType, message))
         .filter(Boolean) as HistoryMessage[];
     allMessages.sort((a, b) => a.receivedAt - b.receivedAt);
-    const chronological: HistoryMessage[] = [];
-    let lastTurn: HistoryMessage | null = null;
-    for (const message of allMessages) {
-        const previous = chronological[chronological.length - 1];
-        if (isAdjacentHistoryDuplicate(agentType, previous, message)) continue;
-        if (message.role !== 'system' && isAdjacentHistoryDuplicate(agentType, lastTurn, message)) continue;
-        chronological.push(message);
-        if (message.role !== 'system') lastTurn = message;
-    }
+    const chronological = dedupeAdjacentHistoryMessages(agentType, allMessages);
     const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
     const boundedLimit = normalizePaginationNumber(limit, 30, 1);
     const boundedOffset = normalizePaginationNumber(offset, 0, 0);

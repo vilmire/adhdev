@@ -38,6 +38,11 @@
  * call arriving while one is in flight replaces (never queues) the pending
  * work — "매 commit 전체 교체다. delta merge가 아니다" (§3.4) applies just as
  * much to what the publisher itself coalesces as to what a subscriber does.
+ * PTY output uses a separate leading+trailing throttle: the first byte pulls
+ * immediately, while the rest of a paint burst is collapsed into at most one
+ * pull per window. Status/finalization/post-chat callers continue to use the
+ * immediate `markDirty` path, so completion and approval transitions are not
+ * delayed by the throughput guard.
  *
  * ── Dedup / empty-guard / oversize (design §3.4, §7.2 item 3) ──────────────
  * See `transcript-observation.ts#hashTranscriptObservation` for why the dedup
@@ -68,6 +73,13 @@ import { resolveTranscriptMode, type TranscriptMode } from './transcript-mode.js
  * role in mesh-dual-write.ts: a shadow that OOMs a daemon is worse than a
  * shadow that skips sessions, and the skip is counted, never silent. */
 export const MAX_TRACKED_SESSIONS = 512;
+
+/**
+ * PTY paint bursts commonly deliver one callback per small terminal chunk.
+ * Keep this below the existing 700ms chat-tail UI debounce while leaving enough
+ * room to collapse the dozens/hundreds of chunks emitted by one repaint.
+ */
+export const TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
 
 export interface TranscriptRevisionEnvelope {
     readonly begin: TranscriptRevisionBeginV1;
@@ -133,6 +145,8 @@ export interface TranscriptProjectionCounters {
     collectorUnavailable: number;
     /** `collectObservation` returned `null` (source not ready — safety-net poll found nothing new). */
     sourcePending: number;
+    /** PTY dirty triggers collapsed behind the per-session throttle window. */
+    ptyDirtyCoalesced: number;
 }
 
 function freshCounters(): TranscriptProjectionCounters {
@@ -145,6 +159,7 @@ function freshCounters(): TranscriptProjectionCounters {
         dropped: 0,
         collectorUnavailable: 0,
         sourcePending: 0,
+        ptyDirtyCoalesced: 0,
     };
 }
 
@@ -170,6 +185,9 @@ export class TranscriptProjectionService {
     private readonly inFlight = new Set<string>();
     private readonly pendingObservation = new Map<string, TranscriptObservation>();
     private readonly pendingPull = new Set<string>();
+    /** PTY-only leading+trailing throttle state; direct dirty triggers bypass it. */
+    private readonly ptyDirtyTimers = new Map<string, NodeJS.Timeout>();
+    private readonly ptyDirtyTrailing = new Set<string>();
 
     constructor(deps: TranscriptProjectionDeps) {
         this.deps = deps;
@@ -206,6 +224,51 @@ export class TranscriptProjectionService {
         }
         if (!this.admitSession(sessionId)) return;
         void this.runPull(sessionId);
+    }
+
+    /**
+     * PTY-output trigger. Pull the leading edge immediately, then collapse all
+     * repaint chunks in the window into one trailing pull. The trailing pull is
+     * mandatory even for a single byte because providers may append their JSONL
+     * record just after writing the corresponding terminal output.
+     */
+    markPtyOutputActivity(sessionId: string): void {
+        if (!sessionId) return;
+        if (this.mode() === 'off') return;
+        if (!this.deps.collectObservation) {
+            this.counters.collectorUnavailable++;
+            return;
+        }
+
+        if (this.ptyDirtyTimers.has(sessionId)) {
+            this.ptyDirtyTrailing.add(sessionId);
+            this.counters.ptyDirtyCoalesced++;
+            return;
+        }
+
+        // Leading edge remains immediate for live transcript consumers.
+        this.markDirty(sessionId);
+        // Always retain one trailing refresh: the native transcript write can
+        // lag the first PTY byte even when the burst contains only one callback.
+        this.ptyDirtyTrailing.add(sessionId);
+        this.armPtyDirtyTimer(sessionId);
+    }
+
+    private armPtyDirtyTimer(sessionId: string): void {
+        const timer = setTimeout(() => {
+            if (!this.ptyDirtyTrailing.delete(sessionId)) {
+                this.ptyDirtyTimers.delete(sessionId);
+                return;
+            }
+
+            // Keep the cooldown armed before pulling so output arriving during
+            // the read cannot start another leading-edge parse concurrently.
+            this.ptyDirtyTimers.delete(sessionId);
+            this.armPtyDirtyTimer(sessionId);
+            this.markDirty(sessionId);
+        }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+        timer.unref?.();
+        this.ptyDirtyTimers.set(sessionId, timer);
     }
 
     /**
@@ -343,6 +406,13 @@ export class TranscriptProjectionService {
     get trackedSessionCount(): number {
         return this.sessionState.size;
     }
+
+    /** Stop deferred PTY work when the singleton is replaced or disarmed. */
+    dispose(): void {
+        for (const timer of this.ptyDirtyTimers.values()) clearTimeout(timer);
+        this.ptyDirtyTimers.clear();
+        this.ptyDirtyTrailing.clear();
+    }
 }
 
 // ─── Module-level singleton — the safe-no-op-until-configured pattern ──────
@@ -355,6 +425,7 @@ let activeService: TranscriptProjectionService | null = null;
  * against a real node, and so tests can arm/disarm around a fake `deps`.
  */
 export function configureTranscriptProjection(deps: TranscriptProjectionDeps | null): TranscriptProjectionService | null {
+    activeService?.dispose();
     activeService = deps ? new TranscriptProjectionService(deps) : null;
     return activeService;
 }
@@ -373,7 +444,13 @@ export function markTranscriptSessionDirty(sessionId: string): void {
     activeService?.markDirty(sessionId);
 }
 
+/** PTY-only throughput guard; status/finalization/post-chat callers stay immediate. */
+export function markTranscriptPtyOutputActivity(sessionId: string): void {
+    activeService?.markPtyOutputActivity(sessionId);
+}
+
 /** TESTS ONLY. */
 export function __resetTranscriptProjectionForTests(): void {
+    activeService?.dispose();
     activeService = null;
 }
