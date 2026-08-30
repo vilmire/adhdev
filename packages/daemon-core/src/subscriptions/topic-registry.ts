@@ -114,7 +114,6 @@ import {
 } from '../runtime-defaults.js';
 import type { SessionModalState } from '../providers/provider-instance.js';
 import type { DebugTraceEvent } from '../logging/debug-trace.js';
-import { markTranscriptPtyOutputActivity } from '../seqscribe/transcript-publisher.js';
 
 /**
  * Transport sink injected by each daemon. The registry never sees WS framing
@@ -677,7 +676,6 @@ export class TopicSubscriptionRegistry {
         // TranscriptProjectionService.markDirty(sessionId)를 호출한다." Safe
         // no-op until a later unit configures a service — see
         // seqscribe/transcript-publisher.ts's header.
-        markTranscriptPtyOutputActivity(sessionId);
         this.chatOutputActiveAt.set(sessionId, this.now());
         if (this.chatOutputFlushTimer) return;
         if (cfg?.scheduleGate && !cfg.scheduleGate()) return;

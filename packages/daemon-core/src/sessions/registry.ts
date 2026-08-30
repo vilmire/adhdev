@@ -1,3 +1,4 @@
+import { startTranscriptStatPolling, stopTranscriptStatPolling } from '../seqscribe/transcript-publisher.js';
 import type { SessionTransport } from '../shared-types.js';
 
 export interface SessionRuntimeTarget {
@@ -46,6 +47,7 @@ export class SessionRegistry {
             target = { ...target, providerSessionId: priorProviderSessionId };
         }
         this.bySessionId.set(target.sessionId, target);
+        startTranscriptStatPolling(target.sessionId);
         if (target.cdpManagerKey) this.addIndex(this.byManagerKey, target.cdpManagerKey, target.sessionId);
         if (target.instanceKey) this.addIndex(this.byInstanceKey, target.instanceKey, target.sessionId);
         if (target.parentSessionId) this.addIndex(this.byParentSessionId, target.parentSessionId, target.sessionId);
@@ -78,6 +80,7 @@ export class SessionRegistry {
         const target = this.bySessionId.get(sessionId);
         if (!target) return;
         this.bySessionId.delete(sessionId);
+        stopTranscriptStatPolling(sessionId);
         if (target.cdpManagerKey) this.removeIndex(this.byManagerKey, target.cdpManagerKey, sessionId);
         if (target.instanceKey) this.removeIndex(this.byInstanceKey, target.instanceKey, sessionId);
         if (target.parentSessionId) this.removeIndex(this.byParentSessionId, target.parentSessionId, sessionId);

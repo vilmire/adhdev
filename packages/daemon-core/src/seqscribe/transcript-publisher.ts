@@ -51,6 +51,7 @@
  * inline comments at each branch.
  */
 
+import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
 import {
@@ -79,7 +80,7 @@ export const MAX_TRACKED_SESSIONS = 512;
  * Keep this below the existing 700ms chat-tail UI debounce while leaving enough
  * room to collapse the dozens/hundreds of chunks emitted by one repaint.
  */
-export const TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
+export const TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3000;
 
 export interface TranscriptRevisionEnvelope {
     readonly begin: TranscriptRevisionBeginV1;
@@ -145,8 +146,6 @@ export interface TranscriptProjectionCounters {
     collectorUnavailable: number;
     /** `collectObservation` returned `null` (source not ready — safety-net poll found nothing new). */
     sourcePending: number;
-    /** PTY dirty triggers collapsed behind the per-session throttle window. */
-    ptyDirtyCoalesced: number;
 }
 
 function freshCounters(): TranscriptProjectionCounters {
@@ -159,7 +158,6 @@ function freshCounters(): TranscriptProjectionCounters {
         dropped: 0,
         collectorUnavailable: 0,
         sourcePending: 0,
-        ptyDirtyCoalesced: 0,
     };
 }
 
@@ -185,9 +183,10 @@ export class TranscriptProjectionService {
     private readonly inFlight = new Set<string>();
     private readonly pendingObservation = new Map<string, TranscriptObservation>();
     private readonly pendingPull = new Set<string>();
-    /** PTY-only leading+trailing throttle state; direct dirty triggers bypass it. */
-    private readonly ptyDirtyTimers = new Map<string, NodeJS.Timeout>();
-    private readonly ptyDirtyTrailing = new Set<string>();
+    private readonly pollingSessions = new Set<string>();
+    private readonly knownPaths = new Map<string, string>();
+    private readonly lastSignatures = new Map<string, string>();
+    private statPollTimer: NodeJS.Timeout | null = null;
 
     constructor(deps: TranscriptProjectionDeps) {
         this.deps = deps;
@@ -207,6 +206,10 @@ export class TranscriptProjectionService {
             return;
         }
         if (!this.admitSession(sessionId)) return;
+        const sourcePath = (observation.provenance?.transcriptProvenance as any)?.sourcePath;
+        if (typeof sourcePath === 'string' && sourcePath) {
+            this.knownPaths.set(sessionId, sourcePath);
+        }
         void this.runObserve(sessionId, observation);
     }
 
@@ -226,49 +229,51 @@ export class TranscriptProjectionService {
         void this.runPull(sessionId);
     }
 
-    /**
-     * PTY-output trigger. Pull the leading edge immediately, then collapse all
-     * repaint chunks in the window into one trailing pull. The trailing pull is
-     * mandatory even for a single byte because providers may append their JSONL
-     * record just after writing the corresponding terminal output.
-     */
-    markPtyOutputActivity(sessionId: string): void {
+    startPolling(sessionId: string): void {
         if (!sessionId) return;
         if (this.mode() === 'off') return;
-        if (!this.deps.collectObservation) {
-            this.counters.collectorUnavailable++;
-            return;
+        this.pollingSessions.add(sessionId);
+        if (!this.statPollTimer) {
+            this.statPollTimer = setInterval(() => this.runStatPoll(), TRANSCRIPT_STAT_POLL_INTERVAL_MS);
+            this.statPollTimer.unref?.();
         }
-
-        if (this.ptyDirtyTimers.has(sessionId)) {
-            this.ptyDirtyTrailing.add(sessionId);
-            this.counters.ptyDirtyCoalesced++;
-            return;
-        }
-
-        // Leading edge remains immediate for live transcript consumers.
-        this.markDirty(sessionId);
-        // Always retain one trailing refresh: the native transcript write can
-        // lag the first PTY byte even when the burst contains only one callback.
-        this.ptyDirtyTrailing.add(sessionId);
-        this.armPtyDirtyTimer(sessionId);
     }
 
-    private armPtyDirtyTimer(sessionId: string): void {
-        const timer = setTimeout(() => {
-            if (!this.ptyDirtyTrailing.delete(sessionId)) {
-                this.ptyDirtyTimers.delete(sessionId);
-                return;
-            }
+    stopPolling(sessionId: string): void {
+        if (!sessionId) return;
+        this.pollingSessions.delete(sessionId);
+        this.knownPaths.delete(sessionId);
+        this.lastSignatures.delete(sessionId);
+        if (this.pollingSessions.size === 0 && this.statPollTimer) {
+            clearInterval(this.statPollTimer);
+            this.statPollTimer = null;
+        }
+    }
 
-            // Keep the cooldown armed before pulling so output arriving during
-            // the read cannot start another leading-edge parse concurrently.
-            this.ptyDirtyTimers.delete(sessionId);
-            this.armPtyDirtyTimer(sessionId);
-            this.markDirty(sessionId);
-        }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
-        timer.unref?.();
-        this.ptyDirtyTimers.set(sessionId, timer);
+    private runStatPoll(): void {
+        for (const sessionId of this.pollingSessions) {
+            const path = this.knownPaths.get(sessionId);
+            if (!path) continue;
+            try {
+                const st = fs.statSync(path);
+                const sig = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+                const lastSig = this.lastSignatures.get(sessionId);
+                if (sig !== lastSig) {
+                    this.lastSignatures.set(sessionId, sig);
+                    if (lastSig !== undefined) {
+                        this.markDirty(sessionId);
+                    }
+                }
+            } catch {
+                const lastSig = this.lastSignatures.get(sessionId);
+                if (lastSig !== 'missing') {
+                    this.lastSignatures.set(sessionId, 'missing');
+                    if (lastSig !== undefined) {
+                        this.markDirty(sessionId);
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -409,9 +414,11 @@ export class TranscriptProjectionService {
 
     /** Stop deferred PTY work when the singleton is replaced or disarmed. */
     dispose(): void {
-        for (const timer of this.ptyDirtyTimers.values()) clearTimeout(timer);
-        this.ptyDirtyTimers.clear();
-        this.ptyDirtyTrailing.clear();
+        if (this.statPollTimer) clearInterval(this.statPollTimer);
+        this.statPollTimer = null;
+        this.pollingSessions.clear();
+        this.knownPaths.clear();
+        this.lastSignatures.clear();
     }
 }
 
@@ -444,9 +451,12 @@ export function markTranscriptSessionDirty(sessionId: string): void {
     activeService?.markDirty(sessionId);
 }
 
-/** PTY-only throughput guard; status/finalization/post-chat callers stay immediate. */
-export function markTranscriptPtyOutputActivity(sessionId: string): void {
-    activeService?.markPtyOutputActivity(sessionId);
+export function startTranscriptStatPolling(sessionId: string): void {
+    activeService?.startPolling(sessionId);
+}
+
+export function stopTranscriptStatPolling(sessionId: string): void {
+    activeService?.stopPolling(sessionId);
 }
 
 /** TESTS ONLY. */
