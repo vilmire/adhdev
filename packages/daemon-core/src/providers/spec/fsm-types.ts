@@ -270,8 +270,9 @@ export interface CliSpecV4 {
     env?: Record<string, string>;
     cli_version_range?: string;
     /**
-     * Optional raw byte sequences written to the PTY once, shortly after spawn,
-     * to prime a TUI that gates its input handling on a terminal event the
+     * Optional raw byte sequences written to the PTY once, shortly after the
+     * child produces its first output, to prime a TUI that gates its input
+     * handling on a terminal event the
      * daemon would otherwise never emit. The canonical case is a focus-event
      * TUI (Ink `useStdin`/`useFocus`, e.g. antigravity's `agy`) that enables
      * focus reporting (`CSI ?1004h`) and treats its input box as unfocused —
@@ -282,7 +283,7 @@ export interface CliSpecV4 {
      * engine writes nothing extra for them, so it stays CLI-agnostic.
      */
     send_on_spawn?: string[];
-    /** Delay (ms) after spawn before writing `send_on_spawn`. Default 250. */
+    /** Delay (ms) after first PTY output before writing `send_on_spawn`. Default 250. */
     send_on_spawn_delay_ms?: number;
     /**
      * Opt-in stall recovery for focus-gated TUIs. The same CLIs that need

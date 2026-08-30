@@ -6,11 +6,12 @@
  * The engine stays CLI-agnostic: it writes the declared sequences once after
  * spawn and writes nothing extra when the field is absent.
  */
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
+import { LOG } from '../../../src/logging/logger.js';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../../src/cli-adapters/pty-transport.js';
@@ -22,17 +23,26 @@ class RecordingPty implements PtyRuntimeTransport {
     readonly ready = Promise.resolve();
     readonly writes: string[] = [];
     private exitCb: ((info: { exitCode: number }) => void) | null = null;
-    write(data: string): void { this.writes.push(data); }
+    private dataCb: ((data: string) => void) | null = null;
+    constructor(private readonly writeOutcome: 'success' | 'false' | 'throw' | 'reject' = 'success') {}
+    write(data: string): boolean | void | Promise<void> {
+        this.writes.push(data);
+        if (this.writeOutcome === 'false') return false;
+        if (this.writeOutcome === 'throw') throw new Error('simulated PTY write failure');
+        if (this.writeOutcome === 'reject') return Promise.reject(new Error('simulated async PTY write failure'));
+    }
     resize(): void { /* no-op */ }
     kill(): void { this.exitCb?.({ exitCode: 0 }); }
-    onData(): void { /* unused */ }
+    onData(cb: (data: string) => void): void { this.dataCb = cb; }
     onExit(cb: (info: { exitCode: number }) => void): void { this.exitCb = cb; }
+    emitOutput(data: string): void { this.dataCb?.(data); }
 }
 
 class RecordingFactory implements PtyTransportFactory {
     last: RecordingPty | null = null;
+    constructor(private readonly writeOutcome: 'success' | 'false' | 'throw' | 'reject' = 'success') {}
     spawn(_command: string, _args: string[], _options: PtySpawnOptions): PtyRuntimeTransport {
-        this.last = new RecordingPty();
+        this.last = new RecordingPty(this.writeOutcome);
         return this.last;
     }
 }
@@ -62,8 +72,12 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 const FOCUS_IN = '\x1b[I';
 
+afterEach(() => {
+    vi.restoreAllMocks();
+});
+
 describe('FsmDriver -- send_on_spawn input prime', () => {
-    it('writes the declared prime sequence once shortly after spawn', async () => {
+    it('waits for first PTY output, then writes the declared prime after its delay', async () => {
         const factory = new RecordingFactory();
         const driver = new FsmDriver({
             specPath: writeSpec(baseSpec({
@@ -77,11 +91,76 @@ describe('FsmDriver -- send_on_spawn input prime', () => {
         driver.start();
         const pty = factory.last!;
         try {
-            // Nothing written synchronously at spawn -- the prime is delayed.
+            // The spawn delay alone is not enough: a slow macOS child can still
+            // be in canonical echo mode, where focus-in is printed as ^[[I and
+            // lost before the TUI installs its input handler.
             expect(pty.writes).toEqual([]);
-            await sleep(80);
+            await sleep(40);
+            expect(pty.writes).toEqual([]);
+            pty.emitOutput('\r ⣷ ');
+            await sleep(10);
+            expect(pty.writes).toEqual([]);
+            await sleep(30);
             // Exactly the focus-in event, exactly once.
             expect(pty.writes).toEqual([FOCUS_IN]);
+        } finally {
+            driver.shutdown();
+        }
+    });
+
+    it('logs the actual PTY write boundary with source, byte length, and spawn-relative timing', async () => {
+        const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined);
+        const factory = new RecordingFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({
+                send_on_spawn: [FOCUS_IN],
+                send_on_spawn_delay_ms: 20,
+            })),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        factory.last!.emitOutput('\r ⣷ ');
+        try {
+            await sleep(80);
+            expect(info).toHaveBeenCalledWith(
+                'FsmDriver',
+                expect.stringMatching(/PTY write before source=spawn-prime bytes=3 afterSpawnMs=\d+/),
+            );
+            expect(info).toHaveBeenCalledWith(
+                'FsmDriver',
+                expect.stringMatching(/PTY write after source=spawn-prime bytes=3 afterSpawnMs=\d+ outcome=success/),
+            );
+        } finally {
+            driver.shutdown();
+        }
+    });
+
+    it.each([
+        ['false', 'false'],
+        ['throw', 'error error=simulated PTY write failure'],
+        ['reject', 'error error=simulated async PTY write failure'],
+    ] as const)('logs a %s PTY write failure instead of reporting success', async (writeOutcome, expectedOutcome) => {
+        const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => undefined);
+        const factory = new RecordingFactory(writeOutcome);
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({
+                send_on_spawn: [FOCUS_IN],
+                send_on_spawn_delay_ms: 20,
+            })),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        factory.last!.emitOutput('\r ⣷ ');
+        try {
+            await sleep(80);
+            expect(warn).toHaveBeenCalledWith(
+                'FsmDriver',
+                expect.stringMatching(new RegExp(`PTY write after source=spawn-prime bytes=3 afterSpawnMs=\\d+ outcome=${expectedOutcome}`)),
+            );
         } finally {
             driver.shutdown();
         }
@@ -97,6 +176,7 @@ describe('FsmDriver -- send_on_spawn input prime', () => {
         });
         driver.start();
         const pty = factory.last!;
+        pty.emitOutput('\r ⣷ ');
         try {
             await sleep(80);
             expect(pty.writes).toEqual([]);
@@ -128,8 +208,8 @@ describe('FsmDriver -- send_on_spawn input prime', () => {
 
 describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
     // An initial state with generating status and no outgoing transitions: the
-    // machine sits in it and the screen never changes (RecordingPty emits no
-    // data), which is exactly the focus-gated stall the watchdog must recover.
+    // fake emits one startup frame, then the screen never changes, which is the
+    // focus-gated stall the watchdog must recover.
     function generatingStallSpec(overrides: Record<string, unknown>): Record<string, unknown> {
         return baseSpec({
             states: [{ id: 'busy', label: 'Working', initial: true, status: 'generating' }],
@@ -141,6 +221,7 @@ describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
     }
 
     it('re-injects focus-in while a generating screen stays frozen', async () => {
+        const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined);
         const factory = new RecordingFactory();
         const driver = new FsmDriver({
             specPath: writeSpec(generatingStallSpec({ refocus_when_stalled_ms: 50 })),
@@ -150,6 +231,7 @@ describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
         });
         driver.start();
         const pty = factory.last!;
+        pty.emitOutput('\r ⣷ ');
         try {
             // Spawn prime (1) plus at least one stall re-prime within a few
             // windows. Each write is the focus-in event.
@@ -157,6 +239,14 @@ describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
             const focusInWrites = pty.writes.filter(w => w === FOCUS_IN).length;
             expect(focusInWrites).toBeGreaterThanOrEqual(2);
             expect(pty.writes.every(w => w === FOCUS_IN)).toBe(true);
+            expect(info).toHaveBeenCalledWith(
+                'FsmDriver',
+                expect.stringMatching(/PTY write before source=stall-refocus bytes=3 afterSpawnMs=\d+/),
+            );
+            expect(info).toHaveBeenCalledWith(
+                'FsmDriver',
+                expect.stringMatching(/PTY write after source=stall-refocus bytes=3 afterSpawnMs=\d+ outcome=success/),
+            );
         } finally {
             driver.shutdown();
         }
@@ -172,6 +262,7 @@ describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
         });
         driver.start();
         const pty = factory.last!;
+        pty.emitOutput('\r ⣷ ');
         try {
             await sleep(220);
             // Only the one spawn prime -- no stall watchdog without the opt-in.

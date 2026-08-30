@@ -17,6 +17,7 @@ import { TerminalScreen } from '../../cli-adapters/terminal-screen.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import type { PtyRuntimeTransport } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
+import { LOG } from '../../logging/logger.js';
 
 export type { PtyTransportFactory };
 
@@ -49,6 +50,11 @@ export interface TerminalAdapterHandlers {
     on_screen_changed?(snapshot: string): void;
     on_exit?(info: { exitCode: number }): void;
     tick?(): void;
+}
+
+export interface PrimeWriteContext {
+    source: 'spawn-prime' | 'stall-refocus';
+    specTag: string;
 }
 
 /**
@@ -102,6 +108,7 @@ export class TerminalAdapter {
     /** Debug-only ring buffer of PTY input/output/resize/cursor events. */
     private events: SpecPtyEvent[] = [];
     private lastCursorKey = '';
+    private spawnedAtMs = 0;
 
     constructor(
         private readonly opts: TerminalAdapterOpts,
@@ -135,6 +142,7 @@ export class TerminalAdapter {
             cols: this.cols,
             rows: this.rows,
         });
+        this.spawnedAtMs = Date.now();
         this.recordEvent('spawn', `${this.opts.binary} (${this.cols}x${this.rows})`);
         this.handlers.init?.({ pid: this.pty.pid });
         this.pty.onData((chunk) => this.onChunk(chunk));
@@ -182,9 +190,41 @@ export class TerminalAdapter {
         return { cols: this.cols, rows: this.rows };
     }
 
-    send_keys(text: string): void {
+    send_keys(text: string, primeContext?: PrimeWriteContext): void | Promise<boolean> {
         this.recordEvent('input', capPreview(escapeControl(text)), text.length);
-        this.pty?.write(text);
+        if (!primeContext) {
+            this.pty?.write(text);
+            return;
+        }
+        return this.writeInput(text, primeContext);
+    }
+
+    private async writeInput(text: string, primeContext: PrimeWriteContext): Promise<boolean> {
+        const bytes = Buffer.byteLength(text, 'utf8');
+        const source = primeContext.source;
+        const prefix = `[${primeContext.specTag}] `;
+        const afterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
+        const pty = this.pty;
+        if (!pty) {
+            LOG.warn('FsmDriver', `${prefix}PTY write skipped source=${source} bytes=${bytes} afterSpawnMs=${afterSpawnMs} outcome=no-active-pty`);
+            return false;
+        }
+        LOG.info('FsmDriver', `${prefix}PTY write before source=${source} bytes=${bytes} afterSpawnMs=${afterSpawnMs}`);
+        try {
+            const result = await pty.write(text);
+            const completedAfterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
+            if (result === false) {
+                LOG.warn('FsmDriver', `${prefix}PTY write after source=${source} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=false`);
+                return false;
+            }
+            LOG.info('FsmDriver', `${prefix}PTY write after source=${source} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=success`);
+            return true;
+        } catch (error) {
+            const completedAfterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
+            const message = error instanceof Error ? error.message : String(error);
+            LOG.warn('FsmDriver', `${prefix}PTY write after source=${source} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=error error=${message}`);
+            return false;
+        }
     }
 
     /** Forward runtime metadata (meshNodeId, workspaceLabel, lifecycle, …) to
