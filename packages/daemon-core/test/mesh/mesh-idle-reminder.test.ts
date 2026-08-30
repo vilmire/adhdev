@@ -29,6 +29,7 @@ import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __clearMeshLedgerForTests, appendLedgerEntry, readLedgerEntriesByKind } from '../../src/mesh/mesh-ledger.js';
+import { buildMeshActiveWorkLedgerSnapshot } from '../../src/mesh/mesh-active-work.js';
 import type { MeshMissionRecord } from '../../src/mesh/mesh-missions.js';
 
 // Minimal coordinator stub: the reminder only ever calls onEvent('send_message', …).
@@ -147,6 +148,27 @@ describe('mesh idle-active-mission reminder', () => {
         expect(coord.calls).toHaveLength(1);
         expect(coord.calls[0].event).toBe('send_message');
         expect(coord.calls[0].payload.input.text).toContain('Deploy pipeline');
+    });
+
+    it('reuses a same-tick six-kind ledger snapshot without reading that slice again', () => {
+        upsertMeshMission(meshId, { title: 'Shared snapshot', goal: 'ship it' });
+        const coord = makeCoordinator();
+        const store = MeshRuntimeStore.getInstance();
+        const readSpy = vi.spyOn(store, 'readLedgerEntries');
+        const snapshot = buildMeshActiveWorkLedgerSnapshot([]);
+
+        const fired = maybeInjectIdleActiveMissionReminder(
+            meshId,
+            coord.instance,
+            undefined,
+            1_000,
+            undefined,
+            snapshot,
+        );
+
+        expect(fired).toBe(true);
+        const sixKindReads = readSpy.mock.calls.filter(([, opts]) => opts?.kinds?.length === 6);
+        expect(sixKindReads).toHaveLength(0);
     });
 
     it('no-op when there are no active missions', () => {

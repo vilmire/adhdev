@@ -24,7 +24,8 @@ import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
 import { getActiveDirectDispatches, getQueue, updateDirectDispatchStatus } from './mesh-work-queue.js';
 import { readLedgerEntriesByKind, appendLedgerEntry } from './mesh-ledger.js';
-import { pruneStaleDirectDispatches } from './mesh-active-work.js';
+import { buildMeshActiveWorkLedgerSnapshot, pruneStaleDirectDispatches } from './mesh-active-work.js';
+import type { MeshActiveWorkLedgerSnapshot } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
 import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant, countTrailingToolActivityAfterFinalAssistant, selectFinalAssistantTurnEndMessage, readChatMessageTimestampMs } from '../providers/chat-message-normalization.js';
 import { hasNonEmptyModalButtons } from '../commands/read-chat-presentation.js';
@@ -837,11 +838,20 @@ export async function autoPruneStaleDirectDispatches(
     selfIds: string[],
     localDaemonId: string | undefined,
     minAgeMs: number,
-): Promise<void> {
+    sharedLedgerSnapshot?: MeshActiveWorkLedgerSnapshot,
+): Promise<MeshActiveWorkLedgerSnapshot | undefined> {
     const directDispatches = getActiveDirectDispatches(mesh.id);
-    if (directDispatches.length === 0) return; // nothing dispatched → nothing to prune
+    if (directDispatches.length === 0) return undefined; // nothing dispatched → nothing to prune
 
     const liveNodes = await collectLiveNodesWithSessions(components, mesh, selfIds, localDaemonId);
+    const ledgerSnapshot = sharedLedgerSnapshot ?? buildMeshActiveWorkLedgerSnapshot(readLedgerEntriesByKind(mesh.id, [
+        'task_dispatched',
+        'task_completed',
+        'task_failed',
+        'task_stalled',
+        'task_approval_needed',
+        'task_question_pending',
+    ]));
 
     const result = pruneStaleDirectDispatches({
         meshId: mesh.id,
@@ -851,14 +861,8 @@ export async function autoPruneStaleDirectDispatches(
         // tail:500 window can be crowded out by unrelated mesh traffic while a still-active
         // dispatch's ledger evidence falls out of the window, risking a live dispatch being
         // misclassified as an orphan and pruned.
-        ledgerEntries: readLedgerEntriesByKind(mesh.id, [
-            'task_dispatched',
-            'task_completed',
-            'task_failed',
-            'task_stalled',
-            'task_approval_needed',
-            'task_question_pending',
-        ]),
+        ledgerEntries: ledgerSnapshot.entries,
+        ledgerSnapshot,
         directDispatches,
         nodes: liveNodes,
         execute: true,
@@ -870,6 +874,7 @@ export async function autoPruneStaleDirectDispatches(
     if (result.prunedCount > 0) {
         LOG.info('MeshReconcile', `Auto-pruned ${result.prunedCount} orphaned direct dispatch record(s) for mesh ${mesh.id}`);
     }
+    return ledgerSnapshot;
 }
 
 // TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i). Single-shot transcript poll for a CLAIM-PATH

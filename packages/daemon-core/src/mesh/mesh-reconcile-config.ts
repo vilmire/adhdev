@@ -25,6 +25,11 @@ export const DEFAULT_RECONCILE_INTERVAL_MS = 4_000;
 // operator pruning explicitly wants the orphan gone now. Overridable via env for tuning.
 export const DEFAULT_AUTO_PRUNE_MIN_AGE_MS = 24 * 60 * 60_000; // 24h
 
+// The orphan age gate is 24h, so reclassifying the same six-kind ledger snapshot every
+// 4s cannot improve safety or materially reduce cleanup latency. Once per minute bounds
+// the extra delay to <0.07% of the conservative gate while removing 15 redundant passes.
+export const DEFAULT_AUTO_PRUNE_INTERVAL_MS = 60_000; // 1m
+
 export function resolveAutoPruneMinAgeMs(): number {
     const raw = readNonEmptyString(process.env.MESH_AUTO_PRUNE_MIN_AGE_MS);
     if (raw) {

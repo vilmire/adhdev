@@ -2,7 +2,7 @@ import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
 import { deleteDirectDispatchesByTaskId } from './mesh-work-queue.js';
-import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, machineCoreFromDaemonId, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { resolveTurnAttemptRow, presentationFromAttemptRow } from './mesh-turn-presentation.js';
 import type { TurnStage } from './mesh-turn-ledger.js';
 import { isWeakCompletionEvidence } from './mesh-events-utils.js';
@@ -113,6 +113,8 @@ export interface BuildMeshActiveWorkOptions {
     meshId: string;
     queue?: MeshWorkQueueEntry[];
     ledgerEntries?: MeshLedgerEntry[];
+    /** Pre-sorted ledger entries + terminal index, reusable across same-tick consumers. */
+    ledgerSnapshot?: MeshActiveWorkLedgerSnapshot;
     /**
      * Active direct dispatches from MeshRuntimeStore. When provided, these are used instead of
      * scanning ledger entries for direct dispatches — eliminates the O(n_ledger) scan.
@@ -127,6 +129,160 @@ export interface BuildMeshActiveWorkOptions {
 
 const DIRECT_DISPATCH_VIA = new Set(['p2p_direct', 'local_direct', 'mesh_send_task']);
 const TERMINAL_LEDGER_KINDS = new Set(['task_completed', 'task_failed', 'task_stalled']);
+
+interface IndexedTerminal {
+    entry: MeshLedgerEntry;
+    timestampMs: number;
+    order: number;
+}
+
+interface TerminalBucket {
+    real: IndexedTerminal[];
+    approval: IndexedTerminal[];
+}
+
+interface DispatchTerminalQuery {
+    dispatch: MeshLedgerEntry;
+    timestampMs: number;
+}
+
+export interface MeshActiveWorkLedgerSnapshot {
+    /** Entries sorted with the same timestamp ordering used by the legacy implementation. */
+    entries: MeshLedgerEntry[];
+    /** @internal Batch matcher; exposed only through the snapshot so consumers can reuse the index. */
+    matchDirectDispatchTerminals(dispatches: MeshLedgerEntry[]): Map<MeshLedgerEntry, MeshLedgerEntry>;
+}
+
+export interface BuildMeshActiveWorkLedgerSnapshotOptions {
+    /** Test/diagnostic hook counting terminal-vs-dispatch timestamp probes. */
+    onTerminalProbe?: () => void;
+}
+
+function pushTerminalBucket(
+    buckets: Map<string, TerminalBucket>,
+    key: string | undefined,
+    terminal: IndexedTerminal,
+): void {
+    if (!key) return;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+        bucket = { real: [], approval: [] };
+        buckets.set(key, bucket);
+    }
+    (terminal.entry.kind === 'task_approval_needed' ? bucket.approval : bucket.real).push(terminal);
+}
+
+function pushTerminalQuery(
+    queries: Map<string, DispatchTerminalQuery[]>,
+    key: string | undefined,
+    query: DispatchTerminalQuery,
+): void {
+    if (!key) return;
+    const existing = queries.get(key);
+    if (existing) existing.push(query);
+    else queries.set(key, [query]);
+}
+
+function earlierTerminal(a: IndexedTerminal | undefined, b: IndexedTerminal | undefined): IndexedTerminal | undefined {
+    if (!a) return b;
+    if (!b) return a;
+    return a.order <= b.order ? a : b;
+}
+
+/**
+ * Build the immutable ledger ordering and terminal lookup index once. Terminal rows with an
+ * explicit taskId live only in the task bucket; rows without one use session, or canonical
+ * daemon/node when the dispatch itself has no session. That is exactly terminalMatchesDispatch's
+ * fallback policy, without re-filtering every terminal for every dispatch.
+ *
+ * Matching is a merge scan per bucket. Dispatch queries and terminals are both timestamp-sorted,
+ * so each is advanced at most once: O(L + D) across the full snapshot.
+ */
+export function buildMeshActiveWorkLedgerSnapshot(
+    ledgerEntries: MeshLedgerEntry[],
+    options: BuildMeshActiveWorkLedgerSnapshotOptions = {},
+): MeshActiveWorkLedgerSnapshot {
+    const timestampByEntry = new Map<MeshLedgerEntry, number>();
+    for (const entry of ledgerEntries) timestampByEntry.set(entry, new Date(entry.timestamp).getTime());
+    const entries = ledgerEntries.slice().sort((a, b) => timestampByEntry.get(a)! - timestampByEntry.get(b)!);
+
+    const taskBuckets = new Map<string, TerminalBucket>();
+    const sessionBuckets = new Map<string, TerminalBucket>();
+    const nodeBuckets = new Map<string, TerminalBucket>();
+    let order = 0;
+    for (const entry of entries) {
+        if (!TERMINAL_LEDGER_KINDS.has(entry.kind) && entry.kind !== 'task_approval_needed') continue;
+        const timestampMs = timestampByEntry.get(entry)!;
+        if (!Number.isFinite(timestampMs)) continue; // legacy >= comparison never matched invalid timestamps
+        const indexed = { entry, timestampMs, order: order++ };
+        const taskId = readString(entry.payload?.taskId);
+        if (taskId) {
+            pushTerminalBucket(taskBuckets, taskId, indexed);
+        } else {
+            // A dispatch WITH a session uses only session fallback. A dispatch WITHOUT one
+            // uses node fallback even when the terminal itself carries some session id.
+            // Index both axes to preserve that asymmetric legacy predicate exactly.
+            pushTerminalBucket(sessionBuckets, readString(entry.sessionId), indexed);
+            pushTerminalBucket(nodeBuckets, machineCoreFromDaemonId(entry.nodeId), indexed);
+        }
+    }
+
+    return {
+        entries,
+        matchDirectDispatchTerminals(dispatches: MeshLedgerEntry[]): Map<MeshLedgerEntry, MeshLedgerEntry> {
+            const sortedDispatches = dispatches.slice().sort((a, b) => timestampByEntry.get(a)! - timestampByEntry.get(b)!);
+            const taskQueries = new Map<string, DispatchTerminalQuery[]>();
+            const sessionQueries = new Map<string, DispatchTerminalQuery[]>();
+            const nodeQueries = new Map<string, DispatchTerminalQuery[]>();
+            for (const dispatch of sortedDispatches) {
+                const timestampMs = timestampByEntry.get(dispatch) ?? new Date(dispatch.timestamp).getTime();
+                if (!Number.isFinite(timestampMs)) continue;
+                const query = { dispatch, timestampMs };
+                pushTerminalQuery(taskQueries, directDispatchTaskId(dispatch), query);
+                const sessionId = readString(dispatch.sessionId);
+                if (dispatch.sessionId) pushTerminalQuery(sessionQueries, sessionId, query);
+                else pushTerminalQuery(nodeQueries, machineCoreFromDaemonId(dispatch.nodeId), query);
+            }
+
+            const realByDispatch = new Map<MeshLedgerEntry, IndexedTerminal>();
+            const approvalByDispatch = new Map<MeshLedgerEntry, IndexedTerminal>();
+            const resolve = (
+                queries: Map<string, DispatchTerminalQuery[]>,
+                buckets: Map<string, TerminalBucket>,
+                bucketKind: keyof TerminalBucket,
+                output: Map<MeshLedgerEntry, IndexedTerminal>,
+            ): void => {
+                for (const [key, bucketQueries] of queries) {
+                    const terminals = buckets.get(key)?.[bucketKind];
+                    if (!terminals?.length) continue;
+                    let cursor = 0;
+                    for (const query of bucketQueries) {
+                        while (cursor < terminals.length) {
+                            options.onTerminalProbe?.();
+                            if (terminals[cursor].timestampMs >= query.timestampMs) break;
+                            cursor += 1;
+                        }
+                        const candidate = terminals[cursor];
+                        if (candidate) output.set(query.dispatch, earlierTerminal(output.get(query.dispatch), candidate)!);
+                    }
+                }
+            };
+            resolve(taskQueries, taskBuckets, 'real', realByDispatch);
+            resolve(sessionQueries, sessionBuckets, 'real', realByDispatch);
+            resolve(nodeQueries, nodeBuckets, 'real', realByDispatch);
+            resolve(taskQueries, taskBuckets, 'approval', approvalByDispatch);
+            resolve(sessionQueries, sessionBuckets, 'approval', approvalByDispatch);
+            resolve(nodeQueries, nodeBuckets, 'approval', approvalByDispatch);
+
+            const result = new Map<MeshLedgerEntry, MeshLedgerEntry>();
+            for (const dispatch of sortedDispatches) {
+                const selected = realByDispatch.get(dispatch) || approvalByDispatch.get(dispatch);
+                if (selected) result.set(dispatch, selected.entry);
+            }
+            return result;
+        },
+    };
+}
 
 function readString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -220,16 +376,6 @@ function directDispatchTaskId(entry: MeshLedgerEntry): string {
     return readString(entry.payload?.taskId) || entry.id;
 }
 
-function terminalMatchesDispatch(terminal: MeshLedgerEntry, dispatch: MeshLedgerEntry, taskId: string): boolean {
-    const terminalTaskId = readString(terminal.payload?.taskId);
-    if (terminalTaskId && terminalTaskId === taskId) return true;
-    if (terminalTaskId && terminalTaskId !== taskId) return false;
-    if (dispatch.sessionId && sessionIdsEquivalent(terminal.sessionId, dispatch.sessionId)) return true;
-    // Node ids can carry interchangeable daemon-id forms (bare `mach_X` vs
-    // `daemon_mach_X`); compare under the canonical machine core, not raw `===`.
-    return Boolean(dispatch.nodeId && daemonIdsEquivalent(terminal.nodeId, dispatch.nodeId) && !dispatch.sessionId);
-}
-
 function statusFromTerminal(entry: MeshLedgerEntry): MeshActiveWorkStatus {
     if (entry.kind === 'task_approval_needed') return 'awaiting_approval';
     // A question (waiting_choice) is a distinct blocked state — kept OUT of
@@ -290,21 +436,18 @@ function classifyDirectDispatch(params: {
  */
 function buildLedgerDirectDispatchRecord(
     dispatch: MeshLedgerEntry,
-    ctx: { terminals: MeshLedgerEntry[]; nodes: any[] | undefined; now: number },
+    ctx: { terminal: MeshLedgerEntry | undefined; nodes: any[] | undefined; now: number },
 ): { record: MeshActiveWorkRecord; terminalRow: boolean } {
     const taskId = directDispatchTaskId(dispatch);
-    const matching = ctx.terminals
-        .filter(entry => new Date(entry.timestamp).getTime() >= new Date(dispatch.timestamp).getTime())
-        .filter(entry => terminalMatchesDispatch(entry, dispatch, taskId));
     // APPROVAL-Q1-REALTIME (stale level state): prefer a REAL terminal (task_completed /
     // task_failed) over an earlier task_approval_needed for the same dispatch. An approval
     // that was subsequently resolved — the worker went on to complete or fail — must NOT keep
     // the node pinned to awaiting_approval, which would falsely tell the coordinator (via
     // mesh_status/read_chat) the worker is still blocked (the UX inversion this fix avoids).
     // Among real terminals the earliest still wins (unchanged); approval-needed is selected
-    // only when no real terminal followed it. `terminals` is sorted ascending, so `.find`
-    // returns the earliest real terminal.
-    const terminal = matching.find(entry => entry.kind !== 'task_approval_needed') || matching[0];
+    // only when no real terminal followed it. The snapshot's batch merge preserves that
+    // ordering and passes the already-selected terminal here.
+    const terminal = ctx.terminal;
     const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
     const live = sessionStatusFromNodes(ctx.nodes, dispatch.nodeId, dispatch.sessionId);
     const status = terminalStatus || live.status || 'assigned';
@@ -449,6 +592,8 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
 
 export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; staleDirectWork: MeshActiveWorkRecord[]; staleDirectWorkNote?: string; terminalDirectWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
     const now = opts.now ?? Date.now();
+    const ledgerSnapshot = opts.ledgerSnapshot ?? buildMeshActiveWorkLedgerSnapshot(opts.ledgerEntries || []);
+    const ledgerEntries = ledgerSnapshot.entries;
     const records: MeshActiveWorkRecord[] = [];
     const staleDirectWork: MeshActiveWorkRecord[] = [];
     const terminalDirectWork: MeshActiveWorkRecord[] = [];
@@ -487,7 +632,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         // terminal already earned. Choice stays distinct: it is vetoed as its OWN status,
         // never remapped to approval.
         const queueTerminalAuthority = task.status === 'assigned'
-            && hasTerminalLedgerAuthorityForTask(opts.ledgerEntries, task.id);
+            && hasTerminalLedgerAuthorityForTask(ledgerEntries, task.id);
         let queueStatus: MeshActiveWorkStatus = !queueTerminalAuthority && (
             queueLive.status === 'awaiting_approval'
             || queueLive.status === 'awaiting_choice'
@@ -536,7 +681,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             // ledger authority for this dispatch's task makes a sniffed approval/choice/
             // generating stale by construction (no current actionable modal).
             const directTerminalAuthority = !isTerminal
-                && hasTerminalLedgerAuthorityForTask(opts.ledgerEntries, dispatch.taskId);
+                && hasTerminalLedgerAuthorityForTask(ledgerEntries, dispatch.taskId);
             const liveStatus = directTerminalAuthority ? undefined : live.status;
             const status: MeshActiveWorkStatus = isTerminal
                 ? (dbStatus === 'completed' ? 'idle' : 'failed')
@@ -584,12 +729,12 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         }
         // Also scan ledger for remote dispatches (via p2p_direct) whose taskIds are NOT in MeshRuntimeStore.
         // Remote daemons write their own local MeshRuntimeStore; this coordinator's MeshRuntimeStore only has local dispatches.
-        const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-        const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
-        for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
+        const ledgerDispatches = ledgerEntries.filter(isDirectDispatch);
+        const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
+        for (const dispatch of ledgerDispatches) {
             if (dbTaskIds.has(directDispatchTaskId(dispatch))) continue; // already covered by MeshRuntimeStore path above
             if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue; // already emitted as a queue row above
-            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminals, nodes: opts.nodes, now });
+            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now });
             if (terminalRow) {
                 terminalDirectWork.push(record);
                 if (opts.includeTerminalDirect !== true) continue;
@@ -602,11 +747,11 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         }
     } else {
         // Full ledger scan: no MeshRuntimeStore direct dispatches available (standalone mode or empty).
-        const ledgerEntries = (opts.ledgerEntries || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-        const terminals = ledgerEntries.filter(entry => TERMINAL_LEDGER_KINDS.has(entry.kind) || entry.kind === 'task_approval_needed');
-        for (const dispatch of ledgerEntries.filter(isDirectDispatch)) {
+        const ledgerDispatches = ledgerEntries.filter(isDirectDispatch);
+        const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
+        for (const dispatch of ledgerDispatches) {
             if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue; // already emitted as a queue row above
-            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminals, nodes: opts.nodes, now });
+            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now });
             if (terminalRow) {
                 terminalDirectWork.push(record);
                 if (opts.includeTerminalDirect !== true) continue;
@@ -702,6 +847,8 @@ export interface PruneStaleDirectDispatchesOptions {
     directDispatches: DirectDispatchRecord[];
     /** Ledger tail used to attribute remote/terminal dispatches (readLedgerEntries). */
     ledgerEntries?: MeshLedgerEntry[];
+    /** Same-tick prepared ledger view; shares ordering and terminal index with other consumers. */
+    ledgerSnapshot?: MeshActiveWorkLedgerSnapshot;
     queue?: MeshWorkQueueEntry[];
     /** Live mesh nodes (decorated with live session details) — drives orphan detection. */
     nodes?: any[];
@@ -752,6 +899,7 @@ export function pruneStaleDirectDispatches(opts: PruneStaleDirectDispatchesOptio
         meshId: opts.meshId,
         queue: opts.queue,
         ledgerEntries: opts.ledgerEntries,
+        ledgerSnapshot: opts.ledgerSnapshot,
         directDispatches: opts.directDispatches,
         nodes: opts.nodes,
         now,

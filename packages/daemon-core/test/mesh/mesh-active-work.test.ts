@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMeshActiveWork, buildMeshActiveWorkSummary, collectPendingApprovals, classifyStaleDirectForPrune, PRUNABLE_ORPHAN_STALE_REASONS } from '../../src/mesh/mesh-active-work.js';
+import { buildMeshActiveWork, buildMeshActiveWorkLedgerSnapshot, buildMeshActiveWorkSummary, collectPendingApprovals, classifyStaleDirectForPrune, PRUNABLE_ORPHAN_STALE_REASONS } from '../../src/mesh/mesh-active-work.js';
 import type { MeshActiveWorkRecord } from '../../src/mesh/mesh-active-work.js';
 import type { MeshLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 
@@ -618,6 +618,115 @@ describe('buildMeshActiveWork — approval level state supersession', () => {
         expect(result.activeWork.some(r => r.status === 'awaiting_approval')).toBe(false);
         const terminal = result.terminalDirectWork.find(r => r.taskId === 'task-1');
         expect(terminal).toMatchObject({ status: 'idle', terminal: true, terminalKind: 'task_completed' });
+    });
+});
+
+describe('buildMeshActiveWork — indexed terminal matching', () => {
+    function terminal(overrides: Partial<MeshLedgerEntry> = {}): MeshLedgerEntry {
+        return {
+            id: overrides.id ?? 'terminal-1',
+            meshId: overrides.meshId ?? 'mesh-1',
+            kind: overrides.kind ?? 'task_completed',
+            timestamp: overrides.timestamp ?? '2026-05-26T00:01:00.000Z',
+            nodeId: overrides.nodeId,
+            sessionId: overrides.sessionId,
+            payload: overrides.payload ?? {},
+        };
+    }
+
+    it('matches the legacy scan at approval supersession and timestamp boundaries', () => {
+        const entries: MeshLedgerEntry[] = [
+            dispatch({ id: 'd-task', timestamp: '2026-05-26T00:00:10.000Z' }),
+            terminal({ id: 'too-early', timestamp: '2026-05-26T00:00:09.999Z', payload: { taskId: 'task-1' } }),
+            terminal({ id: 'approval-at-boundary', kind: 'task_approval_needed', timestamp: '2026-05-26T00:00:10.000Z', payload: { taskId: 'task-1' } }),
+            terminal({ id: 'wrong-task-same-session', timestamp: '2026-05-26T00:00:11.000Z', sessionId: 'session-1', payload: { taskId: 'other-task' } }),
+            terminal({ id: 'real-after-approval', timestamp: '2026-05-26T00:00:12.000Z', payload: { taskId: 'task-1' } }),
+            dispatch({
+                id: 'd-session',
+                timestamp: '2026-05-26T00:00:20.000Z',
+                sessionId: 'session-2',
+                payload: { source: 'direct', via: 'mesh_send_task', taskId: 'task-2', message: 'session fallback' },
+            }),
+            terminal({ id: 'session-boundary', kind: 'task_failed', timestamp: '2026-05-26T00:00:20.000Z', sessionId: 'session-2' }),
+            {
+                id: 'd-node',
+                meshId: 'mesh-1',
+                kind: 'task_dispatched',
+                timestamp: '2026-05-26T00:00:30.000Z',
+                nodeId: 'daemon_mach_abc',
+                payload: { source: 'direct', via: 'mesh_send_task', taskId: 'task-3', message: 'node fallback' },
+            },
+            terminal({ id: 'node-boundary', kind: 'task_stalled', timestamp: '2026-05-26T00:00:30.000Z', nodeId: 'mach_abc', sessionId: 'unrelated-terminal-session' }),
+            dispatch({
+                id: 'd-no-terminal',
+                timestamp: '2026-05-26T00:00:40.000Z',
+                sessionId: 'session-4',
+                payload: { source: 'direct', via: 'mesh_send_task', taskId: 'task-4', message: 'no terminal' },
+            }),
+            terminal({ id: 'session-too-early', timestamp: '2026-05-26T00:00:39.999Z', sessionId: 'session-4' }),
+        ];
+
+        const snapshot = buildMeshActiveWorkLedgerSnapshot(entries);
+        const result = buildMeshActiveWork({
+            meshId: 'mesh-1',
+            ledgerEntries: entries,
+            ledgerSnapshot: snapshot,
+            includeTerminalDirect: true,
+        });
+        const records = [...result.activeWork, ...result.staleDirectWork, ...result.terminalDirectWork]
+            .filter((record, index, all) => all.findIndex(candidate => candidate.taskId === record.taskId) === index)
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+        // These are the exact selections made by the former sorted filter/filter/find scan.
+        expect(records.map(record => ({
+            taskId: record.taskId,
+            status: record.status,
+            terminalKind: record.terminalKind,
+            terminalAt: record.terminalAt,
+        }))).toEqual([
+            { taskId: 'task-1', status: 'idle', terminalKind: 'task_completed', terminalAt: '2026-05-26T00:00:12.000Z' },
+            { taskId: 'task-2', status: 'failed', terminalKind: 'task_failed', terminalAt: '2026-05-26T00:00:20.000Z' },
+            { taskId: 'task-3', status: 'failed', terminalKind: 'task_stalled', terminalAt: '2026-05-26T00:00:30.000Z' },
+            { taskId: 'task-4', status: 'assigned', terminalKind: undefined, terminalAt: undefined },
+        ]);
+    });
+
+    it('keeps terminal lookup probes linear as dispatch count grows', () => {
+        const run = (dispatchCount: number): number => {
+            const entries: MeshLedgerEntry[] = [];
+            for (let i = 0; i < 2_000; i += 1) {
+                entries.push(terminal({
+                    id: `noise-${i}`,
+                    timestamp: new Date(Date.UTC(2026, 4, 26, 0, 1, i)).toISOString(),
+                    payload: { taskId: `noise-task-${i}` },
+                }));
+            }
+            for (let i = 0; i < dispatchCount; i += 1) {
+                entries.push(dispatch({
+                    id: `dispatch-${i}`,
+                    timestamp: new Date(Date.UTC(2026, 4, 26, 0, 0, i)).toISOString(),
+                    sessionId: `session-${i}`,
+                    payload: { source: 'direct', via: 'mesh_send_task', taskId: `task-${i}`, message: `work ${i}` },
+                }));
+                entries.push(terminal({
+                    id: `match-${i}`,
+                    timestamp: new Date(Date.UTC(2026, 4, 26, 0, 2, i)).toISOString(),
+                    payload: { taskId: `task-${i}` },
+                }));
+            }
+            let probes = 0;
+            const ledgerSnapshot = buildMeshActiveWorkLedgerSnapshot(entries, {
+                onTerminalProbe: () => { probes += 1; },
+            });
+            buildMeshActiveWork({ meshId: 'mesh-1', ledgerEntries: entries, ledgerSnapshot });
+            return probes;
+        };
+
+        const small = run(100);
+        const large = run(200);
+        expect(small).toBeGreaterThan(0);
+        expect(large).toBeLessThanOrEqual((small * 2) + 10);
+        expect(large).toBeLessThan(2_000);
     });
 });
 

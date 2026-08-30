@@ -28,7 +28,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { runMeshReconcileTick, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests, __resetReclaimUnknownStreakForTests, restampReboundMeshWorkerAssignment } from '../../src/mesh/mesh-reconcile-loop.js'
+import { runMeshReconcileTick, __resetAutoPruneThrottleForTests, __resetReconcileInFlightSynthDebounceForTests, getMeshV2BackstopCounters, __resetMeshV2BackstopCountersForTests, __resetReclaimUnknownStreakForTests, restampReboundMeshWorkerAssignment } from '../../src/mesh/mesh-reconcile-loop.js'
 import { setLogLevel, getRecentLogs } from '../../src/logging/logger.js'
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { reconcileDirectDispatchCompletionFromTranscript } from '../../src/mesh/mesh-events-stale.js'
@@ -43,6 +43,7 @@ function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
   __resetMeshRuntimeStoreForTests()
   __resetReconcileInFlightSynthDebounceForTests()
+  __resetAutoPruneThrottleForTests()
   __resetReclaimUnknownStreakForTests()
   meshConfigMocks.listMeshes.mockReturnValue([])
   meshConfigMocks.getMesh.mockReset()
@@ -2789,6 +2790,36 @@ describe('runMeshReconcileTick', () => {
         expect(pruneEntries).toHaveLength(1)
         expect((pruneEntries[0].payload as any)?.prunedCount).toBe(1)
       } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('throttles auto-prune to one pass per minute per mesh', async () => {
+      const meshId = `mesh_reconcile_phase5_throttle_${Date.now()}`
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-08-30T00:00:00.000Z'))
+      try {
+        seedDispatch(meshId, 'task_young_anchor', 'node_gone', 'sess-young', 1 * HOUR)
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_present', workspace: '/repo/present' }] },
+        ])
+        const { components } = makeAutoPruneComponents()
+
+        // First tick claims the mesh's prune window but preserves the young orphan.
+        await runMeshReconcileTick(components)
+        seedDispatch(meshId, 'task_old_added_after_pass', 'node_gone', 'sess-old', 2 * DAY)
+
+        // A 4s-style immediate tick must not re-run prune, so the newly-added old row remains.
+        vi.setSystemTime(new Date('2026-08-30T00:00:04.000Z'))
+        await runMeshReconcileTick(components)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === 'task_old_added_after_pass')).toBe(true)
+
+        // At the one-minute boundary the next pass runs and removes that old orphan.
+        vi.setSystemTime(new Date('2026-08-30T00:01:00.000Z'))
+        await runMeshReconcileTick(components)
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === 'task_old_added_after_pass')).toBe(false)
+      } finally {
+        vi.useRealTimers()
         cleanup(meshId)
       }
     })

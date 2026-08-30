@@ -83,6 +83,7 @@ import { getMeshMissions, type MeshMissionRecord } from './mesh-missions.js';
 import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { readLedgerEntries, readLedgerEntriesByKind } from './mesh-ledger.js';
 import { buildMeshActiveWork } from './mesh-active-work.js';
+import type { MeshActiveWorkLedgerSnapshot } from './mesh-active-work.js';
 import { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs } from './mesh-refine-status.js';
 import type { ProviderState } from '../providers/provider-instance.js';
 
@@ -215,6 +216,7 @@ export function maybeInjectIdleActiveMissionReminder(
     policy: RepoMeshPolicy | undefined,
     now: number = Date.now(),
     instanceManager?: DaemonComponents['instanceManager'],
+    sharedLedgerSnapshot?: MeshActiveWorkLedgerSnapshot,
 ): boolean {
     try {
         if (!coordinator) return false;
@@ -236,7 +238,7 @@ export function maybeInjectIdleActiveMissionReminder(
         // a bare tail:200 window can be crowded out by unrelated mesh traffic while a
         // dispatch/terminal row for a still-active task falls out of the window, making this
         // gate wrongly conclude the mesh is fully idle.
-        const ledgerEntries = readLedgerEntriesByKind(meshId, [
+        const ledgerEntries = sharedLedgerSnapshot?.entries ?? readLedgerEntriesByKind(meshId, [
             'task_dispatched',
             'task_completed',
             'task_failed',
@@ -249,6 +251,7 @@ export function maybeInjectIdleActiveMissionReminder(
             queue: getQueue(meshId),
             directDispatches: getActiveDirectDispatches(meshId),
             ledgerEntries,
+            ledgerSnapshot: sharedLedgerSnapshot,
             now,
         }).summary;
         if (summary.totalActiveCount !== 0 || summary.generatingCount !== 0) return false;

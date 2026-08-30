@@ -66,10 +66,12 @@ import {
     resolveCoordinatorSelfIds,
 } from './mesh-reconcile-identity.js';
 import {
+    DEFAULT_AUTO_PRUNE_INTERVAL_MS,
     resolveAutoPruneMinAgeMs,
     resolvePendingHeldDrainEscalateMs,
     resolveReconcileIntervalMs,
 } from './mesh-reconcile-config.js';
+import type { MeshActiveWorkLedgerSnapshot } from './mesh-active-work.js';
 import { pullRemoteNodeQueues } from './mesh-remote-event-pull.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from './mesh-worktree-retention.js';
@@ -156,6 +158,15 @@ let lastDiskRetentionRunAt: number | undefined;
 const IDLE_SESSION_REAP_INTERVAL_MS = 5 * 60 * 1000; // 5m
 let lastIdleSessionReapRunAt: number | undefined;
 
+// PHASE 5 is cleanup behind a 24h age gate, not a latency-sensitive reconcile. Track
+// cadence per mesh so a newly hosted mesh gets an immediate first pass while steady-state
+// meshes avoid rebuilding the same active-work evidence on every 4s tick.
+const lastAutoPruneRunAtByMesh = new Map<string, number>();
+
+export function __resetAutoPruneThrottleForTests(): void {
+    lastAutoPruneRunAtByMesh.clear();
+}
+
 // One reconcile tick. Two independent phases:
 //
 //   PHASE 1 — Remote queue pull (the fix for remote worktree completions never
@@ -186,6 +197,10 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     const store = (() => {
         try { return MeshRuntimeStore.getInstance(); } catch { return undefined; }
     })();
+    // Populated only on a due auto-prune pass that had active direct dispatches. The idle
+    // reminder later in this SAME tick reuses the raw six-kind entries and terminal index,
+    // while still building its own no-live-nodes result.
+    const activeWorkLedgerSnapshots = new Map<string, MeshActiveWorkLedgerSnapshot>();
 
     // ── PHASE 0: retry the worker-side unresolved-delegate forward outbox ──────
     // Cloud-only (needs dispatchMeshCommand). A worker that is NOT a member of the
@@ -525,11 +540,16 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // nothing to re-prune. Isolated in its own try/catch per mesh so it can never kill the tick.
     {
         const minAgeMs = resolveAutoPruneMinAgeMs();
+        const nowMs = Date.now();
         for (const mesh of listMeshes()) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
+            const lastRunAt = lastAutoPruneRunAtByMesh.get(mesh.id);
+            if (lastRunAt !== undefined && nowMs - lastRunAt < DEFAULT_AUTO_PRUNE_INTERVAL_MS) continue;
+            lastAutoPruneRunAtByMesh.set(mesh.id, nowMs);
             try {
-                await autoPruneStaleDirectDispatches(components, mesh, selfIds, localDaemonId, minAgeMs);
+                const snapshot = await autoPruneStaleDirectDispatches(components, mesh, selfIds, localDaemonId, minAgeMs);
+                if (snapshot) activeWorkLedgerSnapshots.set(mesh.id, snapshot);
             } catch (e: any) {
                 LOG.warn('MeshReconcile', `Auto-prune stale direct failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
@@ -918,6 +938,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         getMesh(meshId)?.policy,
                         undefined,
                         components.instanceManager,
+                        activeWorkLedgerSnapshots.get(meshId),
                     );
                     continue;
                 }
@@ -1024,4 +1045,3 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
         },
     };
 }
-
