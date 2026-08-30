@@ -169,6 +169,33 @@ describe('AUTOLAUNCH-REMOTE-CLAIM — remote auto-launch claims after the ready 
     }
   })
 
+  it('(a2) remote post-wait claim preserves the preview-selected model and difficulty slot', async () => {
+    const meshId = `mesh_al_remote_claim_slot_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, { policy: { slots: [
+        { provider: 'codex-cli', model: 'gpt-5-mini', difficulty: ['easy'], maxParallel: 1 },
+        { provider: 'codex-cli', model: 'gpt-5.3-codex', difficulty: ['difficult'], maxParallel: 2 },
+      ] } })
+      const components = createComponents()
+      const task = enqueueTask(meshId, 'claim the difficult codex slot selected before launch', {
+        targetNodeId: NODE_ID,
+        taskMode: 'code_change',
+        difficulty: 'difficult',
+      })
+
+      await triggerMeshQueue(components, meshId)
+
+      const launch = components.dispatchMeshCommand.mock.calls.find((c: unknown[]) => c[1] === 'launch_cli')
+      expect(launch?.[2]).toMatchObject({ cliType: 'codex-cli', initialModel: 'gpt-5.3-codex' })
+      const row = taskRow(meshId, task.id)
+      expect(row?.status).toBe('assigned')
+      expect(row?.assignedProviderType).toBe('codex-cli')
+      expect(row?.assignedModel).toBe('gpt-5.3-codex')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('(b) a refused claim still registers the session with a future expiresAt (expiry filter cannot drop it)', () => {
     const meshId = `mesh_al_remote_claim_b_${randomUUID().slice(0, 8)}`
     const assign = vi.fn(() => false)

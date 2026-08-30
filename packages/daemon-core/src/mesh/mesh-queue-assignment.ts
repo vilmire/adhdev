@@ -2415,6 +2415,27 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                         autoLaunchedForQueueTaskId: task.id,
                     };
 
+                    // Both post-ready paths must claim against the same selected slot/model contract.
+                    const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t): t is string => !!t) : [];
+                    const buildRoutingDecision = () => buildAutoLaunchRoutingDecision({
+                        node,
+                        meshId,
+                        task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags },
+                        resolved: resolved as ResolvedProviderSelection & { providerType: string; slot: NodeCapabilitySlot },
+                        quotaRouting: mesh?.policy?.quotaRouting ?? null,
+                        quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
+                        skippedCandidates,
+                        requiredTagsResult: {
+                            required: requiredTags,
+                            satisfied: !requiredTags.length || nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, effectiveProviderType)),
+                            missing: requiredTags.filter(t => !buildMeshNodeCapabilityTags(node, effectiveProviderType).includes(t)),
+                        },
+                        effectiveModel,
+                        effectiveThinkingLevel,
+                        executedSlot: slotDecision.slot,
+                        demotionReason,
+                    });
+
                     if (launchTarget.mode === 'remote') {
                         // Relay-safe completion routing: stamp the coordinator anchor the same way
                         // mesh_launch_session does so the worker forwards events back to this daemon.
@@ -2488,8 +2509,12 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                             await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
                                 isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId),
                             }).catch(() => false);
-                            // Symmetric with the local path's post-wait tryAssignQueueTask.
-                            claimAfterRemoteAutoLaunch(components, meshId, nodeId, remoteSessionId, effectiveProviderType, tryAssignQueueTask);
+                            // Without the selected model, a remote session was judged against the
+                            // provider-slot intersection and could refuse `difficulty_floor_unmet`
+                            // despite the preview-selected slot having headroom.
+                            const routingDecision = buildRoutingDecision();
+                            claimAfterRemoteAutoLaunch(components, meshId, nodeId, remoteSessionId, effectiveProviderType,
+                                (c, m, n, s, p) => tryAssignQueueTask(c, m, n, s, p, routingDecision, undefined, 'auto_launch'));
                         }
                         return true;
                     }
@@ -2529,29 +2554,7 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // first message lands cleanly. The adapter's queue-until-ready path is the
                     // backstop if readiness is reported late; this just avoids the churn.
                     await waitForLocalSessionReady(components, sessionId);
-                    // LEDGER-TASK-TRACEABILITY (A/D): the auto-launch drain has all the routing
-                    // rationale in scope (resolved provider/model/thinking, skipped candidates,
-                    // fitness score). Fold it into the task_dispatched entry the claim writes.
-                    // All values are already computed above — no extra work on the dispatch path.
-                    const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t): t is string => !!t) : [];
-                    const routingDecision = buildAutoLaunchRoutingDecision({
-                        node,
-                        meshId,
-                        task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags },
-                        resolved: resolved as ResolvedProviderSelection & { providerType: string; slot: NodeCapabilitySlot },
-                        quotaRouting: mesh?.policy?.quotaRouting ?? null,
-                        quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
-                        skippedCandidates,
-                        requiredTagsResult: {
-                            required: requiredTags,
-                            satisfied: !requiredTags.length || nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, effectiveProviderType)),
-                            missing: requiredTags.filter(t => !buildMeshNodeCapabilityTags(node, effectiveProviderType).includes(t)),
-                        },
-                        effectiveModel,
-                        effectiveThinkingLevel,
-                        executedSlot: slotDecision.slot,
-                        demotionReason,
-                    });
+                    const routingDecision = buildRoutingDecision();
                     tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, undefined, 'auto_launch');
                     return true;
                 } catch (e: any) {

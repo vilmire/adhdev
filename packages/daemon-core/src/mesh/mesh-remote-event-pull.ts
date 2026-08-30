@@ -20,8 +20,96 @@ import { getPendingMeshCoordinatorEvents, serializeV2EnvelopeToWire } from './me
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { handleMeshForwardEvent } from './mesh-events-coordinator.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
+
+// ─── Pull pacing (RECONCILE-PULL-FLOOD, M-MESH-INFRA-0829 follow-up) ────────
+// Live measurement (2026-08-30, preview coordinator, rc.45): the 4s reconcile
+// tick issued ~90 get_pending_mesh_events (~25 req/s sustained, 82% to a
+// single daemon, all empty) and pinned the daemon at 114% CPU — a self-DoS
+// that also starved the P2P signal channel (SIGNAL_RATE_LIMIT/CONNECT_TIMEOUT).
+// Three multipliers, all fixed here:
+//   1. NO PER-DAEMON DEDUP — pullRemoteNodeQueues iterated mesh.nodes (config ∪
+//      inline cache) verbatim; remote-cloned worktree nodes alias the SAME
+//      remote daemon once per clone, so one daemon was pulled N_nodes × N_ids
+//      per tick. Fix: one pull-set per unique remote daemon per tick.
+//   2. NO EMPTY-RESPONSE BACKOFF — a daemon whose queue stayed empty was
+//      re-polled at full 4s cadence forever. Fix: after a few consecutive
+//      all-empty rounds the daemon is skipped with an exponential backoff
+//      capped at 30s (event delay stays seconds, never minutes). LOSSLESS:
+//      the remote queue keeps undrained rows, so a skip delays delivery, it
+//      never drops it; any non-empty round resets pacing instantly.
+//   3. REDRIVE-GATE FAN-OUT — the DELIVERED-NOT-CONSUMED last-chance pull ran
+//      per stranded row, so K rows on one daemon multiplied into K pull-sets
+//      per tick. Fix: an optional per-daemon throttle window; rows sharing a
+//      daemon reuse the first row's pull (the drain is daemon-scoped, so the
+//      second pull could only ever re-see what the first just consumed).
+
+// Backoff tunables. The first REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF empty
+// rounds keep the full tick cadence so a bursty event flow is never delayed;
+// only a sustained empty daemon backs off.
+const REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF = 3;
+const REMOTE_PULL_BACKOFF_BASE_MS = 8_000; // 2 ticks
+export const REMOTE_PULL_BACKOFF_MAX_MS = 30_000;
+// Redrive-gate throttle: at most one last-chance pull per daemon per window.
+// Well under the 4s tick so a genuinely fresh check is never stale next tick.
+export const REDRIVE_PULL_MIN_INTERVAL_MS = 2_000;
+
+interface RemotePullBackoff { emptyRounds: number; nextPullAtMs: number; }
+const remotePullBackoffByDaemon = new Map<string, RemotePullBackoff>();
+const lastRedrivePullAtMs = new Map<string, number>();
+
+/** @internal Test-only: clear pacing state between cases. */
+export function __resetRemoteEventPullPacingForTests(): void {
+    remotePullBackoffByDaemon.clear();
+    lastRedrivePullAtMs.clear();
+}
+
+// Exponential backoff per consecutive empty round past the grace rounds:
+// 8s, 16s, then pinned at the 30s cap.
+export function resolveRemotePullBackoffMs(backoffRound: number): number {
+    const shift = Math.max(0, Math.min(backoffRound - 1, 8));
+    return Math.min(REMOTE_PULL_BACKOFF_MAX_MS, REMOTE_PULL_BACKOFF_BASE_MS * 2 ** shift);
+}
+
+function pullBackoffKey(meshId: string, daemonId: string): string {
+    // Keep pacing stable when the same daemon alternates between its bare,
+    // daemon_, and standalone_ identity forms across cache refreshes.
+    return `${meshId}::${canonicalDaemonId(daemonId) ?? daemonId}`;
+}
+
+function isRemotePullBackedOff(meshId: string, daemonId: string, nowMs: number): boolean {
+    const state = remotePullBackoffByDaemon.get(pullBackoffKey(meshId, daemonId));
+    return !!state && nowMs < state.nextPullAtMs;
+}
+
+function noteRemotePullResult(meshId: string, daemonId: string, result: PullFromNodeResult, nowMs: number): void {
+    const key = pullBackoffKey(meshId, daemonId);
+    if (result.received > 0) {
+        remotePullBackoffByDaemon.delete(key);
+        return;
+    }
+    if (!result.reached) return; // transport failure: not evidence of an empty queue — leave the streak alone
+    const prev = remotePullBackoffByDaemon.get(key);
+    const emptyRounds = (prev?.emptyRounds ?? 0) + 1;
+    const backoffRound = emptyRounds - REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF + 1;
+    remotePullBackoffByDaemon.set(key, {
+        emptyRounds,
+        nextPullAtMs: emptyRounds >= REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF
+            ? nowMs + resolveRemotePullBackoffMs(backoffRound)
+            : 0,
+    });
+}
+
+// What a single-node pull round-trip learned. `reached` distinguishes a
+// confirmed-empty queue (backoff evidence) from a transport failure (no
+// evidence — the peer pre-check already skips disconnected daemons).
+export interface PullFromNodeResult {
+    received: number;
+    reached: boolean;
+}
+
+const NOT_REACHED: PullFromNodeResult = { received: 0, reached: false };
 
 // Cloud-only: poll each remote worker node daemon for pending coordinator events
 // and re-inject them locally via handleMeshForwardEvent (which re-queues +
@@ -56,12 +144,35 @@ export async function pullRemoteNodeQueues(
         ? candidateDaemonIds.map(id => ({ meshId, coordinatorDaemonId: id }))
         : [{ meshId }];
 
-    // Parallelize across nodes: a single connected-but-slow node must not serially
-    // block the other nodes for the rest of the tick. Each node callback is fully
-    // self-contained (local/candidate skip, peer-connected pre-check, per-candidate
-    // pulls, extract→re-inject) and best-effort — allSettled swallows per-node errors.
-    await Promise.allSettled(mesh.nodes.map(node =>
-        pullPendingEventsFromNode(components, meshId, node, localDaemonId, candidateDaemonIds, pulls)));
+    // Per-daemon dedup (pacing fix 1): remote-cloned worktree nodes alias the
+    // SAME daemon once per clone entry (config ∪ inline cache), and the pull is
+    // daemon-scoped — the remote handler drains its whole queue for the mesh,
+    // not a per-node slice — so pulling once per node ENTRY re-issued the
+    // identical drain N_aliases × N_ids per tick. Fold aliases (equivalence-
+    // aware, so `daemon_mach_X`/`mach_X` forms collapse too) and pull each
+    // unique daemon once per candidate id.
+    const uniqueNodes: Array<{ daemonId?: string }> = [];
+    const seenDaemonIds = new Set<string>();
+    for (const node of mesh.nodes) {
+        const nodeDaemonId = readNonEmptyString(node.daemonId);
+        if (!nodeDaemonId) continue;
+        const daemonKey = canonicalDaemonId(nodeDaemonId) ?? nodeDaemonId;
+        if (seenDaemonIds.has(daemonKey)) continue;
+        seenDaemonIds.add(daemonKey);
+        uniqueNodes.push(node);
+    }
+
+    // Parallelize across daemons: a single connected-but-slow daemon must not
+    // serially block the others for the rest of the tick. Each daemon callback
+    // is fully self-contained (local/candidate skip, peer-connected pre-check,
+    // empty-backoff gate, per-candidate pulls, extract→re-inject) and
+    // best-effort — allSettled swallows per-daemon errors.
+    await Promise.allSettled(uniqueNodes.map(node => (async () => {
+        const nodeDaemonId = readNonEmptyString(node.daemonId);
+        if (nodeDaemonId && isRemotePullBackedOff(meshId, nodeDaemonId, Date.now())) return;
+        const result = await pullPendingEventsFromNode(components, meshId, node, localDaemonId, candidateDaemonIds, pulls);
+        if (nodeDaemonId) noteRemotePullResult(meshId, nodeDaemonId, result, Date.now());
+    })()));
 }
 
 // Pull one node's pending coordinator events and re-inject them locally via
@@ -73,6 +184,12 @@ export async function pullRemoteNodeQueues(
 // the next PHASE 1 pull. That closes the redrive-vs-consume race: the redrive gate reads
 // taskDeliveryConsumed() AFTER this pull has had its chance to flip the delivery row.
 // Returns silently on any skip/error — every caller treats it as best-effort.
+//
+// `opts.minIntervalSinceLastPullMs` (pacing fix 3): skip when this daemon was
+// already pulled within the window. The drain is daemon-scoped, so a second
+// pull inside the same tick can only re-see what the first just consumed —
+// the redrive gate calls this PER STRANDED ROW, and K rows on one daemon used
+// to multiply into K pull-sets per tick.
 export async function pullPendingEventsFromNode(
     components: DaemonComponents,
     meshId: string,
@@ -80,9 +197,10 @@ export async function pullPendingEventsFromNode(
     localDaemonId: string | undefined,
     candidateDaemonIds: string[],
     pulls: Array<Record<string, unknown>>,
-): Promise<void> {
+    opts?: { minIntervalSinceLastPullMs?: number },
+): Promise<PullFromNodeResult> {
     const dispatchMeshCommand = components.dispatchMeshCommand;
-    if (!dispatchMeshCommand) return;
+    if (!dispatchMeshCommand) return NOT_REACHED;
     const nodeDaemonId = readNonEmptyString(node.daemonId);
     // Skip nodes without a daemon, and nodes on THIS daemon (their events are
     // already in the local queue drained in PHASE 2). "This daemon" is matched
@@ -90,9 +208,9 @@ export async function pullPendingEventsFromNode(
     // localDaemonId — a self node can be registered under the config-form daemonId
     // (`daemon_<machineId>`) which would NOT equal bare localDaemonId, and pulling
     // from ourselves over P2P is both wasteful and a self-dispatch hazard.
-    if (!nodeDaemonId) return;
-    if (daemonIdsEquivalent(nodeDaemonId, localDaemonId)) return;
-    if (daemonIdListIncludes(candidateDaemonIds, nodeDaemonId)) return;
+    if (!nodeDaemonId) return NOT_REACHED;
+    if (daemonIdsEquivalent(nodeDaemonId, localDaemonId)) return NOT_REACHED;
+    if (daemonIdListIncludes(candidateDaemonIds, nodeDaemonId)) return NOT_REACHED;
 
     // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a) + OFFLINE-NODE-FANOUT):
     // a degraded peer whose DataChannel is not open would sink this pull into
@@ -112,9 +230,26 @@ export async function pullPendingEventsFromNode(
     const getPeerStatus = components.getMeshPeerConnectionStatus;
     if (getPeerStatus) {
         const peerSnapshot = getPeerStatus(nodeDaemonId);
-        if (!peerSnapshot || String(peerSnapshot.state) !== 'connected') return;
+        if (!peerSnapshot || String(peerSnapshot.state) !== 'connected') return NOT_REACHED;
     }
 
+    // Per-daemon throttle (pacing fix 3): the redrive gate calls this once per
+    // stranded row; rows aliasing one daemon share the first row's drain.
+    const throttleKey = pullBackoffKey(meshId, nodeDaemonId);
+    if (opts?.minIntervalSinceLastPullMs) {
+        const lastPullAt = lastRedrivePullAtMs.get(throttleKey);
+        if (lastPullAt !== undefined && Date.now() - lastPullAt < opts.minIntervalSinceLastPullMs) {
+            return NOT_REACHED;
+        }
+    }
+
+    let received = 0;
+    let completedPulls = 0;
+    // Stamp a targeted redrive attempt before awaiting transport. PHASE 1 does
+    // not write this map: the last-chance pull intentionally runs after PHASE 1
+    // to close an event-arrived-during-this-tick race. Only later stranded rows
+    // on the same daemon reuse this first targeted drain.
+    if (opts?.minIntervalSinceLastPullMs) lastRedrivePullAtMs.set(throttleKey, Date.now());
     for (const pendingEventArgs of pulls) {
         let events: unknown;
         try {
@@ -123,7 +258,13 @@ export async function pullPendingEventsFromNode(
             // Remote pull is best-effort; the node may be offline. Retry next tick.
             break; // node unreachable — don't bother with the other id form this tick.
         }
-        const list = extractPendingEvents(events).filter(e => readNonEmptyString(e?.meshId) === meshId);
+        const extracted = extractPendingEventsResult(events);
+        // A returned error/malformed envelope is not proof of an empty queue.
+        // Do not advance empty backoff from it; retry on the next tick.
+        if (!extracted.confirmed) break;
+        completedPulls++;
+        received += extracted.events.length;
+        const list = extracted.events.filter(e => readNonEmptyString(e?.meshId) === meshId);
         for (const event of list) {
             const payload = buildForwardPayloadFromPending(event);
             if (!payload.event || !payload.meshId) continue;
@@ -132,6 +273,7 @@ export async function pullPendingEventsFromNode(
             } catch { /* best-effort re-inject */ }
         }
     }
+    return { received, reached: completedPulls === pulls.length };
 }
 
 // Pull the read_chat payload out of whatever envelope the transport returned.
@@ -294,7 +436,7 @@ export function extractStatusMetadataSessions(raw: unknown): any[] {
     return [];
 }
 
-export function extractPendingEvents(raw: unknown): any[] {
+function extractPendingEventsResult(raw: unknown): { events: any[]; confirmed: boolean } {
     // Mirror unwrapReadChatPayload / extractStatusMetadataSessions: a local
     // commandHandler.handle() returns `{ success, events }` directly, but a
     // remote dispatchMeshCommand may wrap the same CommandResult in
@@ -303,15 +445,20 @@ export function extractPendingEvents(raw: unknown): any[] {
     // any other pending event) instead of silently extracting `[]`.
     let cursor: unknown = raw;
     for (let depth = 0; depth < 4 && cursor && typeof cursor === 'object'; depth++) {
-        if (Array.isArray(cursor)) return cursor;
+        if (Array.isArray(cursor)) return { events: cursor, confirmed: true };
         const record = cursor as Record<string, unknown>;
-        if (Array.isArray(record.events)) return record.events;
+        if (record.success === false) return { events: [], confirmed: false };
+        if (Array.isArray(record.events)) return { events: record.events, confirmed: true };
         if (record.payload && typeof record.payload === 'object') { cursor = record.payload; continue; }
         if (record.result && typeof record.result === 'object') { cursor = record.result; continue; }
         if (record.data && typeof record.data === 'object') { cursor = record.data; continue; }
         break;
     }
-    return [];
+    return { events: [], confirmed: false };
+}
+
+export function extractPendingEvents(raw: unknown): any[] {
+    return extractPendingEventsResult(raw).events;
 }
 
 // Flatten a queued PendingMeshCoordinatorEvent into the flat payload shape

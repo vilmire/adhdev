@@ -37,7 +37,7 @@ import {
     resolveLiveTurnPendingEvidence,
 } from './mesh-events-stale.js';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
-import { pullPendingEventsFromNode, reprobeWorkerStatus } from './mesh-remote-event-pull.js';
+import { pullPendingEventsFromNode, reprobeWorkerStatus, REDRIVE_PULL_MIN_INTERVAL_MS } from './mesh-remote-event-pull.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import {
     pollAssignedTaskTerminalEvidence,
@@ -1016,6 +1016,11 @@ export async function recoverStrandedAssignedDispatches(
                 : undefined;
             if (assignedNode?.daemonId) {
                 try {
+                    // RECONCILE-PULL-FLOOD pacing: throttle per daemon — the gate
+                    // runs PER STRANDED ROW, and K rows on one daemon used to
+                    // multiply into K pull-sets per tick. The drain is daemon-
+                    // scoped, so the first row's pull already consumed every
+                    // queued generating_started the later rows could need.
                     await pullPendingEventsFromNode(
                         components,
                         meshId,
@@ -1025,6 +1030,7 @@ export async function recoverStrandedAssignedDispatches(
                         selfIds.length > 0
                             ? selfIds.map(id => ({ meshId, coordinatorDaemonId: id }))
                             : [{ meshId }],
+                        { minIntervalSinceLastPullMs: REDRIVE_PULL_MIN_INTERVAL_MS },
                     );
                 } catch { /* best-effort last-chance pull */ }
                 if (store.taskDeliveryConsumed(meshId, row.id)) {

@@ -1202,6 +1202,38 @@ describe('runMeshReconcileTick', () => {
     }
   })
 
+  it('RECONCILE-PULL-FLOOD: one tick pulls once per unique remote daemon, not once per inline node alias', async () => {
+    const meshId = `mesh_reconcile_pull_dedup_${Date.now()}`
+    try {
+      const self = { id: 'node_coord', workspace: '/repo/coord', daemonId: 'test-machine' }
+      const remoteAliases = [
+        { id: 'node_remote_base', workspace: '/repo/base', daemonId: 'mach_remote' },
+        { id: 'node_remote_wt1', workspace: '/repo/wt1', daemonId: 'daemon_mach_remote' },
+        { id: 'node_remote_wt2', workspace: '/repo/wt2', daemonId: 'standalone_mach_remote' },
+      ]
+      const otherRemote = { id: 'node_other', workspace: '/repo/other', daemonId: 'mach_other' }
+      meshConfigMocks.listMeshes.mockReturnValue([{ id: meshId, nodes: [self, remoteAliases[0], otherRemote] }])
+      const dispatchMeshCommand = vi.fn(async () => ({ success: true, events: [] }))
+      const components: any = {
+        ...makeComponents([], dispatchMeshCommand),
+        router: {
+          getCachedInlineMesh: (id: string) => id === meshId
+            ? { id: meshId, nodes: [self, ...remoteAliases, otherRemote] }
+            : undefined,
+        },
+      }
+
+      await runMeshReconcileTick(components)
+
+      const pulls = dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'get_pending_mesh_events')
+      expect(pulls).toHaveLength(2)
+      expect(pulls.map((call: any[]) => call[0]).sort()).toEqual(['mach_other', 'mach_remote'])
+      expect(pulls.every((call: any[]) => call[2]?.meshId === meshId)).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   describe('EVENT-DELIVERY-DELAY fix(a): peer-connected pre-check in PHASE 1 pull', () => {
     // The pull loop must not sink into a degraded peer's 90s connect-timeout. When the
     // mesh peer telemetry getter reports a non-'connected' state for a node, that node
