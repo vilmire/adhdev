@@ -195,3 +195,68 @@ describe('unsettled-attempt safety net (backstop for writers that bypass the cho
         expect(reconcileUnsettledTerminalAttempts({ id: MESH })).toBe(0);
     });
 });
+
+describe('equivalence tests for N+1 SQL migration', () => {
+    function bypassChokePointToTerminal(taskId: string, status: 'completed' | 'failed'): void {
+        const store = MeshRuntimeStore.getInstance();
+        const entry = store.findQueueEntryById(MESH, taskId)!;
+        entry.status = status;
+        store.updateQueueEntry(entry);
+    }
+
+    it('Case 1: attempt 행 없음 → 0건 구제', () => {
+        const task = enqueueTask(MESH, 'no attempt task', { difficulty: 'easy' });
+        bypassChokePointToTerminal(task.id, 'completed');
+        expect(reconcileUnsettledTerminalAttempts({ id: MESH })).toBe(0);
+    });
+
+    it('Case 2: terminalOutcome 있음 → 0건', () => {
+        const { taskId } = dispatchedTask('sess-worker', 65_000);
+        updateTaskStatus(MESH, taskId, 'completed'); // This sets terminalOutcome
+        expect(reconcileUnsettledTerminalAttempts({ id: MESH })).toBe(0);
+    });
+
+    it('Case 3: stage 가 terminal → 0건', () => {
+        const { taskId, attemptId } = dispatchedTask('sess-worker', 65_000);
+        // Force stage to terminal directly in DB to simulate this exact edge case
+        const store = MeshRuntimeStore.getInstance();
+        (store as any).db.prepare('UPDATE mesh_turn_attempts SET stage = ? WHERE attempt_id = ?').run('completed', attemptId);
+        bypassChokePointToTerminal(taskId, 'completed');
+        expect(reconcileUnsettledTerminalAttempts({ id: MESH })).toBe(0);
+    });
+
+    it('Case 4: 과거 seq 는 조건 맞지만 최신 seq 가 terminal → 0건 (MAX 서브쿼리 검증)', () => {
+        const { taskId, attemptId } = dispatchedTask('sess-worker', 65_000); // Seq 1 is old and non-terminal
+        // create a new attempt (seq 2) that IS terminal
+        const store = MeshRuntimeStore.getInstance();
+        const { attempt: attempt2 } = openTurnAttempt({
+            meshId: MESH, taskId, dispatchNonce: 2, nodeId: 'nodeA', sessionId: 'sess-worker',
+            coordinatorDaemonId: 'coord', coordinatorSessionId: 'coordSess', nowMs: Date.now() - 65_000,
+        });
+        proposeTurnCompletion({
+            meshId: MESH, taskId, outcome: 'completed', source: 'provider_event', sessionId: 'sess-worker',
+        });
+        updateTaskStatus(MESH, taskId, 'completed'); // Settles attempt2
+        
+        // At this point seq 1 is generating, seq 2 is completed. 
+        // Max subquery should only look at seq 2 and thus do nothing.
+        expect(reconcileUnsettledTerminalAttempts({ id: MESH })).toBe(0);
+    });
+
+    it('Case 5: grace 미도달(30초 전) → 0건', () => {
+        const { taskId } = dispatchedTask('sess-worker', 30_000);
+        bypassChokePointToTerminal(taskId, 'completed');
+        expect(reconcileUnsettledTerminalAttempts({ id: MESH })).toBe(0);
+    });
+
+    it('Case 6: 진짜 미정착(65초 전, 모든 조건 충족) → 구제되고 reducer 호출됨', () => {
+        const { taskId } = dispatchedTask('sess-worker', 65_000);
+        bypassChokePointToTerminal(taskId, 'completed');
+        expect(currentAttempt(taskId)!.terminalOutcome).toBeNull();
+        
+        const settled = reconcileUnsettledTerminalAttempts({ id: MESH });
+        expect(settled).toBe(1);
+        expect(currentAttempt(taskId)!.terminalOutcome).toBe('completed');
+    });
+});
+
