@@ -814,7 +814,7 @@ export class DaemonCommandRouter {
      * and, when the node also exists in local config, persists there too; both paths
      * invalidate the aggregate status cache. Best-effort and idempotent.
      */
-    public markWorktreeBootstrapTerminalState(meshId: string, nodeId: string, status: 'complete' | 'failed', opts?: { workspace?: string }): void {
+    public markWorktreeBootstrapTerminalState(meshId: string, nodeId: string, status: 'complete' | 'failed', opts?: { workspace?: string; daemonId?: string; machineId?: string }): void {
         if (!meshId || !nodeId) return;
         const terminalBootstrap = (prev?: Record<string, unknown>): Record<string, unknown> => ({
             ...(prev && typeof prev === 'object' ? prev : {}),
@@ -861,6 +861,11 @@ export class DaemonCommandRouter {
                     nodeId,
                     isLocalWorktree: true,
                     ...(opts?.workspace ? { workspace: opts.workspace } : {}),
+                    // Origin identity from the worker's bootstrap event: without
+                    // these, isLocalAutoLaunchNode treats the shell as LOCAL and the
+                    // coordinator tries to spawn the remote worktree on itself.
+                    ...(opts?.daemonId ? { daemonId: opts.daemonId } : {}),
+                    ...(opts?.machineId ? { machineId: opts.machineId } : {}),
                     worktreeBootstrap: terminalBootstrap(),
                 };
                 this.updateInlineMeshNode(meshId, shell, hydratedNode);

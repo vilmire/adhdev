@@ -1243,7 +1243,24 @@ export function stampPendingEventV2(
     // keyed on the SESSION, not the daemon — stamping a daemon target there would let it
     // drain to a sibling before its session returns and break the strict-route hold. An
     // event that already carries an explicit daemon target is likewise left untouched.
+    //
+    // WORKTREE-BOOTSTRAP-REMOTE-PULL (M-MESH-INFRA-0829 5-d): skip the self-target
+    // stamp for worktree_bootstrap_*. Those are node-lifecycle broadcasts
+    // (defaultScopeForEvent → broadcast; not a TERMINAL_TASK_EVENT). clone_mesh_node
+    // emits them on the WORKER with no coordinator identity, so this stamp would
+    // write targetCoordinatorDaemonId = the WORKER machineId. The mesh host's
+    // PHASE 1 pull then drains with its OWN coordinatorDaemonId and the SQL filter
+    // `(coordinator_daemon_id IS NULL OR IN (host_ids))` misses the row — the
+    // event sits on the worker forever (live: Jupiter logged "queued — broadcast"
+    // while the SQLite column was the worker machineId; the Mac host pulled 7000×
+    // and never consumed it). Leave the SQL column NULL so a remote host pull
+    // matches. Local clones still drain: PHASE 2 uses `NULL OR IN (self_ids)`.
+    // Terminal TASK events (agent:generating_completed / refine:*) KEEP the
+    // self-target — those must not fan out (MAGI replica leak).
+    const isWorktreeBootstrapEvent = event.event === 'worktree_bootstrap_complete'
+        || event.event === 'worktree_bootstrap_failed';
     const selfFallbackTarget = dispatchedBySelfFallback
+        && !isWorktreeBootstrapEvent
         && !readNonEmptyString(event.targetCoordinatorDaemonId)
         && !readNonEmptyString(event.targetCoordinatorSessionId)
         ? readNonEmptyString(stamp.dispatchedBy.daemonId)

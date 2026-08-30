@@ -1194,6 +1194,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 // coordinator never received the clone reply) can seed an addressable node.
                 const bootstrapWorkspace = readNonEmptyString(args.metadataEvent.worktreePath)
                     || readNonEmptyString(args.metadataEvent.workspace);
+                const originDaemonId = readNonEmptyString(args.metadataEvent.originDaemonId)
+                    || readNonEmptyString(args.metadataEvent.daemonId);
+                const originMachineId = readNonEmptyString(args.metadataEvent.originMachineId)
+                    || readNonEmptyString(args.metadataEvent.machineId);
                 // DIRECT typed call, not `(components.router as any)?.method?.()`: the
                 // optional-chain + cast form swallowed a missing router/method into a SILENT
                 // no-op — indistinguishable from "stamped but the view never updated", which
@@ -1206,7 +1210,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     args.meshId,
                     bootstrapNodeId,
                     args.event === 'worktree_bootstrap_failed' ? 'failed' : 'complete',
-                    bootstrapWorkspace ? { workspace: bootstrapWorkspace } : undefined,
+                    (bootstrapWorkspace || originDaemonId || originMachineId)
+                        ? {
+                            ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace } : {}),
+                            ...(originDaemonId ? { daemonId: originDaemonId } : {}),
+                            ...(originMachineId ? { machineId: originMachineId } : {}),
+                        }
+                        : undefined,
                 );
             } catch (e: any) {
                 LOG.error('MeshQueue', `Failed to stamp terminal bootstrap state for ${bootstrapNodeId} (mesh ${args.meshId}): ${e?.message || e}`);
@@ -1653,6 +1663,14 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         interactionId: readNonEmptyString(payload.interactionId),
         status: readNonEmptyString(payload.status),
         targetDaemonId: readNonEmptyString(payload.targetDaemonId),
+        // Worker origin identity for a remotely cloned worktree's bootstrap event
+        // so the coordinator's hydrate-on-miss upsert is P2P-addressable.
+        originDaemonId: readNonEmptyString(payload.originDaemonId)
+            || readNonEmptyString(payload.daemonId)
+            || readNonEmptyString((payload.metadataEvent as Record<string, unknown> | undefined)?.originDaemonId),
+        originMachineId: readNonEmptyString(payload.originMachineId)
+            || readNonEmptyString(payload.machineId)
+            || readNonEmptyString((payload.metadataEvent as Record<string, unknown> | undefined)?.originMachineId),
         startedAt: readNonEmptyString(payload.startedAt),
         completedAt: readNonEmptyString(payload.completedAt),
         retryOfJobId: readNonEmptyString(payload.retryOfJobId),

@@ -69,7 +69,7 @@ export interface HighFamilyContext {
         meshId: string,
         nodeId: string,
         status: 'complete' | 'failed',
-        opts?: { workspace?: string },
+        opts?: { workspace?: string; daemonId?: string; machineId?: string },
     ) => void;
 
     /**

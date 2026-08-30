@@ -1773,6 +1773,14 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 try {
                     const durationMs = Date.now() - startedAtMs;
                     const event = `worktree_${eventStatus}` as const;
+                    // Address the event at the mesh HOST (the daemon that will PHASE-1
+                    // pull this worker's queue), not at this worker. An ownerless emit
+                    // used to self-fallback-stamp THIS machineId, so the host's
+                    // get_pending_mesh_events drain (scoped to the host's ids) never
+                    // matched the row. Also carry the worker's daemon/machine identity
+                    // so the host's hydrate-on-miss upsert is addressable over P2P
+                    // (isLocalAutoLaunchNode treats a shell with neither field as LOCAL).
+                    const hostDaemonId = readNonEmptyString((mesh as { meshHost?: { hostDaemonId?: unknown } })?.meshHost?.hostDaemonId);
                     const metadataEvent = {
                         source: 'clone_mesh_node_bootstrap',
                         nodeId: node.id,
@@ -1780,6 +1788,9 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         worktreePath: result.worktreePath,
                         durationMs,
                         bootstrapStatus: bootstrapState.status,
+                        ...(hostDaemonId ? { targetCoordinatorDaemonId: hostDaemonId } : {}),
+                        ...(effectiveDaemonId ? { originDaemonId: effectiveDaemonId } : {}),
+                        ...(effectiveMachineId ? { originMachineId: effectiveMachineId } : {}),
                         ...(bootstrapState.error ? { error: bootstrapState.error } : {}),
                         ...(bootstrapState.exitCode !== undefined ? { exitCode: bootstrapState.exitCode } : {}),
                         ...(extraPayload || {}),
@@ -1819,7 +1830,16 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                                         getCachedInlineMesh: ctx.getCachedInlineMesh,
                                     },
                                 } as any,
-                                { event, meshId, nodeId: node.id, workspace: result.worktreePath, metadataEvent },
+                                {
+                                    event,
+                                    meshId,
+                                    nodeId: node.id,
+                                    workspace: result.worktreePath,
+                                    metadataEvent,
+                                    ...(hostDaemonId ? { targetCoordinatorDaemonId: hostDaemonId } : {}),
+                                    ...(effectiveDaemonId ? { originDaemonId: effectiveDaemonId } : {}),
+                                    ...(effectiveMachineId ? { originMachineId: effectiveMachineId } : {}),
+                                },
                             );
                             if (forwarded?.success === true) return;
                         } catch { /* falls through to the queue fallback below */ }
@@ -1832,6 +1852,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         workspace: result.worktreePath,
                         metadataEvent,
                         queuedAt: Date.now(),
+                        ...(hostDaemonId ? { targetCoordinatorDaemonId: hostDaemonId } : {}),
                     });
                 } catch { /* event emission is best-effort */ }
             };

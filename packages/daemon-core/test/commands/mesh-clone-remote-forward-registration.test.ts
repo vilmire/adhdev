@@ -163,4 +163,28 @@ describe('clone_mesh_node — remote forward seeds the coordinator inline cache'
       restore()
     }
   })
+
+  it('hydrate-on-miss carries the worker origin daemonId so the shell is not treated as local', async () => {
+    // M-MESH-INFRA-0829 5-d: a remote bootstrap event can arrive before (or without)
+    // seedRemoteClonedWorktreeNode. The hydrate shell used to omit daemonId, and
+    // isLocalAutoLaunchNode treats "neither daemonId nor machineId" as LOCAL — the
+    // coordinator would then try to spawn the Jupiter worktree on itself.
+    const { router, meshId, restore } = await setup()
+    try {
+      const ghostId = 'node_hydrateonmissorigin000000000000000'
+      router.markWorktreeBootstrapTerminalState(meshId, ghostId, 'complete', {
+        workspace: '/home/vilmire/adhdev/worktrees/verify-remote-enqueue-rc44',
+        daemonId: 'daemon_mach_4682cb891bf84e27859623b83bdbbaac',
+        machineId: 'mach_4682cb891bf84e27859623b83bdbbaac',
+      })
+      const cached = router.getCachedInlineMesh(meshId)
+      const node = (cached?.nodes || []).find((n: any) => n.id === ghostId || n.nodeId === ghostId)
+      expect(node).toBeTruthy()
+      expect(node.worktreeBootstrap?.status).toBe('complete')
+      expect(node.daemonId).toBe('daemon_mach_4682cb891bf84e27859623b83bdbbaac')
+      expect(node.machineId).toBe('mach_4682cb891bf84e27859623b83bdbbaac')
+    } finally {
+      restore()
+    }
+  })
 })

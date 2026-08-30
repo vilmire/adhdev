@@ -295,10 +295,21 @@ export function extractStatusMetadataSessions(raw: unknown): any[] {
 }
 
 export function extractPendingEvents(raw: unknown): any[] {
-    if (Array.isArray(raw)) return raw;
-    if (raw && typeof raw === 'object') {
-        const events = (raw as Record<string, unknown>).events;
-        if (Array.isArray(events)) return events;
+    // Mirror unwrapReadChatPayload / extractStatusMetadataSessions: a local
+    // commandHandler.handle() returns `{ success, events }` directly, but a
+    // remote dispatchMeshCommand may wrap the same CommandResult in
+    // `{ payload }` / `{ result }` / `{ data }`. Walking those envelopes is
+    // required for PHASE 1 to see a worker's queued worktree_bootstrap_* (or
+    // any other pending event) instead of silently extracting `[]`.
+    let cursor: unknown = raw;
+    for (let depth = 0; depth < 4 && cursor && typeof cursor === 'object'; depth++) {
+        if (Array.isArray(cursor)) return cursor;
+        const record = cursor as Record<string, unknown>;
+        if (Array.isArray(record.events)) return record.events;
+        if (record.payload && typeof record.payload === 'object') { cursor = record.payload; continue; }
+        if (record.result && typeof record.result === 'object') { cursor = record.result; continue; }
+        if (record.data && typeof record.data === 'object') { cursor = record.data; continue; }
+        break;
     }
     return [];
 }

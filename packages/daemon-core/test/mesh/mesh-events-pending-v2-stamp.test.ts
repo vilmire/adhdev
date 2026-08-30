@@ -151,14 +151,15 @@ describe('mesh pending-event — v2 emit stamping (B2a)', () => {
     });
 
     it('CODA-TERMINAL-EVENT-HELD: stamps the self daemon id as targetCoordinatorDaemonId on an ownerless self-fallback broadcast so a held event is addressable on idle return', () => {
-        // The defect: a self-fallback broadcast terminal event (worktree_bootstrap_complete /
-        // refine:completed / summary-less agent:generating_completed emitted while THIS
-        // machine's coordinator is generating) carried targetCoordinatorDaemonId:null, so the
-        // reconcile-loop hold recorded a null-target event_held row and the coordinator only
-        // ever learned of it by polling the ledger. It must now be addressed to this machine's
-        // own daemon id — deliverable to the local coordinator's per-daemon scoped drain — while
-        // staying BROADCAST + dispatchedBySelfFallback (the machine-level leak guard is intact).
-        for (const eventName of ['agent:generating_completed', 'refine:completed', 'worktree_bootstrap_complete']) {
+        // The defect: a self-fallback broadcast terminal TASK event (refine:completed /
+        // summary-less agent:generating_completed emitted while THIS machine's coordinator
+        // is generating) carried targetCoordinatorDaemonId:null, so the reconcile-loop hold
+        // recorded a null-target event_held row and the coordinator only ever learned of it
+        // by polling the ledger. It must now be addressed to this machine's own daemon id —
+        // deliverable to the local coordinator's per-daemon scoped drain — while staying
+        // BROADCAST + dispatchedBySelfFallback (the machine-level leak guard is intact).
+        // worktree_bootstrap_* is NOT in this set: see the remote-pull contract below.
+        for (const eventName of ['agent:generating_completed', 'refine:completed']) {
             const meshId = `mesh-v2-${randomUUID().slice(0, 8)}`;
             __clearMeshPendingEventsForTests(meshId);
             const noIdentity = makeTerminal(meshId, { event: eventName });
@@ -172,6 +173,35 @@ describe('mesh pending-event — v2 emit stamping (B2a)', () => {
             // The fix: the ownerless broadcast is now addressed to this machine's own daemon.
             expect(peeked.targetCoordinatorDaemonId, `${eventName} target`).toBe(SELF_MACH);
         }
+    });
+
+    it('WORKTREE-BOOTSTRAP-REMOTE-PULL: an ownerless worktree_bootstrap_complete is pullable by a FOREIGN coordinator daemon id', () => {
+        // M-MESH-INFRA-0829 5-d. clone_mesh_node emits bootstrap on the WORKER with no
+        // coordinator identity. The pre-fix self-fallback stamp wrote the WORKER's
+        // machineId into coordinator_daemon_id, so the mesh host's PHASE 1 pull
+        // (`get_pending_mesh_events` scoped to the HOST ids) extracted nothing —
+        // live: Jupiter queued "broadcast" while Mac pulled 7000× and never consumed
+        // it. The event must stay SQL-unscoped (NULL target) so a foreign host drain
+        // matches `(coordinator_daemon_id IS NULL OR IN (host_ids))`.
+        const meshId = `mesh-v2-${randomUUID().slice(0, 8)}`;
+        __clearMeshPendingEventsForTests(meshId);
+        const noIdentity = makeTerminal(meshId, { event: 'worktree_bootstrap_complete' });
+        delete (noIdentity as any).targetCoordinatorDaemonId;
+        queuePendingMeshCoordinatorEvent(noIdentity);
+
+        const [selfPeek] = getPendingMeshCoordinatorEvents(meshId, SELF_MACH) as PendingMeshCoordinatorEvent[];
+        expect(selfPeek, 'still visible to the emitting machine').toBeTruthy();
+        expect(selfPeek.scope).toBe('broadcast');
+        expect(selfPeek.dispatchedBySelfFallback).toBe(true);
+        expect(selfPeek.targetCoordinatorDaemonId, 'must stay unscoped for remote host pull').toBeUndefined();
+
+        const foreign = getPendingMeshCoordinatorEvents(meshId, OTHER_MACH) as PendingMeshCoordinatorEvent[];
+        expect(foreign).toHaveLength(1);
+        expect(foreign[0].event).toBe('worktree_bootstrap_complete');
+
+        const drained = drainPendingMeshCoordinatorEvents(meshId, OTHER_MACH);
+        expect(drained).toHaveLength(1);
+        expect(drained[0].event).toBe('worktree_bootstrap_complete');
     });
 
     it('CODA-TERMINAL-EVENT-HELD: does NOT stamp a daemon target on a SESSION-strict self-fallback event (strict-route hold stays session-keyed)', () => {

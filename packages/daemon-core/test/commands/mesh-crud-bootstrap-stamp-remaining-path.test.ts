@@ -229,6 +229,7 @@ describe('MESH-CRUD-BOOTSTRAP-STAMP-REMAINING-PATH — clone_mesh_node local emi
     const meshId = 'mesh-crud-bootstrap-remaining-path'
     try {
       const router = createRouter()
+      const hostDaemonId = 'daemon_mach_hostcoord00000000000000000000'
       const inlineMesh: any = {
         id: meshId,
         name: 'Bootstrap Remaining Path Mesh',
@@ -236,6 +237,7 @@ describe('MESH-CRUD-BOOTSTRAP-STAMP-REMAINING-PATH — clone_mesh_node local emi
         defaultBranch: 'main',
         policy: { worktreeBaseDir: join(dir, 'worktrees') },
         coordinator: {},
+        meshHost: { role: 'host', hostDaemonId },
         nodes: [
           { id: 'node-source', workspace: repoRoot, repoRoot, daemonId: 'daemon-local', userOverrides: {}, policy: { providerPriority: ['codex-cli'], initSubmodulesOnClone: false } },
         ],
@@ -253,6 +255,10 @@ describe('MESH-CRUD-BOOTSTRAP-STAMP-REMAINING-PATH — clone_mesh_node local emi
       const pending = getPendingMeshCoordinatorEvents(meshId)
       const bootstrapEvents = pending.filter(e => e.event === 'worktree_bootstrap_complete' && e.nodeId === result.node.id)
       expect(bootstrapEvents.length).toBeGreaterThan(0)
+      // M-MESH-INFRA-0829 5-d: addressed at the mesh HOST so a remote coordinator's
+      // PHASE 1 pull (scoped to host ids) matches the SQL drain filter.
+      expect(bootstrapEvents[0].targetCoordinatorDaemonId).toBe(hostDaemonId)
+      expect(bootstrapEvents[0].metadataEvent?.originDaemonId).toBe('daemon-local')
     } finally {
       cleanup(meshId)
       await rm(dir, { recursive: true, force: true })
