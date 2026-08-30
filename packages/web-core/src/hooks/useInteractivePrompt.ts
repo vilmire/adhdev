@@ -72,7 +72,11 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
       })
       setDismissedPromptId(promptSession.prompt.promptId)
     } catch (error) {
-      setResponseError(error instanceof Error ? error.message : String(error))
+      let msg = error instanceof Error ? error.message : String(error)
+      if (msg.includes('Claude TUI review page is not focused')) {
+        msg = '입력은 전달됐으나 확인에 실패했습니다 — 화면을 확인하거나 닫고 다시 시도하세요'
+      }
+      setResponseError(msg)
       throw error
     } finally {
       setIsSubmitting(false)

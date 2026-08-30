@@ -127,7 +127,7 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
  * matching failure line (assertFocusedClaudeTuiReview did not log before this
  * fix), and the question was answered successfully on the very next attempt.
  */
-describe('assertFocusedClaudeTuiReview settle-poll — freeform (Other) answers', () => {
+describe('assertFocusedClaudeTuiReview settle-poll — freeform (Other) allowsFreeform budget', () => {
     // One more stale frame than CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS(600)/
     // CLAUDE_TUI_PAGE_POLL_INTERVAL_MS(120) tolerates, modelling the slower
     // repaint after a typed-and-confirmed freeform answer.
@@ -137,13 +137,13 @@ describe('assertFocusedClaudeTuiReview settle-poll — freeform (Other) answers'
         REVIEW_SCREEN,
     ]
 
-    it('RED: the plain (non-freeform) budget fails closed on a slow freeform-shaped repaint', async () => {
+    it('RED: the plain budget fails closed on a slow freeform-shaped repaint', async () => {
         const { adapter } = makeAdapter(SLOW_FREEFORM_FRAMES)
         await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
             .rejects.toThrow(/review page is not focused/)
     })
 
-    it('GREEN: usedFreeform=true widens the budget enough to observe the late review frame', async () => {
+    it('GREEN: allowsFreeform=true widens the budget enough to observe the late review frame', async () => {
         const { adapter, snapshots } = makeAdapter(SLOW_FREEFORM_FRAMES)
         await expect(adapter.assertFocusedClaudeTuiReview(prompt, true)).resolves.toBeUndefined()
         expect(snapshots.n).toBeGreaterThan(6)
