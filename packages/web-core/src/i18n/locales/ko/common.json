@@ -3613,7 +3613,8 @@
         "singleChoice": "단일 선택",
         "other": "기타",
         "answersRequired_one": "답변이 필요한 질문이 {{count}}개 있습니다",
-        "answersRequired_other": "답변이 필요한 질문이 {{count}}개 있습니다"
+        "answersRequired_other": "답변이 필요한 질문이 {{count}}개 있습니다",
+        "errorReviewPageNotFocused": "입력은 전달됐으나 확인에 실패했습니다 — 화면을 확인하거나 닫고 다시 시도하세요"
     },
     "git": {
         "changeList": {

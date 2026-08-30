@@ -60,6 +60,7 @@ import {
     buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX,
 } from '../kimi-pending-question.js';
 import type { InteractivePrompts } from './fsm-types.js';
+import { CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX } from '@adhdev/mesh-shared';
 
 
 // See the matching helper in cli-adapters/provider-cli-shared.ts for the full
@@ -1791,7 +1792,7 @@ export class SpecCliAdapter implements CliAdapter {
             // where a dashboard-visible "review page is not focused" error had
             // zero matching log output.
             LOG.warn('SpecAdapter', `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (allowsFreeform=${allowsFreeform})${observed}`);
-            throw new Error(`Claude TUI review page is not focused for the active interactive prompt${observed}`);
+            throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed}`);
         }
 
         // Review pages retain the per-question nav headers. When the captured

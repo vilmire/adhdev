@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { useTranslation } from 'react-i18next'
+import { CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX } from '@adhdev/mesh-shared'
+
 import { useBaseDaemons } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
 import {
@@ -20,6 +23,7 @@ export interface UseInteractivePromptResult {
 }
 
 export function useInteractivePrompt(sessionId?: string | null): UseInteractivePromptResult {
+  const { t } = useTranslation('common')
   const { ides, isP2PActive, p2pStates } = useBaseDaemons()
   const { sendCommand } = useTransport()
   const [dismissedPromptId, setDismissedPromptId] = useState<string | null>(null)
@@ -73,8 +77,10 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
       setDismissedPromptId(promptSession.prompt.promptId)
     } catch (error) {
       let msg = error instanceof Error ? error.message : String(error)
-      if (msg.includes('Claude TUI review page is not focused')) {
-        msg = '입력은 전달됐으나 확인에 실패했습니다 — 화면을 확인하거나 닫고 다시 시도하세요'
+      if (msg.includes(CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX)) {
+        msg = t('interactivePrompt.errorReviewPageNotFocused', {
+          defaultValue: 'The input was delivered but verification failed — check the terminal screen or close this and try again.'
+        })
       }
       setResponseError(msg)
       throw error

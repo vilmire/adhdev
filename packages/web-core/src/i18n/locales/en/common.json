@@ -3613,7 +3613,8 @@
         "singleChoice": "Single choice",
         "other": "Other",
         "answersRequired_one": "{{count}} question still needs an answer",
-        "answersRequired_other": "{{count}} questions still need answers"
+        "answersRequired_other": "{{count}} questions still need answers",
+        "errorReviewPageNotFocused": "The input was delivered but verification failed — check the terminal screen or close this and try again."
     },
     "git": {
         "changeList": {
