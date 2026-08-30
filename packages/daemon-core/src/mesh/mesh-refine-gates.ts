@@ -24,6 +24,7 @@ import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
+import { sanitizeRefineGateChildEnv } from './mesh-refine-env-sanitize.js';
 import { LOG } from '../logging/logger.js';
 import type { GitAncestryProbe, GitlinkTrivialFastForwardEvaluation, MeshRefineStageStatus, MeshRefineSubmoduleReachabilityEntry, MeshRefineSubmoduleReachabilitySummary } from './mesh-refine-gitlink-utils.js';
 import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, isSubmoduleFastForward, probeGitAncestry, probeSubmoduleFastForward, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readChangedPathKinds, readTreeObject, runMeshRefineSubmoduleReachabilityGate, truncateValidationOutput, verifyRemoteBranchContainsCommit, warnGitlinkFastForwardUndeterminable, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
@@ -1946,7 +1947,7 @@ export async function runMeshRefineValidationGate(
                     windowsHide: true,
                     timeout,
                     maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-                    env: { ...process.env, CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
+                    env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
                     ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
                 });
                 summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
@@ -2006,7 +2007,7 @@ export async function runMeshRefineValidationGate(
                 windowsHide: true,
                 timeout,
                 maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-                env: { ...process.env, CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
+                env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
                 ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             });
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
