@@ -1382,6 +1382,7 @@
         "openPanelHint": "メッセージの表示を開始するには、使用中のアプリでエージェントパネルまたはチャットビューを開いてください",
         "noMessagesYet": "メッセージはまだありません",
         "loadingChat": "チャットを読み込み中...",
+        "replicaOmittedBefore": "この画面では以前のメッセージは省略されています — 最新の内容のみ表示しています。",
         "openPanel": "{{label}} パネルを開く",
         "switchingPanel": "切り替え中...",
         "openingPanel": "オープン中..."

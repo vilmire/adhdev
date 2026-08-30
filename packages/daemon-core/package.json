@@ -28,6 +28,18 @@
       "import": "./dist/config/config-dir.mjs",
       "require": "./dist/config/config-dir.js",
       "default": "./dist/config/config-dir.js"
+    },
+    "./seqscribe/transcript-revision-codec": {
+      "types": "./dist/seqscribe/transcript-revision-codec.d.ts",
+      "import": "./dist/seqscribe/transcript-revision-codec.mjs",
+      "require": "./dist/seqscribe/transcript-revision-codec.js",
+      "default": "./dist/seqscribe/transcript-revision-codec.js"
+    },
+    "./mesh/transcript-read-model-consumers": {
+      "types": "./dist/mesh/transcript-read-model-consumers.d.ts",
+      "import": "./dist/mesh/transcript-read-model-consumers.mjs",
+      "require": "./dist/mesh/transcript-read-model-consumers.js",
+      "default": "./dist/mesh/transcript-read-model-consumers.js"
     }
   },
   "scripts": {
