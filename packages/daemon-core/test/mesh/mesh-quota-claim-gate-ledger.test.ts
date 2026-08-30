@@ -40,6 +40,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }))
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { evaluateQuotaClaimGateForAssignment } from '../../src/mesh/mesh-queue-claim-gate.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { __clearMeshLedgerForTests, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 
@@ -131,6 +132,21 @@ const codexQuota = (over: Record<string, any> = {}) => ({
   ...over,
 })
 
+const antigravityQuota = () => ({
+  provider: 'antigravity-cli',
+  status: 'ok',
+  session: { usedPercent: 100, windowMinutes: 300, resetsAt: Date.now() + 4 * 60 * 60_000 },
+  weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: Date.now() + 3 * 24 * 60 * 60_000 },
+  buckets: [
+    { name: 'Gemini Models · Five Hour Limit Remaining', usedPercent: 8, windowMinutes: 300, resetsAt: Date.now() + 4 * 60 * 60_000 },
+    { name: 'Gemini Models · Weekly Limit Remaining', usedPercent: 8, windowMinutes: 10080, resetsAt: Date.now() + 3 * 24 * 60 * 60_000 },
+    { name: 'Claude/GPT · Five Hour Limit Remaining', usedPercent: 100, windowMinutes: 300, resetsAt: Date.now() + 4 * 60 * 60_000 },
+    { name: 'Claude/GPT · Weekly Limit Remaining', usedPercent: 100, windowMinutes: 10080, resetsAt: Date.now() + 3 * 24 * 60 * 60_000 },
+  ],
+  updatedAt: Date.now(),
+  error: null,
+})
+
 function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __clearMeshLedgerForTests(meshId)
@@ -141,6 +157,37 @@ function cleanup(meshId: string) {
 
 describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded in the ledger', () => {
   afterEach(() => { vi.clearAllMocks() })
+
+  it('uses the selected slot model for the post-launch claim gate', () => {
+    const meshId = `mesh_quota_ledger_model_${randomUUID().slice(0, 8)}`
+    try {
+      const node = quotaNode({ 'antigravity-cli': antigravityQuota() })
+      setMesh(meshId, [node])
+      const components = createComponents(meshId, [])
+      const base = {
+        meshId,
+        nodeId: NODE_ID,
+        providerType: 'antigravity-cli',
+        trigger: 'auto_launch',
+        node,
+        mesh: meshConfigMocks.getMesh(),
+        providerLoader: components.providerLoader,
+      }
+
+      expect(evaluateQuotaClaimGateForAssignment({
+        ...base,
+        sessionId: 'sess-gemini',
+        model: 'Gemini 3.1 Pro (High)',
+      })).toBe(false)
+      expect(evaluateQuotaClaimGateForAssignment({
+        ...base,
+        sessionId: 'sess-claude',
+        model: 'Claude Sonnet 4.6 (Thinking)',
+      })).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
 
   it('records a quota_claim_gate "blocked" entry the first time the gate refuses a claim', async () => {
     const meshId = `mesh_quota_ledger_block_${randomUUID().slice(0, 8)}`

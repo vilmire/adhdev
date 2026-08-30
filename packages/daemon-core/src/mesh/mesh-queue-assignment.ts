@@ -959,7 +959,7 @@ export function tryAssignQueueTask(
     // provider via requiredTags overrides the gate and logs 'overridden_by_pin'
     // instead of 'blocked'). Returns true when the claim must be refused — the
     // task stays pending (return false without touching its status).
-    if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
+    if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: routingDecision?.selectedSlot?.model, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
         return false;
     }
 

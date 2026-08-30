@@ -400,6 +400,10 @@ export function selectProviderWithDiagnostics(args: {
         args.quotaRouting,
         now,
         args.quotaFactsContext,
+        new Map(candidates.map(candidate => [
+            candidate.providerType,
+            { model: candidate.slot.model },
+        ])),
     );
     const winner = ranked.clear.length
         ? candidates.find(candidate => candidate.providerType === ranked.clear[0]) ?? candidates[0]

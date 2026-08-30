@@ -410,3 +410,94 @@ describe('mesh route preview — reordering evidence', () => {
         }
     });
 });
+
+describe('mesh route preview — Antigravity bucket-aware quota gate', () => {
+    function antigravityQuota() {
+        return {
+            provider: 'antigravity-cli',
+            status: 'ok',
+            // Headline axes intentionally preserve the fetcher's worst-bucket
+            // summary: Claude/GPT is exhausted even though Gemini has 92% left.
+            session: { usedPercent: 100, windowMinutes: 300, resetsAt: NOW + 4 * 60 * MIN },
+            weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: NOW + 3 * DAY },
+            buckets: [
+                { name: 'Gemini Models · Five Hour Limit Remaining', usedPercent: 8, windowMinutes: 300, resetsAt: NOW + 4 * 60 * MIN },
+                { name: 'Gemini Models · Weekly Limit Remaining', usedPercent: 8, windowMinutes: 10080, resetsAt: NOW + 3 * DAY },
+                { name: 'Claude/GPT · Five Hour Limit Remaining', usedPercent: 100, windowMinutes: 300, resetsAt: NOW + 4 * 60 * MIN },
+                { name: 'Claude/GPT · Weekly Limit Remaining', usedPercent: 100, windowMinutes: 10080, resetsAt: NOW + 3 * DAY },
+            ],
+            updatedAt: NOW,
+            error: null,
+        };
+    }
+
+    it('lets a Gemini slot use its 92% remaining bucket even when Claude/GPT is exhausted', () => {
+        const result = preview(nodeWith([
+            { provider: 'antigravity-cli', model: 'Gemini 3.1 Pro (High)', difficulty: ['difficult'] },
+        ], { 'antigravity-cli': antigravityQuota() }));
+
+        expect(result.stages.quota.clearOrder).toEqual(['antigravity-cli']);
+        expect(result.stages.quota.gated).toEqual([]);
+        expect(result.stages.quota.winner).toBe('antigravity-cli');
+    });
+
+    it('still gates a Claude slot when the Claude/GPT bucket it actually uses is exhausted', () => {
+        const result = preview(nodeWith([
+            { provider: 'antigravity-cli', model: 'Claude Sonnet 4.6 (Thinking)', difficulty: ['difficult'] },
+        ], { 'antigravity-cli': antigravityQuota() }));
+
+        expect(result.stages.quota.clearOrder).toEqual([]);
+        expect(result.stages.quota.gated).toEqual([{
+            providerType: 'antigravity-cli',
+            reason: 'provider_quota_session_low',
+        }]);
+        expect(result.stages.quota.winner).toBeUndefined();
+    });
+
+    it('retains the worst-headline gate when the model or bucket decomposition is unavailable', () => {
+        const unknownModel = preview(nodeWith([
+            { provider: 'antigravity-cli', model: 'Future Model', difficulty: ['difficult'] },
+        ], { 'antigravity-cli': antigravityQuota() }));
+        const noBuckets = preview(nodeWith([
+            { provider: 'antigravity-cli', model: 'Gemini 3.1 Pro (High)', difficulty: ['difficult'] },
+        ], {
+            'antigravity-cli': { ...antigravityQuota(), buckets: undefined },
+        }));
+
+        expect(unknownModel.stages.quota.gated[0]?.reason).toBe('provider_quota_session_low');
+        expect(noBuckets.stages.quota.gated[0]?.reason).toBe('provider_quota_session_low');
+    });
+
+    it('preserves existing no-data fail-open and quota-exhausted error hard-block behavior', () => {
+        const noData = preview(nodeWith([
+            { provider: 'antigravity-cli', model: 'Gemini 3.1 Pro (High)', difficulty: ['difficult'] },
+        ], {
+            'antigravity-cli': {
+                ...antigravityQuota(),
+                status: 'unavailable',
+                session: null,
+                weekly: null,
+                buckets: undefined,
+                error: 'no quota buckets',
+                metadata: { failureKind: 'no-data' },
+            },
+        }));
+        const exhaustedError = preview(nodeWith([
+            { provider: 'antigravity-cli', model: 'Gemini 3.1 Pro (High)', difficulty: ['difficult'] },
+        ], {
+            'antigravity-cli': {
+                ...antigravityQuota(),
+                status: 'error',
+                session: null,
+                weekly: null,
+                error: 'usage limit reached',
+                metadata: { failureKind: 'quota-exhausted' },
+            },
+        }));
+
+        expect(noData.stages.quota.clearOrder).toEqual(['antigravity-cli']);
+        expect(noData.quotaDiagnostics[0]?.gate.outcome).toBe('fail-open');
+        expect(exhaustedError.stages.quota.gated[0]?.reason).toBe('provider_quota_exhausted');
+        expect(exhaustedError.quotaDiagnostics[0]?.gate.outcome).toBe('hard-block');
+    });
+});

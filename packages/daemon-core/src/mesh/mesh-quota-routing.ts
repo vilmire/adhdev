@@ -506,6 +506,93 @@ export interface ProviderQuotaGateBlock {
     thresholdPercent: number;
 }
 
+/** The concrete slot the gate is deciding for. Model is optional because
+ * idle-session and legacy callers know only the provider; absence deliberately
+ * preserves the provider headline gate rather than guessing a bucket. */
+export interface ProviderQuotaGateTarget {
+    model?: string | null;
+}
+
+type QuotaGateWindow = {
+    usedPercent: number;
+    windowMinutes: number;
+    resetsAt?: number | null;
+};
+
+type AntigravityQuotaPool = 'gemini' | 'claude-gpt';
+
+function antigravityPoolFromLeadingLabel(value: string | null | undefined): AntigravityQuotaPool | undefined {
+    const label = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (/^gemini(?:[\s/_-]|$)/.test(label)) return 'gemini';
+    if (/^(?:claude|gpt)(?:[\s/_-]|$)/.test(label)) return 'claude-gpt';
+    return undefined;
+}
+
+function worstBucketWindow(
+    buckets: QuotaGateWindow[],
+    targetMinutes: number,
+): QuotaGateWindow | null {
+    const tolerance = targetMinutes * 0.1;
+    const matches = buckets.filter(bucket => {
+        const windowMinutes = Number(bucket.windowMinutes);
+        return Number.isFinite(windowMinutes)
+            && windowMinutes > 0
+            && Math.abs(windowMinutes - targetMinutes) <= tolerance;
+    });
+    if (!matches.length) return null;
+    return matches.reduce((worst, bucket) => (
+        Number(bucket.usedPercent) > Number(worst.usedPercent) ? bucket : worst
+    ));
+}
+
+/**
+ * Resolve the normalized axes for the Antigravity pool used by one concrete
+ * slot model. The fetcher intentionally keeps `session`/`weekly` as the worst
+ * pool headline; this routing-only projection reads the already-preserved
+ * buckets without changing that contract for any other consumer.
+ *
+ * Mapping is admitted only for the labels verified on both sides of the
+ * provider contract: Antigravity models lead with Gemini / Claude / GPT, and
+ * grouped bucket names lead with Gemini Models / Claude/GPT. Every bucket must
+ * be classifiable and every headline axis must have a matching selected-pool
+ * bucket. Anything else returns undefined, which makes the caller retain the
+ * existing worst-headline decision (fail closed; never guess a pool).
+ */
+function quotaWindowsForGateTarget(
+    providerType: string,
+    quota: MeshNodeFactsProviderQuota,
+    target?: ProviderQuotaGateTarget | null,
+): { session: QuotaGateWindow | null; weekly: QuotaGateWindow | null } | undefined {
+    if (providerType !== 'antigravity-cli' || quota.status !== 'ok') return undefined;
+    const selectedPool = antigravityPoolFromLeadingLabel(target?.model);
+    if (!selectedPool || !Array.isArray(quota.buckets) || !quota.buckets.length) return undefined;
+
+    const classified: Array<{ bucket: QuotaGateWindow; pool: AntigravityQuotaPool }> = [];
+    for (const bucket of quota.buckets) {
+        const pool = antigravityPoolFromLeadingLabel(bucket?.name);
+        const usedPercent = Number(bucket?.usedPercent);
+        const windowMinutes = Number(bucket?.windowMinutes);
+        if (!pool || !Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes)) return undefined;
+        classified.push({
+            pool,
+            bucket: { usedPercent, windowMinutes, resetsAt: bucket.resetsAt },
+        });
+    }
+    const selectedBuckets = classified
+        .filter(entry => entry.pool === selectedPool)
+        .map(entry => entry.bucket);
+    if (!selectedBuckets.length) return undefined;
+
+    const session = worstBucketWindow(selectedBuckets, DEFAULT_SESSION_WINDOW_MINUTES);
+    const weekly = worstBucketWindow(selectedBuckets, DEFAULT_WEEKLY_WINDOW_MINUTES);
+    // A provider headline proves that axis exists somewhere. If the selected
+    // pool has no corresponding readable bucket, the decomposition is partial;
+    // retain the headline rather than treating the missing selected window as
+    // unlimited.
+    if ((quota.session && !session) || (quota.weekly && !weekly)) return undefined;
+    return { session, weekly };
+}
+
 /**
  * RESET-IMMINENT relaxation (session window only): should a session-low block
  * be WAIVED because the window resets within `imminentMs`? The session window
@@ -616,10 +703,10 @@ function isWindowExpired(
  * 2026-08-24) — and a missing/unparseable resetsAt uses the staleAfterMs
  * fallback because carry-forward preserves the ORIGINAL updatedAt.
  *
- * Thresholds are judged per window against the node's session/weekly axes —
- * the provider-agnostic vocabulary every fetcher normalizes into, so no
- * provider-specific schema is needed. A window the provider does not report
- * (null) is simply not gated on.
+ * Thresholds are judged per window against the node's session/weekly axes. An
+ * Antigravity slot with a verified model-to-pool mapping projects those axes
+ * from its buckets; absent or uncertain detail retains the headline axes. A
+ * window the provider does not report (null) is simply not gated on.
  *
  * One relaxation: a session-low block is WAIVED when the session window's
  * reset is imminent (within sessionResetImminentMs, default 5 min) — the
@@ -632,6 +719,7 @@ export function evaluateProviderQuotaGate(
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
+    target?: ProviderQuotaGateTarget | null,
 ): ProviderQuotaGateBlock | null {
     const entry = quotaEntryFor(node, providerType, context, now);
     if (!entry) {
@@ -639,6 +727,9 @@ export function evaluateProviderQuotaGate(
         return null; // never reported → unknown, not blocked
     }
     const { facts, quota } = entry;
+    const targetWindows = quotaWindowsForGateTarget(providerType, quota, target);
+    const sessionWindow = targetWindows ? targetWindows.session : quota.session;
+    const weeklyWindow = targetWindows ? targetWindows.weekly : quota.weekly;
     let sessionTrustworthy = true;
     let weeklyTrustworthy = true;
     if (quota.status !== 'ok') {
@@ -664,8 +755,8 @@ export function evaluateProviderQuotaGate(
         // by that window's own reset boundary. Missing reset stamps retain the
         // prior updatedAt freshness fallback.
         if ((quota as any).metadata?.lastGoodWindows !== true) return null;
-        sessionTrustworthy = isWindowTrustworthy(quota.session, facts, quota, policy, now);
-        weeklyTrustworthy = isWindowTrustworthy(quota.weekly, facts, quota, policy, now);
+        sessionTrustworthy = isWindowTrustworthy(sessionWindow, facts, quota, policy, now);
+        weeklyTrustworthy = isWindowTrustworthy(weeklyWindow, facts, quota, policy, now);
     } else {
         // 'ok' snapshots: each window keeps gating until its own resetsAt
         // (owner decision 2026-08-24) — a wall-clock-stale reading still
@@ -674,16 +765,16 @@ export function evaluateProviderQuotaGate(
         // now. A window whose reset has passed, or that carries no reset
         // stamp once the snapshot ages beyond staleAfterMs, drops out; when
         // BOTH drop out the snapshot fails open exactly as before.
-        sessionTrustworthy = isWindowTrustworthy(quota.session, facts, quota, policy, now);
-        weeklyTrustworthy = isWindowTrustworthy(quota.weekly, facts, quota, policy, now);
+        sessionTrustworthy = isWindowTrustworthy(sessionWindow, facts, quota, policy, now);
+        weeklyTrustworthy = isWindowTrustworthy(weeklyWindow, facts, quota, policy, now);
     }
     // GATE-LEVEL DEFENSE: isWindowTrustworthy already discards windows whose
     // own resetsAt has passed, but re-assert the invariant here so a boundary
     // regression cannot turn an expired reading into a block reason. A session
     // or weekly window whose reset boundary is behind the reporter's clock
     // describes a previous window and must never be used to deny a claim.
-    if (sessionTrustworthy && isWindowExpired(quota.session, facts, quota, now)) sessionTrustworthy = false;
-    if (weeklyTrustworthy && isWindowExpired(quota.weekly, facts, quota, now)) weeklyTrustworthy = false;
+    if (sessionTrustworthy && isWindowExpired(sessionWindow, facts, quota, now)) sessionTrustworthy = false;
+    if (weeklyTrustworthy && isWindowExpired(weeklyWindow, facts, quota, now)) weeklyTrustworthy = false;
     if (quota.status === 'ok' && !sessionTrustworthy && !weeklyTrustworthy) {
         if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
             logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);
@@ -691,9 +782,9 @@ export function evaluateProviderQuotaGate(
         return null; // no window survives its own boundary → fail open
     }
     const resolved = resolveQuotaRoutingPolicy(policy);
-    const session = remainingPercent(quota.session);
+    const session = remainingPercent(sessionWindow);
     if (sessionTrustworthy && session !== undefined && session < resolved.sessionMinRemainingPercent
-        && !isSessionResetImminent(quota.session, facts, quota, resolved.sessionResetImminentMs, now)) {
+        && !isSessionResetImminent(sessionWindow, facts, quota, resolved.sessionResetImminentMs, now)) {
         return {
             reason: PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
             window: 'session',
@@ -701,7 +792,7 @@ export function evaluateProviderQuotaGate(
             thresholdPercent: resolved.sessionMinRemainingPercent,
         };
     }
-    const weekly = remainingPercent(quota.weekly);
+    const weekly = remainingPercent(weeklyWindow);
     if (weeklyTrustworthy && weekly !== undefined && weekly < resolved.weeklyMinRemainingPercent) {
         return {
             reason: PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
@@ -1044,11 +1135,14 @@ export function rankProvidersByQuotaGate(
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
+    targetsByProvider?: ReadonlyMap<string, ProviderQuotaGateTarget>,
 ): ProviderQuotaGateRanking {
     const clear: string[] = [];
     const gated: ProviderQuotaGateRanking['gated'] = [];
     for (const providerType of orderedProviderTypes) {
-        const block = evaluateProviderQuotaGate(node, providerType, policy, now, context);
+        const block = evaluateProviderQuotaGate(
+            node, providerType, policy, now, context, targetsByProvider?.get(providerType),
+        );
         if (block) gated.push({ providerType, block });
         else clear.push(providerType);
     }

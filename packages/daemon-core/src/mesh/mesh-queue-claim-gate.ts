@@ -47,16 +47,26 @@ export function evaluateQuotaClaimGateForAssignment(args: {
     nodeId: string;
     sessionId: string;
     providerType: string;
+    /** Model of the slot selected for this claim, when the launch path has it.
+     * Absent idle/legacy sessions retain the provider headline gate. */
+    model?: string;
     trigger: string;
     node: any;
     mesh: any;
     providerLoader: ProviderLoader;
     quotaClaimTrace?: QuotaClaimDrainTrace;
 }): boolean {
-    const { meshId, nodeId, sessionId, providerType, trigger, node, mesh, providerLoader, quotaClaimTrace } = args;
+    const { meshId, nodeId, sessionId, providerType, model, trigger, node, mesh, providerLoader, quotaClaimTrace } = args;
     const pinCandidateTaskId = providerPinOverrideCandidateTaskId(meshId, providerType);
     const isPinOverride = !!pinCandidateTaskId;
-    const quotaClaimBlock = evaluateProviderQuotaGate(node, providerType, mesh?.policy?.quotaRouting ?? null, Date.now(), quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, providerLoader));
+    const quotaClaimBlock = evaluateProviderQuotaGate(
+        node,
+        providerType,
+        mesh?.policy?.quotaRouting ?? null,
+        Date.now(),
+        quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, providerLoader),
+        { model },
+    );
     if (quotaClaimTrace) quotaClaimTrace.evaluated += 1;
     if (quotaClaimBlock) {
         const observation = {
