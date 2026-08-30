@@ -43,6 +43,9 @@ import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 // deduplicated by the SAME signature on both routes rather than by two divergent rules.
 import { buildSendInputSignature } from './chat-commands-shared.js';
 import { findProviderAutoApproveMode, resolveProviderAutoApproveMode } from '../providers/auto-approve-modes.js';
+import { expandModelLaunchArgs } from './model-launch-args.js';
+
+export { expandModelLaunchArgs } from './model-launch-args.js';
 
 // ─── external dependency interface ──────────────────────────
 
@@ -582,21 +585,6 @@ function expandResumeArgs(template: string[] | undefined, sessionId: string): st
         }
         return expanded;
     });
-}
-
-/**
- * Expand a provider's `modelLaunchArgs` template with the requested model, mirroring
- * expandResumeArgs. `{{model}}` → the trimmed model string. Returns undefined when
- * there is no template or no model (a model request without a template is a no-op —
- * see startSession, where the caller logs the skip). MAGI kind-panel model axis.
- */
-export function expandModelLaunchArgs(template: string[] | undefined, model: string | undefined): string[] | undefined {
-    const m = typeof model === 'string' ? model.trim() : '';
-    if (!m || !Array.isArray(template) || template.length === 0) return undefined;
-    // Substitute {{model}} anywhere in a token, not only when it is the whole token,
-    // so templates like ['-c', 'model={{model}}'] (codex) expand as well as the
-    // standalone ['--model', '{{model}}'] (claude) form.
-    return template.map((part) => part.includes('{{model}}') ? part.split('{{model}}').join(m) : part);
 }
 
 /**
@@ -1314,7 +1302,11 @@ export class DaemonCliManager {
  // or no requested model, is a no-op — model selection is best-effort and must never
  // fail a launch. The model args are prepended so a caller's explicit cliArgs (e.g. a
  // resume flag) still win positionally where order matters.
-        const modelLaunchArgs = expandModelLaunchArgs(launchProvider?.modelLaunchArgs, initialModel);
+        const modelLaunchArgs = expandModelLaunchArgs(
+            launchProvider?.modelLaunchArgs,
+            initialModel,
+            launchProvider?.modelLaunchValueMap,
+        );
         const cliArgsWithModel = modelLaunchArgs
             ? [...modelLaunchArgs, ...(cliArgsWithAutoApprove || [])]
             : cliArgsWithAutoApprove;
