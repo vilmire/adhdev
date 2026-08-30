@@ -218,6 +218,14 @@
       },
       "description": "Template for expanding an initialModel selection into launch args. '{{model}}' is substituted with the model string (e.g. ['--model', '{{model}}'] → --model opus). Applied at launch when a model is requested for this CLI provider (MAGI kind-panel model axis). Absent → no launch-time model selection."
     },
+    "modelLaunchValueMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Optional map from user-facing model labels to provider-specific CLI values used to fill {{model}} in modelLaunchArgs. A model absent from the map passes through unchanged."
+    },
     "modelOptions": {
       "type": "array",
       "items": {

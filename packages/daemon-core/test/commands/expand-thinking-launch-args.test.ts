@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expandThinkingLaunchArgs, expandModelLaunchArgs } from '../../src/commands/cli-manager.js';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ANTIGRAVITY_MANIFEST = resolve(HERE, '../../../../../adhdev-providers/cli/antigravity-cli/provider.v1.json');
+const ANTIGRAVITY_MODELS = resolve(HERE, '../../../../../adhdev-providers/tests/fixtures/antigravity-models.txt');
 
 describe('expandModelLaunchArgs (brain-routing model axis)', () => {
     it('substitutes {{model}} as a standalone token (claude form)', () => {
@@ -25,6 +32,19 @@ describe('expandModelLaunchArgs (brain-routing model axis)', () => {
         expect(expandModelLaunchArgs(['--model', '{{model}}'], '  opus  '))
             .toEqual(['--model', 'opus']);
     });
+
+    it.skipIf(!existsSync(ANTIGRAVITY_MANIFEST) || !existsSync(ANTIGRAVITY_MODELS))(
+        'maps the real Antigravity display label to the slug measured from agy models', () => {
+            const provider = JSON.parse(readFileSync(ANTIGRAVITY_MANIFEST, 'utf8'));
+            const modelsOutput = readFileSync(ANTIGRAVITY_MODELS, 'utf8');
+            expect(modelsOutput).toContain('gemini-3.7-flash-high     Gemini 3.7 Flash (High)');
+            expect(expandModelLaunchArgs(
+                provider.modelLaunchArgs,
+                'Gemini 3.7 Flash (High)',
+                provider.modelLaunchValueMap,
+            )).toEqual(['--model', 'gemini-3.7-flash-high']);
+        },
+    );
 });
 
 describe('expandThinkingLaunchArgs (brain-routing thinking axis)', () => {

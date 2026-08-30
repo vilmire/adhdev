@@ -75,6 +75,7 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'details',
   'autoApproveModes',
   'modelLaunchArgs',
+  'modelLaunchValueMap',
   'modelOptions',
   'thinkingLaunchArgs',
   'thinkingLevelMap',

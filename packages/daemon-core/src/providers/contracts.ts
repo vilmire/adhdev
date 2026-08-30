@@ -680,6 +680,13 @@ export interface ProviderModule {
    */
   modelLaunchArgs?: string[];
   /**
+   * Optional mapping from user-facing model labels to the provider's launch-time
+   * CLI values. This keeps modelOptions readable when a CLI accepts stable slugs
+   * rather than its displayed labels. Unmapped values pass through unchanged so
+   * free-form models remain supported.
+   */
+  modelLaunchValueMap?: Record<string, string>;
+  /**
    * BRAIN-ROUTING (model axis): suggested model values for this provider, surfaced
    * as dropdown options in the new-session dialog (e.g. claude ['opus','sonnet',
    * 'haiku']; codex ['gpt-5.5','gpt-5-codex']). Advisory only — the UI allows free
