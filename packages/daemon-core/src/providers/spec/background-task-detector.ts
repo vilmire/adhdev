@@ -582,6 +582,51 @@ function parseNotificationAttrs(tag: string): Map<string, string> {
     return attrs;
 }
 
+interface TailJsonlCacheEntry {
+    signature: string;
+    maxBytes: number;
+    sourceBytes: number;
+    lines: unknown[];
+}
+
+interface TailJsonlCacheStats {
+    hits: number;
+    misses: number;
+    fileReads: number;
+    parsePasses: number;
+}
+
+const TAIL_JSONL_CACHE_MAX_ENTRIES = 8;
+const TAIL_JSONL_CACHE_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+const tailJsonlCache = new Map<string, TailJsonlCacheEntry>();
+let tailJsonlCacheSourceBytes = 0;
+const tailJsonlCacheStats: TailJsonlCacheStats = { hits: 0, misses: 0, fileReads: 0, parsePasses: 0 };
+
+function tailJsonlSignature(stat: fs.Stats): string {
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+function storeTailJsonlCache(p: string, entry: TailJsonlCacheEntry): void {
+    const prior = tailJsonlCache.get(p);
+    if (prior) tailJsonlCacheSourceBytes -= prior.sourceBytes;
+    tailJsonlCache.delete(p);
+
+    if (entry.sourceBytes > TAIL_JSONL_CACHE_MAX_SOURCE_BYTES) return;
+    tailJsonlCache.set(p, entry);
+    tailJsonlCacheSourceBytes += entry.sourceBytes;
+
+    while (
+        tailJsonlCache.size > TAIL_JSONL_CACHE_MAX_ENTRIES
+        || tailJsonlCacheSourceBytes > TAIL_JSONL_CACHE_MAX_SOURCE_BYTES
+    ) {
+        const oldestKey = tailJsonlCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        const oldest = tailJsonlCache.get(oldestKey);
+        if (oldest) tailJsonlCacheSourceBytes -= oldest.sourceBytes;
+        tailJsonlCache.delete(oldestKey);
+    }
+}
+
 /**
  * Read only the last `maxBytes` of a JSONL file and parse the whole lines
  * within it (the first partial line at the read boundary is dropped). Keeps
@@ -592,20 +637,43 @@ function parseNotificationAttrs(tag: string): Map<string, string> {
  * partial-line-drop rule.
  */
 export function readTailJsonlLines(filePath: string, maxBytes: number): unknown[] {
-    const stat = fs.statSync(filePath);
+    let stat: fs.Stats;
+    try {
+        stat = fs.statSync(filePath);
+    } catch {
+        return [];
+    }
+    const signature = tailJsonlSignature(stat);
+    const cached = tailJsonlCache.get(filePath);
+    if (cached?.signature === signature && cached.maxBytes === maxBytes) {
+        tailJsonlCacheStats.hits++;
+        // Refresh LRU recency
+        tailJsonlCache.delete(filePath);
+        tailJsonlCache.set(filePath, cached);
+        return cached.lines;
+    }
+
+    tailJsonlCacheStats.misses++;
     const size = stat.size;
     const start = size > maxBytes ? size - maxBytes : 0;
     const length = size - start;
-    if (length <= 0) return [];
-    const fd = fs.openSync(filePath, 'r');
+    if (length <= 0) {
+        const out: unknown[] = [];
+        storeTailJsonlCache(filePath, { signature, maxBytes, sourceBytes: size, lines: out });
+        return out;
+    }
+    
     let text: string;
+    const fd = fs.openSync(filePath, 'r');
     try {
         const buf = Buffer.alloc(length);
         const bytes = fs.readSync(fd, buf, 0, length, start);
         text = buf.subarray(0, bytes).toString('utf8');
+        tailJsonlCacheStats.fileReads++;
     } finally {
         fs.closeSync(fd);
     }
+    tailJsonlCacheStats.parsePasses++;
     const rawLines = text.split('\n');
     // When we started mid-file, the first element is a partial line — drop it.
     if (start > 0 && rawLines.length > 0) rawLines.shift();
@@ -615,5 +683,21 @@ export function readTailJsonlLines(filePath: string, maxBytes: number): unknown[
         if (!trimmed) continue;
         try { out.push(JSON.parse(trimmed)); } catch { /* skip malformed / truncated */ }
     }
+    storeTailJsonlCache(filePath, { signature, maxBytes, sourceBytes: size, lines: out });
     return out;
+}
+
+/** TESTS ONLY: deterministic cache/read counters for hot-path regression tests. */
+export function __getTailJsonlCacheStatsForTests(): TailJsonlCacheStats {
+    return { ...tailJsonlCacheStats };
+}
+
+/** TESTS ONLY. */
+export function __resetTailJsonlCacheForTests(): void {
+    tailJsonlCache.clear();
+    tailJsonlCacheSourceBytes = 0;
+    tailJsonlCacheStats.hits = 0;
+    tailJsonlCacheStats.misses = 0;
+    tailJsonlCacheStats.fileReads = 0;
+    tailJsonlCacheStats.parsePasses = 0;
 }
