@@ -896,20 +896,19 @@ export class SpecCliAdapter implements CliAdapter {
             // written, then require the matching review page for final Enter.
             // A mismatch fails closed and deliberately leaves the held prompt
             // intact so a stale response cannot operate another picker.
-            let usedFreeform = false;
+            const allowsFreeform = prompt.questions.some(q => q.allowFreeform);
             for (const question of prompt.questions) {
                 const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
                     ...prompt,
                     questions: [question],
                 }, response).slice(0, -1); // final Enter belongs to the review page below
-                if (response.answers[question.questionId]?.freeformText?.trim()) usedFreeform = true;
                 for (const step of questionSteps) {
                     this.assertFocusedClaudeTuiQuestion(question);
                     this.driver.dispatch({ kind: 'pty_write', data: step });
                     await new Promise(resolve => setTimeout(resolve, 180));
                 }
             }
-            await this.assertFocusedClaudeTuiReview(prompt, usedFreeform);
+            await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
             this.driver.dispatch({ kind: 'pty_write', data: '\r' });
             await new Promise(resolve => setTimeout(resolve, 180));
         } else {
@@ -1759,15 +1758,15 @@ export class SpecCliAdapter implements CliAdapter {
      * as the review page; on timeout fall through to the last frame so a
      * genuinely wrong screen still fails closed with its real content.
      *
-     * `usedFreeform` widens the budget to CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
-     * (residual gap, live defect 2026-08-29): the last keystroke for a
-     * freeform ("Type something." / Other) answer commits a typed string that
-     * the TUI must additionally lay out into the review echo, which the plain
-     * option-select budget above does not budget time for.
+     * `allowsFreeform` widens the budget to CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
+     * (residual gap, live defect 2026-08-29): a picker that allows freeform
+     * input ("Type something." / Other) carries a heavier layout burden even if
+     * the user selects a standard option. The wider budget accounts for this
+     * extra layout time when validating the review echo screen.
      */
-    private async snapshotSettledClaudeTuiReview(usedFreeform: boolean): Promise<string> {
+    private async snapshotSettledClaudeTuiReview(allowsFreeform: boolean): Promise<string> {
         let screenText = this.readClaudeTuiSnapshotForAnswer();
-        const budgetMs = usedFreeform
+        const budgetMs = allowsFreeform
             ? SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
             : SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
         const deadline = Date.now() + budgetMs;
@@ -1779,8 +1778,8 @@ export class SpecCliAdapter implements CliAdapter {
         return screenText;
     }
 
-    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, usedFreeform: boolean): Promise<void> {
-        const screenText = await this.snapshotSettledClaudeTuiReview(usedFreeform);
+    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, allowsFreeform: boolean): Promise<void> {
+        const screenText = await this.snapshotSettledClaudeTuiReview(allowsFreeform);
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (focused || !isClaudeTuiReviewScreen(screenText)) {
             const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
@@ -1791,7 +1790,7 @@ export class SpecCliAdapter implements CliAdapter {
             // leaves NO trace in the daemon log — confirmed live 2026-08-29,
             // where a dashboard-visible "review page is not focused" error had
             // zero matching log output.
-            LOG.warn('SpecAdapter', `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (usedFreeform=${usedFreeform})${observed}`);
+            LOG.warn('SpecAdapter', `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (allowsFreeform=${allowsFreeform})${observed}`);
             throw new Error(`Claude TUI review page is not focused for the active interactive prompt${observed}`);
         }
 
