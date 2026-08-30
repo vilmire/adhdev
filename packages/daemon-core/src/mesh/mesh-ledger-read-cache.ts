@@ -277,10 +277,19 @@ export function getCachedFilteredRawEntries(
     opts: { since?: string; kinds?: string[] },
 ): MeshLedgerEntry[] {
     const key = filteredLedgerCacheKey(opts);
-    const meshCache = filteredLedgerReadCache.get(meshId);
+    let meshCache = filteredLedgerReadCache.get(meshId);
+    if (meshCache) {
+        const now = Date.now();
+        for (const [cachedKey, entry] of meshCache) {
+            if (now - entry.cachedAt >= LEDGER_CACHE_TTL_MS) meshCache.delete(cachedKey);
+        }
+        if (meshCache.size === 0) {
+            filteredLedgerReadCache.delete(meshId);
+            meshCache = undefined;
+        }
+    }
     const cached = meshCache?.get(key);
-    if (cached && Date.now() - cached.cachedAt < LEDGER_CACHE_TTL_MS) return cached.entries;
-    if (cached) meshCache!.delete(key);
+    if (cached) return cached.entries;
 
     const entries = readLedgerFromStore(meshId, opts);
     recordLedgerPushdownScan(entries.length);
