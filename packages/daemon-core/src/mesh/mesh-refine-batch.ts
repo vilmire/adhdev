@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
+import { LOG } from '../logging/logger.js';
 import type { MeshRefineSubmoduleReachabilityPreflight } from './mesh-refine-submodule-preflight.js';
 
 const execFileAsync = promisify(execFile);
@@ -11,6 +13,29 @@ const execFileAsync = promisify(execFile);
 // (the same helper the validation/bootstrap spawn path already uses) resolves it to an absolute
 // path once at module load. No-op on non-win32 (returns 'git' verbatim) — no quoting/shell risk.
 const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
+
+async function execChangeAreaGit(
+    callSite: string,
+    gitArgs: string[],
+    cwd: string,
+    inputs: Record<string, unknown>,
+) {
+    try {
+        return await execFileAsync(GIT, gitArgs, { cwd, encoding: 'utf8' });
+    } catch (error: any) {
+        LOG.warn('Mesh', `[Refinery] Change-area git call failed: ${JSON.stringify({
+            callSite,
+            gitArgs,
+            cwd,
+            cwdExists: existsSync(cwd),
+            code: error?.code ?? null,
+            syscall: error?.syscall ?? null,
+            path: error?.path ?? null,
+            inputs,
+        })}`);
+        throw error;
+    }
+}
 
 /**
  * Change-area analysis for one worktree node, used to order sibling nodes for
@@ -71,10 +96,11 @@ function topLevel(path: string): string {
  */
 async function resolveSubmodulePaths(repoRoot: string): Promise<Set<string>> {
     try {
-        const { stdout } = await execFileAsync(
-            GIT,
+        const { stdout } = await execChangeAreaGit(
+            'resolveSubmodulePaths',
             ['config', '--file', '.gitmodules', '--get-regexp', 'path'],
-            { cwd: repoRoot, encoding: 'utf8' },
+            repoRoot,
+            { repoRoot },
         );
         const paths = new Set<string>();
         for (const line of stdout.split('\n')) {
@@ -109,9 +135,15 @@ export async function analyzeMeshRefineNodeChangeArea(args: {
     baseRef: string;
     branchRef: string;
     diffCwd: string;
+    /** Source repo root used to resolve the base ref, retained for failure diagnostics. */
+    repoRoot?: string;
     submodulePaths: Set<string>;
 }): Promise<MeshRefineBatchNodeChangeArea> {
-    const { nodeId, workspace, branch, baseRef, branchRef, diffCwd, submodulePaths } = args;
+    const { nodeId, workspace, branch, baseRef, branchRef, diffCwd, repoRoot, submodulePaths } = args;
+    const diagnosticInputs = {
+        nodeId, workspace, repoRoot: repoRoot ?? null, branch, baseRef, branchRef,
+        submodulePaths: [...submodulePaths],
+    };
     const base: MeshRefineBatchNodeChangeArea = {
         nodeId,
         workspace,
@@ -127,22 +159,29 @@ export async function analyzeMeshRefineNodeChangeArea(args: {
         // that already landed on base via a sibling earlier in the batch.
         let mergeBase = baseRef;
         try {
-            const { stdout } = await execFileAsync(GIT, ['merge-base', baseRef, branchRef], { cwd: diffCwd, encoding: 'utf8' });
+            const { stdout } = await execChangeAreaGit(
+                'analyzeMeshRefineNodeChangeArea.mergeBase',
+                ['merge-base', baseRef, branchRef],
+                diffCwd,
+                diagnosticInputs,
+            );
             const resolved = stdout.trim();
             if (resolved) mergeBase = resolved;
         } catch { /* fall back to baseRef directly */ }
 
-        const { stdout: countStdout } = await execFileAsync(
-            GIT,
+        const { stdout: countStdout } = await execChangeAreaGit(
+            'analyzeMeshRefineNodeChangeArea.aheadCount',
             ['rev-list', '--count', `${mergeBase}..${branchRef}`],
-            { cwd: diffCwd, encoding: 'utf8' },
+            diffCwd,
+            { ...diagnosticInputs, mergeBase },
         );
         base.aheadCount = Number.parseInt(countStdout.trim(), 10) || 0;
 
-        const { stdout: nameStdout } = await execFileAsync(
-            GIT,
+        const { stdout: nameStdout } = await execChangeAreaGit(
+            'analyzeMeshRefineNodeChangeArea.changedFiles',
             ['diff', '--name-only', `${mergeBase}..${branchRef}`],
-            { cwd: diffCwd, encoding: 'utf8' },
+            diffCwd,
+            { ...diagnosticInputs, mergeBase },
         );
         const files = nameStdout.split('\n').map(line => line.trim()).filter(Boolean).slice(0, MAX_CHANGED_FILES);
         base.changedFiles = files;
