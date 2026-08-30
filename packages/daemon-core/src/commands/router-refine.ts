@@ -2107,6 +2107,7 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
                 baseRef,
                 branchRef,
                 diffCwd: node.workspace,
+                repoRoot,
                 submodulePaths: submodulePathsByRepoRoot.get(repoRoot)!,
             }));
         }

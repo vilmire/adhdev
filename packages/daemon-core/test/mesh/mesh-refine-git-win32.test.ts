@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { resolveWin32Executable } from '../../src/cli-adapters/resolve-executable.js'
 import { analyzeMeshRefineNodeChangeArea } from '../../src/mesh/mesh-refine-batch.js'
+import { LOG } from '../../src/logging/logger.js'
 import * as path from 'path'
 
 // Fix (4): the refine/batch git helpers used a bare `git` for execFile(Sync)/execFileAsync.
@@ -41,4 +42,35 @@ describe('Fix (4) — win32 git executable resolution for refine/batch', () => {
     expect(result.aheadCount).toBe(0)
     expect(Array.isArray(result.changedFiles)).toBe(true)
   }, 30_000) // real git spawn against this (large, submodule'd) repo — generous under parallel load
+
+  it('logs that a missing change-area cwd does not exist when git spawn fails with ENOENT', async () => {
+    const missingCwd = path.join(process.cwd(), `.missing-refine-cwd-${process.pid}-${Date.now()}`)
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => undefined)
+    try {
+      const result = await analyzeMeshRefineNodeChangeArea({
+        nodeId: 'node_missing_cwd',
+        workspace: '/stored/workspace/path',
+        branch: 'feat/missing-cwd',
+        baseRef: 'HEAD',
+        branchRef: 'HEAD',
+        diffCwd: missingCwd,
+        repoRoot: '/source/repo/root',
+        submodulePaths: new Set(['oss']),
+      })
+
+      expect(result.error).toContain('ENOENT')
+      expect(warn).toHaveBeenCalledWith('Mesh', expect.stringContaining('[Refinery] Change-area git call failed'))
+      const diagnostic = warn.mock.calls.map(([, message]) => message).join('\n')
+      expect(diagnostic).toContain(`"cwd":"${missingCwd}"`)
+      expect(diagnostic).toContain('"cwdExists":false')
+      expect(diagnostic).toContain('"code":"ENOENT"')
+      expect(diagnostic).toContain('"syscall":"spawn git"')
+      expect(diagnostic).toContain('"path":"git"')
+      expect(diagnostic).toContain('"workspace":"/stored/workspace/path"')
+      expect(diagnostic).toContain('"repoRoot":"/source/repo/root"')
+      expect(diagnostic).toContain('"submodulePaths":["oss"]')
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
