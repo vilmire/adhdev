@@ -1017,6 +1017,13 @@ export class FsmDriver implements ISpecDriver {
 
         if (ev.fired) {
             this.commitTransition(ev.fired, now, ev);
+            // Mark ready BEFORE emitStateChanged so SpecCliAdapter.getStatus()
+            // on the idle-entry frame already has fsmReadySeen=true. The
+            // adapter's statusCallback → detectStatusTransition runs inside
+            // emit; if maybeMarkReady ran after, a quiet CLI (no further PTY
+            // frames at the prompt) would never re-poll and agent:ready would
+            // never fire — antigravity signing_in→idle, live M-MESH-INFRA-0829.
+            this.maybeMarkReady();
             // After a transition, immediately re-derive controls/modal for the
             // new state and emit. Re-run once so a chain like approval→busy
             // that's already satisfied doesn't wait for the next PTY frame.
@@ -1033,24 +1040,20 @@ export class FsmDriver implements ISpecDriver {
             // Without this call the queued first message would strand here
             // forever (the "first input never processed" bug). maybeMarkReady is
             // idempotent (guarded by readySeenOnce) so calling it on both
-            // branches is safe.
-            this.maybeMarkReady();
-            // SEND-OVERLAP: release the in-flight latch once the machine has
-            // visibly left idle, and write the next queued send on the SAME frame
-            // it returns to idle — same "quiet CLI produces no further frame"
-            // hazard the ready-gate drain above documents.
+            // branches is safe. Drain stays after emit so detectStatusTransition
+            // observes idle+fsmReadySeen before the first queued body is written.
             this.drainPendingSends();
             return;
         }
 
         // No transition — refresh modal/controls (content inside the same
         // state can still change, e.g. modal title/buttons) and emit if changed.
+        this.maybeMarkReady();
         this.emitStateChanged(forceEmit);
         // Schedule a wake for the soonest pending time-condition.
         this.scheduleWakeForState();
         this.scheduleStallWatchdog();
         // Drain queued sends once we first reach a "ready" state.
-        this.maybeMarkReady();
         this.drainPendingSends();
     }
 
@@ -1398,15 +1401,12 @@ export class FsmDriver implements ISpecDriver {
         const st = stateById(this.spec, this.currentStateId);
         if (!st) return;
         // "Ready" = a non-initial state whose status is idle (the prompt is up).
+        // Latch only — the queued first send is drained AFTER emitStateChanged
+        // so detectStatusTransition observes idle+fsmReadySeen (and fires
+        // agent:ready) before the body is written. drainPendingSends still
+        // serializes one message at a time (SEND-OVERLAP).
         if (!st.initial && statusForState(st) === 'idle') {
             this.readySeenOnce = true;
-            // SEND-OVERLAP: the queue is drained ONE message at a time through
-            // drainPendingSends (each waits for the machine to come back to idle)
-            // rather than flushed all at once. The old flush wrote every queued
-            // body back-to-back into the same composer, which is the overlap this
-            // fix exists to prevent — it just happened to be rare because the
-            // queue seldom held more than one message at boot.
-            this.drainPendingSends();
         }
     }
 
