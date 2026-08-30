@@ -119,8 +119,6 @@ describe('Transcript stat polling instead of PTY', () => {
         // 2. 파일이 변하면 다음 폴링에서 불린다.
         // change mtime directly since fakeTimers might make fast appends have same mtime
         fs.appendFileSync(transcriptPath, `${JSON.stringify({ role: 'assistant', content: 'second' })}\n`);
-        const now = Date.now();
-        fs.utimesSync(transcriptPath, new Date(now), new Date(now + 1000));
         
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS);
         await flushProjection();
