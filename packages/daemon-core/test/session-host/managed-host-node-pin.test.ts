@@ -10,6 +10,7 @@ const cp = vi.hoisted(() => ({
 vi.mock('child_process', () => cp)
 
 import { createManagedSessionHost } from '../../src/session-host/managed-host'
+import { resetProcessInstanceContextForTests } from '../../src/config/instance-context'
 
 const tempRoots: string[] = []
 let platformDescriptor: PropertyDescriptor | undefined
@@ -41,6 +42,7 @@ describe('managed session-host node runtime pin', () => {
     else process.env.USERPROFILE = originalUserProfile
     if (originalConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
     else process.env.ADHDEV_CONFIG_DIR = originalConfigDir
+    resetProcessInstanceContextForTests()
     for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
   })
 
@@ -70,6 +72,7 @@ describe('managed session-host node runtime pin', () => {
     const homeDir = makeTempHome()
     setFakeHome(homeDir)
     process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
+    resetProcessInstanceContextForTests()
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
     const portableNode = stagePortableNode22(homeDir)
 
@@ -96,6 +99,7 @@ describe('managed session-host node runtime pin', () => {
     const homeDir = makeTempHome()
     setFakeHome(homeDir)
     process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
+    resetProcessInstanceContextForTests()
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
 
     // No portable node staged; any node probe reports non-22 so nothing qualifies.
@@ -114,6 +118,7 @@ describe('managed session-host node runtime pin', () => {
     const homeDir = makeTempHome()
     setFakeHome(homeDir)
     process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
+    resetProcessInstanceContextForTests()
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
 
     // Even if a portable node happens to exist, non-win32 must never resolve it.
