@@ -601,7 +601,18 @@ export function runStatusTransitionTick(host: StatusTransitionHost): void {
                 host.scheduleCompletedDebounceFlush(flushDelay);
             }
         } else if (newStatus === 'idle' && host.lastStatus === 'starting') {
-            host.emitAgentReadyOnce(chatTitle, now);
+            // Spec adapters whose INITIAL state already declares status 'idle'
+            // (antigravity-cli starting, and every other 4.0 spec) used to land
+            // here on the first starting-state emit, consuming the one-shot
+            // before maybeMarkReady. SpecCliAdapter now holds at 'starting'
+            // until fsmReadySeen, so this edge is the genuine prompt-up
+            // transition. Still skip the one-shot when the adapter explicitly
+            // says the prompt is not drawn (fsmReadySeen===false) — the
+            // idle-stayed re-arm below fires once it is. Absent/undefined
+            // fsmReadySeen (non-FSM adapters) keeps the historical one-shot.
+            if (adapterStatus.fsmReadySeen !== false) {
+                host.emitAgentReadyOnce(chatTitle, now);
+            }
             // GENERATING-BOUNDARY (R4c): stamp the collapse moment ONCE so the
             // idle-stayed window below is anchored on the startup-grace collapse,
             // not on boot. Set only the first time so a later starting re-entry

@@ -454,6 +454,29 @@ export class SpecCliAdapter implements CliAdapter {
                 ...sessionFields,
             };
         }
+        // Until the FSM has drawn a genuine non-initial idle prompt, do NOT
+        // project the initial state's declared status (often `idle`) or a
+        // boot-phase generating state (antigravity `signing_in`) onto the
+        // daemon status machine. Projecting idle consumes the starting→idle
+        // agent:ready one-shot before the prompt exists; projecting generating
+        // arms a false generating_started (signing_in lasting >3s) that never
+        // completes — no assistant text — so the dashboard/claim freeze as
+        // generating (M-MESH-INFRA-0829). Hold at 'starting' until
+        // maybeMarkReady. Missing hasSeenReady (stub/legacy drivers) is
+        // treated as "not gated" so existing tests and non-FSM adapters keep
+        // their previous projection. Approval stays visible during boot
+        // (trust/consent modals must not be hidden as 'starting').
+        const readySeen = this.driver.hasSeenReady?.();
+        if (readySeen === false) {
+            return {
+                status: 'starting',
+                messages: [],
+                activeModal: null,
+                activeInteractivePrompt: this.activeInteractivePrompt,
+                fsmReadySeen: false,
+                ...sessionFields,
+            };
+        }
         if (state.status === 'generating') {
             return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
         }
@@ -462,7 +485,7 @@ export class SpecCliAdapter implements CliAdapter {
         // starting→idle one-shot that the provider-instance otherwise relies on.
         // Surfaced only on idle so the provider-instance fires agent:ready exactly
         // when the worker is actually ready to claim.
-        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, fsmReadySeen: this.driver.hasSeenReady?.() ?? false, ...sessionFields };
+        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, fsmReadySeen: readySeen === true, ...sessionFields };
     }
 
     private maybeRefreshNativeHistory(): void {

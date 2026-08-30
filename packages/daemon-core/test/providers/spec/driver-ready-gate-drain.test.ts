@@ -111,7 +111,16 @@ describe('FsmDriver -- ready-gated queue drain', () => {
 
             // One PTY frame brings up the prompt → fires starting→idle. The CLI
             // then goes quiet (no more frames). The queued message must still
-            // flush off THIS frame.
+            // flush off THIS frame. hasSeenReady must already be true on that
+            // same state_changed emit — otherwise SpecCliAdapter.getStatus()
+            // still reports starting and detectStatusTransition never fires
+            // agent:ready (M-MESH-INFRA-0829).
+            let readyOnIdleEmit = false;
+            driver.subscribe((ev) => {
+                if (ev.kind === 'state_changed' && ev.state.id === 'idle') {
+                    readyOnIdleEmit = driver.hasSeenReady();
+                }
+            });
             pty.feed('\n>\n? for shortcuts');
             // adapter coalesces screen changes (~80ms debounce) + maybeMarkReady
             // flush setTimeout(50ms) + the submit-key delay floor (~200ms after
@@ -119,6 +128,7 @@ describe('FsmDriver -- ready-gated queue drain', () => {
             // the first CR — see scheduleWin32Submit). Allow margin past all of it.
             await sleep(1000);
 
+            expect(readyOnIdleEmit).toBe(true);
             const all = pty.writes.join('');
             expect(all).toContain('hello agy');
             // and the submit key followed it.
