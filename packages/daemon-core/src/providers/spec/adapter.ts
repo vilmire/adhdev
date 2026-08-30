@@ -209,7 +209,7 @@ export class TerminalAdapter {
             LOG.warn('FsmDriver', `${prefix}PTY write skipped source=${source} bytes=${bytes} afterSpawnMs=${afterSpawnMs} outcome=no-active-pty`);
             return false;
         }
-        LOG.info('FsmDriver', `${prefix}PTY write before source=${source} bytes=${bytes} afterSpawnMs=${afterSpawnMs}`);
+        LOG.debug('FsmDriver', `${prefix}PTY write before source=${source} bytes=${bytes} afterSpawnMs=${afterSpawnMs}`);
         try {
             const result = await pty.write(text);
             const completedAfterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
@@ -217,7 +217,7 @@ export class TerminalAdapter {
                 LOG.warn('FsmDriver', `${prefix}PTY write after source=${source} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=false`);
                 return false;
             }
-            LOG.info('FsmDriver', `${prefix}PTY write after source=${source} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=success`);
+            LOG.debug('FsmDriver', `${prefix}PTY write after source=${source} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=success`);
             return true;
         } catch (error) {
             const completedAfterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);

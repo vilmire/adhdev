@@ -286,6 +286,12 @@ export interface CliSpecV4 {
     /** Delay (ms) after first PTY output before writing `send_on_spawn`. Default 250. */
     send_on_spawn_delay_ms?: number;
     /**
+     * Maximum time (ms) to wait for first PTY output before writing
+     * `send_on_spawn` immediately. Optional; defaults to 2000 so older provider
+     * specs gain a bounded no-output fallback without being updated.
+     */
+    send_on_spawn_max_wait_ms?: number;
+    /**
      * Opt-in stall recovery for focus-gated TUIs. The same CLIs that need
      * `send_on_spawn` (focus-event TUIs like antigravity's `agy`) also stop
      * rendering / flushing output the moment they believe they have lost focus

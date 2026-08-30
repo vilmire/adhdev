@@ -73,6 +73,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const FOCUS_IN = '\x1b[I';
 
 afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
 });
 
@@ -108,8 +109,63 @@ describe('FsmDriver -- send_on_spawn input prime', () => {
         }
     });
 
-    it('logs the actual PTY write boundary with source, byte length, and spawn-relative timing', async () => {
+    it('falls back to sending the prime when the child never emits PTY output', async () => {
+        vi.useFakeTimers();
+        const factory = new RecordingFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({
+                send_on_spawn: [FOCUS_IN],
+                send_on_spawn_delay_ms: 20,
+                send_on_spawn_max_wait_ms: 60,
+            })),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        const pty = factory.last!;
+        try {
+            await vi.advanceTimersByTimeAsync(59);
+            expect(pty.writes).toEqual([]);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(pty.writes).toEqual([FOCUS_IN]);
+        } finally {
+            driver.shutdown();
+        }
+    });
+
+    it('cancels the timeout fallback when output arrives just before it, so the prime fires once', async () => {
+        vi.useFakeTimers();
+        const factory = new RecordingFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({
+                send_on_spawn: [FOCUS_IN],
+                send_on_spawn_delay_ms: 20,
+                send_on_spawn_max_wait_ms: 60,
+            })),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        const pty = factory.last!;
+        try {
+            await vi.advanceTimersByTimeAsync(59);
+            pty.emitOutput('\r ⣷ ');
+            await vi.advanceTimersByTimeAsync(1);
+            expect(pty.writes).toEqual([]);
+            await vi.advanceTimersByTimeAsync(19);
+            expect(pty.writes).toEqual([FOCUS_IN]);
+            await vi.advanceTimersByTimeAsync(100);
+            expect(pty.writes).toEqual([FOCUS_IN]);
+        } finally {
+            driver.shutdown();
+        }
+    });
+
+    it('keeps the first spawn prime at info while successful PTY write boundaries are debug-only', async () => {
         const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined);
+        const debug = vi.spyOn(LOG, 'debug').mockImplementation(() => undefined);
         const factory = new RecordingFactory();
         const driver = new FsmDriver({
             specPath: writeSpec(baseSpec({
@@ -126,12 +182,17 @@ describe('FsmDriver -- send_on_spawn input prime', () => {
             await sleep(80);
             expect(info).toHaveBeenCalledWith(
                 'FsmDriver',
+                expect.stringMatching(/spawn prime firing trigger=first-output sequences=1/),
+            );
+            expect(debug).toHaveBeenCalledWith(
+                'FsmDriver',
                 expect.stringMatching(/PTY write before source=spawn-prime bytes=3 afterSpawnMs=\d+/),
             );
-            expect(info).toHaveBeenCalledWith(
+            expect(debug).toHaveBeenCalledWith(
                 'FsmDriver',
                 expect.stringMatching(/PTY write after source=spawn-prime bytes=3 afterSpawnMs=\d+ outcome=success/),
             );
+            expect(info.mock.calls.some(([, message]) => message.includes('PTY write'))).toBe(false);
         } finally {
             driver.shutdown();
         }
@@ -222,6 +283,7 @@ describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
 
     it('re-injects focus-in while a generating screen stays frozen', async () => {
         const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined);
+        const debug = vi.spyOn(LOG, 'debug').mockImplementation(() => undefined);
         const factory = new RecordingFactory();
         const driver = new FsmDriver({
             specPath: writeSpec(generatingStallSpec({ refocus_when_stalled_ms: 50 })),
@@ -239,17 +301,47 @@ describe('FsmDriver -- refocus_when_stalled_ms stall recovery', () => {
             const focusInWrites = pty.writes.filter(w => w === FOCUS_IN).length;
             expect(focusInWrites).toBeGreaterThanOrEqual(2);
             expect(pty.writes.every(w => w === FOCUS_IN)).toBe(true);
-            expect(info).toHaveBeenCalledWith(
+            expect(debug).toHaveBeenCalledWith(
                 'FsmDriver',
                 expect.stringMatching(/PTY write before source=stall-refocus bytes=3 afterSpawnMs=\d+/),
             );
-            expect(info).toHaveBeenCalledWith(
+            expect(debug).toHaveBeenCalledWith(
                 'FsmDriver',
                 expect.stringMatching(/PTY write after source=stall-refocus bytes=3 afterSpawnMs=\d+ outcome=success/),
+            );
+            expect(info).toHaveBeenCalledWith(
+                'FsmDriver',
+                expect.stringMatching(/stall detected .* re-injecting focus-in \(1\/3 detailed\)/),
             );
         } finally {
             driver.shutdown();
         }
+    });
+
+    it('caps detailed watchdog reinjection logs at three and summarizes later suppressions once', async () => {
+        vi.useFakeTimers();
+        const info = vi.spyOn(LOG, 'info').mockImplementation(() => undefined);
+        const factory = new RecordingFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(generatingStallSpec({ refocus_when_stalled_ms: 50 })),
+            workingDir: os.tmpdir(),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        driver.start();
+        const pty = factory.last!;
+        pty.emitOutput('\r ⣷ ');
+        try {
+            await vi.advanceTimersByTimeAsync(500);
+            expect(pty.writes.filter(w => w === FOCUS_IN).length).toBeGreaterThan(4);
+            const detailed = info.mock.calls.filter(([, message]) => message.includes('stall detected'));
+            expect(detailed).toHaveLength(3);
+        } finally {
+            driver.shutdown();
+        }
+        const summaries = info.mock.calls.filter(([, message]) => message.includes('stall refocus log summary'));
+        expect(summaries).toHaveLength(1);
+        expect(summaries[0][1]).toMatch(/: [1-9]\d* later reinjection\(s\) suppressed after first 3$/);
     });
 
     it('does not re-inject when refocus_when_stalled_ms is absent', async () => {
