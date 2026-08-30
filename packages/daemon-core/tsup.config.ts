@@ -9,7 +9,18 @@ export default defineConfig({
   // daemon-standalone's bootstrap can import the LEAF without evaluating the
   // barrel — the barrel pulls in the logger, which fixes its log dir at module
   // load, and the bootstrap must run before that happens.
-  entry: ['src/index.ts', 'src/status/normalize.ts', 'src/chat/chat-signatures.ts', 'src/config/config-dir.ts'],
+  entry: [
+    'src/index.ts',
+    'src/status/normalize.ts',
+    'src/chat/chat-signatures.ts',
+    'src/config/config-dir.ts',
+    // Portable (no Node builtins) leaves §8 unit 5 exposes so
+    // `oss/packages/web-core`'s browser-worker transcript adapter can import
+    // them without dragging the rest of daemon-core (logger/fs) into a
+    // browser bundle — see each file's own header for the portability note.
+    'src/seqscribe/transcript-revision-codec.ts',
+    'src/mesh/transcript-read-model-consumers.ts',
+  ],
   format: ['cjs', 'esm'],
   dts: false,
   clean: true,

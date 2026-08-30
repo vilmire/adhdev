@@ -1382,6 +1382,7 @@
         "openPanelHint": "Open the agent panel or chat view in the app you are using to start viewing messages",
         "noMessagesYet": "No messages yet",
         "loadingChat": "Loading chat...",
+        "replicaOmittedBefore": "Earlier messages in this view were skipped — showing the latest tail only.",
         "openPanel": "Open {{label}} Panel",
         "switchingPanel": "Switching...",
         "openingPanel": "Opening..."
