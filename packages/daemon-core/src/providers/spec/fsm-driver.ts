@@ -566,6 +566,11 @@ export class FsmDriver implements ISpecDriver {
      *  Re-arms itself while the machine is generating so a re-prime can fire
      *  even when the PTY has gone completely quiet. */
     private stallTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Spawn-prime timer. It is armed only after the child emits its first PTY
+     *  output, proving the process has advanced past the pre-TUI canonical-echo
+     *  window observed on macOS. */
+    private spawnPrimeTimer: ReturnType<typeof setTimeout> | null = null;
+    private spawnPrimeAwaitingOutput = false;
     /** Wall-clock time the last stall re-prime was injected. The cooldown gate:
      *  after a re-prime we don't re-inject until the screen changes (which
      *  resets the stall reference) or another full stall window lapses. */
@@ -649,7 +654,11 @@ export class FsmDriver implements ISpecDriver {
             this.buildAdapterOpts(),
             {
                 init: () => this.emitInitialState(),
-                on_pty_data: (chunk) => { this.lastPtyDataAt = Date.now(); this.emit({ kind: 'pty_data', chunk }); },
+                on_pty_data: (chunk) => {
+                    this.lastPtyDataAt = Date.now();
+                    this.scheduleSpawnPrimeAfterFirstOutput();
+                    this.emit({ kind: 'pty_data', chunk });
+                },
                 on_screen_changed: () => this.reevaluate(),
                 on_exit: ({ exitCode }) => this.handleExit(exitCode),
             },
@@ -678,33 +687,47 @@ export class FsmDriver implements ISpecDriver {
         this.startupDismissConfig = normalizeStartupDismissConfig(this.spec.startup_dismiss);
         this.startupDismissState = createStartupDismissState();
         this.startupDismissSpawnAt = now;
+        // Arm before adapter.start(): a transport may synchronously flush
+        // buffered child output while registering onData during start().
+        this.armSpawnPrime();
         this.adapter.start();
-        // Prime focus-gated TUIs (see CliSpecV4.send_on_spawn). Written once,
-        // shortly after spawn, so the input stream is awake before the first
-        // delegated message — without this, a focus-event CLI like antigravity
-        // drops the first programmatic write until a manual keystroke.
-        this.scheduleSpawnPrime();
         // The initial state may have a purely time-based exit (elapsed_ms);
         // schedule a wake so we leave it even if the PTY goes quiet.
         this.scheduleWakeForState();
     }
 
-    private scheduleSpawnPrime(): void {
+    private armSpawnPrime(): void {
         const seqs = this.spec.send_on_spawn;
         if (!Array.isArray(seqs) || seqs.length === 0) return;
+        this.spawnPrimeAwaitingOutput = true;
+    }
+
+    /** Start the configured prime delay only after the child produces output.
+     *  On macOS, writing at a fixed spawn-relative deadline can land while the
+     *  slave is still in canonical echo mode: focus-in is echoed as `^[[I` and
+     *  lost before the TUI installs its input handler. First output is the
+     *  earliest transport-level readiness evidence available to the engine. */
+    private scheduleSpawnPrimeAfterFirstOutput(): void {
+        if (!this.spawnPrimeAwaitingOutput) return;
+        this.spawnPrimeAwaitingOutput = false;
         const delay = Math.max(0, this.spec.send_on_spawn_delay_ms ?? 250);
-        setTimeout(() => this.sendSpawnPrime(), delay);
+        this.spawnPrimeTimer = setTimeout(() => {
+            this.spawnPrimeTimer = null;
+            this.sendSpawnPrime('spawn-prime');
+        }, delay);
     }
 
     /** Write the declared `send_on_spawn` sequences to the PTY once. Used both
-     *  at spawn (scheduleSpawnPrime) and, for focus-gated TUIs, by the stall
+     *  on the first-output spawn path and, for focus-gated TUIs, by the stall
      *  watchdog to re-inject the focus-in wake mid-turn. No-op when the spec
      *  declares no prime, so non-focus-gated CLIs are never poked. */
-    private sendSpawnPrime(): void {
+    private sendSpawnPrime(source: 'spawn-prime' | 'stall-refocus'): void {
         const seqs = this.spec.send_on_spawn;
         if (!Array.isArray(seqs) || seqs.length === 0) return;
         for (const seq of seqs) {
-            if (typeof seq === 'string' && seq.length > 0) this.adapter.send_keys(seq);
+            if (typeof seq === 'string' && seq.length > 0) {
+                void this.adapter.send_keys(seq, { source, specTag: this.specTag() });
+            }
         }
     }
 
@@ -778,6 +801,8 @@ export class FsmDriver implements ISpecDriver {
         this.delegateTimers.clear();
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
         if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
+        if (this.spawnPrimeTimer) { clearTimeout(this.spawnPrimeTimer); this.spawnPrimeTimer = null; }
+        this.spawnPrimeAwaitingOutput = false;
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
         if (this.win32ModalConfirmTimer) { clearTimeout(this.win32ModalConfirmTimer); this.win32ModalConfirmTimer = null; }
@@ -1388,7 +1413,7 @@ export class FsmDriver implements ISpecDriver {
         const sinceLastRefocus = now - this.lastRefocusAt;
         if (stalledFor >= windowMs && sinceLastRefocus >= windowMs) {
             LOG.info('FsmDriver', `[${this.specTag()}] stall detected (${stalledFor}ms quiet, generating) — re-injecting focus-in`);
-            this.sendSpawnPrime();
+            this.sendSpawnPrime('stall-refocus');
             this.lastRefocusAt = now;
         }
         // Keep watching: the re-prime may not flush instantly, and a still-quiet
