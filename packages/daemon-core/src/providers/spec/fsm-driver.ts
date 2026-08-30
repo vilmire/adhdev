@@ -216,6 +216,13 @@ function countNewlines(s: string): number {
 }
 
 const SUBMIT_DELAY_FLOOR_MS = 200;
+/** No-output escape hatch for spawn priming. Live agy startup output arrived at
+ *  +335ms / +612ms; 2s is >3x the slower observation while still bounding a
+ *  focus-gated startup cycle to a short, human-visible pause. */
+const DEFAULT_SPAWN_PRIME_MAX_WAIT_MS = 2_000;
+/** Three detailed watchdog attempts show the first injection plus two repeat
+ *  intervals, enough to diagnose cadence without an unbounded per-session log. */
+const STALL_REFOCUS_INFO_LIMIT = 3;
 
 // ── send_message serialization (SEND-OVERLAP) ────────────────────────────────
 //
@@ -566,15 +573,21 @@ export class FsmDriver implements ISpecDriver {
      *  Re-arms itself while the machine is generating so a re-prime can fire
      *  even when the PTY has gone completely quiet. */
     private stallTimer: ReturnType<typeof setTimeout> | null = null;
-    /** Spawn-prime timer. It is armed only after the child emits its first PTY
-     *  output, proving the process has advanced past the pre-TUI canonical-echo
-     *  window observed on macOS. */
+    /** Spawn-prime delay timer. First PTY output is useful readiness evidence,
+     *  not proof that stdin is ready; a separate max-wait timer preserves the
+     *  old spawn-relative fallback when no output ever arrives. */
     private spawnPrimeTimer: ReturnType<typeof setTimeout> | null = null;
+    private spawnPrimeMaxWaitTimer: ReturnType<typeof setTimeout> | null = null;
     private spawnPrimeAwaitingOutput = false;
+    /** Shared latch for the first-output and max-wait paths. Both timers call
+     *  fireSpawnPrimeOnce(), which consumes it before writing. */
+    private spawnPrimePending = false;
     /** Wall-clock time the last stall re-prime was injected. The cooldown gate:
      *  after a re-prime we don't re-inject until the screen changes (which
      *  resets the stall reference) or another full stall window lapses. */
     private lastRefocusAt = 0;
+    private stallRefocusInfoCount = 0;
+    private stallRefocusSuppressedCount = 0;
     /** Timer driving the win32 verification-based submit resend loop (see
      *  WIN32_SUBMIT_* and scheduleVerifiedSubmit). Re-arms itself until the FSM
      *  leaves idle (submitted) or the resend budget is spent. */
@@ -700,6 +713,15 @@ export class FsmDriver implements ISpecDriver {
         const seqs = this.spec.send_on_spawn;
         if (!Array.isArray(seqs) || seqs.length === 0) return;
         this.spawnPrimeAwaitingOutput = true;
+        this.spawnPrimePending = true;
+        const configuredMaxWait = this.spec.send_on_spawn_max_wait_ms;
+        const maxWait = typeof configuredMaxWait === 'number' && Number.isFinite(configuredMaxWait)
+            ? Math.max(0, configuredMaxWait)
+            : DEFAULT_SPAWN_PRIME_MAX_WAIT_MS;
+        this.spawnPrimeMaxWaitTimer = setTimeout(() => {
+            this.spawnPrimeMaxWaitTimer = null;
+            this.fireSpawnPrimeOnce('max-wait');
+        }, maxWait);
     }
 
     /** Start the configured prime delay only after the child produces output.
@@ -710,24 +732,46 @@ export class FsmDriver implements ISpecDriver {
     private scheduleSpawnPrimeAfterFirstOutput(): void {
         if (!this.spawnPrimeAwaitingOutput) return;
         this.spawnPrimeAwaitingOutput = false;
+        if (this.spawnPrimeMaxWaitTimer) {
+            clearTimeout(this.spawnPrimeMaxWaitTimer);
+            this.spawnPrimeMaxWaitTimer = null;
+        }
         const delay = Math.max(0, this.spec.send_on_spawn_delay_ms ?? 250);
         this.spawnPrimeTimer = setTimeout(() => {
             this.spawnPrimeTimer = null;
-            this.sendSpawnPrime('spawn-prime');
+            this.fireSpawnPrimeOnce('first-output');
         }, delay);
+    }
+
+    /** Consume the one-shot spawn-prime latch and cancel the competing timer
+     *  before writing. JavaScript callbacks are serialized, so whichever path
+     *  gets here first makes every later/queued callback a no-op. */
+    private fireSpawnPrimeOnce(trigger: 'first-output' | 'max-wait'): void {
+        if (!this.spawnPrimePending) return;
+        this.spawnPrimePending = false;
+        this.spawnPrimeAwaitingOutput = false;
+        if (this.spawnPrimeTimer) { clearTimeout(this.spawnPrimeTimer); this.spawnPrimeTimer = null; }
+        if (this.spawnPrimeMaxWaitTimer) { clearTimeout(this.spawnPrimeMaxWaitTimer); this.spawnPrimeMaxWaitTimer = null; }
+        this.sendSpawnPrime('spawn-prime', trigger);
     }
 
     /** Write the declared `send_on_spawn` sequences to the PTY once. Used both
      *  on the first-output spawn path and, for focus-gated TUIs, by the stall
      *  watchdog to re-inject the focus-in wake mid-turn. No-op when the spec
      *  declares no prime, so non-focus-gated CLIs are never poked. */
-    private sendSpawnPrime(source: 'spawn-prime' | 'stall-refocus'): void {
+    private sendSpawnPrime(
+        source: 'spawn-prime' | 'stall-refocus',
+        trigger?: 'first-output' | 'max-wait',
+    ): void {
         const seqs = this.spec.send_on_spawn;
         if (!Array.isArray(seqs) || seqs.length === 0) return;
-        for (const seq of seqs) {
-            if (typeof seq === 'string' && seq.length > 0) {
-                void this.adapter.send_keys(seq, { source, specTag: this.specTag() });
-            }
+        const validSeqs = seqs.filter((seq): seq is string => typeof seq === 'string' && seq.length > 0);
+        if (validSeqs.length === 0) return;
+        if (source === 'spawn-prime') {
+            LOG.info('FsmDriver', `[${this.specTag()}] spawn prime firing trigger=${trigger ?? 'unknown'} sequences=${validSeqs.length}`);
+        }
+        for (const seq of validSeqs) {
+            void this.adapter.send_keys(seq, { source, specTag: this.specTag() });
         }
     }
 
@@ -802,7 +846,10 @@ export class FsmDriver implements ISpecDriver {
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
         if (this.stallTimer) { clearTimeout(this.stallTimer); this.stallTimer = null; }
         if (this.spawnPrimeTimer) { clearTimeout(this.spawnPrimeTimer); this.spawnPrimeTimer = null; }
+        if (this.spawnPrimeMaxWaitTimer) { clearTimeout(this.spawnPrimeMaxWaitTimer); this.spawnPrimeMaxWaitTimer = null; }
         this.spawnPrimeAwaitingOutput = false;
+        this.spawnPrimePending = false;
+        this.flushStallRefocusLogSummary();
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
         if (this.win32ModalConfirmTimer) { clearTimeout(this.win32ModalConfirmTimer); this.win32ModalConfirmTimer = null; }
@@ -1412,13 +1459,28 @@ export class FsmDriver implements ISpecDriver {
         const stalledFor = now - this.lastScreenChangeAt();
         const sinceLastRefocus = now - this.lastRefocusAt;
         if (stalledFor >= windowMs && sinceLastRefocus >= windowMs) {
-            LOG.info('FsmDriver', `[${this.specTag()}] stall detected (${stalledFor}ms quiet, generating) — re-injecting focus-in`);
+            if (this.stallRefocusInfoCount < STALL_REFOCUS_INFO_LIMIT) {
+                this.stallRefocusInfoCount += 1;
+                LOG.info('FsmDriver', `[${this.specTag()}] stall detected (${stalledFor}ms quiet, generating) — re-injecting focus-in (${this.stallRefocusInfoCount}/${STALL_REFOCUS_INFO_LIMIT} detailed)`);
+            } else {
+                this.stallRefocusSuppressedCount += 1;
+            }
             this.sendSpawnPrime('stall-refocus');
             this.lastRefocusAt = now;
         }
         // Keep watching: the re-prime may not flush instantly, and a still-quiet
         // screen needs the next window to come around.
         this.scheduleStallWatchdog();
+    }
+
+    /** Emit one exact session summary, then zero the counter so recursive or
+     *  repeated shutdown calls cannot duplicate it. Write failures remain warn
+     *  per attempt in TerminalAdapter and are never suppressed here. */
+    private flushStallRefocusLogSummary(): void {
+        const suppressed = this.stallRefocusSuppressedCount;
+        if (suppressed === 0) return;
+        this.stallRefocusSuppressedCount = 0;
+        LOG.info('FsmDriver', `[${this.specTag()}] stall refocus log summary: ${suppressed} later reinjection(s) suppressed after first ${STALL_REFOCUS_INFO_LIMIT}`);
     }
 
     private maybeMarkReady(): void {
