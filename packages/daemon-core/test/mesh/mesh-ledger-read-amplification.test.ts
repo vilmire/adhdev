@@ -47,6 +47,11 @@ import {
     __resetLedgerScanStatsForTests,
 } from '../../src/mesh/mesh-ledger.js';
 import type { MeshLedgerEntry, MeshLedgerKind } from '../../src/mesh/mesh-ledger.js';
+import {
+    clearLedgerImportFlag,
+    invalidateAllLedgerCaches,
+    invalidateLedgerCache,
+} from '../../src/mesh/mesh-ledger-read-cache.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 describe('mesh-ledger read amplification', () => {
@@ -305,6 +310,80 @@ describe('mesh-ledger read amplification', () => {
         // A subsequent unfiltered read must still see EVERY entry. If the pushdown
         // result had been cached as the raw set, this would return 5.
         expect(readLedgerEntries(meshId)).toHaveLength(10);
+    });
+
+    // ── filtered-read cache ─────────────────────────────────────────────────
+
+    it('reuses a cold filtered SQL read for the same mesh and kinds', () => {
+        seed(3, 'task_completed');
+        const store = MeshRuntimeStore.getInstance();
+        const readSpy = vi.spyOn(store, 'readLedgerEntriesOrdered');
+
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(3);
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(3);
+
+        expect(readSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('invalidates a filtered read on append so the next read sees the new row', () => {
+        seed(2, 'task_completed');
+        const store = MeshRuntimeStore.getInstance();
+        const readSpy = vi.spyOn(store, 'readLedgerEntriesOrdered');
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(2);
+
+        const appended = appendLedgerEntry(meshId, { kind: 'task_completed', payload: { seq: 'new' } });
+        const reread = readLedgerEntriesByKind(meshId, ['task_completed']);
+
+        expect(reread.map(entry => entry.id)).toContain(appended.id);
+        expect(readSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('invalidates a filtered read when invalidateLedgerCache is called', () => {
+        seed(2, 'task_completed');
+        const store = MeshRuntimeStore.getInstance();
+        const readSpy = vi.spyOn(store, 'readLedgerEntriesOrdered');
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(2);
+
+        invalidateLedgerCache(meshId);
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(2);
+
+        expect(readSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('invalidates filtered reads when the ledger import flag is cleared', () => {
+        seed(2, 'task_completed');
+        const store = MeshRuntimeStore.getInstance();
+        const readSpy = vi.spyOn(store, 'readLedgerEntriesOrdered');
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(2);
+
+        clearLedgerImportFlag(meshId);
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(2);
+
+        expect(readSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops every filtered read when all ledger caches are invalidated', () => {
+        seed(2, 'task_completed');
+        const store = MeshRuntimeStore.getInstance();
+        const readSpy = vi.spyOn(store, 'readLedgerEntriesOrdered');
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(2);
+
+        invalidateAllLedgerCaches();
+        expect(readLedgerEntriesByKind(meshId, ['task_completed'])).toHaveLength(2);
+
+        expect(readSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('normalizes kind order when keying filtered reads', () => {
+        seed(2, 'task_completed');
+        seed(1, 'task_failed');
+        const store = MeshRuntimeStore.getInstance();
+        const readSpy = vi.spyOn(store, 'readLedgerEntriesOrdered');
+
+        expect(readLedgerEntriesByKind(meshId, ['task_completed', 'task_failed'])).toHaveLength(3);
+        expect(readLedgerEntriesByKind(meshId, ['task_failed', 'task_completed'])).toHaveLength(3);
+
+        expect(readSpy).toHaveBeenCalledTimes(1);
     });
 
     // ── invalidation completeness ────────────────────────────────────────────

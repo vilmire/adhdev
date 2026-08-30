@@ -65,6 +65,7 @@ export function ledgerEntryTaskId(entry: Pick<MeshLedgerEntry, 'taskId' | 'paylo
 // tiebreak would give a freshly-inserted row.
 
 const ledgerReadCache = new Map<string, { entries: MeshLedgerEntry[]; cachedAt: number }>();
+const filteredLedgerReadCache = new Map<string, Map<string, { entries: MeshLedgerEntry[]; cachedAt: number }>>();
 const LEDGER_CACHE_TTL_MS = 30_000;
 
 export function readLedgerFile(meshId: string): MeshLedgerEntry[] {
@@ -257,6 +258,43 @@ export function getCachedRawEntries(meshId: string): MeshLedgerEntry[] {
 }
 
 /**
+ * Build a stable key for a bounded SQL read. Kinds are a set for query semantics,
+ * so sorting and de-duplicating prevents argument order (or duplicates) from
+ * creating distinct cache entries.
+ */
+function filteredLedgerCacheKey(opts: { since?: string; kinds?: string[] }): string {
+    const kinds = opts.kinds ? [...new Set(opts.kinds)].sort() : [];
+    return JSON.stringify([opts.since ?? null, kinds]);
+}
+
+/**
+ * Read and cache a filtered SQL result without ever placing that subset in the
+ * full-ledger cache. Store failures are allowed to escape so the caller can use
+ * the existing full-read/JSONL fallback path.
+ */
+export function getCachedFilteredRawEntries(
+    meshId: string,
+    opts: { since?: string; kinds?: string[] },
+): MeshLedgerEntry[] {
+    const key = filteredLedgerCacheKey(opts);
+    const meshCache = filteredLedgerReadCache.get(meshId);
+    const cached = meshCache?.get(key);
+    if (cached && Date.now() - cached.cachedAt < LEDGER_CACHE_TTL_MS) return cached.entries;
+    if (cached) meshCache!.delete(key);
+
+    const entries = readLedgerFromStore(meshId, opts);
+    recordLedgerPushdownScan(entries.length);
+    const targetCache = meshCache ?? new Map<string, { entries: MeshLedgerEntry[]; cachedAt: number }>();
+    targetCache.set(key, { entries, cachedAt: Date.now() });
+    if (!meshCache) filteredLedgerReadCache.set(meshId, targetCache);
+    return entries;
+}
+
+function invalidateFilteredLedgerCache(meshId: string): void {
+    filteredLedgerReadCache.delete(meshId);
+}
+
+/**
  * Order key for the cached array, mirroring readLedgerEntriesOrdered's
  * `ORDER BY timestamp ASC, rowid ASC`. A cached entry may be appended in place
  * only when the new entry sorts at or after the current tail — i.e. when pushing
@@ -310,11 +348,15 @@ export function appendToLedgerCache(meshId: string, newEntries: MeshLedgerEntry[
  * stale cache behind now that the TTL is 30s.
  */
 export function recordLedgerAppend(meshId: string, newEntries: MeshLedgerEntry[]): void {
+    // A filtered subset is deliberately never extended in place: determining
+    // membership and preserving store order is riskier than a bounded re-read.
+    invalidateFilteredLedgerCache(meshId);
     if (!appendToLedgerCache(meshId, newEntries)) invalidateLedgerCache(meshId);
 }
 
 export function invalidateLedgerCache(meshId: string): void {
     ledgerReadCache.delete(meshId);
+    invalidateFilteredLedgerCache(meshId);
 }
 
 /**
@@ -331,10 +373,12 @@ export function invalidateLedgerCache(meshId: string): void {
  */
 export function clearLedgerImportFlag(meshId: string): void {
     ledgerImportDone.delete(meshId);
+    invalidateFilteredLedgerCache(meshId);
 }
 
 export function invalidateAllLedgerCaches(): void {
     ledgerReadCache.clear();
+    filteredLedgerReadCache.clear();
 }
 
 // Store-level mutations that are not scoped to one mesh — the retention sweep's
@@ -342,4 +386,3 @@ export function invalidateAllLedgerCaches(): void {
 // back through this registration. They live in modules this one imports, so they
 // cannot import mesh-ledger directly without closing an import cycle.
 registerLedgerBulkChangeListener(invalidateAllLedgerCaches);
-

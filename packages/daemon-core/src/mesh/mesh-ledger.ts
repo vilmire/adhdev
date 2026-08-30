@@ -21,7 +21,7 @@ import { daemonIdsEquivalent, sessionIdsEquivalent, isMeshTaskDifficulty, type M
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getLedgerDir, getLedgerPath, getRotatedPath, getArchivePath, getRotatedArchivePath, getArchivedTerminalKeysPath } from './mesh-ledger-paths.js';
-import { ledgerEntryTaskId, getCachedRawEntries, readLedgerFromStore, readLedgerFile, liveCacheEntry, recordLedgerAppend, recordLedgerPushdownScan, invalidateLedgerCache, clearLedgerImportFlag } from './mesh-ledger-read-cache.js';
+import { ledgerEntryTaskId, getCachedRawEntries, getCachedFilteredRawEntries, readLedgerFile, liveCacheEntry, recordLedgerAppend, invalidateLedgerCache, clearLedgerImportFlag } from './mesh-ledger-read-cache.js';
 import { LOG } from '../logging/logger.js';
 // Phase 2 Stage 2 dual-write shadow. Direction is mesh/ → seqscribe/, which
 // check:boundaries allows (the forbidden edge is seqscribe/ → mesh/, which is
@@ -1519,12 +1519,10 @@ function readRawEntriesForOpts(meshId: string, opts?: ReadLedgerOptions): MeshLe
     if (!hasSince && !kinds) return getCachedRawEntries(meshId);
 
     try {
-        const entries = readLedgerFromStore(meshId, {
+        return getCachedFilteredRawEntries(meshId, {
             ...(hasSince ? { since: opts!.since } : {}),
             ...(kinds ? { kinds } : {}),
         });
-        recordLedgerPushdownScan(entries.length);
-        return entries;
     } catch {
         // Store unavailable — fall back to the full-read path (which itself falls
         // back to JSONL). The JS filters in readLedgerEntries re-apply the same
