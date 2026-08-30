@@ -90,6 +90,7 @@ import {
     pruneStaleConsumersAtBoot,
 } from '../seqscribe/mesh-read-model.js';
 import { configureTranscriptProjection } from '../seqscribe/transcript-publisher.js';
+import { resolveJsonlSourcePath } from '../providers/spec/native-history-executor.js';
 import { createLiveTranscriptPublisher } from '../seqscribe/transcript-publish-runtime.js';
 import { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import { TranscriptTopicClaimRegistry } from '../seqscribe/transcript-topic-claim.js';
@@ -997,6 +998,19 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 // `settle()` publishes it right after this pull returns.
                 // Returning null here is therefore correct, not "nothing to
                 // do" — see transcript-publisher.ts's `settle()`.
+
+                resolveSourcePath: (sessionId: string) => {
+                    const session = sessionRegistry.get(sessionId);
+                    if (!session) return null;
+                    const provider = providerLoader.getMeta(session.providerType);
+                    const nh = provider?.nativeHistory as any;
+                    if (!nh?.source) return null;
+                    return resolveJsonlSourcePath(nh.source, {
+                        workspace: session.workspace,
+                        providerSessionId: session.providerSessionId,
+                        sessionStartedAtMs: session.spawnedAtMs,
+                    });
+                },
                 collectObservation: async (sessionId: string) => {
                     try {
                         await commandHandler.handle('read_chat', { targetSessionId: sessionId });

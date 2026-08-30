@@ -63,19 +63,9 @@ describe('Transcript stat polling instead of PTY', () => {
             daemonId: () => 'daemon-1',
             writerId: () => 'writer-1',
             publishRevision: async () => {},
+            resolveSourcePath: (s) => s === sessionId ? transcriptPath : null,
             collectObservation: async () => {
                 collectorCalls += 1;
-                // mock the read_chat observation push
-                service?.observe(sessionId, {
-                    sessionId,
-                    providerType: 'test',
-                    status: 'idle',
-                    messages: [],
-                    coverage: { mode: 'full', totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false },
-                    provenance: {
-                        transcriptProvenance: { sourcePath: transcriptPath }
-                    }
-                } as any);
                 return null;
             },
         });
@@ -103,18 +93,13 @@ describe('Transcript stat polling instead of PTY', () => {
         }
         expect(collectorCalls).toBe(0);
 
-        // 3. 상태 전이 트리거(직접 markDirty 호출)는 여전히 즉시 동작한다.
-        // 이것이 첫 read_chat을 유발하여 path가 바인딩된다.
-        markTranscriptSessionDirty(sessionId);
-        await flushProjection();
-        expect(collectorCalls).toBe(1);
-
+        // ★ observe나 markDirty 가 한 번도 안 불려도, 폴링 루프가 lazy resolve 로 경로를 찾는다.
         // 1. 파일이 안 변하면 폴링이 돌아도 runPull이 불리지 않는다.
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS);
         await flushProjection();
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS);
         await flushProjection();
-        expect(collectorCalls).toBe(1); // unchanged
+        expect(collectorCalls).toBe(0); // unchanged
 
         // 2. 파일이 변하면 다음 폴링에서 불린다.
         // change mtime directly since fakeTimers might make fast appends have same mtime
@@ -122,12 +107,12 @@ describe('Transcript stat polling instead of PTY', () => {
         
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS);
         await flushProjection();
-        expect(collectorCalls).toBe(2);
+        expect(collectorCalls).toBe(1);
 
         // 4. 채팅 명령 트리거도 여전히 즉시 동작한다 (markDirty 직접 호출).
         markTranscriptSessionDirty(sessionId);
         await flushProjection();
-        expect(collectorCalls).toBe(3);
+        expect(collectorCalls).toBe(2);
 
         // 5. 세션 unregister 시 타이머가 정리된다.
         // We can assert this by checking the active timer count, or by advancing and seeing no crash/stat calls.
@@ -138,6 +123,6 @@ describe('Transcript stat polling instead of PTY', () => {
         fs.rmSync(transcriptPath);
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS * 2);
         await flushProjection();
-        expect(collectorCalls).toBe(3); // stays 3
+        expect(collectorCalls).toBe(2); // stays 2
     });
 });

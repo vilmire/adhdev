@@ -118,6 +118,7 @@ export interface TranscriptProjectionDeps {
      * hot path that triggered it.
      */
     publishRevision(sessionId: string, envelope: TranscriptRevisionEnvelope): Promise<void>;
+    resolveSourcePath?: (sessionId: string) => string | null;
     /**
      * Pull a fresh observation for `markDirty`-triggered publishes. Omit to
      * make `markDirty` an inert no-op (e.g. in tests that only exercise
@@ -252,7 +253,11 @@ export class TranscriptProjectionService {
 
     private runStatPoll(): void {
         for (const sessionId of this.pollingSessions) {
-            const path = this.knownPaths.get(sessionId);
+            let path = this.knownPaths.get(sessionId);
+            if (!path && this.deps.resolveSourcePath) {
+                path = this.deps.resolveSourcePath(sessionId) ?? undefined;
+                if (path) this.knownPaths.set(sessionId, path);
+            }
             if (!path) continue;
             try {
                 const st = fs.statSync(path);
