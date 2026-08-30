@@ -3,6 +3,21 @@ import { CliProviderInstance } from '../../src/providers/cli-provider-instance.j
 import { clearDebugTrace, configureDebugTraceStore, getRecentDebugTrace } from '../../src/logging/debug-trace.js'
 import { resetDebugRuntimeConfig, setDebugRuntimeConfig } from '../../src/logging/debug-config.js'
 
+// Hermetic against ambient ADHDEV_WORKER_MCP (same pattern as worker-mailbox.test.ts):
+// isWorkerMcpEnabled() reads process.env directly, and cli-provider-instance.ts's
+// completion path (completingTurnTaskId → resolveCompletingTaskId) gates on it to read
+// this.meshTaskAttachmentHistory. The fake harnesses below never initialize that field
+// (the feature is normally off), so a daemon/CI shell with ADHDEV_WORKER_MCP=on (e.g. a
+// worker-MCP canary) makes every detectStatusTransition() call in this file throw
+// `Cannot read properties of undefined (reading 'length')` instead of exercising the
+// startup-grace logic under test. Module-scope hooks cover both describe blocks below.
+const ORIGINAL_ADHDEV_WORKER_MCP = process.env.ADHDEV_WORKER_MCP
+beforeEach(() => { delete process.env.ADHDEV_WORKER_MCP })
+afterEach(() => {
+  if (ORIGINAL_ADHDEV_WORKER_MCP === undefined) delete process.env.ADHDEV_WORKER_MCP
+  else process.env.ADHDEV_WORKER_MCP = ORIGINAL_ADHDEV_WORKER_MCP
+})
+
 // GENERATING-MISSING (win32 fresh-worktree first-turn): a freshly-launched mesh worker
 // session is in FSM state 'starting' (CliStateEngine.currentStatus defaults to 'starting';
 // CliProviderInstance.lastStatus defaults to 'starting'). When the FIRST inject turn arrives
