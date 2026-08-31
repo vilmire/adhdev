@@ -899,18 +899,28 @@ export class SpecCliAdapter implements CliAdapter {
             // A mismatch fails closed and deliberately leaves the held prompt
             // intact so a stale response cannot operate another picker.
             const allowsFreeform = prompt.questions.some(q => q.allowFreeform);
+            // A question needing 2+ keysteps re-checks focus mid-answer, and
+            // claude can complete the tool call on the first choice keystroke.
+            // When that happens the picker is already gone: stop typing
+            // immediately (any remaining digit/Tab would land on the next
+            // widget) and fall through to the clear below.
+            let completedMidAnswer = false;
             for (const question of prompt.questions) {
                 const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
                     ...prompt,
                     questions: [question],
                 }, response).slice(0, -1); // final Enter belongs to the review page below
                 for (const step of questionSteps) {
-                    this.assertFocusedClaudeTuiQuestion(question);
+                    if (this.assertFocusedClaudeTuiQuestion(question, prompt) === 'completed') {
+                        completedMidAnswer = true;
+                        break;
+                    }
                     this.driver.dispatch({ kind: 'pty_write', data: step });
                     await new Promise(resolve => setTimeout(resolve, 180));
                 }
+                if (completedMidAnswer) break;
             }
-            await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+            if (!completedMidAnswer) await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
             // Claude Code >=2.1.220 completes AskUserQuestion immediately after
             // the final choice. In that direct-submit path the settle poll
             // clears the bound prompt and there is no review page to confirm.
@@ -1856,10 +1866,62 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
-    private assertFocusedClaudeTuiQuestion(expected: InteractivePrompt['questions'][number]): void {
+    /**
+     * Bind the next keystroke to the live focused question — or recognise that
+     * the question is already gone because the answer completed early.
+     *
+     * HELD-PROMPT LEAK (live defect, 2026-08-31, rc.54): this guard runs per
+     * keystroke inside the answer loop, so any question needing 2+ keysteps
+     * (multi-select, freeform) re-checks the screen mid-answer. Claude Code
+     * >=2.1.220 can complete the AskUserQuestion on the FIRST choice keystroke,
+     * which tears the picker off screen — `readFocusedClaudeTuiQuestion` then
+     * returns null (no "Enter to select" footer) and the old unconditional
+     * throw aborted `setInteractivePromptResponse` before it could reach its
+     * `activeInteractivePrompt = null`. The answer landed, the TUI moved on,
+     * and the dashboard modal was held forever (surviving reload, because the
+     * daemon still reported the prompt).
+     *
+     * rc.54's completion signals could not help: they live in
+     * snapshotSettledClaudeTuiReview, which this throw preempts.
+     *
+     * So `focused === null` is now resolved against the same two completion
+     * signals the review poll uses (bound native tool_result, or a busy
+     * advance with the bound question absent). On a hit, return 'completed' so
+     * the caller BREAKS the keystroke loop — the remaining digits/Tab must not
+     * be typed into whatever widget owns focus now — and joins the normal
+     * clear path.
+     *
+     * `focused !== null && !matches` is untouched and still throws: a foreign
+     * picker holding focus is the original wrong-widget hazard this guard
+     * exists for, and a stale response must never operate it.
+     */
+    private assertFocusedClaudeTuiQuestion(
+        expected: InteractivePrompt['questions'][number],
+        prompt: InteractivePrompt,
+    ): 'focused' | 'completed' {
         const screenText = this.readClaudeTuiSnapshotForAnswer();
         const focused = readFocusedClaudeTuiQuestion(screenText);
-        if (focused && this.claudeTuiQuestionMatches(expected, focused)) return;
+        if (focused && this.claudeTuiQuestionMatches(expected, focused)) return 'focused';
+        if (!focused) {
+            if (!this.activeInteractivePrompt || this.activeInteractivePrompt.promptId !== prompt.promptId) {
+                // Cleared (or replaced) underneath us between keystrokes — the
+                // held slot is no longer ours to drive.
+                return 'completed';
+            }
+            const resolvedByBoundToolResult = this.hasBoundClaudeAskUserQuestionToolResult(prompt);
+            const resolution = this.maybeClearResolvedClaudeTuiPrompt({
+                screenText,
+                resolveImmediatelyWhenBusy: true,
+                resolvedByBoundToolResult,
+            });
+            if (resolution === 'cleared') {
+                LOG.debug(
+                    'SpecAdapter',
+                    `[${this.cliType}] Claude TUI answer completed mid-keystroke classification=${resolvedByBoundToolResult ? 'direct_submit_tool_result' : 'direct_submit_busy'} providerStatus=${this.latestState?.status ?? 'unknown'}`,
+                );
+                return 'completed';
+            }
+        }
         const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
         throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"${observed})`);
     }
