@@ -26,11 +26,24 @@ function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
 }
 
-/** Build a realistic fake `~/.gemini` so the antigravity spec has real sources. */
-function fakeGeminiHome(): string {
+/**
+ * Build a realistic fake `~/.gemini` so the antigravity spec has real sources.
+ *
+ * `cache/onboarding.json` is OPT-IN: a host that has authed but never finished
+ * agy's first-run flow genuinely lacks it, and that case must still launch.
+ */
+function fakeGeminiHome(opts: { onboarded?: boolean } = {}): string {
   const home = tmp('adhdev-worker-realhome-')
   const agy = join(home, '.gemini', 'antigravity-cli')
   mkdirSync(agy, { recursive: true })
+  if (opts.onboarded) {
+    mkdirSync(join(agy, 'cache'), { recursive: true })
+    writeFileSync(
+      join(agy, 'cache', 'onboarding.json'),
+      JSON.stringify({ consumerOnboardingComplete: true, enterpriseOnboardingComplete: false, onboardingComplete: true }),
+      { mode: 0o600 },
+    )
+  }
   mkdirSync(join(home, '.gemini', 'config'), { recursive: true })
   writeFileSync(join(agy, 'antigravity-oauth-token'), '{"token":{"access_token":"x"}}', { mode: 0o600 })
   writeFileSync(join(agy, 'settings.json'), '{"security":{}}', { mode: 0o600 })
@@ -328,6 +341,75 @@ describe('antigravity worker-private HOME', () => {
     expect(lstatSync(workerConfigDir).isSymbolicLink()).toBe(false)
     // The coordinator's 60-tool entry must NOT be reachable from here.
     expect(existsSync(join(workerConfigDir, 'mcp_config.json'))).toBe(false)
+  })
+
+  it('★COPIES cache/onboarding.json so the worker never opens the first-run TUI', () => {
+    // Measured 2026-08-31: without this import an agy worker sits in `starting`
+    // on "Welcome to Antigravity CLI! Choose your color scheme:" (then the
+    // Terms of Service screen) making zero model calls until it is reaped.
+    // Private HOMEs are keyed per TASK, so every task re-onboards without it.
+    const realHome = fakeGeminiHome({ onboarded: true })
+    const rel = join('.gemini', 'antigravity-cli', 'cache', 'onboarding.json')
+    const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
+
+    // COPY, not symlink: a worker write must not reach the user's real config.
+    expect(spec.imports.find((entry) => entry.relativePath === rel)).toMatchObject({ mode: 'copy' })
+
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-agy-onboard-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-onboard-'),
+    })
+
+    const workerFile = join(prepared.home, rel)
+    expect(prepared.imported).toContain(rel)
+    expect(lstatSync(workerFile).isSymbolicLink()).toBe(false)
+    expect(JSON.parse(readFileSync(workerFile, 'utf-8')).onboardingComplete).toBe(true)
+
+    // The copy is a real snapshot — a worker rewrite stays inside the private
+    // HOME and cannot re-open onboarding for the real user.
+    writeFileSync(workerFile, JSON.stringify({ onboardingComplete: false }))
+    expect(JSON.parse(readFileSync(join(realHome, rel), 'utf-8')).onboardingComplete).toBe(true)
+  })
+
+  it('★launches fine on a host that has never completed agy onboarding (import is optional)', () => {
+    // Cross-platform defence: linux/win32 hosts, and macs that have authed but
+    // never run agy, have no cache/onboarding.json. That must SKIP, not throw —
+    // cf. antigravity-oauth-token, whose `required: true` makes win32 workers
+    // fail isolation outright.
+    const realHome = fakeGeminiHome() // deliberately has no cache/ dir
+    const rel = join('.gemini', 'antigravity-cli', 'cache', 'onboarding.json')
+    const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
+
+    expect(spec.imports.find((entry) => entry.relativePath === rel)!.required).toBeFalsy()
+
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-agy-noonboard-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-noonboard-'),
+    })
+
+    expect(prepared.skipped).toContain(rel)
+    expect(existsSync(join(prepared.home, rel))).toBe(false)
+    // The rest of the isolation still materialized.
+    expect(prepared.imported).toContain(join('.gemini', 'antigravity-cli', 'antigravity-oauth-token'))
+  })
+
+  it('★keeps settings.json a SYMLINK so the later pre-launch-trust write reaches the worker', () => {
+    // Ordering, not preference: prepareWorkerPrivateHome runs at launch-planning
+    // time, but applyPreLaunchTrust (providers/spec/pre-launch-trust.ts, called
+    // from FsmDriver) adds trustedWorkspaces to the REAL settings.json later, at
+    // spawn, resolving ~ through os.homedir(). A copy would freeze a PRE-trust
+    // snapshot and park agy on its folder-trust prompt — the same unanswerable
+    // first-run hang the onboarding import above removes.
+    const realHome = fakeGeminiHome()
+    const rel = join('.gemini', 'antigravity-cli', 'settings.json')
+    const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-agy-trust-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-trust-'),
+    })
+
+    expect(lstatSync(join(prepared.home, rel)).isSymbolicLink()).toBe(true)
+    // Simulate applyPreLaunchTrust writing the real file AFTER the HOME exists.
+    writeFileSync(join(realHome, rel), JSON.stringify({ trustedWorkspaces: { '/ws': true } }), { mode: 0o600 })
+    const seen = JSON.parse(readFileSync(join(prepared.home, rel), 'utf-8'))
+    expect(seen.trustedWorkspaces).toEqual({ '/ws': true })
   })
 
   it('gives two workers on one workspace DIFFERENT private homes', () => {

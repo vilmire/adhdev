@@ -747,9 +747,17 @@ export class SpecCliAdapter implements CliAdapter {
         }
 
         // Fail closed while an active turn owns the PTY. Blindly writing here can
-        // leave bytes buffered until after the turn, and destructive keys would
-        // bypass mesh_send_task's interrupt capability validation.
-        if (this.latestState?.status === 'generating') {
+        // leave bytes buffered until after the turn.
+        //
+        // A DESTRUCTIVE key (ESC / CTRL_C) is exempt, matching the modal guard
+        // 8 lines up and the contract stated in this method's doc comment. It
+        // dismisses rather than confirms, so it cannot commit anything a policy
+        // gate would have refused, and the tool layer owns its double-gate +
+        // audit. Without the exemption a session wedged on an unanswerable
+        // screen — a first-run onboarding TUI reported as `generating` — has no
+        // manual escape hatch at all: mesh_send_task's interrupt path needs a
+        // real turn to interrupt, which is exactly what such a session lacks.
+        if (this.latestState?.status === 'generating' && !encoded.hasDestructive) {
             const message = "session is generating; mesh_send_keys cannot write during an active turn. Use mesh_send_task with delivery_mode: 'interrupt' to interrupt it.";
             LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (generating): keys=${encoded.keys.join(',')} — use mesh_send_task delivery_mode=interrupt`);
             return { ok: false, refused: 'generating', keys: encoded.keys, hasDestructive: encoded.hasDestructive, message };

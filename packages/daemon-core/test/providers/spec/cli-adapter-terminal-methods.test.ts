@@ -129,6 +129,34 @@ describe('SpecCliAdapter — injectKeys (MESH-SEND-KEYS)', () => {
         expect(pty(dispatches)).toEqual([]);
     });
 
+    it('★allows a DESTRUCTIVE key (ESC) past the generating gate — the manual escape hatch', async () => {
+        // A session wedged on an unanswerable first-run screen (antigravity's
+        // colour-scheme / Terms-of-Service TUI) reports `generating` while
+        // making zero model calls. mesh_send_task's interrupt path needs a real
+        // turn to interrupt, so ESC/CTRL_C through send_keys is the ONLY way a
+        // coordinator can free it. The method's doc comment always claimed
+        // destructive keys pass this gate; for a while the code did not.
+        const { adapter, dispatches } = makeAdapter({ screen: 'Choose your color scheme:', state: 'generating' });
+
+        const res = await adapter.injectKeys([{ key: 'ESC' }]);
+
+        expect(res.ok).toBe(true);
+        expect(res.hasDestructive).toBe(true);
+        expect(pty(dispatches)[0]).toBe('\x1b');
+    });
+
+    it('★still refuses a NON-destructive key while generating (the exemption is destructive-only)', async () => {
+        // Guards the exemption above from widening into "send_keys works during
+        // a turn", which would let text sit buffered until the turn ends.
+        const { adapter, dispatches } = makeAdapter({ screen: '✳ Tinkering…', state: 'generating' });
+
+        const res = await adapter.injectKeys([{ key: 'DOWN' }, { key: 'ENTER' }]);
+
+        expect(res.ok).toBe(false);
+        expect(res.refused).toBe('generating');
+        expect(pty(dispatches)).toEqual([]);
+    });
+
     it('is refused (fail-closed) for a non-destructive injection while an approval modal is open', async () => {
         const { adapter, dispatches } = makeAdapter({ screen: '❯ 1. Yes', state: 'approval' });
 
