@@ -910,6 +910,16 @@ export class SpecCliAdapter implements CliAdapter {
                 }
             }
             await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+            // Claude Code >=2.1.220 completes AskUserQuestion immediately after
+            // the final choice. In that direct-submit path the settle poll
+            // clears the bound prompt and there is no review page to confirm.
+            // Never send a second Enter after that completion signal: focus now
+            // belongs to the provider's busy screen (or whatever it renders
+            // next), not to the question we answered.
+            if (!this.activeInteractivePrompt) return;
+            if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
+                throw new Error('Claude TUI active interactive prompt changed before review submission');
+            }
             this.driver.dispatch({ kind: 'pty_write', data: '\r' });
             await new Promise(resolve => setTimeout(resolve, 180));
         } else {
@@ -1536,17 +1546,22 @@ export class SpecCliAdapter implements CliAdapter {
      * When the held question text is absent for
      * INTERACTIVE_PROMPT_LOST_GRACE_MS the prompt is genuinely resolved.
      */
-    private maybeClearResolvedClaudeTuiPrompt(): void {
-        if (this.interactivePromptScheme() !== 'claude_tui' || !this.activeInteractivePrompt) return;
+    private maybeClearResolvedClaudeTuiPrompt(options: {
+        screenText?: string;
+        resolveImmediatelyWhenBusy?: boolean;
+    } = {}): 'held' | 'missing' | 'cleared' | 'unavailable' {
+        if (this.interactivePromptScheme() !== 'claude_tui' || !this.activeInteractivePrompt) return 'unavailable';
         // stream-json prompts are tracked by their tool-call lifecycle, not by
         // screen footer, but claude renders the same TUI picker for both
         // transports while awaiting an answer — so screen presence is a valid
         // resolved-signal for either. (If the screen read fails, keep holding.)
-        let screenText = '';
-        try {
-            screenText = this.driver.snapshot();
-        } catch {
-            return;
+        let screenText = options.screenText;
+        if (screenText === undefined) {
+            try {
+                screenText = this.driver.snapshot();
+            } catch {
+                return 'unavailable';
+            }
         }
         const identifiableQuestions = this.activeInteractivePrompt.questions.filter(q => !!q.question?.trim());
         // Empty questions are not emitted by a real capture, but retaining the
@@ -1557,17 +1572,27 @@ export class SpecCliAdapter implements CliAdapter {
         if (stillOnScreen) {
             // Prompt reappeared / never left — reset the hysteresis timer.
             this.interactivePromptLostAt = null;
-            return;
+            return 'held';
         }
+        // During a dashboard answer, a provider transition to busy is causal
+        // confirmation that the final choice was submitted. Combined with the
+        // bound question text being absent, it is stronger than the ordinary
+        // terminal-side stale cleanup and does not need its repaint grace.
+        // The review poll only enables this after ruling out a focused foreign
+        // question, preserving the wrong-picker fail-closed guard.
+        const resolvedByBusyAdvance = options.resolveImmediatelyWhenBusy === true
+            && this.latestState?.status === 'generating';
         const lostAt = this.interactivePromptLostAt ?? Date.now();
-        if (this.interactivePromptLostAt === null) this.interactivePromptLostAt = lostAt;
-        if (Date.now() - lostAt < SpecCliAdapter.INTERACTIVE_PROMPT_LOST_GRACE_MS) return;
+        if (this.interactivePromptLostAt == null) this.interactivePromptLostAt = lostAt;
+        if (!resolvedByBusyAdvance
+            && Date.now() - lostAt < SpecCliAdapter.INTERACTIVE_PROMPT_LOST_GRACE_MS) return 'missing';
         // Resolved in the terminal — drop the held prompt so getStatus() stops
         // re-emitting it.
         this.activeInteractivePrompt = null;
         this.interactivePromptTransport = null;
         this.interactivePromptLostAt = null;
         this.statusCallback?.();
+        return 'cleared';
     }
 
     private maybeCaptureClaudeTuiPrompt(): void {
@@ -1765,22 +1790,66 @@ export class SpecCliAdapter implements CliAdapter {
      * the user selects a standard option. The wider budget accounts for this
      * extra layout time when validating the review echo screen.
      */
-    private async snapshotSettledClaudeTuiReview(allowsFreeform: boolean): Promise<string> {
+    private async snapshotSettledClaudeTuiReview(prompt: InteractivePrompt, allowsFreeform: boolean): Promise<string | null> {
         let screenText = this.readClaudeTuiSnapshotForAnswer();
         const budgetMs = allowsFreeform
             ? SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
             : SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
         const deadline = Date.now() + budgetMs;
-        while (Date.now() < deadline) {
-            if (!readFocusedClaudeTuiQuestion(screenText) && isClaudeTuiReviewScreen(screenText)) return screenText;
+        let poll = 0;
+        while (true) {
+            poll += 1;
+            const focused = readFocusedClaudeTuiQuestion(screenText);
+            const review = !focused && isClaudeTuiReviewScreen(screenText);
+            let classification: string;
+            let directSubmitted = false;
+
+            if (focused) {
+                const boundQuestion = prompt.questions.some(question => this.claudeTuiQuestionMatches(question, focused));
+                classification = boundQuestion ? 'bound_question' : 'foreign_question';
+            } else if (review) {
+                classification = 'review';
+            } else if (!this.activeInteractivePrompt) {
+                // The ordinary stale cleanup or a future native tool-result
+                // observer may have cleared the prompt between poll samples.
+                classification = 'direct_submit_already_cleared';
+                directSubmitted = true;
+            } else if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
+                classification = 'active_prompt_changed';
+            } else {
+                const resolution = this.maybeClearResolvedClaudeTuiPrompt({
+                    screenText,
+                    resolveImmediatelyWhenBusy: true,
+                });
+                classification = resolution === 'cleared'
+                    ? 'direct_submit'
+                    : resolution === 'held'
+                        ? 'bound_question_unparsed'
+                        : resolution === 'missing'
+                            ? 'bound_question_missing'
+                            : 'snapshot_unavailable';
+                directSubmitted = resolution === 'cleared';
+            }
+
+            // Screen text can contain source, secrets, or user input. Keep the
+            // answer-settle diagnostic deliberately structural: classification,
+            // UTF-8 byte count, poll index, and spec-defined provider state.
+            LOG.debug(
+                'SpecAdapter',
+                `[${this.cliType}] Claude TUI answer poll=${poll} classification=${classification} screenBytes=${Buffer.byteLength(screenText, 'utf8')} providerState=${this.latestState?.id ?? 'unknown'} providerStatus=${this.latestState?.status ?? 'unknown'} allowsFreeform=${allowsFreeform}`,
+            );
+
+            if (review) return screenText;
+            if (directSubmitted) return null;
+            if (Date.now() >= deadline) return screenText;
             await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
             screenText = this.readClaudeTuiSnapshotForAnswer();
         }
-        return screenText;
     }
 
     private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, allowsFreeform: boolean): Promise<void> {
-        const screenText = await this.snapshotSettledClaudeTuiReview(allowsFreeform);
+        const screenText = await this.snapshotSettledClaudeTuiReview(prompt, allowsFreeform);
+        if (screenText === null) return;
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (focused || !isClaudeTuiReviewScreen(screenText)) {
             const observed = focused?.question ? `; focused question is "${focused.question}"` : '';

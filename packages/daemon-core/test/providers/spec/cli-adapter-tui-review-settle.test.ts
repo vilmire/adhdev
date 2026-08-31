@@ -38,6 +38,18 @@ const REVIEW_SCREEN = [
     'Enter to select · Esc to cancel',
 ].join('\n')
 
+const BUSY_SCREEN = [
+    '✻ Working…',
+    '',
+    'esc to interrupt',
+].join('\n')
+
+const FOREIGN_QUESTION_SCREEN = QUESTION_SCREEN
+    .replace('☐ Approach', '☐ Deployment')
+    .replace('Which approach?', 'Which environment?')
+    .replace('Option A', 'Production')
+    .replace('Option B', 'Staging')
+
 const prompt = {
     promptId: 'toolu_review',
     origin: 'cli' as const,
@@ -107,6 +119,46 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
         const { adapter } = makeAdapter([foreignReview])
         await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
             .rejects.toThrow(/does not match the active interactive prompt headers/)
+    })
+
+    it('still fails closed when a foreign question is focused after the provider advances to busy', async () => {
+        const { adapter } = makeAdapter([FOREIGN_QUESTION_SCREEN])
+        adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' }
+
+        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+            .rejects.toThrow(/review page is not focused/)
+        expect(adapter.activeInteractivePrompt).toBe(prompt)
+    })
+
+    it('clears the prompt when native tool_result advances to busy without a review page', async () => {
+        let screen = QUESTION_SCREEN
+        const writes: string[] = []
+        const { adapter } = makeAdapter([QUESTION_SCREEN])
+        adapter.driver = {
+            snapshot: () => screen,
+            dispatch: (event: Dispatch) => {
+                if (event.kind !== 'pty_write' || event.data === undefined) return
+                writes.push(event.data)
+                if (event.data === '1') {
+                    // Claude Code v2.1.220 emits the native tool_result and the
+                    // FSM observes its measured consequence: the bound question
+                    // disappears and the provider advances straight to busy.
+                    screen = BUSY_SCREEN
+                    adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' }
+                }
+            },
+            hasSeenReady: () => true,
+        }
+
+        await adapter.setInteractivePromptResponse({
+            promptId: prompt.promptId,
+            answers: { q1: { selectedLabels: ['Option A'] } },
+        })
+
+        // The answer digit is the only key: no non-existent review-page Enter.
+        expect(writes).toEqual(['1'])
+        expect(adapter.activeInteractivePrompt).toBeNull()
+        expect(adapter.interactivePromptTransport).toBeNull()
     })
 })
 
