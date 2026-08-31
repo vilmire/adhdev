@@ -12,6 +12,9 @@
  * late-arriving review frame is accepted — while a screen that never becomes
  * the review page still fails closed.
  */
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
 
@@ -130,7 +133,7 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
         expect(adapter.activeInteractivePrompt).toBe(prompt)
     })
 
-    it('clears the prompt when native tool_result advances to busy without a review page', async () => {
+    it('clears the prompt when the question disappears and the provider advances to busy without a review page', async () => {
         let screen = QUESTION_SCREEN
         const writes: string[] = []
         const { adapter } = makeAdapter([QUESTION_SCREEN])
@@ -140,9 +143,6 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
                 if (event.kind !== 'pty_write' || event.data === undefined) return
                 writes.push(event.data)
                 if (event.data === '1') {
-                    // Claude Code v2.1.220 emits the native tool_result and the
-                    // FSM observes its measured consequence: the bound question
-                    // disappears and the provider advances straight to busy.
                     screen = BUSY_SCREEN
                     adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' }
                 }
@@ -159,6 +159,78 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
         expect(writes).toEqual(['1'])
         expect(adapter.activeInteractivePrompt).toBeNull()
         expect(adapter.interactivePromptTransport).toBeNull()
+    })
+
+    it('clears the prompt when a bound native tool_result arrives without a review page', async () => {
+        const historyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-direct-submit-history-'))
+        const historyPath = path.join(historyDir, '11111111-1111-4111-8111-111111111111.jsonl')
+        let screen = QUESTION_SCREEN
+        const writes: string[] = []
+        try {
+            fs.writeFileSync(historyPath, `${JSON.stringify({
+                type: 'assistant',
+                message: {
+                    role: 'assistant',
+                    content: [{
+                        type: 'tool_use',
+                        id: prompt.promptId,
+                        name: 'AskUserQuestion',
+                        input: { questions: prompt.questions },
+                    }],
+                },
+            })}\n`)
+
+            const { adapter } = makeAdapter([QUESTION_SCREEN])
+            adapter.workingDir = historyDir
+            adapter.spawnedAtMs = 0
+            adapter.spec.native_history = {
+                source: {
+                    kind: 'jsonl',
+                    path: historyPath,
+                    session_id_from: 'filename_uuid',
+                    message_filter: { where: "$.type == 'user' || $.type == 'assistant'" },
+                    message_map: {
+                        role: '$.message.role',
+                        content: '$.message.content',
+                        tools: {},
+                    },
+                },
+            }
+            adapter.driver = {
+                snapshot: () => screen,
+                dispatch: (event: Dispatch) => {
+                    if (event.kind !== 'pty_write' || event.data === undefined) return
+                    writes.push(event.data)
+                    if (event.data !== '1') return
+                    screen = BUSY_SCREEN
+                    fs.appendFileSync(historyPath, `${JSON.stringify({
+                        type: 'user',
+                        message: {
+                            role: 'user',
+                            content: [{
+                                type: 'tool_result',
+                                tool_use_id: prompt.promptId,
+                                content: 'submitted',
+                            }],
+                        },
+                    })}\n`)
+                    // Deliberately leave latestState idle: the bound native
+                    // tool_result alone must complete this OR branch.
+                },
+                hasSeenReady: () => true,
+            }
+
+            await adapter.setInteractivePromptResponse({
+                promptId: prompt.promptId,
+                answers: { q1: { selectedLabels: ['Option A'] } },
+            })
+
+            expect(writes).toEqual(['1'])
+            expect(adapter.activeInteractivePrompt).toBeNull()
+            expect(adapter.interactivePromptTransport).toBeNull()
+        } finally {
+            fs.rmSync(historyDir, { recursive: true, force: true })
+        }
     })
 })
 

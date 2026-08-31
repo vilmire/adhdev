@@ -21,6 +21,7 @@
 import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.js';
 import { lastContiguousNumberedBlock } from './evaluator.js';
 import { executeNativeHistory } from './native-history-executor.js';
+import { readJsonlLines } from './native-history-jsonl-cache.js';
 import { detectBackgroundTaskActive } from './background-task-detector.js';
 import { extractAntigravityScreenAssistantMessages } from './antigravity-screen-messages.js';
 import * as fs from 'node:fs';
@@ -1549,6 +1550,7 @@ export class SpecCliAdapter implements CliAdapter {
     private maybeClearResolvedClaudeTuiPrompt(options: {
         screenText?: string;
         resolveImmediatelyWhenBusy?: boolean;
+        resolvedByBoundToolResult?: boolean;
     } = {}): 'held' | 'missing' | 'cleared' | 'unavailable' {
         if (this.interactivePromptScheme() !== 'claude_tui' || !this.activeInteractivePrompt) return 'unavailable';
         // stream-json prompts are tracked by their tool-call lifecycle, not by
@@ -1582,9 +1584,10 @@ export class SpecCliAdapter implements CliAdapter {
         // question, preserving the wrong-picker fail-closed guard.
         const resolvedByBusyAdvance = options.resolveImmediatelyWhenBusy === true
             && this.latestState?.status === 'generating';
+        const resolvedByBoundToolResult = options.resolvedByBoundToolResult === true;
         const lostAt = this.interactivePromptLostAt ?? Date.now();
         if (this.interactivePromptLostAt == null) this.interactivePromptLostAt = lostAt;
-        if (!resolvedByBusyAdvance
+        if (!resolvedByBusyAdvance && !resolvedByBoundToolResult
             && Date.now() - lostAt < SpecCliAdapter.INTERACTIVE_PROMPT_LOST_GRACE_MS) return 'missing';
         // Resolved in the terminal — drop the held prompt so getStatus() stops
         // re-emitting it.
@@ -1593,6 +1596,96 @@ export class SpecCliAdapter implements CliAdapter {
         this.interactivePromptLostAt = null;
         this.statusCallback?.();
         return 'cleared';
+    }
+
+    /**
+     * True only when the native Claude JSONL contains a tool_result for the
+     * AskUserQuestion bound to `prompt`. TUI-captured prompts use a stable
+     * content-derived id rather than Claude's tool_use id, so bind the native
+     * call by its exact question/header/option identity first (ignoring only
+     * Claude's synthetic freeform/chat rows) and only then accept its matching
+     * tool_use_id. A later identical unresolved call resets the result, keeping
+     * latest-call-wins semantics.
+     */
+    private hasBoundClaudeAskUserQuestionToolResult(prompt: InteractivePrompt): boolean {
+        if (this.cliType !== 'claude-cli' || this.spec.native_history?.source?.kind !== 'jsonl') return false;
+        try {
+            const history = executeNativeHistory(this.spec.native_history, {
+                agentType: this.cliType,
+                providerSessionId: this.providerSessionId,
+                sessionStartedAtMs: this.spawnedAtMs,
+                envOverrides: this.spawnedEnv,
+                workspace: this.workingDir,
+                instanceId: this.owningSessionId,
+            });
+            if (!history?.sourcePath) return false;
+
+            let boundToolUseId: string | null = null;
+            let resolved = false;
+            for (const record of readJsonlLines(history.sourcePath)) {
+                const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record, this.cliType);
+                if (observedPrompt
+                    && (observedPrompt.promptId === prompt.promptId
+                        || this.claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
+                    boundToolUseId = observedPrompt.promptId;
+                    resolved = false;
+                }
+                if (!boundToolUseId) continue;
+                if (this.readClaudeToolResultIds(record).includes(boundToolUseId)) resolved = true;
+            }
+            return resolved;
+        } catch {
+            // Native history is corroborating evidence only. If it cannot be
+            // read or bound, retain the screen/state fail-closed path.
+            return false;
+        }
+    }
+
+    private claudeAskUserQuestionPromptsMatch(expected: InteractivePrompt, observed: InteractivePrompt): boolean {
+        if (expected.questions.length !== observed.questions.length) return false;
+        return expected.questions.every((expectedQuestion, index) => {
+            const observedQuestion = observed.questions[index];
+            if (!observedQuestion
+                || this.normalizeClaudeTuiIdentity(expectedQuestion.question)
+                    !== this.normalizeClaudeTuiIdentity(observedQuestion.question)) return false;
+
+            const observedHeader = this.normalizeClaudeTuiIdentity(observedQuestion.header || '');
+            if (observedHeader
+                && this.normalizeClaudeTuiIdentity(expectedQuestion.header || '') !== observedHeader) return false;
+
+            // Claude's native tool input omits the synthetic TUI escape rows.
+            // Compare its complete option list against the captured picker
+            // after removing only those known synthetic labels.
+            const expectedLabels = expectedQuestion.options
+                .map(option => this.normalizeClaudeTuiIdentity(option.label))
+                .filter(label => !/^(?:Type something\.?|Chat about this)$/i.test(label));
+            const observedLabels = observedQuestion.options
+                .map(option => this.normalizeClaudeTuiIdentity(option.label));
+            return expectedLabels.length === observedLabels.length
+                && expectedLabels.every((label, optionIndex) => label === observedLabels[optionIndex]);
+        });
+    }
+
+    private readClaudeToolResultIds(value: unknown): string[] {
+        if (!value || typeof value !== 'object') return [];
+        const record = value as Record<string, unknown>;
+        const blocks: unknown[] = [];
+        if (Array.isArray(record.content)) blocks.push(...record.content);
+        const message = record.message;
+        if (message && typeof message === 'object' && Array.isArray((message as Record<string, unknown>).content)) {
+            blocks.push(...((message as Record<string, unknown>).content as unknown[]));
+        }
+        if (record.type === 'tool_result') blocks.push(record);
+
+        const ids: string[] = [];
+        for (const block of blocks) {
+            if (!block || typeof block !== 'object') continue;
+            const candidate = block as Record<string, unknown>;
+            if (candidate.type !== 'tool_result') continue;
+            const id = typeof candidate.tool_use_id === 'string' ? candidate.tool_use_id.trim() : '';
+            if (id) ids.push(id);
+        }
+        return ids;
     }
 
     private maybeCaptureClaudeTuiPrompt(): void {
@@ -1817,12 +1910,16 @@ export class SpecCliAdapter implements CliAdapter {
             } else if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
                 classification = 'active_prompt_changed';
             } else {
+                const resolvedByBoundToolResult = this.hasBoundClaudeAskUserQuestionToolResult(prompt);
                 const resolution = this.maybeClearResolvedClaudeTuiPrompt({
                     screenText,
                     resolveImmediatelyWhenBusy: true,
+                    resolvedByBoundToolResult,
                 });
                 classification = resolution === 'cleared'
-                    ? 'direct_submit'
+                    ? resolvedByBoundToolResult
+                        ? 'direct_submit_tool_result'
+                        : 'direct_submit_busy'
                     : resolution === 'held'
                         ? 'bound_question_unparsed'
                         : resolution === 'missing'
