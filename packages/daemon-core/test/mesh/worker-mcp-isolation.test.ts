@@ -272,6 +272,27 @@ describe('antigravity worker-private HOME', () => {
     expect(readFileSync(token, 'utf-8')).toBe('refreshed')
   })
 
+  it('★links the macOS Library/Keychains directory to the real HOME', () => {
+    const realHome = fakeGeminiHome()
+    const realKeychains = join(realHome, 'Library', 'Keychains')
+    mkdirSync(realKeychains, { recursive: true })
+    writeFileSync(join(realKeychains, 'login.keychain-db'), 'fixture-keychain')
+
+    const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
+    const keychainImport = spec.imports.find((entry) => entry.relativePath === join('Library', 'Keychains'))
+    expect(keychainImport).toMatchObject({ mode: 'symlink' })
+
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-agy-keychain-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-keychain-'),
+    })
+    const workerKeychains = join(prepared.home, 'Library', 'Keychains')
+
+    expect(lstatSync(workerKeychains).isSymbolicLink()).toBe(true)
+    expect(realpathSync(workerKeychains)).toBe(realpathSync(realKeychains))
+    expect(readFileSync(join(workerKeychains, 'login.keychain-db'), 'utf-8')).toBe('fixture-keychain')
+    expect(prepared.imported).toContain(join('Library', 'Keychains'))
+  })
+
   it('★links the transcript surfaces through to the real home', () => {
     // The daemon reads transcripts from os.homedir() (hard-coded in
     // native-history/antigravity-cli-transcript.ts). If the worker wrote them
@@ -370,6 +391,11 @@ describe('antigravity worker-private HOME', () => {
       { ...stripped, imports: [...stripped.imports, { relativePath: join('.gemini', 'nope.json'), mode: 'symlink' as const }] },
       { workspace: tmp('adhdev-ws-skip-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase8-') },
     )
+    // Library/Keychains is intentionally declared without a platform guard.
+    // On a host where that macOS path is absent, the generic importer skips it
+    // before attempting a directory symlink or copy.
+    expect(prepared.skipped).toContain(join('Library', 'Keychains'))
+    expect(existsSync(join(prepared.home, 'Library', 'Keychains'))).toBe(false)
     expect(prepared.skipped).toContain(join('.gemini', 'nope.json'))
   })
 })
