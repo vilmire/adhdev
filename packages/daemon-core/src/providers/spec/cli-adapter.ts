@@ -62,6 +62,7 @@ import {
     detectKimiPendingQuestion, detectKimiIdleSelectorPrompt,
     buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX,
 } from '../kimi-pending-question.js';
+import { detectClaudePendingQuestion } from '../claude-pending-question.js';
 import type { InteractivePrompts } from './fsm-types.js';
 import { CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX } from '@adhdev/mesh-shared';
 
@@ -1706,6 +1707,36 @@ export class SpecCliAdapter implements CliAdapter {
         return ids;
     }
 
+    /**
+     * Read the pending AskUserQuestion off claude's native JSONL transcript, or
+     * null when there is none / it cannot be read.
+     *
+     * `ADHDEV_DISABLE_CLAUDE_JSONL_PROMPT=1` forces the legacy screen-scrape
+     * path. It exists so the fallback stays exercisable — both in the injection
+     * test that proves the scrape still produces the (broken) split labels, and
+     * on a live machine where a transcript-format change would otherwise need a
+     * downgrade to diagnose.
+     */
+    private detectClaudeNativePendingQuestion(): InteractivePrompt | null {
+        if (process.env.ADHDEV_DISABLE_CLAUDE_JSONL_PROMPT === '1') return null;
+        if (!this.spec.native_history?.source) return null;
+        try {
+            return detectClaudePendingQuestion(this.spec.native_history, {
+                agentType: this.cliType,
+                providerSessionId: this.providerSessionId || undefined,
+                sessionStartedAtMs: this.spawnedAtMs,
+                envOverrides: this.spawnedEnv,
+                workspace: this.workingDir,
+                // Sidecar-claim owner token — without it resolution fails closed
+                // on ambiguity, same as the kimi wire call site.
+                instanceId: this.owningSessionId || undefined,
+            });
+        } catch {
+            // Fail open: the caller falls back to the screen scrape.
+            return null;
+        }
+    }
+
     private maybeCaptureClaudeTuiPrompt(): void {
         if (this.interactivePromptScheme() !== 'claude_tui'
             || this.activeInteractivePrompt
@@ -1741,6 +1772,28 @@ export class SpecCliAdapter implements CliAdapter {
             return;
         }
         this.claudeTuiCaptureFooterAbsentAt = null;
+
+        // NATIVE-JSONL FIRST (structured source of truth). The picker IS on
+        // screen (footer present, not generating) — so if claude's own
+        // transcript shows an unanswered AskUserQuestion, take its verbatim
+        // labels/descriptions/previews instead of scraping them back off the
+        // terminal, where a wrapped label is indistinguishable from a
+        // description. Screen presence stays the liveness gate; the transcript
+        // supplies only the CONTENT.
+        //
+        // Deliberately non-exclusive: on any miss (transcript not yet written,
+        // unresolvable path, read error) this falls through to the scrape below
+        // unchanged. That fallback is why a JSONL write lagging the repaint
+        // degrades to the old behaviour rather than to no prompt at all.
+        const nativePrompt = this.detectClaudeNativePendingQuestion();
+        if (nativePrompt) {
+            this.activeInteractivePrompt = nativePrompt;
+            this.interactivePromptTransport = 'tui';
+            this.interactivePromptLostAt = null;
+            this.statusCallback?.();
+            return;
+        }
+
         const headers = this.readClaudeTuiHeaders(screenText);
         if (headers.length === 0) {
             // Headerless (single-question) capture parses the CURRENT screen
