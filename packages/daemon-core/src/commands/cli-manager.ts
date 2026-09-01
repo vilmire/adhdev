@@ -44,6 +44,14 @@ import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { buildSendInputSignature } from './chat-commands-shared.js';
 import { findProviderAutoApproveMode, resolveProviderAutoApproveMode } from '../providers/auto-approve-modes.js';
 import { expandModelLaunchArgs } from './model-launch-args.js';
+import type { PreLaunchTrust } from '../providers/spec/fsm-types.js';
+import {
+    loadPreLaunchTrustFromSpecPath,
+    recordWorkerAutoTrustGrant,
+    resolveLaunchTrustPlan,
+    type ResolvedTrustPlan,
+    type TrustLifecycle,
+} from '../providers/trust-provenance-ledger.js';
 
 export { expandModelLaunchArgs } from './model-launch-args.js';
 
@@ -316,6 +324,8 @@ type CliStartOptions = {
     resumeSessionId?: string;
     settingsOverride?: Record<string, any>;
     extraEnv?: Record<string, string>;
+    /** Launch-planning result. Null explicitly suppresses unresolved array trust. */
+    resolvedTrustPlan?: ResolvedTrustPlan | null;
     /**
      * WORKER-MCP: pre-generated runtime session id.
      *
@@ -360,6 +370,15 @@ export interface CoordinatorDelegatedCliLaunchOptionsInput {
     };
     /** Stable per-launch key so two workers never share a private HOME. */
     sessionKey?: string;
+    /** Validated provider spec declaration used to resolve a worker trust plan. */
+    preLaunchTrust?: PreLaunchTrust;
+    trustLifecycle?: TrustLifecycle;
+    /** Test/embedding seams; production uses the daemon's normal roots. */
+    realHome?: string;
+    workerHomeBaseDir?: string;
+    trustLedgerPath?: string;
+    nowMs?: number;
+    runtimeEnv?: NodeJS.ProcessEnv;
     /**
      * WORKER-MCP Phase B: mesh + runtime session this worker is being launched
      * for. Present ⇒ the written config carries a worker MCP server entry and a
@@ -379,6 +398,8 @@ export interface CoordinatorDelegatedCliLaunchOptions {
     env: Record<string, string>;
     /** Set only when the worker-MCP gate produced an isolation surface. */
     workerIsolation?: WorkerMcpIsolation;
+    /** Present (or explicitly null) when this provider declares pre-launch trust. */
+    resolvedTrustPlan?: ResolvedTrustPlan | null;
 }
 
 function hasCliArg(args: string[], flag: string): boolean {
@@ -455,6 +476,8 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         workspace: input.workspace,
         sessionKey: input.sessionKey || input.workspace,
         mcpConfig: input.mcpConfig,
+        realHome: input.realHome,
+        baseDir: input.workerHomeBaseDir,
         // Phase B: with a mesh+session to bind, the worker gets a MINIMAL MCP
         // server (`--mode worker`) plus the bind it exchanges for its task
         // token. Without one, Phase A's shape stands — a config with no servers
@@ -463,7 +486,49 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         ...(input.bindContext
             ? { bindContext: input.bindContext, server: resolveWorkerMcpServerLaunch() }
             : {}),
-    });
+    }, input.runtimeEnv || process.env);
+
+    // TRUST-PROVENANCE C: private HOME/imports above must exist before the
+    // grant is ledgered. The driver receives this already-absolute plan and
+    // materializes it into the per-worker copy immediately before PTY spawn.
+    let resolvedTrustPlan: ResolvedTrustPlan | null | undefined;
+    if (input.preLaunchTrust) {
+        resolvedTrustPlan = null;
+        if (workerIsolation?.workerHome) {
+            const lifecycle: TrustLifecycle = input.trustLifecycle || {
+                kind: 'worktree',
+                worktreePath: path.resolve(input.workspace),
+                expiresAt: null,
+            };
+            const candidate = resolveLaunchTrustPlan({
+                provider: input.cliType,
+                workspace: input.workspace,
+                trust: input.preLaunchTrust,
+                storeHome: workerIsolation.workerHome,
+                scope: 'worker',
+                origin: 'worker_auto',
+                sessionKey: input.sessionKey || input.workspace,
+                lifecycle,
+            });
+            if (candidate) {
+                try {
+                    const recorded = recordWorkerAutoTrustGrant(candidate, {
+                        ledgerPath: input.trustLedgerPath,
+                        nowMs: input.nowMs,
+                    });
+                    resolvedTrustPlan = candidate;
+                    workerIsolation.notes.push(
+                        `${recorded.reused ? 'reused' : 'recorded'} worker-auto trust grant ${recorded.grant.grantId}`,
+                    );
+                } catch (err: any) {
+                    // Ledger is the source of truth. Never create an unledgered
+                    // projection, and never fall back to the user's real store.
+                    workerIsolation.notes.push(`worker trust ledger unavailable (${err?.message || err})`);
+                    LOG.warn('WorkerTrust', `worker-auto trust grant failed for ${input.cliType}: ${err?.message || err}`);
+                }
+            }
+        }
+    }
 
     // Provider-declared env VALUES (env.set), applied before the unset sweep so
     // `unset` always wins on a key named by both — the clear is the stronger,
@@ -523,7 +588,12 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         }
     }
 
-    return { cliArgs, env, ...(workerIsolation ? { workerIsolation } : {}) };
+    return {
+        cliArgs,
+        env,
+        ...(workerIsolation ? { workerIsolation } : {}),
+        ...(resolvedTrustPlan !== undefined ? { resolvedTrustPlan } : {}),
+    };
 }
 
 function isUuid(value: string): boolean {
@@ -900,6 +970,7 @@ export class DaemonCliManager {
         extraEnv?: Record<string, string>,
         /** PERMISSION-MODE-DUPLICATE: see registerCliInstance's option of the same name. */
         removeSpawnArgs?: string[],
+        resolvedTrustPlan?: ResolvedTrustPlan | null,
     ): CliAdapter {
  // cliType normalize (Resolve alias)
         const normalizedType = this.providerLoader.resolveAlias(cliType);
@@ -917,7 +988,7 @@ export class DaemonCliManager {
                 providerSessionId,
                 attachExisting,
             );
-            const adapter = createCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs || [], extraEnv || {}, transportFactory, undefined, removeSpawnArgs);
+            const adapter = createCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs || [], extraEnv || {}, transportFactory, undefined, removeSpawnArgs, resolvedTrustPlan);
             if (providerSessionId) adapter.updateRuntimeMeta?.({ providerSessionId });
             return adapter;
         }
@@ -982,6 +1053,7 @@ export class DaemonCliManager {
             providerSessionId?: string;
             launchMode?: CliLaunchMode;
             extraEnv?: Record<string, string>;
+            resolvedTrustPlan?: ResolvedTrustPlan | null;
             /** BRAIN-ROUTING: post-launch thinking level for runtime-control providers
              *  (e.g. hermes reasoning). Passed through to the instance. */
             initialThinkingLevel?: string;
@@ -1145,6 +1217,30 @@ export class DaemonCliManager {
  // A delegated worker launch supplies this id up front so the MCP config it
  // already wrote can name this session (see CliStartOptions.presetSessionKey).
         const key = options?.presetSessionKey?.trim() || crypto.randomUUID();
+
+        // TRUST-PROVENANCE C: user launches retain the existing real-HOME
+        // behavior, but the path is resolved here in launch planning. A
+        // delegated launch must provide its worker-private plan explicitly;
+        // absence is represented as null so no daemon-HOME fallback is possible.
+        if (provider && provider.category === 'cli' && options?.resolvedTrustPlan === undefined) {
+            const declaredTrust = loadPreLaunchTrustFromSpecPath(
+                (provider as unknown as { _resolvedSpecPath?: string })._resolvedSpecPath,
+            );
+            const delegated = options?.settingsOverride?.launchedByCoordinator === true;
+            const resolvedTrustPlan = !delegated && declaredTrust
+                ? resolveLaunchTrustPlan({
+                    provider: normalizedType,
+                    workspace: resolvedDir,
+                    trust: declaredTrust,
+                    storeHome: os.homedir(),
+                    scope: 'user',
+                    origin: 'user_confirmed',
+                    sessionKey: key,
+                    lifecycle: { kind: 'persistent', expiresAt: null },
+                })
+                : null;
+            options = { ...options, resolvedTrustPlan };
+        }
 
         // (3) Session-anchored mesh routing: when launching a mesh COORDINATOR session
         // (settings.meshCoordinatorFor set), expose this session's OWN runtime id to its MCP
@@ -1349,6 +1445,7 @@ export class DaemonCliManager {
                     providerSessionId: sessionBinding.providerSessionId,
                     launchMode: sessionBinding.launchMode,
                     extraEnv: options?.extraEnv,
+                    resolvedTrustPlan: options?.resolvedTrustPlan,
                     // PERMISSION-MODE-DUPLICATE: the mode's launchArgs are already in
                     // resolvedCliArgs; the spec's own base args still need stripping.
                     ...(autoApproveLaunch.removeArgs?.length ? { removeSpawnArgs: autoApproveLaunch.removeArgs } : {}),
@@ -1380,6 +1477,7 @@ export class DaemonCliManager {
                 false,
                 options?.extraEnv,
                 autoApproveLaunch.removeArgs,
+                options?.resolvedTrustPlan,
             );
             try {
                 await adapter.spawn();
@@ -1911,14 +2009,24 @@ export class DaemonCliManager {
                         // daemon write a worker config for the 6 providers that
                         // declare no isolation rules of their own.
                         mcpConfig: provLookup?.meshCoordinator?.mcpConfig,
-                        // Prefer the auto-launch task binding so two workers on
-                        // one workspace get distinct private HOMEs; fall back to
-                        // the mesh node, then the workspace alone.
-                        sessionKey: (typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
-                            ? settingsOverride.autoLaunchedForQueueTaskId.trim()
-                            : '')
-                            || (typeof settingsOverride?.meshNodeId === 'string' ? settingsOverride.meshNodeId.trim() : '')
-                            || dir,
+                        preLaunchTrust: loadPreLaunchTrustFromSpecPath(
+                            (provLookup as unknown as { _resolvedSpecPath?: string } | undefined)?._resolvedSpecPath,
+                        ) || undefined,
+                        // The runtime session id is the stable launch identity:
+                        // two workers on one workspace therefore receive distinct
+                        // private HOMEs and distinct provenance usage records.
+                        sessionKey: delegatedSessionKey || dir,
+                        trustLifecycle: {
+                            kind: 'worktree',
+                            worktreePath: path.resolve(dir),
+                            ...(delegatedMeshId ? { meshId: delegatedMeshId } : {}),
+                            ...(typeof settingsOverride?.meshNodeId === 'string' && settingsOverride.meshNodeId.trim()
+                                ? { nodeId: settingsOverride.meshNodeId.trim() } : {}),
+                            ...(typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
+                                && settingsOverride.autoLaunchedForQueueTaskId.trim()
+                                ? { taskId: settingsOverride.autoLaunchedForQueueTaskId.trim() } : {}),
+                            expiresAt: null,
+                        },
                         // Present ⇒ the worker gets a reporting surface (Phase B).
                         // Absent (a delegated launch with no mesh context) ⇒ the
                         // Phase A shape: isolation only, no worker server.
@@ -1970,6 +2078,9 @@ export class DaemonCliManager {
                         resumeSessionId: args?.resumeSessionId,
                         settingsOverride,
                         extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
+                        ...(delegatedLaunch && 'resolvedTrustPlan' in delegatedLaunch
+                            ? { resolvedTrustPlan: delegatedLaunch.resolvedTrustPlan }
+                            : {}),
                         ...(delegatedSessionKey ? { presetSessionKey: delegatedSessionKey } : {}),
                         ...(typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}),
                     },

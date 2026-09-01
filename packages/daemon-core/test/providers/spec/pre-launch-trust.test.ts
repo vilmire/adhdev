@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { applyPreLaunchTrust } from '../../../src/providers/spec/pre-launch-trust.js';
+import { resolveLaunchTrustPlan } from '../../../src/providers/trust-provenance-ledger.js';
 
 describe('applyPreLaunchTrust', () => {
     let tmp: string;
@@ -29,8 +30,21 @@ describe('applyPreLaunchTrust', () => {
         fs.rmSync(workspace, { recursive: true, force: true });
     });
 
+    function plan(declaredPath = settingsPath) {
+        return resolveLaunchTrustPlan({
+            provider: 'antigravity-cli',
+            workspace,
+            trust: { settings_path: declaredPath, key: 'trustedWorkspaces' },
+            storeHome: tmp,
+            scope: 'user',
+            origin: 'user_confirmed',
+            sessionKey: 'session-test',
+            lifecycle: { kind: 'persistent', expiresAt: null },
+        })!;
+    }
+
     it('creates the settings file and adds the workspace realpath', () => {
-        const added = applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, workspace);
+        const added = applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, plan());
         const real = fs.realpathSync(workspace);
         expect(added).toBe(real);
         const json = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -42,7 +56,7 @@ describe('applyPreLaunchTrust', () => {
             colorScheme: 'light',
             trustedWorkspaces: ['/already/trusted'],
         }), 'utf8');
-        applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, workspace);
+        applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, plan());
         const json = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
         expect(json.colorScheme).toBe('light');
         expect(json.trustedWorkspaces).toContain('/already/trusted');
@@ -50,24 +64,22 @@ describe('applyPreLaunchTrust', () => {
     });
 
     it('is idempotent — a second call adds nothing and reports no change', () => {
-        applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, workspace);
-        const second = applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, workspace);
+        applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, plan());
+        const second = applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, plan());
         expect(second).toBeNull();
         const json = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
         const real = fs.realpathSync(workspace);
         expect(json.trustedWorkspaces.filter((p: string) => p === real)).toHaveLength(1);
     });
 
-    it('expands a leading ~ to the home directory', () => {
-        const rel = path.relative(os.homedir(), settingsPath);
-        // Only meaningful when the tmp dir is under HOME; otherwise skip the
-        // assertion but still prove expandHome does not throw on a ~ path.
-        const trust = { settings_path: rel.startsWith('..') ? settingsPath : `~/${rel}`, key: 'trustedWorkspaces' };
-        expect(() => applyPreLaunchTrust(trust, workspace)).not.toThrow();
+    it('uses the absolute planned store and never re-expands the declaration', () => {
+        const trust = { settings_path: '~/.gemini/antigravity-cli/settings.json', key: 'trustedWorkspaces' };
+        expect(() => applyPreLaunchTrust(trust, plan())).not.toThrow();
+        expect(fs.existsSync(settingsPath)).toBe(true);
     });
 
     it('does not throw on malformed existing JSON', () => {
         fs.writeFileSync(settingsPath, '{ not valid json', 'utf8');
-        expect(() => applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, workspace)).not.toThrow();
+        expect(() => applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, plan())).not.toThrow();
     });
 });

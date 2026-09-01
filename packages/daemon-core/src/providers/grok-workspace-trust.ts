@@ -113,6 +113,11 @@ function hasTrustEntry(contents: string, real: string): boolean {
     return contents.split(/\r?\n/).some((line) => line.trim() === needle);
 }
 
+/** Native grok TOML projection bytes, separated from HOME/store resolution. */
+export function serializeGrokWorkspaceTrust(real: string, decidedAt = Math.floor(Date.now() / 1000)): string {
+    return `[folders."${escapeTomlKey(real)}"]\ntrusted = true\ndecided_at = ${decidedAt}\n`;
+}
+
 /**
  * Idempotently pre-trust `workingDir` for grok so the first-run folder-trust
  * TUI prompt never appears.
@@ -152,8 +157,7 @@ export function applyGrokWorkspaceTrust(workingDir: string, env: NodeJS.ProcessE
             LOG.debug('grok-workspace-trust', `${real} already has a trust entry — no change`);
             return null;
         }
-        const decidedAt = Math.floor(Date.now() / 1000);
-        const entry = `[folders."${escapeTomlKey(real)}"]\ntrusted = true\ndecided_at = ${decidedAt}\n`;
+        const entry = serializeGrokWorkspaceTrust(real);
         const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
         fs.mkdirSync(path.dirname(storePath), { recursive: true });
         fs.appendFileSync(storePath, `${separator}${entry}`, { encoding: 'utf8', mode: 0o600 });

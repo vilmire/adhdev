@@ -35,6 +35,7 @@ import {
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
+import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import {
     encodeMeshSendKeys,
     truncateToByteTailByLine,
@@ -341,6 +342,7 @@ export class SpecCliAdapter implements CliAdapter {
              *  `spawn_args` too — see route.ts's `removeArgs` parameter. */
             removeArgs?: string[];
         },
+        resolvedTrustPlan?: ResolvedTrustPlan | null,
     ) {
         const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
         this.spec = {
@@ -373,6 +375,7 @@ export class SpecCliAdapter implements CliAdapter {
             sessionId,
             manifestSendDelayMs: manifestTuning?.sendDelayMs,
             removeSpawnArgs: manifestTuning?.removeArgs,
+            resolvedTrustPlan,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
     }

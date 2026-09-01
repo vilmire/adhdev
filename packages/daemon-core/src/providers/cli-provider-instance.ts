@@ -42,6 +42,7 @@ import { TranscriptSignalSource } from './transcript-signal-source.js';
 import { resolveBusyLeaseGate } from './busy-lease-gate.js';
 import type { SignalSnapshot } from './spec/signal-envelope.js';
 import { createCliAdapter } from './spec/route.js';
+import type { ResolvedTrustPlan } from './trust-provenance-ledger.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
@@ -572,6 +573,7 @@ export class CliProviderInstance implements ProviderInstance {
              *  the list itself travels on so the spec path can filter the SPEC's spawn_args,
              *  which declare the same flag with a possibly different value. */
             removeSpawnArgs?: string[];
+            resolvedTrustPlan?: ResolvedTrustPlan | null;
             onProviderSessionResolved?: (info: {
                 instanceId: string;
                 providerType: string;
@@ -591,7 +593,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
         // FSMLOG-SESSION-ATTRIBUTION (D3): hand the resolved session id (assigned just above) to
         // the adapter so a spec-driven FSM tags its log lines with the owning session.
-        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs) as CliInstanceAdapter;
+        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs, options?.resolvedTrustPlan) as CliInstanceAdapter;
         if (this.providerSessionId) {
             this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
         }

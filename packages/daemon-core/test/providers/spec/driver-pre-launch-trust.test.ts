@@ -8,14 +8,21 @@
  * directly with cwd = worktree, and every fresh worktree (mesh task clone)
  * blocked on the trust prompt.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
+import { resolveLaunchTrustPlan } from '../../../src/providers/trust-provenance-ledger.js';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../../src/cli-adapters/pty-transport.js';
+
+const homedirOverride = vi.hoisted(() => ({ value: '' }));
+vi.mock('node:os', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:os')>();
+    return { ...actual, homedir: () => homedirOverride.value || actual.homedir() };
+});
 
 class StubPty implements PtyRuntimeTransport {
     readonly pid = 4242;
@@ -58,16 +65,22 @@ function writeSpec(spec: Record<string, unknown>): string {
 }
 
 describe('FsmDriver -- pre_launch_trust', () => {
-    it('trusts the workspace in the declared settings file on start()', () => {
+    it('keeps user-confirmed trust materialization in the user store on start()', () => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-settings-'));
         const settingsPath = path.join(tmp, 'settings.json');
         const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-ws-'));
         const factory = new StubFactory();
+        const trust = { settings_path: settingsPath, key: 'trustedWorkspaces' } as const;
         const driver = new FsmDriver({
             specPath: writeSpec(baseSpec({
-                pre_launch_trust: { settings_path: settingsPath, key: 'trustedWorkspaces' },
+                pre_launch_trust: trust,
             })),
             workingDir: workspace,
+            resolvedTrustPlan: resolveLaunchTrustPlan({
+                provider: 'test.pre-trust', workspace, trust, storeHome: tmp,
+                scope: 'user', origin: 'user_confirmed', sessionKey: 'user-session',
+                lifecycle: { kind: 'persistent', expiresAt: null },
+            }),
             hotReload: false,
             transportFactory: factory,
         });
@@ -79,6 +92,48 @@ describe('FsmDriver -- pre_launch_trust', () => {
             driver.shutdown();
             fs.rmSync(tmp, { recursive: true, force: true });
             fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it('worker start never touches the real user settings.json', () => {
+        const actualHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-actual-home-'));
+        homedirOverride.value = actualHome;
+        const actualSettingsPath = path.join(actualHome, '.gemini', 'antigravity-cli', 'settings.json');
+        const workerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-worker-home-'));
+        const workerSettingsPath = path.join(workerHome, '.gemini', 'antigravity-cli', 'settings.json');
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-worker-ws-'));
+        fs.mkdirSync(path.dirname(actualSettingsPath), { recursive: true });
+        fs.mkdirSync(path.dirname(workerSettingsPath), { recursive: true });
+        const actualBytes = '{"theme":"real-user-sentinel"}\n';
+        fs.writeFileSync(actualSettingsPath, actualBytes, { mode: 0o600 });
+        fs.copyFileSync(actualSettingsPath, workerSettingsPath);
+
+        const trust = { settings_path: '~/.gemini/antigravity-cli/settings.json', key: 'trustedWorkspaces' } as const;
+        const factory = new StubFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({ pre_launch_trust: trust })),
+            workingDir: workspace,
+            extraEnv: { HOME: workerHome },
+            resolvedTrustPlan: resolveLaunchTrustPlan({
+                provider: 'antigravity-cli', workspace, trust, storeHome: workerHome,
+                scope: 'worker', origin: 'worker_auto', sessionKey: 'worker-session',
+                lifecycle: { kind: 'worktree', worktreePath: fs.realpathSync(workspace), taskId: 'task-1', expiresAt: null },
+            }),
+            hotReload: false,
+            transportFactory: factory,
+        });
+        try {
+            driver.start();
+            expect(fs.readFileSync(actualSettingsPath, 'utf8')).toBe(actualBytes);
+            const projected = JSON.parse(fs.readFileSync(workerSettingsPath, 'utf8'));
+            expect(projected.theme).toBe('real-user-sentinel');
+            expect(projected.trustedWorkspaces).toEqual([fs.realpathSync(workspace)]);
+        } finally {
+            driver.shutdown();
+            fs.rmSync(workerHome, { recursive: true, force: true });
+            fs.rmSync(workspace, { recursive: true, force: true });
+            fs.rmSync(actualHome, { recursive: true, force: true });
+            homedirOverride.value = '';
         }
     });
 

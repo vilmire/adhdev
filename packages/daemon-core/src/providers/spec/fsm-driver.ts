@@ -37,6 +37,8 @@ import {
 } from './fsm-types.js';
 import { loadFsmSpec } from './fsm-loader.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
+import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
+import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import {
     createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss,
     type StartupDismissConfig, type StartupDismissState,
@@ -163,6 +165,8 @@ export interface SpecDriverOpts {
     specPath: string;
     workingDir: string;
     extraEnv?: Record<string, string>;
+    /** Absolute launch-planning result. Null/absent array stores are never resolved here. */
+    resolvedTrustPlan?: ResolvedTrustPlan | null;
     cols?: number;
     rows?: number;
     hotReload?: boolean;
@@ -695,7 +699,18 @@ export class FsmDriver implements ISpecDriver {
         // prompt never appears (best-effort; failures fall back to the FSM's
         // trust-modal detection). Only runs for specs that declare it.
         if (this.spec.pre_launch_trust) {
-            applyPreLaunchTrust(this.spec.pre_launch_trust, this.opts.workingDir);
+            if (this.opts.resolvedTrustPlan) {
+                applyPreLaunchTrust(this.spec.pre_launch_trust, this.opts.resolvedTrustPlan);
+            } else if ('scheme' in this.spec.pre_launch_trust
+                && this.spec.pre_launch_trust.scheme === 'kimi_workspace_file') {
+                // Kimi has no worker-private HOME yet. Keep its current
+                // KIMI_CODE_HOME/os.homedir() behavior until that isolation work lands.
+                applyKimiWorkspaceTrust(this.opts.workingDir);
+            } else {
+                // Fail closed for array stores: resolving `~` here would use the
+                // daemon's real HOME and recreate the worker trust leak.
+                LOG.warn('pre-launch-trust', 'skipping array trust without a resolved launch plan');
+            }
         }
         this.startupDismissConfig = normalizeStartupDismissConfig(this.spec.startup_dismiss);
         this.startupDismissState = createStartupDismissState();

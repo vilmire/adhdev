@@ -21,6 +21,7 @@ import type { CliAdapter } from '../../cli-adapter-types.js';
 import { SpecCliAdapter } from './cli-adapter.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY } from '../../track-identity.js';
+import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 
 /**
  * Recovery copy when a CLI provider has no resolvable spec.
@@ -65,6 +66,7 @@ export function createCliAdapter(
      *  its specs/4.0.json says `default`), so handing over a filtered manifest array would
      *  overwrite the spec's own base args with a different provider's-eye-view of them. */
     removeArgs?: string[],
+    resolvedTrustPlan?: ResolvedTrustPlan | null,
 ): CliAdapter {
     // Prefer the path provider-loader already resolved (it walks the
     // compatibility[i].spec → specs/default.json → spec.json chain).
@@ -90,5 +92,5 @@ export function createCliAdapter(
     return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
         sendDelayMs: provider.sendDelayMs,
         removeArgs,
-    });
+    }, resolvedTrustPlan);
 }

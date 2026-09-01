@@ -24,36 +24,16 @@
 'use strict';
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { PreLaunchTrust } from './fsm-types.js';
-import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
+import { serializeKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
+import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import { LOG } from '../../logging/logger.js';
 
-/** Expand a leading `~` to the user's home directory. */
-function expandHome(p: string): string {
-    if (p === '~') return os.homedir();
-    if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
-    return p;
-}
-
 /**
- * Resolve the canonical, real (symlink-followed) absolute form of the
- * workspace path. Trust files store realpaths, and matching has to be exact, so
- * we normalise the same way the CLI does. Falls back to the raw path if the
- * directory can't be stat'd (e.g. it does not exist yet).
- */
-function realWorkspacePath(workingDir: string): string {
-    try {
-        return fs.realpathSync(workingDir);
-    } catch {
-        return path.resolve(workingDir);
-    }
-}
-
-/**
- * Idempotently add `workingDir` (realpath) to the trusted-folders array named
- * by `trust.key` inside the JSON settings file at `trust.settings_path`.
+ * Idempotently materialize a resolved grant into the provider's native store.
+ * `plan.storePath` and `plan.workspaceRealpath` were fixed by launch planning;
+ * this runtime step deliberately performs no HOME or workspace path resolution.
  *
  * - Creates the file (and parent dir) if missing.
  * - Preserves all other settings; only the trust array is touched.
@@ -65,19 +45,23 @@ function realWorkspacePath(workingDir: string): string {
  * Returns the path that was added (realpath), or null if nothing changed /
  * an error occurred — purely so callers/tests can assert the effect.
  */
-export function applyPreLaunchTrust(trust: PreLaunchTrust, workingDir: string): string | null {
-    if ('scheme' in trust) {
-        // Named per-workspace-file scheme (fsm-types.PreLaunchTrustScheme):
-        // the trust store is one file per workspace, not an array in a
-        // settings file. Same best-effort contract as below — a failure never
-        // blocks launch, the FSM's trust-modal detection remains the fallback.
-        if (trust.scheme === 'kimi_workspace_file') return applyKimiWorkspaceTrust(workingDir);
-        return null; // unknown scheme: validator rejects at load; fail open at runtime
+export function applyPreLaunchTrust(trust: PreLaunchTrust, plan: ResolvedTrustPlan): string | null {
+    const settingsPath = plan.storePath;
+    const real = plan.workspaceRealpath;
+    if (!path.isAbsolute(settingsPath) || !path.isAbsolute(real)) {
+        LOG.warn('pre-launch-trust', 'refusing unresolved trust plan with non-absolute paths');
+        return null;
     }
-    const settingsPath = expandHome(trust.settings_path);
-    const key = trust.key;
-    const real = realWorkspacePath(workingDir);
     try {
+        if ('scheme' in trust) {
+            if (trust.scheme !== 'kimi_workspace_file') return null;
+            if (fs.existsSync(settingsPath)) return null;
+            fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+            fs.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real), 'utf8');
+            return real;
+        }
+
+        const key = trust.key;
         let parsed: Record<string, unknown> = {};
         if (fs.existsSync(settingsPath)) {
             const text = fs.readFileSync(settingsPath, 'utf8');
@@ -95,7 +79,7 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, workingDir: string): 
             : [];
 
         if (list.includes(real)) {
-            LOG.debug('pre-launch-trust', `[${trust.settings_path}] ${real} already trusted — no change`);
+            LOG.debug('pre-launch-trust', `[${settingsPath}] ${real} already trusted — no change`);
             return null;
         }
 
@@ -104,10 +88,10 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, workingDir: string): 
 
         fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
         fs.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
-        LOG.info('pre-launch-trust', `pre-trusted workspace in ${trust.settings_path} (key="${key}")`);
+        LOG.info('pre-launch-trust', `materialized ${plan.origin} workspace trust in ${settingsPath} (key="${key}")`);
         return real;
     } catch (err) {
-        LOG.warn('pre-launch-trust', `failed to pre-trust workspace in ${trust.settings_path}: ${(err as Error).message}`);
+        LOG.warn('pre-launch-trust', `failed to materialize workspace trust in ${settingsPath}: ${(err as Error).message}`);
         return null;
     }
 }

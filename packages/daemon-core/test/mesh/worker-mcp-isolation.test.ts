@@ -391,13 +391,7 @@ describe('antigravity worker-private HOME', () => {
     expect(prepared.imported).toContain(join('.gemini', 'antigravity-cli', 'antigravity-oauth-token'))
   })
 
-  it('★keeps settings.json a SYMLINK so the later pre-launch-trust write reaches the worker', () => {
-    // Ordering, not preference: prepareWorkerPrivateHome runs at launch-planning
-    // time, but applyPreLaunchTrust (providers/spec/pre-launch-trust.ts, called
-    // from FsmDriver) adds trustedWorkspaces to the REAL settings.json later, at
-    // spawn, resolving ~ through os.homedir(). A copy would freeze a PRE-trust
-    // snapshot and park agy on its folder-trust prompt — the same unanswerable
-    // first-run hang the onboarding import above removes.
+  it('★copies settings.json so worker trust cannot write through to the user store', () => {
     const realHome = fakeGeminiHome()
     const rel = join('.gemini', 'antigravity-cli', 'settings.json')
     const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
@@ -405,11 +399,10 @@ describe('antigravity worker-private HOME', () => {
       workspace: tmp('adhdev-ws-agy-trust-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-trust-'),
     })
 
-    expect(lstatSync(join(prepared.home, rel)).isSymbolicLink()).toBe(true)
-    // Simulate applyPreLaunchTrust writing the real file AFTER the HOME exists.
-    writeFileSync(join(realHome, rel), JSON.stringify({ trustedWorkspaces: { '/ws': true } }), { mode: 0o600 })
-    const seen = JSON.parse(readFileSync(join(prepared.home, rel), 'utf-8'))
-    expect(seen.trustedWorkspaces).toEqual({ '/ws': true })
+    const workerSettings = join(prepared.home, rel)
+    expect(lstatSync(workerSettings).isSymbolicLink()).toBe(false)
+    writeFileSync(workerSettings, JSON.stringify({ trustedWorkspaces: ['/worker-only'] }), { mode: 0o600 })
+    expect(JSON.parse(readFileSync(join(realHome, rel), 'utf-8'))).toEqual({ security: {} })
   })
 
   it('gives two workers on one workspace DIFFERENT private homes', () => {

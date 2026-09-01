@@ -81,6 +81,11 @@ function workspaceTrustKey(realPath: string): string {
     return `wd_${slug}_${hash}`;
 }
 
+/** Native kimi projection bytes, separated from HOME/store resolution. */
+export function serializeKimiWorkspaceTrust(realPath: string, trustedAt = Date.now()): string {
+    return JSON.stringify({ root: realPath, trustedAt });
+}
+
 /**
  * Idempotently pre-trust `workingDir` for kimi so the first-run folder-trust
  * TUI prompt never appears.
@@ -109,7 +114,7 @@ export function applyKimiWorkspaceTrust(workingDir: string, env: NodeJS.ProcessE
             return null;
         }
         fs.mkdirSync(trustDir, { recursive: true });
-        fs.writeFileSync(trustFile, JSON.stringify({ root: real, trustedAt: Date.now() }), 'utf8');
+        fs.writeFileSync(trustFile, serializeKimiWorkspaceTrust(real), 'utf8');
         LOG.info('kimi-workspace-trust', `pre-trusted workspace ${real} (${key})`);
         return real;
     } catch (err) {
