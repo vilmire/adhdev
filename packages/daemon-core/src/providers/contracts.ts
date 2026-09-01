@@ -448,6 +448,27 @@ export interface MeshCoordinatorDelegatedWorkerIsolation {
   };
   /** Spawn-argument rules applied before launching a delegated worker. */
   args?: MeshCoordinatorDelegatedWorkerArgRule[];
+  /**
+   * How a worker MCP server is delivered when the provider cannot consume an
+   * auto-import config file. The templates keep provider-specific config key
+   * syntax out of daemon launch code.
+   */
+  workerMcpDelivery?: MeshCoordinatorWorkerMcpDelivery;
+}
+
+export interface MeshCoordinatorWorkerMcpDelivery {
+  mode: 'config_override';
+  /** CLI config flag, e.g. Codex's `-c`. */
+  flag: string;
+  /** Worker-only server name; must not reuse the coordinator server name. */
+  serverName: string;
+  /** Templates support {serverName}, {command_json}, {args_json}, and {env_vars_json}. */
+  commandTemplate: string;
+  argsTemplate: string;
+  envVarsTemplate: string;
+  enabledTemplate: string;
+  /** Optional config override that removes the bind secret from shell children. */
+  shellEnvExcludeTemplate?: string;
 }
 
 export type MeshCoordinatorDelegatedWorkerArgRule =
