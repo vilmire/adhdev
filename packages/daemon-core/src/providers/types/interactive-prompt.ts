@@ -287,8 +287,90 @@ export interface ClaudeInteractiveTuiPage {
 // non-capturing checkbox groups absorb it so the captured label stays clean.
 const CLAUDE_TUI_OPTION_CHECKBOX = '(?:\\[[ xX]\\]|[☐☒◻◼])';
 const CLAUDE_TUI_OPTION_PATTERN = new RegExp(
-  `^\\s*(?:[❯›>]\\s*)?(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(\\d+)\\.\\s+(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(.+?)\\s*$`,
+  `^\\s*(?:[❯›>❐]\\s*)?(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(\\d+)\\.\\s+(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(.+?)\\s*$`,
 );
+
+interface ClaudeTuiScreenLine {
+  text: string;
+  wrapsIntoNext: boolean;
+}
+
+function readClaudeTuiScreenLines(screenText: string): ClaudeTuiScreenLine[] {
+  return screenText.split(/\r?\n/).map((raw) => {
+    const panel = raw.match(/(\s+)[│┃].*$/);
+    return {
+      // Keep the rc.58 preview-panel removal, but retain whether the main-pane
+      // text reached the panel edge. One padding cell before the divider is the
+      // observable signal that the terminal continued that logical row on the
+      // next physical row; generously accept two for wide-glyph edge padding.
+      text: panel ? raw.slice(0, panel.index ?? raw.length) : raw,
+      wrapsIntoNext: !!panel && panel[1].length <= 2,
+    };
+  });
+}
+
+function joinClaudeTuiRows(lines: ClaudeTuiScreenLine[], start: number, end: number): string {
+  return lines.slice(start, end)
+    .map(line => line.text.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function readClaudeQuestionBeforeOption(
+  lines: ClaudeTuiScreenLine[],
+  firstOptionIndex: number,
+  lowerBound: number,
+): string {
+  let end = firstOptionIndex;
+  while (end > lowerBound) {
+    const candidate = lines[end - 1].text.trim();
+    if (candidate && !/^─+$/.test(candidate)) break;
+    end -= 1;
+  }
+  let start = end;
+  while (start > lowerBound) {
+    const candidate = lines[start - 1].text.trim();
+    if (!candidate
+      || /^─+$/.test(candidate)
+      || candidate.includes('✔ Submit')
+      || CLAUDE_TUI_OPTION_PATTERN.test(lines[start - 1].text)) break;
+    start -= 1;
+  }
+  const question = joinClaudeTuiRows(lines, start, end);
+  return question.replace(/^[☐☒]\s+/, '').trim();
+}
+
+function readClaudeTuiOption(
+  lines: ClaudeTuiScreenLine[],
+  optionLineIndex: number,
+  optionBlockEnd: number,
+): InteractiveOption | null {
+  const match = lines[optionLineIndex].text.match(CLAUDE_TUI_OPTION_PATTERN);
+  if (!match) return null;
+  let label = match[2].trim();
+  let continuationEnd = optionLineIndex + 1;
+  while (continuationEnd < optionBlockEnd) {
+    const candidate = lines[continuationEnd].text.trim();
+    if (!candidate
+      || CLAUDE_TUI_OPTION_PATTERN.test(lines[continuationEnd].text)
+      || /^─+$/.test(candidate)
+      || /^Enter to select\b/i.test(candidate)) break;
+    continuationEnd += 1;
+  }
+
+  // A row that visibly reaches the preview divider is terminal-wrapped, not a
+  // description boundary. Follow that chain, including its final short row,
+  // before assigning any remaining rows to the description.
+  let labelEnd = optionLineIndex + 1;
+  while (labelEnd < continuationEnd && lines[labelEnd - 1].wrapsIntoNext) labelEnd += 1;
+  if (labelEnd > optionLineIndex + 1) {
+    label = `${label} ${joinClaudeTuiRows(lines, optionLineIndex + 1, labelEnd)}`.replace(/\s+/g, ' ').trim();
+  }
+  const description = joinClaudeTuiRows(lines, labelEnd, continuationEnd) || undefined;
+  return { label, ...(description ? { description } : {}) };
+}
 
 function claudeTuiQuestionHeaders(screenText: string): string[] {
   const navLine = screenText.split(/\r?\n/).find(line => line.includes('✔ Submit') && /[☐☒]/.test(line));
@@ -367,19 +449,6 @@ function readClaudeHeaderLine(lines: string[], beforeIndex: number): string | un
   return undefined;
 }
 
-function readClaudeOptionDescription(lines: string[], optionLineIndex: number): string | undefined {
-  const nextLine = lines[optionLineIndex + 1];
-  const next = nextLine?.trim();
-  if (!next
-    || CLAUDE_TUI_OPTION_PATTERN.test(nextLine)
-    || /^─+$/.test(next)
-    || /^Enter to select\b/i.test(next)
-    || /^[☐☒]\s+/.test(next)) {
-    return undefined;
-  }
-  return next;
-}
-
 function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
   // The claude TUI select footer ("Enter to select" — older builds paired it
   // with "Esc to cancel"; current builds render "Enter to select · ↑/↓ to
@@ -393,10 +462,10 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
   // allowFreeform.
   if (!isClaudeTuiSelectFooter(page.screenText)) return null;
 
-  const lines = page.screenText.split(/\r?\n/).map((line) => line.replace(/\s+[│┃].*$/, ''));
+  const lines = readClaudeTuiScreenLines(page.screenText);
   let footerIndex = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (/Enter to select/i.test(lines[i])) {
+    if (/Enter to select/i.test(lines[i].text)) {
       footerIndex = i;
       break;
     }
@@ -405,7 +474,7 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
 
   let optionBlockEnd = footerIndex - 1;
   for (let i = footerIndex - 1; i >= 0; i -= 1) {
-    if (/^─+$/.test(lines[i].trim())) {
+    if (/^─+$/.test(lines[i].text.trim())) {
       optionBlockEnd = i - 1;
       break;
     }
@@ -413,7 +482,7 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
 
   const optionLineIndexes: number[] = [];
   for (let i = optionBlockEnd; i >= 0; i -= 1) {
-    const line = lines[i];
+    const line = lines[i].text;
     if (CLAUDE_TUI_OPTION_PATTERN.test(line)) {
       optionLineIndexes.push(i);
       continue;
@@ -424,42 +493,22 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
   if (optionLineIndexes.length === 0) return null;
 
   const firstOptionIndex = optionLineIndexes[0];
-  let question = '';
-  for (let i = firstOptionIndex - 1; i >= 0; i -= 1) {
-    const candidate = lines[i].trim();
-    if (!candidate || /^─+$/.test(candidate)) continue;
-    // Standalone ☐/☒ markers (decorative section dividers in the headered
-    // variant) are not the question — keep skipping them.
-    if (/^[☐☒]\s*$/.test(candidate)) continue;
-    // The headerless variant introduced in claude-cli >=2.1 prefixes the
-    // actual question with `☐ ` (e.g. "☐ RPS R1 1라운드 — …"). Previously
-    // we skipped any ☐/☒ line and returned null, never opening the picker.
-    // Strip the marker so the dashboard label matches the on-screen text.
-    const markerMatch = candidate.match(/^[☐☒]\s+(.+)$/);
-    if (markerMatch) {
-      question = markerMatch[1].trim();
-      break;
-    }
-    question = candidate;
-    break;
-  }
+  const question = readClaudeQuestionBeforeOption(lines, firstOptionIndex, 0);
   if (!question) return null;
 
   const options: InteractiveOption[] = [];
   let allowFreeform = false;
   for (const optionLineIndex of optionLineIndexes) {
-    const match = lines[optionLineIndex].match(CLAUDE_TUI_OPTION_PATTERN);
-    if (!match) continue;
-    const label = match[2].trim();
+    const option = readClaudeTuiOption(lines, optionLineIndex, optionBlockEnd + 1);
+    if (!option) continue;
+    const { label } = option;
     if (/^Chat about this$/i.test(label)) continue;
     if (/^Type something\.?$/i.test(label)) allowFreeform = true;
-
-    const description = readClaudeOptionDescription(lines, optionLineIndex);
-    options.push({ label, ...(description ? { description } : {}) });
+    options.push(option);
   }
   if (options.length === 0) return null;
 
-  const header = readString(page.header) || readClaudeHeaderLine(lines, firstOptionIndex - 1);
+  const header = readString(page.header) || readClaudeHeaderLine(lines.map(line => line.text), firstOptionIndex - 1);
   return {
     questionId: `q${index + 1}`,
     question,
@@ -506,10 +555,10 @@ export function readFocusedClaudeTuiPickerRegion(screenText: string): string | n
 
 // Exported for testing
 export function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
-  const lines = page.screenText.split(/\r?\n/).map((line) => line.replace(/\s+[│┃].*$/, ''));
+  const lines = readClaudeTuiScreenLines(page.screenText);
   let navIndex = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (lines[i].includes('✔ Submit') && /[☐☒]/.test(lines[i])) {
+    if (lines[i].text.includes('✔ Submit') && /[☐☒]/.test(lines[i].text)) {
       navIndex = i;
       break;
     }
@@ -532,44 +581,37 @@ export function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage
   // block is what preserves the stacked-picker protection described on
   // readFocusedClaudeTuiQuestion — a LATER question's rows are never reached.
   for (let i = navIndex + 1; i < lines.length; i += 1) {
-    const candidate = lines[i].trim();
+    const candidate = lines[i].text.trim();
     if (!candidate || /^─+$/.test(candidate)) continue;
     if (candidate === 'Review your answers' || candidate === 'Ready to submit your answers?') return null;
-    if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i])) break;
+    if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) break;
   }
 
-  let question = '';
-  let questionLineIndex = -1;
+  let firstOptionIndex = -1;
   for (let i = navIndex + 1; i < lines.length; i += 1) {
-    const candidate = lines[i].trim();
-    if (!candidate || /^─+$/.test(candidate)) continue;
-    question = candidate;
-    questionLineIndex = i;
-    break;
+    if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) {
+      firstOptionIndex = i;
+      break;
+    }
   }
+  if (firstOptionIndex < 0) return null;
+  const question = readClaudeQuestionBeforeOption(lines, firstOptionIndex, navIndex + 1);
   if (!question) return null;
 
   const options: InteractiveOption[] = [];
   let allowFreeform = false;
-  for (let i = questionLineIndex + 1; i < lines.length; i += 1) {
-    const match = lines[i].match(CLAUDE_TUI_OPTION_PATTERN);
+  for (let i = firstOptionIndex; i < lines.length; i += 1) {
+    const match = lines[i].text.match(CLAUDE_TUI_OPTION_PATTERN);
     if (!match) continue;
-    const label = match[2].trim();
+    const option = readClaudeTuiOption(lines, i, lines.length);
+    if (!option) continue;
+    const { label } = option;
     if (/^Type something\.?$/i.test(label)) {
       allowFreeform = true;
       continue;
     }
     if (/^Chat about this$/i.test(label)) continue;
-
-    let description: string | undefined;
-    const nextLine = lines[i + 1]?.trim();
-    if (nextLine
-      && !CLAUDE_TUI_OPTION_PATTERN.test(lines[i + 1])
-      && !/^─+$/.test(nextLine)
-      && !/^Enter to select\b/.test(nextLine)) {
-      description = nextLine;
-    }
-    options.push({ label, ...(description ? { description } : {}) });
+    options.push(option);
   }
   if (options.length === 0) return null;
 
