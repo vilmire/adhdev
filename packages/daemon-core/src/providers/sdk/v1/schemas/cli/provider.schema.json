@@ -804,6 +804,53 @@
                   }
                 ]
               }
+            },
+            "workerMcpDelivery": {
+              "description": "Runtime worker MCP delivery for providers without an auto-import config path. Templates support {serverName}, {command_json}, {args_json}, and {env_vars_json}.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "flag",
+                "serverName",
+                "commandTemplate",
+                "argsTemplate",
+                "envVarsTemplate",
+                "enabledTemplate"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "config_override"
+                },
+                "flag": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "serverName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "commandTemplate": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "argsTemplate": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "envVarsTemplate": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "enabledTemplate": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "shellEnvExcludeTemplate": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
             }
           }
         }

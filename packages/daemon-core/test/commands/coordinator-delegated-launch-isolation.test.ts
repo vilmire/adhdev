@@ -13,6 +13,16 @@ const claudeIsolation = {
 }
 
 const codexIsolation = {
+  workerMcpDelivery: {
+    mode: 'config_override' as const,
+    flag: '-c',
+    serverName: 'adhdev-worker',
+    commandTemplate: 'mcp_servers.{serverName}.command={command_json}',
+    argsTemplate: 'mcp_servers.{serverName}.args={args_json}',
+    envVarsTemplate: 'mcp_servers.{serverName}.env_vars={env_vars_json}',
+    enabledTemplate: 'mcp_servers.{serverName}.enabled=true',
+    shellEnvExcludeTemplate: 'shell_environment_policy.exclude={env_vars_json}',
+  },
   args: [
     {
       mode: 'config_override' as const,
@@ -227,7 +237,7 @@ describe('worker-MCP gate OFF ⇒ delegated launch is unchanged', () => {
   })
 })
 
-describe('worker-MCP gate ON ⇒ antigravity worker gets a private HOME', () => {
+describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', () => {
   const priorEnv = process.env.ADHDEV_WORKER_MCP
 
   beforeEach(() => { process.env.ADHDEV_WORKER_MCP = '1' })
@@ -273,5 +283,35 @@ describe('worker-MCP gate ON ⇒ antigravity worker gets a private HOME', () => 
     // But it DOES get an isolated config — that is the 6-provider win.
     expect(existsSync(join(workspace, '.kimi-code', 'mcp.json'))).toBe(true)
     expect(JSON.parse(readFileSync(join(workspace, '.kimi-code', 'mcp.json'), 'utf-8'))).toEqual({ mcpServers: {} })
+  })
+
+  it('delivers Codex worker MCP via config overrides while keeping the bind out of argv', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-codex-'))
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'codex-cli',
+      workspace,
+      isolation: codexIsolation,
+      mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh' },
+      sessionKey: 'task_codex',
+      bindContext: { meshId: 'mesh_codex', sessionId: 'sess_codex', spawnedForTaskId: 'task_codex' },
+    })
+
+    const overrides = new Map<string, string>()
+    for (let index = 0; index < result.cliArgs.length; index += 1) {
+      if (result.cliArgs[index] !== '-c') continue
+      const override = result.cliArgs[index + 1]
+      const separator = override.indexOf('=')
+      overrides.set(override.slice(0, separator), override.slice(separator + 1))
+    }
+
+    expect(overrides.get('mcp_servers.adhdev-mesh.enabled')).toBe('false')
+    expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.command')!)).toBeTruthy()
+    expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.args')!)).toContain('--worker')
+    expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.env_vars')!)).toEqual(['ADHDEV_WORKER_SESSION_BIND'])
+    expect(overrides.get('mcp_servers.adhdev-worker.enabled')).toBe('true')
+    expect(JSON.parse(overrides.get('shell_environment_policy.exclude')!)).toEqual(['ADHDEV_WORKER_SESSION_BIND'])
+    expect(result.env.ADHDEV_WORKER_SESSION_BIND).toMatch(/^wsb_/)
+    expect(result.cliArgs.join(' ')).not.toContain(result.env.ADHDEV_WORKER_SESSION_BIND)
+    expect(result.workerIsolation?.configPath).toBeUndefined()
   })
 })

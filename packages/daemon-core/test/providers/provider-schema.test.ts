@@ -423,6 +423,16 @@ describe('validateProviderDefinition', () => {
         },
         delegatedWorkerIsolation: {
           env: { unset: ['ADHDEV_INLINE_MESH'] },
+          workerMcpDelivery: {
+            mode: 'config_override',
+            flag: '-c',
+            serverName: 'adhdev-worker',
+            commandTemplate: 'mcp_servers.{serverName}.command={command_json}',
+            argsTemplate: 'mcp_servers.{serverName}.args={args_json}',
+            envVarsTemplate: 'mcp_servers.{serverName}.env_vars={env_vars_json}',
+            enabledTemplate: 'mcp_servers.{serverName}.enabled=true',
+            shellEnvExcludeTemplate: 'shell_environment_policy.exclude={env_vars_json}',
+          },
           args: [
             {
               mode: 'config_override',

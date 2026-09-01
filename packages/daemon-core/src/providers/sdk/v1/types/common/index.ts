@@ -193,6 +193,18 @@ export interface MeshCoordinatorDelegatedWorkerIsolationDef {
     set?: Readonly<Record<string, string>>;
   };
   args?: ReadonlyArray<MeshCoordinatorDelegatedWorkerArgRuleDef>;
+  workerMcpDelivery?: MeshCoordinatorWorkerMcpDeliveryDef;
+}
+
+export interface MeshCoordinatorWorkerMcpDeliveryDef {
+  mode: 'config_override';
+  flag: string;
+  serverName: string;
+  commandTemplate: string;
+  argsTemplate: string;
+  envVarsTemplate: string;
+  enabledTemplate: string;
+  shellEnvExcludeTemplate?: string;
 }
 
 export type MeshCoordinatorDelegatedWorkerArgRuleDef =
