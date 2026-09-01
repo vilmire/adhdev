@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
 
@@ -39,6 +42,12 @@ const OTHER_CHECKBOX_PICKER_SCREEN = [
   '────────────────────────────────────────────────────────────────',
   '',
   'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+
+const BUSY_SCREEN = [
+  '✻ Working…',
+  '',
+  'esc to interrupt',
 ].join('\n');
 
 // During a picker transition claude can leave the AskUserQuestion frame in the
@@ -609,6 +618,131 @@ describe('SpecCliAdapter — setInteractivePromptResponse submit path', () => {
 
     // First toggle landed while the held question owned focus; the next toggle
     // was withheld as soon as the new lower picker became focused.
+    expect(writes).toEqual(['1']);
+    expect(adapter.activeInteractivePrompt).toBe(MULTI_PROMPT);
+  });
+
+  it('stops remaining keys and clears when the picker disappears after an early keystep and Claude advances to busy', async () => {
+    let screen = renderPromptQuestionScreen(MULTI_PROMPT);
+    const writes: string[] = [];
+    const adapter = makeAdapter(screen);
+    adapter.driver = {
+      snapshot: () => screen,
+      dispatch: (event: any) => {
+        if (event?.kind !== 'pty_write') return;
+        writes.push(event.data);
+        if (writes.length === 1) {
+          screen = BUSY_SCREEN;
+          adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' };
+        }
+      },
+    };
+    adapter.activeInteractivePrompt = MULTI_PROMPT;
+    adapter.interactivePromptTransport = 'tui';
+
+    await adapter.setInteractivePromptResponse({
+      promptId: MULTI_PROMPT.promptId,
+      answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
+    });
+
+    // Claude directly submitted after the first digit. The second digit, Tab,
+    // and review Enter must not leak into the busy screen or its next widget.
+    expect(writes).toEqual(['1']);
+    expect(adapter.activeInteractivePrompt).toBeNull();
+    expect(adapter.interactivePromptTransport).toBeNull();
+    expect(adapter.statusCallback).toHaveBeenCalled();
+  });
+
+  it('stops remaining keys and clears when a bound tool_result arrives after an early keystep', async () => {
+    const historyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-mid-answer-history-'));
+    const historyPath = path.join(historyDir, '11111111-1111-4111-8111-111111111111.jsonl');
+    let screen = renderPromptQuestionScreen(MULTI_PROMPT);
+    const writes: string[] = [];
+    try {
+      fs.writeFileSync(historyPath, `${JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'toolu_multi',
+            name: 'AskUserQuestion',
+            input: { questions: MULTI_PROMPT.questions },
+          }],
+        },
+      })}\n`);
+
+      const adapter = makeAdapter(screen);
+      adapter.workingDir = historyDir;
+      adapter.spawnedAtMs = 0;
+      adapter.spec.native_history = {
+        source: {
+          kind: 'jsonl',
+          path: historyPath,
+          session_id_from: 'filename_uuid',
+          message_filter: { where: "$.type == 'user' || $.type == 'assistant'" },
+          message_map: {
+            role: '$.message.role',
+            content: '$.message.content',
+            tools: {},
+          },
+        },
+      };
+      adapter.driver = {
+        snapshot: () => screen,
+        dispatch: (event: any) => {
+          if (event?.kind !== 'pty_write') return;
+          writes.push(event.data);
+          if (writes.length !== 1) return;
+          screen = BUSY_SCREEN;
+          fs.appendFileSync(historyPath, `${JSON.stringify({
+            type: 'user',
+            message: {
+              role: 'user',
+              content: [{ type: 'tool_result', tool_use_id: 'toolu_multi', content: 'submitted' }],
+            },
+          })}\n`);
+        },
+      };
+      adapter.activeInteractivePrompt = MULTI_PROMPT;
+      adapter.interactivePromptTransport = 'tui';
+
+      await adapter.setInteractivePromptResponse({
+        promptId: MULTI_PROMPT.promptId,
+        answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
+      });
+
+      expect(writes).toEqual(['1']);
+      expect(adapter.activeInteractivePrompt).toBeNull();
+      expect(adapter.interactivePromptTransport).toBeNull();
+    } finally {
+      fs.rmSync(historyDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still throws on a visible wrong picker even when Claude concurrently reports busy', async () => {
+    let screen = renderPromptQuestionScreen(MULTI_PROMPT);
+    const writes: string[] = [];
+    const adapter = makeAdapter(screen);
+    adapter.driver = {
+      snapshot: () => screen,
+      dispatch: (event: any) => {
+        if (event?.kind !== 'pty_write') return;
+        writes.push(event.data);
+        if (writes.length === 1) {
+          screen = OTHER_CHECKBOX_PICKER_SCREEN;
+          adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' };
+        }
+      },
+    };
+    adapter.activeInteractivePrompt = MULTI_PROMPT;
+    adapter.interactivePromptTransport = 'tui';
+
+    await expect(adapter.setInteractivePromptResponse({
+      promptId: MULTI_PROMPT.promptId,
+      answers: { q1: { selectedLabels: ['TypeScript', 'Rust'] } },
+    })).rejects.toThrow(/focused question is "Which model should Claude use\?"/);
+
     expect(writes).toEqual(['1']);
     expect(adapter.activeInteractivePrompt).toBe(MULTI_PROMPT);
   });

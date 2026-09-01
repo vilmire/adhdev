@@ -907,30 +907,36 @@ export class SpecCliAdapter implements CliAdapter {
             // A mismatch fails closed and deliberately leaves the held prompt
             // intact so a stale response cannot operate another picker.
             const allowsFreeform = prompt.questions.some(q => q.allowFreeform);
-            for (const question of prompt.questions) {
+            let completedWithoutReview = false;
+            questionLoop: for (const question of prompt.questions) {
                 const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
                     ...prompt,
                     questions: [question],
                 }, response).slice(0, -1); // final Enter belongs to the review page below
                 for (const step of questionSteps) {
-                    this.assertFocusedClaudeTuiQuestion(question);
+                    if (this.assertFocusedClaudeTuiQuestion(question, prompt) === 'completed') {
+                        completedWithoutReview = true;
+                        break questionLoop;
+                    }
                     this.driver.dispatch({ kind: 'pty_write', data: step });
                     await new Promise(resolve => setTimeout(resolve, 180));
                 }
             }
-            await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
-            // Claude Code >=2.1.220 completes AskUserQuestion immediately after
-            // the final choice. In that direct-submit path the settle poll
-            // clears the bound prompt and there is no review page to confirm.
-            // Never send a second Enter after that completion signal: focus now
-            // belongs to the provider's busy screen (or whatever it renders
-            // next), not to the question we answered.
-            if (!this.activeInteractivePrompt) return;
-            if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
-                throw new Error('Claude TUI active interactive prompt changed before review submission');
+            if (!completedWithoutReview) {
+                await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+                // Claude Code >=2.1.220 completes AskUserQuestion immediately after
+                // the final choice. In that direct-submit path the settle poll
+                // clears the bound prompt and there is no review page to confirm.
+                // Never send a second Enter after that completion signal: focus now
+                // belongs to the provider's busy screen (or whatever it renders
+                // next), not to the question we answered.
+                if (!this.activeInteractivePrompt) return;
+                if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
+                    throw new Error('Claude TUI active interactive prompt changed before review submission');
+                }
+                this.driver.dispatch({ kind: 'pty_write', data: '\r' });
+                await new Promise(resolve => setTimeout(resolve, 180));
             }
-            this.driver.dispatch({ kind: 'pty_write', data: '\r' });
-            await new Promise(resolve => setTimeout(resolve, 180));
         } else {
             this.driver.dispatch({ kind: 'pty_write', data: `${buildClaudeInteractiveToolResult(response)}\n` });
         }
@@ -1864,12 +1870,28 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
-    private assertFocusedClaudeTuiQuestion(expected: InteractivePrompt['questions'][number]): void {
+    private assertFocusedClaudeTuiQuestion(
+        expected: InteractivePrompt['questions'][number],
+        prompt: InteractivePrompt,
+    ): 'focused' | 'completed' {
         const screenText = this.readClaudeTuiSnapshotForAnswer();
         const focused = readFocusedClaudeTuiQuestion(screenText);
-        if (focused && this.claudeTuiQuestionMatches(expected, focused)) return;
-        const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
-        throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"${observed})`);
+        if (focused) {
+            if (this.claudeTuiQuestionMatches(expected, focused)) return 'focused';
+            throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"; focused question is "${focused.question}")`);
+        }
+
+        // A direct-submit Claude TUI can resolve the question after an early
+        // keystep (for example, the first digit of a previously multi-step
+        // answer). Once the picker is gone, corroborate completion before
+        // stopping the key loop so no remaining answer keys leak into the next
+        // widget. A visible foreign picker is handled above and always fails
+        // closed, even if the provider concurrently reports busy.
+        const resolvedByBoundToolResult = this.hasBoundClaudeAskUserQuestionToolResult(prompt);
+        const resolvedByBusyAdvance = this.latestState?.status === 'generating';
+        if (resolvedByBoundToolResult || resolvedByBusyAdvance) return 'completed';
+
+        throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}")`);
     }
 
     /**
