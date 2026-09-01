@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+Terms of Service & Data Use
+
+AI coding agents are known to have certain security risks, including autonomous
+code execution, data exfiltration, prompt injection and supply chain risks.
+Ensure that you monitor and verify all actions taken by the agent.
+
+--------------------------------------------------------------------------------
+
+  > [x] Yes, I agree to help improve Antigravity CLI by allowing
+      Google to collect and use my Interactions data,
+      subject to the Google Antigravity CLI Terms of Service
+      and Google Privacy Policy. I understand I can
+        choose to opt out later whenever I want via my
+        settings.
+
+        Links:
+        - Terms of Service: https://antigravity.google/terms
