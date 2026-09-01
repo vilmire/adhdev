@@ -47,6 +47,23 @@ const BUSY_SCREEN = [
     'esc to interrupt',
 ].join('\n')
 
+const BUSY_SCREEN_WITH_ANSWERED_QUESTION_IN_SCROLLBACK = [
+    '⏺ Which approach?',
+    '  ⎿ User answered: Option A',
+    '',
+    ...BUSY_SCREEN.split('\n'),
+].join('\n')
+
+const UNPARSED_ACTIVE_QUESTION_SCREEN = [
+    '←  ☐ Approach  ✔ Submit  →',
+    '',
+    'Which approach?',
+    '',
+    'Loading choices…',
+    '',
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n')
+
 const FOREIGN_QUESTION_SCREEN = QUESTION_SCREEN
     .replace('☐ Approach', '☐ Deployment')
     .replace('Which approach?', 'Which environment?')
@@ -159,6 +176,34 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
         expect(writes).toEqual(['1'])
         expect(adapter.activeInteractivePrompt).toBeNull()
         expect(adapter.interactivePromptTransport).toBeNull()
+    })
+
+    it('clears the prompt when the answered question remains only in transcript scrollback', () => {
+        const { adapter } = makeAdapter([BUSY_SCREEN_WITH_ANSWERED_QUESTION_IN_SCROLLBACK])
+        adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' }
+
+        const resolution = adapter.maybeClearResolvedClaudeTuiPrompt({
+            screenText: BUSY_SCREEN_WITH_ANSWERED_QUESTION_IN_SCROLLBACK,
+            resolveImmediatelyWhenBusy: true,
+        })
+
+        expect(resolution).toBe('cleared')
+        expect(adapter.activeInteractivePrompt).toBeNull()
+        expect(adapter.interactivePromptTransport).toBeNull()
+    })
+
+    it('keeps holding a real active picker whose question page is temporarily unparsed', () => {
+        const { adapter } = makeAdapter([UNPARSED_ACTIVE_QUESTION_SCREEN])
+        adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' }
+
+        const resolution = adapter.maybeClearResolvedClaudeTuiPrompt({
+            screenText: UNPARSED_ACTIVE_QUESTION_SCREEN,
+            resolveImmediatelyWhenBusy: true,
+        })
+
+        expect(resolution).toBe('held')
+        expect(adapter.activeInteractivePrompt).toBe(prompt)
+        expect(adapter.interactivePromptTransport).toBe('tui')
     })
 
     it('clears the prompt when a bound native tool_result arrives without a review page', async () => {
