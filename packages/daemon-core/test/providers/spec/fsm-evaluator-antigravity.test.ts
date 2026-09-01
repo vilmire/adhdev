@@ -7,9 +7,10 @@ import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-eval
 import { resolveSections, sectionText, extractButtonsFromRule, extractTitle } from '../../../src/providers/spec/evaluator.js';
 import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+
 function resolveSpecPath(): string {
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const repoRoot = path.resolve(here, '../../../../../..');
+    const repoRoot = path.resolve(TEST_DIR, '../../../../../..');
     const candidates = [
         path.join(repoRoot, 'adhdev-providers/cli/antigravity-cli/specs/4.0.json'),
         path.join(process.env.HOME ?? '', '.adhdev/providers/.upstream/cli/antigravity-cli/specs/4.0.json'),
@@ -28,6 +29,10 @@ function loadSpec(): CliSpecV4 {
 
 function clk(now: number, entered: number, regions: [number, number][] = []): FsmClock {
     return { now, stateEnteredAt: entered, regionLastChangedAt: new Map(regions) };
+}
+
+function readScreenFixture(name: string): string {
+    return fs.readFileSync(path.join(TEST_DIR, 'fixtures', name), 'utf8').replace(/\n$/, '');
 }
 
 // Antigravity uses from_bottom sections:
@@ -82,6 +87,13 @@ const signingInScreen = makeScreen(
     ['  Antigravity CLI', '  Signing in to your Google account...'],
     '  Please wait...'
 );
+
+// Normalized from the complete visible PTY screens observed on 2026-08-31.
+// These are deliberately full screens, not isolated regex snippets: condition
+// matching has no implicit multiline flag, and the section boundary is part of
+// the contract under test.
+const onboardingColorScreen = readScreenFixture('antigravity-onboarding-color-screen.txt');
+const onboardingTermsScreen = readScreenFixture('antigravity-onboarding-terms-screen.txt');
 
 // Approval: "Do you want to proceed?" in modal zone
 const approvalScreen = makeScreenWithModal(
@@ -244,6 +256,96 @@ describe('antigravity-cli v4 FSM', () => {
         const buttons = extractButtonsFromRule(rule, hay);
         expect(buttons.length).toBeGreaterThanOrEqual(2);
         expect(buttons[0].key).toBe('1\r');
+    });
+});
+
+describe('antigravity-cli v4 FSM — first-run onboarding recurrence guard', () => {
+    const spec = loadSpec();
+    const modalAnchor = spec.sections!.modal.anchor as string;
+    const approvalTransition = spec.transitions.find(transition => transition.label === '→approval')!;
+    const approvalCondition = approvalTransition.when as { section: string; matches: string; flags?: string };
+    const onboardingCases = [
+        { title: 'Choose your color scheme:', screen: onboardingColorScreen },
+        { title: 'Terms of Service & Data Use', screen: onboardingTermsScreen },
+    ];
+
+    it.each(onboardingCases)('matches the full observed $title screen through the modal section', ({ title, screen }) => {
+        // Whole-screen assertions are load-bearing. Testing only `title` would
+        // miss the historical ^/$-without-m failure mode.
+        expect(new RegExp(modalAnchor).test(screen)).toBe(true);
+        expect(new RegExp(approvalCondition.matches, approvalCondition.flags).test(screen)).toBe(true);
+
+        const sections = resolveSections(spec.sections ?? {}, screen.split('\n'));
+        const modal = sectionText(sections, 'modal', screen);
+        expect(modal.startsWith(title)).toBe(true);
+
+        for (const from of ['starting', 'signing_in', 'idle', 'busy']) {
+            const ev = evaluateFsm(spec, from, screen, undefined, undefined, clk(1000, 0));
+            expect(ev.fired?.label).toBe('→approval');
+            expect(ev.fired?.to).toBe('approval');
+        }
+    });
+
+    it('keeps onboarding matches unanchored because condition regexes have no multiline flag', () => {
+        expect(modalAnchor).not.toMatch(/\^|\$/);
+        expect(approvalCondition.matches).not.toMatch(/\^|\$/);
+        expect(approvalCondition.flags).toBeUndefined();
+    });
+
+    it('does not mistake the normal Welcome banner or the six existing rule screens for onboarding', () => {
+        const onboardingOnly = /Choose your color scheme:|Terms of Service & Data Use/i;
+        for (const screen of [idleScreen, signingInScreen, busyScreen, busyScreen2, approvalScreen, trustScreen, doneScreen]) {
+            expect(onboardingOnly.test(screen)).toBe(false);
+        }
+
+        // Six pre-existing detectors still drive their original transitions.
+        const existingRules = [
+            { from: 'starting', screen: idleScreen, now: 1000, to: 'idle' },
+            { from: 'starting', screen: signingInScreen, now: 1000, to: 'signing_in' },
+            { from: 'idle', screen: trustScreen, now: 1000, to: 'trust' },
+            { from: 'busy', screen: approvalScreen, now: 1000, to: 'approval' },
+            { from: 'idle', screen: busyScreen, now: 1000, to: 'busy' },
+            { from: 'idle', screen: busyScreen2, now: 1000, to: 'busy' },
+        ];
+        for (const rule of existingRules) {
+            const ev = evaluateFsm(spec, rule.from, rule.screen, undefined, undefined, clk(rule.now, 0));
+            expect(ev.fired?.to).toBe(rule.to);
+        }
+    });
+
+    it('promotes a stuck signing_in screen to approval at 60s, before the 180s consume watchdog', () => {
+        const futureConsentScreen = [
+            'Welcome to Antigravity CLI!',
+            '',
+            'Review the updated CLI setup before continuing.',
+            '',
+            '  > Continue',
+            '    Exit',
+        ].join('\n');
+        expect(evaluateFsm(spec, 'signing_in', futureConsentScreen, undefined, undefined, clk(59999, 0)).fired).toBeNull();
+        const ev = evaluateFsm(spec, 'signing_in', futureConsentScreen, undefined, undefined, clk(60000, 0));
+        expect(ev.fired?.label).toBe('signing_in→approval-timeout');
+        expect(ev.fired?.to).toBe('approval');
+    });
+
+    it('promotes a quiet stuck busy screen at 90s but preserves ready and active-turn paths', () => {
+        const futureConsentScreen = [
+            'Antigravity CLI setup changed.',
+            '',
+            'Review the new data controls to continue.',
+            '',
+            '  > Continue',
+            '    Exit',
+        ].join('\n');
+        expect(evaluateFsm(spec, 'busy', futureConsentScreen, undefined, undefined, clk(89999, 0)).fired).toBeNull();
+        const timedOut = evaluateFsm(spec, 'busy', futureConsentScreen, undefined, undefined, clk(90000, 0));
+        expect(timedOut.fired?.label).toBe('busy→approval-timeout');
+        expect(timedOut.fired?.to).toBe('approval');
+
+        const active = evaluateFsm(spec, 'busy', busyScreen, undefined, undefined, clk(61000, 0));
+        expect(active.fired).toBeNull();
+        const ready = evaluateFsm(spec, 'busy', doneScreen, undefined, undefined, clk(61000, 0));
+        expect(ready.fired?.to).toBe('idle');
     });
 });
 
