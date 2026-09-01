@@ -410,7 +410,11 @@ function validateMeshCoordinator(raw: unknown, errors: string[]): void {
   }
 
   validateMeshCoordinatorMcpConfig(meshCoordinator.mcpConfig, errors)
-  validateMeshCoordinatorDelegatedWorkerIsolation(meshCoordinator.delegatedWorkerIsolation, errors)
+  validateMeshCoordinatorDelegatedWorkerIsolation(
+    meshCoordinator.delegatedWorkerIsolation,
+    errors,
+    meshCoordinator.mcpConfig,
+  )
 }
 
 function validateMeshCoordinatorMcpConfig(mcpConfig: unknown, errors: string[]): void {
@@ -461,7 +465,11 @@ function validateMeshCoordinatorMcpConfig(mcpConfig: unknown, errors: string[]):
   }
 }
 
-function validateMeshCoordinatorDelegatedWorkerIsolation(raw: unknown, errors: string[]): void {
+function validateMeshCoordinatorDelegatedWorkerIsolation(
+  raw: unknown,
+  errors: string[],
+  rawMcpConfig?: unknown,
+): void {
   if (raw === undefined) return
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     errors.push('meshCoordinator.delegatedWorkerIsolation must be an object')
@@ -500,33 +508,66 @@ function validateMeshCoordinatorDelegatedWorkerIsolation(raw: unknown, errors: s
     }
   }
   const args = isolation.args
-  if (args === undefined) return
-  if (!Array.isArray(args)) {
-    errors.push('meshCoordinator.delegatedWorkerIsolation.args must be an array')
-    return
-  }
-  for (const [index, rule] of args.entries()) {
-    const prefix = `meshCoordinator.delegatedWorkerIsolation.args[${index}]`
-    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
-      errors.push(`${prefix} must be an object`)
-      continue
-    }
-    const item = rule as Record<string, unknown>
-    const mode = item.mode
-    if (mode !== 'empty_mcp_config' && mode !== 'config_override') {
-      errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override`)
-      continue
-    }
-    for (const key of mode === 'empty_mcp_config' ? ['flag'] : ['flag', 'key', 'value']) {
-      const value = item[key]
-      if (typeof value !== 'string' || !value.trim()) {
-        errors.push(`${prefix}.${key} must be a non-empty string`)
+  if (args !== undefined) {
+    if (!Array.isArray(args)) {
+      errors.push('meshCoordinator.delegatedWorkerIsolation.args must be an array')
+    } else {
+      for (const [index, rule] of args.entries()) {
+        const prefix = `meshCoordinator.delegatedWorkerIsolation.args[${index}]`
+        if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+          errors.push(`${prefix} must be an object`)
+          continue
+        }
+        const item = rule as Record<string, unknown>
+        const mode = item.mode
+        if (mode !== 'empty_mcp_config' && mode !== 'config_override') {
+          errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override`)
+          continue
+        }
+        for (const key of mode === 'empty_mcp_config' ? ['flag'] : ['flag', 'key', 'value']) {
+          const value = item[key]
+          if (typeof value !== 'string' || !value.trim()) {
+            errors.push(`${prefix}.${key} must be a non-empty string`)
+          }
+        }
+        for (const key of ['strictFlag', 'dedupeKey']) {
+          const value = item[key]
+          if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
+            errors.push(`${prefix}.${key} must be a non-empty string when provided`)
+          }
+        }
       }
     }
-    for (const key of ['strictFlag', 'dedupeKey']) {
-      const value = item[key]
-      if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
-        errors.push(`${prefix}.${key} must be a non-empty string when provided`)
+  }
+
+  const delivery = isolation.workerMcpDelivery
+  if (delivery !== undefined) {
+    const prefix = 'meshCoordinator.delegatedWorkerIsolation.workerMcpDelivery'
+    if (!delivery || typeof delivery !== 'object' || Array.isArray(delivery)) {
+      errors.push(`${prefix} must be an object`)
+    } else {
+      const item = delivery as Record<string, unknown>
+      if (item.mode !== 'config_override') {
+        errors.push(`${prefix}.mode must be config_override`)
+      }
+      for (const key of ['flag', 'serverName', 'commandTemplate', 'argsTemplate', 'envVarsTemplate', 'enabledTemplate']) {
+        const value = item[key]
+        if (typeof value !== 'string' || !value.trim()) {
+          errors.push(`${prefix}.${key} must be a non-empty string`)
+        }
+      }
+      const coordinatorServerName = rawMcpConfig && typeof rawMcpConfig === 'object' && !Array.isArray(rawMcpConfig)
+        ? (rawMcpConfig as Record<string, unknown>).serverName
+        : undefined
+      if (typeof item.serverName === 'string' && item.serverName.trim()
+        && typeof coordinatorServerName === 'string'
+        && item.serverName.trim() === coordinatorServerName.trim()) {
+        errors.push(`${prefix}.serverName must differ from meshCoordinator.mcpConfig.serverName`)
+      }
+      const shellEnvExcludeTemplate = item.shellEnvExcludeTemplate
+      if (shellEnvExcludeTemplate !== undefined
+        && (typeof shellEnvExcludeTemplate !== 'string' || !shellEnvExcludeTemplate.trim())) {
+        errors.push(`${prefix}.shellEnvExcludeTemplate must be a non-empty string when provided`)
       }
     }
   }

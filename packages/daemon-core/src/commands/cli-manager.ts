@@ -23,7 +23,7 @@ import { shortHash } from '../system/hash.js';
 import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
 import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
-import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
+import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, type WorkerMcpConfigOverrideDelivery, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
 import { resolveWorkerMcpServerLaunch } from './mesh-coordinator.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
@@ -349,7 +349,8 @@ export interface CoordinatorDelegatedCliLaunchOptionsInput {
     isolation?: MeshCoordinatorDelegatedWorkerIsolation;
     /**
      * WORKER-MCP: the provider's declared `meshCoordinator.mcpConfig`, used to
-     * write a worker-scoped config to the path the provider already names.
+     * write a worker-scoped config for auto-import providers. Manual providers
+     * may instead declare `isolation.workerMcpDelivery`.
      * Absent (or gate off) ⇒ prior behavior, unchanged.
      */
     mcpConfig?: {
@@ -436,6 +437,47 @@ function ensureEmptyDelegatedMcpConfig(workspace: string): string {
     return filePath;
 }
 
+function renderWorkerMcpConfigOverrideTemplate(
+    template: string,
+    delivery: WorkerMcpConfigOverrideDelivery,
+): string {
+    const replacements: Record<string, string> = {
+        serverName: delivery.serverName,
+        command_json: JSON.stringify(delivery.command),
+        args_json: JSON.stringify(delivery.args),
+        env_vars_json: JSON.stringify(delivery.envVars),
+    };
+    let rendered = template;
+    for (const [name, value] of Object.entries(replacements)) {
+        rendered = rendered.split(`{{${name}}}`).join(value);
+        rendered = rendered.split(`{${name}}`).join(value);
+    }
+    return rendered;
+}
+
+function renderWorkerMcpDeliveryArgs(
+    cliArgs: string[],
+    delivery: WorkerMcpConfigOverrideDelivery,
+): string[] {
+    const templates = [
+        delivery.commandTemplate,
+        delivery.argsTemplate,
+        delivery.envVarsTemplate,
+        delivery.enabledTemplate,
+        delivery.shellEnvExcludeTemplate,
+    ];
+    const renderedArgs: string[] = [];
+    for (const template of templates) {
+        if (!template) continue;
+        const override = renderWorkerMcpConfigOverrideTemplate(template, delivery);
+        const separator = override.indexOf('=');
+        const key = separator > 0 ? override.slice(0, separator).trim() : '';
+        if (!key || hasConfigOverride([...renderedArgs, ...cliArgs], key)) continue;
+        renderedArgs.push(delivery.flag, override);
+    }
+    return renderedArgs;
+}
+
 export function buildCoordinatorDelegatedCliLaunchOptions(
     input: CoordinatorDelegatedCliLaunchOptionsInput,
 ): CoordinatorDelegatedCliLaunchOptions {
@@ -455,6 +497,7 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         workspace: input.workspace,
         sessionKey: input.sessionKey || input.workspace,
         mcpConfig: input.mcpConfig,
+        workerMcpDelivery: input.isolation?.workerMcpDelivery,
         // Phase B: with a mesh+session to bind, the worker gets a MINIMAL MCP
         // server (`--mode worker`) plus the bind it exchanges for its task
         // token. Without one, Phase A's shape stands — a config with no servers
@@ -503,6 +546,17 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
     }
 
     for (const key of envUnsets) env[key] = '';
+
+    // config_override delivery is intentionally rendered at the launch seam:
+    // the bind VALUE goes only into the Codex process environment, while argv
+    // carries the non-secret variable name for Codex to forward to its MCP
+    // child. shellEnvExcludeTemplate can simultaneously scrub it from shell
+    // tool children without blocking the explicit MCP forwarding path.
+    if (workerIsolation?.delivery && workerIsolation.bind) {
+        env[workerIsolation.delivery.bindEnvVar] = workerIsolation.bind;
+        const deliveryArgs = renderWorkerMcpDeliveryArgs(cliArgs, workerIsolation.delivery);
+        cliArgs.unshift(...deliveryArgs);
+    }
 
     for (const rule of input.isolation?.args || []) {
         if (!rule || typeof rule !== 'object') continue;

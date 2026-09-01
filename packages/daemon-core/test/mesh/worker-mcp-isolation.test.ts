@@ -530,19 +530,36 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
     expect(result!.notes.join(' ')).toMatch(/home-rooted/)
   })
 
-  it('skips codex (manual mode declares no config path) without erroring', () => {
-    // codex's mcpConfig is `mode: manual` with a `template`, no `path` — the
-    // daemon registers its server via `codex mcp add`, not by writing a file.
-    // It already carries real arg-level isolation (config_override disabling
-    // the mesh server), so having nothing to write here is expected, not a gap.
+  it('delivers worker MCP to codex without requiring a config path', () => {
     const result = resolveWorkerMcpIsolation({
       providerType: 'codex-cli',
       workspace: tmp('adhdev-ws-on-codex-'),
       sessionKey: 'task_1',
       mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh' },
+      workerMcpDelivery: {
+        mode: 'config_override',
+        flag: '-c',
+        serverName: 'adhdev-worker',
+        commandTemplate: 'mcp_servers.{serverName}.command={command_json}',
+        argsTemplate: 'mcp_servers.{serverName}.args={args_json}',
+        envVarsTemplate: 'mcp_servers.{serverName}.env_vars={env_vars_json}',
+        enabledTemplate: 'mcp_servers.{serverName}.enabled=true',
+      },
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+      bindContext: { meshId: 'mesh_codex', sessionId: 'sess_codex', spawnedForTaskId: 'task_1' },
     }, ON)
     expect(result!.configPath).toBeUndefined()
-    expect(result!.notes.join(' ')).toMatch(/no mcpConfig\.path declared/)
+    expect(result!.bind).toMatch(/^wsb_/)
+    expect(result!.delivery).toMatchObject({
+      mode: 'config_override',
+      flag: '-c',
+      serverName: 'adhdev-worker',
+      command: 'adhdev',
+      args: ['mcp', '--mode', 'ipc', '--worker'],
+      envVars: ['ADHDEV_WORKER_SESSION_BIND'],
+      bindEnvVar: 'ADHDEV_WORKER_SESSION_BIND',
+    })
+    expect(result!.notes.join(' ')).toMatch(/config_override delivery prepared for adhdev-worker/)
   })
 
   it('skips a declared path whose format is not auto-import writable', () => {
@@ -564,7 +581,7 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
     expect(result!.notes.join(' ')).toMatch(/no mcpConfig.path declared/)
   })
 
-  it('★covers the four repo-local auto-import providers — counted', () => {
+  it('★covers the five repo-local auto-import providers — counted', () => {
     // Gate-authoring checklist ②: count the scanned surface, do not assume it.
     const repoLocal = [
       { providerType: 'claude-cli', path: '.mcp.json', format: 'claude_mcp_json' },
