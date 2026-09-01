@@ -485,6 +485,25 @@ export function isClaudeTuiReviewScreen(screenText: string): boolean {
   return /(?:^|\n)\s*(?:Review your answers|Ready to submit your answers\?)\s*(?:\r?\n|$)/.test(screenText);
 }
 
+/**
+ * Return the bottommost footer-delimited Claude picker region. Terminal
+ * snapshots can retain earlier question text in transcript scrollback; only
+ * this region can still own picker input.
+ */
+export function readFocusedClaudeTuiPickerRegion(screenText: string): string | null {
+  if (!screenText.includes('Enter to select')) return null;
+  const lines = screenText.split(/\r?\n/);
+  let lastFooterIndex = -1;
+  let previousFooterIndex = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].includes('Enter to select')) continue;
+    previousFooterIndex = lastFooterIndex;
+    lastFooterIndex = index;
+  }
+  if (lastFooterIndex < 0) return null;
+  return lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join('\n');
+}
+
 function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {  const lines = page.screenText.split(/\r?\n/);
   let navIndex = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -578,23 +597,14 @@ function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index
 export function readFocusedClaudeTuiQuestion(
   screenText: string,
 ): { question: string; header?: string; multiSelect: boolean } | null {
-  if (!screenText.includes('Enter to select')) return null;
   // A terminal snapshot can contain an older AskUserQuestion picker above the
   // picker that currently owns focus. In particular, the older picker may have
   // a `✔ Submit` nav line while the lower generic picker is headerless; parsing
   // the whole screen would then select the stale upper nav even though the
   // LAST shared footer belongs to the lower widget. Restrict the read to the
   // final footer-delimited picker region so "focused" really means bottommost.
-  const lines = screenText.split(/\r?\n/);
-  let lastFooterIndex = -1;
-  let previousFooterIndex = -1;
-  for (let index = 0; index < lines.length; index += 1) {
-    if (!lines[index].includes('Enter to select')) continue;
-    previousFooterIndex = lastFooterIndex;
-    lastFooterIndex = index;
-  }
-  if (lastFooterIndex < 0) return null;
-  const focusedScreenText = lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join('\n');
+  const focusedScreenText = readFocusedClaudeTuiPickerRegion(screenText);
+  if (focusedScreenText === null) return null;
   const parsed = parseClaudeInteractiveTuiQuestion({ screenText: focusedScreenText }, 0);
   if (!parsed) return null;
   return {

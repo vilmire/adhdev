@@ -50,6 +50,7 @@ import {
     detectClaudeAskUserQuestionPromptFromTuiPages,
     detectClaudeTuiMultiSelect,
     isClaudeTuiReviewScreen,
+    readFocusedClaudeTuiPickerRegion,
     readFocusedClaudeTuiQuestion,
     stableClaudeTuiPromptId,
     type ClaudeInteractiveTuiPage,
@@ -1861,8 +1862,10 @@ export class SpecCliAdapter implements CliAdapter {
         screenText: string,
     ): boolean {
         const expectedQuestion = this.normalizeClaudeTuiIdentity(expected.question);
+        const focusedPickerRegion = readFocusedClaudeTuiPickerRegion(screenText);
         return !!expectedQuestion
-            && this.normalizeClaudeTuiIdentity(screenText).includes(expectedQuestion);
+            && focusedPickerRegion !== null
+            && this.normalizeClaudeTuiIdentity(focusedPickerRegion).includes(expectedQuestion);
     }
 
     private readClaudeTuiSnapshotForAnswer(): string {
