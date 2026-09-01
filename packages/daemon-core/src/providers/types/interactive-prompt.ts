@@ -393,7 +393,7 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
   // allowFreeform.
   if (!isClaudeTuiSelectFooter(page.screenText)) return null;
 
-  const lines = page.screenText.split(/\r?\n/);
+  const lines = page.screenText.split(/\r?\n/).map((line) => line.replace(/\s+[│┃].*$/, ''));
   let footerIndex = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     if (/Enter to select/i.test(lines[i])) {
@@ -504,7 +504,9 @@ export function readFocusedClaudeTuiPickerRegion(screenText: string): string | n
   return lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join('\n');
 }
 
-function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {  const lines = page.screenText.split(/\r?\n/);
+// Exported for testing
+export function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
+  const lines = page.screenText.split(/\r?\n/).map((line) => line.replace(/\s+[│┃].*$/, ''));
   let navIndex = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     if (lines[i].includes('✔ Submit') && /[☐☒]/.test(lines[i])) {
