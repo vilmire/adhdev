@@ -83,6 +83,9 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
+// §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
+// fixed `replica → live P2P read_chat → cached summary` order.
+import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
 import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 // QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
 // queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
@@ -1132,6 +1135,25 @@ export async function meshReadChat(
         ? args.provider_session_id.trim()
         : cached?.providerSessionId;
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
+
+    // ── §8 unit 6: replica hop (design §4 roster id 3) ──────────────────────
+    // Fixed fallback order `replica → live P2P read_chat → cached summary`.
+    // REMOTE nodes only: a local node's read_chat is an in-process call against
+    // the provider source, which the roster keeps as-is. `readTranscriptReplica
+    // ForDisplay` never throws and returns null for every non-answer, so the
+    // two hops below are reached unchanged.
+    let replicaFallbackReason: string | null = null;
+    if (!isLocalNode && ctx.transport instanceof IpcTransport && node.daemonId) {
+        const replica = await readTranscriptReplicaForDisplay(ctx.transport, {
+            ownerDaemonId: node.daemonId,
+            rawSessionId: args.session_id,
+        });
+        if (replica.payload) {
+            return renderMeshReadChatPayload(replica.payload, args);
+        }
+        replicaFallbackReason = replica.fallbackReason;
+    }
+
     let result: any;
     try {
         result = await commandForNode(ctx, node, 'read_chat', {
@@ -1152,11 +1174,38 @@ export async function meshReadChat(
         if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
         return buildMeshReadChatCacheFallback(ctx, args, node, e);
     }
-    const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result) as Record<string, any>, {
+    return renderMeshReadChatPayload(unwrapCommandPayload(result) as Record<string, any>, args, {
+        fallbackReason: replicaFallbackReason,
+    });
+}
+
+/**
+ * The compact/full renderer, shared by BOTH mesh_read_chat sources (live
+ * `read_chat` and the §8 unit 6 replica). Extracted rather than duplicated
+ * precisely because the design's acceptance item is "compact/full parity":
+ * with one renderer, a replica-sourced payload cannot drift from a live one in
+ * how it is compacted, advisory-annotated or serialized — only in the payload
+ * FIELDS, which `mapTranscriptSnapshotToReadChatPayload`'s allow-list governs
+ * and the adapter tests pin.
+ */
+function renderMeshReadChatPayload(
+    source: Record<string, any>,
+    args: { node_id: string; session_id: string; tail?: number; compact?: boolean },
+    opts: { fallbackReason?: string | null } = {},
+): string {
+    const payload = annotateRapidReadChatAdvisory(source, {
         key: `mesh:${args.node_id}:${args.session_id}`,
         toolName: 'mesh_read_chat',
         completionCallbackExpected: true,
     });
+    // Single-source-of-truth telemetry (design §5.6): why this read did NOT
+    // come from the replica. Only stamped when the replica hop actually ran
+    // and declined — absent on a local node (never attempted) and on a
+    // replica-sourced payload (which carries `transcriptReadSource: 'replica'`
+    // from the adapter instead).
+    const sourceTelemetry = opts.fallbackReason
+        ? { transcriptReadSource: 'legacy_read_chat', transcriptFallbackReason: opts.fallbackReason }
+        : {};
     // Default compact=true to keep coordinator context lean.
     // Pass compact=false explicitly only when full transcript detail is needed for debugging.
     const useCompact = args.compact !== false;
@@ -1171,12 +1220,20 @@ export async function meshReadChat(
             preserveTurn: true,
         });
         return JSON.stringify(
-            payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
+            {
+                ...compactPayload,
+                ...(payload.transcriptReadSource ? { transcriptReadSource: payload.transcriptReadSource } : {}),
+                ...(payload.transcriptReadSource === 'replica'
+                    ? { omittedBefore: payload.omittedBefore === true, stale: payload.stale === true }
+                    : {}),
+                ...sourceTelemetry,
+                ...(payload.pollingAdvisory ? { pollingAdvisory: payload.pollingAdvisory } : {}),
+            },
             null,
             2,
         );
     }
-    return JSON.stringify(payload, null, 2);
+    return JSON.stringify({ ...payload, ...sourceTelemetry }, null, 2);
 }
 
 export async function meshReadDebug(

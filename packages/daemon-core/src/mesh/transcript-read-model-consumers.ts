@@ -22,9 +22,14 @@
  * consumes `TranscriptConsumerId`/`TranscriptConsumerFallbackReason` from
  * here (type-only — this file has zero runtime dependencies, so it is safe to
  * expose to a browser bundle via the `./mesh/transcript-read-model-consumers`
- * package export). Ids 3-8 are declared for completeness (the full roster
- * table, §4) but their readiness/routing wiring is out of this unit's scope —
- * a caller asking about them today gets `consumer_not_enabled`.
+ * package export).
+ *
+ * ── §8 unit 6 scope ─────────────────────────────────────────────────────────
+ * Roster id 3 (`mesh_read_chat_display`) is now enabled: `meshReadChat`
+ * attempts a coordinator-daemon IPC replica read before its existing live P2P
+ * `read_chat`, via `mesh/transcript-read-chat-adapter.ts`. Ids 4-8 remain
+ * declared for completeness (the full roster table, §4) but unwired — a caller
+ * asking about them today gets `consumer_not_enabled`.
  */
 
 /** The complete roster, in the design's consumer integration order (§4). */
@@ -87,8 +92,8 @@ export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, T
     },
     mesh_read_chat_display: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-session.ts (meshReadChat)',
-        note: 'Remote transcript display/compact via coordinator daemon IPC replica read — out of this unit\'s scope.',
-        enabled: false,
+        note: 'Remote transcript display/compact via coordinator daemon IPC replica read; mapTranscriptSnapshotToReadChatPayload keeps compact/full on one shape, so both branches are at parity with the live read.',
+        enabled: true,
     },
     daemon_worker_status_probe: {
         currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)',
