@@ -262,3 +262,81 @@ export function deriveBlueprintEdgeState(
     if (TERMINAL_STATES.has(sourceState)) return 'failed'
     return TERMINAL_STATES.has(targetState) ? 'idle' : 'waiting'
 }
+
+/* ── B-plan collapse (owner call 2026-09-02) ───────────────────────────────
+ * The blueprint used to run THREE placement systems side by side: a hand-built
+ * time lane for detached graph clusters, ELK for the fused chains, and a
+ * hand-built stack for loose tasks — joined by arithmetic (`shift = laneMaxX +
+ * gap`), not by meaning. Reading the canvas as one picture failed because the
+ * Y axis meant time on the left and crossing-minimization in the middle.
+ *
+ * B-plan collapses that to ONE axis: dependency depth, laid out by ELK for
+ * everything. A settled graph no longer gets its own zone — it renders as a
+ * single collapsed chip in the same flow, expandable on click. Time moves onto
+ * the cards (formatTaskCardTime), except for ROOT tasks, whose relative order
+ * ELK does not otherwise constrain — those stay newest-first so the entry
+ * points into the graph still read chronologically. */
+
+/** A graph that has settled: nothing in it will advance again on its own. */
+export function isSettledGraph(graph: Pick<MeshGraphView, 'status' | 'terminalAt'>): boolean {
+    if (graph.terminalAt) return true
+    return graph.status === 'completed' || graph.status === 'failed' || graph.status === 'cancelled'
+}
+
+/**
+ * Which graphs render collapsed: every settled graph the viewer has not
+ * explicitly expanded. An in-flight graph is never collapsed — the blueprint
+ * exists to show live work, and hiding it behind a click would defeat the tab.
+ */
+export function resolveCollapsedGraphIds(
+    graphs: ReadonlyArray<Pick<MeshGraphView, 'graphId' | 'status' | 'terminalAt'>>,
+    expanded: ReadonlySet<string>,
+): Set<string> {
+    const collapsed = new Set<string>()
+    for (const graph of graphs) {
+        if (!isSettledGraph(graph)) continue
+        if (expanded.has(graph.graphId)) continue
+        collapsed.add(graph.graphId)
+    }
+    return collapsed
+}
+
+/** Counts summarised on a collapsed graph's chip. */
+export interface CollapsedGraphSummary {
+    graphId: string
+    batchId?: string
+    status: string
+    nodeCount: number
+    gateCount: number
+    /** Settled-at (or created-at) epoch ms, so the chip can carry a time too. */
+    timestamp: number
+}
+
+export function summarizeCollapsedGraph(graph: MeshGraphView): CollapsedGraphSummary {
+    return {
+        graphId: graph.graphId,
+        ...(graph.batchId ? { batchId: graph.batchId } : {}),
+        status: graph.status,
+        nodeCount: graph.nodes.length,
+        gateCount: graph.gates.length,
+        timestamp: blueprintGraphTimelineTime(graph),
+    }
+}
+
+/**
+ * Root-first ordering for the ELK input array. ELK's `considerModelOrder`
+ * strategy is NODES_AND_EDGES, so the order nodes are handed in decides their
+ * relative placement within a layer — which is exactly the knob the owner call
+ * needs: roots (no incoming dependency) newest-first, everything else left to
+ * ELK's crossing minimization. No coordinate math, no second placement system.
+ */
+export function orderTasksForElk<T extends { id: string; dependsOn: string[] }>(
+    nodes: ReadonlyArray<T>,
+    timeKey: (node: T) => string,
+): T[] {
+    const present = new Set(nodes.map(node => node.id))
+    const isRoot = (node: T) => node.dependsOn.filter(id => present.has(id)).length === 0
+    const roots = nodes.filter(isRoot).sort((a, b) => timeKey(b).localeCompare(timeKey(a)))
+    const rest = nodes.filter(node => !isRoot(node))
+    return [...roots, ...rest]
+}

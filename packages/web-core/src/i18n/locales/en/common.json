@@ -741,6 +741,35 @@
             "clean": "Clean and even with upstream"
         },
         "taskDag": {
+                "plan": {
+                    "depsFailed_one": "{{count}} upstream failed",
+                    "depsFailed_other": "{{count}} upstream failed"
+                },
+                "gate": {
+                    "holding_one": "holding {{count}} step",
+                    "holding_other": "holding {{count}} steps",
+                    "converged": "commits on main",
+                    "notConverged_one": "{{count}} commits not on main",
+                    "notConverged_other": "{{count}} commits not on main",
+                    "deadline": "due {{time}} \u00b7 then {{onTimeout}}",
+                    "needsYou": "Needs you"
+                },
+                "edge": {
+                    "conditional": "if condition"
+                },
+                "time": {
+                    "now": "just now",
+                    "minutes_one": "{{count}}m ago",
+                    "minutes_other": "{{count}}m ago",
+                    "hours_one": "{{count}}h ago",
+                    "hours_other": "{{count}}h ago",
+                    "days_one": "{{count}}d ago",
+                    "days_other": "{{count}}d ago"
+                },
+                "collapsed": {
+                    "expand": "Click to expand this finished graph",
+                    "counts": "{{nodes}} steps \u00b7 {{gates}} gates"
+                },
             "empty": "No queue tasks yet — enqueue mesh tasks to see the dependency graph.",
             "waitsOn_one": "waits on {{count}}",
             "waitsOn_other": "waits on {{count}}",

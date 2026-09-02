@@ -741,6 +741,35 @@
             "clean": "Limpio y al día con upstream"
         },
         "taskDag": {
+                "plan": {
+                    "depsFailed_one": "{{count}} anterior(es) fallaron",
+                    "depsFailed_other": "{{count}} anteriores fallaron"
+                },
+                "gate": {
+                    "holding_one": "reteniendo {{count}} paso",
+                    "holding_other": "reteniendo {{count}} pasos",
+                    "converged": "commits en main",
+                    "notConverged_one": "{{count}} commits fuera de main",
+                    "notConverged_other": "{{count}} commits fuera de main",
+                    "deadline": "hasta {{time}} \u00b7 luego {{onTimeout}}",
+                    "needsYou": "Requiere acci\u00f3n"
+                },
+                "edge": {
+                    "conditional": "condicional"
+                },
+                "time": {
+                    "now": "ahora mismo",
+                    "minutes_one": "hace {{count}} min",
+                    "minutes_other": "hace {{count}} min",
+                    "hours_one": "hace {{count}} h",
+                    "hours_other": "hace {{count}} h",
+                    "days_one": "hace {{count}} d",
+                    "days_other": "hace {{count}} d"
+                },
+                "collapsed": {
+                    "expand": "Haz clic para expandir este grafo finalizado",
+                    "counts": "{{nodes}} pasos \u00b7 {{gates}} puertas"
+                },
             "empty": "Aún no hay tareas en cola — encola tareas del mesh para ver el grafo de dependencias.",
             "waitsOn_one": "espera {{count}}",
             "waitsOn_other": "espera {{count}}",
