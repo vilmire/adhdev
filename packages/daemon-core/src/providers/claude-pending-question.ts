@@ -25,13 +25,43 @@
  *                  options: [ { label, description, preview } ] } ] } } ] } }
  *
  * Labels, descriptions, previews and emoji arrive verbatim — no wrapping, no
- * truncation, no glyph damage. Verified against live plain-TUI captures (no
- * `--ax-screen-reader`, no spawn-arg change): the tool_use line is written when
- * the question is ASKED, minutes before the answer lands, so it is readable
- * while the picker is still parked on screen.
+ * truncation, no glyph damage.
  *
- *   USE 11:21:55 → RES 11:26:39   (4m44s apart)
- *   USE 12:50:19 → RES 12:53:51   (3m32s)
+ * ★MEASURED (2026-09-02), CORRECTING AN EARLIER MISREAD: the `tool_use` block
+ * is NOT written while the picker is parked on screen. It is appended to disk
+ * together with its `tool_result` as a single pair, at the moment the picker
+ * closes (Submit) — never before. Live instrumentation across a full
+ * ask→answer cycle showed the on-disk line/tool_use count staying flat
+ * (lines=11, toolu=0) through parking, a first answered question in a
+ * multi-question call, and the review/Submit screen, then jumping straight to
+ * both the tool_use AND tool_result together (lines=17, toolu=2) the instant
+ * Submit was pressed. A retrospective sweep of 363 transcripts (420
+ * AskUserQuestion calls) found zero unresolved `tool_use` records anywhere —
+ * impossible if the ask were what triggered the write, since any session
+ * interrupted between ask and answer would have left one behind.
+ *
+ * The earlier version of this comment cited a multi-minute gap between the
+ * `tool_use` and `tool_result` *timestamp* fields as proof the tool_use line
+ * was written first. That reasoning doesn't hold: `timestamp` is filled in
+ * from the moment the tool was ASKED, but the line itself is written
+ * retroactively when the pair is flushed — confirmed by comparing a record's
+ * `timestamp` field against the wall-clock instant its bytes actually landed
+ * on disk (02:22:50 recorded vs. 02:24:34 physically written, in lockstep with
+ * the next line). A gap between two timestamp FIELDS says nothing about which
+ * line was WRITTEN first; both can be written at once with old timestamps.
+ *
+ * CONSEQUENCE: this detector cannot see a picker while it is still open —
+ * that data isn't on disk yet — so in practice `detectClaudePendingQuestion`
+ * effectively always returns null and the caller's screen-scrape fallback is
+ * what actually serves every live AskUserQuestion prompt today. This module
+ * is kept anyway, deliberately not deleted: it still fires correctly for the
+ * narrow window between Submit-write and the caller's next scrape/resolve
+ * pass, it gives verbatim (non-wrapped) label/description/preview text in
+ * that window, and if a future claude-cli version starts flushing tool_use
+ * eagerly (ahead of tool_result) this path starts working for the pending
+ * case with no code change — ripping it out now would mean re-deriving all of
+ * the below from scratch later. See DETECTION below for the exact pairing
+ * rule this implies.
  *
  * DETECTION (identical shape to kimi-pending-question, which solved the same
  * problem against kimi's wire.jsonl — this module reuses its bounded-tail read,
@@ -52,10 +82,14 @@
  * hasBoundClaudeAskUserQuestionToolResult() binds a TUI-captured prompt to its
  * native call by question/option identity before falling back to id equality.
  *
- * This detector is a PREFERRED source, never an exclusive one. The caller keeps
- * the screen-scrape path as fallback (see maybeCaptureClaudeTuiPrompt): the
- * JSONL write can lag the repaint, a transcript may be unresolvable for a
- * sidecar-claimed session, and non-claude providers have no such file at all.
+ * This detector is a PREFERRED source, never an exclusive one — and per the
+ * ★MEASURED note above, it is currently the MINORITY source in practice: the
+ * caller's screen-scrape path (see maybeCaptureClaudeTuiPrompt) is what
+ * resolves nearly every live pending picker, because this module's own write
+ * lags the repaint by the full ask→answer duration, not merely a few frames.
+ * The fallback also still earns its keep independently of that gap: a
+ * transcript may be unresolvable for a sidecar-claimed session, and
+ * non-claude providers have no such file at all.
  *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
