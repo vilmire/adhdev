@@ -80898,7 +80898,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} \u2192 spawned provider '${resolved.providerType}'${sessionId ? ` (${sessionId})` : ""}`);
     }
     function recordAutoLaunchEvent(meshId, args) {
-      const dedupKey = `${meshId}:${args.taskId}`;
+      const dedupKey = `${meshId}:${args.taskId}:${args.nodeId || ""}`;
       const currentSig = `${args.phase}|${args.reason || ""}`;
       if (args.phase === "skipped" && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
         return;
@@ -81454,7 +81454,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       return summaryModel || void 0;
     }
     function isDifficultyFloorWaitReason(reason) {
-      return typeof reason === "string" && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX) || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON));
+      return typeof reason === "string" && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX) || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON) || BOUNDED_WAIT_SKIP_REASONS.some((prefix) => reason.startsWith(prefix)));
     }
     function handleDifficultyFloorSkip(args) {
       let previousTask;
@@ -81477,16 +81477,19 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (waitedMs < DIFFICULTY_FLOOR_REPORT_AFTER_MS || difficultyFloorTimeoutReported.has(reportKey)) return;
       const task = previousTask ?? getQueue3(args.meshId).find((candidate) => candidate.id === args.taskId);
       const difficulty = task?.difficulty || args.reason.split(":")[1] || "classified";
-      const coordinatorMessage = `[System] Queued task ${args.taskId} has waited ${Math.round(waitedMs / 6e4)} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
+      const waitedMinutes = Math.round(waitedMs / 6e4);
+      const capacityStall = BOUNDED_WAIT_SKIP_REASONS.some((prefix) => args.reason.startsWith(prefix));
+      const coordinatorMessage = capacityStall ? `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because every capable slot has stayed at capacity (${args.reason}). It remains pending and will still be claimed automatically the moment a slot frees. Check whether the occupying sessions are genuinely working or stuck; consider re-targeting the task to another node rather than widening a mesh-wide cap.` : `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
       const queued = queuePendingMeshCoordinatorEvent({
         event: "mesh:dispatch_blocked",
         meshId: args.meshId,
         nodeLabel: args.nodeId || args.meshId,
         ...args.nodeId ? { nodeId: args.nodeId } : {},
         metadataEvent: {
-          source: "mesh_queue_difficulty_floor_timeout",
+          source: capacityStall ? "mesh_queue_capacity_stall_timeout" : "mesh_queue_difficulty_floor_timeout",
           taskId: args.taskId,
-          reason: "task_difficulty_floor_timeout",
+          reason: capacityStall ? "task_claim_capacity_stall_timeout" : "task_difficulty_floor_timeout",
+          ...capacityStall ? { skipReason: args.reason } : {},
           difficulty,
           waitedMs,
           coordinatorMessage
@@ -81515,6 +81518,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     var difficultyFloorTimeoutReported;
     var DIFFICULTY_FLOOR_REPORT_DEDUP_MAX;
     var CLASSIFIED_DIFFICULTIES;
+    var BOUNDED_WAIT_SKIP_REASONS;
     var init_mesh_difficulty_floor = __esm2({
       "src/mesh/mesh-difficulty-floor.ts"() {
         "use strict";
@@ -81529,6 +81533,11 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         difficultyFloorTimeoutReported = /* @__PURE__ */ new Set();
         DIFFICULTY_FLOOR_REPORT_DEDUP_MAX = 2e3;
         CLASSIFIED_DIFFICULTIES = ["easy", "medium", "difficult"];
+        BOUNDED_WAIT_SKIP_REASONS = [
+          SLOT_MODEL_BUSY_SKIP_REASON,
+          "max_concurrent_sessions_reached",
+          "max_provider_parallel_reached"
+        ];
       }
     });
     function normalizeProviderPriority2(policy) {
