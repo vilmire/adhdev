@@ -261,12 +261,14 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       { screenText: screen },
     ], { promptId: 'rps-choices', createdAt: 1234 });
 
+    // The "Type something." escape hatch is stripped from options (it only
+    // raises allowFreeform) — same shape as the headered parser.
     expect(prompt?.questions[0].options.map(option => option.label)).toEqual([
       '가위',
       '바위',
       '보',
-      'Type something.',
     ]);
+    expect(prompt?.questions[0].allowFreeform).toBe(true);
 
     // 가위=idx 0 → '1', 바위=idx 1 → '2', 보=idx 2 → '3'
     expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
@@ -520,7 +522,6 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
         { label: '가위 ✌     보를 이기고 바위에 집니다' },
         { label: '바위 ✊     가위를 이기고 보에 집니다' },
         { label: '보 ✋     바위를 이기고 가위에 집니다' },
-        { label: 'Type something.' },
       ],
       allowFreeform: true,
     });
@@ -567,7 +568,6 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
         { label: '✊ 바위', description: '주먹' },
         { label: '✌️  가위', description: '검지와 중지' },
         { label: '✋  보', description: '손바닥' },
-        { label: 'Type something.' },
       ],
       allowFreeform: true,
     });
@@ -643,7 +643,6 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
       options: [
         { label: 'Continue' },
         { label: 'Abort' },
-        { label: 'Type something.' },
       ],
       allowFreeform: true,
     });
@@ -1041,5 +1040,83 @@ describe('stableClaudeTuiPromptId (rc.20 rebind option fidelity)', () => {
     });
     expect(resolved.answers.q1.selectedLabels).toEqual(['ALPHA', 'BETA']);
     expect(buildClaudeInteractiveTuiAnswerSteps(multi, resolved)).toEqual(['1', '2', '\t', '\r']);
+  });
+});
+
+/**
+ * OFF-BY-ONE GUARD for the freeform escape hatch.
+ *
+ * Fixture is the screen measured live against claude-cli v2.1.220 on
+ * 2026-09-02: the escape hatch is digit-addressable and sits at
+ * options.length + 1, with a further "Chat about this" row at
+ * options.length + 2. Pressing 4 on the 3-option screen opened the inline text
+ * field; the typed text landed as "❯ 4. teal" and \r committed it.
+ *
+ * The pre-fix builder fell back to `options.length` whenever the escape row was
+ * absent from `options` — which, once both parsers strip that row, is ALWAYS.
+ * That pressed the LAST REAL OPTION instead, silently answering the wrong
+ * choice. The two cases below (3 options → '4', 2 options → '3') pin that the
+ * digit tracks the option count and never lands on "Chat about this".
+ */
+describe('claude freeform escape hatch digit', () => {
+  const measuredScreen = (optionRows: string[], escapeDigit: number) => [
+    '←  ☐ Color  ☐ Size  ✔ Submit  →',
+    'Which color?',
+    '',
+    ...optionRows,
+    `  ${escapeDigit}. Type something.`,
+    `  ${escapeDigit + 1}. Chat about this`,
+    '',
+    'Enter to select · Tab/Arrow keys to navigate · Esc to cancel',
+  ].join('\n');
+
+  const parse = (screenText: string, promptId: string) =>
+    detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText }], { promptId, providerType: 'claude-cli' });
+
+  it('presses 4 for the escape hatch on the measured 3-option screen', () => {
+    const prompt = parse(measuredScreen(['❯ 1. Red', '  2. Green', '  3. Blue'], 4), 'freeform-3');
+
+    // "Type something." and "Chat about this" are both stripped: only the three
+    // real options survive, and allowFreeform records the escape hatch.
+    expect(prompt?.questions[0].options.map(o => o.label)).toEqual(['Red', 'Green', 'Blue']);
+    expect(prompt?.questions[0].allowFreeform).toBe(true);
+
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'freeform-3',
+      answers: { q1: { selectedLabels: [], freeformText: 'teal' } },
+    })).toEqual(['4', 't', 'e', 'a', 'l', '\r', '\r']);
+  });
+
+  it('presses 3 for the escape hatch when the question has only 2 options', () => {
+    const prompt = parse(measuredScreen(['❯ 1. Red', '  2. Green'], 3), 'freeform-2');
+
+    expect(prompt?.questions[0].options.map(o => o.label)).toEqual(['Red', 'Green']);
+
+    // The escape digit follows the option count — it is NOT pinned at 4.
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'freeform-2',
+      answers: { q1: { selectedLabels: [], freeformText: 'ok' } },
+    })).toEqual(['3', 'o', 'k', '\r', '\r']);
+  });
+
+  it('uses the same digit on the headerless (single-question) shape', () => {
+    const screenText = [
+      'Which color?',
+      '',
+      '❯ 1. Red',
+      '  2. Green',
+      '  3. Blue',
+      '  4. Type something.',
+      '',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+    const prompt = parse(screenText, 'freeform-headerless');
+
+    expect(prompt?.questions[0].options.map(o => o.label)).toEqual(['Red', 'Green', 'Blue']);
+    expect(prompt?.questions[0].allowFreeform).toBe(true);
+    expect(buildClaudeInteractiveTuiAnswerSteps(prompt!, {
+      promptId: 'freeform-headerless',
+      answers: { q1: { selectedLabels: [], freeformText: 'x' } },
+    })).toEqual(['4', 'x', '\r', '\r']);
   });
 });
