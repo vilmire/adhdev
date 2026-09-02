@@ -49,18 +49,42 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         try {
-            const { readOperatingNotes } = await import('../../mesh/mesh-ledger.js');
+            const { readOperatingNotes, resolveNoteExpiry } = await import('../../mesh/mesh-ledger.js');
             const tail = typeof args?.tail === 'number' ? args.tail : 100;
             const entries = readOperatingNotes(meshId, { tail });
-            // Flatten to the shape the notes tab renders: id + note payload fields.
+            /* Flatten to the shape the notes tab renders: id + note payload fields.
+             *
+             * `pinned` and the expiry axis were MISSING here (2026-09-02): the tab
+             * rendered a "pinned" badge that could never appear, and a note due to
+             * expire tonight looked identical to a durable one. Both drive real
+             * behaviour — isNoteExpired() drops unpinned notes from every future
+             * coordinator prompt — so the dashboard was hiding the one property
+             * that decides whether a note survives.
+             *
+             * effectiveExpiresAt is resolved HERE rather than in the UI because
+             * the rule lives here: an explicit expiresAt wins, otherwise the
+             * category TTL applies, and some categories are durable. Recomputing
+             * that in the browser would mean two copies of the policy. */
+            const nowMs = Date.now();
             const notes = entries.map(e => {
                 const p = (e.payload || {}) as Record<string, unknown>;
+                const createdAt = typeof p.createdAt === 'string' ? p.createdAt : e.timestamp;
+                const pinned = p.pinned === true;
+                const category = typeof p.category === 'string' ? p.category : undefined;
+                const explicitExpiry = typeof p.expiresAt === 'string' ? p.expiresAt : undefined;
+                // Policy lives in mesh-ledger; this only projects it.
+                const lifetime = resolveNoteExpiry({ category, pinned, createdAt, ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}) }, nowMs);
                 return {
                     id: e.id,
                     text: typeof p.text === 'string' ? p.text : '',
-                    category: typeof p.category === 'string' ? p.category : undefined,
-                    createdAt: typeof p.createdAt === 'string' ? p.createdAt : e.timestamp,
+                    category,
+                    createdAt,
                     sourceCoordinator: typeof p.sourceCoordinator === 'string' ? p.sourceCoordinator : undefined,
+                    pinned,
+                    ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}),
+                    ...(lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {}),
+                    expired: lifetime.expired,
+                    ...(typeof p.subjectKey === 'string' ? { subjectKey: p.subjectKey } : {}),
                 };
             });
             return { success: true, notes };

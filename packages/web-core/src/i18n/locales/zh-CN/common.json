@@ -526,6 +526,57 @@
                         "cleanup_candidate — 可以清理。",
                         "not_mergeable — 无法合并。"
                     ]
+                },
+                "graph": {
+                    "term": "编排图",
+                    "summary": "声明依赖、条件与关卡后一并入队的任务批次。",
+                    "details": [
+                        "由 mesh_enqueue_batch 创建，是任务中的一个可执行计划。",
+                        "已结束的图在蓝图中折叠为一个卡片，点击可原地展开。"
+                    ]
+                },
+                "gate": {
+                    "term": "协调者关卡",
+                    "summary": "在人工指派的协调者处理之前挂起整个图的步骤。",
+                    "details": [
+                        "状态：declared → awaiting_coordinator → claimed → released（或 expired）。",
+                        "等待中的关卡在蓝图中以整卡宽度显示，并附带说明与截止时间。",
+                        "处理关卡需通过指示协调者完成；此处仪表板为只读。"
+                    ]
+                },
+                "condition": {
+                    "term": "条件 (run_if)",
+                    "summary": "决定计划步骤是否执行的声明式谓词。",
+                    "details": [
+                        "语法是封闭集合：exists、==、!= 和 in，配合 all / any / not。",
+                        "蓝图将其渲染为接在连线上的卡片，例如 review.outcome == rejected。",
+                        "条件始终不成立的步骤会被跳过，而非失败。"
+                    ]
+                },
+                "blueprint": {
+                    "term": "蓝图",
+                    "summary": "计划视图：实时队列、图关卡与计划步骤同处一块画布。",
+                    "details": [
+                        "只有一个轴 —— 从左到右的依赖深度。根任务按最新优先排序。",
+                        "卡片自带时间，因此位置无需再表达时间。",
+                        "已完成的图作为折叠归档位于实时工作下方。"
+                    ]
+                },
+                "routingPreview": {
+                    "term": "路由预测",
+                    "summary": "只读预测：假想任务会落到哪里。",
+                    "details": [
+                        "按难度分别显示；固定到某节点的任务有自己的固定预测（📌）。",
+                        "这是预测而非实际归属 —— 已执行的卡片会在下方显示真实节点。"
+                    ]
+                },
+                "worktree": {
+                    "term": "工作树节点",
+                    "summary": "基于 git worktree 而非主检出的节点。",
+                    "details": [
+                        "以分支（⎇）标注。可让多个任务在同一台机器上运行而不共享分支。",
+                        "孤立工作树仅报告为清理候选，不会被自动删除。"
+                    ]
                 }
             }
         },
@@ -741,36 +792,36 @@
             "clean": "与上游保持同步"
         },
         "taskDag": {
-                "plan": {
-                    "depsFailed_one": "{{count}} \u4e2a\u4e0a\u6e38\u5931\u8d25",
-                    "depsFailed_other": "{{count}} \u4e2a\u4e0a\u6e38\u5931\u8d25"
-                },
-                "gate": {
-                    "holding_one": "\u963b\u585e {{count}} \u4e2a\u6b65\u9aa4",
-                    "holding_other": "\u963b\u585e {{count}} \u4e2a\u6b65\u9aa4",
-                    "converged": "\u63d0\u4ea4\u5df2\u8fdb\u5165 main",
-                    "notConverged_one": "{{count}} \u4e2a\u63d0\u4ea4\u672a\u8fdb\u5165 main",
-                    "notConverged_other": "{{count}} \u4e2a\u63d0\u4ea4\u672a\u8fdb\u5165 main",
-                    "deadline": "{{time}} \u622a\u6b62 \u00b7 \u4e4b\u540e {{onTimeout}}",
-                    "needsYou": "\u9700\u8981\u4f60\u5904\u7406"
-                },
-                "edge": {
-                    "conditionMore": "\u7b49\u66f4\u591a",
-                    "conditional": "\u6761\u4ef6"
-                },
-                "time": {
-                    "now": "\u521a\u521a",
-                    "minutes_one": "{{count}}\u5206\u949f\u524d",
-                    "minutes_other": "{{count}}\u5206\u949f\u524d",
-                    "hours_one": "{{count}}\u5c0f\u65f6\u524d",
-                    "hours_other": "{{count}}\u5c0f\u65f6\u524d",
-                    "days_one": "{{count}}\u5929\u524d",
-                    "days_other": "{{count}}\u5929\u524d"
-                },
-                "collapsed": {
-                    "expand": "\u70b9\u51fb\u5c55\u5f00\u5df2\u5b8c\u6210\u7684\u56fe",
-                    "counts": "{{nodes}} \u6b65\u9aa4 \u00b7 {{gates}} \u5173\u5361"
-                },
+            "plan": {
+                "depsFailed_one": "{{count}} 个上游失败",
+                "depsFailed_other": "{{count}} 个上游失败"
+            },
+            "gate": {
+                "holding_one": "阻塞 {{count}} 个步骤",
+                "holding_other": "阻塞 {{count}} 个步骤",
+                "converged": "提交已进入 main",
+                "notConverged_one": "{{count}} 个提交未进入 main",
+                "notConverged_other": "{{count}} 个提交未进入 main",
+                "deadline": "{{time}} 截止 · 之后 {{onTimeout}}",
+                "needsYou": "需要你处理"
+            },
+            "edge": {
+                "conditionMore": "等更多",
+                "conditional": "条件"
+            },
+            "time": {
+                "now": "刚刚",
+                "minutes_one": "{{count}}分钟前",
+                "minutes_other": "{{count}}分钟前",
+                "hours_one": "{{count}}小时前",
+                "hours_other": "{{count}}小时前",
+                "days_one": "{{count}}天前",
+                "days_other": "{{count}}天前"
+            },
+            "collapsed": {
+                "expand": "点击展开已完成的图",
+                "counts": "{{nodes}} 步骤 · {{gates}} 关卡"
+            },
             "empty": "队列中还没有任务 — 提交 mesh 任务后即可查看依赖图。",
             "waitsOn_one": "等待 {{count}} 项",
             "waitsOn_other": "等待 {{count}} 项",
@@ -891,14 +942,16 @@
             "meshConnecting": "网格连接中...",
             "connecting": "连接中...",
             "providerUnknown": "提供方未知",
-            "directionAuto": "自动",
-            "directionAutoTitle": "自动检测方向",
             "directionLRTitle": "从左到右",
             "directionTBTitle": "从上到下",
             "fastForwardConfirmTitle": "对 {{label}} 应用 fast-forward？",
             "fastForwardConfirmLabel": "Fast-forward"
         },
         "notes": {
+            "expired": "已过期",
+            "neverExpires": "永不过期",
+            "durable": "长期保留",
+            "expiresIn": "{{when}} 过期",
             "tab": "运营笔记",
             "addTitle": "添加运营笔记",
             "listTitle": "运营笔记",

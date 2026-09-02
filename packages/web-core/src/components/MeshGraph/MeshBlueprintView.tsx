@@ -389,9 +389,15 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     the canvas (owner call 2026-08-24: overlaying expresses more than
                     an in-flow row, and it returns that row's height to the graph).
                     Clicking a difficulty opens the per-machine detail right below.
-                    Offset below the live queue's in-flow stats row. ── */}
+                    Offset below the live queue's in-flow stats row.
+
+                    HIDDEN on narrow viewports (2026-09-02): at 375px the overlay
+                    is as tall as the canvas itself and sits on top of every node,
+                    so the forecast — the least urgent thing here — was covering
+                    the graph it annotates. The same numbers stay reachable on the
+                    Status tab. ── */}
                 {predictedSlots && (
-                    <div className="pointer-events-none absolute left-2 top-2 z-10 flex max-h-[calc(100%-3rem)] flex-col items-start gap-1">
+                    <div className="pointer-events-none absolute left-2 top-2 z-10 hidden max-h-[calc(100%-3rem)] flex-col items-start gap-1 sm:flex">
                         <div className={`pointer-events-auto flex flex-col rounded-md border text-3xs leading-4 ${meshTheme.isDark
                             ? 'border-white/10 bg-slate-950/85 text-slate-300'
                             : 'border-slate-200 bg-white/95 text-slate-600'}`}
