@@ -23,6 +23,19 @@ export {
 } from './bridge-protocol.js';
 export { workerPortChannel, type MessagePortLike, type WorkerPortChannel } from './message-port-channel.js';
 export {
+    DEFAULT_RTC_PRE_OPEN_CAP,
+    rtcDataChannelTransport,
+    type RtcDataChannelLike,
+    type RtcDataChannelTransportOptions,
+    type RtcTransportHandle,
+} from './rtc-data-channel-transport.js';
+export {
+    SEQSCRIBE_DATA_CHANNEL_LABEL,
+    SEQSCRIBE_SESSION_INTEREST_TYPE,
+    sessionInterestFrame,
+    type SessionInterestFrame,
+} from './session-interest-protocol.js';
+export {
     bridgeTranscriptTransport,
     type BridgeOverflowReason,
     type MainThreadBridgeHandle,
