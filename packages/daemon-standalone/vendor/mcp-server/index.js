@@ -8446,8 +8446,67 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
   }
 }
 
-// src/tools/mesh-tools-session.ts
+// src/tools/mesh-transcript-replica-read.ts
 var import_daemon_core9 = require("@adhdev/daemon-core");
+function unwrap(result) {
+  if (result && typeof result === "object") {
+    if (result.payload && typeof result.payload === "object") return result.payload;
+    if (result.result && typeof result.result === "object") return result.result;
+  }
+  return result;
+}
+function readReason(value, fallback) {
+  return typeof value?.reason === "string" && value.reason.trim() ? value.reason.trim() : fallback;
+}
+function isUsableSnapshot(value) {
+  if (!value || typeof value !== "object") return false;
+  if (value.schemaVersion !== 1) return false;
+  if (typeof value.sessionId !== "string" || !value.sessionId) return false;
+  if (typeof value.status !== "string" || !value.status) return false;
+  if (!Array.isArray(value.messages)) return false;
+  if (!value.coverage || typeof value.coverage !== "object") return false;
+  if (typeof value.coverage.totalMessageCount !== "number") return false;
+  if (typeof value.coverage.omittedBefore !== "boolean") return false;
+  if (!value.provenance || typeof value.provenance !== "object") return false;
+  if (typeof value.revision !== "number") return false;
+  if (typeof value.observedAt !== "string" || !value.observedAt) return false;
+  return true;
+}
+async function readTranscriptReplicaForDisplay(transport, key) {
+  if (!key.ownerDaemonId || !key.rawSessionId) {
+    return { payload: null, fallbackReason: "no_node" };
+  }
+  let ensureReason = null;
+  try {
+    const ensured = unwrap(await transport.command("ensure_transcript_subscription", key));
+    if (ensured?.ready !== true) ensureReason = readReason(ensured, "ipc_unavailable");
+  } catch {
+    ensureReason = "ipc_unavailable";
+  }
+  let read;
+  try {
+    read = unwrap(await transport.command("read_transcript_replica", key));
+  } catch {
+    return { payload: null, fallbackReason: ensureReason ?? "ipc_unavailable" };
+  }
+  if (read?.available !== true) {
+    return { payload: null, fallbackReason: ensureReason ?? readReason(read, "no_complete_revision") };
+  }
+  if (!isUsableSnapshot(read.snapshot)) {
+    return { payload: null, fallbackReason: "revision_invalid" };
+  }
+  const snapshot = read.snapshot;
+  return {
+    payload: (0, import_daemon_core9.mapTranscriptSnapshotToReadChatPayload)(snapshot, {
+      omittedBefore: snapshot.coverage.omittedBefore,
+      stale: read.stale === true
+    }),
+    fallbackReason: null
+  };
+}
+
+// src/tools/mesh-tools-session.ts
+var import_daemon_core10 = require("@adhdev/daemon-core");
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
   return {
@@ -9180,6 +9239,17 @@ async function meshReadChat(ctx, args) {
   const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
   const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
   const isLocalNode = isLocalControlPlaneNode(ctx, node);
+  let replicaFallbackReason = null;
+  if (!isLocalNode && ctx.transport instanceof IpcTransport && node.daemonId) {
+    const replica = await readTranscriptReplicaForDisplay(ctx.transport, {
+      ownerDaemonId: node.daemonId,
+      rawSessionId: args.session_id
+    });
+    if (replica.payload) {
+      return renderMeshReadChatPayload(replica.payload, args);
+    }
+    replicaFallbackReason = replica.fallbackReason;
+  }
   let result;
   try {
     result = await commandForNode(ctx, node, "read_chat", {
@@ -9194,11 +9264,17 @@ async function meshReadChat(ctx, args) {
     if (isLocalNode || !(0, import_daemon_core6.isP2pRelayTransportFailure)(e)) throw e;
     return buildMeshReadChatCacheFallback(ctx, args, node, e);
   }
-  const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result), {
+  return renderMeshReadChatPayload(unwrapCommandPayload(result), args, {
+    fallbackReason: replicaFallbackReason
+  });
+}
+function renderMeshReadChatPayload(source, args, opts = {}) {
+  const payload = annotateRapidReadChatAdvisory(source, {
     key: `mesh:${args.node_id}:${args.session_id}`,
     toolName: "mesh_read_chat",
     completionCallbackExpected: true
   });
+  const sourceTelemetry = opts.fallbackReason ? { transcriptReadSource: "legacy_read_chat", transcriptFallbackReason: opts.fallbackReason } : {};
   const useCompact = args.compact !== false;
   if (useCompact) {
     const compactPayload = compactChatPayload(payload, {
@@ -9211,12 +9287,18 @@ async function meshReadChat(ctx, args) {
       preserveTurn: true
     });
     return JSON.stringify(
-      payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
+      {
+        ...compactPayload,
+        ...payload.transcriptReadSource ? { transcriptReadSource: payload.transcriptReadSource } : {},
+        ...payload.transcriptReadSource === "replica" ? { omittedBefore: payload.omittedBefore === true, stale: payload.stale === true } : {},
+        ...sourceTelemetry,
+        ...payload.pollingAdvisory ? { pollingAdvisory: payload.pollingAdvisory } : {}
+      },
       null,
       2
     );
   }
-  return JSON.stringify(payload, null, 2);
+  return JSON.stringify({ ...payload, ...sourceTelemetry }, null, 2);
 }
 async function meshReadDebug(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
@@ -9347,7 +9429,7 @@ async function meshLaunchSession(ctx, args) {
           supportedProviders: slotProviders
         }, null, 2);
       }
-      const explicitBlock = (0, import_daemon_core9.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+      const explicitBlock = (0, import_daemon_core10.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
       if (explicitBlock) {
         explicitTypeQuotaWarning = {
           quotaWarning: `Provider '${requestedType}' on node '${args.node_id}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly \u2014 the session may fail immediately if the provider rejects on quota.`,
@@ -9385,7 +9467,7 @@ async function meshLaunchSession(ctx, args) {
         failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
       }
       if (detectedCandidates.length) {
-        const ranked = (0, import_daemon_core9.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+        const ranked = (0, import_daemon_core10.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
         if (ranked.clear.length) {
           resolvedProviderType = ranked.clear[0];
         } else {
@@ -10691,8 +10773,8 @@ var import_node_os = __toESM(require("os"));
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
-var import_daemon_core10 = require("@adhdev/daemon-core");
-var DEFAULT_PORT = import_daemon_core10.DEFAULT_STANDALONE_PORT;
+var import_daemon_core11 = require("@adhdev/daemon-core");
+var DEFAULT_PORT = import_daemon_core11.DEFAULT_STANDALONE_PORT;
 var LocalTransport = class {
   baseUrl;
   authHeader;
