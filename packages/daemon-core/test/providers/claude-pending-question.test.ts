@@ -307,3 +307,144 @@ describe('detectClaudePendingQuestion (provider / config gating)', () => {
         expect(detectClaudePendingQuestion(jsonlCfg as never, { agentType: 'claude-cli' })).toBeNull();
     });
 });
+
+/**
+ * TRANSPORT EQUIVALENCE — the real guard against the two paths drifting apart.
+ *
+ * This suite exists because a live E2E comparison reported that the scrape
+ * "emits a Type something. row and the JSONL path does not". Measuring the
+ * scrape settled it the other way: the canonical parser strips that row from
+ * `options` and re-encodes it as the per-question boolean `allowFreeform`
+ * (parseClaudeInteractiveTuiQuestion). So the freeform escape is carried by a
+ * FLAG on both transports, and equivalence must be asserted on the flag — not
+ * on a synthesized option row, which would have shifted the keystroke
+ * protocol's digits and shown the dashboard a row the TUI never offers.
+ */
+describe('freeform escape: native JSONL matches the screen scrape', () => {
+    const Q = 'Pick one.';
+    /**
+     * A picker as claude paints it, INCLUDING the freeform escape row, with the
+     * `✔ Submit` nav line that routes it to the CANONICAL headered parser.
+     */
+    const screenWithEscape = [
+        '←  ☐ Choice  ✔ Submit  →',
+        Q,
+        '',
+        ' ❯ 1. Alpha',
+        '      First option.',
+        '   2. Beta',
+        '      Second option.',
+        '   3. Type something.',
+        '',
+        ' Enter to select · Esc to cancel',
+    ].join('\n');
+
+    const nativeRecord = askUseRow('toolu_freeform', [{
+        question: Q,
+        header: 'Choice',
+        multiSelect: false,
+        options: [
+            { label: 'Alpha', description: 'First option.' },
+            { label: 'Beta', description: 'Second option.' },
+        ],
+    }]);
+
+    const scraped = () => detectClaudeAskUserQuestionPromptFromTuiPages(
+        [{ screenText: screenWithEscape }],
+        { promptId: 'control', providerType: 'claude-cli' },
+    )!.questions[0];
+    const native = () => detectClaudePendingQuestionFromRecords([nativeRecord])!.questions[0];
+
+    it('scrape keeps the escape OUT of options and reports it as allowFreeform', () => {
+        // Pins the measured contract this synthesis is matched against. If the
+        // scrape ever starts emitting the row as an option, this flips and the
+        // native side must be re-derived — not silently left behind.
+        const s = scraped();
+        expect(s.allowFreeform).toBe(true);
+        expect(s.options.map(o => o.label)).toEqual(['Alpha', 'Beta']);
+    });
+
+    it('both transports agree on the option list AND on allowFreeform', () => {
+        const s = scraped();
+        const n = native();
+        expect(n.options.map(o => o.label)).toEqual(s.options.map(o => o.label));
+        expect(n.allowFreeform).toBe(s.allowFreeform);
+        // No phantom row on either side.
+        expect(n.options.some(o => /^Type something\.?$/i.test(o.label))).toBe(false);
+    });
+
+    it('multi-select pickers carry the escape too (scrape sets it unconditionally)', () => {
+        // The scrape's flag does not depend on multiSelect, so the native side
+        // must not condition on it either.
+        const multiScreen = [
+            '←  ☐ Choice  ✔ Submit  →',
+            Q,
+            '',
+            ' ❯ 1. ☐ Alpha',
+            '   2. ☐ Beta',
+            '   3. Type something.',
+            '',
+            ' Enter to select · Esc to cancel',
+        ].join('\n');
+        const s = detectClaudeAskUserQuestionPromptFromTuiPages(
+            [{ screenText: multiScreen }],
+            { promptId: 'control', providerType: 'claude-cli' },
+        )!.questions[0];
+        const n = detectClaudePendingQuestionFromRecords([askUseRow('toolu_multi', [{
+            question: Q,
+            multiSelect: true,
+            options: [{ label: 'Alpha' }, { label: 'Beta' }],
+        }])])!.questions[0];
+        expect(s.allowFreeform).toBe(true);
+        expect(n.allowFreeform).toBe(s.allowFreeform);
+    });
+
+    it('every question of a multi-question native prompt gets the escape', () => {
+        const n = detectClaudePendingQuestionFromRecords([askUseRow('toolu_multiq', [
+            { question: 'First?', options: [{ label: 'A' }] },
+            { question: 'Second?', options: [{ label: 'B' }] },
+        ])])!;
+        expect(n.questions).toHaveLength(2);
+        expect(n.questions.every(q => q.allowFreeform === true)).toBe(true);
+    });
+});
+
+/**
+ * MEASURED DIVERGENCE inside the scrape itself (finding, not a fix).
+ *
+ * The two scrape parsers disagree about the escape row:
+ *   - headered (`✔ Submit` nav, parseClaudeInteractiveTuiQuestion) STRIPS it
+ *     from options and sets allowFreeform.
+ *   - headerless (parseClaudeHeaderlessInteractiveTuiQuestion) sets
+ *     allowFreeform AND ALSO pushes the row into options.
+ *
+ * The native path is matched to the HEADERED shape, because that is the one the
+ * keystroke builder's `typeOptionIndex >= 0` lookup and the dashboard's
+ * allowFreeform textarea are both written against. This test pins the
+ * divergence so it is visible rather than folklore; unifying the headerless
+ * parser is a separate change with its own keystroke-protocol blast radius
+ * (buildClaudeInteractiveTuiAnswerSteps picks a different digit per shape).
+ */
+describe('scrape self-divergence on the escape row (documented, not fixed here)', () => {
+    const rows = (nav: boolean) => [
+        ...(nav ? ['←  ☐ Choice  ✔ Submit  →'] : []),
+        'Pick one.',
+        '',
+        ' ❯ 1. Alpha',
+        '   2. Type something.',
+        '',
+        ' Enter to select · Esc to cancel',
+    ].join('\n');
+
+    const parse = (nav: boolean) => detectClaudeAskUserQuestionPromptFromTuiPages(
+        [{ screenText: rows(nav) }],
+        { promptId: 'control', providerType: 'claude-cli' },
+    )!.questions[0];
+
+    it('headered strips the row; headerless keeps it — both set allowFreeform', () => {
+        expect(parse(true).options.map(o => o.label)).toEqual(['Alpha']);
+        expect(parse(false).options.map(o => o.label)).toEqual(['Alpha', 'Type something.']);
+        expect(parse(true).allowFreeform).toBe(true);
+        expect(parse(false).allowFreeform).toBe(true);
+    });
+});
