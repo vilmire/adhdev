@@ -741,6 +741,35 @@
             "clean": "업스트림과 동기화됨"
         },
         "taskDag": {
+                "plan": {
+                    "depsFailed_one": "\uc120\ud589 {{count}}\uac74 \uc2e4\ud328",
+                    "depsFailed_other": "\uc120\ud589 {{count}}\uac74 \uc2e4\ud328"
+                },
+                "gate": {
+                    "holding_one": "{{count}}\uac1c \uc791\uc5c5 \ub300\uae30\uc911",
+                    "holding_other": "{{count}}\uac1c \uc791\uc5c5 \ub300\uae30\uc911",
+                    "converged": "\ucee4\ubc0b main \ubc18\uc601\ub428",
+                    "notConverged_one": "\ucee4\ubc0b {{count}}\uac74 main \ubbf8\ubc18\uc601",
+                    "notConverged_other": "\ucee4\ubc0b {{count}}\uac74 main \ubbf8\ubc18\uc601",
+                    "deadline": "{{time}}\uae4c\uc9c0 \u00b7 \uc774\ud6c4 {{onTimeout}}",
+                    "needsYou": "\ud655\uc778 \ud544\uc694"
+                },
+                "edge": {
+                    "conditional": "\uc870\uac74\ubd80"
+                },
+                "time": {
+                    "now": "\ubc29\uae08",
+                    "minutes_one": "{{count}}\ubd84 \uc804",
+                    "minutes_other": "{{count}}\ubd84 \uc804",
+                    "hours_one": "{{count}}\uc2dc\uac04 \uc804",
+                    "hours_other": "{{count}}\uc2dc\uac04 \uc804",
+                    "days_one": "{{count}}\uc77c \uc804",
+                    "days_other": "{{count}}\uc77c \uc804"
+                },
+                "collapsed": {
+                    "expand": "\ud074\ub9ad\ud558\uba74 \uc644\ub8cc\ub41c \uadf8\ub798\ud504\ub97c \ud3bc\uce69\ub2c8\ub2e4",
+                    "counts": "{{nodes}}\ub2e8\uacc4 \u00b7 \uac8c\uc774\ud2b8 {{gates}}"
+                },
             "empty": "큐 태스크가 없습니다 — mesh 태스크를 등록하면 의존성 그래프가 표시됩니다.",
             "waitsOn_one": "{{count}}개 대기",
             "waitsOn_other": "{{count}}개 대기",

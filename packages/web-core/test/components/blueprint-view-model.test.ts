@@ -20,6 +20,9 @@ import {
     buildRoutePreviewRequests,
     buildStateByNodeId,
     deriveBlueprintEdgeState,
+    isSettledGraph,
+    orderTasksForElk,
+    resolveCollapsedGraphIds,
     getBlueprintGraphPagination,
     nextBlueprintGraphLimit,
     resolveTaskPredictedSlot,
@@ -308,5 +311,83 @@ describe('resolveTaskPredictedSlot', () => {
             { medium: 'kimi·k3' },
             undefined,
         )).toEqual({ label: 'kimi·k3', pinned: false })
+    })
+})
+
+/* ── B-plan single-axis layout (owner call 2026-09-02) ─────────────────────
+ * Pins the two derivations that replace the retired three-zone canvas:
+ * which graphs collapse, and the root-first ELK input order that keeps
+ * entry points chronological without a second placement system. */
+
+describe('isSettledGraph', () => {
+    it('treats a terminalAt stamp as settled whatever the status string says', () => {
+        expect(isSettledGraph({ status: 'running', terminalAt: '2026-09-01T10:00:00Z' })).toBe(true)
+    })
+
+    it('reads terminal status words when terminalAt is absent', () => {
+        expect(isSettledGraph({ status: 'completed' })).toBe(true)
+        expect(isSettledGraph({ status: 'failed' })).toBe(true)
+        expect(isSettledGraph({ status: 'cancelled' })).toBe(true)
+    })
+
+    it('leaves an in-flight graph unsettled', () => {
+        expect(isSettledGraph({ status: 'running' })).toBe(false)
+        expect(isSettledGraph({ status: 'declared' })).toBe(false)
+    })
+})
+
+describe('resolveCollapsedGraphIds', () => {
+    const graphs = [
+        { graphId: 'g_done', status: 'completed', terminalAt: '2026-09-01T10:00:00Z' },
+        { graphId: 'g_live', status: 'running' },
+        { graphId: 'g_failed', status: 'failed', terminalAt: '2026-09-01T11:00:00Z' },
+    ]
+
+    it('collapses settled graphs and never an in-flight one', () => {
+        const collapsed = resolveCollapsedGraphIds(graphs, new Set())
+        expect([...collapsed].sort()).toEqual(['g_done', 'g_failed'])
+        expect(collapsed.has('g_live')).toBe(false)
+    })
+
+    it('honours an explicit expand', () => {
+        const collapsed = resolveCollapsedGraphIds(graphs, new Set(['g_done']))
+        expect(collapsed.has('g_done')).toBe(false)
+        expect(collapsed.has('g_failed')).toBe(true)
+    })
+
+    it('an expand on a live graph is a no-op, not an error', () => {
+        expect(resolveCollapsedGraphIds(graphs, new Set(['g_live'])).has('g_live')).toBe(false)
+    })
+})
+
+describe('orderTasksForElk', () => {
+    const timeKey = (node: { updatedAt: string }) => node.updatedAt
+
+    it('puts roots first, newest root first', () => {
+        const nodes = [
+            { id: 'old_root', dependsOn: [], updatedAt: '2026-09-01T09:00:00Z' },
+            { id: 'child', dependsOn: ['new_root'], updatedAt: '2026-09-01T12:00:00Z' },
+            { id: 'new_root', dependsOn: [], updatedAt: '2026-09-01T11:00:00Z' },
+        ]
+        expect(orderTasksForElk(nodes, timeKey).map(n => n.id)).toEqual(['new_root', 'old_root', 'child'])
+    })
+
+    it('counts a dependency absent from the projection as no dependency — a dangling dep is still a root', () => {
+        const nodes = [
+            { id: 'a', dependsOn: ['not_on_canvas'], updatedAt: '2026-09-01T09:00:00Z' },
+            { id: 'b', dependsOn: ['a'], updatedAt: '2026-09-01T10:00:00Z' },
+        ]
+        expect(orderTasksForElk(nodes, timeKey).map(n => n.id)).toEqual(['a', 'b'])
+    })
+
+    it('preserves every node exactly once', () => {
+        const nodes = [
+            { id: 'a', dependsOn: [], updatedAt: '3' },
+            { id: 'b', dependsOn: ['a'], updatedAt: '2' },
+            { id: 'c', dependsOn: [], updatedAt: '1' },
+        ]
+        const out = orderTasksForElk(nodes, timeKey)
+        expect(out).toHaveLength(3)
+        expect([...out.map(n => n.id)].sort()).toEqual(['a', 'b', 'c'])
     })
 })
