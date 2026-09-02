@@ -22,7 +22,26 @@ export interface UseInteractivePromptResult {
   reopen: () => void
 }
 
-export function useInteractivePrompt(sessionId?: string | null): UseInteractivePromptResult {
+export interface UseInteractivePromptOptions {
+  /** See `findInteractivePromptSession` — opt-in, for the coordinator answer path only. */
+  includeHidden?: boolean
+}
+
+/**
+ * Hold the interactive prompt a dashboard surface should render.
+ *
+ * Pass the SELECTED session's id. An unscoped call scans every session and
+ * returns the first match in `ides` order — a status-report merge artifact — so
+ * it can render a question belonging to a session the user is not looking at,
+ * and which tab wins may change between refreshes.
+ *
+ * Hidden (`surfaceHidden`) sessions stay suppressed regardless of scope; see
+ * the selector's contract for why that is a separate axis.
+ */
+export function useInteractivePrompt(
+  sessionId?: string | null,
+  options?: UseInteractivePromptOptions,
+): UseInteractivePromptResult {
   const { t } = useTranslation('common')
   const { ides, isP2PActive, p2pStates } = useBaseDaemons()
   const { sendCommand } = useTransport()
@@ -35,7 +54,11 @@ export function useInteractivePrompt(sessionId?: string | null): UseInteractiveP
   // cause of an answered question staying "unresolved". See fix/interactive-question-submit-delay.
   const submitInFlightRef = useRef(false)
 
-  const foundSession = useMemo(() => findInteractivePromptSession(ides, sessionId), [ides, sessionId])
+  const includeHidden = options?.includeHidden === true
+  const foundSession = useMemo(
+    () => findInteractivePromptSession(ides, { sessionId, includeHidden }),
+    [ides, sessionId, includeHidden],
+  )
 
   // hasActivePrompt is true even when dismissed — so callers can show a "reopen" button
   const hasActivePrompt = !!foundSession

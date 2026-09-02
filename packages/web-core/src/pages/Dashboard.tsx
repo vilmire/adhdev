@@ -368,7 +368,13 @@ export default function Dashboard() {
         setToasts,
         resolveConversationByTarget,
     })
-    const interactivePrompt = useInteractivePrompt()
+    // Scope the modal to the SELECTED tab. Unscoped, this returned the first
+    // prompt anywhere in `ides` — so a question belonging to another session
+    // rendered over the tab the user was actually looking at, and which one won
+    // depended on status-report merge order (unstable across refreshes).
+    // `visibleConversations` already excludes surfaceHidden entries, so
+    // activeConv is never a hidden worker; the selector suppresses those anyway.
+    const interactivePrompt = useInteractivePrompt(activeConv?.sessionId ?? activeConv?.routeId ?? null)
 
     // ─── Command Handlers (header/history use activeConv) ──────
     const {

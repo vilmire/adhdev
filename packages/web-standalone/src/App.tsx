@@ -226,18 +226,15 @@ function OnboardingGate() {
     return <StandaloneOnboarding onDone={() => setShow(false)} />
 }
 
-// Global interactive prompt dialog — shown whenever any session has waiting_choice status
+// Global interactive prompt dialog — shown whenever any session has waiting_choice status.
+// Standalone has no tab selection, so this stays a global scan by design. It previously
+// computed the first prompt-bearing session itself and passed that id in, which under the
+// old contract ALSO opted into hidden entries — meaning a surfaceHidden mesh worker's
+// prompt surfaced here even though it was suppressed on the cloud dashboard. Letting the
+// selector do the unscoped scan restores hidden suppression and keeps the two in sync.
 function InteractivePromptGate() {
     const { t } = useTranslation('common')
-    const { ides } = useBaseDaemons()
-    // Find the first session with an active interactive prompt
-    const activeSessionId = useMemo(() => {
-        for (const ide of ides) {
-            if (ide.activeInteractivePrompt) return ide.instanceId ?? ide.id
-        }
-        return null
-    }, [ides])
-    const { promptSession, hasActivePrompt, responseError, isSubmitting, submit, cancel, reopen } = useInteractivePrompt(activeSessionId)
+    const { promptSession, hasActivePrompt, responseError, isSubmitting, submit, cancel, reopen } = useInteractivePrompt()
 
     if (!hasActivePrompt) return null
 
