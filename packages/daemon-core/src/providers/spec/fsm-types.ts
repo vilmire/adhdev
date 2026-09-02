@@ -219,6 +219,70 @@ export interface PreLaunchTrustScheme {
 
 export type PreLaunchTrust = PreLaunchTrustSettingsArray | PreLaunchTrustScheme;
 
+/** One error-class bucket: patterns that, when matched against merged PTY
+ *  output, identify this class of provider failure. `requires` names an
+ *  additional structural precondition the engine checks before trusting a
+ *  bare regex hit — see ErrorClassification for why this exists. */
+export interface ErrorClassBucket {
+    patterns: Array<{ regex: string; flags?: string }>;
+    /**
+     * Extra structural precondition beyond the regex match, gating each
+     * class independently by how prose-ambiguous its wording is (both are
+     * opt-in per bucket — a spec author declares the guard its own wording
+     * actually needs, never both at once, matching how the original
+     * hand-written Kimi classifier gated exactly one of its three buckets):
+     *
+     * - 'no_further_generation': the FSM must have settled off 'generating'
+     *   AND the match must sit at (or within a small slop of) the END of the
+     *   scanned tail — i.e. this is truly the last thing printed, not a
+     *   string quoted mid-report with narration continuing after it. Both
+     *   conditions matter: a completed report that quotes the same wording
+     *   is EQUALLY "not generating" by the time it's read, so the trailing-
+     *   position check is what actually separates a genuine mid-response
+     *   drop (e.g. "API Error: Connection closed mid-response" as literally
+     *   the last bytes on screen) from an agent narrating or fixing that
+     *   same error as part of completed work — the transport class is the
+     *   motivating case (see classifyDeclaredError for the exact rule).
+     * - 'provider_failure_envelope': the match must co-occur with a
+     *   machine-emitted failure envelope (a `provider.*_error` tag or an
+     *   HTTP 401/402/403 status marker — see hasProviderFailureEnvelope in
+     *   cli-adapter.ts) elsewhere in the same tail. Needed for wording that
+     *   a coding agent could otherwise produce while discussing the topic in
+     *   prose (e.g. "reading kimi.ts to understand the usage limit
+     *   pattern") — Kimi's quota bucket is the motivating case; its auth and
+     *   billing buckets are specific enough in wording that neither guard
+     *   applies and matching the pattern alone is sufficient, exactly as
+     *   before this field existed.
+     */
+    requires?: 'no_further_generation' | 'provider_failure_envelope';
+}
+
+/**
+ * Declarative live-PTY failure classification (ERROR-NOT-COMPLETION class,
+ * 2026-09). A PTY CLI can print a transport/auth/billing/quota failure mid-
+ * turn without exiting and without the FSM ever reaching a distinct 'error'
+ * state — left alone, that text sits on screen exactly like real assistant
+ * output and the ordinary idle-settle path folds it into finalSummary as a
+ * "possible completion (weak evidence)", indistinguishable from a genuine
+ * answer. Declaring error_classification lets the engine recognize the
+ * provider's own failure wording and surface the typed ProviderErrorReason
+ * (ordinary agent:stopped path, bypassing completion/finalSummary entirely)
+ * instead of a false completion.
+ *
+ * Same philosophy as startup_dismiss/pre_launch_trust: the engine implements
+ * ONE generic matcher, a spec supplies its provider's own wording. There is
+ * deliberately no "generic default" pattern set baked into the engine — every
+ * CLI's error vocabulary is different enough (and false-positive-prone
+ * enough, see ErrorClassBucket.requires) that an undeclared class means the
+ * engine detects nothing for it, exactly like every other opt-in field here.
+ */
+export interface ErrorClassification {
+    transport?: ErrorClassBucket;
+    auth?: ErrorClassBucket;
+    billing?: ErrorClassBucket;
+    quota?: ErrorClassBucket;
+}
+
 /**
  * Named interactive-prompt protocol (AskUserQuestion pickers / built-in
  * selectors — the waiting_choice path). These protocols are inherently
@@ -331,6 +395,11 @@ export interface CliSpecV4 {
     /** Named interactive-prompt protocol (waiting_choice path) — see
      *  InteractivePrompts. Omitted → no prompt capture. */
     interactive_prompts?: InteractivePrompts;
+    /** Live-PTY failure classification (transport/auth/billing/quota) — see
+     *  ErrorClassification. Omitted → no live-PTY failure detection for this
+     *  provider (mid-turn error text falls through to the ordinary completion
+     *  path unchanged, today's behavior for every provider but Kimi). */
+    error_classification?: ErrorClassification;
     send_message: {
         submit_key: string;
         delay_ms_before_submit?: number;

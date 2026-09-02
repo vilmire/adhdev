@@ -56046,7 +56046,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     var require_canonicalize = __commonJS2({
-      "../../vendor/seqscribe/node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
+      "../../node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
         "use strict";
         module22.exports = function serialize(object2) {
           if (typeof object2 === "number" && isNaN(object2)) {
@@ -56156,7 +56156,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var hexes;
     var Hash;
     var init_utils = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/utils.js"() {
+      "../../node_modules/@noble/hashes/esm/utils.js"() {
         "use strict";
         hasHexBuiltin = /* @__PURE__ */ (() => (
           // @ts-ignore
@@ -56188,7 +56188,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HashMD;
     var SHA256_IV;
     var init_md = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/_md.js"() {
+      "../../node_modules/@noble/hashes/esm/_md.js"() {
         "use strict";
         init_utils();
         HashMD = class extends Hash {
@@ -56298,7 +56298,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var SHA256;
     var sha256;
     var init_sha2 = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha2.js"() {
+      "../../node_modules/@noble/hashes/esm/sha2.js"() {
         "use strict";
         init_md();
         init_utils();
@@ -56444,7 +56444,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var sha2562;
     var init_sha256 = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha256.js"() {
+      "../../node_modules/@noble/hashes/esm/sha256.js"() {
         "use strict";
         init_sha2();
         sha2562 = sha256;
@@ -57183,7 +57183,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HMAC;
     var hmac;
     var init_hmac = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/hmac.js"() {
+      "../../node_modules/@noble/hashes/esm/hmac.js"() {
         "use strict";
         init_utils();
         HMAC = class extends Hash {
@@ -80898,7 +80898,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} \u2192 spawned provider '${resolved.providerType}'${sessionId ? ` (${sessionId})` : ""}`);
     }
     function recordAutoLaunchEvent(meshId, args) {
-      const dedupKey = `${meshId}:${args.taskId}:${args.nodeId || ""}`;
+      const dedupKey = `${meshId}:${args.taskId}`;
       const currentSig = `${args.phase}|${args.reason || ""}`;
       if (args.phase === "skipped" && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
         return;
@@ -81454,7 +81454,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       return summaryModel || void 0;
     }
     function isDifficultyFloorWaitReason(reason) {
-      return typeof reason === "string" && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX) || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON) || BOUNDED_WAIT_SKIP_REASONS.some((prefix) => reason.startsWith(prefix)));
+      return typeof reason === "string" && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX) || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON));
     }
     function handleDifficultyFloorSkip(args) {
       let previousTask;
@@ -81477,19 +81477,16 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (waitedMs < DIFFICULTY_FLOOR_REPORT_AFTER_MS || difficultyFloorTimeoutReported.has(reportKey)) return;
       const task = previousTask ?? getQueue3(args.meshId).find((candidate) => candidate.id === args.taskId);
       const difficulty = task?.difficulty || args.reason.split(":")[1] || "classified";
-      const waitedMinutes = Math.round(waitedMs / 6e4);
-      const capacityStall = BOUNDED_WAIT_SKIP_REASONS.some((prefix) => args.reason.startsWith(prefix));
-      const coordinatorMessage = capacityStall ? `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because every capable slot has stayed at capacity (${args.reason}). It remains pending and will still be claimed automatically the moment a slot frees. Check whether the occupying sessions are genuinely working or stuck; consider re-targeting the task to another node rather than widening a mesh-wide cap.` : `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
+      const coordinatorMessage = `[System] Queued task ${args.taskId} has waited ${Math.round(waitedMs / 6e4)} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
       const queued = queuePendingMeshCoordinatorEvent({
         event: "mesh:dispatch_blocked",
         meshId: args.meshId,
         nodeLabel: args.nodeId || args.meshId,
         ...args.nodeId ? { nodeId: args.nodeId } : {},
         metadataEvent: {
-          source: capacityStall ? "mesh_queue_capacity_stall_timeout" : "mesh_queue_difficulty_floor_timeout",
+          source: "mesh_queue_difficulty_floor_timeout",
           taskId: args.taskId,
-          reason: capacityStall ? "task_claim_capacity_stall_timeout" : "task_difficulty_floor_timeout",
-          ...capacityStall ? { skipReason: args.reason } : {},
+          reason: "task_difficulty_floor_timeout",
           difficulty,
           waitedMs,
           coordinatorMessage
@@ -81518,7 +81515,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     var difficultyFloorTimeoutReported;
     var DIFFICULTY_FLOOR_REPORT_DEDUP_MAX;
     var CLASSIFIED_DIFFICULTIES;
-    var BOUNDED_WAIT_SKIP_REASONS;
     var init_mesh_difficulty_floor = __esm2({
       "src/mesh/mesh-difficulty-floor.ts"() {
         "use strict";
@@ -81533,11 +81529,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         difficultyFloorTimeoutReported = /* @__PURE__ */ new Set();
         DIFFICULTY_FLOOR_REPORT_DEDUP_MAX = 2e3;
         CLASSIFIED_DIFFICULTIES = ["easy", "medium", "difficult"];
-        BOUNDED_WAIT_SKIP_REASONS = [
-          SLOT_MODEL_BUSY_SKIP_REASON,
-          "max_concurrent_sessions_reached",
-          "max_provider_parallel_reached"
-        ];
       }
     });
     function normalizeProviderPriority2(policy) {
@@ -89608,50 +89599,42 @@ ${cleanBody}`;
           web_chat_pane: {
             currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts",
             note: "Live pane transcript authority + history merge; allow-list preserves every field SessionChatTailUpdate consumers read.",
-            enabled: true,
-            unit: 5
+            enabled: true
           },
           web_warm_mobile_preview: {
             currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts (useWarmSessionChatTailControllers)",
             note: "Selector over the SAME warm controller snapshot web_chat_pane reads \u2014 no separate subscription.",
-            enabled: true,
-            unit: 5
+            enabled: true
           },
           mesh_read_chat_display: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-session.ts (meshReadChat)",
             note: "Remote transcript display/compact via coordinator daemon IPC replica read; mapTranscriptSnapshotToReadChatPayload keeps compact/full on one shape, so both branches are at parity with the live read.",
-            enabled: true,
-            unit: 6
+            enabled: true
           },
           daemon_worker_status_probe: {
             currentLocation: "oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)",
             note: "Active-session freshness/owner status re-check. Reads ONE field \u2014 `payload.status` \u2014 which the wire carries verbatim as `snapshot.status` (the producer's own effectiveStatus, not a re-derivation), so the read is exactly lossless. Remote nodes only; a declined replica read falls through to the identical legacy read_chat, preserving null's fail-open meaning.",
-            enabled: true,
-            unit: 7
+            enabled: true
           },
           daemon_terminal_evidence: {
             currentLocation: "oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts (fetchAssignedTaskChatTail)",
             note: "Acked-hold/terminal causal evidence. Every field the extractors read (role/kind/content/senderName/meta.streaming/timestamp/receivedAt, status, providerObservedStatus, activeModal, turn, providerSessionId) survives the projection. \u2605 NOT lossless in one direction: `turnTerminalMarkers` is deliberately omitted (the wire carries no native markers \u2014 see mapTerminalEvidencePayload), so a replica read takes the legacy message-shape admission rules instead of strong native-marker evidence. Weaker evidence, same veto direction.",
-            enabled: true,
-            unit: 7
+            enabled: true
           },
           mcp_mesh_status_reconciliation: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-internal.ts (reconcileDirectDispatchesFromTranscriptEvidence)",
             note: "Final-assistant completion synthesis; the replica feeds the SAME readFinalAssistantTranscriptEvidence + hasTrailingToolActivityAfterFinalAssistant parsers as the live read, so the activity-after-final veto and synthesis idempotency are unchanged. Needs activity kinds in order, so tail-only coverage declines.",
-            enabled: true,
-            unit: 8
+            enabled: true
           },
           magi_approval_probe: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (nudgeWedgedReplica)",
             note: "Fresh status+activeModal only, for idempotent approve. Irreversible act, so admission requires a snapshot inside the freshness budget (design \xA75.5); resolve_action stays a live RPC.",
-            enabled: true,
-            unit: 8
+            enabled: true
           },
           magi_result_collect: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (tryResolveReplica)",
             note: "Current-turn MAGI result/evidence collection; the replica runs the SAME parseFirstMagiCandidateForKind, and current-turn coverage is required so the FIX#1 cross-turn mis-attribution guard is not lost.",
-            enabled: true,
-            unit: 8
+            enabled: true
           }
         };
         TRANSCRIPT_CONSUMER_IDS = Object.keys(
@@ -96173,6 +96156,47 @@ ${cleanBody}`;
                 new RegExp(rec.regex, typeof rec.flags === "string" ? rec.flags : void 0);
               } catch {
                 errs.push(`startup_dismiss.patterns[${i}].regex does not compile`);
+              }
+            });
+          }
+        }
+      }
+      if (spec.error_classification !== void 0) {
+        const ec = spec.error_classification;
+        if (!ec || typeof ec !== "object" || Array.isArray(ec)) {
+          errs.push("error_classification must be an object");
+        } else {
+          const classes = ["transport", "auth", "billing", "quota"];
+          for (const key2 of Object.keys(ec)) {
+            if (!classes.includes(key2)) {
+              errs.push(`error_classification.${key2} is not a recognized class (expected one of: ${classes.join(", ")})`);
+            }
+          }
+          for (const cls of classes) {
+            const bucket2 = ec[cls];
+            if (bucket2 === void 0) continue;
+            const b = bucket2;
+            if (!b || typeof b !== "object" || Array.isArray(b)) {
+              errs.push(`error_classification.${cls} must be an object`);
+              continue;
+            }
+            if (b.requires !== void 0 && b.requires !== "no_further_generation" && b.requires !== "provider_failure_envelope") {
+              errs.push(`error_classification.${cls}.requires must be "no_further_generation" or "provider_failure_envelope" when provided`);
+            }
+            if (!Array.isArray(b.patterns) || b.patterns.length === 0) {
+              errs.push(`error_classification.${cls}.patterns must be a non-empty array`);
+              continue;
+            }
+            b.patterns.forEach((p, i) => {
+              const rec = p && typeof p === "object" ? p : {};
+              if (typeof rec.regex !== "string" || !rec.regex) {
+                errs.push(`error_classification.${cls}.patterns[${i}].regex is required`);
+                return;
+              }
+              try {
+                new RegExp(rec.regex, typeof rec.flags === "string" ? rec.flags : void 0);
+              } catch {
+                errs.push(`error_classification.${cls}.patterns[${i}].regex does not compile`);
               }
             });
           }
@@ -107130,58 +107154,106 @@ ${text}` : text;
     function hasProviderFailureEnvelope(text) {
       return /\bprovider\.[a-z_]*error\b/.test(text) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
     }
-    function detectKimiAuthBillingFailure(output, _exitCode) {
+    function classifyDeclaredError(output, declared, context) {
+      if (!declared) return null;
       const text = stripAnsi(output).replace(/\s+/g, " ").trim().toLowerCase();
       if (!text) return null;
-      const quota = hasProviderFailureEnvelope(text) && [
-        /\b(?:usage|quota|credit)\s+limit\b/,
-        /\bquota\s*(?:exhausted|refresh)/,
-        /\bbilling\s+cycle\b/
-      ].some((pattern) => pattern.test(text));
-      if (quota) {
+      const order = ["quota", "billing", "auth", "transport"];
+      for (const cls of order) {
+        const bucket2 = declared[cls];
+        if (!bucket2) continue;
+        const match = bucket2.patterns.reduce((found, { regex, flags }) => {
+          if (found) return found;
+          try {
+            return text.match(new RegExp(regex, flags));
+          } catch {
+            return null;
+          }
+        }, null);
+        if (!match) continue;
+        if (bucket2.requires === "no_further_generation") {
+          if (context.generating) continue;
+          const matchEnd = (match.index ?? 0) + match[0].length;
+          if (text.length - matchEnd > NO_FURTHER_GENERATION_TRAILING_SLOP) continue;
+        }
+        if (bucket2.requires === "provider_failure_envelope" && !hasProviderFailureEnvelope(text)) continue;
         return {
-          errorReason: "quota_exceeded",
-          failureKind: "quota",
-          message: "Kimi usage quota reached \u2014 the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets."
-        };
-      }
-      const billing = [
-        /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
-        /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
-        /\bpayment_required\b/,
-        /\binsufficient\s+(?:balance|credits?)\b/
-      ].some((pattern) => pattern.test(text));
-      if (billing) {
-        return {
-          errorReason: "billing_failed",
-          failureKind: "billing",
-          message: "Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying."
-        };
-      }
-      const auth = [
-        /\b(?:authentication|authorization|login)\s*(?:error|failed|required)\b/,
-        /\b(?:access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)?(?:expired|invalid|rejected|revoked)\b/,
-        /\b(?:token_expired|invalid_token)\b/,
-        /\b(?:unauthorized|http\s*401|status(?:\s+code)?\s*[:=]?\s*401)\b/,
-        /\b(?:not\s+(?:logged|signed)\s+in)\b/,
-        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/
-      ].some((pattern) => pattern.test(text));
-      if (auth) {
-        return {
-          errorReason: "auth_failed",
-          failureKind: "auth",
-          message: 'Kimi authentication failed (the access token is expired or rejected). Run "kimi login" in this environment before retrying.'
+          errorReason: ERROR_CLASS_TO_REASON[cls],
+          failureKind: cls,
+          message: context.messages?.[cls] || ERROR_CLASS_MESSAGE[cls]
         };
       }
       return null;
     }
+    var ANSI_OSC_DCS_RE;
+    var ANSI_CSI_RE;
+    var ERROR_CLASS_TO_REASON;
+    var ERROR_CLASS_MESSAGE;
+    var NO_FURTHER_GENERATION_TRAILING_SLOP;
+    var KIMI_DEFAULT_ERROR_CLASSIFICATION;
+    var KIMI_ERROR_MESSAGES;
+    var init_error_classification = __esm2({
+      "src/providers/spec/error-classification.ts"() {
+        "use strict";
+        ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
+        ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+        ERROR_CLASS_TO_REASON = {
+          transport: "spawn_error",
+          auth: "auth_failed",
+          billing: "billing_failed",
+          quota: "quota_exceeded"
+        };
+        ERROR_CLASS_MESSAGE = {
+          transport: "The provider connection was interrupted mid-response. This is usually transient \u2014 the mesh may retry.",
+          auth: "Provider authentication failed (the access token is expired or rejected). Re-authenticate this environment before retrying.",
+          billing: "Provider billing/subscription failed. Renew the subscription or payment entitlement before retrying.",
+          quota: "Provider usage quota reached \u2014 the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets."
+        };
+        NO_FURTHER_GENERATION_TRAILING_SLOP = 24;
+        KIMI_DEFAULT_ERROR_CLASSIFICATION = {
+          quota: {
+            patterns: [
+              { regex: "\\b(?:usage|quota|credit)\\s+limit\\b" },
+              { regex: "\\bquota\\s*(?:exhausted|refresh)" },
+              { regex: "\\bbilling\\s+cycle\\b" }
+            ],
+            // The only bucket the original hand-written classifier gated: bare
+            // limit wording is what a coding agent produces while discussing
+            // quota code, so it is trusted only alongside a machine-emitted
+            // failure envelope (a provider.*_error tag or 401/402/403 marker).
+            requires: "provider_failure_envelope"
+          },
+          billing: {
+            patterns: [
+              { regex: "\\b(?:kimi code\\s+)?(?:subscription|membership|plan)\\s+(?:has\\s+|is\\s+)?(?:expired|inactive|suspended|cancelled|canceled)\\b" },
+              { regex: "\\b(?:payment|billing)\\s+(?:is\\s+)?(?:required|failed|overdue)\\b" },
+              { regex: "\\bpayment_required\\b" },
+              { regex: "\\binsufficient\\s+(?:balance|credits?)\\b" }
+            ]
+          },
+          auth: {
+            patterns: [
+              { regex: "\\b(?:authentication|authorization|login)\\s*(?:error|failed|required)\\b" },
+              { regex: "\\b(?:access|refresh|auth(?:entication)?)\\s+token\\s+(?:has\\s+|is\\s+)?(?:expired|invalid|rejected|revoked)\\b" },
+              { regex: "\\b(?:token_expired|invalid_token)\\b" },
+              { regex: "\\b(?:unauthorized|http\\s*401|status(?:\\s+code)?\\s*[:=]?\\s*401)\\b" },
+              { regex: "\\b(?:not\\s+(?:logged|signed)\\s+in)\\b" },
+              { regex: "\\bplease\\s+(?:run\\s+)?(?:`?kimi`?\\s+)?login\\b" }
+            ]
+          }
+        };
+        KIMI_ERROR_MESSAGES = {
+          quota: "Kimi usage quota reached \u2014 the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets.",
+          billing: "Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying.",
+          auth: 'Kimi authentication failed (the access token is expired or rejected). Run "kimi login" in this environment before retrying.'
+        };
+      }
+    });
     function delay(ms) {
       return new Promise((resolve33) => setTimeout(resolve33, ms));
     }
     var fs37;
     var import_node_crypto4;
-    var ANSI_OSC_DCS_RE;
-    var ANSI_CSI_RE;
     var SpecCliAdapter;
     var init_cli_adapter = __esm2({
       "src/providers/spec/cli-adapter.ts"() {
@@ -107202,8 +107274,8 @@ ${text}` : text;
         init_kimi_pending_question();
         init_claude_pending_question();
         init_dist();
-        ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
-        ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+        init_error_classification();
+        init_error_classification();
         SpecCliAdapter = class _SpecCliAdapter {
           cliType;
           cliName;
@@ -107290,9 +107362,10 @@ ${text}` : text;
           jsonLineTail = "";
           exited = false;
           spawned = false;
-          /** Bounded merged PTY output tail used only for Kimi auth/billing classification. */
+          /** Bounded merged PTY output tail used for live error classification
+           *  (error_classification — ERROR-NOT-COMPLETION). */
           kimiFailureOutputTail = "";
-          kimiAuthBillingFailure = null;
+          declaredErrorFailure = null;
           lastExitCode = null;
           providerSessionId;
           /** Wall clock at the moment spawn() ran. Used as the cutoff for
@@ -107360,14 +107433,14 @@ ${text}` : text;
           }
           getStatus(_options) {
             const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
-            if (this.kimiAuthBillingFailure) {
+            if (this.declaredErrorFailure) {
               return {
                 status: "error",
                 messages: [],
                 activeModal: null,
                 activeInteractivePrompt: this.activeInteractivePrompt,
-                errorMessage: this.kimiAuthBillingFailure.message,
-                errorReason: this.kimiAuthBillingFailure.errorReason,
+                errorMessage: this.declaredErrorFailure.message,
+                errorReason: this.declaredErrorFailure.errorReason,
                 ...sessionFields
               };
             }
@@ -107989,7 +108062,7 @@ ${text}` : text;
               activeInteractivePrompt: this.activeInteractivePrompt,
               exited: this.exited,
               exitCode: this.lastExitCode,
-              kimiFailureKind: this.kimiAuthBillingFailure?.failureKind ?? null,
+              kimiFailureKind: this.declaredErrorFailure?.failureKind ?? null,
               screen,
               sections,
               stateHistory: this.driver.getStateHistory(),
@@ -108071,7 +108144,7 @@ ${text}` : text;
                 this.statusCallback?.();
                 return;
               case "pty_data":
-                this.observeKimiAuthBillingOutput(ev.chunk);
+                this.observeDeclaredErrorOutput(ev.chunk);
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
@@ -108084,7 +108157,7 @@ ${text}` : text;
               case "exit":
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
-                if (!this.observeKimiAuthBillingOutput("", ev.exit_code)) this.statusCallback?.();
+                if (!this.observeDeclaredErrorOutput("", ev.exit_code)) this.statusCallback?.();
                 return;
               case "spec_error":
                 LOG.warn("SpecAdapter", `[${this.cliType}] spec reload error: ${ev.errors.join("; ")}`);
@@ -108093,16 +108166,33 @@ ${text}` : text;
                 return;
             }
           }
-          observeKimiAuthBillingOutput(chunk, exitCode) {
-            if (this.cliType !== "kimi" || this.kimiAuthBillingFailure) return false;
+          /**
+           * The declared classification to apply for this adapter's cliType: the
+           * spec's own error_classification when it declares one, otherwise Kimi's
+           * built-in default (byte-for-byte the pre-2026-09 hardcoded behavior),
+           * otherwise none — every provider without either stays exactly as it was
+           * before this class existed (mid-turn error text falls through to the
+           * ordinary completion path unchanged).
+           */
+          declaredErrorClassification() {
+            if (this.spec.error_classification) return this.spec.error_classification;
+            return this.cliType === "kimi" ? KIMI_DEFAULT_ERROR_CLASSIFICATION : void 0;
+          }
+          observeDeclaredErrorOutput(chunk, exitCode) {
+            const declared = this.declaredErrorClassification();
+            if (!declared || this.declaredErrorFailure) return false;
             if (chunk) {
               this.kimiFailureOutputTail = `${this.kimiFailureOutputTail}${stripAnsi(chunk)}`.slice(-16 * 1024);
             }
-            const failure3 = detectKimiAuthBillingFailure(this.kimiFailureOutputTail, exitCode);
+            const usingKimiDefault = !this.spec.error_classification && this.cliType === "kimi";
+            const failure3 = classifyDeclaredError(this.kimiFailureOutputTail, declared, {
+              generating: this.latestState?.status === "generating",
+              messages: usingKimiDefault ? KIMI_ERROR_MESSAGES : void 0
+            });
             if (!failure3) return false;
-            this.kimiAuthBillingFailure = failure3;
+            this.declaredErrorFailure = failure3;
             const suppressionNote = failure3.failureKind === "quota" ? "this PTY session will not be blindly restarted; the mesh may retry once quota resets" : "automatic provider retry must be suppressed";
-            LOG.warn("SpecAdapter", `[kimi] ${failure3.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? "pending"}); ${suppressionNote}`);
+            LOG.warn("SpecAdapter", `[${this.cliType}] ${failure3.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? "pending"}); ${suppressionNote}`);
             this.statusCallback?.();
             return true;
           }
@@ -161226,70 +161316,54 @@ var require_transcript_read_model_consumers = __commonJS({
     var transcript_read_model_consumers_exports = {};
     __export2(transcript_read_model_consumers_exports, {
       TRANSCRIPT_CONSUMER_IDS: () => TRANSCRIPT_CONSUMER_IDS,
-      TRANSCRIPT_CONSUMER_ROSTER: () => TRANSCRIPT_CONSUMER_ROSTER2,
-      rosterIdsForUnit: () => rosterIdsForUnit,
-      withRosterEntryDisabled: () => withRosterEntryDisabled
+      TRANSCRIPT_CONSUMER_ROSTER: () => TRANSCRIPT_CONSUMER_ROSTER2
     });
     module2.exports = __toCommonJS2(transcript_read_model_consumers_exports);
     var TRANSCRIPT_CONSUMER_ROSTER2 = {
       web_chat_pane: {
         currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts",
         note: "Live pane transcript authority + history merge; allow-list preserves every field SessionChatTailUpdate consumers read.",
-        enabled: true,
-        unit: 5
+        enabled: true
       },
       web_warm_mobile_preview: {
         currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts (useWarmSessionChatTailControllers)",
         note: "Selector over the SAME warm controller snapshot web_chat_pane reads \u2014 no separate subscription.",
-        enabled: true,
-        unit: 5
+        enabled: true
       },
       mesh_read_chat_display: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-session.ts (meshReadChat)",
         note: "Remote transcript display/compact via coordinator daemon IPC replica read; mapTranscriptSnapshotToReadChatPayload keeps compact/full on one shape, so both branches are at parity with the live read.",
-        enabled: true,
-        unit: 6
+        enabled: true
       },
       daemon_worker_status_probe: {
         currentLocation: "oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)",
         note: "Active-session freshness/owner status re-check. Reads ONE field \u2014 `payload.status` \u2014 which the wire carries verbatim as `snapshot.status` (the producer's own effectiveStatus, not a re-derivation), so the read is exactly lossless. Remote nodes only; a declined replica read falls through to the identical legacy read_chat, preserving null's fail-open meaning.",
-        enabled: true,
-        unit: 7
+        enabled: true
       },
       daemon_terminal_evidence: {
         currentLocation: "oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts (fetchAssignedTaskChatTail)",
         note: "Acked-hold/terminal causal evidence. Every field the extractors read (role/kind/content/senderName/meta.streaming/timestamp/receivedAt, status, providerObservedStatus, activeModal, turn, providerSessionId) survives the projection. \u2605 NOT lossless in one direction: `turnTerminalMarkers` is deliberately omitted (the wire carries no native markers \u2014 see mapTerminalEvidencePayload), so a replica read takes the legacy message-shape admission rules instead of strong native-marker evidence. Weaker evidence, same veto direction.",
-        enabled: true,
-        unit: 7
+        enabled: true
       },
       mcp_mesh_status_reconciliation: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-internal.ts (reconcileDirectDispatchesFromTranscriptEvidence)",
         note: "Final-assistant completion synthesis; the replica feeds the SAME readFinalAssistantTranscriptEvidence + hasTrailingToolActivityAfterFinalAssistant parsers as the live read, so the activity-after-final veto and synthesis idempotency are unchanged. Needs activity kinds in order, so tail-only coverage declines.",
-        enabled: true,
-        unit: 8
+        enabled: true
       },
       magi_approval_probe: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (nudgeWedgedReplica)",
         note: "Fresh status+activeModal only, for idempotent approve. Irreversible act, so admission requires a snapshot inside the freshness budget (design \xA75.5); resolve_action stays a live RPC.",
-        enabled: true,
-        unit: 8
+        enabled: true
       },
       magi_result_collect: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (tryResolveReplica)",
         note: "Current-turn MAGI result/evidence collection; the replica runs the SAME parseFirstMagiCandidateForKind, and current-turn coverage is required so the FIX#1 cross-turn mis-attribution guard is not lost.",
-        enabled: true,
-        unit: 8
+        enabled: true
       }
     };
     var TRANSCRIPT_CONSUMER_IDS = Object.keys(
       TRANSCRIPT_CONSUMER_ROSTER2
     );
-    function rosterIdsForUnit(unit) {
-      return TRANSCRIPT_CONSUMER_IDS.filter((id) => TRANSCRIPT_CONSUMER_ROSTER2[id].unit === unit);
-    }
-    function withRosterEntryDisabled(id, roster = TRANSCRIPT_CONSUMER_ROSTER2) {
-      return { ...roster, [id]: { ...roster[id], enabled: false } };
-    }
   }
 });
 

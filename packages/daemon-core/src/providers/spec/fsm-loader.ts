@@ -83,6 +83,48 @@ export function validateFsmSpec(raw: unknown): string[] {
         }
     }
 
+    if (spec.error_classification !== undefined) {
+        const ec = spec.error_classification as Record<string, unknown>;
+        if (!ec || typeof ec !== 'object' || Array.isArray(ec)) {
+            errs.push('error_classification must be an object');
+        } else {
+            const classes = ['transport', 'auth', 'billing', 'quota'] as const;
+            for (const key of Object.keys(ec)) {
+                if (!(classes as readonly string[]).includes(key)) {
+                    errs.push(`error_classification.${key} is not a recognized class (expected one of: ${classes.join(', ')})`);
+                }
+            }
+            for (const cls of classes) {
+                const bucket = ec[cls];
+                if (bucket === undefined) continue;
+                const b = bucket as { patterns?: unknown; requires?: unknown };
+                if (!b || typeof b !== 'object' || Array.isArray(b)) {
+                    errs.push(`error_classification.${cls} must be an object`);
+                    continue;
+                }
+                if (b.requires !== undefined && b.requires !== 'no_further_generation' && b.requires !== 'provider_failure_envelope') {
+                    errs.push(`error_classification.${cls}.requires must be "no_further_generation" or "provider_failure_envelope" when provided`);
+                }
+                if (!Array.isArray(b.patterns) || b.patterns.length === 0) {
+                    errs.push(`error_classification.${cls}.patterns must be a non-empty array`);
+                    continue;
+                }
+                b.patterns.forEach((p, i) => {
+                    const rec = (p && typeof p === 'object' ? p : {}) as { regex?: unknown; flags?: unknown };
+                    if (typeof rec.regex !== 'string' || !rec.regex) {
+                        errs.push(`error_classification.${cls}.patterns[${i}].regex is required`);
+                        return;
+                    }
+                    try {
+                        new RegExp(rec.regex, typeof rec.flags === 'string' ? rec.flags : undefined);
+                    } catch {
+                        errs.push(`error_classification.${cls}.patterns[${i}].regex does not compile`);
+                    }
+                });
+            }
+        }
+    }
+
     if (spec.refocus_when_stalled_ms !== undefined) {
         if (typeof spec.refocus_when_stalled_ms !== 'number' || !(spec.refocus_when_stalled_ms > 0)) {
             errs.push('refocus_when_stalled_ms must be a positive number');
