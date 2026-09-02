@@ -142,12 +142,91 @@ describe('interactive prompt utilities', () => {
         .toMatchObject({ sessionId: 'session-2' })
     })
 
-    it('still resolves a hidden session when asked for it explicitly by id', () => {
+    it('still resolves a hidden session for the legacy positional-id form', () => {
       // The coordinator answers its worker's prompt through this path — suppressing
       // it here would strand the worker waiting forever.
       expect(findInteractivePromptSession([hiddenWorker], 'worker-1'))
         .toMatchObject({ sessionId: 'worker-1' })
     })
+
+    it('resolves a hidden session when includeHidden is opted into explicitly', () => {
+      expect(findInteractivePromptSession([hiddenWorker], { sessionId: 'worker-1', includeHidden: true }))
+        .toMatchObject({ sessionId: 'worker-1' })
+    })
+
+    // ★ The core guard for the scoping fix: adding a scope must NOT re-open the
+    // hidden leak. Under the old single-parameter contract, any explicit
+    // sessionId implicitly enabled hidden entries, so scoping the dashboard
+    // modal to the selected tab would have surfaced a hidden worker again.
+    it('keeps a hidden session suppressed even when scoped to it by id', () => {
+      expect(findInteractivePromptSession([hiddenWorker], { sessionId: 'worker-1' }))
+        .toBeNull()
+    })
+
+    it('keeps hidden suppression when a scoped scan would otherwise match it first', () => {
+      expect(findInteractivePromptSession(
+        [hiddenWorker, visibleSession],
+        { sessionId: 'worker-1' },
+      )).toBeNull()
+    })
+  })
+
+  // ── The modal must follow the SELECTED tab, not `ides` order ──
+  // Live defect: with the `ws` tab selected, the modal rendered `e2e-ws`'s
+  // question. Dashboard.tsx called the hook unscoped, so the winner was
+  // whichever prompt-bearing session came first in the status-report merge —
+  // unstable enough to change across a refresh.
+  describe('selected-session scoping', () => {
+    const otherPrompt = { ...prompt, promptId: 'prompt-other' }
+
+    const unselectedFirst = {
+      id: 'daemon-1:cli:e2e-ws',
+      daemonId: 'daemon-1',
+      sessionId: 'e2e-ws',
+      type: 'claude-cli',
+      status: 'waiting_choice',
+      activeInteractivePrompt: otherPrompt,
+    } as DaemonData
+
+    const selectedSecond = {
+      id: 'daemon-1:cli:ws',
+      daemonId: 'daemon-1',
+      sessionId: 'ws',
+      type: 'claude-cli',
+      status: 'waiting_choice',
+      activeInteractivePrompt: prompt,
+    } as DaemonData
+
+    it('returns the selected session\'s prompt even when another is ordered first', () => {
+      expect(findInteractivePromptSession([unselectedFirst, selectedSecond], { sessionId: 'ws' }))
+        .toMatchObject({ sessionId: 'ws', prompt })
+    })
+
+    it('returns nothing when the selected session has no prompt of its own', () => {
+      // Must NOT fall back to some other session's question — silence is correct.
+      const selectedNoPrompt = { ...selectedSecond, activeInteractivePrompt: undefined } as DaemonData
+      expect(findInteractivePromptSession([unselectedFirst, selectedNoPrompt], { sessionId: 'ws' }))
+        .toBeNull()
+    })
+
+    it('scopes by routeId too, since that is what a tab may carry', () => {
+      expect(findInteractivePromptSession(
+        [unselectedFirst, selectedSecond],
+        { sessionId: 'daemon-1:cli:ws' },
+      )).toMatchObject({ sessionId: 'ws' })
+    })
+  })
+
+  describe('visibility flags other than surfaceHidden', () => {
+    const visibleSession = {
+      id: 'daemon-1:cli:session-2',
+      daemonId: 'daemon-1',
+      sessionId: 'session-2',
+      type: 'claude-cli',
+      status: 'waiting_approval',
+      surfaceHidden: false,
+      activeInteractivePrompt: prompt,
+    } as DaemonData
 
     it('surfaces a muted-but-visible session — mute silences alerts, not the dialog', () => {
       const mutedVisible = { ...visibleSession, muted: true, surfaceHidden: false } as DaemonData
