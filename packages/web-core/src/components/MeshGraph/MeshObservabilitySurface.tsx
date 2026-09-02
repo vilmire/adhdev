@@ -454,11 +454,17 @@ export default function MeshObservabilitySurface({
             : t('meshGraph.obs.headlineConverged')
     const headlineTone = canonicalGraph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
 
-    // 'auto' (not 'LR'): an explicit direction prop suppresses MeshGraphView's
-    // narrow-viewport TB fallback, so a hard 'LR' default forced phones into the
-    // wide horizontal pipeline. Auto keeps LR on desktop (heuristic) and lets
-    // mobile fall back to vertical.
-    const [directionPref, setDirectionPref] = useState<'auto' | 'LR' | 'TB'>('auto')
+    /* Direction is the USER's choice, defaulting to TB (owner call 2026-09-02).
+     * The former 'auto' mode picked a direction from the data, so the same mesh
+     * could flip orientation as it changed — the layout appeared to move on its
+     * own. A stable default the user can override reads as a tool; a layout that
+     * re-decides for you does not.
+     *
+     * TB is also why the old caveat here no longer bites: an explicit direction
+     * prop suppresses MeshGraphView's narrow-viewport TB fallback, which made a
+     * hard 'LR' default force phones into the wide horizontal pipeline. TB is
+     * what that fallback wanted anyway. */
+    const [directionPref, setDirectionPref] = useState<'LR' | 'TB'>('TB')
 
     const directionToggleButtonClass = (active: boolean) =>
         active
@@ -606,7 +612,6 @@ export default function MeshObservabilitySurface({
                             role="group"
                             aria-label="Graph layout direction"
                         >
-                            <button type="button" onClick={() => setDirectionPref('auto')} className={directionToggleButtonClass(directionPref === 'auto')} title={t('meshGraph.obs.directionAutoTitle')}>{t('meshGraph.obs.directionAuto')}</button>
                             <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title={t('meshGraph.obs.directionLRTitle')}>LR</button>
                             <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title={t('meshGraph.obs.directionTBTitle')}>TB</button>
                         </div>

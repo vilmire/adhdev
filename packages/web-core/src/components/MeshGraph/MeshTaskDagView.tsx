@@ -587,10 +587,9 @@ function ClusterHullNode({ data }: NodeProps<HullFlowNode>) {
  * automatic frame instead pushed its own targets off a short canvas. */
 const CANVAS_MIN_ZOOM = 0.18
 
-/** Widest an edge label may render, in px — see the layer-spacing note. */
+/** The closed run_if operator set, as symbols — see ConditionNode. */
 const CONDITION_OP_SYMBOL: Record<string, string> = { eq: '=', ne: '≠', in: '∈', exists: '?' }
 
-const EDGE_LABEL_MAX_WIDTH = 200
 
 
 const COLLAPSED_GRAPH_WIDTH = 236
@@ -649,6 +648,9 @@ function CollapsedGraphNode({ data }: NodeProps<CollapsedGraphFlowNode>) {
 }
 
 const CONDITION_NODE_WIDTH = 188
+/** Horizontal room reserved between layers so a condition card fits on the wire
+ *  instead of overlapping the nodes at either end. */
+const CONDITION_NODE_LAYER_GAP = CONDITION_NODE_WIDTH + 12
 /** Approximate rendered height — used only to centre the card on its wire. */
 const CONDITION_NODE_HEIGHT = 48
 
@@ -727,37 +729,19 @@ const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, p
 interface CanvasComposition {
     /** Every renderable task; ELK model order is applied at layout time. */
     orderedTasks: TaskDagNode[]
-    missionClusters: Array<{ id: string; missionId: string; memberIds: string[] }>
 }
 
 function taskTimeKey(node: TaskDagNode): string {
     return String(node.task.updatedAt || node.task.createdAt || '')
 }
 
-function buildCanvasComposition(dag: TaskDagData, overlays: FusedOverlays): CanvasComposition {
-    // Mission hulls used to cover only LOOSE same-mission tasks, because the
-    // loose stack was the only place they could be made contiguous. With one
-    // ELK zone the hull is a pure grouping again: every multi-task mission
-    // gets one, whether or not its tasks carry dependency edges.
-    const graphMemberIds = new Set(overlays.clusters.flatMap(cluster => cluster.memberIds))
-    const byMission = new Map<string, TaskDagNode[]>()
-    for (const node of dag.nodes) {
-        const missionId = typeof node.task.missionId === 'string' && node.task.missionId ? node.task.missionId : ''
-        if (!missionId) continue
-        // A card already framed by its graph hull must not take a second frame.
-        if (graphMemberIds.has(node.id)) continue
-        const bucket = byMission.get(missionId) ?? []
-        bucket.push(node)
-        byMission.set(missionId, bucket)
-    }
-    const missionClusters = [...byMission.entries()]
-        .filter(([, nodes]) => nodes.length > 1)
-        .map(([missionId, nodes]) => ({
-            id: `mission:${missionId}`,
-            missionId,
-            memberIds: nodes.map(node => node.id),
-        }))
-    return { orderedTasks: dag.nodes, missionClusters }
+/* Mission hulls are NOT built here (2026-09-02): this used to bucket loose
+ * same-mission tasks into hulls, but hulls render exclusively from
+ * `fused.clusters`, so the result was computed on every layout and thrown
+ * away. Mission grouping survives as the hover thread, which is what the
+ * owner call actually asked for. */
+function buildCanvasComposition(dag: TaskDagData): CanvasComposition {
+    return { orderedTasks: dag.nodes }
 }
 
 
@@ -874,8 +858,23 @@ function layoutArchive(
     type Entry = { at: number; expandedIds?: string[]; chipId?: string }
     const entries: Entry[] = []
     for (const cluster of overlays.clusters) {
-        const ownIds = cluster.memberIds.filter(id => positions.has(id))
-        if (ownIds.length === 0 || ownIds.length !== cluster.memberIds.length) continue
+        /* Move only the nodes this graph OWNS — its gates and ghost steps.
+         *
+         * A settled graph's task nodes fuse onto live queue cards while those
+         * cards are still within the terminal-render cap, so a just-finished
+         * graph legitimately has live task ids among its members. Skipping the
+         * whole cluster on that basis (the first cut of this guard) left its
+         * gates and ghosts at raw ELK coordinates, sitting on top of the live
+         * drawing — and that is precisely the graph a user is most likely to
+         * expand. Skipping on "any member missing from positions" had the same
+         * effect for a partially-rendered cluster.
+         *
+         * A cluster that is ANCHORED to the live drawing (has live members)
+         * still must not be translated as a unit — that would tear the fusion
+         * apart — so those keep ELK's placement and only fully free-floating
+         * graphs join the archive list. */
+        const ownIds = cluster.memberIds.filter(id => positions.has(id) && !liveIds.has(id))
+        if (ownIds.length === 0) continue
         if (cluster.memberIds.some(id => liveIds.has(id))) continue
         entries.push({ at: timelineByGraphId.get(cluster.graphId) ?? 0, expandedIds: ownIds })
     }
@@ -935,7 +934,7 @@ async function layoutElkElements(tasks: TaskDagNode[], taskEdges: TaskDagData['e
             // Wide enough for a conditional edge's predicate label to sit
             // between two layers without riding either node (measured: a
             // 200px label over a 120px gap overlapped BOTH neighbours).
-            'elk.layered.spacing.nodeNodeBetweenLayers': String(EDGE_LABEL_MAX_WIDTH + 48),
+            'elk.layered.spacing.nodeNodeBetweenLayers': String(CONDITION_NODE_LAYER_GAP + 48),
             'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
             'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
             'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
@@ -1068,7 +1067,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     const jumpCycleRef = useRef<Record<string, number>>({})
     const fittedFingerprintRef = useRef('')
 
-    const composition = useMemo(() => buildCanvasComposition(dag, fused), [dag, fused])
+    const composition = useMemo(() => buildCanvasComposition(dag), [dag, fused])
 
     /** graphId → its moment on the archive axis, for ordering the list. */
     const timelineByGraphId = useMemo(() => {
@@ -1226,9 +1225,15 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                      * heights (a blocking gate is 104px, a ghost step 58px), so
                      * averaging their tops put the card 66px off the wire and
                      * the smoothstep visibly kinked around it. */
+                    /* The source's REAL height — a task card is 96px only at its
+                     * minimum; a mission bar, wrapped message and badge row take
+                     * it to ~192, which put the card ~48px off the wire and
+                     * reintroduced the kink this centring exists to remove. */
+                    const sourceNode = dag.nodes.find(n => n.id === edge.source)
                     const sourceH = edge.source.startsWith('gate:')
                         ? gateNodeHeight(fused.gates.find(g => g.id === edge.source)?.state ?? 'declared')
-                        : edge.source.startsWith('plan:') ? PLAN_NODE_HEIGHT : TASK_CARD_MIN_HEIGHT
+                        : edge.source.startsWith('plan:') ? PLAN_NODE_HEIGHT
+                            : sourceNode ? estimateTaskCardHeight(sourceNode) : TASK_CARD_MIN_HEIGHT
                     const midY = source.y + sourceH / 2 - CONDITION_NODE_HEIGHT / 2
                     return {
                         id: `cond:${edge.id}`,
@@ -1489,12 +1494,17 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 : tone === 'info'
                     ? (meshTheme.isDark ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
                     : (meshTheme.isDark ? 'border-white/10 bg-white/[0.05] text-slate-300' : 'border-slate-200 bg-white/85 text-slate-600')
-        if (!onJump) return <span className={`rounded-full border px-2 py-0.5 text-3xs ${toneClass}`}>{label}</span>
+        /* shrink-0 + nowrap: the row is horizontally scrollable, but without
+         * these flex squeezed each chip to fit the container and the label
+         * wrapped one character per line at 375px ("태스크 6개" became a 71px
+         * column). Chips keep their width and the row scrolls instead. */
+        const chipBase = `shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-3xs ${toneClass}`
+        if (!onJump) return <span className={chipBase}>{label}</span>
         // State chips double as navigation: each click centers the next card in
         // that bucket, so "1 blocked" is an entry point, not just a count.
         return (
             <button type="button" onClick={onJump} title={t('meshGraph.taskDag.jumpToState')}
-                className={`rounded-full border px-2 py-0.5 text-3xs transition-transform hover:scale-105 ${toneClass}`}>
+                className={`${chipBase} transition-transform hover:scale-105`}>
                 {label}
             </button>
         )
@@ -1567,7 +1577,17 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             >
                 {/* No background pattern: the drafting-shell surface alone carries the
                     blueprint identity (owner call 2026-08-25 — no grid, no dots). */}
-                <Controls showInteractive={false} position="bottom-left" />
+                {/* Bottom-left by default; CSS flips it to the right edge under
+                    640px. At 375px the bottom-left controls sat on top of the
+                    archive column and the gate card (measured: 5 nodes covered),
+                    and the right edge is empty there because the drawing is
+                    left-anchored. Done in CSS rather than with a ResizeObserver
+                    so placement costs no re-render. */}
+                <Controls
+                    showInteractive={false}
+                    position="bottom-left"
+                    className="max-[640px]:!left-auto max-[640px]:!right-2"
+                />
             </ReactFlow>
 
 

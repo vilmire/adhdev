@@ -526,6 +526,57 @@
                         "cleanup_candidate: lista para limpiar.",
                         "not_mergeable: no se puede fusionar."
                     ]
+                },
+                "graph": {
+                    "term": "Grafo de orquestación",
+                    "summary": "Un lote de tareas encoladas con dependencias, condiciones y puertas declaradas.",
+                    "details": [
+                        "Creado por mesh_enqueue_batch; cada grafo es un plan ejecutable dentro de una misión.",
+                        "Los grafos finalizados se colapsan en una ficha del plano — haz clic para expandir en su sitio."
+                    ]
+                },
+                "gate": {
+                    "term": "Puerta de coordinador",
+                    "summary": "Un paso que retiene el grafo hasta que actúa un coordinador dirigido por una persona.",
+                    "details": [
+                        "Estados: declared → awaiting_coordinator → claimed → released (o expired).",
+                        "El plano dibuja una puerta en espera con el ancho completo, con sus instrucciones y fecha límite.",
+                        "Se actúa sobre una puerta instruyendo al coordinador; aquí el panel es de solo lectura."
+                    ]
+                },
+                "condition": {
+                    "term": "Condición (run_if)",
+                    "summary": "Un predicado declarativo que decide si un paso planificado llega a ejecutarse.",
+                    "details": [
+                        "La gramática es un conjunto cerrado: all / any / not sobre exists, ==, != e in.",
+                        "El plano la dibuja como una tarjeta conectada a la arista, p. ej. review.outcome == rejected.",
+                        "Un paso cuya condición nunca se cumple se omite, no falla."
+                    ]
+                },
+                "blueprint": {
+                    "term": "Plano",
+                    "summary": "La vista de plan: trabajo en cola, puertas del grafo y pasos planificados en un lienzo.",
+                    "details": [
+                        "Un solo eje: profundidad de dependencias, de izquierda a derecha. Las raíces van de más reciente a más antigua.",
+                        "Cada tarjeta lleva su hora, así la posición no tiene que codificarla.",
+                        "Los grafos terminados quedan debajo como archivo colapsado."
+                    ]
+                },
+                "routingPreview": {
+                    "term": "Vista previa de enrutado",
+                    "summary": "Un pronóstico de solo lectura de dónde caería una tarea hipotética.",
+                    "details": [
+                        "Se muestra por dificultad; una tarea fijada a un nodo tiene su propia vista fijada (📌).",
+                        "Es una predicción, no el propietario — una tarjeta ya ejecutada muestra su nodo real debajo."
+                    ]
+                },
+                "worktree": {
+                    "term": "Nodo de worktree",
+                    "summary": "Un nodo respaldado por un git worktree en lugar del checkout principal.",
+                    "details": [
+                        "Etiquetado por su rama (⎇). Permite varias tareas en una máquina sin compartir rama.",
+                        "Los worktrees huérfanos se reportan como candidatos a limpieza y nunca se borran solos."
+                    ]
                 }
             }
         },
@@ -741,36 +792,36 @@
             "clean": "Limpio y al día con upstream"
         },
         "taskDag": {
-                "plan": {
-                    "depsFailed_one": "{{count}} anterior(es) fallaron",
-                    "depsFailed_other": "{{count}} anteriores fallaron"
-                },
-                "gate": {
-                    "holding_one": "reteniendo {{count}} paso",
-                    "holding_other": "reteniendo {{count}} pasos",
-                    "converged": "commits en main",
-                    "notConverged_one": "{{count}} commits fuera de main",
-                    "notConverged_other": "{{count}} commits fuera de main",
-                    "deadline": "hasta {{time}} \u00b7 luego {{onTimeout}}",
-                    "needsYou": "Requiere acci\u00f3n"
-                },
-                "edge": {
-                    "conditionMore": "y m\u00e1s",
-                    "conditional": "condicional"
-                },
-                "time": {
-                    "now": "ahora mismo",
-                    "minutes_one": "hace {{count}} min",
-                    "minutes_other": "hace {{count}} min",
-                    "hours_one": "hace {{count}} h",
-                    "hours_other": "hace {{count}} h",
-                    "days_one": "hace {{count}} d",
-                    "days_other": "hace {{count}} d"
-                },
-                "collapsed": {
-                    "expand": "Haz clic para expandir este grafo finalizado",
-                    "counts": "{{nodes}} pasos \u00b7 {{gates}} puertas"
-                },
+            "plan": {
+                "depsFailed_one": "{{count}} anterior(es) fallaron",
+                "depsFailed_other": "{{count}} anteriores fallaron"
+            },
+            "gate": {
+                "holding_one": "reteniendo {{count}} paso",
+                "holding_other": "reteniendo {{count}} pasos",
+                "converged": "commits en main",
+                "notConverged_one": "{{count}} commits fuera de main",
+                "notConverged_other": "{{count}} commits fuera de main",
+                "deadline": "hasta {{time}} · luego {{onTimeout}}",
+                "needsYou": "Requiere acción"
+            },
+            "edge": {
+                "conditionMore": "y más",
+                "conditional": "condicional"
+            },
+            "time": {
+                "now": "ahora mismo",
+                "minutes_one": "hace {{count}} min",
+                "minutes_other": "hace {{count}} min",
+                "hours_one": "hace {{count}} h",
+                "hours_other": "hace {{count}} h",
+                "days_one": "hace {{count}} d",
+                "days_other": "hace {{count}} d"
+            },
+            "collapsed": {
+                "expand": "Haz clic para expandir este grafo finalizado",
+                "counts": "{{nodes}} pasos · {{gates}} puertas"
+            },
             "empty": "Aún no hay tareas en cola — encola tareas del mesh para ver el grafo de dependencias.",
             "waitsOn_one": "espera {{count}}",
             "waitsOn_other": "espera {{count}}",
@@ -896,14 +947,16 @@
             "meshConnecting": "conectando a la malla...",
             "connecting": "conectando...",
             "providerUnknown": "proveedor desconocido",
-            "directionAuto": "Auto",
-            "directionAutoTitle": "Detectar dirección automáticamente",
             "directionLRTitle": "De izquierda a derecha",
             "directionTBTitle": "De arriba abajo",
             "fastForwardConfirmTitle": "¿Aplicar fast-forward a {{label}}?",
             "fastForwardConfirmLabel": "Fast-forward"
         },
         "notes": {
+            "expired": "caducada",
+            "neverExpires": "nunca caduca",
+            "durable": "permanente",
+            "expiresIn": "caduca {{when}}",
             "tab": "Notas",
             "addTitle": "Anadir nota operativa",
             "listTitle": "Notas operativas",

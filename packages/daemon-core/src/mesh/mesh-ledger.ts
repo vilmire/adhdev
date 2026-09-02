@@ -677,24 +677,46 @@ export interface OperatingNoteExpiryInput {
  *    (never silently drop a note we cannot age).
  */
 export function isNoteExpired(note: OperatingNoteExpiryInput, now: number): boolean {
-    if (!note || note.pinned) return false;
+    return resolveNoteExpiry(note, now).expired;
+}
+
+/** What a caller needs to both display and enforce a note's lifetime. */
+export interface ResolvedNoteExpiry {
+    /** When this note stops being injected. Absent = durable (never expires). */
+    effectiveExpiresAt?: string;
+    expired: boolean;
+}
+
+/**
+ * Single source for the note-lifetime policy: pinned beats everything, an
+ * explicit parseable `expiresAt` beats the category TTL, and a category with no
+ * TTL is durable.
+ *
+ * Callers that only need the boolean use isNoteExpired; the dashboard also needs
+ * the resolved deadline to show it. Those were briefly two separate
+ * implementations — one here, one in the list_mesh_notes handler — which agreed
+ * by luck and would have drifted.
+ */
+export function resolveNoteExpiry(note: OperatingNoteExpiryInput, now: number): ResolvedNoteExpiry {
+    if (!note || note.pinned) return { expired: false };
 
     // Explicit expiresAt wins when present and parseable.
     if (typeof note.expiresAt === 'string') {
         const exp = new Date(note.expiresAt).getTime();
-        if (!Number.isNaN(exp)) return exp <= now;
+        if (!Number.isNaN(exp)) return { effectiveExpiresAt: new Date(exp).toISOString(), expired: exp <= now };
     }
 
     const ttlDays = note.category ? OPERATING_NOTE_CATEGORY_TTL_DAYS[note.category] : undefined;
     if (typeof ttlDays !== 'number' || !Number.isFinite(ttlDays)) {
         // Durable category (provider_quirk / uncategorized / unknown) → never expires.
-        return false;
+        return { expired: false };
     }
 
     const created = new Date(note.createdAt ?? note.timestamp ?? '').getTime();
-    if (Number.isNaN(created)) return false; // cannot age → keep
+    if (Number.isNaN(created)) return { expired: false }; // cannot age → keep
 
-    return now - created >= ttlDays * MS_PER_DAY;
+    const deadline = created + ttlDays * MS_PER_DAY;
+    return { effectiveExpiresAt: new Date(deadline).toISOString(), expired: now >= deadline };
 }
 
 // ─── Path Helpers ───────────────────────────────

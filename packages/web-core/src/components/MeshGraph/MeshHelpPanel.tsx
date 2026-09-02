@@ -33,10 +33,18 @@ type HelpSection = {
  */
 const MESH_HELP_SECTION_IDS = [
     'node',
+    'worktree',
     'p2p',
     'session',
     'task',
     'mission',
+    // Graph orchestration — the blueprint's vocabulary. Absent until 2026-09-02,
+    // which left the panel describing only the first generation of the mesh.
+    'graph',
+    'gate',
+    'condition',
+    'blueprint',
+    'routingPreview',
     'refinery',
     'completion',
     'magi',

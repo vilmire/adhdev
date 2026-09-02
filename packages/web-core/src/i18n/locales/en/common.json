@@ -526,6 +526,57 @@
                         "cleanup_candidate — ready to clean up.",
                         "not_mergeable — cannot be merged."
                     ]
+                },
+                "graph": {
+                    "term": "Orchestration graph",
+                    "summary": "A batch of tasks enqueued together with declared dependencies, conditions and gates.",
+                    "details": [
+                        "Created by mesh_enqueue_batch; each graph is one executable plan inside a mission.",
+                        "Settled graphs collapse to a single chip on the blueprint — click to expand in place."
+                    ]
+                },
+                "gate": {
+                    "term": "Coordinator gate",
+                    "summary": "A step that holds the graph until a human-directed coordinator acts.",
+                    "details": [
+                        "States: declared → awaiting_coordinator → claimed → released (or expired).",
+                        "The blueprint draws a waiting gate at full card width with its instructions and deadline.",
+                        "Acting on a gate is done by instructing the coordinator; the dashboard is read-only here."
+                    ]
+                },
+                "condition": {
+                    "term": "Condition (run_if)",
+                    "summary": "A declarative predicate deciding whether a planned step runs at all.",
+                    "details": [
+                        "Grammar is a closed set: all / any / not over exists, ==, != and in.",
+                        "The blueprint renders it as a card wired into the edge, e.g. review.outcome == rejected.",
+                        "A step whose condition never holds is skipped, not failed."
+                    ]
+                },
+                "blueprint": {
+                    "term": "Blueprint",
+                    "summary": "The plan view: live queue work, graph gates and planned steps on one canvas.",
+                    "details": [
+                        "One axis — dependency depth, left to right. Root tasks are ordered newest first.",
+                        "Cards carry their own time, so position never has to encode it.",
+                        "Finished graphs sit below the live work as a collapsed archive."
+                    ]
+                },
+                "routingPreview": {
+                    "term": "Routing preview",
+                    "summary": "A read-only forecast of where a hypothetical task would land.",
+                    "details": [
+                        "Shown per difficulty; a task pinned to a node gets its own pinned preview (📌).",
+                        "It is a prediction, not the owner — a card that already ran shows its real node below."
+                    ]
+                },
+                "worktree": {
+                    "term": "Worktree node",
+                    "summary": "A node backed by a git worktree rather than the main checkout.",
+                    "details": [
+                        "Labelled by its branch (⎇). Lets several tasks run on one machine without sharing a branch.",
+                        "Orphan worktrees are reported as cleanup candidates and are never deleted automatically."
+                    ]
                 }
             }
         },
@@ -741,36 +792,36 @@
             "clean": "Clean and even with upstream"
         },
         "taskDag": {
-                "plan": {
-                    "depsFailed_one": "{{count}} upstream failed",
-                    "depsFailed_other": "{{count}} upstream failed"
-                },
-                "gate": {
-                    "holding_one": "holding {{count}} step",
-                    "holding_other": "holding {{count}} steps",
-                    "converged": "commits on main",
-                    "notConverged_one": "{{count}} commits not on main",
-                    "notConverged_other": "{{count}} commits not on main",
-                    "deadline": "due {{time}} \u00b7 then {{onTimeout}}",
-                    "needsYou": "Needs you"
-                },
-                "edge": {
-                    "conditionMore": "+ more",
-                    "conditional": "if condition"
-                },
-                "time": {
-                    "now": "just now",
-                    "minutes_one": "{{count}}m ago",
-                    "minutes_other": "{{count}}m ago",
-                    "hours_one": "{{count}}h ago",
-                    "hours_other": "{{count}}h ago",
-                    "days_one": "{{count}}d ago",
-                    "days_other": "{{count}}d ago"
-                },
-                "collapsed": {
-                    "expand": "Click to expand this finished graph",
-                    "counts": "{{nodes}} steps \u00b7 {{gates}} gates"
-                },
+            "plan": {
+                "depsFailed_one": "{{count}} upstream failed",
+                "depsFailed_other": "{{count}} upstream failed"
+            },
+            "gate": {
+                "holding_one": "holding {{count}} step",
+                "holding_other": "holding {{count}} steps",
+                "converged": "commits on main",
+                "notConverged_one": "{{count}} commits not on main",
+                "notConverged_other": "{{count}} commits not on main",
+                "deadline": "due {{time}} · then {{onTimeout}}",
+                "needsYou": "Needs you"
+            },
+            "edge": {
+                "conditionMore": "+ more",
+                "conditional": "if condition"
+            },
+            "time": {
+                "now": "just now",
+                "minutes_one": "{{count}}m ago",
+                "minutes_other": "{{count}}m ago",
+                "hours_one": "{{count}}h ago",
+                "hours_other": "{{count}}h ago",
+                "days_one": "{{count}}d ago",
+                "days_other": "{{count}}d ago"
+            },
+            "collapsed": {
+                "expand": "Click to expand this finished graph",
+                "counts": "{{nodes}} steps · {{gates}} gates"
+            },
             "empty": "No queue tasks yet — enqueue mesh tasks to see the dependency graph.",
             "waitsOn_one": "waits on {{count}}",
             "waitsOn_other": "waits on {{count}}",
@@ -891,14 +942,16 @@
             "meshConnecting": "mesh connecting...",
             "connecting": "connecting...",
             "providerUnknown": "provider unknown",
-            "directionAuto": "Auto",
-            "directionAutoTitle": "Auto-detect direction",
             "directionLRTitle": "Left to right",
             "directionTBTitle": "Top to bottom",
             "fastForwardConfirmTitle": "Apply fast-forward for {{label}}?",
             "fastForwardConfirmLabel": "Fast-forward"
         },
         "notes": {
+            "expired": "expired",
+            "neverExpires": "never expires",
+            "durable": "durable",
+            "expiresIn": "expires {{when}}",
             "tab": "Notes",
             "addTitle": "Add operating note",
             "listTitle": "Operating notes",
