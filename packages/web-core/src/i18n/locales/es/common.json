@@ -755,6 +755,7 @@
                     "needsYou": "Requiere acci\u00f3n"
                 },
                 "edge": {
+                    "conditionMore": "y m\u00e1s",
                     "conditional": "condicional"
                 },
                 "time": {

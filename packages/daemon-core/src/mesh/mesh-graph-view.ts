@@ -72,19 +72,47 @@ export interface MeshGraphNodeView {
     features?: string[];
 }
 
+/** One leaf comparison of a `run_if`, ready to render as discrete parts. */
+export interface MeshEdgeConditionClause {
+    /** Dotted subject path, e.g. `review.outcome`. */
+    subject: string;
+    op: 'exists' | 'eq' | 'ne' | 'in';
+    /** Literal comparand, pre-formatted; absent for `exists`. */
+    value?: string;
+}
+
+/**
+ * A `run_if` reduced to what a reader needs: the clauses, and how they
+ * combine. Nested combinators are flattened to a single level — the blueprint
+ * shows the shape of the gate, not a full expression tree; `truncated` says
+ * when detail was dropped so the UI can point at the detail panel.
+ */
+export interface MeshEdgeConditionView {
+    /** How the clauses combine. 'single' when there is exactly one. */
+    combinator: 'single' | 'all' | 'any';
+    /** True when the whole expression is negated (`not`). */
+    negated: boolean;
+    clauses: MeshEdgeConditionClause[];
+    /** True when nesting or clause count exceeded what is summarised here. */
+    truncated: boolean;
+}
+
 export interface MeshGraphEdgeView {
     from: string;
     to: string;
     kind: string;
     omitOnSkip: boolean;
     /**
-     * Human-readable summary of a conditional edge's `run_if`, e.g.
-     * `review.outcome == "rejected"`. The stored `condition_json` never
-     * reached a reader before, so a blueprint could show THAT a branch was
-     * conditional but never on WHAT — "조건부" with no predicate reads as an
-     * unexplained label. Summary only: the raw expression stays server-side.
+     * Structured summary of a conditional edge's `run_if`. The stored
+     * `condition_json` never reached a reader before, so a blueprint could
+     * show THAT a branch was conditional but never on WHAT.
+     *
+     * Structured, not a rendered string: the grammar is a closed set
+     * (all/any/not over exists/eq/ne/in), so the UI can lay each clause out as
+     * its own typed element — subject, operator, comparand — instead of
+     * parsing a sentence back apart or truncating it to fit an edge label.
      */
-    condition?: string;
+    condition?: MeshEdgeConditionView;
     /** False once the source is skipped and the edge was omitted from the projection. */
     active: boolean;
 }
@@ -448,19 +476,22 @@ export function countMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
 }
 
 /** Which advanced graph features a node declared — enough to explain a hold, no spec contents. */
+/** Max clauses summarised on the canvas; beyond this the view says `truncated`. */
+const MAX_CONDITION_CLAUSES = 3;
+
 /**
- * One-line, human-readable rendering of a `run_if` expression.
+ * Reduce a `run_if` expression to the structured summary the blueprint draws.
  *
  * The grammar is small and closed (all/any/not over exists/eq/ne/in with a
- * JSON Pointer selector — see parseRunIfCondition), so a faithful short form
- * is possible without leaking arbitrary content: selectors and literal
- * comparands are the author's own plan text, the same class of string as the
- * `ref` values already carried here.
+ * JSON Pointer selector — see parseRunIfCondition), so a faithful reduction is
+ * possible without leaking arbitrary content: selectors and literal comparands
+ * are the author's own plan text, the same class of string as the `ref` values
+ * already carried here.
  *
- * Returns undefined for absent/!unparseable input so the UI renders nothing
+ * Returns undefined for absent/unparseable input so the UI renders nothing
  * rather than a misleading half-condition.
  */
-export function describeEdgeCondition(conditionJson: string | undefined): string | undefined {
+export function describeEdgeCondition(conditionJson: string | undefined): MeshEdgeConditionView | undefined {
     if (typeof conditionJson !== 'string' || conditionJson.length === 0) return undefined;
     let parsed: unknown;
     try {
@@ -468,42 +499,55 @@ export function describeEdgeCondition(conditionJson: string | undefined): string
     } catch {
         return undefined;
     }
-    const text = renderCondition(parsed, 0);
-    return text && text.length <= 120 ? text : text ? `${text.slice(0, 117)}...` : undefined;
+    return reduceCondition(parsed);
 }
 
-function renderCondition(node: unknown, depth: number): string | undefined {
-    if (!node || typeof node !== 'object' || Array.isArray(node)) return undefined;
-    if (depth > 4) return '...';
-    const value = node as Record<string, unknown>;
+function reduceCondition(raw: unknown): MeshEdgeConditionView | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    let node = raw as Record<string, unknown>;
+    let negated = false;
+    if (node.not !== undefined) {
+        const inner = node.not;
+        if (!inner || typeof inner !== 'object' || Array.isArray(inner)) return undefined;
+        negated = true;
+        node = inner as Record<string, unknown>;
+    }
     for (const key of ['all', 'any'] as const) {
-        const list = value[key];
-        if (Array.isArray(list) && list.length > 0) {
-            const parts = list.map(entry => renderCondition(entry, depth + 1)).filter(Boolean) as string[];
-            if (parts.length === 0) return undefined;
-            const joined = parts.join(key === 'all' ? ' and ' : ' or ');
-            return depth > 0 ? `(${joined})` : joined;
+        const list = node[key];
+        if (!Array.isArray(list) || list.length === 0) continue;
+        const clauses: MeshEdgeConditionClause[] = [];
+        let truncated = false;
+        for (const entry of list) {
+            // Nested combinators are not expanded — the canvas shows shape, the
+            // detail panel shows the full expression.
+            const clause = toClause(entry);
+            if (!clause) { truncated = true; continue; }
+            if (clauses.length >= MAX_CONDITION_CLAUSES) { truncated = true; continue; }
+            clauses.push(clause);
         }
+        if (clauses.length === 0) return undefined;
+        return { combinator: key, negated, clauses, truncated };
     }
-    if (value.not !== undefined) {
-        const inner = renderCondition(value.not, depth + 1);
-        return inner ? `not ${inner}` : undefined;
-    }
-    if (typeof value.op !== 'string') return undefined;
-    const selector = typeof value.select === 'string' && value.select ? value.select.replace(/^\//, '').replace(/\//g, '.') : '';
-    const subject = [typeof value.from === 'string' ? value.from : '', selector].filter(Boolean).join('.') || 'result';
-    switch (value.op) {
-        case 'exists': return `${subject} exists`;
-        case 'eq': return `${subject} == ${renderLiteral(value.value)}`;
-        case 'ne': return `${subject} != ${renderLiteral(value.value)}`;
-        case 'in': return `${subject} in ${renderLiteral(value.value)}`;
-        default: return undefined;
-    }
+    const clause = toClause(node);
+    return clause ? { combinator: 'single', negated, clauses: [clause], truncated: false } : undefined;
+}
+
+function toClause(raw: unknown): MeshEdgeConditionClause | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const node = raw as Record<string, unknown>;
+    const op = node.op;
+    if (op !== 'exists' && op !== 'eq' && op !== 'ne' && op !== 'in') return undefined;
+    const selector = typeof node.select === 'string' && node.select
+        ? node.select.replace(/^\//, '').replace(/\//g, '.')
+        : '';
+    const subject = [typeof node.from === 'string' ? node.from : '', selector].filter(Boolean).join('.') || 'result';
+    if (op === 'exists') return { subject, op };
+    return { subject, op, value: renderLiteral(node.value) };
 }
 
 function renderLiteral(value: unknown): string {
-    if (typeof value === 'string') return JSON.stringify(value);
-    if (Array.isArray(value)) return `[${value.map(renderLiteral).join(', ')}]`;
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) return value.map(renderLiteral).join(', ');
     if (value === null || value === undefined) return 'null';
     if (typeof value === 'object') return '{...}';
     return String(value);

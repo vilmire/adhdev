@@ -145,6 +145,20 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     // Machine ⊃ nodes: a node's display name is its checkout identity
     // (⎇ branch for worktrees, base otherwise); the MACHINE is a separate
     // grouping axis (machineKeyForMeshNode) used to dedupe slot/quota views.
+    /** nodeId → what to print on a card that RAN there: checkout · machine. */
+    const nodeLabels = useMemo(() => {
+        const map: Record<string, string> = {}
+        for (const node of status.nodes ?? []) {
+            const worktreeBranch = (node as { worktreeBranch?: string }).worktreeBranch
+            const basename = typeof node.workspace === 'string' ? node.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : ''
+            const machineKey = machineKeyForMeshNode(node)
+            const machine = resolveMachineLabel(status, machineKey)
+            const checkout = worktreeBranch ? `⎇ ${worktreeBranch}` : (basename || node.machineLabel || node.nodeId.slice(0, 12))
+            map[node.nodeId] = machine && machine !== checkout ? `${checkout} · ${machine}` : checkout
+        }
+        return map
+    }, [status])
+
     const nodeMetaById = useMemo(() => {
         const map = new Map<string, { nodeLabel: string; machineKey: string; machineLabel: string; isWorktree: boolean }>()
         for (const node of status.nodes ?? []) {
@@ -356,6 +370,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 <div className="absolute inset-0">
                     <MeshTaskDagView
                         tasks={tasks}
+                        nodeLabels={nodeLabels}
                         emptyMessage={emptyMessage}
                         predictedSlots={predictedSlots}
                         pinnedSlots={pinnedSlots}

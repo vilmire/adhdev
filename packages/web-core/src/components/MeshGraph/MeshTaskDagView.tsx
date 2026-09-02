@@ -55,6 +55,8 @@ interface MeshTaskDagViewProps {
     /** Initial cap on terminal (completed/failed/cancelled) cards — the blueprint
      *  tab passes a tight cap so history doesn't drown the active plan. */
     initialTerminalLimit?: number
+    /** nodeId → `checkout · machine`, for the "ran on" row of each card. */
+    nodeLabels?: Record<string, string>
     /** When provided, clicking a task opens the caller's detail surface (the
      *  shared MeshOverviewDetailModal) instead of the built-in side panel. */
     onTaskOpen?: (task: RepoMeshQueueTask) => void
@@ -105,6 +107,10 @@ type TaskFlowNodeData = Record<string, unknown> & {
     onMissionOpen?: (missionId: string) => void
     /** Shared clock for every card's relative time label. */
     nowMs: number
+    /** `checkout · machine` for the node this task actually ran on. */
+    runOnLabel?: string
+    /** Provider that executed it (from autoLaunch), e.g. `claude-cli`. */
+    ranWithProvider?: string
 }
 
 type TaskFlowNode = Node<TaskFlowNodeData, 'taskNode'>
@@ -115,7 +121,9 @@ function estimateTaskCardHeight(node: TaskDagNode): number {
     const messageLines = Math.max(1, Math.min(3, Math.ceil(messageLength / 34)))
     const extraBadgeRow = node.waitingOn.length > 0 || node.blocked || node.missingDeps.length > 0 ? 22 : 0
     const missionBar = node.task.missionId ? 28 : 0
-    return TASK_CARD_MIN_HEIGHT + (messageLines - 1) * 15 + extraBadgeRow + missionBar
+    // The "ran on" row only renders when the task actually landed somewhere.
+    const runRow = node.task.assignedNodeId || node.task.autoLaunch?.providerType ? 16 : 0
+    return TASK_CARD_MIN_HEIGHT + (messageLines - 1) * 15 + extraBadgeRow + missionBar + runRow
 }
 
 const STATUS_STYLES: Record<string, { dark: string; light: string; dot: string; pulse?: boolean }> = {
@@ -168,7 +176,7 @@ const messageClampStyle: CSSProperties = {
 
 function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
     const { t } = useTranslation('common')
-    const { dagNode, theme, selected, predictedSlot, predictedSlotPinned, missionTitle, missionHighlighted, onMissionOpen, nowMs } = data
+    const { dagNode, theme, selected, predictedSlot, predictedSlotPinned, missionTitle, missionHighlighted, onMissionOpen, nowMs, runOnLabel, ranWithProvider } = data
     const task = dagNode.task
     // One `nowMs` for every card on the canvas, so two cards a second apart
     // never disagree about "3분 전".
@@ -279,6 +287,22 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                     </span>
                 )}
             </div>
+            {/* WHERE it ran and WITH WHAT. `assignedNodeId` and the autoLaunch
+                provider were on the task all along and appeared nowhere on the
+                canvas, so a running card could not answer "which machine is
+                this on?" — the 📌/→ chip above is a routing FORECAST, easily
+                misread as the actual owner. This row is the real thing. */}
+            {(runOnLabel || ranWithProvider) && (
+                <div className={`mt-1 flex items-center gap-1 text-4xs ${theme.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    <span className="shrink-0 opacity-70">▶</span>
+                    {ranWithProvider && <span className="shrink-0 font-medium">{ranWithProvider}</span>}
+                    {runOnLabel && (
+                        <span className="min-w-0 truncate" title={runOnLabel}>
+                            {ranWithProvider ? '@ ' : ''}{runOnLabel}
+                        </span>
+                    )}
+                </div>
+            )}
         </div>
     )
 }
@@ -318,7 +342,7 @@ interface FusedOverlays {
      *  straight off MeshGraphNodeView and were previously dropped on the
      *  floor — they are what explains a step that never ran. */
     planned: Array<{ id: string; ref: string; state: string; skipReason?: string; failureReason?: string; blockedByDeps?: number; conditional?: boolean }>
-    edges: Array<{ id: string; source: string; target: string; state: import('./blueprintViewModel').BlueprintEdgeState; kind?: string; condition?: string }>
+    edges: Array<{ id: string; source: string; target: string; state: import('./blueprintViewModel').BlueprintEdgeState; kind?: string; condition?: import('@adhdev/daemon-core').MeshEdgeConditionView }>
     /** One entry per graph: which canvas ids belong to it, for the cluster hull. */
     clusters: Array<{ id: string; graphId: string; batchId?: string; status: string; memberIds: string[] }>
 }
@@ -526,6 +550,8 @@ function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
 
 const HULL_PADDING = 26
 const HULL_LABEL_CLEARANCE = 24
+/** Height of the hull's label text drawn ABOVE the frame's top edge. */
+const HULL_LABEL_BAND = 26
 
 type HullFlowNode = Node<Record<string, unknown> & { label: string; status: string; width: number; height: number; theme: MeshGraphTheme }, 'clusterHull'>
 
@@ -561,17 +587,25 @@ function ClusterHullNode({ data }: NodeProps<HullFlowNode>) {
  * automatic frame instead pushed its own targets off a short canvas. */
 const CANVAS_MIN_ZOOM = 0.18
 
+/** Widest an edge label may render, in px — see the layer-spacing note. */
+const CONDITION_OP_SYMBOL: Record<string, string> = { eq: '=', ne: '≠', in: '∈', exists: '?' }
+
+const EDGE_LABEL_MAX_WIDTH = 200
+
+
 const COLLAPSED_GRAPH_WIDTH = 236
 const COLLAPSED_GRAPH_HEIGHT = 52
 /** Gap between stacked collapsed chips, and clearance below the live drawing. */
 const COLLAPSED_STACK_GAP_Y = 10
-const COLLAPSED_STACK_LEAD_Y = 72
 /** Clearance between the live drawing and the first expanded graph below it. */
-const EXPANDED_GRAPH_LEAD_Y = 96
-/** Horizontal gap between the two expanded-graph columns. */
-const EXPANDED_GRAPH_COLUMN_GAP_X = 64
+const EXPANDED_GRAPH_LEAD_Y = HULL_PADDING * 2 + HULL_LABEL_CLEARANCE + 60
 /** Vertical gap between two graphs stacked in the same column. */
-const EXPANDED_GRAPH_STACK_GAP_Y = 72
+/* Gap between two stacked graphs. Must clear BOTH hull frames that sit
+ * between them: each hull extends HULL_PADDING below its last node and
+ * HULL_PADDING + HULL_LABEL_CLEARANCE above its first, so a bare 72px left
+ * about -4px of real space and the lower hull's label printed over the card
+ * above it. */
+const EXPANDED_GRAPH_STACK_GAP_Y = HULL_PADDING * 2 + HULL_LABEL_CLEARANCE + 44
 
 type CollapsedGraphFlowNode = Node<Record<string, unknown> & {
     summary: import('./blueprintViewModel').CollapsedGraphSummary
@@ -614,7 +648,57 @@ function CollapsedGraphNode({ data }: NodeProps<CollapsedGraphFlowNode>) {
     )
 }
 
-const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, planNode: PlanNodeCard, clusterHull: ClusterHullNode, collapsedGraph: CollapsedGraphNode }
+const CONDITION_NODE_WIDTH = 188
+/** Approximate rendered height — used only to centre the card on its wire. */
+const CONDITION_NODE_HEIGHT = 48
+
+type ConditionFlowNode = Node<Record<string, unknown> & {
+    condition: import('@adhdev/daemon-core').MeshEdgeConditionView
+    theme: MeshGraphTheme
+}, 'conditionNode'>
+
+/**
+ * A `run_if` drawn as a small typed card on its edge, rather than a sentence
+ * crammed into an edge label.
+ *
+ * The grammar is closed (all/any/not over exists/eq/ne/in), so every clause is
+ * exactly subject · operator · value and can be laid out as three elements —
+ * mono subject, symbol operator, highlighted comparand. That reads at a glance
+ * and, unlike a label, wraps instead of overrunning its neighbours.
+ */
+function ConditionNode({ data }: NodeProps<ConditionFlowNode>) {
+    const { t } = useTranslation('common')
+    const { condition, theme } = data
+    const shell = theme.isDark
+        ? 'border-violet-400/30 bg-violet-500/10 text-violet-100'
+        : 'border-violet-300 bg-violet-50 text-violet-800'
+    const valueTone = theme.isDark ? 'text-violet-50' : 'text-violet-900'
+    return (
+        <div className={`rounded-lg border px-2 py-1 shadow-sm ${shell}`} style={{ width: CONDITION_NODE_WIDTH }}>
+            <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            <div className="flex items-center gap-1 text-4xs font-semibold uppercase tracking-wide opacity-80">
+                <span>{t('meshGraph.taskDag.edge.conditional')}</span>
+                {condition.negated && <span className="opacity-90">· not</span>}
+                {condition.combinator !== 'single' && <span className="opacity-90">· {condition.combinator}</span>}
+            </div>
+            {condition.clauses.map((clause, index) => (
+                <div key={`${clause.subject}:${clause.op}:${index}`} className="mt-0.5 flex items-baseline gap-1 text-4xs">
+                    <span className="min-w-0 flex-1 truncate font-mono opacity-90" title={clause.subject}>{clause.subject}</span>
+                    <span className="shrink-0 font-semibold opacity-80">{CONDITION_OP_SYMBOL[clause.op] ?? clause.op}</span>
+                    {clause.value !== undefined && (
+                        <span className={`min-w-0 max-w-[52%] truncate font-mono font-medium ${valueTone}`} title={clause.value}>{clause.value}</span>
+                    )}
+                </div>
+            ))}
+            {condition.truncated && (
+                <div className="mt-0.5 text-4xs opacity-70">{t('meshGraph.taskDag.edge.conditionMore')}</div>
+            )}
+        </div>
+    )
+}
+
+const nodeTypes: NodeTypes = { taskNode: TaskNodeCard, gateNode: GateNodeCard, planNode: PlanNodeCard, clusterHull: ClusterHullNode, collapsedGraph: CollapsedGraphNode, conditionNode: ConditionNode }
 
 
 
@@ -682,6 +766,7 @@ async function layoutTaskDag(
     overlays: FusedOverlays,
     composition: CanvasComposition,
     collapsed: ReadonlyArray<import('./blueprintViewModel').CollapsedGraphSummary>,
+    timelineByGraphId: ReadonlyMap<string, number>,
 ): Promise<{ positions: Map<string, { x: number; y: number }> }> {
     // B-plan (owner call 2026-09-02): ONE placement system. Every task —
     // dependency-linked or loose — goes through the same ELK pass, so the
@@ -713,27 +798,54 @@ async function layoutTaskDag(
      * component-order options did not hold, so the invariant is enforced here
      * instead: anything belonging to an expanded graph is shifted below the
      * live drawing, preserving ELK's internal layout of each. */
-    lowerExpandedGraphs(positions, dag, overlays)
-    stackCollapsedGraphs(positions, collapsed)
+    layoutArchive(positions, dag, overlays, collapsed, timelineByGraphId)
+    /* Pin the drawing's origin. ELK returns coordinates relative to its own
+     * bounding box, which changes as graphs expand — so with the viewport
+     * transform completely unchanged, on-screen content still slid (measured:
+     * a 158px drift of the gate card per expand). Normalising the LIVE
+     * drawing's top-left to a constant makes the live work the fixed frame of
+     * reference: expanding appends below and to the side, and what the user is
+     * looking at stays exactly where it was. */
+    anchorLayoutOrigin(positions, dag)
     return { positions }
 }
 
+/** Translate every position so the live drawing's top-left is always (0, 0). */
+function anchorLayoutOrigin(positions: Map<string, { x: number; y: number }>, dag: TaskDagData): void {
+    let minX = Infinity
+    let minY = Infinity
+    for (const node of dag.nodes) {
+        const position = positions.get(node.id)
+        if (!position) continue
+        minX = Math.min(minX, position.x)
+        minY = Math.min(minY, position.y)
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return
+    if (minX === 0 && minY === 0) return
+    for (const [id, position] of positions) {
+        positions.set(id, { x: position.x - minX, y: position.y - minY })
+    }
+}
+
 /**
- * Place every free-floating expanded graph BELOW the live task drawing, in two
- * columns.
+ * Lay out the ARCHIVE — every settled graph, collapsed or expanded — as one
+ * ordered column below the live drawing, newest first.
  *
- * Three revisions, each fixing the previous one's defect:
- *  1. shift each graph to the same baseline → all landed at one y (15 overlaps)
- *  2. one column tracking a running cursor → correct, but the canvas grew very
- *     tall and left the right half of a wide viewport empty
- *  3. two columns, shortest-column-first → same correctness, half the height
+ * Expanded and collapsed entries share a single ordering, so a graph expands
+ * IN PLACE: the chip you clicked becomes the opened graph at the same spot in
+ * the list, and the entries below it move down. Placing expanded graphs in a
+ * separate zone above the chips (the previous shape) meant a click teleported
+ * the graph to the top of the canvas — the opposite of where the user was
+ * looking, which the owner flagged as disorienting.
  *
- * Each graph keeps its own ELK shape; only the whole cluster translates.
+ * Each expanded graph keeps its own ELK shape; only the cluster translates.
  */
-function lowerExpandedGraphs(
+function layoutArchive(
     positions: Map<string, { x: number; y: number }>,
     dag: TaskDagData,
     overlays: FusedOverlays,
+    collapsed: ReadonlyArray<import('./blueprintViewModel').CollapsedGraphSummary>,
+    timelineByGraphId: ReadonlyMap<string, number>,
 ): void {
     const liveIds = new Set(dag.nodes.map(node => node.id))
     let liveBottom = -Infinity
@@ -744,8 +856,10 @@ function lowerExpandedGraphs(
         liveBottom = Math.max(liveBottom, position.y + estimateTaskCardHeight(node))
         liveLeft = Math.min(liveLeft, position.x)
     }
-    if (!Number.isFinite(liveBottom)) return
-    const sizeOf = (id: string): number => {
+    const originX = Number.isFinite(liveLeft) ? liveLeft : 0
+    let cursorY = Number.isFinite(liveBottom) ? liveBottom + EXPANDED_GRAPH_LEAD_Y : 0
+
+    const heightOf = (id: string): number => {
         if (id.startsWith('gate:')) {
             const gate = overlays.gates.find(candidate => candidate.id === id)
             return gateNodeHeight(gate?.state ?? 'declared')
@@ -754,94 +868,56 @@ function lowerExpandedGraphs(
         const node = dag.nodes.find(candidate => candidate.id === id)
         return node ? estimateTaskCardHeight(node) : TASK_CARD_MIN_HEIGHT
     }
-    const widthOf = (id: string): number => {
-        if (id.startsWith('gate:')) {
-            const gate = overlays.gates.find(candidate => candidate.id === id)
-            return gateNodeWidth(gate?.state ?? 'declared')
-        }
-        if (id.startsWith('plan:')) return PLAN_NODE_WIDTH
-        return TASK_CARD_WIDTH
-    }
-    const startY = liveBottom + EXPANDED_GRAPH_LEAD_Y
-    const originX = Number.isFinite(liveLeft) ? liveLeft : 0
-    /* Two columns. The gutter is set from the graphs that actually land in
-     * column 1, not from the widest graph overall: sizing it to the widest
-     * (1214px here) pushed column 2 off-screen and saved no height at all,
-     * while a fixed midpoint let a wide graph run through its neighbour
-     * (7 overlaps). So column 2's x is decided AFTER placement, by measuring
-     * column 1 — see the second pass below. */
-    const columnX = [originX, originX]
-    const columnBottom = [startY, startY]
-    let column1Right = originX
-    const placed: Array<{ ids: string[]; column: number }> = []
+
+    // One list, newest first: expanded graph clusters and collapsed chips
+    // interleaved by the same timestamp axis.
+    type Entry = { at: number; expandedIds?: string[]; chipId?: string }
+    const entries: Entry[] = []
     for (const cluster of overlays.clusters) {
-        // A cluster containing a live card is FUSED into the drawing; moving it
-        // would tear the fusion apart, so only fully free-floating graphs move.
         const ownIds = cluster.memberIds.filter(id => positions.has(id))
-        if (ownIds.length === 0) continue
-        if (ownIds.length !== cluster.memberIds.length) continue
+        if (ownIds.length === 0 || ownIds.length !== cluster.memberIds.length) continue
         if (cluster.memberIds.some(id => liveIds.has(id))) continue
+        entries.push({ at: timelineByGraphId.get(cluster.graphId) ?? 0, expandedIds: ownIds })
+    }
+    for (const summary of collapsed) {
+        entries.push({ at: summary.timestamp, chipId: `graph:${summary.graphId}` })
+    }
+    if (entries.length === 0) return
+    entries.sort((a, b) => b.at - a.at)
+
+    /* The gap BEFORE an expanded graph must clear its hull's label, which is
+     * drawn above the frame — a chip followed by an expanded graph left only
+     * COLLAPSED_STACK_GAP_Y and the label printed over the chip (measured:
+     * -39px). Chip-to-chip needs no such clearance. */
+    // HULL_LABEL_CLEARANCE reserves space INSIDE the frame; the label itself is
+    // drawn above the frame's top edge and needs its own band on top of that,
+    // hence the extra HULL_LABEL_BAND (measured: 10px short without it).
+    const hullLeadIn = HULL_PADDING + HULL_LABEL_CLEARANCE + HULL_LABEL_BAND
+    for (const entry of entries) {
+        if (entry.chipId) {
+            positions.set(entry.chipId, { x: originX, y: cursorY })
+            cursorY += COLLAPSED_GRAPH_HEIGHT + COLLAPSED_STACK_GAP_Y
+            continue
+        }
+        cursorY += hullLeadIn
+        const ids = entry.expandedIds!
         let top = Infinity
         let left = Infinity
         let bottom = -Infinity
-        for (const id of ownIds) {
+        for (const id of ids) {
             const position = positions.get(id)!
             top = Math.min(top, position.y)
             left = Math.min(left, position.x)
-            bottom = Math.max(bottom, position.y + sizeOf(id))
+            bottom = Math.max(bottom, position.y + heightOf(id))
         }
-        // Shortest column first keeps the two sides even.
-        const column = columnBottom[0] <= columnBottom[1] ? 0 : 1
-        const shiftY = columnBottom[column] - top
-        const shiftX = columnX[column] - left
-        for (const id of ownIds) {
+        const shiftY = cursorY - top
+        const shiftX = originX - left
+        for (const id of ids) {
             const position = positions.get(id)!
             positions.set(id, { x: position.x + shiftX, y: position.y + shiftY })
         }
-        columnBottom[column] = bottom + shiftY + EXPANDED_GRAPH_STACK_GAP_Y
-        placed.push({ ids: ownIds, column })
-        if (column === 0) {
-            let right = -Infinity
-            for (const id of ownIds) right = Math.max(right, positions.get(id)!.x + widthOf(id))
-            column1Right = Math.max(column1Right, right)
-        }
+        cursorY = bottom + shiftY + EXPANDED_GRAPH_STACK_GAP_Y
     }
-    // Second pass: now that column 1's true extent is known, slide column 2
-    // just clear of it — no wider, so the pair stays inside one screenful.
-    const column2X = column1Right + EXPANDED_GRAPH_COLUMN_GAP_X
-    for (const entry of placed) {
-        if (entry.column !== 1) continue
-        let left = Infinity
-        for (const id of entry.ids) left = Math.min(left, positions.get(id)!.x)
-        const shiftX = column2X - left
-        for (const id of entry.ids) {
-            const position = positions.get(id)!
-            positions.set(id, { x: position.x + shiftX, y: position.y })
-        }
-    }
-}
-
-/** Newest-first single column of collapsed-graph chips, below the live drawing. */
-function stackCollapsedGraphs(
-    positions: Map<string, { x: number; y: number }>,
-    collapsed: ReadonlyArray<import('./blueprintViewModel').CollapsedGraphSummary>,
-): void {
-    if (collapsed.length === 0) return
-    let minX = Infinity
-    let maxY = -Infinity
-    for (const position of positions.values()) {
-        minX = Math.min(minX, position.x)
-        maxY = Math.max(maxY, position.y)
-    }
-    if (!Number.isFinite(minX)) { minX = 0; maxY = -COLLAPSED_STACK_GAP_Y }
-    const startY = maxY + TASK_CARD_MIN_HEIGHT + COLLAPSED_STACK_LEAD_Y
-    const ordered = [...collapsed].sort((a, b) => b.timestamp - a.timestamp)
-    ordered.forEach((summary, index) => {
-        positions.set(`graph:${summary.graphId}`, {
-            x: minX,
-            y: startY + index * (COLLAPSED_GRAPH_HEIGHT + COLLAPSED_STACK_GAP_Y),
-        })
-    })
 }
 
 async function layoutElkElements(tasks: TaskDagNode[], taskEdges: TaskDagData['edges'], overlays: FusedOverlays): Promise<Map<string, { x: number; y: number }>> {
@@ -856,7 +932,10 @@ async function layoutElkElements(tasks: TaskDagNode[], taskEdges: TaskDagData['e
             // separate the components far enough that a hull's label never
             // rides the previous hull's bottom edge.
             'elk.spacing.componentComponent': '110',
-            'elk.layered.spacing.nodeNodeBetweenLayers': '120',
+            // Wide enough for a conditional edge's predicate label to sit
+            // between two layers without riding either node (measured: a
+            // 200px label over a 120px gap overlapped BOTH neighbours).
+            'elk.layered.spacing.nodeNodeBetweenLayers': String(EDGE_LABEL_MAX_WIDTH + 48),
             'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
             'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
             'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
@@ -888,7 +967,7 @@ async function layoutElkElements(tasks: TaskDagNode[], taskEdges: TaskDagData['e
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, pinnedSlots, initialTerminalLimit, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles, onMissionOpen, focusMission }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, pinnedSlots, initialTerminalLimit, nodeLabels, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles, onMissionOpen, focusMission }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -949,6 +1028,21 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             + '||' + collapsedGraphs.map(summary => summary.graphId).join('|'),
         [dag, fused, collapsedGraphs],
     )
+    /* Auto-fit key — deliberately EXCLUDES collapse state, unlike the layout
+     * fingerprint above. Expanding a chip must re-run the layout but must NOT
+     * re-frame the viewport: the two shared one key at first, so each click
+     * yanked the view back to the live work (measured: a 2,124px jump on one
+     * expand) and the graph you just opened flew off screen. Data changes
+     * still re-fit; a user's own expand/collapse never does. */
+    const autoFitKey = useMemo(
+        // Live QUEUE work only. Gate ids were in here too, but expanding a
+        // graph re-adds its gates to the overlay, so the first expand still
+        // moved the view (247px) even after collapse state was removed from
+        // this key. The frame targets in-flight tasks and awaiting gates; of
+        // those, only the task set changes for reasons the user did not cause.
+        () => dag.nodes.map(node => `${node.id}:${node.task.status}`).join('|'),
+        [dag],
+    )
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
     // Focus highlight driven by the stat-chip jump — separate from selection so
     // jumping never opens the detail surface, it only rings + centers the card.
@@ -976,6 +1070,13 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
 
     const composition = useMemo(() => buildCanvasComposition(dag, fused), [dag, fused])
 
+    /** graphId → its moment on the archive axis, for ordering the list. */
+    const timelineByGraphId = useMemo(() => {
+        const map = new Map<string, number>()
+        for (const entry of buildBlueprintGraphTimeline(graphs ?? [])) map.set(entry.graphId, entry.timestamp)
+        return map
+    }, [graphs])
+
     /**
      * Per-graph time labels. The rail they used to annotate is gone (B-plan);
      * they now label a COLLAPSED graph's chip, which is the only place a graph
@@ -1000,7 +1101,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             setPositions(null)
             return
         }
-        void layoutTaskDag(dag, fused, composition, collapsedGraphs)
+        void layoutTaskDag(dag, fused, composition, collapsedGraphs, timelineByGraphId)
             .then(next => {
                 if (cancelled) return
                 setPositions(next.positions)
@@ -1025,6 +1126,10 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     dagNode: node,
                     theme: meshTheme,
                     nowMs,
+                    ...(node.task.assignedNodeId
+                        ? { runOnLabel: nodeLabels?.[node.task.assignedNodeId] ?? node.task.assignedNodeId.slice(0, 12) }
+                        : {}),
+                    ...(node.task.autoLaunch?.providerType ? { ranWithProvider: node.task.autoLaunch.providerType } : {}),
                     selected: selectedTaskId === node.id || focusTaskId === node.id,
                     ...(() => {
                         const predicted = resolveTaskPredictedSlot(node.task, predictedSlots, pinnedSlots)
@@ -1037,7 +1142,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 draggable: false,
                 selectable: true,
             }))
-    }, [dag, meshTheme, nowMs, positions, selectedTaskId, focusTaskId, predictedSlots, pinnedSlots, missionTitles, hoveredMissionId, onMissionOpen])
+    }, [dag, meshTheme, nowMs, nodeLabels, positions, selectedTaskId, focusTaskId, predictedSlots, pinnedSlots, missionTitles, hoveredMissionId, onMissionOpen])
 
     const overlayFlowNodes = useMemo<Node[]>(() => {
         if (!positions) return []
@@ -1104,6 +1209,37 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     draggable: false,
                     selectable: false,
                 })),
+            /* Condition cards ride the midpoint of their own edge. They are
+               NOT ELK children: giving them a node would make ELK reserve a
+               whole layer and stretch the graph, when all they need is the gap
+               the layer spacing already leaves between two nodes. */
+            ...fused.edges
+                .filter(edge => edge.condition && positions.has(edge.source) && positions.has(edge.target))
+                .map(edge => {
+                    const source = positions.get(edge.source)!
+                    const target = positions.get(edge.target)!
+                    const sourceW = edge.source.startsWith('gate:') ? gateNodeWidth(fused.gates.find(g => g.id === edge.source)?.state ?? 'declared')
+                        : edge.source.startsWith('plan:') ? PLAN_NODE_WIDTH : TASK_CARD_WIDTH
+                    const midX = (source.x + sourceW + target.x) / 2
+                    /* Sit on the SOURCE node's vertical centre, not the average
+                     * of the two endpoints: the endpoints have different
+                     * heights (a blocking gate is 104px, a ghost step 58px), so
+                     * averaging their tops put the card 66px off the wire and
+                     * the smoothstep visibly kinked around it. */
+                    const sourceH = edge.source.startsWith('gate:')
+                        ? gateNodeHeight(fused.gates.find(g => g.id === edge.source)?.state ?? 'declared')
+                        : edge.source.startsWith('plan:') ? PLAN_NODE_HEIGHT : TASK_CARD_MIN_HEIGHT
+                    const midY = source.y + sourceH / 2 - CONDITION_NODE_HEIGHT / 2
+                    return {
+                        id: `cond:${edge.id}`,
+                        type: 'conditionNode' as const,
+                        position: { x: midX - CONDITION_NODE_WIDTH / 2, y: midY },
+                        data: { condition: edge.condition!, theme: meshTheme },
+                        draggable: false,
+                        selectable: false,
+                        zIndex: 1,
+                    }
+                }),
             ...collapsedGraphs
                 .filter(summary => positions.has(`graph:${summary.graphId}`))
                 .map(summary => ({
@@ -1137,45 +1273,54 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 },
             }
         })
-        const graphEdges = fused.edges.map(edge => {
+        /* An edge carrying a condition is drawn as TWO segments through the
+         * condition card (source → condition → target) instead of one line
+         * running behind it. The card is a station on the wire, not a sticker
+         * floating over it — otherwise the line visually bypasses the very
+         * thing that gates it. */
+        /* An edge carrying a condition is drawn as TWO segments routed through
+         * the condition card (source → condition → target) rather than one
+         * line passing behind it: the card is a station on the wire, not a
+         * sticker floating over it. Plain edges stay a single segment. */
+        const graphEdges = fused.edges.flatMap(edge => {
             const stroke = edge.state === 'inactive' || edge.state === 'idle'
                 ? (meshTheme.isDark ? '#475569' : '#94a3b8')
                 : (meshTheme.isDark ? EDGE_COLORS[edge.state].dark : EDGE_COLORS[edge.state].light)
-            return {
+            const style = {
+                stroke,
+                strokeWidth: 1.6,
+                ...(edge.state === 'inactive'
+                    ? { strokeDasharray: '2 5', opacity: 0.5 }
+                    : edge.state === 'waiting' ? { strokeDasharray: '6 4' } : {}),
+            }
+            const arrow = { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 }
+            const base = { type: 'smoothstep' as const, animated: edge.state === 'waiting', style }
+            if (edge.condition && positions?.has(edge.source) && positions.has(edge.target)) {
+                const conditionId = `cond:${edge.id}`
+                return [
+                    // Into the condition: no arrowhead, the card is not a terminus.
+                    { ...base, id: `${edge.id}:in`, source: edge.source, target: conditionId },
+                    { ...base, id: `${edge.id}:out`, source: conditionId, target: edge.target, markerEnd: arrow },
+                ]
+            }
+            return [{
+                ...base,
                 id: edge.id,
                 source: edge.source,
                 target: edge.target,
-                type: 'smoothstep' as const,
-                animated: edge.state === 'waiting',
-                style: {
-                    stroke,
-                    strokeWidth: 1.6,
-                    ...(edge.state === 'inactive'
-                        ? { strokeDasharray: '2 5', opacity: 0.5 }
-                        : edge.state === 'waiting' ? { strokeDasharray: '6 4' } : {}),
-                },
-                markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 },
-                /* Edge kind label. It used to render at 9px — smaller than any
-                 * other text on the canvas and effectively unreadable, which
-                 * matters most for exactly the edge it labels: a `conditional`
-                 * edge is the visible half of a `run_if`, i.e. the answer to
-                 * "why did this branch not run?". Bumped to 10px with a
-                 * background chip so it survives crossing a card or a hull. */
-                /* Prefer the PREDICATE over the category word. "조건부" alone
-                 * told the reader a branch was conditional but not on what,
-                 * which reads as an unexplained label sitting mid-canvas;
-                 * `review.outcome == "rejected"` answers the actual question. */
-                ...(edge.kind || edge.condition ? {
-                    label: edge.condition
-                        ? `if ${edge.condition}`
-                        : edge.kind === 'conditional' ? t('meshGraph.taskDag.edge.conditional') : edge.kind,
+                markerEnd: arrow,
+                // Non-dependency edge kinds keep a small text label; a
+                // conditional one never reaches here (it has a card instead).
+                ...(edge.kind ? {
+                    label: edge.kind === 'conditional' ? t('meshGraph.taskDag.edge.conditional') : edge.kind,
                     labelStyle: { fontSize: 10, fontWeight: 600, fill: meshTheme.edgeLabelTextColor },
                     labelBgStyle: { fill: meshTheme.edgeLabelBackgroundColor },
                     labelBgPadding: [4, 2] as [number, number],
                     labelBgBorderRadius: 4,
                 } : {}),
-            }
+            }]
         })
+
         // Mission threads (owner ask 2026-08-25): a dotted line chaining
         // same-mission cards in time order. Purely decorative — never fed to
         // ELK, no arrowheads, no animation, indigo echoing the mission chip.
@@ -1238,8 +1383,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     )
     useEffect(() => {
         if (!flowInstance || !positions) return
-        if (fittedFingerprintRef.current === dagFingerprint) return
-        fittedFingerprintRef.current = dagFingerprint
+        if (fittedFingerprintRef.current === autoFitKey) return
+        fittedFingerprintRef.current = autoFitKey
         /* The ONLY framing authority now that the built-in fitView is gone.
          * It frames the LIVE work — in-flight tasks plus gates awaiting a
          * human — instead of the whole archive, which is what kept the old
@@ -1256,7 +1401,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
          * floor for the user. */
         const frame = liveTaskIds.length > 0 ? { nodes: liveTaskIds.map(id => ({ id })) } : {}
         void flowInstance.fitView({ ...frame, padding: 0.2, maxZoom: 1, minZoom: CANVAS_MIN_ZOOM })
-    }, [dagFingerprint, flowInstance, liveTaskIds, positions])
+    }, [autoFitKey, flowInstance, liveTaskIds, positions])
 
     /** Stat-chip jump: cycle through the tasks in that bucket, centering each. */
     const jumpToState = useCallback((bucket: 'pending' | 'assigned' | 'waiting' | 'blocked') => {
