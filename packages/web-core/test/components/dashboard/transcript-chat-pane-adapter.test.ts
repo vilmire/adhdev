@@ -167,6 +167,222 @@ describe('SessionChatTailController transcript replica integration', () => {
     expect(result.stale).toBe(false)
   })
 
+  it('routes on the caller subscriptionKey — a mismatched key never reaches the controller', () => {
+    // Guards the `key: options.subscriptionKey` projection. SubscriptionManager
+    // routes strictly on `${topic}:${key}`, so if the adapter stopped carrying
+    // the caller's subscriptionKey the update would be published into the void
+    // and the pane would silently stay empty forever.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    controller.retain()
+
+    const snapshot = buildSnapshot({
+      messages: [
+        { role: 'assistant', kind: 'standard', content: 'routed', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+      ],
+    })
+    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      omittedBefore: false,
+      stale: false,
+    })
+    expect(update.key).toBe('daemon:daemon-1:session:session-1')
+
+    manager.publish(update)
+    expect(controller.getSnapshot().liveMessages).toHaveLength(1)
+
+    // Negative half: the same payload under any other key must not land.
+    resetSessionChatTailControllersForTest()
+    const manager2 = new SubscriptionManager()
+    const controller2 = getOrCreateSessionChatTailController({
+      manager: manager2,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    controller2.retain()
+    manager2.publish({ ...update, key: 'some-other-key' })
+    expect(controller2.getSnapshot().liveMessages).toHaveLength(0)
+  })
+
+  it('carries snapshot.sessionId — a wrong/missing sessionId is dropped by the controller identity gate', () => {
+    // Guards the `sessionId: snapshot.sessionId` projection. handleUpdate
+    // compares the update's sessionId against its own and returns early on a
+    // mismatch, so dropping this field routes another session's transcript into
+    // this pane (or, if it became undefined, silently disables the guard).
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    controller.retain()
+
+    const snapshot = buildSnapshot({
+      sessionId: 'session-1',
+      messages: [
+        { role: 'assistant', kind: 'standard', content: 'mine', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+      ],
+    })
+    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      omittedBefore: false,
+      stale: false,
+    })
+    expect(update.sessionId).toBe('session-1')
+    manager.publish(update)
+    expect(controller.getSnapshot().liveMessages).toHaveLength(1)
+
+    // A foreign-session snapshot mapped onto the same subscription key must be
+    // rejected by the identity gate rather than overwriting this pane.
+    const foreign = mapTranscriptSnapshotToChatTailUpdate(
+      buildSnapshot({
+        sessionId: 'session-OTHER',
+        messages: [
+          { role: 'assistant', kind: 'standard', content: 'not mine', receivedAt: 9, timestamp: 9, turnKey: 'tX', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        ],
+      }),
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+    )
+    manager.publish(foreign)
+    expect(controller.getSnapshot().liveMessages).toHaveLength(1)
+    expect(controller.getSnapshot().liveMessages[0]).toMatchObject({ content: 'mine' })
+  })
+
+  it('carries turnKey→bubbleId and messageSource so the native-history force-apply gate can fire on a shrinking tail', () => {
+    // Guards the D6 force-apply path. A native-history [user, assistant] tail
+    // that is SHORTER than the rendered busy tail must still be applied.
+    //
+    // Verified by injection: dropping the mapMessageSource projection makes
+    // isNativeHistorySource() false, the gate never fires, and the shrink-
+    // defense rejects the corrective tail (3 stale messages instead of 2).
+    // messageSource is therefore behaviorally load-bearing here.
+    //
+    // The turnKey→bubbleId assertion below is a STRUCTURAL guard only. It feeds
+    // lastSubstantiveAssistantIdentity, but in this scenario force-apply keys on
+    // the role transition alone, so removing bubbleId does NOT change the
+    // outcome of this particular case — the explicit assertion is what catches
+    // that projection. Don't read this test as proving bubbleId gates the gate.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    controller.retain()
+
+    // Busy phase: a long PTY-ish tail ending on the USER prompt (no assistant yet).
+    manager.publish(mapTranscriptSnapshotToChatTailUpdate(
+      buildSnapshot({
+        status: 'generating',
+        messages: [
+          { role: 'user', kind: 'standard', content: 'q1', receivedAt: 1, timestamp: 1, turnKey: 'u1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+          { role: 'assistant', kind: 'thought', content: 'thinking', receivedAt: 2, timestamp: 2, turnKey: 'x1', bubbleState: 'partial', senderName: null, toolName: null, streaming: null },
+          { role: 'user', kind: 'standard', content: 'q2', receivedAt: 3, timestamp: 3, turnKey: 'u2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        ],
+      }),
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+    ))
+    expect(controller.getSnapshot().liveMessages).toHaveLength(3)
+
+    // Corrective native-history tail: SHORTER, but finally carries the answer.
+    const corrective = mapTranscriptSnapshotToChatTailUpdate(
+      buildSnapshot({
+        status: 'generating',
+        provenance: { messageSource: 'native-history', transcriptProvenance: null },
+        messages: [
+          { role: 'user', kind: 'standard', content: 'q2', receivedAt: 3, timestamp: 3, turnKey: 'u2', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+          { role: 'assistant', kind: 'standard', content: 'the answer', receivedAt: 4, timestamp: 4, turnKey: 'a1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        ],
+      }),
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+    )
+    // Both projections must be present for the gate to be reachable at all.
+    expect(corrective.messageSource).toEqual({ selected: 'native-history' })
+    expect(corrective.messages[1]).toMatchObject({ bubbleId: 'a1' })
+
+    manager.publish(corrective)
+
+    const result = controller.getSnapshot()
+    expect(result.liveMessages).toHaveLength(2)
+    expect(result.liveMessages[1]).toMatchObject({ role: 'assistant', content: 'the answer' })
+  })
+
+  it('carries per-message receivedAt/timestamp — a re-emitted same bubble at a later arrival time is not swallowed as a no-op', () => {
+    // Guards `mapped.receivedAt` / `mapped.timestamp`. The controller's no-op
+    // short-circuit fires only when BOTH buildChatSnapshotSignature AND
+    // lastSubstantiveAssistantIdentity match. The latter keys on
+    // bubbleId + content length, so to isolate receivedAt the two tails must
+    // share turnKey AND content and differ ONLY in arrival time — i.e. the same
+    // bubble re-emitted later. receivedAt is then the sole discriminator in
+    // buildChatSnapshotSignature; drop the projection and both tails hash
+    // identically, the second is suppressed, and the pane keeps the stale
+    // timestamp forever.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    controller.retain()
+
+    // Identical bubble identity ('a1') and identical content — arrival time is
+    // the ONLY difference between the two tails.
+    const tailAt = (receivedAt: number) => mapTranscriptSnapshotToChatTailUpdate(
+      buildSnapshot({
+        messages: [
+          { role: 'assistant', kind: 'standard', content: 'same text', receivedAt, timestamp: receivedAt, turnKey: 'a1', bubbleState: 'final', senderName: null, toolName: null, streaming: null },
+        ],
+      }),
+      { subscriptionKey: 'daemon:daemon-1:session:session-1', omittedBefore: false, stale: false },
+    )
+
+    manager.publish(tailAt(100))
+    expect(controller.getSnapshot().liveMessages[0]).toMatchObject({ receivedAt: 100 })
+
+    manager.publish(tailAt(200))
+
+    // Behavioral assertion: the later arrival must have been APPLIED, not
+    // short-circuited as an unchanged snapshot.
+    const result = controller.getSnapshot()
+    expect(result.liveMessages).toHaveLength(1)
+    expect(result.liveMessages[0]).toMatchObject({ receivedAt: 200, timestamp: 200 })
+  })
+
+  it('carries snapshot.revision as seq — the wire ordering field must not silently become undefined', () => {
+    // Guards `seq: snapshot.revision`. Every consumer of a chat_tail envelope
+    // treats `seq` as the monotonic revision; if the adapter dropped it the
+    // field would read `undefined` rather than fail loudly.
+    const update = mapTranscriptSnapshotToChatTailUpdate(
+      buildSnapshot({ revision: 42 }),
+      { subscriptionKey: 'key-1', omittedBefore: false, stale: false },
+    )
+    expect(update.seq).toBe(42)
+    expect(update.seq).not.toBeUndefined()
+  })
+
   it('reportTranscriptReplicaFallback flips the source label without touching liveMessages', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
