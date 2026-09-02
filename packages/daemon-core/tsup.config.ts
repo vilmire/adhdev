@@ -20,6 +20,14 @@ export default defineConfig({
     // browser bundle — see each file's own header for the portability note.
     'src/seqscribe/transcript-revision-codec.ts',
     'src/mesh/transcript-read-model-consumers.ts',
+    // The projection allow-list (design §2.4). Same portability property as the
+    // codec beside it — its only import is `seqscribe`, no Node builtins — and
+    // it is the producer step that runs BEFORE the codec
+    // (`transcript-publisher.ts:376-377`). Exposed as a leaf because
+    // `test:seqscribe-asymmetric` must drive the real encoder across a process
+    // boundary: a gate that asserts the content boundary while re-implementing
+    // the projection would assert only against its own copy.
+    'src/seqscribe/transcript-projection.ts',
   ],
   format: ['cjs', 'esm'],
   dts: false,
