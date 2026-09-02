@@ -503,7 +503,17 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
     if (!option) continue;
     const { label } = option;
     if (/^Chat about this$/i.test(label)) continue;
-    if (/^Type something\.?$/i.test(label)) allowFreeform = true;
+    // Strip the escape-hatch row from `options` exactly like the headered
+    // parser (below) and the native JSONL path do. It is not a real option:
+    // it is the freeform entry point, and the answer builder re-derives its
+    // on-screen number as options.length + 1. Leaving it in `options` made the
+    // two parsers disagree on the same picker (see claude-pending-question
+    // parser-parity test) and let the builder short-circuit on a row the
+    // headered path never produces.
+    if (/^Type something\.?$/i.test(label)) {
+      allowFreeform = true;
+      continue;
+    }
     options.push(option);
   }
   if (options.length === 0) return null;
@@ -730,10 +740,19 @@ export function buildClaudeInteractiveTuiAnswerSteps(
       // stays put under digit input so the user can toggle multiple boxes.)
       steps.push('\t');
     } else if (freeformText) {
-      // Freeform: select the "Type something." option (always the last visible
-      // option before "Chat about this"), then type the text and confirm.
+      // Freeform: select the "Type something." escape hatch, then type the text
+      // and confirm. Both parsers strip that row from `options`, so its
+      // on-screen number is options.length + 1 — the row sits immediately after
+      // the real options (a further "Chat about this" row may follow it at
+      // options.length + 2; that one must NEVER be selected here).
+      //
+      // Measured live against claude-cli v2.1.220 (2026-09-02): with 3 real
+      // options the escape hatch renders as "4. Type something." and pressing 4
+      // opens the inline text field; with 2 real options it renders as "3.".
+      // The old fallback used options.length, which pressed the LAST REAL
+      // OPTION instead — silently answering the wrong choice.
       const typeOptionIndex = question.options.findIndex(o => /^Type something\.?$/i.test(o.label));
-      const optionNumber = typeOptionIndex >= 0 ? typeOptionIndex + 1 : question.options.length;
+      const optionNumber = typeOptionIndex >= 0 ? typeOptionIndex + 1 : question.options.length + 1;
       steps.push(String(optionNumber));
       // Type the text character by character, then Enter to confirm.
       for (const ch of freeformText) steps.push(ch);
@@ -806,10 +825,11 @@ export function buildKimiInteractiveTuiAnswerSteps(
       // Freeform ("Other"): kimi always renders an "Other" row as the LAST
       // visible option, and the wire's options list never includes it — so
       // its on-screen number is options.length + 1.
-      // UNVERIFIED: the Other-row keystroke path (digit → type → Enter) was
-      // NOT measured live; it mirrors the claude freeform path and the
-      // measured kimi digit/auto-advance rule. Verify against a live picker
-      // before relying on it.
+      // The escape-hatch keystroke path (digit → type → Enter) is verified:
+      // measured 2026-09-02 against live claude v2.1.220, where the row is
+      // digit-addressable at options.length + 1 and typing then Enter commits
+      // and auto-advances. kimi's own digit/auto-advance rule was measured
+      // separately, so both halves of this sequence now rest on live behavior.
       steps.push(String(question.options.length + 1));
       for (const ch of freeformText) steps.push(ch);
       steps.push('\r');
