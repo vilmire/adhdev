@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { gitChildEnv } from '../git/git-locale.js';
 import { createWorktree, removeWorktree } from '../git/git-worktree.js';
 import { getMesh } from '../config/mesh-config.js';
+import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import {
     WORKSPACE_OWNER_GIT_CONFIG_KEY,
@@ -42,6 +43,30 @@ export interface WorkspaceCloneResult {
     ownerTag: string;
     alreadyExisted?: boolean;
     baseSha?: string;
+    /**
+     * Outcome of the repo's `.adhdev/worktree_bootstrap` run for a freshly
+     * created worktree (undefined when the worktree already existed, or when the
+     * port implementation does not bootstrap — e.g. test fakes).
+     *
+     * Carried on the clone result rather than run later by the saga because the
+     * saga must not dispatch into a half-built worktree: the bootstrap has to be
+     * finished by the time `prepareClaimedIntent` publishes membership and
+     * finalizes to 'ready'.
+     */
+    bootstrap?: WorkspaceBootstrapOutcome;
+}
+
+/** Non-throwing summary of a saga-path worktree bootstrap run. */
+export interface WorkspaceBootstrapOutcome {
+    /** Mirrors WorktreeBootstrapState.status ('ready' | 'failed' | 'disabled' | 'not_configured' | …). */
+    status: string;
+    /** `required !== false` in the resolved config — a required failure is fatal to preparation. */
+    required: boolean;
+    error?: string;
+    lastCommand?: string;
+    exitCode?: number | null;
+    configSource?: string;
+    submodulesInitialized?: boolean;
 }
 
 export interface WorkspaceInspectRequest {
@@ -298,12 +323,108 @@ async function defaultCreateWorktree(req: WorkspaceCloneRequest): Promise<Worksp
         syncBaseFromRemote: false,
     });
     await gitConfigSet(created.worktreePath, WORKSPACE_OWNER_GIT_CONFIG_KEY, req.ownerTag);
+    // A saga-prepared worktree is a normal dispatch target, so it needs the same
+    // "usable checkout" preparation an operator clone gets. See prepareCreatedWorktree.
+    const bootstrap = await prepareCreatedWorktree(req.meshId, req.sourceNodeId, created.worktreePath);
     return {
         nodeId: derivePreparedNodeId(req.graphId, req.workspaceRef),
         worktreePath: created.worktreePath,
         ownerTag: req.ownerTag,
         alreadyExisted: false,
+        bootstrap,
     };
+}
+
+/**
+ * WORKSPACE-SAGA-BOOTSTRAP: bring a freshly created saga worktree to the same
+ * readiness an operator `clone_mesh_node` clone reaches.
+ *
+ * The two worktree-creation paths had diverged. `clone_mesh_node`
+ * (commands/med-family/mesh-crud.ts) runs, after `git worktree add`:
+ *   1. `git submodule update --init --recursive`
+ *   2. syncClonedWorktreeSubmodules (source-node HEAD sync + rewind guard)
+ *   3. runMeshWorktreeBootstrap (the repo's `.adhdev/worktree_bootstrap` commands)
+ * The saga path (defaultCreateWorktree) ran NONE of them — it created the
+ * worktree, stamped the owner tag and returned. A batch that declared
+ * `workspaces` therefore handed workers a checkout with uninitialized
+ * submodules and no `npm install`, silently: `required: true` in the config had
+ * no effect because nothing on this path ever read the config at all.
+ *
+ * This runs INSIDE createWorktree (not later in the saga) so it completes
+ * before `prepareClaimedIntent` publishes membership and finalizes the intent to
+ * 'ready' — i.e. strictly before any worker session can be dispatched into it.
+ *
+ * Everything except a REQUIRED bootstrap failure is best-effort: submodule work
+ * mirrors clone_mesh_node's own best-effort contract, and a bootstrap that is
+ * disabled/not-configured is a legitimate outcome, not an error. A required
+ * failure is surfaced to the caller, which fails preparation rather than
+ * dispatching into a broken tree.
+ */
+async function prepareCreatedWorktree(
+    meshId: string,
+    sourceNodeId: string | undefined,
+    worktreePath: string,
+): Promise<WorkspaceBootstrapOutcome> {
+    const mesh = getMesh(meshId);
+    const nodes = Array.isArray(mesh?.nodes) ? mesh!.nodes : [];
+    const sourceNode = sourceNodeId
+        ? nodes.find((n: any) => n?.id === sourceNodeId)
+        : nodes.find((n: any) => n?.isLocalWorktree !== true);
+
+    let submodulesInitialized = false;
+    // Parity with clone_mesh_node: the source node's policy opts out, not a
+    // saga-specific flag — a graph workspace of the same node must behave the same.
+    const initSubmodules = (sourceNode?.policy as any)?.initSubmodulesOnClone !== false;
+    if (initSubmodules) {
+        try {
+            const { runGit } = await import('../git/git-executor.js');
+            await runGit(
+                { workspace: worktreePath, repoRoot: worktreePath, isGitRepo: true },
+                ['submodule', 'update', '--init', '--recursive'],
+                { timeoutMs: 120000 },
+            );
+            submodulesInitialized = true;
+            const sourceWorkspace = (sourceNode as any)?.repoRoot || (sourceNode as any)?.workspace;
+            if (sourceWorkspace) {
+                const { syncClonedWorktreeSubmodules } = await import('../commands/med-family/mesh-crud.js');
+                await syncClonedWorktreeSubmodules(worktreePath, sourceWorkspace, runGit as any);
+            }
+        } catch (e: any) {
+            // Best-effort, exactly as on the clone path: a submodule failure must
+            // not abort a worktree that is otherwise correct.
+            LOG.warn('MeshGraphWorkspace', `submodule init failed for saga worktree ${worktreePath}: ${e?.message || e}`);
+        }
+    }
+
+    try {
+        const { runMeshWorktreeBootstrap } = await import('./worktree-bootstrap-config.js');
+        const state = await runMeshWorktreeBootstrap(mesh, worktreePath);
+        const outcome: WorkspaceBootstrapOutcome = {
+            status: state.status,
+            required: state.required !== false,
+            error: state.error,
+            lastCommand: state.lastCommand,
+            exitCode: state.exitCode ?? undefined,
+            configSource: state.configSource,
+            submodulesInitialized,
+        };
+        // `required: true` used to be silent on this path. Make it audible in every
+        // non-success case, so an operator sees WHY a workspace is unusable
+        // instead of a worker tripping over missing dependencies later.
+        if (state.status === 'failed' || state.status === 'stale') {
+            const level = outcome.required ? 'error' : 'warn';
+            LOG[level]('MeshGraphWorkspace', `worktree bootstrap ${state.status}${outcome.required ? ' (REQUIRED)' : ''} for ${worktreePath}: ${state.error || 'no error reported'}${state.lastCommand ? ` [last: ${state.lastCommand}]` : ''}`);
+        } else if (state.status !== 'ready') {
+            LOG.info('MeshGraphWorkspace', `worktree bootstrap ${state.status} for ${worktreePath} (${state.configSource || 'no config'})`);
+        }
+        return outcome;
+    } catch (e: any) {
+        // A throw here is an infrastructure fault, not a bootstrap verdict. Treat
+        // it as a non-required failure: the caller keeps the worktree, and the
+        // operator sees the reason.
+        LOG.warn('MeshGraphWorkspace', `worktree bootstrap could not run for ${worktreePath}: ${e?.message || e}`);
+        return { status: 'failed', required: false, error: e?.message || String(e), submodulesInitialized };
+    }
 }
 
 async function defaultFindOwnedWorktree(req: WorkspaceInspectRequest): Promise<WorkspaceCloneResult | null> {
