@@ -31,6 +31,7 @@ import {
     isRestartBlockingPresentation,
     classifyShadowDivergence,
     getTurnPresentationMetrics,
+    STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS,
     __resetTurnPresentationMetricsForTests,
 } from '../../src/mesh/mesh-turn-presentation.js';
 import { normalizeManagedStatus } from '../../src/status/normalize.js';
@@ -428,5 +429,101 @@ describe('observability', () => {
         // No transcript/prompt content anywhere in the metrics payload.
         const serialized = JSON.stringify(metrics);
         expect(serialized).not.toContain('content');
+    });
+});
+
+describe('stale in-flight attempt max-age gate', () => {
+    /**
+     * REGRESSION (stranded `generating` anchor): a task completes normally but its
+     * `mesh_queue` row is later removed by retention prune. Neither reclaim path
+     * can close the attempt (no higher-seq sibling for reclaimOrphanedTurnAttempts;
+     * no queue row for reclaimQueueTerminatedTurnAttempts), so the nonterminal row
+     * kept every surface pinned to `generating` forever while PTY/adapter/parser
+     * all read `idle`. The max-age gate demotes such a row to the provider FSM.
+     */
+    function staleGeneratingSession(): { sessionId: string; startedMs: number } {
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        const sessionId = `sess-${randomUUID().slice(0, 8)}`;
+        const startedMs = Date.parse('2026-09-02T05:00:00.000Z');
+        openAttempt({ taskId, sessionId, nowMs: startedMs });
+        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', sessionId, nowMs: startedMs });
+        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', sessionId, nowMs: startedMs });
+        // `nowMs` (not `occurredAtMs`) is what stamps `updated_at` — the column the
+        // max-age gate reads. Passing only `occurredAtMs` leaves the row wall-clock fresh.
+        recordTurnStage({ meshId: MESH, taskId, stage: 'generating', sessionId, nowMs: startedMs, occurredAtMs: startedMs });
+        return { sessionId, startedMs };
+    }
+
+    it('demotes a stranded `generating` row so the provider FSM idle reaches the surface', () => {
+        const { sessionId, startedMs } = staleGeneratingSession();
+
+        const p = resolveSessionTurnPresentation({
+            sessionId,
+            legacyStatus: 'idle',
+            surface: 'read_chat',
+            nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS + 60_000,
+        });
+
+        expect(p.authority).toBe('provider_fsm_fallback');
+        expect(p.status).toBe(normalizeManagedStatus('idle'));
+        expect(p.stage).toBeNull();
+    });
+
+    it('keeps authority for a live `generating` row that was just written', () => {
+        const { sessionId, startedMs } = staleGeneratingSession();
+
+        const p = resolveSessionTurnPresentation({
+            sessionId,
+            legacyStatus: 'idle',
+            surface: 'read_chat',
+            nowMs: startedMs + 1_000,
+        });
+
+        expect(p.authority).toBe('turn_reducer');
+        expect(p.stage).toBe('generating');
+        expect(p.status).toBe('generating');
+    });
+
+    it('is exclusive at the threshold: at the boundary authority holds, just past it demotes', () => {
+        const { sessionId, startedMs } = staleGeneratingSession();
+
+        const atBoundary = resolveSessionTurnPresentation({
+            sessionId,
+            legacyStatus: 'idle',
+            surface: 'read_chat',
+            nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS,
+        });
+        expect(atBoundary.authority).toBe('turn_reducer');
+
+        const pastBoundary = resolveSessionTurnPresentation({
+            sessionId,
+            legacyStatus: 'idle',
+            surface: 'read_chat',
+            nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS + 1,
+        });
+        expect(pastBoundary.authority).toBe('provider_fsm_fallback');
+    });
+
+    it('never demotes long-lived-by-design suspensions (a human may not answer for hours)', () => {
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        const sessionId = `sess-${randomUUID().slice(0, 8)}`;
+        const startedMs = Date.parse('2026-09-02T05:00:00.000Z');
+        openAttempt({ taskId, sessionId, nowMs: startedMs });
+        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', sessionId, nowMs: startedMs });
+        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', sessionId, nowMs: startedMs });
+        // `nowMs` (not `occurredAtMs`) is what stamps `updated_at` — the column the
+        // max-age gate reads. Passing only `occurredAtMs` leaves the row wall-clock fresh.
+        recordTurnStage({ meshId: MESH, taskId, stage: 'generating', sessionId, nowMs: startedMs, occurredAtMs: startedMs });
+        recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', sessionId, nowMs: startedMs, occurredAtMs: startedMs });
+
+        const p = resolveSessionTurnPresentation({
+            sessionId,
+            legacyStatus: 'idle',
+            surface: 'read_chat',
+            nowMs: startedMs + STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS * 10,
+        });
+
+        expect(p.authority).toBe('turn_reducer');
+        expect(p.stage).toBe('waiting_approval');
     });
 });

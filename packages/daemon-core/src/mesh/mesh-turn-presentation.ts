@@ -135,6 +135,56 @@ function ageMs(nowMs: number, iso: string | null): number | null {
     return Number.isFinite(ts) ? Math.max(0, nowMs - ts) : null;
 }
 
+/**
+ * STALE-ATTEMPT-AUTHORITY GATE — max age for an IN-FLIGHT (`generating` /
+ * `consumed`) attempt row to keep authority over the provider FSM.
+ *
+ * WHY: an attempt row can be stranded nonterminal by an ordinary, non-exotic
+ * path — the task completes normally, but its `mesh_queue` row is later removed
+ * by retention prune. Neither reclaim path can then close it:
+ * `reclaimOrphanedTurnAttempts` requires a HIGHER-seq sibling (a lone seq-0 row
+ * has none) and `reclaimQueueTerminatedTurnAttempts` requires an EXISTS match
+ * against `mesh_queue` (pruned → never matches). Both also run only once at
+ * daemon boot, and the stall watchdog re-arms the anchor rather than closing it.
+ * With no max-age anywhere, such a row pins its session to `generating` forever
+ * on every surface even though PTY/adapter/parser all read `idle`.
+ *
+ * WHY A GATE AND NOT "DROP STAGE 6 AUTHORITY": the authority itself is load
+ * bearing (see the file header) — a Kimi native transcript mid-turn or a Codex
+ * mid-tool sample reads `idle` while the turn is genuinely running, and dropping
+ * authority would resurrect early completion + early restart of `finalizing`
+ * sessions. So authority is kept, and only a row that is demonstrably dead is
+ * demoted.
+ *
+ * WHY 30 MINUTES: the gate must never misjudge a long but healthy turn as dead,
+ * because that surfaces a running session as `idle` (and un-blocks the restart
+ * gate for it). A reducer-authoritative turn refreshes `updated_at` on every
+ * stage write, so a live turn is not silently quiet for this long; a genuinely
+ * long agent turn stays well under it. The value is deliberately far above the
+ * ~15m floor the defect report proposed — the cost of a late demotion is a
+ * stale badge, the cost of an early one is a corrupted in-flight turn.
+ *
+ * SCOPE: only `generating` and `consumed`. Terminal stages need no gate;
+ * `accepted`/`delivered` are covered by the existing redrive/reclaim machinery;
+ * `waiting_approval` / `waiting_choice` / `finalizing` are legitimately long-lived
+ * by design (a human may not answer an approval for hours) and are excluded.
+ */
+export const STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1000;
+
+/** Stages subject to the max-age gate above. */
+const STALE_GATED_STAGES: ReadonlySet<string> = new Set(['generating', 'consumed']);
+
+/**
+ * True when an attempt row sits in an in-flight stage but has not been written
+ * to for longer than {@link STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS}, i.e. it is
+ * an unreachable/stranded anchor rather than a live turn.
+ */
+export function isStaleTurnAttemptAuthority(row: MeshTurnAttemptRow, nowMs: number): boolean {
+    if (!STALE_GATED_STAGES.has(row.stage)) return false;
+    const age = ageMs(nowMs, row.updatedAt ?? null);
+    return age !== null && age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
+}
+
 /** Build the presentation from an attempt row (the reducer-authoritative branch). */
 export function presentationFromAttemptRow(row: MeshTurnAttemptRow, nowMs: number = Date.now()): SessionTurnPresentation {
     const stage = row.stage as TurnStage;
@@ -213,7 +263,10 @@ export interface ResolveTurnPresentationArgs extends TurnAuthorityLookup {
 export function resolveSessionTurnPresentation(args: ResolveTurnPresentationArgs): SessionTurnPresentation {
     const nowMs = args.nowMs ?? Date.now();
     const row = resolveTurnAttemptRow(args);
-    if (row) {
+    // STALE-ATTEMPT-AUTHORITY GATE: a stranded in-flight row (see
+    // STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS) is demoted so the provider FSM —
+    // which reads the session's real, idle state — governs the surface again.
+    if (row && !isStaleTurnAttemptAuthority(row, nowMs)) {
         const presentation = presentationFromAttemptRow(row, nowMs);
         recordProjectionSource('turn_reducer');
         shadowCompareLegacyVsProjection(args.surface, args.providerType ?? row.providerType, args.legacyStatus, presentation);
