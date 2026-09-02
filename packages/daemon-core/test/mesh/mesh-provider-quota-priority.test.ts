@@ -56,6 +56,7 @@ import {
 } from '../../src/mesh/mesh-queue-assignment.js';
 import { __replaceMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from '../../src/mesh/mesh-quota-routing.js';
+import { SLOT_MODEL_BUSY_SKIP_REASON } from '../../src/mesh/slot-model-enforcement.js';
 import { buildAutoLaunchRoutingDecision } from '../../src/mesh/mesh-routing-decision.js';
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js';
@@ -268,6 +269,50 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
         expect(event?.metadataEvent).toEqual(expect.objectContaining({
             taskId: 'quota-timeout-task', reason: 'task_difficulty_floor_timeout', difficulty: 'difficult',
         }));
+    });
+
+    it('reports a capacity stall once after ten minutes and does not page on the first skip', () => {
+        // LEDGER-AUTOLAUNCH-RETRY-SPAM (④). `slot_for_model_busy` self-resolves, so it is
+        // correctly absent from ACTIONABLE_SKIP_REASON_PREFIXES — a slot busy for one tick
+        // must never page. But when it persists past the bounded wait, nobody is coming and
+        // the coordinator has to hear about it once. Measured live 2026-09-02: the Mac node
+        // reported exactly this reason with no pager behind it.
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-09-02T00:00:00.000Z'));
+        __replaceMeshQueueForTests(MESH_ID, [{
+            id: 'slot-busy-task', meshId: MESH_ID, message: 'blocked task', status: 'pending', difficulty: 'medium',
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }] as any);
+
+        // Still a back-pressure reason, so it must NOT be treated as actionable-on-sight.
+        expect(__isActionableSkipReasonForTests(SLOT_MODEL_BUSY_SKIP_REASON)).toBe(false);
+
+        __markAutoLaunchForTests(MESH_ID, 'slot-busy-task', {
+            status: 'skipped', reason: SLOT_MODEL_BUSY_SKIP_REASON, nodeId: NODE_ID,
+        });
+        // First skip: silent. A transiently busy slot is not a blocker.
+        expect(drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine')).toHaveLength(0);
+
+        vi.advanceTimersByTime(DIFFICULTY_FLOOR_REPORT_AFTER_MS);
+        __markAutoLaunchForTests(MESH_ID, 'slot-busy-task', {
+            status: 'skipped', reason: SLOT_MODEL_BUSY_SKIP_REASON, nodeId: NODE_ID,
+        });
+        const [event] = drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine') as any[];
+        expect(event?.metadataEvent).toEqual(expect.objectContaining({
+            source: 'mesh_queue_capacity_stall_timeout',
+            taskId: 'slot-busy-task',
+            reason: 'task_claim_capacity_stall_timeout',
+            skipReason: SLOT_MODEL_BUSY_SKIP_REASON,
+        }));
+        // Capacity advice, not the downgrade advice the floor path gives.
+        expect(event?.coordinatorMessage).toContain('claimed automatically the moment a slot frees');
+        expect(event?.coordinatorMessage).not.toContain('explicit task-scoped downgrade');
+
+        // Paged once only: a further skip after the report stays silent.
+        __markAutoLaunchForTests(MESH_ID, 'slot-busy-task', {
+            status: 'skipped', reason: SLOT_MODEL_BUSY_SKIP_REASON, nodeId: NODE_ID,
+        });
+        expect(drainPendingMeshCoordinatorEvents(MESH_ID, 'test-machine')).toHaveLength(0);
     });
 
     it('persists bounded intra-node losers and the quota-risk snapshot in the task ledger', async () => {

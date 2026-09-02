@@ -4063,6 +4063,107 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('de-dups skipped auto-launch entries per node when candidates skip for DIFFERENT reasons', async () => {
+    // LEDGER-AUTOLAUNCH-RETRY-SPAM regression. The de-dup above is a last-value compare.
+    // Keyed by task alone it collapses only when every candidate node reports the SAME
+    // reason — which is why the single-node test above passed while the ledger flooded.
+    //
+    // Here two nodes skip for two DIFFERENT reasons, the shape measured live on
+    // 2026-09-02 (node A `slot_for_model_busy`, node B a difficulty-floor miss). Per
+    // tick the task-keyed signature flipped A→B→A→B and never matched, so EVERY skip
+    // appended: 2 entries/tick, ~30/min, forever. With the key including nodeId each
+    // node's own repeat collapses, so three ticks must yield exactly one entry per node.
+    const meshId = `mesh_auto_launch_skip_dedup_multinode_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [
+          {
+            id: 'node_remote_a',
+            workspace: '/repo/worktree-a',
+            health: 'online',
+            daemonId: 'daemon_remote_a',
+            machineId: 'mach_remote_a',
+            policy: { providerPriority: ['hermes-cli'] },
+          },
+          {
+            // Dirty workspace → a different skip reason than node A's.
+            id: 'node_remote_b',
+            workspace: '/repo/worktree-b',
+            health: 'online',
+            daemonId: 'daemon_remote_b',
+            machineId: 'mach_remote_b',
+            git: { dirty: true },
+            policy: { providerPriority: ['hermes-cli'] },
+          },
+        ],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
+      const { components } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+
+      const skips = readLedgerEntries(meshId).filter(
+        e => e.kind === 'session_auto_launch' && e.payload?.phase === 'skipped',
+      )
+      // Two distinct reasons were genuinely observed, so both must remain visible...
+      const reasons = new Set(skips.map(e => e.payload?.reason))
+      expect(reasons.size).toBeGreaterThanOrEqual(2)
+      // ...but no (node, reason) pair may repeat across the three ticks. This is the
+      // assertion that actually fails pre-fix: node A alternating with node B replays
+      // both pairs on every tick.
+      const perNodeReason = skips.map(e => `${e.nodeId}|${e.payload?.reason}`)
+      expect(perNodeReason).toHaveLength(new Set(perNodeReason).size)
+      // Pre-fix: 6 (2 nodes x 3 ticks, nothing suppressed). Post-fix: 3 — one per
+      // (node, reason), node A legitimately contributing two because it transitions
+      // remote_auto_launch_unsupported -> auto_launch_cooldown, a real state change
+      // that MUST still record. Bounded well under the per-tick replay either way.
+      expect(skips.length).toBeLessThanOrEqual(4)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('re-appends a skipped auto-launch entry when the same node reports a CHANGED reason', async () => {
+    // The de-dup must stay a transition detector, not a mute: a node whose skip reason
+    // changes is a real state change and must reappear in the ledger. Guards against
+    // "fixing" the spam by suppressing per node regardless of reason.
+    const meshId = `mesh_auto_launch_skip_reason_change_${Date.now()}`
+    try {
+      const node = {
+        id: 'node_remote_1',
+        workspace: '/repo/remote-worktree',
+        health: 'online',
+        daemonId: 'daemon_remote_machine',
+        machineId: 'mach_remote',
+        policy: { providerPriority: ['hermes-cli'] },
+      }
+      meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [node], policy: { maxParallelTasks: 2 } })
+      enqueueTask(meshId, 'pending remote task', { difficulty: 'medium' })
+      const { components } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+      await triggerMeshQueue(components, meshId)
+      // The node goes dirty → the SAME node now skips for a different reason.
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ ...node, git: { dirty: true } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      await triggerMeshQueue(components, meshId)
+
+      const reasons = readLedgerEntries(meshId)
+        .filter(e => e.kind === 'session_auto_launch' && e.payload?.phase === 'skipped')
+        .map(e => e.payload?.reason)
+      expect(new Set(reasons).size).toBeGreaterThanOrEqual(2)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('gracefully skips a remote node when no coordinator daemonId can be resolved', async () => {
     // dispatchMeshCommand exists but there is no local machineId to stamp as the
     // coordinator anchor → relay-safe completion routing is impossible, so skip
