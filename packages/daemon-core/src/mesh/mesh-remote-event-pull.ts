@@ -22,6 +22,10 @@ import { handleMeshForwardEvent } from './mesh-events-coordinator.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
+import {
+    readTranscriptForDaemonConsumer,
+    TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
+} from './transcript-daemon-consumer-read.js';
 
 // ─── Pull pacing (RECONCILE-PULL-FLOOD, M-MESH-INFRA-0829 follow-up) ────────
 // Live measurement (2026-08-30, preview coordinator, rc.45): the 4s reconcile
@@ -339,10 +343,37 @@ export function realTerminalEmitPendingForTask(meshId: string, taskId: string): 
 // R4e fix (2): one fresh read_chat status read for the worker session, via the same local/remote
 // transport PHASE 4 uses. Returns the lowercased status, or null when the read is inconclusive
 // (transport error, success:false, no payload) — callers treat null as "no new evidence, proceed".
+//
+// ── §8 unit 7: roster id 4 `daemon_worker_status_probe` (design §4) ─────────
+// The replica hop runs FIRST for a REMOTE worker, then this function's original
+// local/remote `read_chat` exactly as before. Losslessness is trivial here and
+// that is the point of taking this consumer first: the only field read is
+// `payload.status` (`readChatPayloadStatus`), which the transcript wire carries
+// verbatim as `snapshot.status` — the SAME `effectiveStatus` the producer's
+// `read_chat` last mile computed, not a re-derivation.
+//
+// LOCAL nodes never take the replica hop: their `read_chat` is an in-process
+// call against the provider source, which §4's roster note keeps as-is.
+//
+// The roster's fallback note — "불충분하면 기존 local/remote `read_chat`; null의
+// 기존 fail-open 의미 유지" — is why a declined replica read falls THROUGH to
+// the legacy call rather than returning null: null means "inconclusive, proceed"
+// to every caller, so answering null on a mere replica miss would silently
+// convert a would-be conclusive probe into a fail-open one.
 export async function reprobeWorkerStatus(
     components: DaemonComponents,
     args: { isLocalNode: boolean; nodeDaemonId: string; readArgs: Record<string, unknown> },
 ): Promise<string | null> {
+    if (!args.isLocalNode) {
+        const replica = readTranscriptForDaemonConsumer({
+            consumerId: 'daemon_worker_status_probe',
+            ownerDaemonId: args.nodeDaemonId,
+            rawSessionId: readNonEmptyString(args.readArgs.sessionId),
+            maxAgeMs: TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
+            store: components.transcriptReplicaStore,
+        });
+        if (replica.snapshot) return replica.snapshot.status.toLowerCase();
+    }
     try {
         if (args.isLocalNode) {
             const r = await components.commandHandler.handle('read_chat', args.readArgs);

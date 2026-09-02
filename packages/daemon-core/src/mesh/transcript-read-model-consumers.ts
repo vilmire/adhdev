@@ -30,6 +30,14 @@
  * `read_chat`, via `mesh/transcript-read-chat-adapter.ts`. Ids 4-8 remain
  * declared for completeness (the full roster table, §4) but unwired — a caller
  * asking about them today gets `consumer_not_enabled`.
+ *
+ * ── §8 unit 7 scope ─────────────────────────────────────────────────────────
+ * Roster ids 4-5 (`daemon_worker_status_probe`, `daemon_terminal_evidence`) are
+ * now enabled. Both run INSIDE the daemon that owns the replica store, so they
+ * route through `mesh/transcript-daemon-consumer-read.ts` — a direct store read
+ * plus the §5.5 readiness gate — rather than unit 6's IPC pair, which exists
+ * only because mcp-server is a separate process. Ids 6-8 (all mcp-server) stay
+ * unwired and still answer `consumer_not_enabled`.
  */
 
 /** The complete roster, in the design's consumer integration order (§4). */
@@ -97,13 +105,13 @@ export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, T
     },
     daemon_worker_status_probe: {
         currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)',
-        note: 'Active-session freshness/owner status re-check — out of this unit\'s scope.',
-        enabled: false,
+        note: 'Active-session freshness/owner status re-check. Reads ONE field — `payload.status` — which the wire carries verbatim as `snapshot.status` (the producer\'s own effectiveStatus, not a re-derivation), so the read is exactly lossless. Remote nodes only; a declined replica read falls through to the identical legacy read_chat, preserving null\'s fail-open meaning.',
+        enabled: true,
     },
     daemon_terminal_evidence: {
-        currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts',
-        note: 'Acked-hold/terminal causal evidence with activity/current-turn projection — out of this unit\'s scope.',
-        enabled: false,
+        currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts (fetchAssignedTaskChatTail)',
+        note: 'Acked-hold/terminal causal evidence. Every field the extractors read (role/kind/content/senderName/meta.streaming/timestamp/receivedAt, status, providerObservedStatus, activeModal, turn, providerSessionId) survives the projection. ★ NOT lossless in one direction: `turnTerminalMarkers` is deliberately omitted (the wire carries no native markers — see mapTerminalEvidencePayload), so a replica read takes the legacy message-shape admission rules instead of strong native-marker evidence. Weaker evidence, same veto direction.',
+        enabled: true,
     },
     mcp_mesh_status_reconciliation: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-internal.ts',
