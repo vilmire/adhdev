@@ -128,10 +128,14 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
         // edit — the property that makes the roster the single control point.
         expect(TRANSCRIPT_CONSUMER_ROSTER.daemon_worker_status_probe.enabled).toBe(true);
         expect(TRANSCRIPT_CONSUMER_ROSTER.daemon_terminal_evidence.enabled).toBe(true);
-        // Ids 6-8 belong to §8 unit 8 (mcp-server) and must still be unwired.
-        expect(TRANSCRIPT_CONSUMER_ROSTER.mcp_mesh_status_reconciliation.enabled).toBe(false);
-        expect(TRANSCRIPT_CONSUMER_ROSTER.magi_approval_probe.enabled).toBe(false);
-        expect(TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect.enabled).toBe(false);
+        // Ids 6-8 belong to §8 unit 8 (mcp-server) and were unwired when this
+        // unit-7 test was written; unit 8 cut them over, so they now read true.
+        // Their own gate behaviour is asserted by the unit-8 suite
+        // (test/mesh/transcript-read-model-consumers.test.ts) — here we only
+        // pin that the daemon gate's two ids are independent of that cutover.
+        expect(TRANSCRIPT_CONSUMER_ROSTER.mcp_mesh_status_reconciliation.enabled).toBe(true);
+        expect(TRANSCRIPT_CONSUMER_ROSTER.magi_approval_probe.enabled).toBe(true);
+        expect(TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect.enabled).toBe(true);
     });
 
     // ── §5.5 condition 2 — node/key/store ──────────────────────────────────
