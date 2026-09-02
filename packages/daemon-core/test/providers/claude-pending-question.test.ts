@@ -410,22 +410,19 @@ describe('freeform escape: native JSONL matches the screen scrape', () => {
 });
 
 /**
- * MEASURED DIVERGENCE inside the scrape itself (finding, not a fix).
+ * PARITY on the escape row, across all three parsers (2026-09-02).
  *
- * The two scrape parsers disagree about the escape row:
- *   - headered (`✔ Submit` nav, parseClaudeInteractiveTuiQuestion) STRIPS it
- *     from options and sets allowFreeform.
- *   - headerless (parseClaudeHeaderlessInteractiveTuiQuestion) sets
- *     allowFreeform AND ALSO pushes the row into options.
+ * This block used to pin a MEASURED DIVERGENCE: the headered parser stripped
+ * the "Type something." row from `options` while the headerless one left it in,
+ * so the same picker produced two different option lists and the keystroke
+ * builder picked a different digit per shape.
  *
- * The native path is matched to the HEADERED shape, because that is the one the
- * keystroke builder's `typeOptionIndex >= 0` lookup and the dashboard's
- * allowFreeform textarea are both written against. This test pins the
- * divergence so it is visible rather than folklore; unifying the headerless
- * parser is a separate change with its own keystroke-protocol blast radius
- * (buildClaudeInteractiveTuiAnswerSteps picks a different digit per shape).
+ * Both scrape parsers now strip it, matching the native JSONL path. The row is
+ * an escape hatch, not an option: `allowFreeform` is the only thing it should
+ * set, and the builder re-derives its on-screen number as options.length + 1
+ * (measured live, claude v2.1.220 — see interactive-prompt.ts).
  */
-describe('scrape self-divergence on the escape row (documented, not fixed here)', () => {
+describe('scrape parity on the escape row (headered and headerless agree)', () => {
     const rows = (nav: boolean) => [
         ...(nav ? ['←  ☐ Choice  ✔ Submit  →'] : []),
         'Pick one.',
@@ -441,9 +438,9 @@ describe('scrape self-divergence on the escape row (documented, not fixed here)'
         { promptId: 'control', providerType: 'claude-cli' },
     )!.questions[0];
 
-    it('headered strips the row; headerless keeps it — both set allowFreeform', () => {
+    it('both shapes strip the row and set allowFreeform', () => {
         expect(parse(true).options.map(o => o.label)).toEqual(['Alpha']);
-        expect(parse(false).options.map(o => o.label)).toEqual(['Alpha', 'Type something.']);
+        expect(parse(false).options.map(o => o.label)).toEqual(['Alpha']);
         expect(parse(true).allowFreeform).toBe(true);
         expect(parse(false).allowFreeform).toBe(true);
     });
