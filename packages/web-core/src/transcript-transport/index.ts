@@ -9,6 +9,13 @@
  * never imported as a value.
  */
 export {
+    assertRingOnlyPolicy,
+    browserRejectAuthority,
+    guardRingOnlyDefineTopic,
+    isRingOnlyPolicy,
+    type RingOnlyDefineTopicTarget,
+} from './browser-reject-authority.js';
+export {
     isTranscriptBridgeControlEvent,
     transcriptBridgeControlEvent,
     type TranscriptBridgeControlEvent,

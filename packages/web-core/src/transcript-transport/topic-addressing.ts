@@ -46,7 +46,22 @@ export const ADHDEV_AUTHORITY_ID = 'adhdev-coordinator';
 /** Mirrors `topics.ts#SESSION_TRANSCRIPT_RING`. */
 export const SESSION_TRANSCRIPT_RING = 500;
 
-/** Mirrors `topics.ts#sessionTranscriptPolicy`. */
+/**
+ * Mirrors `topics.ts#sessionTranscriptPolicy`.
+ *
+ * ★ `finalityAuthority` MUST STAY — do not delete it "because the browser
+ * cannot sign". It is not a capability claim; it is an input to
+ * `topicSchemaHash` (seqscribe SPEC §14 / host-guide §6). Dropping it here
+ * while the daemon keeps it forks the hash, and every daemon peer then rejects
+ * this topic with `ERR_SCHEMA_MISMATCH`. Removing it fleet-wide is separately
+ * forbidden by the Phase 3 design doc.
+ *
+ * What the browser lacks is the SIGNING key, not the field. seqscribe's gate
+ * (`vendor/seqscribe/src/topics.ts:53-54`) only requires that an
+ * `AuthorityHooks.verifyFinality` *exists* — so the browser supplies the
+ * non-signing `browserRejectAuthority` and this policy stays byte-identical to
+ * the daemon's.
+ */
 export function sessionTranscriptPolicy(ringSize: number = SESSION_TRANSCRIPT_RING): TopicPolicy {
     return {
         kind: 'append',
