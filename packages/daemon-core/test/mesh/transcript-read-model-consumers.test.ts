@@ -29,11 +29,15 @@ describe('transcript-read-model-consumers roster', () => {
         );
     });
 
-    it('enables only the §8 unit 5 consumers (web_chat_pane, web_warm_mobile_preview)', () => {
+    // Enabled set grows one unit at a time — units 5 (web pane) and 6
+    // (mesh_read_chat display) have landed; ids 4-8 of the table are still
+    // declared-but-unwired. Extend this list ONLY alongside the unit that
+    // actually wires the consumer's routing.
+    it('enables exactly the §8 unit 5-6 consumers', () => {
+        const enabled = new Set(['web_chat_pane', 'web_warm_mobile_preview', 'mesh_read_chat_display']);
         for (const id of TRANSCRIPT_CONSUMER_IDS) {
             const entry = TRANSCRIPT_CONSUMER_ROSTER[id];
-            const shouldBeEnabled = id === 'web_chat_pane' || id === 'web_warm_mobile_preview';
-            expect(entry.enabled, `roster id ${id}`).toBe(shouldBeEnabled);
+            expect(entry.enabled, `roster id ${id}`).toBe(enabled.has(id));
         }
     });
 

@@ -1222,6 +1222,14 @@ export {
 // import — the root-barrel-value-import ban (see meshSurfaceHelpers.ts's own
 // note) only forbids pulling runtime code (logger/fs) into a browser bundle;
 // an `export type` is erased at compile time and carries none of that.
+// §8 unit 6 ("mesh_read_chat remote display cutover"): the `mesh_read_chat_
+// display` roster adapter. A VALUE export (unlike the type-only block below) —
+// mcp-server is a node process, not a browser bundle, so the root-barrel
+// value-import ban does not apply to it.
+export {
+  mapTranscriptSnapshotToReadChatPayload,
+  type TranscriptReadChatPayload,
+} from './mesh/transcript-read-chat-adapter.js';
 export type {
   ReplicatedTranscriptSnapshotV1,
   ReplicatedTranscriptMessageV1,
