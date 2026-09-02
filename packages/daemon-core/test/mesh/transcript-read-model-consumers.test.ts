@@ -29,12 +29,22 @@ describe('transcript-read-model-consumers roster', () => {
         );
     });
 
-    // Enabled set grows one unit at a time — units 5 (web pane) and 6
-    // (mesh_read_chat display) have landed; ids 4-8 of the table are still
-    // declared-but-unwired. Extend this list ONLY alongside the unit that
-    // actually wires the consumer's routing.
-    it('enables exactly the §8 unit 5-6 consumers', () => {
-        const enabled = new Set(['web_chat_pane', 'web_warm_mobile_preview', 'mesh_read_chat_display']);
+    // Enabled set grew one unit at a time — 5 (web pane), 6 (mesh_read_chat
+    // display), 7 (the two daemon-side semantic consumers) and 8 (the three
+    // mcp-server semantic consumers). With units 7 and 8 both landed the roster
+    // is fully enabled, so this assertion now pins the COMPLETE set: a future id
+    // added to the table defaults to failing here until its own unit wires it.
+    it('enables every roster consumer once units 5-8 have landed', () => {
+        const enabled = new Set([
+            'web_chat_pane',
+            'web_warm_mobile_preview',
+            'mesh_read_chat_display',
+            'daemon_worker_status_probe',
+            'daemon_terminal_evidence',
+            'mcp_mesh_status_reconciliation',
+            'magi_approval_probe',
+            'magi_result_collect',
+        ]);
         for (const id of TRANSCRIPT_CONSUMER_IDS) {
             const entry = TRANSCRIPT_CONSUMER_ROSTER[id];
             expect(entry.enabled, `roster id ${id}`).toBe(enabled.has(id));

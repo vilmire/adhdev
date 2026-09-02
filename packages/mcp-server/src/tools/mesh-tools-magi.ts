@@ -40,10 +40,12 @@ import {
     readString,
     refreshMeshFromDaemon,
     resolveCoordinatorNode,
+    resolveSemanticReplicaTransport,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
     upsertMeshMission,
 } from './mesh-tools-internal.js';
+import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
 import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import type {
     LocalMeshEntry,
@@ -2511,13 +2513,39 @@ async function collectMagiResponses(
         const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
         if (!node || !task.assignedSessionId) return;
         try {
-            const read = await commandForNode(ctx, node, 'read_chat', {
-                sessionId: task.assignedSessionId,
-                targetSessionId: task.assignedSessionId,
-                workspace: (node as any).workspace,
-                tailLimit: 1,
-            });
-            const payload = unwrapCommandPayload(read) as any;
+            // ── §8 unit 8: replica hop (design §4 roster id 7) ──────────────
+            // `magi_approval_probe`. Only `status` + `activeModal` are read, and
+            // the SAME magiReadIndicatesApprovalWedge predicate decides — so
+            // approve idempotency is untouched by the source swap.
+            //
+            // ★ Freshness is mandatory here and the reason is not cosmetic: a
+            // stale snapshot describes a modal that may already be gone, and
+            // this consumer's next act is an approve CLICK. Any coverage is
+            // accepted (even `tail`) because the two fields are session-level,
+            // not message-window-derived. resolve_action below stays a live RPC
+            // regardless — the replica decides only WHETHER to act, never
+            // performs the act.
+            const replicaTransport = resolveSemanticReplicaTransport(ctx, node as any);
+            let payload: any = null;
+            if (replicaTransport) {
+                const replica = await readTranscriptReplicaForSemanticConsumer(replicaTransport, {
+                    consumerId: 'magi_approval_probe',
+                    ownerDaemonId: (node as any).daemonId,
+                    rawSessionId: task.assignedSessionId,
+                    acceptCoverage: ['full', 'tail', 'current-turn'],
+                    requireFresh: true,
+                });
+                if (replica.payload) payload = replica.payload;
+            }
+            if (!payload) {
+                const read = await commandForNode(ctx, node, 'read_chat', {
+                    sessionId: task.assignedSessionId,
+                    targetSessionId: task.assignedSessionId,
+                    workspace: (node as any).workspace,
+                    tailLimit: 1,
+                });
+                payload = unwrapCommandPayload(read) as any;
+            }
             if (!magiReadIndicatesApprovalWedge(payload)) return;
             const status = String(payload?.status ?? '');
             await commandForNode(ctx, node, 'resolve_action', {
@@ -2609,17 +2637,44 @@ async function collectMagiResponses(
         try {
             const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
             if (!node) throw new Error('assigned node not in mesh');
-            const result = await commandForNode(ctx, node, 'read_chat', {
-                sessionId: task.assignedSessionId,
-                targetSessionId: task.assignedSessionId,
-                workspace: (node as any).workspace,
-                tailLimit: 6,
-                // FIX#1: scope the read to the CURRENT turn so a provider that supports it returns
-                // only this turn's bubbles (coverage:'current-turn' / _turnKey), instead of the
-                // whole-session tail whose newest kind-valid JSON could belong to an earlier turn.
-                coverage: 'current-turn',
-            });
-            const payload = unwrapCommandPayload(result);
+            // ── §8 unit 8: replica hop (design §4 roster id 8) ──────────────
+            // `magi_result_collect`. The replica payload is fed to the SAME
+            // captureRawAnswer + parseFirstMagiCandidateForKind below, so the
+            // weak/unparseable/retry/deadline semantics are all unchanged.
+            //
+            // ★ ONLY current-turn coverage is admitted, and that is the whole
+            // FIX#1 guard restated: the live read below asks for
+            // coverage:'current-turn' precisely because a whole-session tail's
+            // newest kind-valid JSON can belong to an EARLIER turn and be
+            // mis-attributed as this replica's answer. A `tail`-covered replica
+            // snapshot is that same hazard arriving by a different road, so it
+            // declines to legacy rather than being parsed. Freshness is
+            // required because this read locks a terminal verdict.
+            const replicaTransport = resolveSemanticReplicaTransport(ctx, node as any);
+            let payload: any = null;
+            if (replicaTransport) {
+                const replica = await readTranscriptReplicaForSemanticConsumer(replicaTransport, {
+                    consumerId: 'magi_result_collect',
+                    ownerDaemonId: (node as any).daemonId,
+                    rawSessionId: task.assignedSessionId,
+                    acceptCoverage: ['current-turn'],
+                    requireFresh: true,
+                });
+                if (replica.payload) payload = replica.payload;
+            }
+            if (!payload) {
+                const result = await commandForNode(ctx, node, 'read_chat', {
+                    sessionId: task.assignedSessionId,
+                    targetSessionId: task.assignedSessionId,
+                    workspace: (node as any).workspace,
+                    tailLimit: 6,
+                    // FIX#1: scope the read to the CURRENT turn so a provider that supports it returns
+                    // only this turn's bubbles (coverage:'current-turn' / _turnKey), instead of the
+                    // whole-session tail whose newest kind-valid JSON could belong to an earlier turn.
+                    coverage: 'current-turn',
+                });
+                payload = unwrapCommandPayload(result);
+            }
             // Capture the raw answer onto `source` now, so it rides along whether this
             // replica finalizes as a parseable answer or a weak/provisional one. (Stripped
             // for non-verbose consumers downstream.)

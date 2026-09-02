@@ -61,6 +61,12 @@ import {
     realTerminalEmitPendingForTask,
     collectLiveNodesWithSessions,
 } from './mesh-remote-event-pull.js';
+import {
+    readTranscriptForDaemonConsumer,
+    TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
+} from './transcript-daemon-consumer-read.js';
+import { mapTranscriptSnapshotToReadChatPayload } from './transcript-read-chat-adapter.js';
+import type { ReplicatedTranscriptSnapshotV1 } from '../seqscribe/transcript-projection.js';
 
 /**
  * Newest transcript bubble of ANY kind (epoch ms), or undefined when nothing in the
@@ -997,6 +1003,22 @@ async function fetchAssignedTaskChatTail(
         ...(providerType ? { agentType: providerType, providerType } : {}),
     };
 
+    // ── §8 unit 7: roster id 5 `daemon_terminal_evidence` (design §4) ───────
+    // REMOTE workers only — a local node's read_chat is the in-process provider
+    // source, which §4's roster note keeps as-is. A declined replica read falls
+    // THROUGH to the identical legacy call below ("어떤 field/coverage라도 없으면
+    // legacy 전체 호출"), so both `poll*` shells keep their conservative
+    // "couldn't tell ≠ idle" semantics unchanged.
+    if (!isLocalNode) {
+        const replica = readTranscriptForDaemonConsumer({
+            consumerId: 'daemon_terminal_evidence',
+            ownerDaemonId: nodeDaemonId,
+            rawSessionId: sessionId,
+            maxAgeMs: TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
+            store: components.transcriptReplicaStore,
+        });
+        if (replica.snapshot) return mapTerminalEvidencePayload(replica.snapshot);
+    }
     try {
         if (isLocalNode) {
             const result = await components.commandHandler?.handle('read_chat', readArgs);
@@ -1013,6 +1035,51 @@ async function fetchAssignedTaskChatTail(
     } catch {
         return null; // transport error / session gone → inconclusive, let the caller decide
     }
+}
+
+/**
+ * Replica snapshot → the `read_chat` payload shape this file's evidence
+ * extractors consume. A thin wrapper over §8 unit 6's shared adapter
+ * (`mapTranscriptSnapshotToReadChatPayload`), so the replica-sourced object
+ * graph cannot drift between the mcp-server display consumer and this one.
+ *
+ * ★★ `turnTerminalMarkers` MUST STAY ABSENT — the load-bearing part of this
+ * function, and the reason it exists rather than the adapter being called
+ * inline.
+ *
+ * `evaluateTerminalAdmission` treats the field's PRESENCE as a version-skew
+ * discriminator (`mesh-terminal-admission.ts`, `nativeMarkersFieldPresent`):
+ * present-even-as-`[]` means "a native history read genuinely happened", which
+ * for a provider with a native turn signal makes an empty list the
+ * AUTHORITATIVE "this turn has NOT ended" — the incident veto. Absent means "an
+ * old daemon / PTY fallback read" and falls through to the legacy message-shape
+ * rules.
+ *
+ * The transcript wire cannot answer this question either way. Its producer
+ * (`commands/transcript-observation-builder.ts`) hard-codes `terminalMarkers:
+ * []` and the projection's `TranscriptTerminalOutcome` is a DIFFERENT enum from
+ * `NativeTurnTerminalMarker['outcome']` (`completed|failed|cancelled|stalled`
+ * vs `completed|aborted`), so there is no native-marker evidence on this wire to
+ * forward, and synthesizing `turnTerminalMarkers: []` from the snapshot's empty
+ * list would fabricate exactly the authoritative veto the discriminator exists
+ * to distinguish from silence.
+ *
+ * So the field is omitted, which routes a replica-sourced read down the same
+ * legacy message-shape rules an old daemon takes. That is a real, deliberate
+ * reduction in evidence STRENGTH for native-signal providers (strong marker
+ * evidence becomes weak shape evidence), never in safety: the veto direction is
+ * preserved and the admission rules stay conservative. Restoring marker parity
+ * requires putting native markers on the wire first — a §8 unit 1 projection
+ * change, not a consumer change.
+ */
+function mapTerminalEvidencePayload(
+    snapshot: ReplicatedTranscriptSnapshotV1,
+): Record<string, unknown> {
+    return mapTranscriptSnapshotToReadChatPayload(snapshot, {
+        omittedBefore: snapshot.coverage.omittedBefore,
+        // Freshness is the router's gate (§5.5), already satisfied to get here.
+        stale: false,
+    }) as unknown as Record<string, unknown>;
 }
 
 /**

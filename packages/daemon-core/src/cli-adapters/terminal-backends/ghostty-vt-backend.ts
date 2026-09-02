@@ -108,11 +108,39 @@ function loadGhosttyVtBinding(): GhosttyVtBinding {
     throw buildError();
 }
 
+// DEC private modes that swap in the alternate screen buffer. 1049 is what
+// modern TUIs emit; 47 and 1047 are the legacy spellings, kept because the
+// cost of matching them is a wider character class and the cost of missing
+// them is a silently collapsed viewport.
+const ALT_SCREEN_MODE_RE = /\x1b\[\?(?:1049|1047|47)([hl])/g;
+
+// Longest prefix of an alt-screen sequence that can be a proper prefix of a
+// match: "\x1b[?1049" is 8 chars, so 8 characters of tail are enough to
+// reassemble any sequence split across two writes. Bounded so the carry can
+// never grow with input volume.
+const ALT_SCREEN_SEQ_MAX_PREFIX = 8;
+
 export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     readonly kind = 'ghostty-vt' as const;
     private terminal: GhosttyVtTerminal;
     private rows: number;
     private disposed = false;
+    /**
+     * Whether the alternate screen buffer is currently active.
+     *
+     * Tracked here because the native binding exposes no accessor for it, and
+     * the distinction is load-bearing: the alternate screen has no scrollback,
+     * so a mid-repaint sample of it is a *partial frame* rather than a short
+     * buffer. See getText() for why that changes how the viewport is framed.
+     */
+    private altScreenActive = false;
+    /**
+     * Trailing bytes of the previous write that could be the start of an
+     * alt-screen mode sequence. PTY reads chunk at arbitrary offsets, so
+     * "\x1b[?10" and "49h" routinely arrive as two writes; scanning each chunk
+     * in isolation would miss the mode change and leave altScreenActive stale.
+     */
+    private modeScanCarry = '';
 
     constructor(options: TerminalViewportBackendOptions) {
         const binding = loadGhosttyVtBinding();
@@ -131,7 +159,35 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
 
     write(data: string): void {
         if (!data || this.disposed) return;
+        this.trackAltScreenMode(data);
         this.terminal.write(data);
+    }
+
+    /**
+     * Updates altScreenActive from any alt-screen mode sequence in `data`.
+     *
+     * Only the LAST match matters: a single write may both enter and leave the
+     * alternate screen, and the resulting state is whichever transition came
+     * last. ghostty's own parser is fed the unmodified chunk, so this scan is
+     * purely observational and cannot alter what gets rendered.
+     */
+    private trackAltScreenMode(data: string): void {
+        const haystack = this.modeScanCarry + data;
+
+        ALT_SCREEN_MODE_RE.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        let last: string | null = null;
+        let lastMatchEnd = 0;
+        while ((match = ALT_SCREEN_MODE_RE.exec(haystack)) !== null) {
+            last = match[1];
+            lastMatchEnd = ALT_SCREEN_MODE_RE.lastIndex;
+        }
+        if (last) this.altScreenActive = last === 'h';
+
+        // Carry only the bytes *after* the last consumed match. Retaining a
+        // matched sequence would let it be re-matched on the next write and
+        // resurrect an already-superseded transition.
+        this.modeScanCarry = haystack.slice(Math.max(lastMatchEnd, haystack.length - ALT_SCREEN_SEQ_MAX_PREFIX));
     }
 
     private formatLines(): string[] {
@@ -160,13 +216,49 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
         if (lines.length === 0) return '';
         // Take only the viewport (last `rows` lines) to exclude scrollback history.
         const viewport = lines.length > this.rows ? lines.slice(-this.rows) : lines;
-        return GhosttyVtTerminalBackend.trimBlankEnds(viewport);
+
+        // On the normal screen the buffer accumulates scrollback, so a short
+        // `viewport` genuinely means "little output so far" and collapsing the
+        // blank margin is the right, long-standing behaviour. Preserve it
+        // byte-for-byte — every non-alt-screen provider matches against it.
+        if (!this.altScreenActive) return GhosttyVtTerminalBackend.trimBlankEnds(viewport);
+
+        // The alternate screen has no scrollback: `viewport` IS the whole
+        // buffer, and ghostty drops trailing blank rows from it. So a frame
+        // sampled mid-repaint — after an erase-display but before the TUI has
+        // painted the rest — arrives as a handful of rows rather than a short
+        // screen. Trimming that collapses a 32-row viewport to the few bytes
+        // that happen to be painted (observed: 3 bytes for a lone spinner),
+        // which destroys the row offsets that viewport-relative matching and
+        // the modal section anchors depend on.
+        //
+        // Restoring the full `rows` height keeps geometry stable across
+        // repaints: content lands on the row the TUI actually drew it on, and
+        // a partial frame reads as a mostly-blank screen instead of a
+        // truncated one.
+        return GhosttyVtTerminalBackend.padToRows(viewport, this.rows);
+    }
+
+    /** Pads `lines` with trailing blanks so the result is exactly `rows` tall. */
+    private static padToRows(lines: string[], rows: number): string {
+        const padded = lines.slice(0, rows);
+        while (padded.length < rows) padded.push('');
+        return padded.join('\n');
     }
 
     getTextWithScrollback(): string {
         if (this.disposed) return '';
         const lines = this.formatLines();
         if (lines.length === 0) return '';
+        // On the alternate screen there is no scrollback to include — the whole
+        // buffer is the viewport — so this must apply the same partial-frame
+        // padding as getText(). Without it the modal/approval content matching
+        // that relies on this method sees the same collapsed fragment.
+        if (this.altScreenActive) {
+            const viewport = lines.length > this.rows ? lines.slice(-this.rows) : lines;
+            return GhosttyVtTerminalBackend.padToRows(viewport, this.rows);
+        }
+
         // Full buffer including scrollback — does NOT slice to the viewport, so a
         // tall prompt whose top has scrolled above the visible rows is still
         // matchable by content patterns.
