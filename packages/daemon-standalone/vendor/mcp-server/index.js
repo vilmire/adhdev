@@ -56046,7 +56046,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     var require_canonicalize = __commonJS2({
-      "../../node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
+      "../../vendor/seqscribe/node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
         "use strict";
         module22.exports = function serialize(object2) {
           if (typeof object2 === "number" && isNaN(object2)) {
@@ -56156,7 +56156,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var hexes;
     var Hash;
     var init_utils = __esm2({
-      "../../node_modules/@noble/hashes/esm/utils.js"() {
+      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/utils.js"() {
         "use strict";
         hasHexBuiltin = /* @__PURE__ */ (() => (
           // @ts-ignore
@@ -56188,7 +56188,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HashMD;
     var SHA256_IV;
     var init_md = __esm2({
-      "../../node_modules/@noble/hashes/esm/_md.js"() {
+      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/_md.js"() {
         "use strict";
         init_utils();
         HashMD = class extends Hash {
@@ -56298,7 +56298,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var SHA256;
     var sha256;
     var init_sha2 = __esm2({
-      "../../node_modules/@noble/hashes/esm/sha2.js"() {
+      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha2.js"() {
         "use strict";
         init_md();
         init_utils();
@@ -56444,7 +56444,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var sha2562;
     var init_sha256 = __esm2({
-      "../../node_modules/@noble/hashes/esm/sha256.js"() {
+      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha256.js"() {
         "use strict";
         init_sha2();
         sha2562 = sha256;
@@ -57183,7 +57183,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HMAC;
     var hmac;
     var init_hmac = __esm2({
-      "../../node_modules/@noble/hashes/esm/hmac.js"() {
+      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/hmac.js"() {
         "use strict";
         init_utils();
         HMAC = class extends Hash {
@@ -89599,42 +89599,50 @@ ${cleanBody}`;
           web_chat_pane: {
             currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts",
             note: "Live pane transcript authority + history merge; allow-list preserves every field SessionChatTailUpdate consumers read.",
-            enabled: true
+            enabled: true,
+            unit: 5
           },
           web_warm_mobile_preview: {
             currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts (useWarmSessionChatTailControllers)",
             note: "Selector over the SAME warm controller snapshot web_chat_pane reads \u2014 no separate subscription.",
-            enabled: true
+            enabled: true,
+            unit: 5
           },
           mesh_read_chat_display: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-session.ts (meshReadChat)",
             note: "Remote transcript display/compact via coordinator daemon IPC replica read; mapTranscriptSnapshotToReadChatPayload keeps compact/full on one shape, so both branches are at parity with the live read.",
-            enabled: true
+            enabled: true,
+            unit: 6
           },
           daemon_worker_status_probe: {
             currentLocation: "oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)",
             note: "Active-session freshness/owner status re-check. Reads ONE field \u2014 `payload.status` \u2014 which the wire carries verbatim as `snapshot.status` (the producer's own effectiveStatus, not a re-derivation), so the read is exactly lossless. Remote nodes only; a declined replica read falls through to the identical legacy read_chat, preserving null's fail-open meaning.",
-            enabled: true
+            enabled: true,
+            unit: 7
           },
           daemon_terminal_evidence: {
             currentLocation: "oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts (fetchAssignedTaskChatTail)",
             note: "Acked-hold/terminal causal evidence. Every field the extractors read (role/kind/content/senderName/meta.streaming/timestamp/receivedAt, status, providerObservedStatus, activeModal, turn, providerSessionId) survives the projection. \u2605 NOT lossless in one direction: `turnTerminalMarkers` is deliberately omitted (the wire carries no native markers \u2014 see mapTerminalEvidencePayload), so a replica read takes the legacy message-shape admission rules instead of strong native-marker evidence. Weaker evidence, same veto direction.",
-            enabled: true
+            enabled: true,
+            unit: 7
           },
           mcp_mesh_status_reconciliation: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-internal.ts (reconcileDirectDispatchesFromTranscriptEvidence)",
             note: "Final-assistant completion synthesis; the replica feeds the SAME readFinalAssistantTranscriptEvidence + hasTrailingToolActivityAfterFinalAssistant parsers as the live read, so the activity-after-final veto and synthesis idempotency are unchanged. Needs activity kinds in order, so tail-only coverage declines.",
-            enabled: true
+            enabled: true,
+            unit: 8
           },
           magi_approval_probe: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (nudgeWedgedReplica)",
             note: "Fresh status+activeModal only, for idempotent approve. Irreversible act, so admission requires a snapshot inside the freshness budget (design \xA75.5); resolve_action stays a live RPC.",
-            enabled: true
+            enabled: true,
+            unit: 8
           },
           magi_result_collect: {
             currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (tryResolveReplica)",
             note: "Current-turn MAGI result/evidence collection; the replica runs the SAME parseFirstMagiCandidateForKind, and current-turn coverage is required so the FIX#1 cross-turn mis-attribution guard is not lost.",
-            enabled: true
+            enabled: true,
+            unit: 8
           }
         };
         TRANSCRIPT_CONSUMER_IDS = Object.keys(
@@ -161209,54 +161217,70 @@ var require_transcript_read_model_consumers = __commonJS({
     var transcript_read_model_consumers_exports = {};
     __export2(transcript_read_model_consumers_exports, {
       TRANSCRIPT_CONSUMER_IDS: () => TRANSCRIPT_CONSUMER_IDS,
-      TRANSCRIPT_CONSUMER_ROSTER: () => TRANSCRIPT_CONSUMER_ROSTER2
+      TRANSCRIPT_CONSUMER_ROSTER: () => TRANSCRIPT_CONSUMER_ROSTER2,
+      rosterIdsForUnit: () => rosterIdsForUnit,
+      withRosterEntryDisabled: () => withRosterEntryDisabled
     });
     module2.exports = __toCommonJS2(transcript_read_model_consumers_exports);
     var TRANSCRIPT_CONSUMER_ROSTER2 = {
       web_chat_pane: {
         currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts",
         note: "Live pane transcript authority + history merge; allow-list preserves every field SessionChatTailUpdate consumers read.",
-        enabled: true
+        enabled: true,
+        unit: 5
       },
       web_warm_mobile_preview: {
         currentLocation: "oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts (useWarmSessionChatTailControllers)",
         note: "Selector over the SAME warm controller snapshot web_chat_pane reads \u2014 no separate subscription.",
-        enabled: true
+        enabled: true,
+        unit: 5
       },
       mesh_read_chat_display: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-session.ts (meshReadChat)",
         note: "Remote transcript display/compact via coordinator daemon IPC replica read; mapTranscriptSnapshotToReadChatPayload keeps compact/full on one shape, so both branches are at parity with the live read.",
-        enabled: true
+        enabled: true,
+        unit: 6
       },
       daemon_worker_status_probe: {
         currentLocation: "oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)",
         note: "Active-session freshness/owner status re-check. Reads ONE field \u2014 `payload.status` \u2014 which the wire carries verbatim as `snapshot.status` (the producer's own effectiveStatus, not a re-derivation), so the read is exactly lossless. Remote nodes only; a declined replica read falls through to the identical legacy read_chat, preserving null's fail-open meaning.",
-        enabled: true
+        enabled: true,
+        unit: 7
       },
       daemon_terminal_evidence: {
         currentLocation: "oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts (fetchAssignedTaskChatTail)",
         note: "Acked-hold/terminal causal evidence. Every field the extractors read (role/kind/content/senderName/meta.streaming/timestamp/receivedAt, status, providerObservedStatus, activeModal, turn, providerSessionId) survives the projection. \u2605 NOT lossless in one direction: `turnTerminalMarkers` is deliberately omitted (the wire carries no native markers \u2014 see mapTerminalEvidencePayload), so a replica read takes the legacy message-shape admission rules instead of strong native-marker evidence. Weaker evidence, same veto direction.",
-        enabled: true
+        enabled: true,
+        unit: 7
       },
       mcp_mesh_status_reconciliation: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-internal.ts (reconcileDirectDispatchesFromTranscriptEvidence)",
         note: "Final-assistant completion synthesis; the replica feeds the SAME readFinalAssistantTranscriptEvidence + hasTrailingToolActivityAfterFinalAssistant parsers as the live read, so the activity-after-final veto and synthesis idempotency are unchanged. Needs activity kinds in order, so tail-only coverage declines.",
-        enabled: true
+        enabled: true,
+        unit: 8
       },
       magi_approval_probe: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (nudgeWedgedReplica)",
         note: "Fresh status+activeModal only, for idempotent approve. Irreversible act, so admission requires a snapshot inside the freshness budget (design \xA75.5); resolve_action stays a live RPC.",
-        enabled: true
+        enabled: true,
+        unit: 8
       },
       magi_result_collect: {
         currentLocation: "oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (tryResolveReplica)",
         note: "Current-turn MAGI result/evidence collection; the replica runs the SAME parseFirstMagiCandidateForKind, and current-turn coverage is required so the FIX#1 cross-turn mis-attribution guard is not lost.",
-        enabled: true
+        enabled: true,
+        unit: 8
       }
     };
     var TRANSCRIPT_CONSUMER_IDS = Object.keys(
       TRANSCRIPT_CONSUMER_ROSTER2
     );
+    function rosterIdsForUnit(unit) {
+      return TRANSCRIPT_CONSUMER_IDS.filter((id) => TRANSCRIPT_CONSUMER_ROSTER2[id].unit === unit);
+    }
+    function withRosterEntryDisabled(id, roster = TRANSCRIPT_CONSUMER_ROSTER2) {
+      return { ...roster, [id]: { ...roster[id], enabled: false } };
+    }
   }
 });
 
