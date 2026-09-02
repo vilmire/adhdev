@@ -33,10 +33,13 @@
  */
 
 import type { TopicPolicy } from 'seqscribe';
-import { ADHDEV_AUTHORITY_ID } from './authority.js';
+import { ADHDEV_AUTHORITY_ID } from './authority-id.js';
 
-// No import cycle: authority.ts depends on the seqscribe library and the logger
-// only, never on this table.
+// Imported from authority-id.ts, NOT authority.ts. That module is zero-import
+// by construction, which keeps this table side-effect-free at load: authority.ts
+// pulls in the logger, and the logger resolves the daemon config dir at module
+// load, so importing the id from there would make merely READING a topic policy
+// require a live (or test-pinned) ADHDEV_CONFIG_DIR. Keep it pointed here.
 
 // ─── Charter normalization ──────────────────────────────────────────────────
 

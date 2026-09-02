@@ -33,11 +33,13 @@ export const FINALITY_INTERVAL_MS = 60 * 60 * 1000;
 /**
  * The single authority id for the fleet.
  *
- * Stable string, not a machine id: the coordinator daemon that holds the role
- * can change hosts without a schema change. Changing THIS value is a fleet
- * upgrade (host-guide §6) — every peer refuses the topic until all converge.
+ * Defined in ./authority-id.ts (a zero-import module) and re-exported here so
+ * this stays its canonical import site. The split exists so topics.ts can name
+ * the id without dragging this module's logger/config-dir load-time chain into
+ * every reader of the topic table — see authority-id.ts for the full reason.
  */
-export const ADHDEV_AUTHORITY_ID = 'adhdev-coordinator';
+export { ADHDEV_AUTHORITY_ID } from './authority-id.js';
+import { ADHDEV_AUTHORITY_ID } from './authority-id.js';
 
 export interface FleetAuthorityOptions {
     /**
