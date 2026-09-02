@@ -35,6 +35,12 @@
       "require": "./dist/seqscribe/transcript-revision-codec.js",
       "default": "./dist/seqscribe/transcript-revision-codec.js"
     },
+    "./seqscribe/transcript-projection": {
+      "types": "./dist/seqscribe/transcript-projection.d.ts",
+      "import": "./dist/seqscribe/transcript-projection.mjs",
+      "require": "./dist/seqscribe/transcript-projection.js",
+      "default": "./dist/seqscribe/transcript-projection.js"
+    },
     "./mesh/transcript-read-model-consumers": {
       "types": "./dist/mesh/transcript-read-model-consumers.d.ts",
       "import": "./dist/mesh/transcript-read-model-consumers.mjs",
