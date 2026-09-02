@@ -40938,10 +40938,10 @@ var require_dist3 = __commonJS({
     }
     function getDaemonBuildInfo() {
       if (cached2) return cached2;
-      const commit = readInjected(true ? "c615c30b0d54d84a7167d6c9401ac785220b6a4c" : void 0) ?? "unknown";
-      const commitShort = readInjected(true ? "c615c30b" : void 0) ?? (commit !== "unknown" ? commit.slice(0, 7) : "unknown");
+      const commit = readInjected(true ? "unknown" : void 0) ?? "unknown";
+      const commitShort = readInjected(true ? "unknown" : void 0) ?? (commit !== "unknown" ? commit.slice(0, 7) : "unknown");
       const version2 = readInjected(true ? "1.0.57" : void 0) ?? readInjected(typeof process !== "undefined" ? process.env?.ADHDEV_PKG_VERSION : void 0) ?? "unknown";
-      const builtAt = readInjected(true ? "2026-09-02T12:49:19.347Z" : void 0);
+      const builtAt = readInjected(true ? "unknown" : void 0);
       cached2 = builtAt ? { commit, commitShort, version: version2, builtAt } : { commit, commitShort, version: version2 };
       return cached2;
     }
@@ -56046,7 +56046,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     var require_canonicalize = __commonJS2({
-      "../../vendor/seqscribe/node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
+      "../../node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
         "use strict";
         module22.exports = function serialize(object2) {
           if (typeof object2 === "number" && isNaN(object2)) {
@@ -56156,7 +56156,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var hexes;
     var Hash;
     var init_utils = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/utils.js"() {
+      "../../node_modules/@noble/hashes/esm/utils.js"() {
         "use strict";
         hasHexBuiltin = /* @__PURE__ */ (() => (
           // @ts-ignore
@@ -56188,7 +56188,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HashMD;
     var SHA256_IV;
     var init_md = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/_md.js"() {
+      "../../node_modules/@noble/hashes/esm/_md.js"() {
         "use strict";
         init_utils();
         HashMD = class extends Hash {
@@ -56298,7 +56298,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var SHA256;
     var sha256;
     var init_sha2 = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha2.js"() {
+      "../../node_modules/@noble/hashes/esm/sha2.js"() {
         "use strict";
         init_md();
         init_utils();
@@ -56444,7 +56444,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var sha2562;
     var init_sha256 = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha256.js"() {
+      "../../node_modules/@noble/hashes/esm/sha256.js"() {
         "use strict";
         init_sha2();
         sha2562 = sha256;
@@ -57183,7 +57183,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HMAC;
     var hmac;
     var init_hmac = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/hmac.js"() {
+      "../../node_modules/@noble/hashes/esm/hmac.js"() {
         "use strict";
         init_utils();
         HMAC = class extends Hash {
