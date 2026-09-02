@@ -487,7 +487,7 @@ async function computeGitPatchId(
     toRef: string,
     excludePaths: string[] = [],
 ): Promise<string> {
-    const { execFileSync } = await import('node:child_process');
+    const { spawnSync } = await import('node:child_process');
     // When excludePaths is non-empty we drop those paths from the diff via
     // `:(exclude)` pathspecs. This is used to omit gitlink paths that have
     // already been proven a safe fast-forward: their patch hunks legitimately
@@ -498,19 +498,66 @@ async function computeGitPatchId(
     if (excludePaths.length > 0) {
         diffArgs.push('--', '.', ...excludePaths.map(path => `:(exclude)${path}`));
     }
-    const diff = execFileSync(GIT, diffArgs, {
-        cwd,
-        encoding: 'utf8',
-        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-    });
-    if (!diff.trim()) return '';
-    const patchId = execFileSync(GIT, ['patch-id', '--stable'], {
-        cwd,
-        input: diff,
-        encoding: 'utf8',
-        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-    }).trim();
-    return patchId.split(/\s+/)[0] || '';
+    // The patch itself is streamed `git diff | git patch-id` through an OS pipe
+    // and is NEVER buffered in this process: only the ~50-byte patch-id crosses
+    // the boundary. Buffering it here used to cap the gate at
+    // REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES (4 MB) of *patch text*, which a
+    // large vendored bundle blows straight through — a 26 MB diff made
+    // execFileSync throw ENOBUFS, the outer catch turned that I/O failure into
+    // `status: 'failed'`, and a genuinely patch-equivalent branch was reported as
+    // a divergence with no cause recorded anywhere (VENDOR-BUNDLE-ENOBUFS). The
+    // gate's verdict is unchanged — same two `git patch-id --stable` values
+    // compared the same way — it just no longer depends on patch size.
+    // No shell is used: quoting rules differ between POSIX sh and cmd.exe, and
+    // this gate runs on win32 mesh nodes too. Instead `git diff` writes to a
+    // temp file and `git patch-id` reads it via stdin, so the patch stays on
+    // disk and out of this process either way.
+    const { mkdtempSync, rmSync, openSync, closeSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const scratch = mkdtempSync(join(tmpdir(), 'adhdev-patchid-'));
+    const patchFile = join(scratch, 'patch.diff');
+    try {
+        const out = openSync(patchFile, 'w');
+        let diffRun;
+        try {
+            diffRun = spawnSync(GIT, diffArgs, {
+                cwd,
+                stdio: ['ignore', out, 'pipe'],
+                encoding: 'utf8',
+            });
+        } finally {
+            closeSync(out);
+        }
+        if (diffRun.error) throw diffRun.error;
+        if (diffRun.status !== 0) {
+            throw new Error(
+                `git diff failed (exit ${diffRun.status}): ${(diffRun.stderr || '').trim() || 'no stderr'}`,
+            );
+        }
+        const patchIn = openSync(patchFile, 'r');
+        let patchIdRun;
+        try {
+            patchIdRun = spawnSync(GIT, ['patch-id', '--stable'], {
+                cwd,
+                stdio: [patchIn, 'pipe', 'pipe'],
+                encoding: 'utf8',
+                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+            });
+        } finally {
+            closeSync(patchIn);
+        }
+        if (patchIdRun.error) throw patchIdRun.error;
+        if (patchIdRun.status !== 0) {
+            throw new Error(
+                `git patch-id failed (exit ${patchIdRun.status}): ${(patchIdRun.stderr || '').trim() || 'no stderr'}`,
+            );
+        }
+        // Empty stdout == empty diff, preserving the previous `if (!diff.trim()) return ''`.
+        return (patchIdRun.stdout || '').trim().split(/\s+/)[0] || '';
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
 }
 
 export async function runMeshRefinePatchEquivalenceGate(
