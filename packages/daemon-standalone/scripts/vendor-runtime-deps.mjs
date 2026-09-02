@@ -21,6 +21,26 @@ function copyRecursive(source, target) {
   fs.copyFileSync(source, target);
 }
 
+// Strip trailing horizontal whitespace from every .js file under dir.
+//
+// tsup's CJS output leaves spaces on otherwise-blank lines inside function bodies,
+// and `git diff --check` flags those as errors in committed generated files. The
+// daemon-cloud vendorer has always applied this normalization; this one did not,
+// so the two vendored copies of the SAME mcp-server dist differed by ~121 bytes of
+// pure trailing whitespace. That made the copies non-comparable and hid whether a
+// difference between them was cosmetic or a real source drift. Both vendorers must
+// normalize identically so the two copies are byte-identical for a given dist.
+function stripTrailingWhitespaceInJs(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) { stripTrailingWhitespaceInJs(full); continue; }
+    if (!entry.name.endsWith('.js')) continue;
+    const src = fs.readFileSync(full, 'utf8');
+    const cleaned = src.replace(/[^\S\n]+$/gm, '');
+    if (cleaned !== src) fs.writeFileSync(full, cleaned, 'utf8');
+  }
+}
+
 if (!fs.existsSync(sourceRoot)) {
   console.error(`session-host-daemon dist not found at ${sourceRoot}`);
   process.exit(1);
@@ -98,6 +118,9 @@ if (fs.existsSync(path.join(mcpPackageDir, 'package.json')) && mcpServerDistIsSt
 if (fs.existsSync(mcpSourceRoot)) {
   fs.rmSync(mcpTargetRoot, { recursive: true, force: true });
   copyRecursive(mcpSourceRoot, mcpTargetRoot);
+  // Normalize exactly as the daemon-cloud vendorer does for its mcp-server copy, so
+  // both committed copies of the same dist are byte-identical (see the function's note).
+  stripTrailingWhitespaceInJs(mcpTargetRoot);
   // Write a MINIMAL manifest — do NOT copy mcp-server's real package.json.
   //
   // ★It must not carry a `version` field. This directory is committed and a drift

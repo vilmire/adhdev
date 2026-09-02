@@ -6604,7 +6604,7 @@ var init_schemas = __esm({
             })));
           }
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -6612,7 +6612,7 @@ var init_schemas = __esm({
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
           } else {
             doc.write(`
@@ -6622,7 +6622,7 @@ var init_schemas = __esm({
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -6630,7 +6630,7 @@ var init_schemas = __esm({
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
           }
         }
@@ -79869,7 +79869,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           rotated = false;
           /**
           * Append new messages to history
-          * 
+          *
           * @param agentType agent type (e.g. 'antigravity', 'cursor')
           * @param messages Message array received from readChat
           * @param sessionTitle Current session title
@@ -118522,7 +118522,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
           /**
           * Input text via CDP protocol then send Enter
           * Used for editors where execCommand does not work (e.g. Lexical).
-          * 
+          *
           * 1. Find editor by selector, focus + click
           * 2. Insert text via Input.insertText
           * 3. Send Enter via Input.dispatchKeyEvent
@@ -118686,13 +118686,13 @@ Run 'adhdev doctor' for detailed diagnostics.`
           /**
           * Evaluate JS from inside Webview iframe
           * Kiro, PearAI etc Used for IDEs where chat UI is inside webview iframe.
-          * 
+          *
           * 1. Query Target.getTargets via browser WS → find vscode-webview iframes
           * 2. Target.attachToTarget → session acquire
           * 3. Page.getFrameTree → nested iframe find
           * 4. Page.createIsolatedWorld → contextId acquire
           * 5. Runtime.evaluate → result return
-          * 
+          *
           * @param expression JS expression to execute
           * @param matchFn webview iframe URL match function (optional, all webview attempt)
           * @returns evaluate result or null
@@ -128087,24 +128087,56 @@ ${asText(streams.stderr)}
       return { enabled: false };
     }
     async function computeGitPatchId(cwd, fromRef, toRef, excludePaths = []) {
-      const { execFileSync: execFileSync16 } = await import("child_process");
+      const { spawnSync: spawnSync3 } = await import("child_process");
       const diffArgs = ["diff", "--patch", "--full-index", fromRef, toRef];
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path66) => `:(exclude)${path66}`));
       }
-      const diff = execFileSync16(GIT2, diffArgs, {
-        cwd,
-        encoding: "utf8",
-        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
-      });
-      if (!diff.trim()) return "";
-      const patchId = execFileSync16(GIT2, ["patch-id", "--stable"], {
-        cwd,
-        input: diff,
-        encoding: "utf8",
-        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
-      }).trim();
-      return patchId.split(/\s+/)[0] || "";
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync8, closeSync: closeSync8 } = await import("fs");
+      const { tmpdir: tmpdir8 } = await import("os");
+      const { join: join76 } = await import("path");
+      const scratch = mkdtempSync3(join76(tmpdir8(), "adhdev-patchid-"));
+      const patchFile = join76(scratch, "patch.diff");
+      try {
+        const out = openSync8(patchFile, "w");
+        let diffRun;
+        try {
+          diffRun = spawnSync3(GIT2, diffArgs, {
+            cwd,
+            stdio: ["ignore", out, "pipe"],
+            encoding: "utf8"
+          });
+        } finally {
+          closeSync8(out);
+        }
+        if (diffRun.error) throw diffRun.error;
+        if (diffRun.status !== 0) {
+          throw new Error(
+            `git diff failed (exit ${diffRun.status}): ${(diffRun.stderr || "").trim() || "no stderr"}`
+          );
+        }
+        const patchIn = openSync8(patchFile, "r");
+        let patchIdRun;
+        try {
+          patchIdRun = spawnSync3(GIT2, ["patch-id", "--stable"], {
+            cwd,
+            stdio: [patchIn, "pipe", "pipe"],
+            encoding: "utf8",
+            maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
+          });
+        } finally {
+          closeSync8(patchIn);
+        }
+        if (patchIdRun.error) throw patchIdRun.error;
+        if (patchIdRun.status !== 0) {
+          throw new Error(
+            `git patch-id failed (exit ${patchIdRun.status}): ${(patchIdRun.stderr || "").trim() || "no stderr"}`
+          );
+        }
+        return (patchIdRun.stdout || "").trim().split(/\s+/)[0] || "";
+      } finally {
+        rmSync13(scratch, { recursive: true, force: true });
+      }
     }
     async function runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead) {
       const startedAt = Date.now();
@@ -142727,7 +142759,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       /**
       * CDP DOM Dump — IDE's DOM tree retrieve
-      * 
+      *
       * args:
       * selector?: string — CSS selector to dump specific area only (default: All)
       * depth?: number — Dump depth limit (default: 10)
@@ -142750,7 +142782,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             expression = `(() => {
                     const root = document.querySelector('${selector.replace(/'/g, "\\'")}');
                     if (!root) return JSON.stringify({ error: 'Selector not found: ${selector}' });
-                    
+
                     function summarize(el, depth, maxD) {
                         if (depth > maxD) return { tag: '...', note: 'max depth' };
                         const node = {
@@ -142772,7 +142804,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             expression = `(() => {
                     const root = document.querySelector('${selector.replace(/'/g, "\\'")}');
                     if (!root) return 'Selector not found: ${selector}';
-                    
+
                     function tree(el, indent, depth, maxD) {
                         if (depth > maxD) return indent + '...\\n';
                         let line = indent + '<' + (el.tagName?.toLowerCase() || '?');
@@ -142786,7 +142818,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                         const testId = el.getAttribute?.('data-testid');
                         if (testId) line += ' [data-testid=' + testId + ']';
                         line += '> (' + (el.children?.length || 0) + ')\\n';
-                        
+
                         let result = line;
                         if (el.children?.length > 0 && depth < maxD) {
                             for (let i = 0; i < Math.min(el.children.length, 30); i++) {
@@ -142830,7 +142862,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       /**
       * CDP DOM Query — CSS Test selector
       * Check how many elements match selector and what elements they are
-      * 
+      *
       * args:
       * selector: string — CSS selector
       * limit?: number — Max element count to return (default: 20)
@@ -142885,10 +142917,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       /**
       * CDP DOM Debug — IDE AI panel specialized analysis
       * Collect all essential info at once when supporting new IDE
-      * 
+      *
       * args:
       * ideType?: string — IDE type hint
-      * sessionId?: string — agent webview session ID 
+      * sessionId?: string — agent webview session ID
       */
       async handleDomDebug(args) {
         if (!this.getCdp()?.isConnected) return { success: false, error: "CDP not connected" };
@@ -142898,7 +142930,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                 url: location.href,
                 title: document.title,
                 viewport: { w: window.innerWidth, h: window.innerHeight },
-                
+
  // Input field info
                 inputs: [],
  // Textarea info
@@ -152864,7 +152896,7 @@ async (params) => {
           const isList = sameTagCount >= 3 && sameTagCount >= allChildren.length * 0.4;
 
           // Gather all same-tag children as list items
-          const listItems = isList 
+          const listItems = isList
             ? allChildren.filter(c => c.tagName === childTag)
             : allChildren;
 
