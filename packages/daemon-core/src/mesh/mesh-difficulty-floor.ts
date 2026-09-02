@@ -1,6 +1,6 @@
 import { getQueue, recordTaskAutoLaunch, type MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { isModelAllowedBySlot } from './slot-model-enforcement.js';
+import { isModelAllowedBySlot, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
 import { isMeshTaskDifficulty, normalizeNodeCapabilitySlots, type MeshTaskDifficulty, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
 
@@ -66,8 +66,32 @@ export function readSessionModel(state: any): string | undefined {
 
 export function isDifficultyFloorWaitReason(reason?: string): boolean {
     return typeof reason === 'string' && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX)
-        || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON));
+        || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON)
+        || BOUNDED_WAIT_SKIP_REASONS.some(prefix => reason.startsWith(prefix)));
 }
+
+// LEDGER-AUTOLAUNCH-RETRY-SPAM (④ claim-stall notification): back-pressure skips that
+// genuinely DO self-resolve — so they must never join ACTIONABLE_SKIP_REASON_PREFIXES,
+// which pages the coordinator on the FIRST occurrence (a slot that is busy for one tick
+// is not a blocker). But "self-resolving" is a statement about the mechanism, not a
+// guarantee about the clock: when one of these persists past the bounded wait below,
+// nobody is coming, and until now nothing told the coordinator.
+//
+// Measured live 2026-09-02: task 208f0a38 sat unclaimable with node_0b39db59 reporting
+// `slot_for_model_busy` and node_695e6d07 reporting a difficulty-floor miss. Only the
+// latter node's reason had a timeout pager; had the fleet been Mac-only, the task would
+// have waited silently and indefinitely. The owner noticed before the coordinator did.
+//
+// Routing these through handleDifficultyFloorSkip reuses its whole safety envelope: the
+// durable `updatedAt` wait clock (not an in-memory timer, so it survives restarts and
+// does not reset per tick), the in-memory + durable double debounce, and the single
+// `mesh:dispatch_blocked` page. Crucially it does NOT touch the retry loop — the task
+// stays queued and is still claimed the instant a slot frees.
+const BOUNDED_WAIT_SKIP_REASONS = [
+    SLOT_MODEL_BUSY_SKIP_REASON,
+    'max_concurrent_sessions_reached',
+    'max_provider_parallel_reached',
+];
 
 export function resetDifficultyFloorReportsForTests(): void {
     difficultyFloorTimeoutReported.clear();
@@ -100,16 +124,24 @@ export function handleDifficultyFloorSkip(args: {
 
     const task = previousTask ?? getQueue(args.meshId).find(candidate => candidate.id === args.taskId);
     const difficulty = task?.difficulty || args.reason.split(':')[1] || 'classified';
-    const coordinatorMessage = `[System] Queued task ${args.taskId} has waited ${Math.round(waitedMs / 60_000)} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
+    const waitedMinutes = Math.round(waitedMs / 60_000);
+    // The capacity reasons and the difficulty-floor reasons need different advice: a busy
+    // slot resolves by waiting or by moving the task, whereas a floor miss will never
+    // resolve on its own and needs an explicit task-scoped downgrade decision.
+    const capacityStall = BOUNDED_WAIT_SKIP_REASONS.some(prefix => args.reason.startsWith(prefix));
+    const coordinatorMessage = capacityStall
+        ? `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because every capable slot has stayed at capacity (${args.reason}). It remains pending and will still be claimed automatically the moment a slot frees. Check whether the occupying sessions are genuinely working or stuck; consider re-targeting the task to another node rather than widening a mesh-wide cap.`
+        : `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
     const queued = queuePendingMeshCoordinatorEvent({
         event: 'mesh:dispatch_blocked',
         meshId: args.meshId,
         nodeLabel: args.nodeId || args.meshId,
         ...(args.nodeId ? { nodeId: args.nodeId } : {}),
         metadataEvent: {
-            source: 'mesh_queue_difficulty_floor_timeout',
+            source: capacityStall ? 'mesh_queue_capacity_stall_timeout' : 'mesh_queue_difficulty_floor_timeout',
             taskId: args.taskId,
-            reason: 'task_difficulty_floor_timeout',
+            reason: capacityStall ? 'task_claim_capacity_stall_timeout' : 'task_difficulty_floor_timeout',
+            ...(capacityStall ? { skipReason: args.reason } : {}),
             difficulty,
             waitedMs,
             coordinatorMessage,

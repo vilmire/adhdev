@@ -248,8 +248,22 @@ export function logAutoLaunchQuotaFallbackSuccess(
 // transport, or a node under cooldown) would otherwise append an identical
 // session_auto_launch{phase:'skipped'} entry on every tick — flooding the ledger.
 // We suppress a `skipped` ledger append when the immediately-prior recorded event
-// for that task was the SAME (phase, reason). Any non-skip phase (started/failed/
-// completed) or a changed reason resets the de-dup so real transitions still record.
+// for that (task, node) was the SAME (phase, reason). Any non-skip phase (started/
+// failed/completed) or a changed reason resets the de-dup so real transitions still
+// record.
+//
+// LEDGER-AUTOLAUNCH-RETRY-SPAM: the key MUST include nodeId. tryAssignQueueTask marks
+// a skip once per CANDIDATE NODE inside its `for (const node of orderedCandidateNodes)`
+// loop (mesh-queue-assignment.ts `markSkip`), and this de-dup is a last-value compare,
+// not a set. Keyed by task alone, a heterogeneous fleet defeats it completely: node A
+// skips `slot_for_model_busy` (signature stored), node B skips
+// `task_difficulty_floor_unavailable:difficult` (differs → appends, signature
+// overwritten), and the next 4s tick replays the same alternation forever because the
+// stored signature never matches the first node again. Measured live 2026-09-02: one
+// unclaimable task appended 30 entries/min (15 per node × 2 nodes) for as long as it
+// stayed queued. Per-node keying makes each node's own repeat collapse to one entry,
+// which is what the original comment intended. Matches the (mesh, node, …) keying every
+// sibling de-dup map in this file already uses.
 const lastAutoLaunchLedgerKey = new Map<string, string>();
 /** @internal Split-visibility only: mesh-skip-notify bounds its own notify de-dup map by
  *  the same cap. Not part of this module's public surface — no consumer outside
@@ -270,10 +284,10 @@ export function recordAutoLaunchEvent(meshId: string, args: {
     model?: string;
     thinkingLevel?: string;
 }) {
-    // Suppress consecutive identical `skipped` entries for the same task (4s reconcile
-    // re-trigger noise). Non-skip phases and changed reasons always record and reset
-    // the de-dup so genuine state transitions remain visible in the ledger.
-    const dedupKey = `${meshId}:${args.taskId}`;
+    // Suppress consecutive identical `skipped` entries for the same (task, node) pair
+    // (4s reconcile re-trigger noise). Non-skip phases and changed reasons always record
+    // and reset the de-dup so genuine state transitions remain visible in the ledger.
+    const dedupKey = `${meshId}:${args.taskId}:${args.nodeId || ''}`;
     const currentSig = `${args.phase}|${args.reason || ''}`;
     if (args.phase === 'skipped' && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
         return;
