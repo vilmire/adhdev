@@ -1109,113 +1109,13 @@ export function findNodeSession(nodes: any[], nodeId?: string | null, sessionId?
     return { node, session };
 }
 
-export function buildDirectDispatchReconciliationCandidates(directDispatches: any[], ledgerEntries: any[]): any[] {
-    const candidates: any[] = [];
-    const seenTaskIds = new Set<string>();
-    for (const dispatch of directDispatches || []) {
-        const taskId = readString(dispatch?.taskId);
-        if (!taskId || seenTaskIds.has(taskId)) continue;
-        seenTaskIds.add(taskId);
-        candidates.push(dispatch);
-    }
-    for (const entry of ledgerEntries || []) {
-        if (!isDirectDispatchLedgerEntry(entry)) continue;
-        const taskId = readString(entry.payload?.taskId);
-        if (!taskId || seenTaskIds.has(taskId)) continue;
-        seenTaskIds.add(taskId);
-        candidates.push({
-            taskId,
-            nodeId: entry.nodeId,
-            sessionId: entry.sessionId,
-            providerType: entry.providerType || readString(entry.payload?.providerType),
-            message: readString(entry.payload?.message),
-            dispatchedAt: entry.timestamp,
-            via: readString(entry.payload?.via),
-        });
-    }
-    return candidates;
-}
-
-export async function reconcileDirectDispatchesFromTranscriptEvidence(
-    ctx: MeshContext,
-    liveNodes: any[],
-    directDispatches: any[],
-    ledgerEntries: any[],
-): Promise<{ attempted: number; reconciled: number; skipped: number }> {
-    let attempted = 0;
-    let reconciled = 0;
-    let skipped = 0;
-    const candidates = buildDirectDispatchReconciliationCandidates(directDispatches, ledgerEntries);
-    for (const dispatch of candidates) {
-        const taskId = readString(dispatch?.taskId);
-        const nodeId = readString(dispatch?.nodeId);
-        const sessionId = readString(dispatch?.sessionId);
-        if (!taskId || !nodeId || !sessionId) {
-            skipped += 1;
-            continue;
-        }
-        const { session } = findNodeSession(liveNodes, nodeId, sessionId);
-        // EARLYNOTIFY-GATEBYPASS (e): a single snapshot-idle sample is NOT sufficient to synthesize
-        // a completion — a mid-turn poll routinely reads idle for an instant. This idle check only
-        // makes the session ELIGIBLE for a transcript read; the actual turn-finality gate is
-        // enforced downstream: readFinalAssistantTranscriptEvidence requires a genuine non-empty
-        // latest-assistant turn end, and reconcileDirectDispatchCompletionFromTranscript (the
-        // guarded daemon path this delegates to) applies the dispatch grace window + stale-summary
-        // guard before it will write a terminal. So a coordinator poll cannot force a mid-turn synth.
-        if (!session || !isIdleSessionRecord(session)) {
-            skipped += 1;
-            continue;
-        }
-        const node = await findOptionalNodeWithRefresh(ctx, nodeId).catch(() => null);
-        if (!node) {
-            skipped += 1;
-            continue;
-        }
-        const providerType = readString(dispatch?.providerType) || resolveSessionProviderType(session);
-        const providerSessionId = readString(session?.providerSessionId)
-            || readString(session?.activeChat?.providerSessionId)
-            || readString(session?.settings?.providerSessionId)
-            || resolveMeshSessionProviderMetadata(ctx, nodeId, sessionId)?.providerSessionId;
-        attempted += 1;
-        try {
-            const readResult = await commandForNode(ctx, node, 'read_chat', {
-                sessionId,
-                targetSessionId: sessionId,
-                workspace: node.workspace,
-                ...(providerType ? { agentType: providerType, providerType } : {}),
-                ...(providerSessionId ? { providerSessionId } : {}),
-                tailLimit: 10,
-            });
-            const payload = unwrapCommandPayload(readResult);
-            if (payload?.success === false) continue;
-            // MID-TURN-CAUSAL-ADMISSION (rc.16): the latest final-LOOKING assistant bubble
-            // followed by trailing tool/terminal activity is interim narration, not a turn
-            // end — a single coordinator poll must never promote it to a completion. This is
-            // the same veto the reconcile loop's PHASE 4 and the watchdog poll enforce; the
-            // MCP process has no live adapter to probe (remote semantics), so the bounded
-            // transcript evidence below remains the operative net (fail-open preserved).
-            if (hasTrailingToolActivityAfterFinalAssistant(Array.isArray(payload?.messages) ? payload.messages : [])) continue;
-            const evidence = readFinalAssistantTranscriptEvidence(payload);
-            if (!evidence.finalSummary) continue;
-            const result = reconcileDirectDispatchCompletionFromTranscript({
-                meshId: ctx.mesh.id,
-                nodeId,
-                sessionId,
-                providerType,
-                providerSessionId: readString(payload?.providerSessionId) || providerSessionId,
-                taskId,
-                finalSummary: evidence.finalSummary,
-                transcriptMessageAt: evidence.transcriptMessageAt,
-                targetCoordinatorDaemonId: ctx.localDaemonId,
-                source: 'mcp_mesh_status_transcript_reconciliation',
-            });
-            if (result.reconciled) reconciled += 1;
-        } catch {
-            skipped += 1;
-        }
-    }
-    return { attempted, reconciled, skipped };
-}
+// §8 unit 8: direct-dispatch transcript reconciliation moved to its own module
+// (`check:file-sizes` decomposition — this file is a frozen baseline). Re-exported
+// here so `mesh-tools-status` / `-session` / `-queue` keep importing from this barrel.
+export {
+    buildDirectDispatchReconciliationCandidates,
+    reconcileDirectDispatchesFromTranscriptEvidence,
+} from './mesh-direct-dispatch-reconcile.js';
 
 export async function triggerMeshQueueAndReport(
     ctx: MeshContext,
@@ -2686,6 +2586,29 @@ export async function commandForNode(
         return ctx.transport.meshCommand(node.daemonId, command, relayedArgs);
     }
     return ctx.transport.command(command, args);
+}
+
+/**
+ * §8 unit 8: the exact condition under which a semantic replica read may be
+ * attempted for `node` — a REMOTE node reachable over the coordinator's local
+ * IPC. Returns the coordinator transport (the one that owns the replica store),
+ * or null when the replica hop must be skipped entirely.
+ *
+ * Extracted rather than repeated at each of the three call sites because it
+ * must stay identical to `commandForNode`'s own remote branch above: the
+ * replica exists to spare a P2P round trip, so it is only ever correct exactly
+ * where `commandForNode` would have made one. A LOCAL node's read is an
+ * in-process call against the provider source, which design §4's roster keeps
+ * as-is for every consumer.
+ */
+export function resolveSemanticReplicaTransport(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry | null | undefined,
+): IpcTransport | null {
+    if (!node || !node.daemonId) return null;
+    if (!(ctx.transport instanceof IpcTransport)) return null;
+    if (isLocalControlPlaneNode(ctx, node)) return null;
+    return ctx.transport;
 }
 
 export function normalizePendingMeshCoordinatorEvents(value: any): any[] {
