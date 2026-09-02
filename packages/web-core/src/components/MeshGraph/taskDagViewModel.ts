@@ -204,3 +204,51 @@ export function buildTaskDag(tasks: RepoMeshQueueTask[] | null | undefined): Tas
         },
     }
 }
+
+/* ── Card time label (owner call 2026-09-02) ───────────────────────────────
+ * B-plan layout makes dependency depth the ONE canvas axis, so time stops
+ * being readable from position for anything past the roots. The card carries
+ * it instead, as `14:32 (3분 전)` — absolute to cross-check against logs,
+ * relative to judge staleness at a glance. */
+
+/** The task moment the card labels: last activity, falling back to creation. */
+export function taskCardTimeSource(task: Pick<RepoMeshQueueTask, 'updatedAt' | 'createdAt'>): string {
+    return String(task.updatedAt || task.createdAt || '')
+}
+
+/**
+ * `HH:MM (relative)` for a card. Returns undefined when there is no usable
+ * timestamp, so the caller renders nothing rather than a fake epoch — an
+ * unparseable value must never read as 1970.
+ */
+export function formatTaskCardTime(
+    raw: string,
+    now: number,
+    t: (key: string, options?: Record<string, unknown>) => string,
+): { absolute: string; relative: string; iso: string } | undefined {
+    if (!raw) return undefined
+    const parsed = Date.parse(raw)
+    if (!Number.isFinite(parsed)) return undefined
+    const absolute = new Date(parsed).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    return { absolute, relative: formatRelativeTime(parsed, now, t), iso: new Date(parsed).toISOString() }
+}
+
+/**
+ * Coarse relative time. Deliberately granular only to the day — the card is a
+ * staleness cue, not a clock, and a 45s poll cannot justify second precision.
+ * A future timestamp (clock skew across mesh nodes is real) clamps to "now"
+ * rather than rendering a negative age.
+ */
+export function formatRelativeTime(
+    at: number,
+    now: number,
+    t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+    const seconds = Math.max(0, Math.round((now - at) / 1000))
+    if (seconds < 45) return t('meshGraph.taskDag.time.now')
+    const minutes = Math.round(seconds / 60)
+    if (minutes < 60) return t('meshGraph.taskDag.time.minutes', { count: minutes })
+    const hours = Math.round(minutes / 60)
+    if (hours < 24) return t('meshGraph.taskDag.time.hours', { count: hours })
+    return t('meshGraph.taskDag.time.days', { count: Math.round(hours / 24) })
+}

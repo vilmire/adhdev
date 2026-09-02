@@ -7,8 +7,16 @@
 @import "tailwindcss/utilities.css" layer(utilities);
 @import "./styles/dashboard-mobile.css";
 
-/* Scan web-core source for Tailwind classes */
-@source "./**/*.tsx";
+/* Scan web-core source for Tailwind classes.
+   `.ts` is included deliberately (2026-09-02): class lists also live in plain
+   TypeScript modules — meshGraphTheme.ts is an entire theme of them — and with
+   a `.tsx`-only glob every one of those utilities was silently never generated.
+   The symptom is a rule that simply does not exist rather than a build error:
+   the mesh observability dialog carried `h-[calc(100dvh-32px)]` for months and
+   still sized itself to its content, so the graph canvas got a fraction of the
+   screen. If a class only ever appears in a .ts file, this line is what makes
+   it real. */
+@source "./**/*.{tsx,ts}";
 
 /* ── Tailwind v4 Design Tokens ────────────────────── */
 /* @theme references :root CSS variables so runtime theme switching works.

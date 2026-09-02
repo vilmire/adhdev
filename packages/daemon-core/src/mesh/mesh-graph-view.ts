@@ -77,6 +77,14 @@ export interface MeshGraphEdgeView {
     to: string;
     kind: string;
     omitOnSkip: boolean;
+    /**
+     * Human-readable summary of a conditional edge's `run_if`, e.g.
+     * `review.outcome == "rejected"`. The stored `condition_json` never
+     * reached a reader before, so a blueprint could show THAT a branch was
+     * conditional but never on WHAT — "조건부" with no predicate reads as an
+     * unexplained label. Summary only: the raw expression stays server-side.
+     */
+    condition?: string;
     /** False once the source is skipped and the edge was omitted from the projection. */
     active: boolean;
 }
@@ -262,12 +270,14 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
             // An omitted skipped edge is exactly the case C1 removes from the
             // downstream projection (design :361-366).
             const active = !(source?.state === 'skipped' && edge.omitOnSkip);
+            const condition = describeEdgeCondition(edge.conditionJson);
             return {
                 from: source?.ref ?? edge.fromNodeId,
                 to: byId.get(edge.toNodeId)?.ref ?? edge.toNodeId,
                 kind: edge.kind,
                 omitOnSkip: edge.omitOnSkip,
                 active,
+                ...(condition ? { condition } : {}),
             };
         });
 
@@ -438,6 +448,67 @@ export function countMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
 }
 
 /** Which advanced graph features a node declared — enough to explain a hold, no spec contents. */
+/**
+ * One-line, human-readable rendering of a `run_if` expression.
+ *
+ * The grammar is small and closed (all/any/not over exists/eq/ne/in with a
+ * JSON Pointer selector — see parseRunIfCondition), so a faithful short form
+ * is possible without leaking arbitrary content: selectors and literal
+ * comparands are the author's own plan text, the same class of string as the
+ * `ref` values already carried here.
+ *
+ * Returns undefined for absent/!unparseable input so the UI renders nothing
+ * rather than a misleading half-condition.
+ */
+export function describeEdgeCondition(conditionJson: string | undefined): string | undefined {
+    if (typeof conditionJson !== 'string' || conditionJson.length === 0) return undefined;
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(conditionJson);
+    } catch {
+        return undefined;
+    }
+    const text = renderCondition(parsed, 0);
+    return text && text.length <= 120 ? text : text ? `${text.slice(0, 117)}...` : undefined;
+}
+
+function renderCondition(node: unknown, depth: number): string | undefined {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return undefined;
+    if (depth > 4) return '...';
+    const value = node as Record<string, unknown>;
+    for (const key of ['all', 'any'] as const) {
+        const list = value[key];
+        if (Array.isArray(list) && list.length > 0) {
+            const parts = list.map(entry => renderCondition(entry, depth + 1)).filter(Boolean) as string[];
+            if (parts.length === 0) return undefined;
+            const joined = parts.join(key === 'all' ? ' and ' : ' or ');
+            return depth > 0 ? `(${joined})` : joined;
+        }
+    }
+    if (value.not !== undefined) {
+        const inner = renderCondition(value.not, depth + 1);
+        return inner ? `not ${inner}` : undefined;
+    }
+    if (typeof value.op !== 'string') return undefined;
+    const selector = typeof value.select === 'string' && value.select ? value.select.replace(/^\//, '').replace(/\//g, '.') : '';
+    const subject = [typeof value.from === 'string' ? value.from : '', selector].filter(Boolean).join('.') || 'result';
+    switch (value.op) {
+        case 'exists': return `${subject} exists`;
+        case 'eq': return `${subject} == ${renderLiteral(value.value)}`;
+        case 'ne': return `${subject} != ${renderLiteral(value.value)}`;
+        case 'in': return `${subject} in ${renderLiteral(value.value)}`;
+        default: return undefined;
+    }
+}
+
+function renderLiteral(value: unknown): string {
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(renderLiteral).join(', ')}]`;
+    if (value === null || value === undefined) return 'null';
+    if (typeof value === 'object') return '{...}';
+    return String(value);
+}
+
 function describeNodeFeatures(baseSpecJson: string): string[] {
     let spec: Record<string, unknown> | undefined;
     try {

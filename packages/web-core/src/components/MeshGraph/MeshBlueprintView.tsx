@@ -276,10 +276,23 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
 
     // Owner call 2026-08-24: the blueprint canvas renders as LARGE as the
     // dialog allows — no content-count tiers (unlike topology's
-    // getGraphMinHeightClass). flex-1 already claims the free space; this
-    // floor keeps it generous even when sibling rows would squeeze it, capped
-    // by viewport height so the dialog itself never scrolls.
-    const bodyMinHeightClass = 'min-h-[min(760px,66dvh)]'
+    // getGraphMinHeightClass).
+    //
+    // It must claim that space WITHOUT a height floor of its own (2026-09-02).
+    // Two floors were tried and both clipped the graph, because this element
+    // sits in a padded flex parent and `overflow-hidden` turns any excess into
+    // a hard cut rather than a scroll:
+    //   - `min-h-[min(760px,66dvh)]` measured the VIEWPORT, so in a dialog
+    //     shorter than 66dvh it overflowed by hundreds of px (18 of 28 nodes
+    //     rendered outside the clip box, unreachable — the canvas pans, it
+    //     does not scroll). Adding `max-h-full` does not help: CSS resolves
+    //     `min-height` after `max-height`, so the floor just wins.
+    //   - `min-h-[320px]` matched the parent's own floor, so the element came
+    //     out 320px + its padding and spilled by exactly that padding (39px) —
+    //     the "sliced off at the bottom" edge the owner spotted.
+    // `flex-1 min-h-0` takes exactly what the parent offers and no more, which
+    // is what "as large as the dialog allows" actually means.
+    const bodyMinHeightClass = 'flex-1 min-h-0'
     const graphPagination = getBlueprintGraphPagination(graphs.length, totalGraphCount, graphLimit)
 
     return (

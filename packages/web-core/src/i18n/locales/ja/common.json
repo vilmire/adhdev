@@ -741,6 +741,35 @@
             "clean": "アップストリームと同期済み"
         },
         "taskDag": {
+                "plan": {
+                    "depsFailed_one": "\u5148\u884c{{count}}\u4ef6\u304c\u5931\u6557",
+                    "depsFailed_other": "\u5148\u884c{{count}}\u4ef6\u304c\u5931\u6557"
+                },
+                "gate": {
+                    "holding_one": "{{count}}\u4ef6\u3092\u4fdd\u7559\u4e2d",
+                    "holding_other": "{{count}}\u4ef6\u3092\u4fdd\u7559\u4e2d",
+                    "converged": "\u30b3\u30df\u30c3\u30c8\u306fmain\u53cd\u6620\u6e08\u307f",
+                    "notConverged_one": "{{count}}\u4ef6\u306e\u30b3\u30df\u30c3\u30c8\u304c\u672a\u53cd\u6620",
+                    "notConverged_other": "{{count}}\u4ef6\u306e\u30b3\u30df\u30c3\u30c8\u304c\u672a\u53cd\u6620",
+                    "deadline": "{{time}}\u307e\u3067 \u00b7 \u4ee5\u5f8c {{onTimeout}}",
+                    "needsYou": "\u5bfe\u5fdc\u304c\u5fc5\u8981"
+                },
+                "edge": {
+                    "conditional": "\u6761\u4ef6\u4ed8\u304d"
+                },
+                "time": {
+                    "now": "\u305f\u3063\u305f\u4eca",
+                    "minutes_one": "{{count}}\u5206\u524d",
+                    "minutes_other": "{{count}}\u5206\u524d",
+                    "hours_one": "{{count}}\u6642\u9593\u524d",
+                    "hours_other": "{{count}}\u6642\u9593\u524d",
+                    "days_one": "{{count}}\u65e5\u524d",
+                    "days_other": "{{count}}\u65e5\u524d"
+                },
+                "collapsed": {
+                    "expand": "\u30af\u30ea\u30c3\u30af\u3067\u5b8c\u4e86\u6e08\u307f\u30b0\u30e9\u30d5\u3092\u5c55\u958b",
+                    "counts": "{{nodes}}\u30b9\u30c6\u30c3\u30d7 \u00b7 \u30b2\u30fc\u30c8{{gates}}"
+                },
             "empty": "キュータスクがありません — mesh タスクを登録すると依存関係グラフが表示されます。",
             "waitsOn_one": "{{count}}件待機",
             "waitsOn_other": "{{count}}件待機",
