@@ -24,6 +24,15 @@ interface OperatingNote {
     sourceCoordinator?: string
     /** Pinned notes always ride into the coordinator prompt — surfaced as a badge. */
     pinned?: boolean
+    /** Explicit expiry set on the note, when the author supplied one. */
+    expiresAt?: string
+    /** Resolved expiry: explicit value, else the category TTL. Absent = durable.
+     *  Computed daemon-side so the TTL policy has exactly one home. */
+    effectiveExpiresAt?: string
+    /** Already past its expiry — still listed, but no longer injected. */
+    expired?: boolean
+    /** Groups notes about the same subject (drives supersede + folding). */
+    subjectKey?: string
 }
 
 /** Above this display length a note renders collapsed to a preview first. */
@@ -381,6 +390,25 @@ export function MeshNotesTab({
                                                 tone={NOTE_CATEGORIES.includes(note.category as NoteCategory) ? CATEGORY_TONE[note.category as NoteCategory] : 'default'}
                                             />
                                             {note.pinned && <Badge label={t('meshGraph.notes.pinned')} tone="info" />}
+                                            {/* Expiry is what decides whether a note keeps reaching
+                                                coordinators, so it belongs next to the pin, not hidden.
+                                                Pinned notes are exempt by rule, hence the explicit
+                                                "never expires" rather than a blank. */}
+                                            {note.expired
+                                                ? <Badge label={t('meshGraph.notes.expired')} tone="danger" />
+                                                : note.pinned
+                                                    ? <Badge label={t('meshGraph.notes.neverExpires')} tone="default" />
+                                                    : formatCreatedAt(note.effectiveExpiresAt)
+                                                        ? (
+                                                            // formatCreatedAt returns '' (not undefined) for an
+                                                            // unparseable date, so gate on the formatted value —
+                                                            // a `?? fallback` here could never fire and rendered
+                                                            // a blank "expires  " instead.
+                                                            <span className={`text-2xs ${meshTheme.textMuted}`} title={note.effectiveExpiresAt}>
+                                                                {t('meshGraph.notes.expiresIn', { when: formatCreatedAt(note.effectiveExpiresAt) })}
+                                                            </span>
+                                                        )
+                                                        : <Badge label={t('meshGraph.notes.durable')} tone="default" />}
                                             {formatCreatedAt(note.createdAt) && (
                                                 <span className={`text-2xs ${meshTheme.textMuted}`}>{formatCreatedAt(note.createdAt)}</span>
                                             )}

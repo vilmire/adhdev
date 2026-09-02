@@ -526,6 +526,57 @@
                         "cleanup_candidate — 정리 준비 완료.",
                         "not_mergeable — 머지 불가."
                     ]
+                },
+                "graph": {
+                    "term": "오케스트레이션 그래프",
+                    "summary": "의존성·조건·게이트를 함께 선언해 한 번에 등록한 태스크 묶음.",
+                    "details": [
+                        "mesh_enqueue_batch 로 생성되며, 미션 안의 실행 가능한 계획 하나에 해당합니다.",
+                        "종료된 그래프는 설계도면에서 칩 하나로 접히고, 클릭하면 그 자리에서 펼쳐집니다."
+                    ]
+                },
+                "gate": {
+                    "term": "코디네이터 게이트",
+                    "summary": "사람이 지시한 코디네이터가 처리할 때까지 그래프를 멈춰 두는 단계.",
+                    "details": [
+                        "상태: declared → awaiting_coordinator → claimed → released (또는 expired).",
+                        "대기 중인 게이트는 설계도면에서 카드 전체 폭으로, 지시문과 마감과 함께 표시됩니다.",
+                        "게이트 처리는 코디네이터에게 지시해서 합니다 — 대시보드는 읽기 전용입니다."
+                    ]
+                },
+                "condition": {
+                    "term": "조건 (run_if)",
+                    "summary": "계획된 단계를 실행할지 결정하는 선언적 술어.",
+                    "details": [
+                        "문법은 닫힌 집합입니다: exists, ==, !=, in 에 all / any / not 조합.",
+                        "설계도면에서는 엣지에 연결된 카드로 표시됩니다. 예: review.outcome == rejected.",
+                        "조건이 끝내 성립하지 않은 단계는 실패가 아니라 건너뜀 처리됩니다."
+                    ]
+                },
+                "blueprint": {
+                    "term": "설계도면",
+                    "summary": "계획 화면 — 라이브 큐 작업, 그래프 게이트, 계획된 단계를 한 캔버스에 표시.",
+                    "details": [
+                        "축은 하나입니다 — 좌에서 우로 의존성 깊이. 루트 태스크는 최신순입니다.",
+                        "카드가 각자 시각을 표시하므로 위치가 시간을 나타낼 필요가 없습니다.",
+                        "종료된 그래프는 라이브 작업 아래에 접힌 아카이브로 놓입니다."
+                    ]
+                },
+                "routingPreview": {
+                    "term": "라우팅 예측",
+                    "summary": "가상의 태스크가 어디로 배정될지 보여주는 읽기 전용 예측.",
+                    "details": [
+                        "난이도별로 표시되며, 노드에 고정된 태스크는 별도의 고정 예측(📌)을 받습니다.",
+                        "예측일 뿐 실제 담당이 아닙니다 — 이미 실행된 카드는 아래에 실제 노드를 표시합니다."
+                    ]
+                },
+                "worktree": {
+                    "term": "워크트리 노드",
+                    "summary": "메인 체크아웃이 아니라 git 워크트리를 사용하는 노드.",
+                    "details": [
+                        "브랜치(⎇)로 표시됩니다. 한 머신에서 여러 태스크가 브랜치를 공유하지 않고 돌 수 있습니다.",
+                        "고아 워크트리는 정리 후보로 보고될 뿐, 자동 삭제되지 않습니다."
+                    ]
                 }
             }
         },
@@ -741,36 +792,36 @@
             "clean": "업스트림과 동기화됨"
         },
         "taskDag": {
-                "plan": {
-                    "depsFailed_one": "\uc120\ud589 {{count}}\uac74 \uc2e4\ud328",
-                    "depsFailed_other": "\uc120\ud589 {{count}}\uac74 \uc2e4\ud328"
-                },
-                "gate": {
-                    "holding_one": "{{count}}\uac1c \uc791\uc5c5 \ub300\uae30\uc911",
-                    "holding_other": "{{count}}\uac1c \uc791\uc5c5 \ub300\uae30\uc911",
-                    "converged": "\ucee4\ubc0b main \ubc18\uc601\ub428",
-                    "notConverged_one": "\ucee4\ubc0b {{count}}\uac74 main \ubbf8\ubc18\uc601",
-                    "notConverged_other": "\ucee4\ubc0b {{count}}\uac74 main \ubbf8\ubc18\uc601",
-                    "deadline": "{{time}}\uae4c\uc9c0 \u00b7 \uc774\ud6c4 {{onTimeout}}",
-                    "needsYou": "\ud655\uc778 \ud544\uc694"
-                },
-                "edge": {
-                    "conditionMore": "\uc678 \ub354",
-                    "conditional": "\uc870\uac74\ubd80"
-                },
-                "time": {
-                    "now": "\ubc29\uae08",
-                    "minutes_one": "{{count}}\ubd84 \uc804",
-                    "minutes_other": "{{count}}\ubd84 \uc804",
-                    "hours_one": "{{count}}\uc2dc\uac04 \uc804",
-                    "hours_other": "{{count}}\uc2dc\uac04 \uc804",
-                    "days_one": "{{count}}\uc77c \uc804",
-                    "days_other": "{{count}}\uc77c \uc804"
-                },
-                "collapsed": {
-                    "expand": "\ud074\ub9ad\ud558\uba74 \uc644\ub8cc\ub41c \uadf8\ub798\ud504\ub97c \ud3bc\uce69\ub2c8\ub2e4",
-                    "counts": "{{nodes}}\ub2e8\uacc4 \u00b7 \uac8c\uc774\ud2b8 {{gates}}"
-                },
+            "plan": {
+                "depsFailed_one": "선행 {{count}}건 실패",
+                "depsFailed_other": "선행 {{count}}건 실패"
+            },
+            "gate": {
+                "holding_one": "{{count}}개 작업 대기중",
+                "holding_other": "{{count}}개 작업 대기중",
+                "converged": "커밋 main 반영됨",
+                "notConverged_one": "커밋 {{count}}건 main 미반영",
+                "notConverged_other": "커밋 {{count}}건 main 미반영",
+                "deadline": "{{time}}까지 · 이후 {{onTimeout}}",
+                "needsYou": "확인 필요"
+            },
+            "edge": {
+                "conditionMore": "외 더",
+                "conditional": "조건부"
+            },
+            "time": {
+                "now": "방금",
+                "minutes_one": "{{count}}분 전",
+                "minutes_other": "{{count}}분 전",
+                "hours_one": "{{count}}시간 전",
+                "hours_other": "{{count}}시간 전",
+                "days_one": "{{count}}일 전",
+                "days_other": "{{count}}일 전"
+            },
+            "collapsed": {
+                "expand": "클릭하면 완료된 그래프를 펼칩니다",
+                "counts": "{{nodes}}단계 · 게이트 {{gates}}"
+            },
             "empty": "큐 태스크가 없습니다 — mesh 태스크를 등록하면 의존성 그래프가 표시됩니다.",
             "waitsOn_one": "{{count}}개 대기",
             "waitsOn_other": "{{count}}개 대기",
@@ -891,14 +942,16 @@
             "meshConnecting": "메시 연결 중...",
             "connecting": "연결 중...",
             "providerUnknown": "알 수 없는 프로바이더",
-            "directionAuto": "자동",
-            "directionAutoTitle": "방향 자동 감지",
             "directionLRTitle": "왼쪽에서 오른쪽",
             "directionTBTitle": "위에서 아래",
             "fastForwardConfirmTitle": "{{label}}에 fast-forward를 적용할까요?",
             "fastForwardConfirmLabel": "Fast-forward"
         },
         "notes": {
+            "expired": "만료됨",
+            "neverExpires": "만료 없음",
+            "durable": "상시 유지",
+            "expiresIn": "{{when}} 만료",
             "tab": "운영 노트",
             "addTitle": "운영 노트 추가",
             "listTitle": "운영 노트",

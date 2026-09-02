@@ -98,26 +98,12 @@ export const MESH_GRAPH_ELK_OPTIONS: LayoutOptions = elkOptionsFor(MESH_GRAPH_LA
 
 export const MESH_GRAPH_ELK_OPTIONS_COMPACT: LayoutOptions = elkOptionsFor(MESH_GRAPH_LAYOUT_COMPACT, 'LR')
 
-/**
- * Heuristic: TB reads better when there are many nodes but the dominant
- * connection pattern is shallow fan-out (few hops, many siblings). LR wins
- * when there's a real left-to-right pipeline. Anything else, leave LR.
- */
-export function pickMeshGraphDirection(data: MeshGraphData): MeshGraphDirection {
-    const nodeCount = data.nodes.length
-    if (nodeCount < 8) return 'LR'
-    const outDegree = new Map<string, number>()
-    for (const edge of data.edges) {
-        outDegree.set(edge.source, (outDegree.get(edge.source) ?? 0) + 1)
-    }
-    let maxFanOut = 0
-    for (const count of outDegree.values()) {
-        if (count > maxFanOut) maxFanOut = count
-    }
-    // Wide fan-out from a single hub on dense graphs → TB usually wins.
-    if (maxFanOut >= Math.max(6, Math.floor(nodeCount / 2))) return 'TB'
-    return 'LR'
-}
+/* pickMeshGraphDirection (the fan-out heuristic that chose LR vs TB from the
+ * data) was REMOVED 2026-09-02 with the 'auto' direction mode. Deriving the
+ * orientation from the data meant the same mesh could flip as it changed, which
+ * reads as the layout moving on its own; direction is the user's choice now,
+ * defaulting to TB. Leaving the function behind would falsely signal that
+ * direction is still data-driven. */
 
 type MeshGraphLayoutNodeKind = 'meshNode'
 

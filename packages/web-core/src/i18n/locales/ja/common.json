@@ -526,6 +526,57 @@
                         "cleanup_candidate — クリーンアップ可能。",
                         "not_mergeable — マージできません。"
                     ]
+                },
+                "graph": {
+                    "term": "オーケストレーショングラフ",
+                    "summary": "依存関係・条件・ゲートを宣言して一括登録したタスク群。",
+                    "details": [
+                        "mesh_enqueue_batch で作成され、ミッション内の実行可能な計画に相当します。",
+                        "完了したグラフは設計図でチップ1つに折りたたまれ、クリックでその場に展開します。"
+                    ]
+                },
+                "gate": {
+                    "term": "コーディネーターゲート",
+                    "summary": "人が指示したコーディネーターが処理するまでグラフを保留する段階。",
+                    "details": [
+                        "状態: declared → awaiting_coordinator → claimed → released（または expired）。",
+                        "待機中のゲートは設計図でカード全幅、指示文と期限つきで表示されます。",
+                        "ゲートの操作はコーディネーターへの指示で行います — ダッシュボードは読み取り専用です。"
+                    ]
+                },
+                "condition": {
+                    "term": "条件 (run_if)",
+                    "summary": "計画されたステップを実行するかを決める宣言的な述語。",
+                    "details": [
+                        "文法は閉じた集合です: exists, ==, !=, in に all / any / not。",
+                        "設計図ではエッジに接続されたカードとして表示されます。例: review.outcome == rejected。",
+                        "条件が成立しなかったステップは失敗ではなくスキップになります。"
+                    ]
+                },
+                "blueprint": {
+                    "term": "設計図",
+                    "summary": "計画ビュー — ライブキュー、ゲート、計画ステップを1つのキャンバスに。",
+                    "details": [
+                        "軸は1つ — 左から右への依存の深さ。ルートタスクは新しい順です。",
+                        "カード自身が時刻を表示するため、位置で時間を表す必要はありません。",
+                        "完了したグラフはライブ作業の下に折りたたまれたアーカイブとして並びます。"
+                    ]
+                },
+                "routingPreview": {
+                    "term": "ルーティング予測",
+                    "summary": "仮のタスクがどこに割り当てられるかの読み取り専用の予測。",
+                    "details": [
+                        "難易度ごとに表示され、ノードに固定されたタスクは専用の固定予測（📌）を持ちます。",
+                        "あくまで予測で実際の担当ではありません — 実行済みカードは下部に実ノードを表示します。"
+                    ]
+                },
+                "worktree": {
+                    "term": "ワークツリーノード",
+                    "summary": "メインチェックアウトではなく git ワークツリーを使うノード。",
+                    "details": [
+                        "ブランチ（⎇）で表示されます。1台で複数タスクをブランチ共有せずに実行できます。",
+                        "孤立したワークツリーは整理候補として報告されるだけで、自動削除はされません。"
+                    ]
                 }
             }
         },
@@ -741,36 +792,36 @@
             "clean": "アップストリームと同期済み"
         },
         "taskDag": {
-                "plan": {
-                    "depsFailed_one": "\u5148\u884c{{count}}\u4ef6\u304c\u5931\u6557",
-                    "depsFailed_other": "\u5148\u884c{{count}}\u4ef6\u304c\u5931\u6557"
-                },
-                "gate": {
-                    "holding_one": "{{count}}\u4ef6\u3092\u4fdd\u7559\u4e2d",
-                    "holding_other": "{{count}}\u4ef6\u3092\u4fdd\u7559\u4e2d",
-                    "converged": "\u30b3\u30df\u30c3\u30c8\u306fmain\u53cd\u6620\u6e08\u307f",
-                    "notConverged_one": "{{count}}\u4ef6\u306e\u30b3\u30df\u30c3\u30c8\u304c\u672a\u53cd\u6620",
-                    "notConverged_other": "{{count}}\u4ef6\u306e\u30b3\u30df\u30c3\u30c8\u304c\u672a\u53cd\u6620",
-                    "deadline": "{{time}}\u307e\u3067 \u00b7 \u4ee5\u5f8c {{onTimeout}}",
-                    "needsYou": "\u5bfe\u5fdc\u304c\u5fc5\u8981"
-                },
-                "edge": {
-                    "conditionMore": "\u307b\u304b",
-                    "conditional": "\u6761\u4ef6\u4ed8\u304d"
-                },
-                "time": {
-                    "now": "\u305f\u3063\u305f\u4eca",
-                    "minutes_one": "{{count}}\u5206\u524d",
-                    "minutes_other": "{{count}}\u5206\u524d",
-                    "hours_one": "{{count}}\u6642\u9593\u524d",
-                    "hours_other": "{{count}}\u6642\u9593\u524d",
-                    "days_one": "{{count}}\u65e5\u524d",
-                    "days_other": "{{count}}\u65e5\u524d"
-                },
-                "collapsed": {
-                    "expand": "\u30af\u30ea\u30c3\u30af\u3067\u5b8c\u4e86\u6e08\u307f\u30b0\u30e9\u30d5\u3092\u5c55\u958b",
-                    "counts": "{{nodes}}\u30b9\u30c6\u30c3\u30d7 \u00b7 \u30b2\u30fc\u30c8{{gates}}"
-                },
+            "plan": {
+                "depsFailed_one": "先行{{count}}件が失敗",
+                "depsFailed_other": "先行{{count}}件が失敗"
+            },
+            "gate": {
+                "holding_one": "{{count}}件を保留中",
+                "holding_other": "{{count}}件を保留中",
+                "converged": "コミットはmain反映済み",
+                "notConverged_one": "{{count}}件のコミットが未反映",
+                "notConverged_other": "{{count}}件のコミットが未反映",
+                "deadline": "{{time}}まで · 以後 {{onTimeout}}",
+                "needsYou": "対応が必要"
+            },
+            "edge": {
+                "conditionMore": "ほか",
+                "conditional": "条件付き"
+            },
+            "time": {
+                "now": "たった今",
+                "minutes_one": "{{count}}分前",
+                "minutes_other": "{{count}}分前",
+                "hours_one": "{{count}}時間前",
+                "hours_other": "{{count}}時間前",
+                "days_one": "{{count}}日前",
+                "days_other": "{{count}}日前"
+            },
+            "collapsed": {
+                "expand": "クリックで完了済みグラフを展開",
+                "counts": "{{nodes}}ステップ · ゲート{{gates}}"
+            },
             "empty": "キュータスクがありません — mesh タスクを登録すると依存関係グラフが表示されます。",
             "waitsOn_one": "{{count}}件待機",
             "waitsOn_other": "{{count}}件待機",
@@ -891,14 +942,16 @@
             "meshConnecting": "メッシュに接続中...",
             "connecting": "接続中...",
             "providerUnknown": "プロバイダー不明",
-            "directionAuto": "自動",
-            "directionAutoTitle": "方向を自動判定",
             "directionLRTitle": "左から右",
             "directionTBTitle": "上から下",
             "fastForwardConfirmTitle": "{{label}} に fast-forward を適用しますか？",
             "fastForwardConfirmLabel": "Fast-forward"
         },
         "notes": {
+            "expired": "期限切れ",
+            "neverExpires": "期限なし",
+            "durable": "常時保持",
+            "expiresIn": "{{when}} 期限",
             "tab": "運用ノート",
             "addTitle": "運用ノートを追加",
             "listTitle": "運用ノート",

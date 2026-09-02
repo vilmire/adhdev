@@ -46,7 +46,6 @@ import {
     MESH_GRAPH_EDGE_LABEL,
     getMeshGraphNodeCardWidth,
     getNodeSummaryForLayout,
-    pickMeshGraphDirection,
     type MeshGraphDirection,
     type MeshGraphLayoutEdgePoint,
 } from './meshGraphLayout'
@@ -76,7 +75,7 @@ const MOBILE_GRAPH_WIDTH = 640
 interface MeshGraphViewProps {
     data: MeshGraphData
     selectedNodeId?: string | null
-    directionPref?: 'auto' | 'LR' | 'TB'
+    directionPref?: 'LR' | 'TB'
     onNodeClick?: (node: MeshGraphNode) => void
     onEdgeClick?: (edge: MeshGraphEdge) => void
     onNodeHoverChange?: (node: MeshGraphNode | null) => void
@@ -1202,7 +1201,6 @@ function MeshViewportController({ data, viewportKey }: { data: MeshGraphData; vi
     return null
 }
 
-type DirectionPref = 'auto' | 'LR' | 'TB'
 
 const MINIMAP_NODE_THRESHOLD = 12
 
@@ -1261,19 +1259,20 @@ export default function MeshGraphView({
     // width === 0 means the surface has not measured yet — treat as desktop until known.
     const isNarrowViewport = surfaceSize.width > 0 && surfaceSize.width < MOBILE_GRAPH_WIDTH
     const compact = data.nodes.length >= COMPACT_NODE_THRESHOLD || isNarrowViewport
-    // Default ('LR') only reacts to viewport; an explicit prop/toggle is honored as-is.
-    const [directionPrefInternal] = useState<DirectionPref>('LR')
-    const directionPref: DirectionPref = directionPrefProp ?? directionPrefInternal
+    /* Direction: the caller's explicit choice, else TB. The former 'auto' mode
+     * derived it from the data, so the same mesh could flip orientation as it
+     * changed; TB is also what the narrow-viewport fallback below wanted, so a
+     * TB default makes the two agree instead of fighting. `data` is no longer
+     * an input here — only the heuristic ever read it. */
     const direction: MeshGraphDirection = useMemo(
         () => {
-            // Honor an explicit direction (user toggle / caller override) on every viewport.
             if (directionPrefProp === 'LR' || directionPrefProp === 'TB') return directionPrefProp
-            // No explicit choice: vertical on narrow viewports so the wide LR pipeline
-            // doesn't fit-zoom into overlap; desktop keeps its existing behavior.
+            // No explicit choice: vertical on narrow viewports so a wide LR
+            // pipeline is not fit-zoomed into overlap.
             if (isNarrowViewport) return 'TB'
-            return directionPref === 'auto' ? pickMeshGraphDirection(data) : directionPref
+            return 'TB'
         },
-        [directionPref, directionPrefProp, dataFingerprint, data, isNarrowViewport],
+        [directionPrefProp, isNarrowViewport],
     )
     const showMinimap = data.nodes.length >= MINIMAP_NODE_THRESHOLD
     // `pass` tracks which layout generation is on screen: the estimated first pass
