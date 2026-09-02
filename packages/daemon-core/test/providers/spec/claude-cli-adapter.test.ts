@@ -146,12 +146,15 @@ describe('SpecCliAdapter — claude-cli screen fallbacks', () => {
     adapter.maybeCaptureClaudeTuiPrompt();
 
     expect(adapter.activeInteractivePrompt).not.toBeNull();
+    // The "Type something." escape hatch is stripped from options — it only
+    // raises allowFreeform, matching the headered parser and the native JSONL
+    // path. Its on-screen digit is re-derived as options.length + 1.
     expect(adapter.activeInteractivePrompt.questions[0].options.map((option: any) => option.label)).toEqual([
       '✊ 바위',
       '✌️  가위',
       '✋  보',
-      'Type something.',
     ]);
+    expect(adapter.activeInteractivePrompt.questions[0].allowFreeform).toBe(true);
     expect(adapter.statusCallback).toHaveBeenCalled();
   });
 
