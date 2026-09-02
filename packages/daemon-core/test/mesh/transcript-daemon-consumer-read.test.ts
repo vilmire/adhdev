@@ -24,10 +24,13 @@ import {
     TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
     TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
 } from '../../src/mesh/transcript-daemon-consumer-read.js';
-import { TRANSCRIPT_CONSUMER_ROSTER } from '../../src/mesh/transcript-read-model-consumers.js';
+import { rosterIdsForUnit, TRANSCRIPT_CONSUMER_ROSTER } from '../../src/mesh/transcript-read-model-consumers.js';
 import { mapTranscriptSnapshotToReadChatPayload } from '../../src/mesh/transcript-read-chat-adapter.js';
 import type { TranscriptReplicaStore } from '../../src/seqscribe/transcript-replica-store.js';
 import type { ReplicatedTranscriptSnapshotV1 } from '../../src/seqscribe/transcript-projection.js';
+
+/** This suite's §8 unit — the roster ids it owns, and the only ones it asserts. */
+const UNIT = 7;
 
 const OWNER = 'daemon_mach_owner';
 const SESSION = 'sess-1';
@@ -123,19 +126,19 @@ describe('§8 unit 7 — daemon consumer readiness gate (design §5.5)', () => {
     });
 
     it('both unit-7 roster ids are enabled, and the gate honours that flag', () => {
+        // ★ Scoped to THIS unit's ids only. Asserting another unit's `enabled`
+        // here is what broke twice (see the roster header's "Test authority"
+        // note): it is green when written and red the day that unit lands. The
+        // complete enabled set is asserted once, in the roster suite; the
+        // no-foreign-ids rule is enforced there too.
+        const owned = rosterIdsForUnit(UNIT);
+        expect(owned).toEqual(['daemon_worker_status_probe', 'daemon_terminal_evidence']);
         // The gate reads the roster rather than a local constant, so flipping
         // an entry back to `enabled: false` disables the cutover with no other
         // edit — the property that makes the roster the single control point.
-        expect(TRANSCRIPT_CONSUMER_ROSTER.daemon_worker_status_probe.enabled).toBe(true);
-        expect(TRANSCRIPT_CONSUMER_ROSTER.daemon_terminal_evidence.enabled).toBe(true);
-        // Ids 6-8 belong to §8 unit 8 (mcp-server) and were unwired when this
-        // unit-7 test was written; unit 8 cut them over, so they now read true.
-        // Their own gate behaviour is asserted by the unit-8 suite
-        // (test/mesh/transcript-read-model-consumers.test.ts) — here we only
-        // pin that the daemon gate's two ids are independent of that cutover.
-        expect(TRANSCRIPT_CONSUMER_ROSTER.mcp_mesh_status_reconciliation.enabled).toBe(true);
-        expect(TRANSCRIPT_CONSUMER_ROSTER.magi_approval_probe.enabled).toBe(true);
-        expect(TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect.enabled).toBe(true);
+        for (const id of owned) {
+            expect(TRANSCRIPT_CONSUMER_ROSTER[id].enabled, `roster id ${id}`).toBe(true);
+        }
     });
 
     // ── §5.5 condition 2 — node/key/store ──────────────────────────────────

@@ -51,6 +51,23 @@
  * §5.5 gate but not its implementation, and deliberately so: unit 7's consumers
  * are in-process with the store, unit 8's are across a process boundary and must
  * additionally re-validate the untyped JSON that crossed it.
+ *
+ * ── Test authority: who may assert `enabled` ────────────────────────────────
+ * ★ ONE suite owns the enablement question:
+ * `oss/packages/daemon-core/test/mesh/transcript-read-model-consumers.test.ts`
+ * asserts the COMPLETE enabled set, plus the roster's own shape.
+ *
+ * A per-unit suite must assert only ids it OWNS (`entry.unit`), and should
+ * derive them via `rosterIdsForUnit()` rather than hardcoding a list. It must
+ * NOT assert anything about another unit's ids — not even "still false".
+ * That is a forward-looking snapshot of someone else's work, and it goes red
+ * the moment that unit lands. It has already cost us twice: unit 7's suite
+ * pinned ids 6-8 as unwired, and unit 8's landing turned that red (oss
+ * f8704493), then turned a bootstrap branch red a second time.
+ *
+ * To gate behaviour on a DISABLED consumer, inject a modified roster instead of
+ * borrowing whichever id happens to be off today — see the semantic reader's
+ * `roster` parameter and `withRosterEntryDisabled()` below.
  */
 
 /** The complete roster, in the design's consumer integration order (§4). */
@@ -97,6 +114,15 @@ export interface TranscriptConsumerRosterEntry {
     readonly note: string;
     /** Whether THIS unit wires the consumer's replica routing. */
     readonly enabled: boolean;
+    /**
+     * The design §8 unit that cut this consumer over — the OWNER of its
+     * `enabled` assertions in tests. See the "Test authority" header note:
+     * a per-unit suite asserts only the ids whose `unit` matches its own, via
+     * `rosterIdsForUnit()`. Ownership is recorded here rather than in each test
+     * so a future unit adds one line to this table and its suite picks the id
+     * up automatically, instead of every other suite needing an edit.
+     */
+    readonly unit: number;
 }
 
 /** The full roster table (§4) — id → current call site + enablement state. */
@@ -105,41 +131,49 @@ export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, T
         currentLocation: 'oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts',
         note: 'Live pane transcript authority + history merge; allow-list preserves every field SessionChatTailUpdate consumers read.',
         enabled: true,
+        unit: 5,
     },
     web_warm_mobile_preview: {
         currentLocation: 'oss/packages/web-core/src/components/dashboard/session-chat-tail-controller.ts (useWarmSessionChatTailControllers)',
         note: 'Selector over the SAME warm controller snapshot web_chat_pane reads — no separate subscription.',
         enabled: true,
+        unit: 5,
     },
     mesh_read_chat_display: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-session.ts (meshReadChat)',
         note: 'Remote transcript display/compact via coordinator daemon IPC replica read; mapTranscriptSnapshotToReadChatPayload keeps compact/full on one shape, so both branches are at parity with the live read.',
         enabled: true,
+        unit: 6,
     },
     daemon_worker_status_probe: {
         currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-remote-event-pull.ts (reprobeWorkerStatus)',
         note: 'Active-session freshness/owner status re-check. Reads ONE field — `payload.status` — which the wire carries verbatim as `snapshot.status` (the producer\'s own effectiveStatus, not a re-derivation), so the read is exactly lossless. Remote nodes only; a declined replica read falls through to the identical legacy read_chat, preserving null\'s fail-open meaning.',
         enabled: true,
+        unit: 7,
     },
     daemon_terminal_evidence: {
         currentLocation: 'oss/packages/daemon-core/src/mesh/mesh-completion-synthesis.ts (fetchAssignedTaskChatTail)',
         note: 'Acked-hold/terminal causal evidence. Every field the extractors read (role/kind/content/senderName/meta.streaming/timestamp/receivedAt, status, providerObservedStatus, activeModal, turn, providerSessionId) survives the projection. ★ NOT lossless in one direction: `turnTerminalMarkers` is deliberately omitted (the wire carries no native markers — see mapTerminalEvidencePayload), so a replica read takes the legacy message-shape admission rules instead of strong native-marker evidence. Weaker evidence, same veto direction.',
         enabled: true,
+        unit: 7,
     },
     mcp_mesh_status_reconciliation: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-internal.ts (reconcileDirectDispatchesFromTranscriptEvidence)',
         note: 'Final-assistant completion synthesis; the replica feeds the SAME readFinalAssistantTranscriptEvidence + hasTrailingToolActivityAfterFinalAssistant parsers as the live read, so the activity-after-final veto and synthesis idempotency are unchanged. Needs activity kinds in order, so tail-only coverage declines.',
         enabled: true,
+        unit: 8,
     },
     magi_approval_probe: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (nudgeWedgedReplica)',
         note: 'Fresh status+activeModal only, for idempotent approve. Irreversible act, so admission requires a snapshot inside the freshness budget (design §5.5); resolve_action stays a live RPC.',
         enabled: true,
+        unit: 8,
     },
     magi_result_collect: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (tryResolveReplica)',
         note: 'Current-turn MAGI result/evidence collection; the replica runs the SAME parseFirstMagiCandidateForKind, and current-turn coverage is required so the FIX#1 cross-turn mis-attribution guard is not lost.',
         enabled: true,
+        unit: 8,
     },
 };
 
@@ -147,3 +181,36 @@ export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, T
 export const TRANSCRIPT_CONSUMER_IDS: readonly TranscriptConsumerId[] = Object.keys(
     TRANSCRIPT_CONSUMER_ROSTER,
 ) as TranscriptConsumerId[];
+
+/**
+ * The roster ids a given §8 unit owns, in roster order.
+ *
+ * A per-unit suite calls this instead of hardcoding its ids, so that:
+ *   - it asserts only what it owns (see the header's "Test authority" note),
+ *     and cannot accidentally pin another unit's `enabled` state, and
+ *   - adding a future unit's id to the table needs no edit to any existing
+ *     suite — the new unit's own suite picks it up by number.
+ *
+ * Returns `[]` for an unknown unit; a suite should assert a non-empty result so
+ * a renamed/renumbered entry surfaces as a failure rather than as zero checks
+ * silently passing.
+ */
+export function rosterIdsForUnit(unit: number): readonly TranscriptConsumerId[] {
+    return TRANSCRIPT_CONSUMER_IDS.filter((id) => TRANSCRIPT_CONSUMER_ROSTER[id].unit === unit);
+}
+
+/**
+ * A copy of the roster with one id forced to `enabled: false`.
+ *
+ * For testing "a disabled consumer declines before doing any work". Use this
+ * with an injectable-roster call site rather than borrowing whichever id
+ * happens to be disabled today — that borrowing is exactly what coupled one
+ * unit's suite to another unit's progress and broke on landing. The real roster
+ * is never mutated.
+ */
+export function withRosterEntryDisabled(
+    id: TranscriptConsumerId,
+    roster: Readonly<Record<TranscriptConsumerId, TranscriptConsumerRosterEntry>> = TRANSCRIPT_CONSUMER_ROSTER,
+): Readonly<Record<TranscriptConsumerId, TranscriptConsumerRosterEntry>> {
+    return { ...roster, [id]: { ...roster[id], enabled: false } };
+}

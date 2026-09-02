@@ -21,7 +21,14 @@ import {
   SEMANTIC_TRANSCRIPT_FRESHNESS_BUDGET_MS,
   readTranscriptReplicaForSemanticConsumer,
 } from '../src/tools/mesh-transcript-semantic-read.js';
-import { TRANSCRIPT_CONSUMER_ROSTER } from '../../daemon-core/src/mesh/transcript-read-model-consumers.js';
+import {
+  rosterIdsForUnit,
+  TRANSCRIPT_CONSUMER_ROSTER,
+  withRosterEntryDisabled,
+} from '../../daemon-core/src/mesh/transcript-read-model-consumers.js';
+
+/** This suite's §8 unit — the roster ids it owns, and the only ones it asserts. */
+const UNIT = 8;
 
 const NOW = Date.parse('2026-09-02T00:00:00.000Z');
 
@@ -80,10 +87,18 @@ const BASE = { ownerDaemonId: 'daemon-remote', rawSessionId: 'sess-remote', nowM
 
 // ── the roster is the switch (design §4: "roster 밖 코드는 replica를 읽을 수 없다") ──
 
-test('all three unit-8 roster ids are enabled', () => {
-  assert.equal(TRANSCRIPT_CONSUMER_ROSTER.mcp_mesh_status_reconciliation.enabled, true);
-  assert.equal(TRANSCRIPT_CONSUMER_ROSTER.magi_approval_probe.enabled, true);
-  assert.equal(TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect.enabled, true);
+test('this unit owns roster ids 6-8, and the shipped roster has them enabled', () => {
+  // ★ Scoped to THIS unit's ids, derived from the roster's own ownership field
+  // rather than hardcoded — so a future unit enabling ITS id does not touch
+  // this suite. The complete enabled set (all 8) is asserted once, by
+  // daemon-core's test/mesh/transcript-read-model-consumers.test.ts, which also
+  // enforces that no per-unit suite asserts a foreign id. See the roster
+  // module header's "Test authority" note.
+  const owned = rosterIdsForUnit(UNIT);
+  assert.deepEqual([...owned], ['mcp_mesh_status_reconciliation', 'magi_approval_probe', 'magi_result_collect']);
+  for (const id of owned) {
+    assert.equal(TRANSCRIPT_CONSUMER_ROSTER[id].enabled, true, `roster id ${id}`);
+  }
 });
 
 test('a disabled roster id declines BEFORE any IPC — the cutover is fully inert when flipped off', async () => {
@@ -91,24 +106,19 @@ test('a disabled roster id declines BEFORE any IPC — the cutover is fully iner
   // this cannot borrow a still-disabled id as a stand-in (it did while unit 7
   // was in flight, which coupled this assertion to another unit's progress).
   // Injecting the roster instead pins the BEHAVIOUR — "enabled:false means no
-  // IPC at all" — independently of which ids happen to be enabled today.
+  // IPC at all" — independently of which ids happen to be enabled today. The
+  // preceding test is what keeps the injected stub honest about shipped state.
   const t = transportFor();
   const outcome = await readTranscriptReplicaForSemanticConsumer(t, {
     ...BASE,
     consumerId: 'magi_result_collect',
     acceptCoverage: ['full', 'tail', 'current-turn'],
     requireFresh: false,
-    roster: { ...TRANSCRIPT_CONSUMER_ROSTER, magi_result_collect: { ...TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect, enabled: false } },
+    roster: withRosterEntryDisabled('magi_result_collect'),
   });
   assert.equal(outcome.payload, null);
   assert.equal(outcome.fallbackReason, 'consumer_not_enabled');
   assert.deepEqual(t.calls, [], 'a disabled consumer must not touch the IPC at all');
-});
-
-test('the real roster has every unit-8 consumer enabled — the injection above is a stub, not the shipped state', () => {
-  assert.equal(TRANSCRIPT_CONSUMER_ROSTER.mcp_mesh_status_reconciliation.enabled, true);
-  assert.equal(TRANSCRIPT_CONSUMER_ROSTER.magi_approval_probe.enabled, true);
-  assert.equal(TRANSCRIPT_CONSUMER_ROSTER.magi_result_collect.enabled, true);
 });
 
 // ── the happy path for each consumer ────────────────────────────────────────
