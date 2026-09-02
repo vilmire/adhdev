@@ -55,6 +55,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/git/git-locale.test.ts',
   'test/git/git-status.test.ts',
   'test/mesh/mesh-completion-side-effect-evidence.test.ts',
+  'test/mesh/mesh-graph-workspace-bootstrap.test.ts',
   'test/mesh/mesh-onboarding-plan.test.ts',
   'test/mesh/preview-freshness.test.ts',
   'test/mesh/submodule-default-branch.test.ts',

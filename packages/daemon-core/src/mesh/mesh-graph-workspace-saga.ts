@@ -402,6 +402,39 @@ async function prepareClaimedIntent(
             };
         }
         faults?.afterCloneSuccess?.(created);
+
+        // WORKSPACE-SAGA-BOOTSTRAP: the port ran the repo's worktree_bootstrap
+        // before returning (so it is finished before any dispatch). A bootstrap
+        // the repo marked `required` and that did NOT succeed means the worktree
+        // is not usable — a worker launched into it would hit missing
+        // dependencies / uninitialized submodules. Fail preparation loudly here
+        // instead of publishing a broken tree as a dispatch target. The worktree
+        // itself is left on disk with its created identity persisted below, so a
+        // later tick can resume it once the cause is fixed.
+        const bootstrap = created.bootstrap;
+        if (bootstrap && bootstrap.required && bootstrap.status !== 'ready' && bootstrap.status !== 'complete') {
+            const reason = `worktree_bootstrap_${bootstrap.status}: ${bootstrap.error || 'required bootstrap did not complete'}`;
+            LOG.error('MeshGraphWorkspace', `required worktree bootstrap did not succeed for ${intent.graphId}/${intent.workspaceRef} at ${created.worktreePath} — ${reason}`);
+            const nowIso = new Date(ports.nowMs()).toISOString();
+            store.transaction(() => {
+                store.graphStore().patchWorkspaceIntent(intent.graphId, intent.workspaceRef, {
+                    sagaState: 'failed',
+                    createdNodeId: created!.nodeId,
+                    createdWorktreePath: created!.worktreePath,
+                    ownerTag: created!.ownerTag || intent.ownerTag,
+                    lastError: reason,
+                }, nowIso, { leaseGeneration: generation });
+            });
+            return {
+                graphId: intent.graphId,
+                workspaceRef: intent.workspaceRef,
+                sagaState: 'failed',
+                action: 'clone_failed',
+                createdNodeId: created.nodeId,
+                createdWorktreePath: created.worktreePath,
+                error: reason,
+            };
+        }
     }
 
     // Persist created identity BEFORE bind. Crash between this write and
