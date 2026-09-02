@@ -142,6 +142,7 @@ export function detectClaudePendingQuestionFromRecords(records: unknown[]): Inte
         // would drift apart.
         const prompt = detectClaudeAskUserQuestionPromptFromJson(records[i]);
         if (!prompt) continue;
+        applyClaudeFreeformEscape(prompt);
         // A synthesized fallback id (no `toolu_…` on the block) cannot be
         // paired with a tool_result, so it can never be shown to clear. Skip
         // it and let the screen scrape own that picker.
@@ -167,6 +168,35 @@ export function detectClaudePendingQuestionFromRecords(records: unknown[]): Inte
         `pending AskUserQuestion from native JSONL: promptId=${latestPrompt.promptId} questions=${latestPrompt.questions.length}`,
     );
     return latestPrompt;
+}
+
+/**
+ * Restore the freeform ("Type something.") escape hatch that the TUI renders
+ * but the native tool call does not carry.
+ *
+ * MEASURED, not assumed. The scrape does NOT surface that row as an option: it
+ * matches the label, sets `allowFreeform = true`, and `continue`s WITHOUT
+ * pushing it (parseClaudeInteractiveTuiQuestion, interactive-prompt.ts). So the
+ * screen-derived option list is already the real options only, and the escape
+ * hatch travels as a per-question BOOLEAN. The dashboard renders its own
+ * textarea from that flag (InteractivePromptModal), and the keystroke builder
+ * falls back to `options.length` — one past the last real option, exactly where
+ * the TUI draws the row — when no such option is present.
+ *
+ * Synthesizing a `Type something.` OPTION here would therefore have created new
+ * drift rather than removing it: the dashboard would show a dead row that
+ * selects a label the TUI never offers as an option, and it would shift every
+ * subsequent digit in the keystroke protocol. Setting the flag is what makes
+ * the two transports agree.
+ *
+ * Unconditional, matching the scrape's effective behaviour and the identical
+ * kimi precedent (kimi-pending-question.ts forces allowFreeform: true): claude
+ * renders the escape hatch on every AskUserQuestion picker, single- and
+ * multi-select alike, and `input.questions[]` never carries an allowFreeform
+ * key of its own, so nothing here can be overwritten.
+ */
+function applyClaudeFreeformEscape(prompt: InteractivePrompt): void {
+    for (const question of prompt.questions) question.allowFreeform = true;
 }
 
 /**
