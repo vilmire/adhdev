@@ -4,7 +4,7 @@
  * Imports shared components and pages from web-core,
  * wraps them with StandaloneDaemonContext + TransportContext.
  */
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { StandaloneDaemonProvider, sendCommandViaWs, sendDataViaWs, sendPtyInputViaWs } from './StandaloneDaemonContext'
 import { getStandaloneToken, standaloneFetch, stripStandaloneTokenFromLocation, type StandaloneAuthSessionStatus, type StandalonePreferencesStatus } from './standalone-auth-client'
@@ -21,6 +21,7 @@ import SetupWizardPage from './SetupWizardPage'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
 import StandaloneOnboarding, { hasCompletedOnboarding } from './StandaloneOnboarding'
+import { resolveInteractivePromptGateScope } from './interactive-prompt-gate-scope'
 import '@adhdev/web-core/index.css'
 
 // Restore persisted appearance before first render so CSS vars resolve correctly.
@@ -226,16 +227,49 @@ function OnboardingGate() {
     return <StandaloneOnboarding onDone={() => setShow(false)} />
 }
 
-// Global interactive prompt dialog — shown whenever any session has waiting_choice status.
-// Standalone has no tab selection, so this stays a global scan by design. It previously
-// computed the first prompt-bearing session itself and passed that id in, which under the
-// old contract ALSO opted into hidden entries — meaning a surfaceHidden mesh worker's
-// prompt surfaced here even though it was suppressed on the cloud dashboard. Letting the
-// selector do the unscoped scan restores hidden suppression and keeps the two in sync.
+/**
+ * Interactive prompt dialog for the routes that have no prompt surface of their own
+ * (/settings, /mesh, /about, /notifications, …).
+ *
+ * ── Scope ─────────────────────────────────────────────────────────────────
+ * CORRECTION: a previous comment here claimed "standalone has no tab selection,
+ * so this stays a global scan by design". That was FALSE and it caused two live
+ * defects. Standalone renders web-core's `Dashboard`, which is a Dockview tab
+ * workspace with a real tab bar and a real selected session — the same selection
+ * `Dashboard` itself scopes its modal with (`Dashboard.tsx`, via `activeConv`).
+ *
+ * Unscoped, this gate rendered the FIRST prompt-bearing session in `ides` order —
+ * a status-report merge artifact. Live repro: with session `wsA` selected and no
+ * prompt of its own, a refresh surfaced `e2e-ws`'s question instead. Worse, the
+ * modal is a `fixed inset-0` full-screen overlay, so a prompt on ANY session
+ * covered the tab bar and the user could not even navigate away from it.
+ *
+ * We scope to the selected session via the `activeTab` search param, which
+ * `useDashboardDesktopWorkspaceState.openDesktopConversation` writes and whose
+ * value is exactly the conversation's `sessionId` (`getConversationActiveTabTarget`).
+ * That is the same id `Dashboard` passes to `useInteractivePrompt`, so the two
+ * surfaces agree instead of racing.
+ *
+ * ── Why the dashboard route is excluded ───────────────────────────────────
+ * `Dashboard` already renders its own scoped `InteractivePromptModal` through
+ * `DashboardOverlays`. Mounting this gate there too stacked a SECOND modal on
+ * top of it. This gate covers only the routes that lack that surface.
+ *
+ * `includeHidden` stays at its default (false): a `surfaceHidden` mesh worker
+ * has no tab here either, and its prompt must remain suppressed.
+ */
 function InteractivePromptGate() {
     const { t } = useTranslation('common')
-    const { promptSession, hasActivePrompt, responseError, isSubmitting, submit, cancel, reopen } = useInteractivePrompt()
+    const location = useLocation()
+    const [searchParams] = useSearchParams()
+    const { suppressed, sessionId } = resolveInteractivePromptGateScope(
+        location.pathname,
+        searchParams.get('activeTab'),
+    )
+    // Called before any early return so hook order stays stable across routes.
+    const { promptSession, hasActivePrompt, responseError, isSubmitting, submit, cancel, reopen } = useInteractivePrompt(sessionId)
 
+    if (suppressed) return null
     if (!hasActivePrompt) return null
 
     return (
