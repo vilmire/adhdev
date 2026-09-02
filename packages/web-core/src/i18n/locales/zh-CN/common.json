@@ -755,6 +755,7 @@
                     "needsYou": "\u9700\u8981\u4f60\u5904\u7406"
                 },
                 "edge": {
+                    "conditionMore": "\u7b49\u66f4\u591a",
                     "conditional": "\u6761\u4ef6"
                 },
                 "time": {

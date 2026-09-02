@@ -755,6 +755,7 @@
                     "needsYou": "Needs you"
                 },
                 "edge": {
+                    "conditionMore": "+ more",
                     "conditional": "if condition"
                 },
                 "time": {

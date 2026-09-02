@@ -429,6 +429,8 @@ export type {
     MeshGraphView,
     MeshGraphNodeView,
     MeshGraphEdgeView,
+    MeshEdgeConditionView,
+    MeshEdgeConditionClause,
     MeshGraphGateView,
     MeshGraphWorkspaceView,
     BuildMeshGraphViewOptions,
