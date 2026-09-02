@@ -190,4 +190,61 @@ describe('CliProviderInstance — WORKER-MCP T2 precursor: turn-aware task attac
       delete process.env.ADHDEV_WORKER_MCP
     })
   })
+
+  describe('constructor-bypassed stub (Object.create) — history is self-healing', () => {
+    // The suite-wide idiom for exercising private completion/mesh state is
+    // `Object.create(CliProviderInstance.prototype)`, which skips the
+    // constructor so class-field initializers never run and
+    // meshTaskAttachmentHistory reads back as `undefined`. makeInstance() above
+    // seeds it explicitly, so it cannot catch this — 55 other test files build
+    // their stubs without that line.
+    //
+    // With ADHDEV_WORKER_MCP off the helpers are never called, so the gap is
+    // invisible. With the flag ON — the documented daemon/CI canary
+    // environment (see test/mesh/mesh-refine-gate-env-sanitize.test.ts) — every
+    // one of those stubs threw `Cannot read properties of undefined`, taking
+    // 125 tests across 29 files down at once. These assertions pin the helper
+    // that heals it (mesh-task-attachment.ts meshTaskAttachments()).
+    function bareStub() {
+      const instance = Object.create(CliProviderInstance.prototype) as any
+      instance.instanceId = 'sess-bare-1'
+      instance.type = 'claude-code'
+      instance.workingDir = '/work/repo'
+      instance.settings = { launchedByCoordinator: true }
+      instance.adapter = { updateRuntimeSettings() {} }
+      // Deliberately NOT set: meshTaskInjectedAt, meshTaskAttachmentHistory.
+      return instance
+    }
+
+    beforeEach(() => { process.env.ADHDEV_WORKER_MCP = '1' })
+
+    it('completingTurnTaskId() falls through to the scalar instead of throwing', () => {
+      const instance = bareStub()
+      expect(instance.meshTaskAttachmentHistory).toBeUndefined()
+      expect(() => instance.completingTurnTaskId()).not.toThrow()
+      expect(instance.completingTurnTaskId()).toBeUndefined()
+      instance.settings.meshActiveTaskId = 'task-scalar'
+      expect(instance.completingTurnTaskId()).toBe('task-scalar')
+    })
+
+    it('injectedTaskHasStartedGenerating() reads the bare scalar instead of throwing', () => {
+      const instance = bareStub()
+      expect(() => instance.injectedTaskHasStartedGenerating()).not.toThrow()
+    })
+
+    it('detachMeshAssignment() on a bare stub does not throw', () => {
+      const instance = bareStub()
+      instance.settings.meshActiveTaskId = 'task-A'
+      instance.settings.meshNodeFor = 'mesh-1'
+      expect(() => instance.detachMeshAssignment()).not.toThrow()
+      expect(instance.settings.meshActiveTaskId).toBeUndefined()
+    })
+
+    it('attachMeshAssignment() materializes the history on first use', () => {
+      const instance = bareStub()
+      expect(() => instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-A' })).not.toThrow()
+      expect(instance.meshTaskAttachmentHistory).toHaveLength(1)
+      expect(instance.completingTurnTaskId()).toBe('task-A')
+    })
+  })
 })

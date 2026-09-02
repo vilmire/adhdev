@@ -53,7 +53,7 @@ import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
 import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { isTerminalTurnStage } from '../mesh/mesh-turn-ledger.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js'; // layer-neutral — see runtime-defaults.ts for why this isn't imported from mesh/worker-mcp-isolation.js
-import { mergePendingMeshTaskAttachment, popCompletedMeshTaskAttachment, pushMeshTaskAttachment, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
+import { mergePendingMeshTaskAttachment, meshTaskAttachments, popCompletedMeshTaskAttachment, pushMeshTaskAttachment, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText, normalizeApprovalLabel } from './approval-utils.js';
@@ -425,7 +425,7 @@ export class CliProviderInstance implements ProviderInstance {
     // from "genuinely generating". This timestamp is that discriminator. 0 = no task
     // injected since boot (ad-hoc/non-mesh turns fall back to the plain turn-started check).
     private meshTaskInjectedAt = 0;
-    private meshTaskAttachmentHistory: MeshTaskAttachment[] = []; // WORKER-MCP T2 precursor — mesh-task-attachment.ts, flag-gated, byte-identical off.
+    private meshTaskAttachmentHistory: MeshTaskAttachment[] = []; // WORKER-MCP T2 precursor — mesh-task-attachment.ts, flag-gated, byte-identical off. Always read via meshTaskAttachments(this.meshTaskAttachmentHistory), never raw — see that module's "Constructor-bypassed instances".
     private settings: Record<string, any> = {};
     private monitor: StatusMonitor;
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
@@ -1098,7 +1098,7 @@ export class CliProviderInstance implements ProviderInstance {
         // that would otherwise fire generating_completed before generating_started).
         if (assignment.taskId && assignment.taskId.trim()) {
             this.meshTaskInjectedAt = Date.now();
-            if (isWorkerMcpEnabled()) { const { droppedTaskId } = pushMeshTaskAttachment(this.meshTaskAttachmentHistory, { taskId: assignment.taskId, attemptId: assignment.attemptId, dispatchNonce: assignment.dispatchNonce, injectedAt: this.meshTaskInjectedAt }); if (droppedTaskId) LOG.warn('MeshTaskAttach', `[${this.instanceId}] turn-aware attachment history exceeded cap — dropped task ${droppedTaskId}.`); } // WORKER-MCP T2 precursor — mesh-task-attachment.ts
+            if (isWorkerMcpEnabled()) { this.meshTaskAttachmentHistory = meshTaskAttachments(this.meshTaskAttachmentHistory); const { droppedTaskId } = pushMeshTaskAttachment(this.meshTaskAttachmentHistory, { taskId: assignment.taskId, attemptId: assignment.attemptId, dispatchNonce: assignment.dispatchNonce, injectedAt: this.meshTaskInjectedAt }); if (droppedTaskId) LOG.warn('MeshTaskAttach', `[${this.instanceId}] turn-aware attachment history exceeded cap — dropped task ${droppedTaskId}.`); } // WORKER-MCP T2 precursor — mesh-task-attachment.ts
         }
         this.settings = {
             ...this.settings,
@@ -1153,7 +1153,7 @@ export class CliProviderInstance implements ProviderInstance {
      * keeps the original full clear so an ad-hoc session is never left pinned.
      */
     detachMeshAssignment(): void { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): restores a still-pending attachment onto the scalar; flag off is a no-op.
-        const pending = isWorkerMcpEnabled() ? popCompletedMeshTaskAttachment(this.meshTaskAttachmentHistory) : undefined; if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
+        const pending = isWorkerMcpEnabled() ? popCompletedMeshTaskAttachment(meshTaskAttachments(this.meshTaskAttachmentHistory)) : undefined; if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
         // Session-level member: keep membership, drop only the task-level markers.
         if (this.settings.launchedByCoordinator === true) {
             if (!this.settings.meshActiveTaskId) return;
@@ -2396,7 +2396,7 @@ export class CliProviderInstance implements ProviderInstance {
      * turn completes overwrites it. Returns undefined for a non-task ad-hoc turn.
      */
     private completingTurnTaskId(): string | undefined { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): flag-on, a pending entry wins over the binding+scalar below.
-        const fromHistory = isWorkerMcpEnabled() ? resolveCompletingTaskId(this.meshTaskAttachmentHistory) : undefined; if (fromHistory) return fromHistory;
+        const fromHistory = isWorkerMcpEnabled() ? resolveCompletingTaskId(meshTaskAttachments(this.meshTaskAttachmentHistory)) : undefined; if (fromHistory) return fromHistory;
         const turnTaskId = this.adapter?.currentTurnTaskId;
         if (typeof turnTaskId === 'string' && turnTaskId.trim()) return turnTaskId;
         const scalar = this.settings.meshActiveTaskId;
@@ -2432,7 +2432,7 @@ export class CliProviderInstance implements ProviderInstance {
             ? (this.adapter as any).currentTurnStartedAt as number
             : 0;
         const turnStarted = Number.isFinite(turnStartedAt) && turnStartedAt > 0;
-        const injectedAt = (isWorkerMcpEnabled() ? resolvePendingInjectedAt(this.meshTaskAttachmentHistory) : undefined) ?? this.meshTaskInjectedAt;
+        const injectedAt = (isWorkerMcpEnabled() ? resolvePendingInjectedAt(meshTaskAttachments(this.meshTaskAttachmentHistory)) : undefined) ?? this.meshTaskInjectedAt;
         if (injectedAt <= 0) {
             // No mesh task injected since boot — plain "a turn has started" suffices.
             return turnStarted;
