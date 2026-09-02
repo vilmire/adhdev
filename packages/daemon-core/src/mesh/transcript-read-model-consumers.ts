@@ -27,17 +27,30 @@
  * ── §8 unit 6 scope ─────────────────────────────────────────────────────────
  * Roster id 3 (`mesh_read_chat_display`) is now enabled: `meshReadChat`
  * attempts a coordinator-daemon IPC replica read before its existing live P2P
- * `read_chat`, via `mesh/transcript-read-chat-adapter.ts`. Ids 4-8 remain
- * declared for completeness (the full roster table, §4) but unwired — a caller
- * asking about them today gets `consumer_not_enabled`.
+ * `read_chat`, via `mesh/transcript-read-chat-adapter.ts`.
  *
  * ── §8 unit 7 scope ─────────────────────────────────────────────────────────
  * Roster ids 4-5 (`daemon_worker_status_probe`, `daemon_terminal_evidence`) are
  * now enabled. Both run INSIDE the daemon that owns the replica store, so they
  * route through `mesh/transcript-daemon-consumer-read.ts` — a direct store read
  * plus the §5.5 readiness gate — rather than unit 6's IPC pair, which exists
- * only because mcp-server is a separate process. Ids 6-8 (all mcp-server) stay
- * unwired and still answer `consumer_not_enabled`.
+ * only because mcp-server is a separate process.
+ *
+ * ── §8 unit 8 scope ─────────────────────────────────────────────────────────
+ * Roster ids 6-8 (`mcp_mesh_status_reconciliation`, `magi_approval_probe`,
+ * `magi_result_collect`) are now enabled — the three mcp-server reads that
+ * derive an IRREVERSIBLE decision (completion synthesis, approve click, final
+ * MAGI verdict) rather than merely displaying. They route through
+ * `oss/packages/mcp-server/src/tools/mesh-transcript-semantic-read.ts`, which
+ * adds §5.5's semantic admission gate (per-consumer coverage + freshness
+ * budget) on top of the same IPC pair unit 6 uses, and hands back the same
+ * `read_chat`-shaped payload so each call site's existing evidence/kind parser
+ * runs unchanged.
+ *
+ * With units 7 and 8 both landed, every roster id is enabled. The two share the
+ * §5.5 gate but not its implementation, and deliberately so: unit 7's consumers
+ * are in-process with the store, unit 8's are across a process boundary and must
+ * additionally re-validate the untyped JSON that crossed it.
  */
 
 /** The complete roster, in the design's consumer integration order (§4). */
@@ -114,19 +127,19 @@ export const TRANSCRIPT_CONSUMER_ROSTER: Readonly<Record<TranscriptConsumerId, T
         enabled: true,
     },
     mcp_mesh_status_reconciliation: {
-        currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-internal.ts',
-        note: 'Final-assistant completion synthesis over transcript evidence — out of this unit\'s scope.',
-        enabled: false,
+        currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-internal.ts (reconcileDirectDispatchesFromTranscriptEvidence)',
+        note: 'Final-assistant completion synthesis; the replica feeds the SAME readFinalAssistantTranscriptEvidence + hasTrailingToolActivityAfterFinalAssistant parsers as the live read, so the activity-after-final veto and synthesis idempotency are unchanged. Needs activity kinds in order, so tail-only coverage declines.',
+        enabled: true,
     },
     magi_approval_probe: {
         currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (nudgeWedgedReplica)',
-        note: 'Fresh status+activeModal only, for idempotent approve — out of this unit\'s scope.',
-        enabled: false,
+        note: 'Fresh status+activeModal only, for idempotent approve. Irreversible act, so admission requires a snapshot inside the freshness budget (design §5.5); resolve_action stays a live RPC.',
+        enabled: true,
     },
     magi_result_collect: {
-        currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-magi.ts',
-        note: 'Current-turn MAGI result/evidence collection — out of this unit\'s scope.',
-        enabled: false,
+        currentLocation: 'oss/packages/mcp-server/src/tools/mesh-tools-magi.ts (tryResolveReplica)',
+        note: 'Current-turn MAGI result/evidence collection; the replica runs the SAME parseFirstMagiCandidateForKind, and current-turn coverage is required so the FIX#1 cross-turn mis-attribution guard is not lost.',
+        enabled: true,
     },
 };
 
