@@ -23,6 +23,16 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
 import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
 import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, type TurnEventRow } from './mesh-turn-event-queries.js';
+import {
+    insertTurnOutboxRow,
+    selectDueTurnOutbox,
+    selectOldestPendingTurnOutboxAgeMs,
+    updateTurnOutboxDelivered,
+    updateTurnOutboxAttemptFailed,
+    selectDeliveredTurnOutboxTaskIdsSince,
+    countTurnOutboxRowsByStatus,
+    type DueTurnOutboxRow,
+} from './mesh-turn-outbox-queries.js';
 import { selectUnsettledTerminalQueueRowsAndAttempts } from './mesh-unsettled-terminal-queries.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
@@ -3338,6 +3348,12 @@ export class MeshRuntimeStore {
     deleteTurnEventsByKindOlderThan(kind: string, cutoffIso: string, meshId?: string): number { return deleteTurnEventsByKindOlderThan(this.db, kind, cutoffIso, meshId); }
 
     // ── TURN-LEDGER (Stage 5): durable outbound delivery (outbox) ────────────
+    //
+    // ★ SQL lives in mesh-turn-outbox-queries.ts (file-size gate decomposition).
+    // These stay as delegators because `db` is private; the three mutating ones
+    // keep `maybeCheckpointWal()` here since it is private class state, which
+    // preserves the original statement-then-checkpoint order exactly.
+    // ★★ This block and that file are REMOVED TOGETHER in 5c (§5 rows 1-3, 10).
 
     /** Enqueue an outbound notification. INSERT OR IGNORE on the row id = exactly-once. */
     enqueueTurnOutbox(row: {
@@ -3345,76 +3361,29 @@ export class MeshRuntimeStore {
         kind: string; payload?: string; nextAttemptAtMs?: number | null;
         createdAt: string; updatedAt: string;
     }): boolean {
-        const res = this.db.prepare(`
-            INSERT OR IGNORE INTO mesh_turn_outbox (
-                id, mesh_id, attempt_id, task_id, kind, payload, status, next_attempt_at_ms, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-        `).run(
-            row.id, row.meshId, row.attemptId ?? null, row.taskId ?? null,
-            row.kind, row.payload ?? '{}', row.nextAttemptAtMs ?? null, row.createdAt, row.updatedAt,
-        );
+        const inserted = insertTurnOutboxRow(this.db, row);
         this.maybeCheckpointWal();
-        return res.changes > 0;
+        return inserted;
     }
 
     /** Due pending outbox rows (status='pending', next_attempt_at_ms NULL or <= nowMs). */
-    listDueTurnOutbox(nowMs: number, meshId?: string): Array<{
-        id: string; meshId: string; attemptId: string | null; taskId: string | null;
-        kind: string; payload: string; attemptCount: number; createdAt: string;
-    }> {
-        const rows = (meshId
-            ? this.db.prepare(`
-                SELECT * FROM mesh_turn_outbox
-                WHERE status = 'pending' AND mesh_id = ? AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
-                ORDER BY created_at ASC
-            `).all(meshId, nowMs)
-            : this.db.prepare(`
-                SELECT * FROM mesh_turn_outbox
-                WHERE status = 'pending' AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
-                ORDER BY created_at ASC
-            `).all(nowMs)) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            id: r.id as string,
-            meshId: r.mesh_id as string,
-            attemptId: r.attempt_id as string | null,
-            taskId: r.task_id as string | null,
-            kind: r.kind as string,
-            payload: r.payload as string,
-            attemptCount: r.attempt_count as number,
-            createdAt: r.created_at as string,
-        }));
+    listDueTurnOutbox(nowMs: number, meshId?: string): DueTurnOutboxRow[] {
+        return selectDueTurnOutbox(this.db, nowMs, meshId);
     }
 
     /** Oldest pending outbox row age in ms (observability: outbox backlog age). */
     oldestPendingTurnOutboxAgeMs(nowMs: number): number | null {
-        const row = this.db.prepare(`
-            SELECT MIN(created_at) AS oldest FROM mesh_turn_outbox WHERE status = 'pending'
-        `).get() as { oldest: string | null } | undefined;
-        if (!row?.oldest) return null;
-        const parsed = Date.parse(row.oldest);
-        return Number.isNaN(parsed) ? null : Math.max(0, nowMs - parsed);
+        return selectOldestPendingTurnOutboxAgeMs(this.db, nowMs);
     }
 
     markTurnOutboxDelivered(id: string, updatedAt: string): void {
-        this.db.prepare(`
-            UPDATE mesh_turn_outbox SET status = 'delivered', updated_at = ? WHERE id = ? AND status = 'pending'
-        `).run(updatedAt, id);
+        updateTurnOutboxDelivered(this.db, id, updatedAt);
         this.maybeCheckpointWal();
     }
 
     /** Record a failed delivery attempt and schedule the retry (or park as 'failed' when no retry remains). */
     markTurnOutboxAttemptFailed(id: string, opts: { updatedAt: string; nextAttemptAtMs?: number | null; terminal?: boolean }): void {
-        if (opts.terminal) {
-            this.db.prepare(`
-                UPDATE mesh_turn_outbox SET status = 'failed', attempt_count = attempt_count + 1, updated_at = ?
-                WHERE id = ? AND status = 'pending'
-            `).run(opts.updatedAt, id);
-        } else {
-            this.db.prepare(`
-                UPDATE mesh_turn_outbox SET attempt_count = attempt_count + 1, next_attempt_at_ms = ?, updated_at = ?
-                WHERE id = ? AND status = 'pending'
-            `).run(opts.nextAttemptAtMs ?? null, opts.updatedAt, id);
-        }
+        updateTurnOutboxAttemptFailed(this.db, id, opts);
         this.maybeCheckpointWal();
     }
 
@@ -3424,38 +3393,15 @@ export class MeshRuntimeStore {
      * ★ REMOVED IN 5c together with `mesh_turn_outbox` itself
      * (docs/design/2026-08-29-seqscribe-outbox-migration.md §5 row 1). It exists
      * only to prove the 5a→5b migration is safe, and has no consumer that
-     * outlives the table.
-     *
-     * ★ Why a `sinceIso` window rather than the whole table: `delivered` rows are
-     * NEVER pruned (there is no `DELETE FROM mesh_turn_outbox` anywhere), so an
-     * all-time enumeration is unbounded AND spans daemon generations the redrive
-     * counterpart cannot possibly have seen. Windowing on `updated_at` — which
-     * `markTurnOutboxDelivered` stamps at the moment of delivery — restricts the
-     * denominator to the same process lifetime the redrive set covers. See the
-     * epoch note in mesh-turn-outbox-coverage-diagnostics.ts.
-     *
-     * Rows with a NULL task_id are excluded: the redrive path cannot re-arm a
-     * task-less entry (`buildRedriveInjection` returns null for one), so counting
-     * it against coverage would assert an impossible obligation.
+     * outlives the table. Rationale for the window + the NULL-task exclusion is
+     * on selectDeliveredTurnOutboxTaskIdsSince.
      */
     listDeliveredTurnOutboxTaskIdsSince(sinceIso: string, limit: number): string[] {
-        const rows = this.db.prepare(`
-            SELECT DISTINCT task_id FROM mesh_turn_outbox
-            WHERE status = 'delivered' AND task_id IS NOT NULL AND updated_at >= ?
-            ORDER BY updated_at ASC
-            LIMIT ?
-        `).all(sinceIso, limit) as Array<{ task_id: string }>;
-        return rows.map(r => r.task_id);
+        return selectDeliveredTurnOutboxTaskIdsSince(this.db, sinceIso, limit);
     }
 
     countTurnOutboxByStatus(meshId?: string): Record<string, number> {
-        const rows = (meshId
-            ? this.db.prepare('SELECT status, COUNT(*) AS n FROM mesh_turn_outbox WHERE mesh_id = ? GROUP BY status').all(meshId)
-            : this.db.prepare('SELECT status, COUNT(*) AS n FROM mesh_turn_outbox GROUP BY status').all()
-        ) as Array<{ status: string; n: number }>;
-        const out: Record<string, number> = {};
-        for (const r of rows) out[r.status] = r.n;
-        return out;
+        return countTurnOutboxRowsByStatus(this.db, meshId);
     }
 
     // ── TURN-LEDGER (Stage 5): held suspensions (pre-consumed waiting_*) ─────
