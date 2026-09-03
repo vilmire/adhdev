@@ -919,7 +919,7 @@ export class SpecCliAdapter implements CliAdapter {
                     questions: [question],
                 }, response).slice(0, -1); // final Enter belongs to the review page below
                 for (const step of questionSteps) {
-                    if (this.assertFocusedClaudeTuiQuestion(question, prompt) === 'completed') {
+                    if (await this.assertFocusedClaudeTuiQuestion(question, prompt) === 'completed') {
                         completedWithoutReview = true;
                         break questionLoop;
                     }
@@ -1929,12 +1929,47 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
-    private assertFocusedClaudeTuiQuestion(
+    private async assertFocusedClaudeTuiQuestion(
         expected: InteractivePrompt['questions'][number],
         prompt: InteractivePrompt,
-    ): 'focused' | 'completed' {
-        const screenText = this.readClaudeTuiSnapshotForAnswer();
-        const focused = readFocusedClaudeTuiQuestion(screenText);
+    ): Promise<'focused' | 'completed'> {
+        // MULTI-QUESTION PAGE REPAINT RACE (live defect, 2026-09-02).
+        //
+        // This used to gate on a SINGLE snapshot. In a multi-question prompt the
+        // keystroke that answers question N is also what navigates the picker
+        // onto question N+1, and that repaint is not instantaneous: the fixed
+        // 180ms inter-key delay in setInteractivePromptResponse races it. On a
+        // slow frame the next iteration's snapshot still showed the PREVIOUS
+        // page, so the assertion fired with expected = the question we were
+        // about to answer and focused = the one still on screen — the observed
+        // "expected <question 2>; focused question is <question 1>" failure.
+        // Because the picker never moves, every retry reproduced it identically:
+        // a permanent deadlock on any 2+ question prompt.
+        //
+        // Single-question prompts never hit this (one iteration, no page
+        // transition), which is why the defect looked multi-question-specific.
+        //
+        // The fix is the same bounded settle-poll assertFocusedClaudeTuiReview
+        // already applies to the review page for this exact class of race: keep
+        // re-snapshotting until the expected page lands, then fall through to
+        // the last frame so a genuinely WRONG screen still fails closed with its
+        // real content. A foreign picker that never becomes the expected page
+        // costs only the bounded budget before it is rejected.
+        const settleTimeoutMs = expected.allowFreeform
+            ? SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
+            : SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
+        const deadline = Date.now() + settleTimeoutMs;
+        let screenText = this.readClaudeTuiSnapshotForAnswer();
+        let focused = readFocusedClaudeTuiQuestion(screenText);
+        while (Date.now() < deadline && !(focused && this.claudeTuiQuestionMatches(expected, focused))) {
+            // Either a stale/foreign page or no picker at all. Both can be
+            // mid-repaint, and the no-picker case is separately resolved as
+            // 'completed' below — so keep sampling rather than deciding on a
+            // single transient frame.
+            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+            screenText = this.readClaudeTuiSnapshotForAnswer();
+            focused = readFocusedClaudeTuiQuestion(screenText);
+        }
         if (focused) {
             if (this.claudeTuiQuestionMatches(expected, focused)) return 'focused';
             throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"; focused question is "${focused.question}")`);
