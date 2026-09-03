@@ -1567,7 +1567,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                         type="button"
                         onClick={() => setTerminalLimit(limit => limit + TASK_DAG_LOAD_MORE_STEP)}
                         title={t('meshGraph.taskDag.hiddenTasks', { count: scoped.hiddenCount })}
-                        className={`rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${meshTheme.isDark
+                        className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${meshTheme.isDark
                             ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                             : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
                     >
