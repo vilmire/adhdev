@@ -43,6 +43,14 @@ export {
     type MainThreadBridgePortLike,
 } from './main-thread-bridge.js';
 export {
+    startTranscriptWorkerHost,
+    type TranscriptMessageChannelLike,
+    type TranscriptWorkerHostHandle,
+    type TranscriptWorkerHostOptions,
+    type TranscriptWorkerLike,
+} from './transcript-worker-host.js';
+export { isTranscriptWorkerEnabled, type TranscriptFlagEnv } from './web-transcript-flag.js';
+export {
     TranscriptWorkerNode,
     type TranscriptWorkerAttachOptions,
     type TranscriptWorkerNodeEnv,

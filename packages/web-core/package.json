@@ -9,14 +9,15 @@
     "./index.css": "./src/index.css",
     "./constants/supported": "./src/constants/supported.ts",
     "./utils/provider-priority": "./src/utils/provider-priority.ts",
-    "./transcript-transport": "./src/transcript-transport/index.ts"
+    "./transcript-transport": "./src/transcript-transport/index.ts",
+    "./transcript-transport/worker-entry": "./src/transcript-transport/transcript-worker-entry.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:browser": "vitest run --config vitest.browser.config.ts"
+    "test:browser": "vitest run --config vitest.browser.config.ts && vitest run --config vitest.browser-unisolated.config.ts"
   },
   "dependencies": {
     "@adhdev/daemon-core": "*",
