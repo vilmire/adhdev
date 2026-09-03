@@ -794,7 +794,8 @@
         "taskDag": {
             "plan": {
                 "depsFailed_one": "선행 {{count}}건 실패",
-                "depsFailed_other": "선행 {{count}}건 실패"
+                "depsFailed_other": "선행 {{count}}건 실패",
+                "openTask": "이 태스크 열기"
             },
             "gate": {
                 "holding_one": "{{count}}개 작업 대기중",

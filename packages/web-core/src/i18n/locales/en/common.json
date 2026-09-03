@@ -794,7 +794,8 @@
         "taskDag": {
             "plan": {
                 "depsFailed_one": "{{count}} upstream failed",
-                "depsFailed_other": "{{count}} upstream failed"
+                "depsFailed_other": "{{count}} upstream failed",
+                "openTask": "Open this task"
             },
             "gate": {
                 "holding_one": "holding {{count}} step",

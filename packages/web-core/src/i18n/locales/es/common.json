@@ -794,7 +794,8 @@
         "taskDag": {
             "plan": {
                 "depsFailed_one": "{{count}} anterior(es) fallaron",
-                "depsFailed_other": "{{count}} anteriores fallaron"
+                "depsFailed_other": "{{count}} anteriores fallaron",
+                "openTask": "Abrir esta tarea"
             },
             "gate": {
                 "holding_one": "reteniendo {{count}} paso",

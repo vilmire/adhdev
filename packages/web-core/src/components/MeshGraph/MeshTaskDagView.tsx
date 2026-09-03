@@ -350,10 +350,23 @@ interface FusedOverlays {
     /** Ghost (not-yet-materialized) steps. `skipReason` and `features` come
      *  straight off MeshGraphNodeView and were previously dropped on the
      *  floor — they are what explains a step that never ran. */
-    planned: Array<{ id: string; ref: string; state: string; skipReason?: string; failureReason?: string; blockedByDeps?: number; conditional?: boolean }>
+    planned: Array<{
+        id: string; ref: string; state: string; skipReason?: string; failureReason?: string
+        blockedByDeps?: number; conditional?: boolean
+        /* The backing queue row, when the graph node has one. A settled step
+         * whose task fell outside the visible window is NOT fused onto a live
+         * card, so before this it rendered as a bare unclickable ghost even
+         * though its taskId was in hand — `fix_ledger` with no way through to
+         * what it actually did. Carrying these three makes the ghost both
+         * readable (live status, why it is held) and openable. */
+        taskId?: string; taskStatus?: string; blockedReason?: string
+        /** Owning graph, so a click can resolve the step without re-scanning. */
+        graphId: string
+        missionId?: string
+    }>
     edges: Array<{ id: string; source: string; target: string; state: import('./blueprintViewModel').BlueprintEdgeState; kind?: string; condition?: import('@adhdev/daemon-core').MeshEdgeConditionView }>
     /** One entry per graph: which canvas ids belong to it, for the cluster hull. */
-    clusters: Array<{ id: string; graphId: string; batchId?: string; status: string; memberIds: string[] }>
+    clusters: Array<{ id: string; graphId: string; batchId?: string; status: string; memberIds: string[]; missionId?: string }>
 }
 
 /** Gate state → visual, mirrored from the retired per-graph view. */
@@ -395,6 +408,11 @@ function buildFusedOverlays(graphs: MeshGraphView[], visibleTaskIds: Set<string>
                 id,
                 ref: node.ref || node.nodeId.slice(0, 8),
                 state: node.state,
+                graphId: graph.graphId,
+                ...(graph.missionId ? { missionId: graph.missionId } : {}),
+                ...(node.taskId ? { taskId: node.taskId } : {}),
+                ...(node.taskStatus ? { taskStatus: node.taskStatus } : {}),
+                ...(node.blockedReason ? { blockedReason: node.blockedReason } : {}),
                 ...(node.skipReason ? { skipReason: node.skipReason } : {}),
                 ...(node.failureReason ? { failureReason: node.failureReason } : {}),
                 // C3-derived: which predecessors failed, so this step can never
@@ -425,6 +443,7 @@ function buildFusedOverlays(graphs: MeshGraphView[], visibleTaskIds: Set<string>
             ...(typeof (graph as { batchId?: string }).batchId === 'string' && (graph as { batchId?: string }).batchId ? { batchId: (graph as { batchId?: string }).batchId } : {}),
             status: graph.status,
             memberIds: [...canvasIdByGraphNode.values()],
+            ...(graph.missionId ? { missionId: graph.missionId } : {}),
         })
     }
     return overlays
@@ -521,10 +540,17 @@ function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
     const { t } = useTranslation('common')
     const { overlay, theme } = data
     const settled = overlay.state === 'completed' || overlay.state === 'skipped' || overlay.state === 'cancelled'
+    /* Openable steps are the ones with a backing queue row. They must LOOK
+     * different: a settled ghost at opacity-50 with no cursor affordance is
+     * exactly the "물음표" card — the user cannot tell it is a door. */
+    const openable = Boolean(overlay.taskId)
     return (
         <div
-            className={`rounded-xl border border-dashed px-3 py-2 ${settled ? 'opacity-50' : ''} ${theme.isDark ? 'border-slate-400/30 bg-white/[0.02] text-slate-300' : 'border-slate-300 bg-white/70 text-slate-600'}`}
+            className={`rounded-xl border border-dashed px-3 py-2 ${settled && !openable ? 'opacity-50' : settled ? 'opacity-80' : ''} ${openable ? 'cursor-pointer transition-colors hover:border-solid' : ''} ${theme.isDark
+                ? `border-slate-400/30 bg-white/[0.02] text-slate-300 ${openable ? 'hover:border-sky-400/60 hover:bg-sky-500/10' : ''}`
+                : `border-slate-300 bg-white/70 text-slate-600 ${openable ? 'hover:border-sky-400 hover:bg-sky-50' : ''}`}`}
             style={{ width: PLAN_NODE_WIDTH, minHeight: PLAN_NODE_HEIGHT }}
+            title={openable ? t('meshGraph.taskDag.plan.openTask') : undefined}
         >
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
@@ -536,6 +562,19 @@ function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
                 {overlay.conditional && <span className="shrink-0 normal-case opacity-90" title={t('meshGraph.taskDag.edge.conditional')}>· if</span>}
             </div>
             <div className="mt-1 truncate text-2xs font-medium" title={overlay.ref}>{overlay.ref}</div>
+            {/* The queue row's LIVE status, when it differs from the graph
+               node's state — the two genuinely diverge mid-flight, and the
+               step showing only its plan-side state is how a running task
+               reads as an idle ghost. */}
+            {overlay.taskStatus && overlay.taskStatus !== overlay.state && (
+                <div className="mt-0.5 truncate text-4xs opacity-70">{overlay.taskStatus}</div>
+            )}
+            {/* Why the row is held. Present on the view, drawn nowhere. */}
+            {overlay.blockedReason && (
+                <div className={`mt-0.5 truncate text-4xs ${theme.isDark ? 'text-amber-300' : 'text-amber-600'}`} title={overlay.blockedReason}>
+                    {overlay.blockedReason}
+                </div>
+            )}
             {overlay.skipReason && (
                 <div className="mt-0.5 truncate text-4xs opacity-70" title={overlay.skipReason}>{overlay.skipReason}</div>
             )}
@@ -562,13 +601,13 @@ const HULL_LABEL_CLEARANCE = 24
 /** Height of the hull's label text drawn ABOVE the frame's top edge. */
 const HULL_LABEL_BAND = 26
 
-type HullFlowNode = Node<Record<string, unknown> & { label: string; status: string; width: number; height: number; theme: MeshGraphTheme }, 'clusterHull'>
+type HullFlowNode = Node<Record<string, unknown> & { label: string; subLabel?: string; status: string; width: number; height: number; theme: MeshGraphTheme }, 'clusterHull'>
 
 /** Faint bounding frame + label naming which orchestration graph/batch a chain
  *  belongs to — without it, chains from different plans float indistinguishably
  *  on one plane. Non-interactive; sits behind every card (zIndex). */
 function ClusterHullNode({ data }: NodeProps<HullFlowNode>) {
-    const { label, status, width, height, theme } = data
+    const { label, subLabel, status, width, height, theme } = data
     const tone = status === 'completed'
         ? (theme.isDark ? 'border-emerald-400/15 bg-emerald-500/[0.03]' : 'border-emerald-300/60 bg-emerald-50/40')
         : status === 'failed' || status === 'compensation_required'
@@ -580,8 +619,16 @@ function ClusterHullNode({ data }: NodeProps<HullFlowNode>) {
                     : (theme.isDark ? 'border-sky-400/20 bg-sky-500/[0.03]' : 'border-sky-300/60 bg-sky-50/40')
     return (
         <div className={`pointer-events-none rounded-2xl border border-dashed ${tone}`} style={{ width, height }}>
-            <div className={`absolute -top-0.5 left-3 -translate-y-full pb-1 text-4xs font-semibold uppercase tracking-[0.18em] ${theme.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                {label} · {status}
+            {/* A mission title is prose and must not be letter-spaced ALL-CAPS;
+                the id subtitle keeps the old technical styling. Capped so a
+                long title cannot outrun its own hull. */}
+            <div className={`absolute -top-0.5 left-3 -translate-y-full pb-1 text-4xs font-semibold ${theme.isDark ? 'text-slate-400' : 'text-slate-500'}`}
+                style={{ maxWidth: Math.max(120, width - 24) }}>
+                <span className={`inline-block max-w-full truncate align-bottom ${subLabel ? '' : 'uppercase tracking-[0.18em]'}`} title={subLabel ? `${label} · ${subLabel}` : label}>
+                    {label}
+                </span>
+                <span className="uppercase tracking-[0.18em] opacity-80"> · {status}</span>
+                {subLabel && <span className="ml-1 font-normal uppercase tracking-[0.14em] opacity-55">{subLabel}</span>}
             </div>
         </div>
     )
@@ -620,6 +667,7 @@ type CollapsedGraphFlowNode = Node<Record<string, unknown> & {
     timeLabel: string
     theme: MeshGraphTheme
     onToggle: (graphId: string) => void
+    missionTitle?: string
 }, 'collapsedGraph'>
 
 /**
@@ -629,7 +677,8 @@ type CollapsedGraphFlowNode = Node<Record<string, unknown> & {
  */
 function CollapsedGraphNode({ data }: NodeProps<CollapsedGraphFlowNode>) {
     const { t } = useTranslation('common')
-    const { summary, timeLabel, theme, onToggle } = data
+    const { summary, timeLabel, theme, onToggle, missionTitle } = data
+    const graphRef = summary.batchId || summary.graphId.slice(0, 8)
     const tone = summary.status === 'failed'
         ? (theme.isDark ? 'border-rose-400/30 bg-rose-500/[0.07] text-rose-200' : 'border-rose-200 bg-rose-50/70 text-rose-700')
         : (theme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300' : 'border-slate-200 bg-slate-50/80 text-slate-600')
@@ -645,7 +694,7 @@ function CollapsedGraphNode({ data }: NodeProps<CollapsedGraphFlowNode>) {
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <span className="flex items-center gap-1.5 truncate text-2xs font-medium">
                 <span className="opacity-60">▸</span>
-                <span className="truncate">{summary.batchId || summary.graphId.slice(0, 8)}</span>
+                <span className="truncate" title={missionTitle ? `${missionTitle} · ${graphRef}` : graphRef}>{missionTitle || graphRef}</span>
                 <span className="shrink-0 opacity-70">· {summary.status}</span>
             </span>
             <span className="flex items-center gap-2 text-4xs opacity-70">
@@ -1180,7 +1229,18 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 type: 'clusterHull' as const,
                 position: { x: minX - HULL_PADDING, y: minY - HULL_PADDING - HULL_LABEL_CLEARANCE },
                 data: {
-                    label: cluster.batchId || cluster.graphId.slice(0, 8),
+                    /* The hull header used to be a raw `batchId || graphId[0:8]`
+                     * — an uppercase UUID fragment nobody can read, sitting on
+                     * top of the canvas as if it were a title. The graph object
+                     * carries no name field, but it does carry `missionId`, and
+                     * this component already receives `missionTitles` for the
+                     * task cards. Prefer that human title; keep the id as the
+                     * subtitle so the technical handle stays available. */
+                    label: (cluster.missionId ? missionTitles?.[cluster.missionId] : undefined)
+                        || cluster.batchId || cluster.graphId.slice(0, 8),
+                    subLabel: (cluster.missionId && missionTitles?.[cluster.missionId])
+                        ? (cluster.batchId || cluster.graphId.slice(0, 8))
+                        : undefined,
                     status: cluster.status,
                     width: (maxX - minX) + HULL_PADDING * 2,
                     height: (maxY - minY) + HULL_PADDING * 2 + HULL_LABEL_CLEARANCE,
@@ -1215,7 +1275,11 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     position: positions.get(plan.id)!,
                     data: { overlay: plan, theme: meshTheme },
                     draggable: false,
-                    selectable: false,
+                    // Selectable ONLY when the step has a backing queue row to
+                    // open. A truly not-yet-materialized step has nothing to
+                    // show, and a card that highlights on click and then does
+                    // nothing reads as broken — worse than an inert ghost.
+                    selectable: Boolean(plan.taskId),
                 })),
             /* Condition cards ride the midpoint of their own edge. They are
                NOT ELK children: giving them a node would make ELK reserve a
@@ -1265,12 +1329,18 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                         timeLabel: timelineLabels.get(summary.graphId)?.timeLabel ?? '',
                         theme: meshTheme,
                         onToggle: toggleGraphExpanded,
+                        // Same reading as the hull: a mission name beats a
+                        // UUID fragment, and the collapsed chip is the FIRST
+                        // thing shown for a settled graph.
+                        ...(summary.missionId && missionTitles?.[summary.missionId]
+                            ? { missionTitle: missionTitles[summary.missionId] }
+                            : {}),
                     },
                     draggable: false,
                     selectable: false,
                 })),
         ]
-    }, [fused, meshTheme, positions, collapsedGraphs, timelineLabels, toggleGraphExpanded])
+    }, [fused, meshTheme, positions, collapsedGraphs, timelineLabels, toggleGraphExpanded, missionTitles])
 
     const flowEdges = useMemo<Edge[]>(() => {
         if (!positions) return []
@@ -1503,13 +1573,29 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             onGateOpen?.(overlay.graph, overlay.nodeId, overlay.gate)
             return
         }
+        /* A planned step backed by a real queue row opens THAT row — the same
+         * detail the live card would open. Before this the step was inert on
+         * every viewport (`selectable: false` + an early return), so a
+         * completed step that had scrolled out of the terminal window was a
+         * dead end: a two-word ref and nowhere to go. Resolved against the
+         * unscoped `tasks`, not `dag`/`scoped`, precisely because the
+         * interesting case is the task the window is hiding. */
+        if (node.type === 'planNode') {
+            const overlay = (node.data as unknown as { overlay: FusedOverlays['planned'][number] }).overlay
+            if (!overlay.taskId) return
+            const task = tasks.find(candidate => candidate.id === overlay.taskId)
+            if (!task) return
+            if (onTaskOpen) onTaskOpen(task)
+            else setSelectedTaskId(current => (current === task.id ? null : task.id))
+            return
+        }
         if (node.type !== 'taskNode') return
         if (onTaskOpen) {
             onTaskOpen(node.data.dagNode.task)
             return
         }
         setSelectedTaskId(current => (current === node.id ? null : node.id))
-    }, [onGateOpen, onTaskOpen])
+    }, [onGateOpen, onTaskOpen, tasks])
 
     if (dag.nodes.length === 0 && fused.gates.length === 0 && fused.planned.length === 0) {
         return (

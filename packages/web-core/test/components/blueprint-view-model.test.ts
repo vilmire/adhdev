@@ -28,6 +28,7 @@ import {
     resolveTaskPredictedSlot,
     routePreviewKey,
     routePreviewNextSlotLabel,
+    summarizeCollapsedGraph,
 } from '../../src/components/MeshGraph/blueprintViewModel'
 
 describe('blueprint graph pagination', () => {
@@ -389,5 +390,28 @@ describe('orderTasksForElk', () => {
         const out = orderTasksForElk(nodes, timeKey)
         expect(out).toHaveLength(3)
         expect([...out.map(n => n.id)].sort()).toEqual(['a', 'b', 'c'])
+    })
+})
+
+/* A collapsed graph is the FIRST thing shown for a settled graph, and it used
+ * to title itself with a raw UUID fragment. The summary now carries missionId
+ * so the chip can resolve a human title; without this the id is all there is. */
+describe('summarizeCollapsedGraph — mission identity', () => {
+    const base = {
+        graphId: 'A79AE27B-1EF7-401C-B176-890119B27132',
+        status: 'completed',
+        nodes: [{ nodeId: 'n1' }, { nodeId: 'n2' }],
+        gates: [],
+        createdAt: '2026-09-03T00:00:00.000Z',
+    }
+
+    it('carries missionId through so the chip can title itself with the mission name', () => {
+        const summary = summarizeCollapsedGraph({ ...base, missionId: 'mission_a' } as any)
+        expect(summary.missionId).toBe('mission_a')
+        expect(summary.graphId).toBe(base.graphId)
+    })
+
+    it('omits missionId entirely when the graph has none — the chip then falls back to the id', () => {
+        expect('missionId' in summarizeCollapsedGraph(base as any)).toBe(false)
     })
 })

@@ -310,6 +310,9 @@ export interface CollapsedGraphSummary {
     gateCount: number
     /** Settled-at (or created-at) epoch ms, so the chip can carry a time too. */
     timestamp: number
+    /** Lets the chip title itself with the mission name instead of a raw
+     *  UUID fragment — a collapsed graph is the FIRST thing a reader sees. */
+    missionId?: string
 }
 
 export function summarizeCollapsedGraph(graph: MeshGraphView): CollapsedGraphSummary {
@@ -320,6 +323,7 @@ export function summarizeCollapsedGraph(graph: MeshGraphView): CollapsedGraphSum
         nodeCount: graph.nodes.length,
         gateCount: graph.gates.length,
         timestamp: blueprintGraphTimelineTime(graph),
+        ...(graph.missionId ? { missionId: graph.missionId } : {}),
     }
 }
 
