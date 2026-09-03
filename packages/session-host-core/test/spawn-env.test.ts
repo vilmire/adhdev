@@ -104,3 +104,37 @@ test('sanitizeSpawnEnv never mutates process.env itself', () => {
 
   assert.deepEqual({ ...process.env }, before)
 })
+
+// ★Terminal geometry must never be inherited. COLUMNS/LINES are advisory
+// overrides a TUI trusts in preference to the real TTY size, but the PTY is
+// sized from the adapter's own geometry — so an inherited value describes some
+// unrelated terminal. When they disagree the child lays out for the phantom
+// width while the VT renders at the real one, and in-place repaints land on the
+// wrong row: content fragments across the buffer with a blank gap between the
+// stale head and the live tail (observed on antigravity-cli as a "Running
+// command" spinner split into body/footer 28 blank rows apart).
+test('sanitizeSpawnEnv strips inherited terminal geometry (COLUMNS/LINES)', () => {
+  const env = sanitizeSpawnEnv({
+    HOME: '/tmp/home',
+    COLUMNS: '17',
+    LINES: '30',
+  })
+
+  assert.equal(env.COLUMNS, undefined)
+  assert.equal(env.LINES, undefined)
+  // Unrelated vars are untouched — this strip is narrow.
+  assert.equal(env.HOME, '/tmp/home')
+})
+
+// Explicit overrides are stripped too, exactly like NO_COLOR/CODEX_* above. No
+// provider spec sets these (all shipped specs verified), and letting one pin a
+// geometry that contradicts the PTY would reintroduce the same split.
+test('sanitizeSpawnEnv strips terminal geometry supplied via overrides', () => {
+  const env = sanitizeSpawnEnv(
+    { HOME: '/tmp/home' },
+    { COLUMNS: '17', LINES: '30' },
+  )
+
+  assert.equal(env.COLUMNS, undefined)
+  assert.equal(env.LINES, undefined)
+})
