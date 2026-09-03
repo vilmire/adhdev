@@ -104,9 +104,15 @@ export { buildConversations } from './components/dashboard/buildConversations'
 // (§8 unit 4b) Transcript replica delivery into the chat pane. Exported so the
 // cloud assembly — which owns the P2P/worker transport — can route a verified
 // snapshot to whichever controllers are warm, without reaching into the module.
+// (§8 unit 4c) …and the reverse direction: the cloud assembly reads which
+// sessions are actually being displayed, so it can declare exactly those as
+// transcript interest. Derived from the same registry the delivery above
+// targets, so the grant and the delivery cannot drift apart.
 export {
     applyTranscriptReplicaSnapshotToControllers,
+    collectRetainedTranscriptSessionInterest,
     reportTranscriptReplicaFallbackForSession,
+    subscribeTranscriptSessionInterest,
 } from './components/dashboard/session-chat-tail-controller'
 export type { ActiveConversation } from './components/dashboard/types'
 export { isCliConv, isAcpConv } from './components/dashboard/types'

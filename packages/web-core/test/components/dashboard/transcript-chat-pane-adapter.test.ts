@@ -5,7 +5,10 @@ import {
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
-import { mapTranscriptSnapshotToChatTailUpdate } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
+import {
+  buildTranscriptReadSourceAttributes,
+  mapTranscriptSnapshotToChatTailUpdate,
+} from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 
 function buildSnapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
   return {
@@ -415,5 +418,63 @@ describe('SessionChatTailController transcript replica integration', () => {
     // liveMessages untouched — never merges two sources by clearing on fallback.
     expect(result.liveMessages).toHaveLength(1)
     expect(result.liveMessages[0]).toMatchObject({ content: 'hi' })
+  })
+})
+
+/**
+ * (§8 unit 4c) Making the §5.6 read-source decision observable.
+ *
+ * The field was computed and stored by units 4b/5 but read by NOTHING, so
+ * replica and legacy rendered identically — there was no way, short of a
+ * debugger, to tell whether the replica lane was feeding the pane or had
+ * silently fallen back to legacy. Live verification of the rollout depends
+ * entirely on this readout, so it is pinned rather than left to the component.
+ */
+describe('buildTranscriptReadSourceAttributes (unit 4c)', () => {
+  it('always reports the source, so a pane is never unlabelled', () => {
+    expect(buildTranscriptReadSourceAttributes({ transcriptReadSource: 'legacy' }))
+      .toEqual({ 'data-transcript-read-source': 'legacy' })
+    expect(buildTranscriptReadSourceAttributes({ transcriptReadSource: 'replica' }))
+      .toEqual({ 'data-transcript-read-source': 'replica' })
+  })
+
+  it('★ carries the fallback reason, which is what distinguishes "never tried" from "fell back"', () => {
+    expect(buildTranscriptReadSourceAttributes({
+      transcriptReadSource: 'legacy',
+      transcriptFallbackReason: 'no_node',
+    })).toEqual({
+      'data-transcript-read-source': 'legacy',
+      'data-transcript-fallback-reason': 'no_node',
+    })
+  })
+
+  it('OMITS the reason when there is none — absence is meaningful, not an empty string', () => {
+    const attributes = buildTranscriptReadSourceAttributes({ transcriptReadSource: 'legacy' })
+    expect('data-transcript-fallback-reason' in attributes).toBe(false)
+  })
+
+  it('flags a stale replica tail (design §5.5), and omits the flag when fresh', () => {
+    expect(buildTranscriptReadSourceAttributes({ transcriptReadSource: 'replica', stale: true }))
+      .toHaveProperty('data-transcript-stale', 'true')
+    expect('data-transcript-stale' in buildTranscriptReadSourceAttributes({
+      transcriptReadSource: 'replica',
+      stale: false,
+    })).toBe(false)
+  })
+
+  it('★ accepts a controller snapshot directly, so the pane cannot drift from the controller', () => {
+    // Structural: the helper's input must stay assignable from the real
+    // snapshot shape, or the pane would need a hand-maintained mapping that
+    // could silently stop tracking the controller's own fields.
+    const controller = getOrCreateSessionChatTailController({
+      manager: new SubscriptionManager(),
+      daemonId: 'daemon-attr',
+      sessionId: 'session-attr',
+      subscriptionKey: 'daemon:daemon-attr:session:session-attr',
+      sendData: vi.fn(() => true),
+    })
+    expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
+      .toEqual({ 'data-transcript-read-source': 'legacy' })
+    resetSessionChatTailControllersForTest()
   })
 })
