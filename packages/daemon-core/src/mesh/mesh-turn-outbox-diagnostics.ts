@@ -34,6 +34,13 @@ import {
     getOutboxEnqueueBlockedCount,
     type OutboxEnqueueBlockReason,
 } from './mesh-turn-outbox-enqueue-policy.js';
+import {
+    resolveOutboxDrainPolicy,
+    getOutboxDrainTriggersSuppressed,
+    getOutboxResidueObservations,
+    REQUIRED_CLEAN_SWEEPS,
+    type OutboxDrainDisableReason,
+} from './mesh-turn-outbox-drain-policy.js';
 
 /** Local-only snapshot of the turn outbox's redrive-backstop health. */
 export interface TurnOutboxDiagnostics {
@@ -65,6 +72,43 @@ export interface TurnOutboxDiagnostics {
      * block (>0 and rising) from an idle daemon (0) — a zero backlog alone cannot.
      */
     enqueueSuppressed: number;
+    /**
+     * Stage 5b-2: whether drain triggers ②(reconcile tick) and ③(boot) are
+     * currently disarmed. Trigger ①(commit-time) is deliberately NOT covered —
+     * it stays armed until 5c as the residual flush path
+     * (mesh-turn-outbox-drain-policy.ts).
+     */
+    drainTriggersDisabled: boolean;
+    /**
+     * Fixed-vocabulary reason for the drain-trigger state. Never carries
+     * identifiers.
+     *
+     * ★ The two refusal reasons answer different operator questions, which is why
+     * they are not collapsed: `enqueue_active` means 5b-1 was skipped (action:
+     * apply the enqueue block), `residue_pending` means the block is on but the
+     * backlog has not been observed empty long enough yet (action: wait).
+     */
+    drainDisableReason: OutboxDrainDisableReason;
+    /**
+     * Consecutive sweeps that observed an empty backlog, capped at the
+     * requirement. Read alongside `drainRequiredCleanSweeps`, this is the
+     * progress bar for a `residue_pending` refusal.
+     */
+    drainCleanSweeps: number;
+    /** Consecutive clean sweeps required before the disarm engages. */
+    drainRequiredCleanSweeps: number;
+    /**
+     * Sweeps that found residue and reset the streak. A rising value while the
+     * flag is set means rows keep appearing — i.e. something is still producing,
+     * which is the state `enqueue_active` exists to catch.
+     */
+    drainResidueObservations: number;
+    /**
+     * Drain triggers this process suppressed. Makes "②③ fired 0 times"
+     * observable rather than merely asserted — a zero delivered-count also
+     * describes pumps that ran and found nothing.
+     */
+    drainTriggersSuppressed: number;
 }
 
 /**
@@ -79,6 +123,7 @@ export function readTurnOutboxDiagnostics(nowMs: number = Date.now()): TurnOutbo
     // load would report a stale policy after a flag flip, which is precisely when
     // someone is reading this surface.
     const policy = resolveOutboxEnqueuePolicy(process.env);
+    const drainPolicy = resolveOutboxDrainPolicy(process.env);
     return {
         oldestPendingAgeMs: metrics.outboxOldestPendingAgeMs,
         byStatus: metrics.outboxByStatus,
@@ -86,5 +131,11 @@ export function readTurnOutboxDiagnostics(nowMs: number = Date.now()): TurnOutbo
         enqueueBlocked: policy.blocked,
         enqueueBlockReason: policy.reason,
         enqueueSuppressed: getOutboxEnqueueBlockedCount(),
+        drainTriggersDisabled: drainPolicy.disabled,
+        drainDisableReason: drainPolicy.reason,
+        drainCleanSweeps: drainPolicy.cleanSweeps,
+        drainRequiredCleanSweeps: REQUIRED_CLEAN_SWEEPS,
+        drainResidueObservations: getOutboxResidueObservations(),
+        drainTriggersSuppressed: getOutboxDrainTriggersSuppressed(),
     };
 }
