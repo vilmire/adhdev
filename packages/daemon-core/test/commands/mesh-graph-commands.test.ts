@@ -141,10 +141,64 @@ describe('mesh graph dashboard commands', () => {
     });
 
     it('fails soft on missing args', async () => {
-        for (const name of ['mesh_graph_overview', 'mesh_gate_claim', 'mesh_gate_release', 'mesh_gate_abandon'] as const) {
+        for (const name of ['mesh_graph_overview', 'mesh_gate_claim', 'mesh_gate_release', 'mesh_gate_abandon', 'mesh_task_output'] as const) {
             const res: any = await meshGraphCommandHandlers[name](ctx, {});
             expect(res.success).toBe(false);
             expect(typeof res.error).toBe('string');
         }
+    });
+
+    // Task-detail completion info (docs/design/2026-09-02-blueprint-followups.md
+    // §1) — finalSummary/providerType read path over getLatestOutput.
+    describe('mesh_task_output', () => {
+        it('returns output:null when the task has no persisted output', async () => {
+            const mesh = meshId('output-none');
+            const res: any = await meshGraphCommandHandlers.mesh_task_output(ctx, { meshId: mesh, taskId: randomUUID() });
+            expect(res.success).toBe(true);
+            expect(res.output).toBeNull();
+        });
+
+        it('projects finalSummary and providerType out of the latest persisted envelope', async () => {
+            const mesh = meshId('output-hit');
+            const taskId = randomUUID();
+            const gs = MeshRuntimeStore.getInstance().graphStore();
+            const now = new Date().toISOString();
+            const envelope = {
+                final_summary: 'Landed the fix and verified with the repro script.',
+                worker_result: 'ok',
+                source: { provider_type: 'claude-cli', session_id: 'sess_1' },
+            };
+            gs.insertOutput({
+                taskId, version: 1, meshId: mesh, attempt: 1, status: 'completed',
+                envelopeJson: JSON.stringify(envelope), digest: 'digest1', createdAt: now,
+            });
+            const res: any = await meshGraphCommandHandlers.mesh_task_output(ctx, { meshId: mesh, taskId });
+            expect(res.success).toBe(true);
+            expect(res.output.finalSummary).toBe(envelope.final_summary);
+            expect(res.output.providerType).toBe('claude-cli');
+            expect(res.output.version).toBe(1);
+        });
+
+        it('returns the latest version when a task has multiple output rows', async () => {
+            const mesh = meshId('output-latest');
+            const taskId = randomUUID();
+            const gs = MeshRuntimeStore.getInstance().graphStore();
+            const now = new Date().toISOString();
+            gs.insertOutput({
+                taskId, version: 1, meshId: mesh, attempt: 1, status: 'completed',
+                envelopeJson: JSON.stringify({ final_summary: 'first attempt', source: {} }),
+                digest: 'd1', createdAt: now,
+            });
+            gs.insertOutput({
+                taskId, version: 2, meshId: mesh, attempt: 2, status: 'completed',
+                envelopeJson: JSON.stringify({ final_summary: 'second attempt', source: { provider_type: 'codex-cli' } }),
+                digest: 'd2', createdAt: now,
+            });
+            const res: any = await meshGraphCommandHandlers.mesh_task_output(ctx, { meshId: mesh, taskId });
+            expect(res.success).toBe(true);
+            expect(res.output.version).toBe(2);
+            expect(res.output.finalSummary).toBe('second attempt');
+            expect(res.output.providerType).toBe('codex-cli');
+        });
     });
 });
