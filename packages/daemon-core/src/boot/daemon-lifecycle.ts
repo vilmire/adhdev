@@ -89,7 +89,11 @@ import {
     configureMeshReadModel,
     pruneStaleConsumersAtBoot,
 } from '../seqscribe/mesh-read-model.js';
-import { configureTranscriptProjection } from '../seqscribe/transcript-publisher.js';
+import {
+    activeTranscriptProjectionService,
+    configureTranscriptProjection,
+} from '../seqscribe/transcript-publisher.js';
+import { transcriptParityCounters } from '../seqscribe/transcript-parity.js';
 import { resolveJsonlSourcePath } from '../providers/spec/native-history-executor.js';
 import { createLiveTranscriptPublisher } from '../seqscribe/transcript-publish-runtime.js';
 import { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
@@ -747,6 +751,19 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 // live counter and the status-frame dedup keeps working.
                 const dual = meshDualWriteCounters();
                 const parity = meshParityCounters();
+                // §8 unit 2. The publisher runs live here (step 10a arms
+                // `configureTranscriptProjection` against the real node), and
+                // `createLiveTranscriptPublisher` runs a parity self-check on
+                // every append — but until this call passed them, BOTH counter
+                // sets stayed process-local and `transcriptParityRan` reported
+                // a permanent `false`. That is a false NEGATIVE, not a
+                // missing feature: the allow-listed `transcript*` fields
+                // already exist all the way through `reporter.ts` and the
+                // server's `daemon-status.ts` sanitizer, so this fills
+                // existing fields rather than widening either allow-list.
+                const transcriptService = activeTranscriptProjectionService();
+                const transcriptCounters = transcriptService?.getCounters() ?? null;
+                const transcriptParity = transcriptParityCounters();
                 // ★ Read the collector's PUBLISHED snapshot — never
                 // `node.stats()`, and never `collector.collect()` either.
                 //
@@ -790,6 +807,31 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                         missingInShadow: parity.missingInShadow,
                         extraInShadow: parity.extraInShadow,
                         fieldMismatch: parity.fieldMismatch,
+                    },
+                    // §8 unit 2, exactly mirroring the two blocks above.
+                    // `active` follows the SERVICE, not the mode: mode
+                    // `shadow` still publishes, so keying off the mode would
+                    // read `false` on a daemon that is actively appending.
+                    ...(transcriptCounters
+                        ? {
+                              transcript: {
+                                  active: true,
+                                  published: transcriptCounters.published,
+                                  publishFailed: transcriptCounters.publishFailed,
+                                  deduped: transcriptCounters.deduped,
+                                  oversized: transcriptCounters.oversized,
+                                  dropped: transcriptCounters.dropped,
+                              },
+                          }
+                        : {}),
+                    // persistentMismatches is LOCAL-ONLY by the allow-lists in
+                    // reporter.ts / daemon-status.ts — passed here so
+                    // `get_status_metadata` can serve the Phase 4 promotion
+                    // gate, and dropped before the status frame leaves.
+                    transcriptParity: {
+                        runs: transcriptParity.runs,
+                        mismatches: transcriptParity.mismatches,
+                        persistentMismatches: transcriptParity.persistentMismatches,
                     },
                 });
             } catch (error) {
