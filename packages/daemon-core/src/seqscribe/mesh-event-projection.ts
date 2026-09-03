@@ -150,6 +150,21 @@ export const PROJECTED_PAYLOAD_KEYS: readonly string[] = [
     // Stage 4B: strictly boolean at every producer (mesh-termination-bridge,
     // router-worktree-cleanup) — the intentional/accidental stop discriminator.
     'intentional',
+    // ── Stage 5a-1 addition (2026-09-03) ───────────────────────────────────
+    // `weak` — the completion-evidence strength discriminator, written by exactly
+    // one producer (mesh-event-forwarding's terminal ledger append) as the literal
+    // boolean `true`, from a function-entry frozen read of isWeakCompletionEvidence.
+    // It is a VERDICT ABOUT evidence, not the evidence itself: the free text that
+    // produced it (finalSummary, workerResult, completionDiagnostic bodies) stays
+    // off the topic, and no part of it is recoverable from this bit.
+    //
+    // ★ Do not confuse with `evidence` / `evidenceLevel`, which are NOT allow-listed:
+    // `evidence` is a nested object holding composed text (refused by
+    // isProjectableScalar anyway), and `evidenceLevel` is re-resolved after the
+    // snapshot is taken, so it is deliberately not the same predicate. The redrive
+    // consumer (Stage 5a-2) needs the frozen verdict to rebuild the pending-event
+    // fingerprint the outbox drain builds; evidenceLevel would give a different one.
+    'weak',
     // Counters
     'attempt',
     'attemptCount',
