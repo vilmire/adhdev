@@ -1180,6 +1180,18 @@ export {
   type MeshParityResult,
   type ParityLedgerEntry,
 } from './seqscribe/mesh-parity.js';
+// §8 unit 2: transcript publisher + parity counters. Exported so the cloud
+// daemon's status projection can pass them to `summarizeSeqscribeStats` the
+// same way it already passes the mesh-axis `dualWrite`/`parity` counters.
+export {
+  transcriptParityCounters,
+  __resetTranscriptParityForTests,
+  type TranscriptParityCounters,
+} from './seqscribe/transcript-parity.js';
+export {
+  activeTranscriptProjectionService,
+  type TranscriptProjectionCounters,
+} from './seqscribe/transcript-publisher.js';
 // Phase 4 Stage 3: fleet.status parity evidence + future-consumer readiness.
 export {
   configureFleetStatusParity,
