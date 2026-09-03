@@ -42,7 +42,7 @@
  * guarantee entirely. `REDRIVE_CONSUMER` is a distinct namespace with no `#`
  * or `:` suffix form, and `assertRedriveConsumerNameIsPruneSafe` pins it.
  *
- * ── Failure handling, and where quarantine will attach (5a-4) ─────────────
+ * ── Failure handling ────────────────────────────────────────────────────
  * `onEntry` is at-least-once with a cursor that advances ONLY after the callback
  * resolves (SPEC §9); a throw leaves the cursor put and retries with backoff. We
  * therefore let an injection failure propagate: not advancing is what makes the
@@ -56,11 +56,32 @@
  * a WARN for the "permanent failure" signal that the outbox's `failed` park used
  * to provide (§11-3, decided 2026-09-03).
  *
- * Quarantine itself is 5a-4 and is NOT implemented here. What this file owes it
- * is a shape it can attach to, so the counters below (`consecutiveFailures`,
- * `lastFailureAt`) are tracked per mesh from the start: quarantine becomes a
- * policy read over that state plus a decision to skip-and-advance, rather than a
- * refactor of the delivery path.
+ * ── Quarantine (5a-4) ───────────────────────────────────────────────────────
+ * A mesh enters quarantine after `QUARANTINE_FAILURE_THRESHOLD` (proposed
+ * default: 5, see the constant) CONSECUTIVE `consumeRedriveEntry` failures.
+ * While quarantined, `consumeRedriveEntry` returns `'quarantined'` instead of
+ * throwing — the caller (mesh-terminal-redrive-consumer.ts) treats that the
+ * same as a skip: the `onEntry` callback resolves, the durable cursor ADVANCES
+ * past the entry, and the §7.6 archive floor releases on the next drain pass.
+ * The unresolved notification is not re-armed by this path while quarantined —
+ * it relies on the SAME dual-drive property that makes 5a safe at all: the
+ * legacy outbox drain (or, post-5b, backfill/parity) is the other independent
+ * path to the same terminal, so quarantining the redrive leg alone does not
+ * silently lose the notification.
+ *
+ * "Auto-resolving": this is NOT a permanent park like the outbox's `failed`
+ * status (which needs a human to clear). Once `QUARANTINE_COOLDOWN_MS` has
+ * elapsed since the failure that triggered quarantine, the NEXT entry is let
+ * through for a real attempt (half-open probe, one entry only). Success clears
+ * quarantine (`consecutiveFailures` resets to 0, same as any other success);
+ * failure re-arms quarantine with a fresh cooldown window. No operator action
+ * is required either way — this is what makes it strictly better than WARN,
+ * which only flagged the leak without stopping it.
+ *
+ * Quarantine state is in-memory only (same as the rest of `RedriveMeshState`),
+ * so a daemon restart also clears it — consistent with "auto-resolving": a
+ * restarted process starts each mesh's failure streak at zero rather than
+ * inheriting a pre-restart quarantine that may no longer apply.
  */
 
 import { LOG } from '../logging/logger.js';
@@ -93,7 +114,29 @@ export const REDRIVE_ENV = 'ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE';
  */
 export const REDRIVEN_TERMINAL_KINDS: readonly string[] = ['task_completed', 'task_failed'];
 
-/** Per-mesh delivery state. Read by the 5a-3 coverage metrics and, later, by 5a-4. */
+/**
+ * Consecutive-failure threshold that quarantines a mesh's redrive leg (5a-4).
+ *
+ * ★ PROPOSED DEFAULT — the design doc (§11-3) decided quarantine itself but
+ * left the exact threshold to the implementation. 5 is deliberately lower than
+ * the legacy outbox's own park threshold (8, `drainTurnOutbox` maxAttempts in
+ * mesh-turn-ledger.ts) — quarantine's cost here is an unbounded archive floor,
+ * not merely a delayed notification, so erring toward tripping sooner is the
+ * safer default. Revisit with real failure-rate data if it proves too eager.
+ */
+export const QUARANTINE_FAILURE_THRESHOLD = 5;
+
+/**
+ * Half-open cooldown (ms): how long a mesh stays quarantined before the next
+ * entry is let through for a real (auto-resolving) probe attempt.
+ *
+ * ★ PROPOSED DEFAULT, same caveat as the threshold above. 60s is short enough
+ * that a transient coordinator hiccup self-heals on a human timescale, and long
+ * enough not to hammer a genuinely down coordinator every drain pass.
+ */
+export const QUARANTINE_COOLDOWN_MS = 60_000;
+
+/** Per-mesh delivery state. Read by the 5a-3 coverage metrics and the 5a-4 quarantine policy. */
 export interface RedriveMeshState {
     /** Entries this process handed to the pending queue (dedup may absorb them). */
     injected: number;
@@ -103,6 +146,15 @@ export interface RedriveMeshState {
     consecutiveFailures: number;
     /** Epoch ms of the most recent failure, or null. */
     lastFailureAt: number | null;
+    /** Entries skip-and-advanced because the mesh was quarantined at the time. */
+    quarantineSkips: number;
+    /**
+     * Epoch ms when this mesh most recently ENTERED quarantine, or null if it
+     * has never been quarantined. Distinct from `lastFailureAt`: this only
+     * updates on the transition into quarantine, not on every failure inside
+     * it, so it marks the start of the current cooldown window.
+     */
+    quarantinedAt: number | null;
 }
 
 const state = new Map<string, RedriveMeshState>();
@@ -110,7 +162,14 @@ const state = new Map<string, RedriveMeshState>();
 function stateFor(meshId: string): RedriveMeshState {
     let s = state.get(meshId);
     if (!s) {
-        s = { injected: 0, skipped: 0, consecutiveFailures: 0, lastFailureAt: null };
+        s = {
+            injected: 0,
+            skipped: 0,
+            consecutiveFailures: 0,
+            lastFailureAt: null,
+            quarantineSkips: 0,
+            quarantinedAt: null,
+        };
         state.set(meshId, s);
     }
     return s;
@@ -120,6 +179,36 @@ function stateFor(meshId: string): RedriveMeshState {
 export function getRedriveState(meshId: string): RedriveMeshState | null {
     const s = state.get(meshId);
     return s ? { ...s } : null;
+}
+
+/**
+ * Whether a mesh is CURRENTLY quarantined (past the failure threshold and
+ * still inside the cooldown window). Exported so the consumer registration and
+ * diagnostics can share one definition rather than re-deriving it.
+ *
+ * `nowMs` is a parameter (not `Date.now()` inline) so tests can drive the
+ * half-open transition deterministically without a real 60s wait.
+ */
+export function isMeshQuarantined(meshId: string, nowMs: number = Date.now()): boolean {
+    const s = state.get(meshId);
+    if (!s || s.quarantinedAt === null) return false;
+    return nowMs - s.quarantinedAt < QUARANTINE_COOLDOWN_MS;
+}
+
+/** Count of meshes currently quarantined. Feeds the diagnostics surface (5a-1/5a-3 pattern). */
+export function getQuarantinedMeshCount(nowMs: number = Date.now()): number {
+    let count = 0;
+    for (const meshId of state.keys()) {
+        if (isMeshQuarantined(meshId, nowMs)) count++;
+    }
+    return count;
+}
+
+/** Cumulative entries skip-and-advanced across every mesh because of quarantine. */
+export function getTotalQuarantineSkips(): number {
+    let total = 0;
+    for (const s of state.values()) total += s.quarantineSkips;
+    return total;
 }
 
 /**
@@ -238,9 +327,34 @@ export function buildRedriveInjection(
  * Non-terminal / unusable entries are skipped (cursor advances) — they are not
  * failures, and holding the cursor on one would stall every later terminal
  * behind it.
+ *
+ * ── Quarantine (5a-4) ────────────────────────────────────────────────────
+ * If the mesh is currently quarantined (`isMeshQuarantined`), this entry is
+ * skip-and-advanced WITHOUT attempting the injection — same rationale as the
+ * non-terminal skip above: holding the cursor here would pin the §7.6 archive
+ * floor open indefinitely. Once the cooldown elapses, the mesh naturally falls
+ * out of quarantine (`isMeshQuarantined` returns false) and the very next
+ * entry gets a real attempt — that IS the half-open probe; no separate probe
+ * codepath is needed because a live topic keeps delivering new entries.
  */
-export function consumeRedriveEntry(meshId: string, entry: RedriveProjectedEntry): 'injected' | 'skipped' {
+export function consumeRedriveEntry(
+    meshId: string,
+    entry: RedriveProjectedEntry,
+    nowMs: number = Date.now(),
+): 'injected' | 'skipped' | 'quarantined' {
     const s = stateFor(meshId);
+
+    if (isMeshQuarantined(meshId, nowMs)) {
+        s.quarantineSkips++;
+        LOG.warn(
+            'MeshRedrive',
+            `mesh=${meshId} redrive quarantined (consecutiveFailures=${s.consecutiveFailures}) — `
+            + `skip-and-advance entry=${entry.id} to release the §7.6 archive floor; `
+            + 'the legacy outbox drain remains the redelivery path for this terminal while quarantined',
+        );
+        return 'quarantined';
+    }
+
     const injection = buildRedriveInjection(meshId, entry);
     if (!injection) {
         s.skipped++;
@@ -251,26 +365,45 @@ export function consumeRedriveEntry(meshId: string, entry: RedriveProjectedEntry
     try {
         queued = queuePendingMeshCoordinatorEvent(injection);
     } catch (error) {
-        s.consecutiveFailures++;
-        s.lastFailureAt = Date.now();
+        recordFailure(s, meshId, nowMs);
         throw error instanceof Error ? error : new Error(String(error));
     }
 
     if (!queued) {
         // The queue REJECTED the event (not a dedup collapse — that returns
         // true). Treat as transient: leave the cursor so it is retried.
-        s.consecutiveFailures++;
-        s.lastFailureAt = Date.now();
+        recordFailure(s, meshId, nowMs);
         throw new Error(`pending queue rejected redrive injection for task ${injection.metadataEvent.taskId}`);
     }
 
     s.consecutiveFailures = 0;
+    s.quarantinedAt = null;
     s.injected++;
     LOG.debug(
         'MeshRedrive',
         `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} — dedup collapses it onto the original if already delivered`,
     );
     return 'injected';
+}
+
+/**
+ * Record one failure and, on crossing `QUARANTINE_FAILURE_THRESHOLD`, enter
+ * quarantine. Only the THRESHOLD-CROSSING failure sets `quarantinedAt` — a
+ * failure while already quarantined never reaches here (it is skip-and-
+ * advanced above), so `quarantinedAt` marks exactly the start of a cooldown
+ * window, never mid-window noise.
+ */
+function recordFailure(s: RedriveMeshState, meshId: string, nowMs: number): void {
+    s.consecutiveFailures++;
+    s.lastFailureAt = nowMs;
+    if (s.consecutiveFailures >= QUARANTINE_FAILURE_THRESHOLD) {
+        s.quarantinedAt = nowMs;
+        LOG.warn(
+            'MeshRedrive',
+            `mesh=${meshId} redrive entering quarantine after ${s.consecutiveFailures} consecutive failures — `
+            + `cooldown ${QUARANTINE_COOLDOWN_MS}ms before the next auto-resolving probe attempt`,
+        );
+    }
 }
 
 /** Reset all module state. TESTS ONLY. */

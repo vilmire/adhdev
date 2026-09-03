@@ -40,6 +40,7 @@ import {
 import {
     consumeRedriveEntry,
     __resetTerminalRedriveForTests,
+    QUARANTINE_FAILURE_THRESHOLD,
     type RedriveProjectedEntry,
 } from '../../src/mesh/mesh-terminal-redrive.js';
 import { readRedriveCoverageDiagnostics } from '../../src/mesh/mesh-turn-outbox-coverage-diagnostics.js';
@@ -194,5 +195,42 @@ describe('redrive coverage diagnostics (Stage 5, 5a-3)', () => {
         expect(diag.outboxDelivered).toBe(1);
         expect(diag.redriveInjected).toBe(2);
         expect(diag.coveragePercent).toBe(100);
+    });
+
+    // Stage 5a-4 — quarantine counters exposed alongside coverage. Real
+    // failures against the real pending queue (vi.spyOn insertPendingEvent),
+    // same technique mesh-terminal-redrive.test.ts uses for its own
+    // "holds the cursor when the queue rejects" case.
+    it('reports zero quarantine counters on a healthy fleet', () => {
+        const diag = readRedriveCoverageDiagnostics();
+        expect(diag.quarantinedMeshCount).toBe(0);
+        expect(diag.quarantineSkipsTotal).toBe(0);
+    });
+
+    it('surfaces a quarantined mesh in quarantinedMeshCount without touching a healthy mesh', () => {
+        const store = MeshRuntimeStore.getInstance();
+        const spy = vi.spyOn(store, 'insertPendingEvent')
+            .mockImplementation(() => { throw new Error('simulated persist failure'); });
+        try {
+            for (let i = 0; i < QUARANTINE_FAILURE_THRESHOLD; i++) {
+                expect(() => consumeRedriveEntry(MESH, projectedTerminal(nextTaskId()))).toThrow();
+            }
+        } finally {
+            spy.mockRestore();
+        }
+        // Threshold-crossing failure quarantined MESH; the queue is real again
+        // now, but a quarantined mesh skip-and-advances rather than retrying —
+        // so a would-succeed entry must NOT bump redriveInjected/outboxDelivered.
+        const beforeInjected = readRedriveCoverageDiagnostics().redriveInjected;
+        expect(consumeRedriveEntry(MESH, projectedTerminal(nextTaskId()))).toBe('quarantined');
+
+        const otherMesh = `mesh-${randomUUID().slice(0, 8)}`;
+        expect(consumeRedriveEntry(otherMesh, projectedTerminal(nextTaskId()))).toBe('injected');
+
+        const diag = readRedriveCoverageDiagnostics();
+        expect(diag.quarantinedMeshCount).toBe(1);
+        expect(diag.quarantineSkipsTotal).toBeGreaterThanOrEqual(1);
+        expect(diag.redriveInjected, 'the quarantined skip must not count as an injection')
+            .toBe(beforeInjected + 1); // +1 is otherMesh's real injection only
     });
 });

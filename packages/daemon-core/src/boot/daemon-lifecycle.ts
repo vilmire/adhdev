@@ -1134,7 +1134,9 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                     configureTerminalRedrive(components.seqscribeNode, {
                         consumerName: REDRIVE_CONSUMER,
                         handler: ({ meshId, entry }) => {
-                            // Throwing holds the durable cursor — see the module note.
+                            // Throwing holds the durable cursor; resolving (including the
+                            // 5a-4 quarantine skip-and-advance outcome) advances it — see
+                            // the module note in mesh-terminal-redrive.ts.
                             consumeRedriveEntry(meshId, entry);
                         },
                     });

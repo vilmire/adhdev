@@ -1,7 +1,8 @@
 /**
- * Redrive coverage diagnostics — the 5a→5b gate's evidence (Stage 5, 5a-3).
+ * Redrive coverage + quarantine diagnostics — the 5a→5b gate's evidence
+ * (Stage 5, 5a-3) plus the 5a-4 quarantine health surface.
  *
- * Design: docs/design/2026-08-29-seqscribe-outbox-migration.md §7 5a-3.
+ * Design: docs/design/2026-08-29-seqscribe-outbox-migration.md §7 5a-3, §11-3.
  * "지표 신설: redrive 주입 수, 커서 lag, outbox drain delivered 수의 대응
  * 관계 계측(같은 터미널에 대해 양쪽이 발동한 비율 = 커버리지)."
  *
@@ -35,7 +36,11 @@
  */
 
 import { getTurnLedgerMetrics } from './mesh-turn-ledger.js';
-import { getTotalRedriveInjected } from './mesh-terminal-redrive.js';
+import {
+    getTotalRedriveInjected,
+    getQuarantinedMeshCount,
+    getTotalQuarantineSkips,
+} from './mesh-terminal-redrive.js';
 
 /** Local-only snapshot comparing redrive injections against outbox deliveries. */
 export interface RedriveCoverageDiagnostics {
@@ -50,12 +55,31 @@ export interface RedriveCoverageDiagnostics {
      * regression on a fresh/idle daemon).
      */
     coveragePercent: number | null;
+    /**
+     * Meshes CURRENTLY quarantined (5a-4) — past the consecutive-failure
+     * threshold and still inside the cooldown window. An aggregate count only:
+     * no meshId, so this stays within the same local-only content boundary as
+     * the rest of this file. A non-zero value on a healthy fleet is worth an
+     * operator's attention (the dual-drive outbox leg is still covering the
+     * notification, but the redrive leg for that mesh is not).
+     */
+    quarantinedMeshCount: number;
+    /**
+     * Cumulative entries skip-and-advanced across every mesh because their
+     * mesh was quarantined at the time. Grows only while at least one mesh is
+     * quarantined; a steady climb alongside a persistent `quarantinedMeshCount`
+     * indicates an ongoing coordinator-unreachable condition rather than a
+     * one-off blip the half-open probe already recovered from.
+     */
+    quarantineSkipsTotal: number;
 }
 
 /**
- * Read the current redrive-vs-outbox coverage. Delegates all arithmetic to
- * the two counters that already exist (`getTurnLedgerMetrics` for the
- * outbox, `getTotalRedriveInjected` for redrive) and does no I/O of its own.
+ * Read the current redrive-vs-outbox coverage plus quarantine health.
+ * Delegates all arithmetic to counters that already exist
+ * (`getTurnLedgerMetrics` for the outbox, `getTotalRedriveInjected` /
+ * `getQuarantinedMeshCount` / `getTotalQuarantineSkips` for redrive) and does
+ * no I/O of its own.
  */
 export function readRedriveCoverageDiagnostics(nowMs: number = Date.now()): RedriveCoverageDiagnostics {
     const metrics = getTurnLedgerMetrics(nowMs);
@@ -64,5 +88,11 @@ export function readRedriveCoverageDiagnostics(nowMs: number = Date.now()): Redr
     const coveragePercent = outboxDelivered > 0
         ? Math.min(100, (redriveInjected / outboxDelivered) * 100)
         : null;
-    return { redriveInjected, outboxDelivered, coveragePercent };
+    return {
+        redriveInjected,
+        outboxDelivered,
+        coveragePercent,
+        quarantinedMeshCount: getQuarantinedMeshCount(nowMs),
+        quarantineSkipsTotal: getTotalQuarantineSkips(),
+    };
 }

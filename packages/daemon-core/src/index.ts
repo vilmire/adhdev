@@ -1180,6 +1180,14 @@ export {
   getRedriveState,
   getTotalRedriveInjected,
   __resetTerminalRedriveForTests,
+  // Stage 5a-4: quarantine — auto-resolving skip-and-advance for a redrive
+  // leg that has failed QUARANTINE_FAILURE_THRESHOLD times in a row, so a
+  // permanently-stuck cursor stops pinning the §7.6 archive floor open.
+  QUARANTINE_FAILURE_THRESHOLD,
+  QUARANTINE_COOLDOWN_MS,
+  isMeshQuarantined,
+  getQuarantinedMeshCount,
+  getTotalQuarantineSkips,
   type RedriveMeshState,
   type RedriveProjectedEntry,
 } from './mesh/mesh-terminal-redrive.js';

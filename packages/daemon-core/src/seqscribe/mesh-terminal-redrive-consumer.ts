@@ -18,6 +18,14 @@
  * guarantee this consumer exists to provide. The cost of that choice — a stuck
  * cursor pins the topic's §7.6 archive floor open — is real, and is why §11-3
  * resolved to an auto-resolving quarantine (5a-4) rather than a WARN.
+ *
+ * ★ Quarantine (5a-4) needs NO changes in this file. It is implemented entirely
+ * as a policy decision inside the injected handler (`consumeRedriveEntry`,
+ * mesh-terminal-redrive.ts): once a mesh is quarantined, that function returns
+ * instead of throwing, so the `await handler(...)` below resolves normally and
+ * the cursor advances — exactly the same path a non-terminal skip already
+ * takes. This file's only job (advance on resolve, hold on throw) already
+ * implements "quarantine releases the archive floor" for free.
  */
 
 import { LOG } from '../logging/logger.js';
