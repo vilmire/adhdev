@@ -3418,6 +3418,36 @@ export class MeshRuntimeStore {
         this.maybeCheckpointWal();
     }
 
+    /**
+     * Task ids of outbox rows marked `delivered` AT OR AFTER `sinceIso`.
+     *
+     * ★ REMOVED IN 5c together with `mesh_turn_outbox` itself
+     * (docs/design/2026-08-29-seqscribe-outbox-migration.md §5 row 1). It exists
+     * only to prove the 5a→5b migration is safe, and has no consumer that
+     * outlives the table.
+     *
+     * ★ Why a `sinceIso` window rather than the whole table: `delivered` rows are
+     * NEVER pruned (there is no `DELETE FROM mesh_turn_outbox` anywhere), so an
+     * all-time enumeration is unbounded AND spans daemon generations the redrive
+     * counterpart cannot possibly have seen. Windowing on `updated_at` — which
+     * `markTurnOutboxDelivered` stamps at the moment of delivery — restricts the
+     * denominator to the same process lifetime the redrive set covers. See the
+     * epoch note in mesh-turn-outbox-coverage-diagnostics.ts.
+     *
+     * Rows with a NULL task_id are excluded: the redrive path cannot re-arm a
+     * task-less entry (`buildRedriveInjection` returns null for one), so counting
+     * it against coverage would assert an impossible obligation.
+     */
+    listDeliveredTurnOutboxTaskIdsSince(sinceIso: string, limit: number): string[] {
+        const rows = this.db.prepare(`
+            SELECT DISTINCT task_id FROM mesh_turn_outbox
+            WHERE status = 'delivered' AND task_id IS NOT NULL AND updated_at >= ?
+            ORDER BY updated_at ASC
+            LIMIT ?
+        `).all(sinceIso, limit) as Array<{ task_id: string }>;
+        return rows.map(r => r.task_id);
+    }
+
     countTurnOutboxByStatus(meshId?: string): Record<string, number> {
         const rows = (meshId
             ? this.db.prepare('SELECT status, COUNT(*) AS n FROM mesh_turn_outbox WHERE mesh_id = ? GROUP BY status').all(meshId)
