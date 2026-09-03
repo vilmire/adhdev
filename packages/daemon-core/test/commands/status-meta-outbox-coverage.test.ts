@@ -80,13 +80,20 @@ describe('get_status_metadata — redrive coverage (Stage 5, 5a-3)', () => {
         const result: any = await statusMetaHandlers.get_status_metadata({ deps: baseDeps() }, {})
         const coverage = result.outboxRedriveCoverage
 
+        // Stage 5a-4: quarantinedMeshCount / quarantineSkipsTotal joined this
+        // key set — both are plain aggregate integers (no meshId), same
+        // content-boundary discipline as the three original fields.
         expect(Object.keys(coverage).sort()).toEqual([
             'coveragePercent',
             'outboxDelivered',
+            'quarantineSkipsTotal',
+            'quarantinedMeshCount',
             'redriveInjected',
         ])
         expect(Number.isInteger(coverage.redriveInjected)).toBe(true)
         expect(Number.isInteger(coverage.outboxDelivered)).toBe(true)
         expect(coverage.coveragePercent === null || typeof coverage.coveragePercent === 'number').toBe(true)
+        expect(Number.isInteger(coverage.quarantinedMeshCount)).toBe(true)
+        expect(Number.isInteger(coverage.quarantineSkipsTotal)).toBe(true)
     })
 })
