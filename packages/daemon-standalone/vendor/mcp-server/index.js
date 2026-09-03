@@ -56046,7 +56046,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     var require_canonicalize = __commonJS2({
-      "../../vendor/seqscribe/node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
+      "../../node_modules/canonicalize/lib/canonicalize.js"(exports22, module22) {
         "use strict";
         module22.exports = function serialize(object2) {
           if (typeof object2 === "number" && isNaN(object2)) {
@@ -56078,6 +56078,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           }, "");
           return `{${values}}`;
         };
+      }
+    });
+    var nc;
+    var crypto3;
+    var init_cryptoNode = __esm2({
+      "../../node_modules/@noble/hashes/esm/cryptoNode.js"() {
+        "use strict";
+        nc = __toESM2(require("crypto"));
+        crypto3 = nc && typeof nc === "object" && "webcrypto" in nc ? nc.webcrypto : nc && typeof nc === "object" && "randomBytes" in nc ? nc : void 0;
       }
     });
     function isBytes(a) {
@@ -56156,8 +56165,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var hexes;
     var Hash;
     var init_utils = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/utils.js"() {
+      "../../node_modules/@noble/hashes/esm/utils.js"() {
         "use strict";
+        init_cryptoNode();
         hasHexBuiltin = /* @__PURE__ */ (() => (
           // @ts-ignore
           typeof Uint8Array.from([]).toHex === "function" && typeof Uint8Array.fromHex === "function"
@@ -56188,7 +56198,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HashMD;
     var SHA256_IV;
     var init_md = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/_md.js"() {
+      "../../node_modules/@noble/hashes/esm/_md.js"() {
         "use strict";
         init_utils();
         HashMD = class extends Hash {
@@ -56298,7 +56308,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var SHA256;
     var sha256;
     var init_sha2 = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha2.js"() {
+      "../../node_modules/@noble/hashes/esm/sha2.js"() {
         "use strict";
         init_md();
         init_utils();
@@ -56444,7 +56454,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var sha2562;
     var init_sha256 = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/sha256.js"() {
+      "../../node_modules/@noble/hashes/esm/sha256.js"() {
         "use strict";
         init_sha2();
         sha2562 = sha256;
@@ -57183,7 +57193,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HMAC;
     var hmac;
     var init_hmac = __esm2({
-      "../../vendor/seqscribe/node_modules/@noble/hashes/esm/hmac.js"() {
+      "../../node_modules/@noble/hashes/esm/hmac.js"() {
         "use strict";
         init_utils();
         HMAC = class extends Hash {
@@ -64187,7 +64197,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           );
         }
       }
-      const id = requestedId ?? (0, import_crypto10.randomUUID)();
+      const id = requestedId ?? (0, import_crypto11.randomUUID)();
       const existing = requestedId ? store.getMission(meshId, id) : null;
       const prevStatus = existing ? normalizeMissionStatus(existing.status) : null;
       const prevGoal = existing?.goal ?? "";
@@ -64476,7 +64486,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       );
       return lines.join("\n");
     }
-    var import_crypto10;
+    var import_crypto11;
     var LEDGER_GOAL_SUMMARY_MAX;
     var MESH_MISSION_STATUSES3;
     var GOAL_PREVIEW_MAX;
@@ -64486,7 +64496,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_missions = __esm2({
       "src/mesh/mesh-missions.ts"() {
         "use strict";
-        import_crypto10 = require("crypto");
+        import_crypto11 = require("crypto");
         init_logger();
         init_mesh_runtime_store();
         init_mesh_work_queue();
@@ -64741,7 +64751,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!modeValidation.valid) {
         throw new Error(buildMeshTaskModeViolationError3(modeValidation));
       }
-      const id = typeof opts?.id === "string" && opts.id.trim() ? opts.id.trim() : (0, import_crypto11.randomUUID)();
+      const id = typeof opts?.id === "string" && opts.id.trim() ? opts.id.trim() : (0, import_crypto12.randomUUID)();
       const dependsOn = normalizeDependsOn(opts?.dependsOn);
       const priority = normalizeMeshTaskPriority2(opts?.priority);
       const notBefore = resolveNotBefore2(opts?.notBefore);
@@ -64817,7 +64827,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (specs.length > MESH_TASK_GRAPH_MAX_TASKS3) {
         throw new Error(`task_graph_too_large: ${specs.length} tasks exceeds the ${MESH_TASK_GRAPH_MAX_TASKS3}-task cap for one atomic enqueue`);
       }
-      const ids = specs.map(() => (0, import_crypto11.randomUUID)());
+      const ids = specs.map(() => (0, import_crypto12.randomUUID)());
       const idByRef = /* @__PURE__ */ new Map();
       specs.forEach((spec, i) => {
         const ref = typeof spec.ref === "string" ? spec.ref.trim() : "";
@@ -65430,7 +65440,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return { rateLimitExceeded: false, callsInWindow: 0, advisory: null };
       }
     }
-    var import_crypto11;
+    var import_crypto12;
     var ACTIVE_MESH_QUEUE_STATUSES;
     var HISTORICAL_MESH_QUEUE_STATUSES;
     var MESH_TASK_MODES;
@@ -65449,7 +65459,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_work_queue = __esm2({
       "src/mesh/mesh-work-queue.ts"() {
         "use strict";
-        import_crypto11 = require("crypto");
+        import_crypto12 = require("crypto");
         init_mesh_host_ownership();
         init_repo_mesh_types();
         init_mesh_runtime_store();
@@ -72791,7 +72801,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         }
       }
       const entry = {
-        id: (0, import_crypto12.randomUUID)(),
+        id: (0, import_crypto13.randomUUID)(),
         meshId,
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         ...partial2
@@ -73378,7 +73388,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     }
     var import_fs13;
     var import_path11;
-    var import_crypto12;
+    var import_crypto13;
     var import_events;
     var TASK_LIFECYCLE_LEDGER_KINDS;
     var MAX_FILE_SIZE_BYTES;
@@ -73402,7 +73412,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         "use strict";
         import_fs13 = require("fs");
         import_path11 = require("path");
-        import_crypto12 = require("crypto");
+        import_crypto13 = require("crypto");
         init_mesh_retention_config();
         init_dist();
         import_events = require("events");
@@ -83075,7 +83085,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       if (identity.attemptId) {
         try {
           store.insertTurnEvent({
-            eventId: (0, import_crypto13.randomUUID)(),
+            eventId: (0, import_crypto14.randomUUID)(),
             meshId: identity.meshId,
             attemptId: identity.attemptId,
             taskId: identity.taskId,
@@ -83161,7 +83171,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       const nowMs = opts.nowMs ?? Date.now();
       try {
         MeshRuntimeStore.getInstance().insertTurnEvent({
-          eventId: (0, import_crypto13.randomUUID)(),
+          eventId: (0, import_crypto14.randomUUID)(),
           meshId: identity.meshId,
           attemptId: identity.attemptId,
           taskId: identity.taskId,
@@ -83182,7 +83192,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       if (identity.attemptId) {
         try {
           MeshRuntimeStore.getInstance().insertTurnEvent({
-            eventId: (0, import_crypto13.randomUUID)(),
+            eventId: (0, import_crypto14.randomUUID)(),
             meshId: identity.meshId,
             attemptId: identity.attemptId,
             taskId: identity.taskId,
@@ -83221,7 +83231,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       }
       return true;
     }
-    var import_crypto13;
+    var import_crypto14;
     var WORKER_BRANCH_STATES;
     var WORKER_REPORT_EVENT_KIND;
     var WORKER_PROGRESS_EVENT_KIND;
@@ -83237,7 +83247,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     var init_worker_report = __esm2({
       "src/mesh/worker-report.ts"() {
         "use strict";
-        import_crypto13 = require("crypto");
+        import_crypto14 = require("crypto");
         init_logger();
         init_mesh_runtime_store();
         init_mesh_graph_transition_runner();
@@ -85183,7 +85193,7 @@ ${block2.text}`,
       const fingerprint = `${target}::${buildPendingEventFingerprint(fingerprintSource)}`;
       try {
         const inserted = store.insertPendingEvent({
-          id: (0, import_crypto14.randomUUID)(),
+          id: (0, import_crypto15.randomUUID)(),
           meshId: UNRESOLVED_FORWARD_OUTBOX_MESH_ID,
           coordinatorDaemonId: target,
           event,
@@ -85246,14 +85256,14 @@ ${block2.text}`,
         return 0;
       }
     }
-    var import_crypto14;
+    var import_crypto15;
     var UNRESOLVED_FORWARD_OUTBOX_MESH_ID;
     var UNRESOLVED_FORWARD_MAX_AGE_MS;
     var retryNudgeHandler;
     var init_mesh_unresolved_forward_outbox = __esm2({
       "src/mesh/mesh-unresolved-forward-outbox.ts"() {
         "use strict";
-        import_crypto14 = require("crypto");
+        import_crypto15 = require("crypto");
         init_logger();
         init_mesh_runtime_store();
         init_mesh_events_pending();
@@ -94405,7 +94415,7 @@ ${cleanBody}`;
         } else {
           takeoverFromClaimed = priorState === "claimed";
           generation = gate.leaseGeneration + 1;
-          fencingToken = (0, import_crypto15.randomUUID)();
+          fencingToken = (0, import_crypto16.randomUUID)();
         }
         const deadlineAt = input.extendDeadlineSeconds && input.extendDeadlineSeconds > 0 ? isoAfter(nowMs, input.extendDeadlineSeconds) : gate.deadlineAt;
         const won = graphStore.patchGate(gate.gateId, {
@@ -94890,14 +94900,14 @@ ${cleanBody}`;
         updatedAt: nowIso
       });
     }
-    var import_crypto15;
+    var import_crypto16;
     var MESH_GATE_DEFAULT_LEASE_SECONDS;
     var MESH_GATE_NAMED_OUTCOMES;
     var MESH_GATE_RELEASE_PATCH_KEYS;
     var init_mesh_graph_gates = __esm2({
       "src/mesh/mesh-graph-gates.ts"() {
         "use strict";
-        import_crypto15 = require("crypto");
+        import_crypto16 = require("crypto");
         init_mesh_runtime_store();
         init_logger();
         init_mesh_graph_input_binding();
@@ -100881,7 +100891,7 @@ ${marker}`,
     function workspaceTrustKey(realPath) {
       const normalized = realPath.replace(/\\/g, "/").replace(/\/+$/, "");
       const slug = slugify2(path30.basename(normalized));
-      const hash2 = crypto3.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+      const hash2 = crypto4.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
       return `wd_${slug}_${hash2}`;
     }
     function serializeKimiWorkspaceTrust(realPath, trustedAt = Date.now()) {
@@ -100909,7 +100919,7 @@ ${marker}`,
     var fs25;
     var os20;
     var path30;
-    var crypto3;
+    var crypto4;
     var MAX_SLUG_LENGTH;
     var init_kimi_workspace_trust = __esm2({
       "src/providers/kimi-workspace-trust.ts"() {
@@ -100917,7 +100927,7 @@ ${marker}`,
         fs25 = __toESM2(require("fs"));
         os20 = __toESM2(require("os"));
         path30 = __toESM2(require("path"));
-        crypto3 = __toESM2(require("crypto"));
+        crypto4 = __toESM2(require("crypto"));
         init_logger();
         MAX_SLUG_LENGTH = 40;
       }
@@ -109561,7 +109571,7 @@ ${text}` : text;
     }
     function safeInputImageBasename(index, mimeType) {
       const extension = extensionForImageMime(mimeType);
-      const suffix = crypto4.randomBytes(6).toString("hex");
+      const suffix = crypto5.randomBytes(6).toString("hex");
       return `adhdev-input-image-${Date.now()}-${index}-${suffix}${extension}`;
     }
     function materializeImageDataPart(part, index, dir) {
@@ -109633,7 +109643,7 @@ ${text}` : text;
     }
     var os27;
     var path41;
-    var crypto4;
+    var crypto5;
     var fs39;
     var IMAGE_MIME_EXTENSIONS;
     var MATERIALIZED_IMAGE_MAX_AGE_MS;
@@ -109644,7 +109654,7 @@ ${text}` : text;
         "use strict";
         os27 = __toESM2(require("os"));
         path41 = __toESM2(require("path"));
-        crypto4 = __toESM2(require("crypto"));
+        crypto5 = __toESM2(require("crypto"));
         fs39 = __toESM2(require("fs"));
         IMAGE_MIME_EXTENSIONS = {
           "image/png": ".png",
@@ -111659,14 +111669,14 @@ ${buttons.join("\n")}`;
       }
     });
     var os28;
-    var crypto5;
+    var crypto6;
     var fs42;
     var CliProviderInstance;
     var init_cli_provider_instance = __esm2({
       "src/providers/cli-provider-instance.ts"() {
         "use strict";
         os28 = __toESM2(require("os"));
-        crypto5 = __toESM2(require("crypto"));
+        crypto6 = __toESM2(require("crypto"));
         fs42 = __toESM2(require("fs"));
         init_cli_provider_bracketed_paste();
         init_contracts2();
@@ -111723,7 +111733,7 @@ ${buttons.join("\n")}`;
             this.workingDir = workingDir;
             this.cliArgs = cliArgs;
             this.type = provider.type;
-            this.instanceId = instanceId || crypto5.randomUUID();
+            this.instanceId = instanceId || crypto6.randomUUID();
             this.presentationMode = "chat";
             this.providerSessionId = options?.providerSessionId;
             this.launchMode = options?.launchMode || "new";
@@ -116076,7 +116086,7 @@ ${rawInput}` : rawInput;
     }
     function writeLedger(ledgerPath, ledger) {
       fs43.mkdirSync(path44.dirname(ledgerPath), { recursive: true, mode: 448 });
-      const temporaryPath = `${ledgerPath}.${process.pid}.${crypto6.randomUUID()}.tmp`;
+      const temporaryPath = `${ledgerPath}.${process.pid}.${crypto7.randomUUID()}.tmp`;
       try {
         fs43.writeFileSync(temporaryPath, `${JSON.stringify(ledger, null, 2)}
 `, { encoding: "utf8", mode: 384 });
@@ -116106,7 +116116,7 @@ ${rawInput}` : rawInput;
       const usage = grant?.usages.find((candidate) => candidate.sessionKey === plan.sessionKey);
       if (!grant) {
         grant = {
-          grantId: crypto6.randomUUID(),
+          grantId: crypto7.randomUUID(),
           provider: plan.provider,
           workspaceRealpath: plan.workspaceRealpath,
           scope: "worker",
@@ -116139,13 +116149,13 @@ ${rawInput}` : rawInput;
       writeLedger(ledgerPath, ledger);
       return { ledgerPath, grant, reused };
     }
-    var crypto6;
+    var crypto7;
     var fs43;
     var path44;
     var init_trust_provenance_ledger = __esm2({
       "src/providers/trust-provenance-ledger.ts"() {
         "use strict";
-        crypto6 = __toESM2(require("crypto"));
+        crypto7 = __toESM2(require("crypto"));
         fs43 = __toESM2(require("fs"));
         path44 = __toESM2(require("path"));
         init_config_dir();
@@ -116620,7 +116630,7 @@ ${rawInput}` : rawInput;
       if (!supportsExplicitSessionStart(resume)) {
         return { cliArgs: baseArgs, launchMode: "new" };
       }
-      const providerSessionId = crypto7.randomUUID();
+      const providerSessionId = crypto8.randomUUID();
       const newSessionArgs = expandResumeArgs(resume.newSessionArgs, providerSessionId);
       return {
         cliArgs: [...baseArgs || [], ...newSessionArgs || []],
@@ -116630,7 +116640,7 @@ ${rawInput}` : rawInput;
     }
     var os30;
     var path46;
-    var crypto7;
+    var crypto8;
     var import_fs22;
     var import_child_process10;
     var import_chalk;
@@ -116645,7 +116655,7 @@ ${rawInput}` : rawInput;
         "use strict";
         os30 = __toESM2(require("os"));
         path46 = __toESM2(require("path"));
-        crypto7 = __toESM2(require("crypto"));
+        crypto8 = __toESM2(require("crypto"));
         import_fs22 = require("fs");
         import_child_process10 = require("child_process");
         import_chalk = __toESM2((init_source(), __toCommonJS(source_exports)));
@@ -116922,7 +116932,7 @@ ${rawInput}` : rawInput;
 Enable and detect this provider from the Machine Providers page before starting a runtime.`
               );
             }
-            const key2 = options?.presetSessionKey?.trim() || crypto7.randomUUID();
+            const key2 = options?.presetSessionKey?.trim() || crypto8.randomUUID();
             if (provider && provider.category === "cli" && options?.resolvedTrustPlan === void 0) {
               const declaredTrust = loadPreLaunchTrustFromSpecPath(
                 provider._resolvedSpecPath
@@ -117476,7 +117486,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
                     };
                   }
                 }
-                const delegatedSessionKey = settingsOverride?.launchedByCoordinator === true ? crypto7.randomUUID() : void 0;
+                const delegatedSessionKey = settingsOverride?.launchedByCoordinator === true ? crypto8.randomUUID() : void 0;
                 const delegatedMeshId = typeof settingsOverride?.meshNodeFor === "string" ? settingsOverride.meshNodeFor.trim() : "";
                 const delegatedLaunch = settingsOverride?.launchedByCoordinator === true ? buildCoordinatorDelegatedCliLaunchOptions({
                   cliType,
@@ -119551,12 +119561,12 @@ ${effect.notification.body || ""}`.trim();
         if (timer) clearTimeout(timer);
       }
     }
-    var crypto8;
+    var crypto9;
     var IdeProviderInstance;
     var init_ide_provider_instance = __esm2({
       "src/providers/ide-provider-instance.ts"() {
         "use strict";
-        crypto8 = __toESM2(require("crypto"));
+        crypto9 = __toESM2(require("crypto"));
         init_contracts2();
         init_extension_provider_instance();
         init_status_monitor();
@@ -119596,7 +119606,7 @@ ${effect.notification.body || ""}`.trim();
           constructor(provider, instanceKey) {
             this.type = provider.type;
             this.provider = provider;
-            this.instanceId = crypto8.randomUUID();
+            this.instanceId = crypto9.randomUUID();
             this.monitor = new StatusMonitor();
             this.historyWriter = new ChatHistoryWriter();
           }
@@ -121206,14 +121216,14 @@ ${effect.notification.body || ""}`.trim();
     });
     var fs46;
     var path50;
-    var crypto9;
+    var crypto10;
     var ProviderChannelStore;
     var init_store2 = __esm2({
       "src/providers/channel/store.ts"() {
         "use strict";
         fs46 = __toESM2(require("fs"));
         path50 = __toESM2(require("path"));
-        crypto9 = __toESM2(require("crypto"));
+        crypto10 = __toESM2(require("crypto"));
         init_config();
         init_contract();
         ProviderChannelStore = class _ProviderChannelStore {
@@ -121246,7 +121256,7 @@ ${effect.notification.body || ""}`.trim();
           // ─── Staging ─────────────────────────────────────────────
           /** Create a fresh staging directory. Caller must clean it up (or gc will). */
           createStagingDir(kind) {
-            const dir = path50.join(this.stagingDir, `${kind}-${process.pid}-${crypto9.randomBytes(6).toString("hex")}`);
+            const dir = path50.join(this.stagingDir, `${kind}-${process.pid}-${crypto10.randomBytes(6).toString("hex")}`);
             fs46.mkdirSync(dir, { recursive: true });
             return dir;
           }
@@ -121433,7 +121443,7 @@ ${effect.notification.body || ""}`.trim();
             const dir = this.activeDir(channel);
             fs46.mkdirSync(dir, { recursive: true });
             const file2 = this.pointerPath(channel, providerType);
-            const tmp = path50.join(dir, `.${providerType}.${process.pid}.${crypto9.randomBytes(4).toString("hex")}.tmp`);
+            const tmp = path50.join(dir, `.${providerType}.${process.pid}.${crypto10.randomBytes(4).toString("hex")}.tmp`);
             fs46.writeFileSync(tmp, JSON.stringify(pointer, null, 2), "utf-8");
             fs46.renameSync(tmp, file2);
           }
@@ -121513,7 +121523,7 @@ ${effect.notification.body || ""}`.trim();
         );
       }
       relPaths.sort();
-      const hash2 = (0, import_crypto16.createHash)("sha256");
+      const hash2 = (0, import_crypto17.createHash)("sha256");
       for (const relPath of relPaths) {
         const absPath = path51.join(rootDir, ...relPath.split("/"));
         const bytes = fs47.readFileSync(absPath);
@@ -121555,14 +121565,14 @@ ${effect.notification.body || ""}`.trim();
     }
     var fs47;
     var path51;
-    var import_crypto16;
+    var import_crypto17;
     var TREE_DIGEST_ALGORITHM;
     var init_tree_digest = __esm2({
       "src/providers/channel/tree-digest.ts"() {
         "use strict";
         fs47 = __toESM2(require("fs"));
         path51 = __toESM2(require("path"));
-        import_crypto16 = require("crypto");
+        import_crypto17 = require("crypto");
         init_contract();
         TREE_DIGEST_ALGORITHM = "adhdev-provider-tree-sha256-v1";
       }
@@ -139543,7 +139553,7 @@ ${e?.stderr || ""}`;
       const nowMs = ports.nowMs();
       const nowIso = new Date(nowMs).toISOString();
       const leaseUntil = new Date(nowMs + WORKSPACE_SAGA_LEASE_MS).toISOString();
-      const fencingToken = (0, import_crypto17.randomUUID)();
+      const fencingToken = (0, import_crypto18.randomUUID)();
       const claimed = store.transaction(() => {
         const graphStore = store.graphStore();
         const intent2 = graphStore.getWorkspaceIntent(graphId, workspaceRef);
@@ -140042,13 +140052,13 @@ ${e?.stderr || ""}`;
         return void 0;
       }
     }
-    var import_crypto17;
+    var import_crypto18;
     var LEASE_OWNER;
     var ACTIVE_SAGA_STATES;
     var init_mesh_graph_workspace_saga = __esm2({
       "src/mesh/mesh-graph-workspace-saga.ts"() {
         "use strict";
-        import_crypto17 = require("crypto");
+        import_crypto18 = require("crypto");
         init_mesh_runtime_store();
         init_mesh_graph_types();
         init_mesh_graph_transition_runner();
@@ -142053,7 +142063,7 @@ ${e?.stderr || ""}`;
     init_mesh_graph_workspace_ports();
     init_mesh_graph_gates();
     init_mesh_graph_gate_evidence();
-    var import_crypto18 = require("crypto");
+    var import_crypto19 = require("crypto");
     init_logger();
     init_mesh_runtime_store();
     init_mesh_graph_input_binding();
@@ -142121,7 +142131,7 @@ ${e?.stderr || ""}`;
         })),
         on_dependency_failure: parseOnDependencyFailurePolicy3(req.onDependencyFailure)
       };
-      return (0, import_crypto18.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
+      return (0, import_crypto19.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
     }
     function commitMeshGraphPlan3(req) {
       const store = MeshRuntimeStore.getInstance();
@@ -157100,7 +157110,7 @@ data: ${JSON.stringify(msg.data)}
         });
       }
     };
-    var import_crypto19 = require("crypto");
+    var import_crypto20 = require("crypto");
     var import_session_host_core12 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -157198,7 +157208,7 @@ data: ${JSON.stringify(msg.data)}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto19.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto20.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core12.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -157995,7 +158005,7 @@ data: ${JSON.stringify(msg.data)}
     init_mesh_reconcile_loop();
     var import_fs24 = require("fs");
     var import_path24 = require("path");
-    var import_crypto20 = require("crypto");
+    var import_crypto21 = require("crypto");
     init_logger();
     init_mesh_ledger();
     init_mesh_runtime_store();
@@ -158029,7 +158039,7 @@ data: ${JSON.stringify(msg.data)}
       try {
         const fingerprint = buildPendingEventFingerprint(event);
         MeshRuntimeStore.getInstance().insertPendingEvent({
-          id: (0, import_crypto20.randomUUID)(),
+          id: (0, import_crypto21.randomUUID)(),
           meshId: event.meshId,
           coordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
           event: event.event,
@@ -160639,7 +160649,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     init_fsm_driver();
     init_adapter();
     init_approval_utils();
-    var crypto10 = __toESM2(require("crypto"));
+    var crypto11 = __toESM2(require("crypto"));
     var import_node_fs11 = require("fs");
     var import_node_path6 = require("path");
     init_provider_cli_shared();
