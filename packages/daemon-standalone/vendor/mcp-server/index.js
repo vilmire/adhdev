@@ -50911,6 +50911,25 @@ Next step: ${nextStep}`;
           return [];
       }
     }
+    function getTurnLedgerMetrics(nowMs = Date.now()) {
+      let outboxOldestPendingAgeMs = null;
+      let outboxByStatus = {};
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        outboxOldestPendingAgeMs = store.oldestPendingTurnOutboxAgeMs(nowMs);
+        outboxByStatus = store.countTurnOutboxByStatus();
+      } catch {
+      }
+      return {
+        ...metrics,
+        completionProposalsRejected: { ...metrics.completionProposalsRejected },
+        suspensionsDropped: { ...metrics.suspensionsDropped },
+        redriveBlockedByReason: { ...metrics.redriveBlockedByReason },
+        targetPinClearedByReason: { ...metrics.targetPinClearedByReason },
+        outboxOldestPendingAgeMs,
+        outboxByStatus
+      };
+    }
     function noteRejectedProposal(reason) {
       metrics.completionProposalsRejected[reason] = (metrics.completionProposalsRejected[reason] ?? 0) + 1;
     }
@@ -98972,6 +98991,20 @@ ${marker}`,
         BOOT_ID = `${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
       }
     });
+    function readTurnOutboxDiagnostics(nowMs = Date.now()) {
+      const metrics3 = getTurnLedgerMetrics(nowMs);
+      return {
+        oldestPendingAgeMs: metrics3.outboxOldestPendingAgeMs,
+        byStatus: metrics3.outboxByStatus,
+        backlogPending: metrics3.outboxByStatus.pending ?? 0
+      };
+    }
+    var init_mesh_turn_outbox_diagnostics = __esm2({
+      "src/mesh/mesh-turn-outbox-diagnostics.ts"() {
+        "use strict";
+        init_mesh_turn_ledger();
+      }
+    });
     var init_quota = __esm2({
       "src/quota/index.ts"() {
         "use strict";
@@ -98999,6 +99032,7 @@ ${marker}`,
         init_track_identity();
         init_coordinator_registry();
         init_mesh_refine_executor_liveness();
+        init_mesh_turn_outbox_diagnostics();
         init_quota();
         init_quota();
         statusMetaHandlers = {
@@ -99070,7 +99104,13 @@ ${marker}`,
               // seqscribe SUBs; it neither polls nor touches the server status
               // path. Raw numeric receive/comparison counters live alongside the
               // entries because no content or dynamic-key map is present.
-              fleetStatusPeerView: ctx.deps.getFleetStatusPeerView?.() ?? null
+              fleetStatusPeerView: ctx.deps.getFleetStatusPeerView?.() ?? null,
+              // Turn outbox redrive-backstop health (Stage 5, 5a-1 — see
+              // mesh-turn-outbox-diagnostics.ts header). Backed by
+              // `getTurnLedgerMetrics`, which is a plain MeshRuntimeStore-backed
+              // read — no boot-time arming like `beacon` above, so it is called
+              // directly rather than via a ctx.deps getter closure.
+              outbox: readTurnOutboxDiagnostics()
             };
           },
           /**
@@ -101647,9 +101687,9 @@ ${marker}`,
           getEventTimeline(limit) {
             return this.adapter.getEventTimeline(limit);
           }
-          getSections(screenText) {
+          getSections() {
             try {
-              const screen = screenText ?? this.adapter.snapshot();
+              const screen = this.adapter.snapshot();
               const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
               return resolveSections(this.spec.sections ?? {}, lines).map((s2) => ({ id: s2.id, text: s2.text }));
             } catch {
@@ -107977,13 +108017,12 @@ ${text}` : text;
            *  section is named), resolved from the driver's current sections. */
           readScreenSectionText(sectionId) {
             try {
-              const screen = this.driver.getScreen();
-              const sections = this.driver.getSections(screen);
+              const sections = this.driver.getSections();
               if (sectionId && sections) {
                 const hit = sections.find((s2) => s2.id === sectionId);
                 if (hit) return hit.text;
               }
-              return screen;
+              return this.driver.getScreen();
             } catch {
               return "";
             }
@@ -107993,7 +108032,7 @@ ${text}` : text;
             let sections;
             try {
               screen = this.driver.snapshot();
-              const driverSections = this.driver.getSections?.(screen);
+              const driverSections = this.driver.getSections?.();
               if (driverSections) {
                 sections = Object.fromEntries(driverSections.map((s2) => [s2.id, s2.text]));
               } else {
@@ -108208,9 +108247,9 @@ ${text}` : text;
               }
             }
           }
-          readCurrentScreenSections(screenText) {
+          readCurrentScreenSections(_screenText) {
             try {
-              const sections = this.driver.getSections(screenText) ?? [];
+              const sections = this.driver.getSections() ?? [];
               return Object.fromEntries(sections.map((section) => [section.id, section.text]));
             } catch {
               return {};
@@ -108843,8 +108882,7 @@ ${text}` : text;
               workingDir: this.workingDir,
               spawnedAtMs: this.spawnedAtMs,
               providerSessionId: this.providerSessionId ?? null,
-              // Same frame as `screen` above — see FsmDriver.getSections.
-              sections: this.driver.getSections?.(screen) ?? null,
+              sections: this.driver.getSections?.() ?? null,
               stateHistory: history,
               specPath: this.driver.getSpecPath?.() ?? null,
               // v4 FSM live transition table — present only for FsmDriver. Lets
