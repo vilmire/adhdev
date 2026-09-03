@@ -1211,6 +1211,26 @@ export {
   enqueueTerminalOutbox,
   drainTurnOutbox,
 } from './mesh/mesh-turn-ledger.js';
+// Stage 5b-1: the enqueue block and its redrive interlock. Exported so the root
+// gate evaluates the SAME policy function the producer does — a gate that
+// reimplemented the interlock could pass while the hot path skipped it.
+// ★ REMOVED IN 5c along with the outbox (§5 row 2).
+export {
+  OUTBOX_ENQUEUE_ENV,
+  resolveOutboxEnqueuePolicy,
+  isTurnOutboxEnqueueBlocked,
+  describeOutboxEnqueuePolicy,
+  getOutboxEnqueueBlockedCount,
+  __resetOutboxEnqueuePolicyForTests,
+  type OutboxEnqueuePolicy,
+  type OutboxEnqueueBlockReason,
+} from './mesh/mesh-turn-outbox-enqueue-policy.js';
+// Stage 5a-1 + 5b-1: the outbox backlog/enqueue-state surface behind
+// `get_status_metadata`. ★ REMOVED IN 5c (§5 row 10).
+export {
+  readTurnOutboxDiagnostics,
+  type TurnOutboxDiagnostics,
+} from './mesh/mesh-turn-outbox-diagnostics.js';
 export {
   configureTerminalRedrive,
   ensureTerminalRedriveConsumer,

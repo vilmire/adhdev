@@ -120,6 +120,13 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // `getTurnLedgerMetrics`, which is a plain MeshRuntimeStore-backed
             // read — no boot-time arming like `beacon` above, so it is called
             // directly rather than via a ctx.deps getter closure.
+            //
+            // Also carries the Stage 5b-1 enqueue state (`enqueueBlocked`,
+            // `enqueueBlockReason`, `enqueueSuppressed`). Read those WITH
+            // `backlogPending`: blocked + a falling backlog is the intended 5b-1
+            // transition, while `enqueueBlockReason: 'redrive_disabled'` means
+            // the interlock REFUSED a requested block because the redrive leg is
+            // off — the outbox is still enqueueing, deliberately.
             outbox: readTurnOutboxDiagnostics(),
             // Stage 5, 5a-3: the 5a→5b gate's evidence that the redrive
             // consumer (5a-2) is actually keeping up with the legacy outbox

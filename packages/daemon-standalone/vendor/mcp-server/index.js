@@ -50886,6 +50886,1589 @@ Next step: ${nextStep}`;
         inFlight = /* @__PURE__ */ new Set();
       }
     });
+    function truncateString(value, maxChars) {
+      if (value.length <= maxChars) return value;
+      if (maxChars <= 12) return value.slice(0, Math.max(0, maxChars));
+      return `${value.slice(0, maxChars - 12)}...[truncated]`;
+    }
+    function trimStructuredStrings(value, maxChars) {
+      if (typeof value === "string") return truncateString(value, maxChars);
+      if (Array.isArray(value)) return value.map((item) => trimStructuredStrings(item, maxChars));
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(
+        Object.entries(value).map(([key2, nested]) => [key2, trimStructuredStrings(nested, maxChars)])
+      );
+    }
+    function estimateBytes(value) {
+      try {
+        return JSON.stringify(value).length;
+      } catch {
+        return String(value ?? "").length;
+      }
+    }
+    function trimMessageForStatus(message, stringLimit) {
+      if (!message || typeof message !== "object") return message;
+      return trimStructuredStrings(message, stringLimit);
+    }
+    function normalizeMessageTime(message) {
+      if (!message || typeof message !== "object") return message;
+      const msg = message;
+      if (msg.receivedAt == null) {
+        const fallback = msg.timestamp ?? msg.createdAt;
+        if (fallback != null) {
+          const ts2 = typeof fallback === "string" ? Date.parse(fallback) : Number(fallback);
+          if (Number.isFinite(ts2) && ts2 > 0) msg.receivedAt = ts2;
+        }
+      }
+      return msg;
+    }
+    function trimMessagesForStatus(messages, options) {
+      if (!options.includeMessages || options.messageLimit <= 0 || options.totalBytesLimit <= 0) return [];
+      if (!Array.isArray(messages) || messages.length === 0) return [];
+      const recent = messages.slice(-options.messageLimit);
+      const kept = [];
+      let totalBytes = 0;
+      for (let i = recent.length - 1; i >= 0; i -= 1) {
+        let normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.stringLimit));
+        let size = estimateBytes(normalized);
+        if (size > options.totalBytesLimit) {
+          normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.fallbackStringLimit));
+          size = estimateBytes(normalized);
+        }
+        if (kept.length > 0 && totalBytes + size > options.totalBytesLimit) {
+          continue;
+        }
+        kept.push(normalized);
+        totalBytes += size;
+      }
+      return kept.reverse();
+    }
+    function hasApprovalButtons(activeModal) {
+      return (activeModal?.buttons?.length ?? 0) > 0;
+    }
+    function normalizeManagedStatus(status, opts) {
+      if (hasApprovalButtons(opts?.activeModal)) return "waiting_approval";
+      const normalized = String(status || "idle").trim().toLowerCase();
+      if (normalized === "waiting_approval") return "waiting_approval";
+      if (normalized === "waiting_choice") return "waiting_choice";
+      if (normalized === "finalizing") return "finalizing";
+      if (WORKING_STATUSES2.has(normalized)) return "generating";
+      if (normalized === "error") return "error";
+      if (normalized === "stopped") return "stopped";
+      if (normalized === "starting") return "starting";
+      if (normalized === "panel_hidden") return "panel_hidden";
+      if (normalized === "not_monitored") return "not_monitored";
+      if (normalized === "disconnected") return "disconnected";
+      return "idle";
+    }
+    function isManagedStatusWorking(status) {
+      return normalizeManagedStatus(status) === "generating";
+    }
+    function isManagedStatusWaiting(status, opts) {
+      return normalizeManagedStatus(status, opts) === "waiting_approval";
+    }
+    function normalizeActiveChatData(activeChat, options = FULL_STATUS_ACTIVE_CHAT_OPTIONS) {
+      if (!activeChat) return activeChat;
+      const resolvedOptions = {
+        ...FULL_STATUS_ACTIVE_CHAT_OPTIONS,
+        ...options
+      };
+      const {
+        messages: _messages,
+        ...rest
+      } = activeChat;
+      const normalized = {
+        ...rest,
+        status: normalizeManagedStatus(activeChat.status, { activeModal: activeChat.activeModal }),
+        activeModal: resolvedOptions.includeActiveModal && activeChat.activeModal ? {
+          message: truncateString(activeChat.activeModal.message || "", STATUS_MODAL_MESSAGE_LIMIT),
+          buttons: (activeChat.activeModal.buttons || []).map(
+            (button) => truncateString(String(button || ""), STATUS_MODAL_BUTTON_LIMIT)
+          )
+        } : null,
+        inputContent: resolvedOptions.includeInputContent && activeChat.inputContent ? truncateString(activeChat.inputContent, 2 * 1024) : void 0
+      };
+      if (resolvedOptions.includeMessages) {
+        normalized.messages = trimMessagesForStatus(activeChat.messages, resolvedOptions);
+      }
+      return normalized;
+    }
+    var WORKING_STATUSES2;
+    var FULL_STATUS_ACTIVE_CHAT_OPTIONS;
+    var LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
+    var STATUS_MODAL_MESSAGE_LIMIT;
+    var STATUS_MODAL_BUTTON_LIMIT;
+    var init_normalize = __esm2({
+      "src/status/normalize.ts"() {
+        "use strict";
+        WORKING_STATUSES2 = /* @__PURE__ */ new Set([
+          "generating",
+          "streaming",
+          "loading",
+          "loading_reference",
+          "thinking",
+          "active"
+        ]);
+        FULL_STATUS_ACTIVE_CHAT_OPTIONS = {
+          includeMessages: true,
+          includeInputContent: true,
+          includeActiveModal: true,
+          messageLimit: 60,
+          totalBytesLimit: 96 * 1024,
+          stringLimit: 4 * 1024,
+          fallbackStringLimit: 1024
+        };
+        LIVE_STATUS_ACTIVE_CHAT_OPTIONS = {
+          includeMessages: false,
+          includeInputContent: false,
+          includeActiveModal: false,
+          messageLimit: 0,
+          totalBytesLimit: 0,
+          stringLimit: 512,
+          fallbackStringLimit: 256
+        };
+        STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
+        STATUS_MODAL_BUTTON_LIMIT = 120;
+      }
+    });
+    function turnStageToSurfaceStatus(stage) {
+      switch (stage) {
+        case "accepted":
+        case "delivered":
+          return "starting";
+        case "consumed":
+        case "generating":
+          return "generating";
+        case "waiting_approval":
+          return "waiting_approval";
+        case "waiting_choice":
+          return "waiting_choice";
+        case "finalizing":
+          return "finalizing";
+        case "completed":
+          return "idle";
+        case "failed":
+          return "error";
+        case "cancelled":
+          return "stopped";
+      }
+    }
+    function ageMs(nowMs, iso) {
+      if (!iso) return null;
+      const ts2 = Date.parse(iso);
+      return Number.isFinite(ts2) ? Math.max(0, nowMs - ts2) : null;
+    }
+    function isStaleTurnAttemptAuthority(row, nowMs) {
+      if (!STALE_GATED_STAGES.has(row.stage)) return false;
+      const age = ageMs(nowMs, row.updatedAt ?? null);
+      return age !== null && age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
+    }
+    function presentationFromAttemptRow(row, nowMs = Date.now()) {
+      const stage = row.stage;
+      return {
+        authority: "turn_reducer",
+        status: turnStageToSurfaceStatus(stage),
+        stage,
+        terminalOutcome: row.terminalOutcome ?? null,
+        terminalReason: row.terminalReason ?? null,
+        meshId: row.meshId,
+        taskId: row.taskId,
+        attemptId: row.attemptId,
+        attemptSeq: row.attemptSeq,
+        sessionId: row.sessionId ?? null,
+        nodeId: row.nodeId ?? null,
+        providerType: row.providerType ?? null,
+        acceptedAt: row.acceptedAt ?? null,
+        deliveredAt: row.deliveredAt ?? null,
+        consumedAt: row.consumedAt ?? null,
+        terminalAt: row.terminalAt ?? null,
+        updatedAt: row.updatedAt ?? null,
+        projectionAgeMs: ageMs(nowMs, row.updatedAt),
+        approvalAgeMs: stage === "waiting_approval" ? ageMs(nowMs, row.updatedAt) : null,
+        choiceAgeMs: stage === "waiting_choice" ? ageMs(nowMs, row.updatedAt) : null,
+        finalizingAgeMs: stage === "finalizing" ? ageMs(nowMs, row.updatedAt) : null
+      };
+    }
+    function resolveTurnAttemptRow(lookup) {
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        const meshId = typeof lookup.meshId === "string" && lookup.meshId.trim() ? lookup.meshId.trim() : null;
+        const taskId = typeof lookup.taskId === "string" && lookup.taskId.trim() ? lookup.taskId.trim() : null;
+        if (meshId && taskId) {
+          const row = store.getCurrentTurnAttempt(meshId, taskId);
+          if (row) return row;
+        }
+        const sessionId = typeof lookup.sessionId === "string" && lookup.sessionId.trim() ? lookup.sessionId.trim() : null;
+        if (sessionId) return store.getLatestTurnAttemptForSession(sessionId);
+        return null;
+      } catch {
+        return null;
+      }
+    }
+    function resolveSessionTurnPresentation(args) {
+      const nowMs = args.nowMs ?? Date.now();
+      const row = resolveTurnAttemptRow(args);
+      if (row && !isStaleTurnAttemptAuthority(row, nowMs)) {
+        const presentation = presentationFromAttemptRow(row, nowMs);
+        recordProjectionSource("turn_reducer");
+        shadowCompareLegacyVsProjection(args.surface, args.providerType ?? row.providerType, args.legacyStatus, presentation);
+        observePresentationAges(presentation);
+        return presentation;
+      }
+      recordProjectionSource("provider_fsm_fallback");
+      return {
+        authority: "provider_fsm_fallback",
+        status: normalizeManagedStatus(args.legacyStatus),
+        stage: null,
+        terminalOutcome: null,
+        terminalReason: null,
+        meshId: null,
+        taskId: null,
+        attemptId: null,
+        attemptSeq: null,
+        sessionId: typeof args.sessionId === "string" ? args.sessionId : null,
+        nodeId: null,
+        providerType: args.providerType ?? null,
+        acceptedAt: null,
+        deliveredAt: null,
+        consumedAt: null,
+        terminalAt: null,
+        updatedAt: null,
+        projectionAgeMs: null,
+        approvalAgeMs: null,
+        choiceAgeMs: null,
+        finalizingAgeMs: null
+      };
+    }
+    function isRestartBlockingPresentation(presentation, legacyBlocking) {
+      if (presentation.authority !== "turn_reducer") return legacyBlocking;
+      return presentation.stage !== null && !isTerminalTurnStage(presentation.stage);
+    }
+    function getTurnPresentationMetrics() {
+      return {
+        projectionSource: { ...presentationMetrics.projectionSource },
+        shadowAgreements: presentationMetrics.shadowAgreements,
+        shadowDivergences: { ...presentationMetrics.shadowDivergences },
+        shadowDivergenceTotal: presentationMetrics.shadowDivergenceTotal,
+        maxProjectionAgeMs: presentationMetrics.maxProjectionAgeMs,
+        maxFinalizingAgeMs: presentationMetrics.maxFinalizingAgeMs,
+        maxApprovalAgeMs: presentationMetrics.maxApprovalAgeMs,
+        maxChoiceAgeMs: presentationMetrics.maxChoiceAgeMs
+      };
+    }
+    function recordProjectionSource(source) {
+      presentationMetrics.projectionSource[source] += 1;
+    }
+    function observePresentationAges(p) {
+      if (p.projectionAgeMs !== null) presentationMetrics.maxProjectionAgeMs = Math.max(presentationMetrics.maxProjectionAgeMs, p.projectionAgeMs);
+      if (p.finalizingAgeMs !== null) presentationMetrics.maxFinalizingAgeMs = Math.max(presentationMetrics.maxFinalizingAgeMs, p.finalizingAgeMs);
+      if (p.approvalAgeMs !== null) presentationMetrics.maxApprovalAgeMs = Math.max(presentationMetrics.maxApprovalAgeMs, p.approvalAgeMs);
+      if (p.choiceAgeMs !== null) presentationMetrics.maxChoiceAgeMs = Math.max(presentationMetrics.maxChoiceAgeMs, p.choiceAgeMs);
+    }
+    function classifyShadowDivergence(legacyStatus, presentation) {
+      const stage = presentation.stage;
+      const legacyWorking = legacyStatus === "generating" || legacyStatus === "starting";
+      const legacyWaiting = legacyStatus === "waiting_approval" || legacyStatus === "waiting_choice";
+      if (stage && isTerminalTurnStage(stage)) {
+        return legacyWorking || legacyWaiting ? "legacy_busy_turn_terminal" : "stage_mismatch_other";
+      }
+      if (legacyStatus === "idle") return "legacy_idle_turn_active";
+      if (stage === "waiting_approval" || stage === "waiting_choice") {
+        if (legacyWaiting && legacyStatus !== stage) return "legacy_approval_choice_confusion";
+        if (legacyWorking) return "legacy_working_turn_suspended";
+        return "stage_mismatch_other";
+      }
+      if (stage === "finalizing") return legacyWorking ? "legacy_working_turn_finalizing" : "stage_mismatch_other";
+      return "stage_mismatch_other";
+    }
+    function shadowCompareLegacyVsProjection(surface, providerType, legacyStatus, presentation) {
+      if (legacyStatus === null || legacyStatus === void 0) return;
+      const legacyNorm = normalizeManagedStatus(legacyStatus);
+      if (legacyNorm === presentation.status) {
+        presentationMetrics.shadowAgreements += 1;
+        return;
+      }
+      const reason = classifyShadowDivergence(legacyNorm, presentation);
+      const provider = providerType && providerType.trim() ? providerType.trim() : "unknown";
+      const key2 = `${reason}|${surface}|${provider}`;
+      presentationMetrics.shadowDivergenceTotal += 1;
+      if (presentationMetrics.shadowDivergences[key2] !== void 0) {
+        presentationMetrics.shadowDivergences[key2] += 1;
+      } else if (Object.keys(presentationMetrics.shadowDivergences).length < MAX_DIVERGENCE_KEYS) {
+        presentationMetrics.shadowDivergences[key2] = 1;
+      } else {
+        presentationMetrics.shadowDivergences[OVERFLOW_KEY] = (presentationMetrics.shadowDivergences[OVERFLOW_KEY] ?? 0) + 1;
+      }
+      if (!divergenceLogOnce.has(key2)) {
+        divergenceLogOnce.add(key2);
+        if (divergenceLogOnce.size > MAX_DIVERGENCE_KEYS) divergenceLogOnce.clear();
+        LOG.info("TurnPresentation", `Shadow divergence (${reason}) surface=${surface} provider=${provider} legacy=${legacyNorm} projected=${presentation.status} stage=${presentation.stage ?? "none"} task=${presentation.taskId ?? "none"} attempt=${presentation.attemptId ?? "none"}`);
+      }
+    }
+    var STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
+    var STALE_GATED_STAGES;
+    var MAX_DIVERGENCE_KEYS;
+    var OVERFLOW_KEY;
+    var presentationMetrics;
+    var divergenceLogOnce;
+    var init_mesh_turn_presentation = __esm2({
+      "src/mesh/mesh-turn-presentation.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_turn_ledger();
+        init_logger();
+        init_normalize();
+        STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1e3;
+        STALE_GATED_STAGES = /* @__PURE__ */ new Set(["generating", "consumed"]);
+        MAX_DIVERGENCE_KEYS = 200;
+        OVERFLOW_KEY = "overflow|__overflow__|__overflow__";
+        presentationMetrics = {
+          projectionSource: { turn_reducer: 0, provider_fsm_fallback: 0 },
+          shadowAgreements: 0,
+          shadowDivergences: {},
+          shadowDivergenceTotal: 0,
+          maxProjectionAgeMs: 0,
+          maxFinalizingAgeMs: 0,
+          maxApprovalAgeMs: 0,
+          maxChoiceAgeMs: 0
+        };
+        divergenceLogOnce = /* @__PURE__ */ new Set();
+      }
+    });
+    function s(v) {
+      return typeof v === "string" && v.trim() ? v.trim() : "";
+    }
+    function meshEventTraceKey(ctx) {
+      const segs = [`task=${s(ctx.taskId) || "-"}`];
+      const eventId = s(ctx.eventId);
+      if (eventId) segs.push(`evt=${eventId}`);
+      segs.push(`sess=${s(ctx.sessionId) || "-"}`);
+      const nodeId = s(ctx.nodeId);
+      if (nodeId) segs.push(`node=${nodeId}`);
+      const meshId = s(ctx.meshId);
+      if (meshId) segs.push(`mesh=${meshId}`);
+      const event = s(ctx.event);
+      if (event) segs.push(`event=${event}`);
+      return segs.join(" ");
+    }
+    function traceMeshEventStage(stage, ctx, detail) {
+      LOG.info(CAT, `[stage:${stage}] ${meshEventTraceKey(ctx)}${detail ? ` \u2014 ${detail}` : ""}`);
+    }
+    function traceMeshEventDrop(reason, ctx, detail) {
+      LOG.warn(CAT, `[drop:${reason}] ${meshEventTraceKey(ctx)}${detail ? ` \u2014 ${detail}` : ""}`);
+    }
+    var CAT;
+    var init_mesh_event_trace = __esm2({
+      "src/mesh/mesh-event-trace.ts"() {
+        "use strict";
+        init_logger();
+        CAT = "EvtTrace";
+      }
+    });
+    function isSupportedMeshProtocolVersion(value) {
+      return typeof value === "string" && SUPPORTED_MESH_PROTOCOL_VERSIONS.includes(value);
+    }
+    function coordinatorIdentityEquals(a, b) {
+      return daemonIdsEquivalent4(a.daemonId, b.daemonId) && a.coordinatorRunId === b.coordinatorRunId && (a.sessionId ?? "") === (b.sessionId ?? "");
+    }
+    function coordinatorIdentityKey(identity) {
+      const daemonCore = machineCoreFromDaemonId(identity.daemonId) ?? identity.daemonId;
+      return `${daemonCore}|${identity.coordinatorRunId}|${identity.sessionId ?? ""}`;
+    }
+    function isMeshEventScope(value) {
+      return typeof value === "string" && MESH_EVENT_SCOPES.includes(value);
+    }
+    function isNonEmptyString(value) {
+      return typeof value === "string" && value.length > 0;
+    }
+    function assertCoordinatorIdentity(raw, path66) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, path66, "must be an object");
+      }
+      const obj = raw;
+      if (!isNonEmptyString(obj.daemonId)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.daemonId`, "must be a non-empty string");
+      }
+      if (!isNonEmptyString(obj.coordinatorRunId)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.coordinatorRunId`, "must be a non-empty string");
+      }
+      const sessionId = obj.sessionId;
+      if (sessionId !== void 0 && !isNonEmptyString(sessionId)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.sessionId`, "must be a non-empty string when provided");
+      }
+      return sessionId !== void 0 ? { daemonId: obj.daemonId, coordinatorRunId: obj.coordinatorRunId, sessionId } : { daemonId: obj.daemonId, coordinatorRunId: obj.coordinatorRunId };
+    }
+    function assertPendingMeshCoordinatorEventV2(raw, path66 = "$") {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, path66, "must be an object");
+      }
+      const obj = raw;
+      if (!isSupportedMeshProtocolVersion(obj.protocolVersion)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.protocolVersion`, `must be one of ${SUPPORTED_MESH_PROTOCOL_VERSIONS.join(", ")}`);
+      }
+      if (!isNonEmptyString(obj.eventId)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.eventId`, "must be a non-empty string");
+      }
+      if (!isMeshEventScope(obj.scope)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.scope`, `must be one of ${MESH_EVENT_SCOPES.join(", ")}`);
+      }
+      if (!isNonEmptyString(obj.event)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.event`, "must be a non-empty string");
+      }
+      if (!isNonEmptyString(obj.meshId)) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.meshId`, "must be a non-empty string");
+      }
+      const dispatchedBy = assertCoordinatorIdentity(obj.dispatchedBy, `${path66}.dispatchedBy`);
+      if (obj.scope === "unicast") {
+        if (!obj.intendedFor) {
+          throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.intendedFor`, "unicast scope requires intendedFor");
+        }
+      } else if (obj.intendedFor !== void 0) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.intendedFor`, "only unicast scope may set intendedFor");
+      }
+      const intendedFor = obj.intendedFor ? assertCoordinatorIdentity(obj.intendedFor, `${path66}.intendedFor`) : void 0;
+      const metadata = obj.metadataEvent && typeof obj.metadataEvent === "object" && !Array.isArray(obj.metadataEvent) ? obj.metadataEvent : null;
+      if (!metadata) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.metadataEvent`, "must be an object");
+      }
+      const queuedAt = typeof obj.queuedAt === "number" && Number.isFinite(obj.queuedAt) ? obj.queuedAt : null;
+      if (queuedAt === null) {
+        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.queuedAt`, "must be a finite number");
+      }
+      return {
+        event: obj.event,
+        meshId: obj.meshId,
+        nodeLabel: isNonEmptyString(obj.nodeLabel) ? obj.nodeLabel : "",
+        nodeId: typeof obj.nodeId === "string" ? obj.nodeId : void 0,
+        workspace: typeof obj.workspace === "string" ? obj.workspace : void 0,
+        metadataEvent: metadata,
+        coordinatorMessage: typeof obj.coordinatorMessage === "string" ? obj.coordinatorMessage : void 0,
+        queuedAt,
+        protocolVersion: obj.protocolVersion,
+        eventId: obj.eventId,
+        scope: obj.scope,
+        dispatchedBy,
+        ...intendedFor ? { intendedFor } : {}
+      };
+    }
+    function shouldDeliverPendingEventToCoordinator(event, drainer) {
+      if (event.scope === "system") return false;
+      if (event.scope === "broadcast") return true;
+      if (!event.intendedFor) return false;
+      return coordinatorIdentityEquals(event.intendedFor, drainer);
+    }
+    function isTerminalTaskEvent(eventName) {
+      return TERMINAL_TASK_EVENTS.has(eventName);
+    }
+    function defaultScopeForEvent(eventName) {
+      if (TERMINAL_TASK_EVENTS.has(eventName) || COORDINATOR_ALERT_EVENTS.has(eventName)) return "unicast";
+      return "broadcast";
+    }
+    function coordinatorIdentityFromEmitFields2(fields) {
+      const daemonId = typeof fields.daemonId === "string" && fields.daemonId.length > 0 ? fields.daemonId : void 0;
+      if (!daemonId) return void 0;
+      const coordinatorRunId = typeof fields.coordinatorRunId === "string" && fields.coordinatorRunId.length > 0 ? fields.coordinatorRunId : daemonId;
+      const sessionId = typeof fields.sessionId === "string" && fields.sessionId.length > 0 ? fields.sessionId : void 0;
+      return sessionId !== void 0 ? { daemonId, coordinatorRunId, sessionId } : { daemonId, coordinatorRunId };
+    }
+    function buildPendingEventEmitStamp(opts) {
+      if (!opts.dispatchedBy) return void 0;
+      let scope = opts.scope ?? defaultScopeForEvent(opts.eventName);
+      let intendedFor = opts.intendedFor;
+      if (scope === "unicast" && !intendedFor) {
+        if (isTerminalTaskEvent(opts.eventName)) {
+          intendedFor = opts.dispatchedBy;
+        } else {
+          scope = "broadcast";
+        }
+      }
+      if (scope !== "unicast") intendedFor = void 0;
+      return {
+        protocolVersion: MESH_PROTOCOL_VERSION_V2,
+        eventId: opts.eventId,
+        scope,
+        dispatchedBy: opts.dispatchedBy,
+        ...intendedFor ? { intendedFor } : {}
+      };
+    }
+    var MESH_PROTOCOL_VERSION_V1;
+    var MESH_PROTOCOL_VERSION_V2;
+    var SUPPORTED_MESH_PROTOCOL_VERSIONS;
+    var MESH_EVENT_SCOPES;
+    var MeshContractViolationError;
+    var TERMINAL_TASK_EVENTS;
+    var COORDINATOR_ALERT_EVENTS;
+    var init_contracts = __esm2({
+      "src/mesh/contracts.ts"() {
+        "use strict";
+        init_dist();
+        MESH_PROTOCOL_VERSION_V1 = "1.0";
+        MESH_PROTOCOL_VERSION_V2 = "2.0";
+        SUPPORTED_MESH_PROTOCOL_VERSIONS = [
+          MESH_PROTOCOL_VERSION_V1,
+          MESH_PROTOCOL_VERSION_V2
+        ];
+        MESH_EVENT_SCOPES = ["unicast", "broadcast", "system"];
+        MeshContractViolationError = class extends Error {
+          violationPath;
+          protocolVersion;
+          constructor(protocolVersion, violationPath, detail) {
+            super(`mesh contract ${protocolVersion} violation at ${violationPath}: ${detail}`);
+            this.name = "MeshContractViolationError";
+            this.violationPath = violationPath;
+            this.protocolVersion = protocolVersion;
+          }
+        };
+        TERMINAL_TASK_EVENTS = /* @__PURE__ */ new Set([
+          "agent:generating_completed",
+          "agent:stopped",
+          "refine:completed",
+          "refine:failed",
+          "refine:accepted"
+        ]);
+        COORDINATOR_ALERT_EVENTS = /* @__PURE__ */ new Set([
+          "mesh:dispatch_blocked"
+        ]);
+      }
+    });
+    function normalizeCoordinatorDaemonIds(coordinatorDaemonId) {
+      return expandDaemonIdForms(coordinatorDaemonId);
+    }
+    function isMeshProtocolV2EnforceEnabled() {
+      const raw = readNonEmptyString(process.env.MESH_PROTOCOL_V2_ENFORCE);
+      if (!raw) return true;
+      const v = raw.trim().toLowerCase();
+      return !(v === "0" || v === "false" || v === "off" || v === "no");
+    }
+    function ledgerRecordQuarantinedEvent(event, reason) {
+      try {
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent || {});
+        appendLedgerEntry3(event.meshId, {
+          kind: "event_held",
+          ...event.nodeId ? { nodeId: event.nodeId } : {},
+          payload: {
+            event: event.event,
+            reason,
+            recoverable: true,
+            nodeLabel: event.nodeLabel,
+            ...event.workspace ? { workspace: event.workspace } : {},
+            targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+            ...readNonEmptyString(event.eventId) ? { eventId: event.eventId } : {},
+            queuedAt: event.queuedAt,
+            ...finalSummary ? { finalSummary } : {},
+            // Full original event so mesh_requeue_held_events can restore it
+            // losslessly (event_held→pending). The summary/label fields above stay
+            // for human-readable audit; `heldEvent` is the machine recovery copy.
+            heldEvent: event
+          }
+        });
+      } catch (e) {
+        LOG.warn("MeshEventsV2", `Failed to ledger-record v2-quarantined ${event.event} for mesh ${event.meshId}: ${e?.message || e}`);
+      }
+    }
+    function getMeshV2DrainCounters() {
+      return { ...meshV2DrainCounters };
+    }
+    function warnV2Once(key2, message) {
+      if (warnedV2Violations.has(key2)) return;
+      warnedV2Violations.add(key2);
+      if (warnedV2Violations.size > 2e3) {
+        const first = warnedV2Violations.values().next().value;
+        if (first !== void 0) warnedV2Violations.delete(first);
+      }
+      LOG.warn("MeshEventsV2", message);
+    }
+    function resolveDrainerIdentity(daemonIds, explicit) {
+      if (explicit) return explicit;
+      return coordinatorIdentityFromEmitFields2({ daemonId: daemonIds[0] });
+    }
+    function isV2Event(event) {
+      return event.protocolVersion === MESH_PROTOCOL_VERSION_V2;
+    }
+    function runIdIsDaemonFormFallback(identity) {
+      return daemonIdsEquivalent4(identity.coordinatorRunId, identity.daemonId);
+    }
+    function identityDeliversTo(intendedFor, drainer) {
+      if (runIdIsDaemonFormFallback(intendedFor) && runIdIsDaemonFormFallback(drainer)) {
+        if (!daemonIdsEquivalent4(intendedFor.daemonId, drainer.daemonId)) return false;
+        if (intendedFor.sessionId && drainer.sessionId) {
+          return intendedFor.sessionId === drainer.sessionId;
+        }
+        return true;
+      }
+      return coordinatorIdentityEquals(intendedFor, drainer);
+    }
+    function routeV2EventsForDrainer(events, drainer, ctx) {
+      if (!drainer) return events;
+      const enforce = isMeshProtocolV2EnforceEnabled();
+      const bump = (k) => {
+        if (ctx.countMetrics) meshV2DrainCounters[k]++;
+      };
+      const kept = [];
+      for (const event of events) {
+        if (!isV2Event(event)) {
+          if (enforce) {
+            bump("v1UnversionedQuarantined");
+            if (ctx.countMetrics) ledgerRecordQuarantinedEvent(event, "v2_enforce_unversioned_quarantined");
+            warnV2Once(
+              `${event.meshId}::${event.eventId ?? event.event}::v1-quarantined`,
+              `v2 ENFORCE: unversioned ${event.event} on mesh ${event.meshId} QUARANTINED (no v2 envelope \u2014 held back, not delivered; ledger-recorded recoverable). A producer path still emits v1.`
+            );
+            continue;
+          }
+          bump("v1BroadcastAccepted");
+          kept.push(event);
+          continue;
+        }
+        let validated;
+        try {
+          validated = assertPendingMeshCoordinatorEventV2(event);
+        } catch (e) {
+          if (enforce) {
+            bump("v2ValidationFailedQuarantined");
+            if (ctx.countMetrics) ledgerRecordQuarantinedEvent(event, "v2_enforce_validation_failed_quarantined");
+            warnV2Once(
+              `${event.meshId}::${event.eventId ?? event.event}::invalid-quarantined`,
+              `v2 ENFORCE: envelope validation failed for ${event.event} on mesh ${event.meshId} \u2014 QUARANTINED (held back, not delivered; ledger-recorded recoverable): ${e?.message || e}`
+            );
+            continue;
+          }
+          bump("v2ValidationFailedAccepted");
+          warnV2Once(
+            `${event.meshId}::${event.eventId ?? event.event}::invalid`,
+            `v2 envelope validation failed for ${event.event} on mesh ${event.meshId} \u2014 PASSED THROUGH (accept mode): ${e?.message || e}`
+          );
+          kept.push(event);
+          continue;
+        }
+        const eventId = validated.eventId;
+        if (ctx.batchSeen.has(eventId) || ctx.alreadyDrained(eventId)) {
+          bump("v2DedupSkipped");
+          continue;
+        }
+        if (validated.scope !== "unicast") {
+          if (validated.scope === "broadcast" && isTerminalTaskEvent(validated.event)) {
+            const deliverSelfFallback = event.dispatchedBySelfFallback && daemonIdsEquivalent4(validated.dispatchedBy.daemonId, drainer.daemonId);
+            if (deliverSelfFallback || identityDeliversTo(validated.dispatchedBy, drainer)) {
+              ctx.batchSeen.add(eventId);
+              bump("v2Delivered");
+              kept.push(event);
+            } else {
+              bump("v2RoutedAway");
+            }
+            continue;
+          }
+          if (shouldDeliverPendingEventToCoordinator(validated, drainer)) {
+            ctx.batchSeen.add(eventId);
+            bump("v2Delivered");
+            kept.push(event);
+          } else {
+            bump("v2RoutedAway");
+          }
+          continue;
+        }
+        if (validated.intendedFor && !validated.intendedFor.sessionId && daemonIdsEquivalent4(validated.intendedFor.daemonId, drainer.daemonId)) {
+          const liveSessions = ctx.countLiveCoordinatorSessions?.(validated.intendedFor.daemonId) ?? 0;
+          if (liveSessions > 1) {
+            warnV2Once(
+              `${event.meshId}::${eventId}::ambiguous-unicast`,
+              `v2 unicast ${event.event} on mesh ${event.meshId} carries NO coordinator session but ${liveSessions} coordinator sessions are live on ${validated.intendedFor.daemonId} \u2014 delivery is first-come-first-served and may reach the wrong coordinator. Delivered to ${coordinatorIdentityKey(drainer)}. The EMITTING path must stamp targetCoordinatorSessionId.`
+            );
+            bump("v2AmbiguousUnicastDelivered");
+          }
+        }
+        if (validated.intendedFor && identityDeliversTo(validated.intendedFor, drainer)) {
+          ctx.batchSeen.add(eventId);
+          bump("v2Delivered");
+          LOG.debug("MeshEventsV2", `unicast ${event.event} (mesh ${event.meshId}, eventId ${eventId}) delivered to ${coordinatorIdentityKey(drainer)}; intendedFor=${coordinatorIdentityKey(validated.intendedFor)}`);
+          kept.push(event);
+          continue;
+        }
+        const realRunIdMismatch = !runIdIsDaemonFormFallback(validated.intendedFor) || !runIdIsDaemonFormFallback(drainer);
+        if (validated.intendedFor && realRunIdMismatch && daemonIdsEquivalent4(validated.intendedFor.daemonId, drainer.daemonId)) {
+          ctx.batchSeen.add(eventId);
+          bump("v2ReattributedToDrainer");
+          warnV2Once(
+            `${event.meshId}::${eventId}::reattributed`,
+            `v2 unicast ${event.event} on mesh ${event.meshId} re-attributed to current coordinator ${coordinatorIdentityKey(drainer)} (originating coordinatorRunId no longer live)`
+          );
+          kept.push(event);
+          continue;
+        }
+        LOG.debug("MeshEventsV2", `unicast ${event.event} (mesh ${event.meshId}, eventId ${eventId}) NOT delivered to ${coordinatorIdentityKey(drainer)}; intendedFor=${validated.intendedFor ? coordinatorIdentityKey(validated.intendedFor) : "none"} \u2014 left for its own drainer`);
+        bump("v2RoutedAway");
+      }
+      return kept;
+    }
+    function readRefineJobId2(event) {
+      const metadata = readRecord2(event.metadataEvent) || event;
+      const result = readRecord2(metadata.result);
+      const refineJob = readRecord2(result?.refineJob);
+      return readNonEmptyString(metadata.jobId) || readNonEmptyString(refineJob?.jobId);
+    }
+    function hasPendingRefineTerminalEventDuplicate(event) {
+      if (!REFINE_TERMINAL_EVENTS.has(event.event)) return false;
+      const jobId = readRefineJobId2(event);
+      if (!jobId) return false;
+      try {
+        return MeshRuntimeStore.getInstance().peekPendingEvents(event.meshId).some(
+          (row) => row.event === event.event && readRefineJobId2(row.payload) === jobId
+        );
+      } catch {
+        return false;
+      }
+    }
+    function buildPendingEventFingerprint(event) {
+      const metadata = readRecord2(event.metadataEvent) || {};
+      if (event.event === "worktree_bootstrap_complete" || event.event === "worktree_bootstrap_failed") {
+        return [event.meshId, event.event, event.nodeId || ""].join("::");
+      }
+      if (TERMINAL_COMPLETION_EVENTS.has(event.event)) {
+        const terminalTaskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
+        if (terminalTaskId) {
+          return [
+            event.meshId,
+            event.event,
+            terminalTaskId,
+            isWeakCompletionMetadata(metadata) ? "weak" : "genuine"
+          ].join("::");
+        }
+      }
+      const consensusGroupId = readNonEmptyString(metadata.consensusGroupId) || readNonEmptyString(readRecord2(metadata.payload)?.consensusGroupId);
+      if (consensusGroupId) {
+        const groupTaskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
+        return [event.meshId, event.event, groupTaskId || "", consensusGroupId, "group"].join("::");
+      }
+      const sessionId = resolveEventSessionId(metadata);
+      const providerSessionId = readNonEmptyString(metadata.providerSessionId);
+      const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
+      const jobId = readRefineJobId2(event);
+      const timestamp2 = metadata.timestamp !== void 0 && metadata.timestamp !== null ? String(metadata.timestamp) : "";
+      const alertReason = COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT.has(event.event) ? readNonEmptyString(metadata.reason) : void 0;
+      return [
+        event.meshId,
+        event.event,
+        event.nodeId || "",
+        sessionId || "",
+        providerSessionId || "",
+        taskId || "",
+        jobId || "",
+        timestamp2 || "",
+        ...alertReason ? [alertReason] : []
+      ].join("::");
+    }
+    function isDurablyDedupedEvent(event) {
+      if (!TERMINAL_COMPLETION_EVENTS.has(event.event)) return false;
+      const metadata = readRecord2(event.metadataEvent) || {};
+      const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
+      return !!taskId;
+    }
+    function recordDurableTerminalDedup(event, fingerprint) {
+      if (!isDurablyDedupedEvent(event)) return;
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        store.recordCompletionFingerprint(event.meshId, `pending::${fingerprint}`, TERMINAL_COMPLETION_DEDUP_TTL_MS);
+        store.sweepExpiredFingerprints();
+      } catch {
+      }
+    }
+    function hasPendingCoordinatorEventDuplicate(event) {
+      const fingerprint = buildPendingEventFingerprint(event);
+      if (!fingerprint.trim()) return false;
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.hasPendingEventFingerprint(event.meshId, fingerprint)) return true;
+        if (isDurablyDedupedEvent(event) && store.hasCompletionFingerprint(event.meshId, `pending::${fingerprint}`)) {
+          return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    }
+    function refineTerminalEventFromLedger(meshId, pending) {
+      const acceptedJobIds = new Set(
+        pending.filter((event) => event.event === "refine:accepted").map((event) => readRefineJobId2(event)).filter(Boolean)
+      );
+      if (acceptedJobIds.size === 0) return [];
+      const existingTerminalJobIds = new Set(
+        pending.filter((event) => REFINE_TERMINAL_EVENTS.has(event.event)).map((event) => `${event.event}:${readRefineJobId2(event)}`).filter((value) => !value.endsWith(":"))
+      );
+      const backfilled = [];
+      const entries = readLedgerEntriesByKind(meshId, ["task_completed", "task_failed"]);
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        const payload = readRecord2(entry.payload);
+        if (payload?.source !== "refine_mesh_node_async_job") continue;
+        const refineJob = readRecord2(payload.refineJob);
+        const jobId = readNonEmptyString(refineJob?.jobId);
+        if (!jobId || !acceptedJobIds.has(jobId)) continue;
+        const eventName = entry.kind === "task_completed" ? "refine:completed" : "refine:failed";
+        if (existingTerminalJobIds.has(`${eventName}:${jobId}`)) continue;
+        existingTerminalJobIds.add(`${eventName}:${jobId}`);
+        const result = readRecord2(payload.result);
+        const metadataEvent = {
+          source: "refine_mesh_node_async_job",
+          jobId,
+          interactionId: readNonEmptyString(refineJob?.interactionId),
+          meshId,
+          nodeId: readNonEmptyString(refineJob?.nodeId) || entry.nodeId,
+          targetDaemonId: readNonEmptyString(refineJob?.targetDaemonId),
+          workspace: readNonEmptyString(refineJob?.workspace),
+          status: eventName === "refine:completed" ? "completed" : "failed",
+          startedAt: readNonEmptyString(refineJob?.startedAt),
+          completedAt: readNonEmptyString(refineJob?.completedAt) || entry.timestamp,
+          retryOfJobId: readNonEmptyString(refineJob?.retryOfJobId) || readNonEmptyString(payload.retryOfJobId),
+          ...result ? { result } : {}
+        };
+        const nodeLabel = readNonEmptyString(refineJob?.nodeId) || entry.nodeId || "refine job";
+        backfilled.push({
+          event: eventName,
+          meshId,
+          nodeLabel,
+          nodeId: readNonEmptyString(refineJob?.nodeId) || entry.nodeId,
+          workspace: readNonEmptyString(refineJob?.workspace),
+          metadataEvent,
+          coordinatorMessage: buildMeshSystemMessage({ event: eventName, nodeLabel, metadataEvent }),
+          queuedAt: Date.now()
+        });
+      }
+      return backfilled.reverse();
+    }
+    function readPendingEventTaskId(event) {
+      const metadataEvent = readRecord2(event.metadataEvent);
+      return readNonEmptyString(metadataEvent?.taskId);
+    }
+    function dropStaleTerminalTaskEvents(meshId, events) {
+      if (!events.some((event) => STALE_TASK_DROPPABLE_EVENTS.has(event.event))) return events;
+      let store;
+      try {
+        store = MeshRuntimeStore.getInstance();
+      } catch {
+        return events;
+      }
+      const terminalByTaskId = /* @__PURE__ */ new Map();
+      const isTaskTerminal = (taskId) => {
+        const cached5 = terminalByTaskId.get(taskId);
+        if (cached5 !== void 0) return cached5;
+        let terminal = false;
+        try {
+          const entry = store.findQueueEntryById(meshId, taskId);
+          terminal = !!entry && STALE_TASK_TERMINAL_STATUSES.has(entry.status);
+        } catch {
+          terminal = false;
+        }
+        terminalByTaskId.set(taskId, terminal);
+        return terminal;
+      };
+      return events.filter((event) => {
+        if (!STALE_TASK_DROPPABLE_EVENTS.has(event.event)) return true;
+        const taskId = readPendingEventTaskId(event);
+        if (!taskId) return true;
+        if (!isTaskTerminal(taskId)) return true;
+        traceMeshEventDrop("stale_task_terminal", {
+          taskId,
+          sessionId: resolveEventSessionId(event.metadataEvent) ?? event.targetCoordinatorSessionId,
+          nodeId: event.nodeId,
+          meshId,
+          event: event.event
+        }, "task row is already terminal (completed/failed/cancelled) \u2014 non-terminal alert is stale");
+        return false;
+      });
+    }
+    function reconcilePendingMeshCoordinatorEvents(meshId, events) {
+      const backfilled = refineTerminalEventFromLedger(meshId, events);
+      const terminalJobIds = new Set(
+        [...events.filter((event) => REFINE_TERMINAL_EVENTS.has(event.event)), ...backfilled].map((event) => readRefineJobId2(event)).filter(Boolean)
+      );
+      const reconciled = terminalJobIds.size === 0 ? events : events.filter((event) => !(event.event === "refine:accepted" && terminalJobIds.has(readRefineJobId2(event))));
+      const fresh = dropStaleTerminalTaskEvents(meshId, reconciled);
+      return backfilled.length === 0 ? fresh : [...fresh, ...backfilled];
+    }
+    function getPendingRetentionCounters() {
+      return { ...pendingRetentionCounters };
+    }
+    function ledgerRecordExpiredUndrainedEvent(row) {
+      try {
+        const restored = row.payload && typeof row.payload === "object" ? row.payload : void 0;
+        const finalSummary = restored?.metadataEvent ? readMeshCompletionSummary(restored.metadataEvent) : void 0;
+        appendLedgerEntry3(row.meshId, {
+          kind: "event_held",
+          ...restored?.nodeId ? { nodeId: restored.nodeId } : {},
+          payload: {
+            event: row.event,
+            reason: PENDING_RETENTION_EXPIRED_HOLD_REASON,
+            recoverable: true,
+            nodeLabel: restored?.nodeLabel ?? "",
+            ...restored?.workspace ? { workspace: restored.workspace } : {},
+            targetCoordinatorDaemonId: restored?.targetCoordinatorDaemonId ?? null,
+            ...readNonEmptyString(restored?.eventId) ? { eventId: restored.eventId } : {},
+            queuedAt: restored?.queuedAt ?? null,
+            ...finalSummary ? { finalSummary } : {},
+            // Full original event so mesh_requeue_held_events can restore it
+            // losslessly (event_held→pending), same as every other event_held feeder.
+            ...restored ? { heldEvent: restored } : {}
+          }
+        });
+      } catch (e) {
+        pendingRetentionCounters.undrainedExpiredMirrorFailed++;
+        LOG.warn("MeshEvents", `Failed to ledger-record retention-expired pending event ${row.event} (row ${row.id}, mesh ${row.meshId}) \u2014 it is being deleted UNRECOVERABLY: ${e?.message || e}`);
+      }
+    }
+    function prunePendingMeshCoordinatorEventsRetention() {
+      try {
+        const { drainedExpired, undrainedExpired, undrainedRows } = MeshRuntimeStore.getInstance().prunePendingEvents({
+          drainedOlderThanMs: PENDING_EVENTS_DRAINED_RETENTION_MS,
+          undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS
+        });
+        pendingRetentionCounters.drainedExpired += drainedExpired;
+        pendingRetentionCounters.undrainedExpired += undrainedExpired;
+        if (undrainedRows.length > 0) {
+          for (const row of undrainedRows) {
+            ledgerRecordExpiredUndrainedEvent(row);
+          }
+          const meshIds = [...new Set(undrainedRows.map((r) => r.meshId))];
+          const droppedAt = (/* @__PURE__ */ new Date()).toISOString();
+          LOG.warn(
+            "MeshEvents",
+            `Pending-event retention DROPPED ${undrainedRows.length} never-delivered event(s) at ${droppedAt} (queued >30d, still undrained) across mesh(es) ${meshIds.join(", ")} \u2014 mirrored to the ledger as event_held (reason: ${PENDING_RETENTION_EXPIRED_HOLD_REASON}); recover with mesh_requeue_held_events.`
+          );
+        }
+        const removed = drainedExpired + undrainedExpired;
+        if (removed > 0) {
+          LOG.info("MeshEvents", `Pruned ${removed} stale pending-event row(s) (drained >7d / undrained >30d)`);
+        } else {
+          pendingRetentionCounters.sweepsNoop++;
+        }
+        return removed;
+      } catch (e) {
+        LOG.warn("MeshEvents", `Pending-event retention prune failed: ${e?.message || e}`);
+        return 0;
+      }
+    }
+    function stampPendingEventV2(event, hint) {
+      if (event.protocolVersion === MESH_PROTOCOL_VERSION_V2 && readNonEmptyString(event.eventId)) {
+        return event;
+      }
+      const coordinatorIdentity = hint?.dispatchedBy ?? coordinatorIdentityFromEmitFields2({
+        daemonId: event.targetCoordinatorDaemonId,
+        coordinatorRunId: hint?.coordinatorRunId,
+        sessionId: event.targetCoordinatorSessionId
+      });
+      const selfFallback = !coordinatorIdentity;
+      const dispatchedBy = coordinatorIdentity ?? coordinatorIdentityFromEmitFields2({
+        daemonId: readNonEmptyString(loadConfig().machineId)
+      });
+      const intendedFor = hint?.intendedFor ?? (selfFallback ? void 0 : coordinatorIdentity);
+      const stamp2 = buildPendingEventEmitStamp({
+        eventName: event.event,
+        eventId: (0, import_crypto5.randomUUID)(),
+        dispatchedBy,
+        intendedFor,
+        // Force broadcast for the self-fallback so a unicast-defaulting terminal
+        // event isn't addressed to this daemon alone; an explicit hint still wins.
+        scope: hint?.scope ?? (selfFallback ? "broadcast" : void 0)
+      });
+      if (!stamp2) return event;
+      const dispatchedBySelfFallback = selfFallback && stamp2.scope === "broadcast";
+      const isWorktreeBootstrapEvent = event.event === "worktree_bootstrap_complete" || event.event === "worktree_bootstrap_failed";
+      const selfFallbackTarget = dispatchedBySelfFallback && !isWorktreeBootstrapEvent && !readNonEmptyString(event.targetCoordinatorDaemonId) && !readNonEmptyString(event.targetCoordinatorSessionId) ? readNonEmptyString(stamp2.dispatchedBy.daemonId) : void 0;
+      return {
+        ...event,
+        protocolVersion: stamp2.protocolVersion,
+        eventId: stamp2.eventId,
+        scope: stamp2.scope,
+        dispatchedBy: stamp2.dispatchedBy,
+        ...stamp2.intendedFor ? { intendedFor: stamp2.intendedFor } : {},
+        ...dispatchedBySelfFallback ? { dispatchedBySelfFallback: true } : {},
+        ...selfFallbackTarget ? { targetCoordinatorDaemonId: selfFallbackTarget } : {}
+      };
+    }
+    function readCoordinatorIdentityFromWire(raw) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+      const obj = raw;
+      const daemonId = readNonEmptyString(obj.daemonId);
+      const coordinatorRunId = readNonEmptyString(obj.coordinatorRunId);
+      if (!daemonId || !coordinatorRunId) return void 0;
+      const sessionId = readNonEmptyString(obj.sessionId);
+      return { daemonId, coordinatorRunId, ...sessionId ? { sessionId } : {} };
+    }
+    function serializeV2EnvelopeToWire2(event) {
+      const out = {};
+      if (event.protocolVersion) out.protocolVersion = event.protocolVersion;
+      if (readNonEmptyString(event.eventId)) out.eventId = event.eventId;
+      if (event.scope) out.scope = event.scope;
+      if (event.dispatchedBy) out.dispatchedBy = event.dispatchedBy;
+      if (event.intendedFor) out.intendedFor = event.intendedFor;
+      return out;
+    }
+    function readV2EnvelopeFromWire(payload) {
+      const out = {};
+      if (payload.protocolVersion === MESH_PROTOCOL_VERSION_V2) out.protocolVersion = MESH_PROTOCOL_VERSION_V2;
+      const eventId = readNonEmptyString(payload.eventId);
+      if (eventId) out.eventId = eventId;
+      if (isMeshEventScope(payload.scope)) out.scope = payload.scope;
+      const dispatchedBy = readCoordinatorIdentityFromWire(payload.dispatchedBy);
+      if (dispatchedBy) out.dispatchedBy = dispatchedBy;
+      const intendedFor = readCoordinatorIdentityFromWire(payload.intendedFor);
+      if (intendedFor) out.intendedFor = intendedFor;
+      return out;
+    }
+    function queuePendingMeshCoordinatorEvent(rawEvent, hint) {
+      const event = stampPendingEventV2(rawEvent, hint);
+      return persistPendingMeshCoordinatorEvent(event);
+    }
+    function persistPendingMeshCoordinatorEvent(event) {
+      try {
+        if (hasPendingRefineTerminalEventDuplicate(event)) {
+          LOG.info("MeshEvents", `Suppressed duplicate pending ${event.event} for refine job ${readRefineJobId2(event)}`);
+          return true;
+        }
+        if (hasPendingCoordinatorEventDuplicate(event)) {
+          LOG.info("MeshEvents", `Suppressed duplicate pending ${event.event} for mesh ${event.meshId}`);
+          return true;
+        }
+        const fingerprint = buildPendingEventFingerprint(event);
+        MeshRuntimeStore.getInstance().insertPendingEvent({
+          id: (0, import_crypto5.randomUUID)(),
+          meshId: event.meshId,
+          coordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+          event: event.event,
+          payload: event,
+          fingerprint: fingerprint || null,
+          queuedAt: event.queuedAt,
+          // v2 envelope columns (B2a) — all nullable so v1 rows coexist. The
+          // authoritative copy still rides inside `payload`; these columns exist
+          // for queryable idempotency (event_id) and scope-based drain filtering
+          // (scope / intended_for) without JSON-parsing every row.
+          protocolVersion: event.protocolVersion ?? null,
+          eventId: event.eventId ?? null,
+          scope: event.scope ?? null,
+          dispatchedBy: event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
+          intendedFor: event.intendedFor ? JSON.stringify(event.intendedFor) : null
+        });
+        recordDurableTerminalDedup(event, fingerprint);
+        return true;
+      } catch (e) {
+        LOG.error(
+          "MeshEvents",
+          `PENDING-EVENT PERSIST FAILED \u2014 ${event.event} for mesh ${event.meshId} is NOT queued and will NOT be delivered (SQLite is the only store; there is no fallback): ${e?.message || e}`
+        );
+        return false;
+      }
+    }
+    function requeueDrainedPendingMeshCoordinatorEvent(event) {
+      const fingerprint = buildPendingEventFingerprint(event);
+      if (!fingerprint.trim()) return false;
+      let requeued = false;
+      try {
+        requeued = MeshRuntimeStore.getInstance().requeueDrainedPendingEventByFingerprint(event.meshId, fingerprint);
+      } catch (e) {
+        LOG.error(
+          "MeshEvents",
+          `HELD-EVENT RE-QUEUE FAILED \u2014 ${event.event} for mesh ${event.meshId} was NOT durably returned to the queue (SQLite is the only store): ${e?.message || e}`
+        );
+        return false;
+      }
+      return requeued;
+    }
+    function drainPendingMeshCoordinatorEvents3(meshId, coordinatorDaemonId, opts) {
+      if (!meshId) return [];
+      const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
+      const drainer = resolveDrainerIdentity(daemonIds, opts?.drainerIdentity);
+      let priorDrainedEventIds = /* @__PURE__ */ new Set();
+      try {
+        priorDrainedEventIds = MeshRuntimeStore.getInstance().drainedEventIdsForMesh(meshId);
+      } catch {
+      }
+      const onlyEvents = opts?.onlyEvents;
+      const merged = [];
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.pendingEventCount(meshId) > 0) {
+          const drainedBy = drainer ? JSON.stringify(drainer) : null;
+          for (const row of store.drainPendingEvents(
+            meshId,
+            daemonIds.length > 0 ? daemonIds : void 0,
+            { ...onlyEvents ? { onlyEvents } : {}, drainedBy }
+          )) {
+            const event = row.payload;
+            if (event) merged.push(event);
+          }
+        }
+      } catch (e) {
+        if (!loggedSqlitePendingDrainFailure) {
+          loggedSqlitePendingDrainFailure = true;
+          LOG.warn("MeshEvents", `SQLite pending-event drain failed for mesh ${meshId} \u2014 NO events can be delivered while the store is unavailable (there is no fallback store; further occurrences at debug): ${e?.message || e}`);
+        } else {
+          LOG.debug("MeshEvents", `SQLite pending-event drain failed for mesh ${meshId}; no events delivered this cycle: ${e?.message || e}`);
+        }
+      }
+      if (merged.length === 0) return [];
+      const routed = routeV2EventsForDrainer(merged, drainer, {
+        alreadyDrained: (eventId) => priorDrainedEventIds.has(eventId),
+        batchSeen: /* @__PURE__ */ new Set(),
+        countMetrics: true,
+        ...opts?.countLiveCoordinatorSessions ? { countLiveCoordinatorSessions: opts.countLiveCoordinatorSessions } : {}
+      });
+      return reconcilePendingMeshCoordinatorEvents(meshId, routed);
+    }
+    function retractPendingDispatchBlockedEvent(meshId, taskId, coordinatorDaemonId) {
+      if (!meshId || !taskId) return 0;
+      let removed = 0;
+      const matchesTask = (event) => {
+        if (!event || event.event !== "mesh:dispatch_blocked") return false;
+        const rowTaskId = readNonEmptyString(event.metadataEvent?.taskId);
+        return rowTaskId === taskId;
+      };
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        const ids = [];
+        for (const row of store.peekPendingEvents(meshId)) {
+          if (row.event !== "mesh:dispatch_blocked") continue;
+          if (matchesTask(row.payload)) ids.push(row.id);
+        }
+        if (ids.length) removed += store.deletePendingEventsById(ids);
+      } catch (e) {
+        LOG.warn("MeshEvents", `Failed to retract dispatch_blocked for task ${taskId} on mesh ${meshId}: ${e?.message || e}`);
+      }
+      return removed;
+    }
+    function getPendingMeshCoordinatorEvents(meshId, coordinatorDaemonId, opts) {
+      if (!meshId) return [];
+      const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
+      const drainer = resolveDrainerIdentity(daemonIds, opts?.drainerIdentity);
+      let priorDrainedEventIds = /* @__PURE__ */ new Set();
+      try {
+        priorDrainedEventIds = MeshRuntimeStore.getInstance().drainedEventIdsForMesh(meshId);
+      } catch {
+      }
+      const merged = [];
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.pendingEventCount(meshId) > 0) {
+          for (const row of store.peekPendingEvents(meshId, daemonIds.length > 0 ? daemonIds : void 0)) {
+            const event = row.payload;
+            if (event) merged.push(event);
+          }
+        }
+      } catch {
+      }
+      const routed = routeV2EventsForDrainer(merged, drainer, {
+        alreadyDrained: (eventId) => priorDrainedEventIds.has(eventId),
+        batchSeen: /* @__PURE__ */ new Set(),
+        countMetrics: false
+      });
+      return reconcilePendingMeshCoordinatorEvents(meshId, routed).map((event) => annotatePendingEventWithTurnProjection(meshId, event));
+    }
+    function annotatePendingEventWithTurnProjection(meshId, event) {
+      try {
+        const taskId = typeof event?.metadataEvent?.taskId === "string" ? event.metadataEvent.taskId.trim() : "";
+        if (!taskId) return event;
+        const row = resolveTurnAttemptRow({ meshId, taskId });
+        if (!row) return event;
+        return {
+          ...event,
+          attemptId: row.attemptId,
+          turnStage: row.stage,
+          ...row.terminalOutcome ? { terminalOutcome: row.terminalOutcome } : {}
+        };
+      } catch {
+        return event;
+      }
+    }
+    function readHeldTaskId(restored, payload) {
+      const fromMeta = restored?.metadataEvent && typeof restored.metadataEvent === "object" ? readNonEmptyString(restored.metadataEvent.taskId) : "";
+      return fromMeta || readNonEmptyString(payload.taskId) || "";
+    }
+    function requeueHeldMeshCoordinatorEvents3(meshId, filter) {
+      const result = {
+        meshId,
+        matched: 0,
+        alreadyRequeued: 0,
+        unrecoverable: 0,
+        requeued: 0,
+        dedupSuppressed: 0,
+        entries: []
+      };
+      const all = readLedgerEntries3(meshId);
+      const requeuedIds = /* @__PURE__ */ new Set();
+      for (const entry of all) {
+        if (entry.kind !== "event_held_requeued") continue;
+        const id = readNonEmptyString(entry.payload?.heldEntryId);
+        if (id) requeuedIds.add(id);
+      }
+      const sinceMs = filter?.since ? new Date(filter.since).getTime() : NaN;
+      const wantEvent = readNonEmptyString(filter?.event);
+      const wantNode = readNonEmptyString(filter?.nodeId);
+      const wantTask = readNonEmptyString(filter?.taskId);
+      const wantReason = readNonEmptyString(filter?.reason);
+      for (const entry of all) {
+        if (entry.kind !== "event_held") continue;
+        const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
+        if (payload.recoverable !== true) continue;
+        const restored = payload.heldEvent && typeof payload.heldEvent === "object" ? { ...payload.heldEvent } : void 0;
+        const eventName = restored?.event || readNonEmptyString(payload.event);
+        const nodeId = restored?.nodeId || entry.nodeId || readNonEmptyString(payload.nodeId) || void 0;
+        const taskId = readHeldTaskId(restored, payload);
+        const reason = readNonEmptyString(payload.reason) || void 0;
+        if (wantEvent && eventName !== wantEvent) continue;
+        if (wantNode && nodeId !== wantNode) continue;
+        if (wantTask && taskId !== wantTask) continue;
+        if (wantReason && reason !== wantReason) continue;
+        if (filter?.since && !Number.isNaN(sinceMs) && new Date(entry.timestamp).getTime() < sinceMs) continue;
+        result.matched++;
+        if (requeuedIds.has(entry.id)) {
+          result.alreadyRequeued++;
+          result.entries.push({ heldEntryId: entry.id, event: eventName, ...nodeId ? { nodeId } : {}, ...taskId ? { taskId } : {}, ...reason ? { reason } : {}, outcome: "already_requeued" });
+          continue;
+        }
+        if (!restored || !readNonEmptyString(restored.event) || !readNonEmptyString(restored.meshId)) {
+          result.unrecoverable++;
+          result.entries.push({ heldEntryId: entry.id, event: eventName, ...nodeId ? { nodeId } : {}, ...taskId ? { taskId } : {}, ...reason ? { reason } : {}, outcome: "unrecoverable" });
+          continue;
+        }
+        const beforeDup = hasPendingCoordinatorEventDuplicate(restored);
+        let ok = false;
+        try {
+          ok = queuePendingMeshCoordinatorEvent(restored);
+        } catch (e) {
+          LOG.warn("MeshEvents", `Requeue of held ${eventName} for mesh ${meshId} failed: ${e?.message || e}`);
+        }
+        appendLedgerEntry3(meshId, {
+          kind: "event_held_requeued",
+          ...nodeId ? { nodeId } : {},
+          payload: {
+            heldEntryId: entry.id,
+            event: eventName,
+            requeued: ok,
+            ...taskId ? { taskId } : {},
+            ...reason ? { reason } : {},
+            ...beforeDup ? { dedupSuppressed: true } : {}
+          }
+        });
+        requeuedIds.add(entry.id);
+        result.requeued++;
+        if (beforeDup) result.dedupSuppressed++;
+        result.entries.push({ heldEntryId: entry.id, event: eventName, ...nodeId ? { nodeId } : {}, ...taskId ? { taskId } : {}, ...reason ? { reason } : {}, outcome: "requeued" });
+      }
+      return result;
+    }
+    function clearPendingMeshCoordinatorEvents(meshId, _coordinatorDaemonId) {
+      if (!meshId) return;
+      try {
+        MeshRuntimeStore.getInstance().clearPendingEventsForMesh(meshId);
+      } catch {
+      }
+    }
+    var import_crypto5;
+    var REFINE_TERMINAL_EVENTS;
+    var meshV2DrainCounters;
+    var warnedV2Violations;
+    var loggedSqlitePendingDrainFailure;
+    var TERMINAL_COMPLETION_EVENTS;
+    var COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT;
+    var TERMINAL_COMPLETION_DEDUP_TTL_MS;
+    var STALE_TASK_DROPPABLE_EVENTS;
+    var STALE_TASK_TERMINAL_STATUSES;
+    var PENDING_EVENTS_DRAINED_RETENTION_MS;
+    var PENDING_EVENTS_UNDRAINED_RETENTION_MS;
+    var PENDING_RETENTION_EXPIRED_HOLD_REASON;
+    var pendingRetentionCounters;
+    var init_mesh_events_pending = __esm2({
+      "src/mesh/mesh-events-pending.ts"() {
+        "use strict";
+        import_crypto5 = require("crypto");
+        init_logger();
+        init_config();
+        init_mesh_ledger();
+        init_mesh_runtime_store();
+        init_mesh_turn_presentation();
+        init_mesh_events_utils();
+        init_mesh_event_trace();
+        init_dist();
+        init_contracts();
+        REFINE_TERMINAL_EVENTS = /* @__PURE__ */ new Set(["refine:completed", "refine:failed"]);
+        meshV2DrainCounters = {
+          /** v2 events that passed validation and unicast/broadcast routing → delivered. */
+          v2Delivered: 0,
+          /** v2 unicast events skipped because intendedFor addressed another coordinator. */
+          v2RoutedAway: 0,
+          /** v2 events skipped because their eventId was already drained (idempotency). */
+          v2DedupSkipped: 0,
+          /** v2 events that failed assertPendingMeshCoordinatorEventV2 but were PASSED
+           *  THROUGH (accept mode). Non-zero here is the rollout signal that a producer
+           *  emits a malformed envelope. */
+          v2ValidationFailedAccepted: 0,
+          /** unicast events re-attributed to the drainer via daemon-core match (a
+           *  coordinatorRunId change orphaned them). */
+          v2ReattributedToDrainer: 0,
+          /** REFINE-EVENT-SESSION-SCOPED-UNICAST: unicast events delivered while addressed only
+           *  at DAEMON granularity (no sessionId in intendedFor) even though >1 coordinator
+           *  session was live on that daemon — i.e. delivered by race, not by address. Non-zero
+           *  here names an emit path that still fails to stamp targetCoordinatorSessionId. */
+          v2AmbiguousUnicastDelivered: 0,
+          /** v1 (unversioned) events passed through as broadcast (rollout baseline). */
+          v1BroadcastAccepted: 0,
+          /** T6 enforce: v2 events that FAILED validation and were QUARANTINED (held back
+           *  from delivery, not dropped). Non-zero here means a producer is still emitting a
+           *  malformed envelope after enforce was turned on. */
+          v2ValidationFailedQuarantined: 0,
+          /** T6 enforce: v1 (unversioned) events QUARANTINED because no v2 envelope could be
+           *  derived at emit time. Non-zero here means a producer path still emits v1 after
+           *  enforce — it should reach 0 once every node is on a v2-stamping build. */
+          v1UnversionedQuarantined: 0
+        };
+        warnedV2Violations = /* @__PURE__ */ new Set();
+        loggedSqlitePendingDrainFailure = false;
+        TERMINAL_COMPLETION_EVENTS = /* @__PURE__ */ new Set(["agent:generating_completed", "agent:stopped"]);
+        COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT = /* @__PURE__ */ new Set([
+          "mesh:dispatch_blocked"
+        ]);
+        TERMINAL_COMPLETION_DEDUP_TTL_MS = 60 * 60 * 1e3;
+        STALE_TASK_DROPPABLE_EVENTS = /* @__PURE__ */ new Set([
+          // Actionable dispatch-skip page ("this task will NOT dispatch on its own"). Meaningless
+          // once the task is terminal — the measured 081317f3 case.
+          "mesh:dispatch_blocked",
+          // Stall watchdog ("no progress observed"). A terminal task cannot make progress; the
+          // alert only invites the coordinator to re-drive already-finished work.
+          "monitor:no_progress"
+        ]);
+        STALE_TASK_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+        PENDING_EVENTS_DRAINED_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
+        PENDING_EVENTS_UNDRAINED_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
+        PENDING_RETENTION_EXPIRED_HOLD_REASON = "pending_retention_expired";
+        pendingRetentionCounters = {
+          /** Already-drained rows deleted past the 7-day dedup-useful window. Not a drop. */
+          drainedExpired: 0,
+          /** Never-delivered rows deleted past the 30-day undrained window. A genuine
+           *  silent-drop risk — mirrored to event_held before deletion (see below). */
+          undrainedExpired: 0,
+          /** undrainedExpired rows that failed to mirror to the ledger (ledger write threw).
+           *  Non-zero here means those specific rows are NOT recoverable via
+           *  mesh_requeue_held_events — the delete still proceeds (retention must not wedge
+           *  on a ledger fault), but this count is the operator's signal of true loss. */
+          undrainedExpiredMirrorFailed: 0,
+          /** How many times the sweep has run and found nothing to prune (0 in both
+           *  windows). Purely diagnostic — confirms the sweep is actually firing. */
+          sweepsNoop: 0
+        };
+      }
+    });
+    function getRedriveInjectedTaskIds() {
+      return { taskIds: injectedTaskIds, overflowed: injectedTaskIdsOverflowed };
+    }
+    function getRedriveEpochStartMs() {
+      return processStartMs;
+    }
+    function stateFor(meshId) {
+      let s2 = state.get(meshId);
+      if (!s2) {
+        s2 = {
+          injected: 0,
+          skipped: 0,
+          consecutiveFailures: 0,
+          lastFailureAt: null,
+          quarantineSkips: 0,
+          quarantinedAt: null
+        };
+        state.set(meshId, s2);
+      }
+      return s2;
+    }
+    function getRedriveState(meshId) {
+      const s2 = state.get(meshId);
+      return s2 ? { ...s2 } : null;
+    }
+    function isMeshQuarantined(meshId, nowMs = Date.now()) {
+      const s2 = state.get(meshId);
+      if (!s2 || s2.quarantinedAt === null) return false;
+      return nowMs - s2.quarantinedAt < QUARANTINE_COOLDOWN_MS;
+    }
+    function getQuarantinedMeshCount(nowMs = Date.now()) {
+      let count = 0;
+      for (const meshId of state.keys()) {
+        if (isMeshQuarantined(meshId, nowMs)) count++;
+      }
+      return count;
+    }
+    function getTotalQuarantineSkips() {
+      let total = 0;
+      for (const s2 of state.values()) total += s2.quarantineSkips;
+      return total;
+    }
+    function getTotalRedriveInjected() {
+      let total = 0;
+      for (const s2 of state.values()) total += s2.injected;
+      return total;
+    }
+    function isTerminalRedriveEnabled(env2) {
+      return env2[REDRIVE_ENV] === "on";
+    }
+    function assertRedriveConsumerNameIsPruneSafe(prunePrefixes) {
+      for (const prefix of prunePrefixes) {
+        if (REDRIVE_CONSUMER.startsWith(prefix)) {
+          throw new Error(
+            `redrive consumer name '${REDRIVE_CONSUMER}' matches boot-GC prefix '${prefix}' \u2014 it would be pruned on every boot, rewinding or dropping the redelivery cursor`
+          );
+        }
+      }
+    }
+    function buildRedriveInjection(meshId, entry) {
+      if (!REDRIVEN_TERMINAL_KINDS.includes(entry.ledgerKind)) return null;
+      const taskId = entry.taskId || (typeof entry.payload.taskId === "string" ? entry.payload.taskId : void 0);
+      if (!taskId) return null;
+      const event = typeof entry.payload.event === "string" ? entry.payload.event : "agent:generating_completed";
+      const sessionId = entry.sessionId || (typeof entry.payload.sessionId === "string" ? entry.payload.sessionId : void 0);
+      const providerType = entry.providerType || (typeof entry.payload.providerType === "string" ? entry.payload.providerType : void 0);
+      const nodeId = entry.nodeId || (typeof entry.payload.nodeId === "string" ? entry.payload.nodeId : void 0);
+      const metadataEvent = {
+        taskId,
+        ...sessionId ? { sessionId } : {},
+        ...providerType ? { providerType } : {},
+        // Fingerprint parity with the drain: a weak original was stamped
+        // evidenceLevel='insufficient'; a bare record reads as genuine. Sourced
+        // from the projected `weak` (Stage 5a-1) — NOT recomputed from
+        // evidenceLevel, which is not projected and would not be equivalent.
+        ...entry.payload.weak === true ? { evidenceLevel: "insufficient" } : {},
+        source: "seqscribe_redelivery",
+        redriveRedelivery: true
+      };
+      return {
+        event,
+        meshId,
+        nodeId: nodeId || void 0,
+        metadataEvent,
+        queuedAt: Date.now()
+      };
+    }
+    function consumeRedriveEntry(meshId, entry, nowMs = Date.now()) {
+      const s2 = stateFor(meshId);
+      if (isMeshQuarantined(meshId, nowMs)) {
+        s2.quarantineSkips++;
+        LOG.warn(
+          "MeshRedrive",
+          `mesh=${meshId} redrive quarantined (consecutiveFailures=${s2.consecutiveFailures}) \u2014 skip-and-advance entry=${entry.id} to release the \xA77.6 archive floor; the legacy outbox drain remains the redelivery path for this terminal while quarantined`
+        );
+        return "quarantined";
+      }
+      const injection = buildRedriveInjection(meshId, entry);
+      if (!injection) {
+        s2.skipped++;
+        return "skipped";
+      }
+      let queued = false;
+      try {
+        queued = queuePendingMeshCoordinatorEvent(injection);
+      } catch (error48) {
+        recordFailure(s2, meshId, nowMs);
+        throw error48 instanceof Error ? error48 : new Error(String(error48));
+      }
+      if (!queued) {
+        recordFailure(s2, meshId, nowMs);
+        throw new Error(`pending queue rejected redrive injection for task ${injection.metadataEvent.taskId}`);
+      }
+      s2.consecutiveFailures = 0;
+      s2.quarantinedAt = null;
+      s2.injected++;
+      const injectedTaskId = injection.metadataEvent.taskId;
+      if (typeof injectedTaskId === "string") {
+        if (injectedTaskIds.size >= REDRIVE_TASK_ID_CAP && !injectedTaskIds.has(injectedTaskId)) {
+          injectedTaskIdsOverflowed = true;
+        } else {
+          injectedTaskIds.add(injectedTaskId);
+        }
+      }
+      LOG.debug(
+        "MeshRedrive",
+        `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} \u2014 dedup collapses it onto the original if already delivered`
+      );
+      return "injected";
+    }
+    function recordFailure(s2, meshId, nowMs) {
+      s2.consecutiveFailures++;
+      s2.lastFailureAt = nowMs;
+      if (s2.consecutiveFailures >= QUARANTINE_FAILURE_THRESHOLD) {
+        s2.quarantinedAt = nowMs;
+        LOG.warn(
+          "MeshRedrive",
+          `mesh=${meshId} redrive entering quarantine after ${s2.consecutiveFailures} consecutive failures \u2014 cooldown ${QUARANTINE_COOLDOWN_MS}ms before the next auto-resolving probe attempt`
+        );
+      }
+    }
+    function __resetTerminalRedriveForTests() {
+      state.clear();
+      injectedTaskIds.clear();
+      injectedTaskIdsOverflowed = false;
+    }
+    var REDRIVE_CONSUMER;
+    var REDRIVE_ENV;
+    var REDRIVEN_TERMINAL_KINDS;
+    var QUARANTINE_FAILURE_THRESHOLD;
+    var QUARANTINE_COOLDOWN_MS;
+    var REDRIVE_TASK_ID_CAP;
+    var state;
+    var injectedTaskIds;
+    var injectedTaskIdsOverflowed;
+    var processStartMs;
+    var init_mesh_terminal_redrive = __esm2({
+      "src/mesh/mesh-terminal-redrive.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_events_pending();
+        REDRIVE_CONSUMER = "stage5a-mesh-terminal-redrive";
+        REDRIVE_ENV = "ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE";
+        REDRIVEN_TERMINAL_KINDS = ["task_completed", "task_failed"];
+        QUARANTINE_FAILURE_THRESHOLD = 5;
+        QUARANTINE_COOLDOWN_MS = 6e4;
+        REDRIVE_TASK_ID_CAP = 1e4;
+        state = /* @__PURE__ */ new Map();
+        injectedTaskIds = /* @__PURE__ */ new Set();
+        injectedTaskIdsOverflowed = false;
+        processStartMs = Date.now();
+      }
+    });
+    function resolveOutboxEnqueuePolicy(env2) {
+      const requested = env2[OUTBOX_ENQUEUE_ENV] === "off";
+      const redriveEnabled = isTerminalRedriveEnabled(env2);
+      if (!requested) {
+        return { blocked: false, requested: false, redriveEnabled, reason: "not_requested" };
+      }
+      if (!redriveEnabled) {
+        return { blocked: false, requested: true, redriveEnabled: false, reason: "redrive_disabled" };
+      }
+      return { blocked: true, requested: true, redriveEnabled: true, reason: "blocked" };
+    }
+    function isTurnOutboxEnqueueBlocked(env2 = process.env) {
+      return resolveOutboxEnqueuePolicy(env2).blocked;
+    }
+    function recordOutboxEnqueueBlocked() {
+      enqueueBlockedCount++;
+    }
+    function getOutboxEnqueueBlockedCount() {
+      return enqueueBlockedCount;
+    }
+    function __resetOutboxEnqueuePolicyForTests() {
+      enqueueBlockedCount = 0;
+    }
+    function describeOutboxEnqueuePolicy(env2 = process.env) {
+      const policy = resolveOutboxEnqueuePolicy(env2);
+      if (!policy.requested) return null;
+      if (policy.reason === "redrive_disabled") {
+        return `${OUTBOX_ENQUEUE_ENV}=off REFUSED \u2014 ${REDRIVE_ENV} is not 'on', so blocking turn-outbox enqueue would leave NO terminal-notification redelivery path (Stage 5b-1 interlock). The outbox keeps enqueueing. Enable the redrive leg first, then re-apply the block.`;
+      }
+      return `${OUTBOX_ENQUEUE_ENV}=off honoured \u2014 turn-outbox enqueue blocked (Stage 5b-1); the seqscribe redrive leg is the redelivery path and existing rows keep draining to zero.`;
+    }
+    var OUTBOX_ENQUEUE_ENV;
+    var enqueueBlockedCount;
+    var init_mesh_turn_outbox_enqueue_policy = __esm2({
+      "src/mesh/mesh-turn-outbox-enqueue-policy.ts"() {
+        "use strict";
+        init_mesh_terminal_redrive();
+        OUTBOX_ENQUEUE_ENV = "ADHDEV_MESH_OUTBOX_ENQUEUE";
+        enqueueBlockedCount = 0;
+      }
+    });
     function isTerminalTurnStage(stage) {
       return TURN_TERMINAL_OUTCOMES.has(stage);
     }
@@ -50958,7 +52541,7 @@ Next step: ${nextStep}`;
       const store = MeshRuntimeStore.getInstance();
       const nowMs = args.nowMs ?? Date.now();
       const nowIso = new Date(nowMs).toISOString();
-      const attemptId = (0, import_crypto5.randomUUID)();
+      const attemptId = (0, import_crypto6.randomUUID)();
       const inserted = store.insertTurnAttempt({
         attemptId,
         meshId: args.meshId,
@@ -50981,7 +52564,7 @@ Next step: ${nextStep}`;
       }
       if (inserted) {
         store.insertTurnEvent({
-          eventId: (0, import_crypto5.randomUUID)(),
+          eventId: (0, import_crypto6.randomUUID)(),
           meshId: args.meshId,
           attemptId: attempt.attemptId,
           taskId: args.taskId,
@@ -51057,7 +52640,7 @@ Next step: ${nextStep}`;
       if (staleAttempt) {
         metrics.staleAttemptEvents += 1;
         const inserted2 = store.insertTurnEvent({
-          eventId: (0, import_crypto5.randomUUID)(),
+          eventId: (0, import_crypto6.randomUUID)(),
           meshId: args.meshId,
           attemptId: attempt.attemptId,
           taskId: args.taskId,
@@ -51074,7 +52657,7 @@ Next step: ${nextStep}`;
         return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: false };
       }
       const inserted = store.insertTurnEvent({
-        eventId: (0, import_crypto5.randomUUID)(),
+        eventId: (0, import_crypto6.randomUUID)(),
         meshId: args.meshId,
         attemptId: attempt.attemptId,
         taskId: args.taskId,
@@ -51133,7 +52716,7 @@ Next step: ${nextStep}`;
       if (current && current.attemptId !== attempt.attemptId) {
         metrics.staleAttemptEvents += 1;
         store.insertTurnEvent({
-          eventId: (0, import_crypto5.randomUUID)(),
+          eventId: (0, import_crypto6.randomUUID)(),
           meshId: args.meshId,
           attemptId: attempt.attemptId,
           taskId: args.taskId,
@@ -51156,7 +52739,7 @@ Next step: ${nextStep}`;
       if (args.sessionId && attempt.sessionId && !sessionIdsEquivalent(args.sessionId, attempt.sessionId)) {
         metrics.staleAttemptEvents += 1;
         store.insertTurnEvent({
-          eventId: (0, import_crypto5.randomUUID)(),
+          eventId: (0, import_crypto6.randomUUID)(),
           meshId: args.meshId,
           attemptId: attempt.attemptId,
           taskId: args.taskId,
@@ -51169,7 +52752,7 @@ Next step: ${nextStep}`;
         return { attemptId: attempt.attemptId, stage: attempt.stage, applied: false, staleAttempt: true };
       }
       const inserted = store.insertTurnEvent({
-        eventId: (0, import_crypto5.randomUUID)(),
+        eventId: (0, import_crypto6.randomUUID)(),
         meshId: args.meshId,
         attemptId: attempt.attemptId,
         taskId: args.taskId,
@@ -51284,7 +52867,7 @@ Next step: ${nextStep}`;
         if (stageAfter === hold.stage) {
           if (store.resolveHeldTurnSuspension(hold.holdId, "applied", "applied", nowIso)) {
             store.insertTurnEvent({
-              eventId: (0, import_crypto5.randomUUID)(),
+              eventId: (0, import_crypto6.randomUUID)(),
               meshId: hold.meshId,
               attemptId,
               taskId: hold.taskId,
@@ -51360,7 +52943,7 @@ Next step: ${nextStep}`;
         store.transaction(() => {
           if (STAGE_RANK[attempt.stage] < STAGE_RANK.consumed) {
             store.insertTurnEvent({
-              eventId: (0, import_crypto5.randomUUID)(),
+              eventId: (0, import_crypto6.randomUUID)(),
               meshId: args.meshId,
               attemptId: attempt.attemptId,
               taskId: args.taskId,
@@ -51474,7 +53057,7 @@ Next step: ${nextStep}`;
     }
     function recordProposalEvent(store, proposal, attempt, nowMs, nowIso, rejection) {
       store.insertTurnEvent({
-        eventId: (0, import_crypto5.randomUUID)(),
+        eventId: (0, import_crypto6.randomUUID)(),
         meshId: proposal.meshId,
         attemptId: attempt.attemptId,
         taskId: proposal.taskId,
@@ -51517,7 +53100,7 @@ Next step: ${nextStep}`;
       if (!ok) return { rebound: false, reason: "store_rejected", attemptId: attempt.attemptId };
       try {
         store.insertTurnEvent({
-          eventId: (0, import_crypto5.randomUUID)(),
+          eventId: (0, import_crypto6.randomUUID)(),
           meshId: args.meshId,
           attemptId: attempt.attemptId,
           taskId: args.taskId,
@@ -51628,7 +53211,7 @@ Next step: ${nextStep}`;
           if (committed) {
             result.closed += 1;
             store.insertTurnEvent({
-              eventId: (0, import_crypto5.randomUUID)(),
+              eventId: (0, import_crypto6.randomUUID)(),
               meshId,
               attemptId: row.attemptId,
               taskId: row.taskId,
@@ -51671,7 +53254,7 @@ Next step: ${nextStep}`;
           if (committed) {
             result.closed += 1;
             store.insertTurnEvent({
-              eventId: (0, import_crypto5.randomUUID)(),
+              eventId: (0, import_crypto6.randomUUID)(),
               meshId,
               attemptId: row.attemptId,
               taskId: row.taskId,
@@ -51693,6 +53276,10 @@ Next step: ${nextStep}`;
       return result;
     }
     function enqueueTerminalOutbox(args) {
+      if (!args.bypassEnqueueBlock && isTurnOutboxEnqueueBlocked()) {
+        recordOutboxEnqueueBlocked();
+        return false;
+      }
       const nowMs = args.nowMs ?? Date.now();
       const nowIso = new Date(nowMs).toISOString();
       return MeshRuntimeStore.getInstance().enqueueTurnOutbox({
@@ -51779,7 +53366,7 @@ Next step: ${nextStep}`;
         return "{}";
       }
     }
-    var import_crypto5;
+    var import_crypto6;
     var TURN_TERMINAL_OUTCOMES;
     var STAGE_RANK;
     var SUSPENDED_STAGES;
@@ -51793,10 +53380,11 @@ Next step: ${nextStep}`;
     var init_mesh_turn_ledger = __esm2({
       "src/mesh/mesh-turn-ledger.ts"() {
         "use strict";
-        import_crypto5 = require("crypto");
+        import_crypto6 = require("crypto");
         init_mesh_runtime_store();
         init_logger();
         init_dist();
+        init_mesh_turn_outbox_enqueue_policy();
         TURN_TERMINAL_OUTCOMES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
         STAGE_RANK = {
           accepted: 10,
@@ -51839,18 +53427,18 @@ Next step: ${nextStep}`;
       }
     });
     function newMeshGraphId() {
-      return (0, import_crypto6.randomUUID)();
+      return (0, import_crypto7.randomUUID)();
     }
     function newMeshGraphNodeId() {
-      return (0, import_crypto6.randomUUID)();
+      return (0, import_crypto7.randomUUID)();
     }
     function newMeshGraphGateId() {
-      return (0, import_crypto6.randomUUID)();
+      return (0, import_crypto7.randomUUID)();
     }
     function newMeshGraphOutboxId() {
-      return (0, import_crypto6.randomUUID)();
+      return (0, import_crypto7.randomUUID)();
     }
-    var import_crypto6;
+    var import_crypto7;
     var MESH_GRAPH_SCHEMA_VERSION;
     var MESH_GRAPH_ON_UPSTREAM_SKIP_POLICIES;
     var MESH_GRAPH_GATE_ACTIONS;
@@ -51859,7 +53447,7 @@ Next step: ${nextStep}`;
     var init_mesh_graph_types = __esm2({
       "src/mesh/mesh-graph-types.ts"() {
         "use strict";
-        import_crypto6 = require("crypto");
+        import_crypto7 = require("crypto");
         MESH_GRAPH_SCHEMA_VERSION = 2;
         MESH_GRAPH_ON_UPSTREAM_SKIP_POLICIES = ["skip", "omit_dependency"];
         MESH_GRAPH_GATE_ACTIONS = [
@@ -52125,7 +53713,7 @@ Next step: ${nextStep}`;
       return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
     }
     function sha256Hex2(text) {
-      return (0, import_crypto7.createHash)("sha256").update(text, "utf8").digest("hex");
+      return (0, import_crypto8.createHash)("sha256").update(text, "utf8").digest("hex");
     }
     function utf8Bytes(text) {
       return Buffer.byteLength(text, "utf8");
@@ -52326,7 +53914,7 @@ ${blocks.join("\n\n")}`;
         throw new MeshMaterializationError("message_too_large", "materialized message exceeds the final size ceiling", "final_message");
       }
     }
-    var import_crypto7;
+    var import_crypto8;
     var MESH_BINDING_DEFAULT_MAX_BYTES;
     var MESH_BINDING_HARD_MAX_BYTES;
     var MESH_BINDING_TOTAL_MAX_BYTES;
@@ -52339,7 +53927,7 @@ ${blocks.join("\n\n")}`;
     var init_mesh_graph_input_binding = __esm2({
       "src/mesh/mesh-graph-input-binding.ts"() {
         "use strict";
-        import_crypto7 = require("crypto");
+        import_crypto8 = require("crypto");
         init_log_redactor();
         MESH_BINDING_DEFAULT_MAX_BYTES = 16 * 1024;
         MESH_BINDING_HARD_MAX_BYTES = 64 * 1024;
@@ -53065,7 +54653,7 @@ ${blocks.join("\n\n")}`;
           detail: `task ${taskId} already holds ${list.length} undelivered message(s) \u2014 it is not reading its tool responses`
         };
       }
-      const message = { id: (0, import_crypto8.randomUUID)(), meshId, taskId, text, mintedAtMs: Date.now() };
+      const message = { id: (0, import_crypto9.randomUUID)(), meshId, taskId, text, mintedAtMs: Date.now() };
       list.push(message);
       PENDING.set(key2, list);
       return { ok: true, id: message.id, pending: list.length };
@@ -53103,14 +54691,14 @@ ${blocks.join("\n\n")}`;
 ${lines.join("\n")}
 `;
     }
-    var import_crypto8;
+    var import_crypto9;
     var MAILBOX_TEXT_MAX_CHARS;
     var MAILBOX_MAX_PENDING_PER_TASK;
     var PENDING;
     var init_worker_mailbox = __esm2({
       "src/mesh/worker-mailbox.ts"() {
         "use strict";
-        import_crypto8 = require("crypto");
+        import_crypto9 = require("crypto");
         MAILBOX_TEXT_MAX_CHARS = 2e3;
         MAILBOX_MAX_PENDING_PER_TASK = 20;
         PENDING = /* @__PURE__ */ new Map();
@@ -54340,1375 +55928,6 @@ ${lines.join("\n")}
           "prune"
         ]);
         GIT_STASH_READONLY_SUBCOMMANDS = /* @__PURE__ */ new Set(["list", "show"]);
-      }
-    });
-    function truncateString(value, maxChars) {
-      if (value.length <= maxChars) return value;
-      if (maxChars <= 12) return value.slice(0, Math.max(0, maxChars));
-      return `${value.slice(0, maxChars - 12)}...[truncated]`;
-    }
-    function trimStructuredStrings(value, maxChars) {
-      if (typeof value === "string") return truncateString(value, maxChars);
-      if (Array.isArray(value)) return value.map((item) => trimStructuredStrings(item, maxChars));
-      if (!value || typeof value !== "object") return value;
-      return Object.fromEntries(
-        Object.entries(value).map(([key2, nested]) => [key2, trimStructuredStrings(nested, maxChars)])
-      );
-    }
-    function estimateBytes(value) {
-      try {
-        return JSON.stringify(value).length;
-      } catch {
-        return String(value ?? "").length;
-      }
-    }
-    function trimMessageForStatus(message, stringLimit) {
-      if (!message || typeof message !== "object") return message;
-      return trimStructuredStrings(message, stringLimit);
-    }
-    function normalizeMessageTime(message) {
-      if (!message || typeof message !== "object") return message;
-      const msg = message;
-      if (msg.receivedAt == null) {
-        const fallback = msg.timestamp ?? msg.createdAt;
-        if (fallback != null) {
-          const ts2 = typeof fallback === "string" ? Date.parse(fallback) : Number(fallback);
-          if (Number.isFinite(ts2) && ts2 > 0) msg.receivedAt = ts2;
-        }
-      }
-      return msg;
-    }
-    function trimMessagesForStatus(messages, options) {
-      if (!options.includeMessages || options.messageLimit <= 0 || options.totalBytesLimit <= 0) return [];
-      if (!Array.isArray(messages) || messages.length === 0) return [];
-      const recent = messages.slice(-options.messageLimit);
-      const kept = [];
-      let totalBytes = 0;
-      for (let i = recent.length - 1; i >= 0; i -= 1) {
-        let normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.stringLimit));
-        let size = estimateBytes(normalized);
-        if (size > options.totalBytesLimit) {
-          normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.fallbackStringLimit));
-          size = estimateBytes(normalized);
-        }
-        if (kept.length > 0 && totalBytes + size > options.totalBytesLimit) {
-          continue;
-        }
-        kept.push(normalized);
-        totalBytes += size;
-      }
-      return kept.reverse();
-    }
-    function hasApprovalButtons(activeModal) {
-      return (activeModal?.buttons?.length ?? 0) > 0;
-    }
-    function normalizeManagedStatus(status, opts) {
-      if (hasApprovalButtons(opts?.activeModal)) return "waiting_approval";
-      const normalized = String(status || "idle").trim().toLowerCase();
-      if (normalized === "waiting_approval") return "waiting_approval";
-      if (normalized === "waiting_choice") return "waiting_choice";
-      if (normalized === "finalizing") return "finalizing";
-      if (WORKING_STATUSES2.has(normalized)) return "generating";
-      if (normalized === "error") return "error";
-      if (normalized === "stopped") return "stopped";
-      if (normalized === "starting") return "starting";
-      if (normalized === "panel_hidden") return "panel_hidden";
-      if (normalized === "not_monitored") return "not_monitored";
-      if (normalized === "disconnected") return "disconnected";
-      return "idle";
-    }
-    function isManagedStatusWorking(status) {
-      return normalizeManagedStatus(status) === "generating";
-    }
-    function isManagedStatusWaiting(status, opts) {
-      return normalizeManagedStatus(status, opts) === "waiting_approval";
-    }
-    function normalizeActiveChatData(activeChat, options = FULL_STATUS_ACTIVE_CHAT_OPTIONS) {
-      if (!activeChat) return activeChat;
-      const resolvedOptions = {
-        ...FULL_STATUS_ACTIVE_CHAT_OPTIONS,
-        ...options
-      };
-      const {
-        messages: _messages,
-        ...rest
-      } = activeChat;
-      const normalized = {
-        ...rest,
-        status: normalizeManagedStatus(activeChat.status, { activeModal: activeChat.activeModal }),
-        activeModal: resolvedOptions.includeActiveModal && activeChat.activeModal ? {
-          message: truncateString(activeChat.activeModal.message || "", STATUS_MODAL_MESSAGE_LIMIT),
-          buttons: (activeChat.activeModal.buttons || []).map(
-            (button) => truncateString(String(button || ""), STATUS_MODAL_BUTTON_LIMIT)
-          )
-        } : null,
-        inputContent: resolvedOptions.includeInputContent && activeChat.inputContent ? truncateString(activeChat.inputContent, 2 * 1024) : void 0
-      };
-      if (resolvedOptions.includeMessages) {
-        normalized.messages = trimMessagesForStatus(activeChat.messages, resolvedOptions);
-      }
-      return normalized;
-    }
-    var WORKING_STATUSES2;
-    var FULL_STATUS_ACTIVE_CHAT_OPTIONS;
-    var LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
-    var STATUS_MODAL_MESSAGE_LIMIT;
-    var STATUS_MODAL_BUTTON_LIMIT;
-    var init_normalize = __esm2({
-      "src/status/normalize.ts"() {
-        "use strict";
-        WORKING_STATUSES2 = /* @__PURE__ */ new Set([
-          "generating",
-          "streaming",
-          "loading",
-          "loading_reference",
-          "thinking",
-          "active"
-        ]);
-        FULL_STATUS_ACTIVE_CHAT_OPTIONS = {
-          includeMessages: true,
-          includeInputContent: true,
-          includeActiveModal: true,
-          messageLimit: 60,
-          totalBytesLimit: 96 * 1024,
-          stringLimit: 4 * 1024,
-          fallbackStringLimit: 1024
-        };
-        LIVE_STATUS_ACTIVE_CHAT_OPTIONS = {
-          includeMessages: false,
-          includeInputContent: false,
-          includeActiveModal: false,
-          messageLimit: 0,
-          totalBytesLimit: 0,
-          stringLimit: 512,
-          fallbackStringLimit: 256
-        };
-        STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
-        STATUS_MODAL_BUTTON_LIMIT = 120;
-      }
-    });
-    function turnStageToSurfaceStatus(stage) {
-      switch (stage) {
-        case "accepted":
-        case "delivered":
-          return "starting";
-        case "consumed":
-        case "generating":
-          return "generating";
-        case "waiting_approval":
-          return "waiting_approval";
-        case "waiting_choice":
-          return "waiting_choice";
-        case "finalizing":
-          return "finalizing";
-        case "completed":
-          return "idle";
-        case "failed":
-          return "error";
-        case "cancelled":
-          return "stopped";
-      }
-    }
-    function ageMs(nowMs, iso) {
-      if (!iso) return null;
-      const ts2 = Date.parse(iso);
-      return Number.isFinite(ts2) ? Math.max(0, nowMs - ts2) : null;
-    }
-    function isStaleTurnAttemptAuthority(row, nowMs) {
-      if (!STALE_GATED_STAGES.has(row.stage)) return false;
-      const age = ageMs(nowMs, row.updatedAt ?? null);
-      return age !== null && age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
-    }
-    function presentationFromAttemptRow(row, nowMs = Date.now()) {
-      const stage = row.stage;
-      return {
-        authority: "turn_reducer",
-        status: turnStageToSurfaceStatus(stage),
-        stage,
-        terminalOutcome: row.terminalOutcome ?? null,
-        terminalReason: row.terminalReason ?? null,
-        meshId: row.meshId,
-        taskId: row.taskId,
-        attemptId: row.attemptId,
-        attemptSeq: row.attemptSeq,
-        sessionId: row.sessionId ?? null,
-        nodeId: row.nodeId ?? null,
-        providerType: row.providerType ?? null,
-        acceptedAt: row.acceptedAt ?? null,
-        deliveredAt: row.deliveredAt ?? null,
-        consumedAt: row.consumedAt ?? null,
-        terminalAt: row.terminalAt ?? null,
-        updatedAt: row.updatedAt ?? null,
-        projectionAgeMs: ageMs(nowMs, row.updatedAt),
-        approvalAgeMs: stage === "waiting_approval" ? ageMs(nowMs, row.updatedAt) : null,
-        choiceAgeMs: stage === "waiting_choice" ? ageMs(nowMs, row.updatedAt) : null,
-        finalizingAgeMs: stage === "finalizing" ? ageMs(nowMs, row.updatedAt) : null
-      };
-    }
-    function resolveTurnAttemptRow(lookup) {
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        const meshId = typeof lookup.meshId === "string" && lookup.meshId.trim() ? lookup.meshId.trim() : null;
-        const taskId = typeof lookup.taskId === "string" && lookup.taskId.trim() ? lookup.taskId.trim() : null;
-        if (meshId && taskId) {
-          const row = store.getCurrentTurnAttempt(meshId, taskId);
-          if (row) return row;
-        }
-        const sessionId = typeof lookup.sessionId === "string" && lookup.sessionId.trim() ? lookup.sessionId.trim() : null;
-        if (sessionId) return store.getLatestTurnAttemptForSession(sessionId);
-        return null;
-      } catch {
-        return null;
-      }
-    }
-    function resolveSessionTurnPresentation(args) {
-      const nowMs = args.nowMs ?? Date.now();
-      const row = resolveTurnAttemptRow(args);
-      if (row && !isStaleTurnAttemptAuthority(row, nowMs)) {
-        const presentation = presentationFromAttemptRow(row, nowMs);
-        recordProjectionSource("turn_reducer");
-        shadowCompareLegacyVsProjection(args.surface, args.providerType ?? row.providerType, args.legacyStatus, presentation);
-        observePresentationAges(presentation);
-        return presentation;
-      }
-      recordProjectionSource("provider_fsm_fallback");
-      return {
-        authority: "provider_fsm_fallback",
-        status: normalizeManagedStatus(args.legacyStatus),
-        stage: null,
-        terminalOutcome: null,
-        terminalReason: null,
-        meshId: null,
-        taskId: null,
-        attemptId: null,
-        attemptSeq: null,
-        sessionId: typeof args.sessionId === "string" ? args.sessionId : null,
-        nodeId: null,
-        providerType: args.providerType ?? null,
-        acceptedAt: null,
-        deliveredAt: null,
-        consumedAt: null,
-        terminalAt: null,
-        updatedAt: null,
-        projectionAgeMs: null,
-        approvalAgeMs: null,
-        choiceAgeMs: null,
-        finalizingAgeMs: null
-      };
-    }
-    function isRestartBlockingPresentation(presentation, legacyBlocking) {
-      if (presentation.authority !== "turn_reducer") return legacyBlocking;
-      return presentation.stage !== null && !isTerminalTurnStage(presentation.stage);
-    }
-    function getTurnPresentationMetrics() {
-      return {
-        projectionSource: { ...presentationMetrics.projectionSource },
-        shadowAgreements: presentationMetrics.shadowAgreements,
-        shadowDivergences: { ...presentationMetrics.shadowDivergences },
-        shadowDivergenceTotal: presentationMetrics.shadowDivergenceTotal,
-        maxProjectionAgeMs: presentationMetrics.maxProjectionAgeMs,
-        maxFinalizingAgeMs: presentationMetrics.maxFinalizingAgeMs,
-        maxApprovalAgeMs: presentationMetrics.maxApprovalAgeMs,
-        maxChoiceAgeMs: presentationMetrics.maxChoiceAgeMs
-      };
-    }
-    function recordProjectionSource(source) {
-      presentationMetrics.projectionSource[source] += 1;
-    }
-    function observePresentationAges(p) {
-      if (p.projectionAgeMs !== null) presentationMetrics.maxProjectionAgeMs = Math.max(presentationMetrics.maxProjectionAgeMs, p.projectionAgeMs);
-      if (p.finalizingAgeMs !== null) presentationMetrics.maxFinalizingAgeMs = Math.max(presentationMetrics.maxFinalizingAgeMs, p.finalizingAgeMs);
-      if (p.approvalAgeMs !== null) presentationMetrics.maxApprovalAgeMs = Math.max(presentationMetrics.maxApprovalAgeMs, p.approvalAgeMs);
-      if (p.choiceAgeMs !== null) presentationMetrics.maxChoiceAgeMs = Math.max(presentationMetrics.maxChoiceAgeMs, p.choiceAgeMs);
-    }
-    function classifyShadowDivergence(legacyStatus, presentation) {
-      const stage = presentation.stage;
-      const legacyWorking = legacyStatus === "generating" || legacyStatus === "starting";
-      const legacyWaiting = legacyStatus === "waiting_approval" || legacyStatus === "waiting_choice";
-      if (stage && isTerminalTurnStage(stage)) {
-        return legacyWorking || legacyWaiting ? "legacy_busy_turn_terminal" : "stage_mismatch_other";
-      }
-      if (legacyStatus === "idle") return "legacy_idle_turn_active";
-      if (stage === "waiting_approval" || stage === "waiting_choice") {
-        if (legacyWaiting && legacyStatus !== stage) return "legacy_approval_choice_confusion";
-        if (legacyWorking) return "legacy_working_turn_suspended";
-        return "stage_mismatch_other";
-      }
-      if (stage === "finalizing") return legacyWorking ? "legacy_working_turn_finalizing" : "stage_mismatch_other";
-      return "stage_mismatch_other";
-    }
-    function shadowCompareLegacyVsProjection(surface, providerType, legacyStatus, presentation) {
-      if (legacyStatus === null || legacyStatus === void 0) return;
-      const legacyNorm = normalizeManagedStatus(legacyStatus);
-      if (legacyNorm === presentation.status) {
-        presentationMetrics.shadowAgreements += 1;
-        return;
-      }
-      const reason = classifyShadowDivergence(legacyNorm, presentation);
-      const provider = providerType && providerType.trim() ? providerType.trim() : "unknown";
-      const key2 = `${reason}|${surface}|${provider}`;
-      presentationMetrics.shadowDivergenceTotal += 1;
-      if (presentationMetrics.shadowDivergences[key2] !== void 0) {
-        presentationMetrics.shadowDivergences[key2] += 1;
-      } else if (Object.keys(presentationMetrics.shadowDivergences).length < MAX_DIVERGENCE_KEYS) {
-        presentationMetrics.shadowDivergences[key2] = 1;
-      } else {
-        presentationMetrics.shadowDivergences[OVERFLOW_KEY] = (presentationMetrics.shadowDivergences[OVERFLOW_KEY] ?? 0) + 1;
-      }
-      if (!divergenceLogOnce.has(key2)) {
-        divergenceLogOnce.add(key2);
-        if (divergenceLogOnce.size > MAX_DIVERGENCE_KEYS) divergenceLogOnce.clear();
-        LOG.info("TurnPresentation", `Shadow divergence (${reason}) surface=${surface} provider=${provider} legacy=${legacyNorm} projected=${presentation.status} stage=${presentation.stage ?? "none"} task=${presentation.taskId ?? "none"} attempt=${presentation.attemptId ?? "none"}`);
-      }
-    }
-    var STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
-    var STALE_GATED_STAGES;
-    var MAX_DIVERGENCE_KEYS;
-    var OVERFLOW_KEY;
-    var presentationMetrics;
-    var divergenceLogOnce;
-    var init_mesh_turn_presentation = __esm2({
-      "src/mesh/mesh-turn-presentation.ts"() {
-        "use strict";
-        init_mesh_runtime_store();
-        init_mesh_turn_ledger();
-        init_logger();
-        init_normalize();
-        STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1e3;
-        STALE_GATED_STAGES = /* @__PURE__ */ new Set(["generating", "consumed"]);
-        MAX_DIVERGENCE_KEYS = 200;
-        OVERFLOW_KEY = "overflow|__overflow__|__overflow__";
-        presentationMetrics = {
-          projectionSource: { turn_reducer: 0, provider_fsm_fallback: 0 },
-          shadowAgreements: 0,
-          shadowDivergences: {},
-          shadowDivergenceTotal: 0,
-          maxProjectionAgeMs: 0,
-          maxFinalizingAgeMs: 0,
-          maxApprovalAgeMs: 0,
-          maxChoiceAgeMs: 0
-        };
-        divergenceLogOnce = /* @__PURE__ */ new Set();
-      }
-    });
-    function s(v) {
-      return typeof v === "string" && v.trim() ? v.trim() : "";
-    }
-    function meshEventTraceKey(ctx) {
-      const segs = [`task=${s(ctx.taskId) || "-"}`];
-      const eventId = s(ctx.eventId);
-      if (eventId) segs.push(`evt=${eventId}`);
-      segs.push(`sess=${s(ctx.sessionId) || "-"}`);
-      const nodeId = s(ctx.nodeId);
-      if (nodeId) segs.push(`node=${nodeId}`);
-      const meshId = s(ctx.meshId);
-      if (meshId) segs.push(`mesh=${meshId}`);
-      const event = s(ctx.event);
-      if (event) segs.push(`event=${event}`);
-      return segs.join(" ");
-    }
-    function traceMeshEventStage(stage, ctx, detail) {
-      LOG.info(CAT, `[stage:${stage}] ${meshEventTraceKey(ctx)}${detail ? ` \u2014 ${detail}` : ""}`);
-    }
-    function traceMeshEventDrop(reason, ctx, detail) {
-      LOG.warn(CAT, `[drop:${reason}] ${meshEventTraceKey(ctx)}${detail ? ` \u2014 ${detail}` : ""}`);
-    }
-    var CAT;
-    var init_mesh_event_trace = __esm2({
-      "src/mesh/mesh-event-trace.ts"() {
-        "use strict";
-        init_logger();
-        CAT = "EvtTrace";
-      }
-    });
-    function isSupportedMeshProtocolVersion(value) {
-      return typeof value === "string" && SUPPORTED_MESH_PROTOCOL_VERSIONS.includes(value);
-    }
-    function coordinatorIdentityEquals(a, b) {
-      return daemonIdsEquivalent4(a.daemonId, b.daemonId) && a.coordinatorRunId === b.coordinatorRunId && (a.sessionId ?? "") === (b.sessionId ?? "");
-    }
-    function coordinatorIdentityKey(identity) {
-      const daemonCore = machineCoreFromDaemonId(identity.daemonId) ?? identity.daemonId;
-      return `${daemonCore}|${identity.coordinatorRunId}|${identity.sessionId ?? ""}`;
-    }
-    function isMeshEventScope(value) {
-      return typeof value === "string" && MESH_EVENT_SCOPES.includes(value);
-    }
-    function isNonEmptyString(value) {
-      return typeof value === "string" && value.length > 0;
-    }
-    function assertCoordinatorIdentity(raw, path66) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, path66, "must be an object");
-      }
-      const obj = raw;
-      if (!isNonEmptyString(obj.daemonId)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.daemonId`, "must be a non-empty string");
-      }
-      if (!isNonEmptyString(obj.coordinatorRunId)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.coordinatorRunId`, "must be a non-empty string");
-      }
-      const sessionId = obj.sessionId;
-      if (sessionId !== void 0 && !isNonEmptyString(sessionId)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.sessionId`, "must be a non-empty string when provided");
-      }
-      return sessionId !== void 0 ? { daemonId: obj.daemonId, coordinatorRunId: obj.coordinatorRunId, sessionId } : { daemonId: obj.daemonId, coordinatorRunId: obj.coordinatorRunId };
-    }
-    function assertPendingMeshCoordinatorEventV2(raw, path66 = "$") {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, path66, "must be an object");
-      }
-      const obj = raw;
-      if (!isSupportedMeshProtocolVersion(obj.protocolVersion)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.protocolVersion`, `must be one of ${SUPPORTED_MESH_PROTOCOL_VERSIONS.join(", ")}`);
-      }
-      if (!isNonEmptyString(obj.eventId)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.eventId`, "must be a non-empty string");
-      }
-      if (!isMeshEventScope(obj.scope)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.scope`, `must be one of ${MESH_EVENT_SCOPES.join(", ")}`);
-      }
-      if (!isNonEmptyString(obj.event)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.event`, "must be a non-empty string");
-      }
-      if (!isNonEmptyString(obj.meshId)) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.meshId`, "must be a non-empty string");
-      }
-      const dispatchedBy = assertCoordinatorIdentity(obj.dispatchedBy, `${path66}.dispatchedBy`);
-      if (obj.scope === "unicast") {
-        if (!obj.intendedFor) {
-          throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.intendedFor`, "unicast scope requires intendedFor");
-        }
-      } else if (obj.intendedFor !== void 0) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.intendedFor`, "only unicast scope may set intendedFor");
-      }
-      const intendedFor = obj.intendedFor ? assertCoordinatorIdentity(obj.intendedFor, `${path66}.intendedFor`) : void 0;
-      const metadata = obj.metadataEvent && typeof obj.metadataEvent === "object" && !Array.isArray(obj.metadataEvent) ? obj.metadataEvent : null;
-      if (!metadata) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.metadataEvent`, "must be an object");
-      }
-      const queuedAt = typeof obj.queuedAt === "number" && Number.isFinite(obj.queuedAt) ? obj.queuedAt : null;
-      if (queuedAt === null) {
-        throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path66}.queuedAt`, "must be a finite number");
-      }
-      return {
-        event: obj.event,
-        meshId: obj.meshId,
-        nodeLabel: isNonEmptyString(obj.nodeLabel) ? obj.nodeLabel : "",
-        nodeId: typeof obj.nodeId === "string" ? obj.nodeId : void 0,
-        workspace: typeof obj.workspace === "string" ? obj.workspace : void 0,
-        metadataEvent: metadata,
-        coordinatorMessage: typeof obj.coordinatorMessage === "string" ? obj.coordinatorMessage : void 0,
-        queuedAt,
-        protocolVersion: obj.protocolVersion,
-        eventId: obj.eventId,
-        scope: obj.scope,
-        dispatchedBy,
-        ...intendedFor ? { intendedFor } : {}
-      };
-    }
-    function shouldDeliverPendingEventToCoordinator(event, drainer) {
-      if (event.scope === "system") return false;
-      if (event.scope === "broadcast") return true;
-      if (!event.intendedFor) return false;
-      return coordinatorIdentityEquals(event.intendedFor, drainer);
-    }
-    function isTerminalTaskEvent(eventName) {
-      return TERMINAL_TASK_EVENTS.has(eventName);
-    }
-    function defaultScopeForEvent(eventName) {
-      if (TERMINAL_TASK_EVENTS.has(eventName) || COORDINATOR_ALERT_EVENTS.has(eventName)) return "unicast";
-      return "broadcast";
-    }
-    function coordinatorIdentityFromEmitFields2(fields) {
-      const daemonId = typeof fields.daemonId === "string" && fields.daemonId.length > 0 ? fields.daemonId : void 0;
-      if (!daemonId) return void 0;
-      const coordinatorRunId = typeof fields.coordinatorRunId === "string" && fields.coordinatorRunId.length > 0 ? fields.coordinatorRunId : daemonId;
-      const sessionId = typeof fields.sessionId === "string" && fields.sessionId.length > 0 ? fields.sessionId : void 0;
-      return sessionId !== void 0 ? { daemonId, coordinatorRunId, sessionId } : { daemonId, coordinatorRunId };
-    }
-    function buildPendingEventEmitStamp(opts) {
-      if (!opts.dispatchedBy) return void 0;
-      let scope = opts.scope ?? defaultScopeForEvent(opts.eventName);
-      let intendedFor = opts.intendedFor;
-      if (scope === "unicast" && !intendedFor) {
-        if (isTerminalTaskEvent(opts.eventName)) {
-          intendedFor = opts.dispatchedBy;
-        } else {
-          scope = "broadcast";
-        }
-      }
-      if (scope !== "unicast") intendedFor = void 0;
-      return {
-        protocolVersion: MESH_PROTOCOL_VERSION_V2,
-        eventId: opts.eventId,
-        scope,
-        dispatchedBy: opts.dispatchedBy,
-        ...intendedFor ? { intendedFor } : {}
-      };
-    }
-    var MESH_PROTOCOL_VERSION_V1;
-    var MESH_PROTOCOL_VERSION_V2;
-    var SUPPORTED_MESH_PROTOCOL_VERSIONS;
-    var MESH_EVENT_SCOPES;
-    var MeshContractViolationError;
-    var TERMINAL_TASK_EVENTS;
-    var COORDINATOR_ALERT_EVENTS;
-    var init_contracts = __esm2({
-      "src/mesh/contracts.ts"() {
-        "use strict";
-        init_dist();
-        MESH_PROTOCOL_VERSION_V1 = "1.0";
-        MESH_PROTOCOL_VERSION_V2 = "2.0";
-        SUPPORTED_MESH_PROTOCOL_VERSIONS = [
-          MESH_PROTOCOL_VERSION_V1,
-          MESH_PROTOCOL_VERSION_V2
-        ];
-        MESH_EVENT_SCOPES = ["unicast", "broadcast", "system"];
-        MeshContractViolationError = class extends Error {
-          violationPath;
-          protocolVersion;
-          constructor(protocolVersion, violationPath, detail) {
-            super(`mesh contract ${protocolVersion} violation at ${violationPath}: ${detail}`);
-            this.name = "MeshContractViolationError";
-            this.violationPath = violationPath;
-            this.protocolVersion = protocolVersion;
-          }
-        };
-        TERMINAL_TASK_EVENTS = /* @__PURE__ */ new Set([
-          "agent:generating_completed",
-          "agent:stopped",
-          "refine:completed",
-          "refine:failed",
-          "refine:accepted"
-        ]);
-        COORDINATOR_ALERT_EVENTS = /* @__PURE__ */ new Set([
-          "mesh:dispatch_blocked"
-        ]);
-      }
-    });
-    function normalizeCoordinatorDaemonIds(coordinatorDaemonId) {
-      return expandDaemonIdForms(coordinatorDaemonId);
-    }
-    function isMeshProtocolV2EnforceEnabled() {
-      const raw = readNonEmptyString(process.env.MESH_PROTOCOL_V2_ENFORCE);
-      if (!raw) return true;
-      const v = raw.trim().toLowerCase();
-      return !(v === "0" || v === "false" || v === "off" || v === "no");
-    }
-    function ledgerRecordQuarantinedEvent(event, reason) {
-      try {
-        const finalSummary = readMeshCompletionSummary(event.metadataEvent || {});
-        appendLedgerEntry3(event.meshId, {
-          kind: "event_held",
-          ...event.nodeId ? { nodeId: event.nodeId } : {},
-          payload: {
-            event: event.event,
-            reason,
-            recoverable: true,
-            nodeLabel: event.nodeLabel,
-            ...event.workspace ? { workspace: event.workspace } : {},
-            targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
-            ...readNonEmptyString(event.eventId) ? { eventId: event.eventId } : {},
-            queuedAt: event.queuedAt,
-            ...finalSummary ? { finalSummary } : {},
-            // Full original event so mesh_requeue_held_events can restore it
-            // losslessly (event_held→pending). The summary/label fields above stay
-            // for human-readable audit; `heldEvent` is the machine recovery copy.
-            heldEvent: event
-          }
-        });
-      } catch (e) {
-        LOG.warn("MeshEventsV2", `Failed to ledger-record v2-quarantined ${event.event} for mesh ${event.meshId}: ${e?.message || e}`);
-      }
-    }
-    function getMeshV2DrainCounters() {
-      return { ...meshV2DrainCounters };
-    }
-    function warnV2Once(key2, message) {
-      if (warnedV2Violations.has(key2)) return;
-      warnedV2Violations.add(key2);
-      if (warnedV2Violations.size > 2e3) {
-        const first = warnedV2Violations.values().next().value;
-        if (first !== void 0) warnedV2Violations.delete(first);
-      }
-      LOG.warn("MeshEventsV2", message);
-    }
-    function resolveDrainerIdentity(daemonIds, explicit) {
-      if (explicit) return explicit;
-      return coordinatorIdentityFromEmitFields2({ daemonId: daemonIds[0] });
-    }
-    function isV2Event(event) {
-      return event.protocolVersion === MESH_PROTOCOL_VERSION_V2;
-    }
-    function runIdIsDaemonFormFallback(identity) {
-      return daemonIdsEquivalent4(identity.coordinatorRunId, identity.daemonId);
-    }
-    function identityDeliversTo(intendedFor, drainer) {
-      if (runIdIsDaemonFormFallback(intendedFor) && runIdIsDaemonFormFallback(drainer)) {
-        if (!daemonIdsEquivalent4(intendedFor.daemonId, drainer.daemonId)) return false;
-        if (intendedFor.sessionId && drainer.sessionId) {
-          return intendedFor.sessionId === drainer.sessionId;
-        }
-        return true;
-      }
-      return coordinatorIdentityEquals(intendedFor, drainer);
-    }
-    function routeV2EventsForDrainer(events, drainer, ctx) {
-      if (!drainer) return events;
-      const enforce = isMeshProtocolV2EnforceEnabled();
-      const bump = (k) => {
-        if (ctx.countMetrics) meshV2DrainCounters[k]++;
-      };
-      const kept = [];
-      for (const event of events) {
-        if (!isV2Event(event)) {
-          if (enforce) {
-            bump("v1UnversionedQuarantined");
-            if (ctx.countMetrics) ledgerRecordQuarantinedEvent(event, "v2_enforce_unversioned_quarantined");
-            warnV2Once(
-              `${event.meshId}::${event.eventId ?? event.event}::v1-quarantined`,
-              `v2 ENFORCE: unversioned ${event.event} on mesh ${event.meshId} QUARANTINED (no v2 envelope \u2014 held back, not delivered; ledger-recorded recoverable). A producer path still emits v1.`
-            );
-            continue;
-          }
-          bump("v1BroadcastAccepted");
-          kept.push(event);
-          continue;
-        }
-        let validated;
-        try {
-          validated = assertPendingMeshCoordinatorEventV2(event);
-        } catch (e) {
-          if (enforce) {
-            bump("v2ValidationFailedQuarantined");
-            if (ctx.countMetrics) ledgerRecordQuarantinedEvent(event, "v2_enforce_validation_failed_quarantined");
-            warnV2Once(
-              `${event.meshId}::${event.eventId ?? event.event}::invalid-quarantined`,
-              `v2 ENFORCE: envelope validation failed for ${event.event} on mesh ${event.meshId} \u2014 QUARANTINED (held back, not delivered; ledger-recorded recoverable): ${e?.message || e}`
-            );
-            continue;
-          }
-          bump("v2ValidationFailedAccepted");
-          warnV2Once(
-            `${event.meshId}::${event.eventId ?? event.event}::invalid`,
-            `v2 envelope validation failed for ${event.event} on mesh ${event.meshId} \u2014 PASSED THROUGH (accept mode): ${e?.message || e}`
-          );
-          kept.push(event);
-          continue;
-        }
-        const eventId = validated.eventId;
-        if (ctx.batchSeen.has(eventId) || ctx.alreadyDrained(eventId)) {
-          bump("v2DedupSkipped");
-          continue;
-        }
-        if (validated.scope !== "unicast") {
-          if (validated.scope === "broadcast" && isTerminalTaskEvent(validated.event)) {
-            const deliverSelfFallback = event.dispatchedBySelfFallback && daemonIdsEquivalent4(validated.dispatchedBy.daemonId, drainer.daemonId);
-            if (deliverSelfFallback || identityDeliversTo(validated.dispatchedBy, drainer)) {
-              ctx.batchSeen.add(eventId);
-              bump("v2Delivered");
-              kept.push(event);
-            } else {
-              bump("v2RoutedAway");
-            }
-            continue;
-          }
-          if (shouldDeliverPendingEventToCoordinator(validated, drainer)) {
-            ctx.batchSeen.add(eventId);
-            bump("v2Delivered");
-            kept.push(event);
-          } else {
-            bump("v2RoutedAway");
-          }
-          continue;
-        }
-        if (validated.intendedFor && !validated.intendedFor.sessionId && daemonIdsEquivalent4(validated.intendedFor.daemonId, drainer.daemonId)) {
-          const liveSessions = ctx.countLiveCoordinatorSessions?.(validated.intendedFor.daemonId) ?? 0;
-          if (liveSessions > 1) {
-            warnV2Once(
-              `${event.meshId}::${eventId}::ambiguous-unicast`,
-              `v2 unicast ${event.event} on mesh ${event.meshId} carries NO coordinator session but ${liveSessions} coordinator sessions are live on ${validated.intendedFor.daemonId} \u2014 delivery is first-come-first-served and may reach the wrong coordinator. Delivered to ${coordinatorIdentityKey(drainer)}. The EMITTING path must stamp targetCoordinatorSessionId.`
-            );
-            bump("v2AmbiguousUnicastDelivered");
-          }
-        }
-        if (validated.intendedFor && identityDeliversTo(validated.intendedFor, drainer)) {
-          ctx.batchSeen.add(eventId);
-          bump("v2Delivered");
-          LOG.debug("MeshEventsV2", `unicast ${event.event} (mesh ${event.meshId}, eventId ${eventId}) delivered to ${coordinatorIdentityKey(drainer)}; intendedFor=${coordinatorIdentityKey(validated.intendedFor)}`);
-          kept.push(event);
-          continue;
-        }
-        const realRunIdMismatch = !runIdIsDaemonFormFallback(validated.intendedFor) || !runIdIsDaemonFormFallback(drainer);
-        if (validated.intendedFor && realRunIdMismatch && daemonIdsEquivalent4(validated.intendedFor.daemonId, drainer.daemonId)) {
-          ctx.batchSeen.add(eventId);
-          bump("v2ReattributedToDrainer");
-          warnV2Once(
-            `${event.meshId}::${eventId}::reattributed`,
-            `v2 unicast ${event.event} on mesh ${event.meshId} re-attributed to current coordinator ${coordinatorIdentityKey(drainer)} (originating coordinatorRunId no longer live)`
-          );
-          kept.push(event);
-          continue;
-        }
-        LOG.debug("MeshEventsV2", `unicast ${event.event} (mesh ${event.meshId}, eventId ${eventId}) NOT delivered to ${coordinatorIdentityKey(drainer)}; intendedFor=${validated.intendedFor ? coordinatorIdentityKey(validated.intendedFor) : "none"} \u2014 left for its own drainer`);
-        bump("v2RoutedAway");
-      }
-      return kept;
-    }
-    function readRefineJobId2(event) {
-      const metadata = readRecord2(event.metadataEvent) || event;
-      const result = readRecord2(metadata.result);
-      const refineJob = readRecord2(result?.refineJob);
-      return readNonEmptyString(metadata.jobId) || readNonEmptyString(refineJob?.jobId);
-    }
-    function hasPendingRefineTerminalEventDuplicate(event) {
-      if (!REFINE_TERMINAL_EVENTS.has(event.event)) return false;
-      const jobId = readRefineJobId2(event);
-      if (!jobId) return false;
-      try {
-        return MeshRuntimeStore.getInstance().peekPendingEvents(event.meshId).some(
-          (row) => row.event === event.event && readRefineJobId2(row.payload) === jobId
-        );
-      } catch {
-        return false;
-      }
-    }
-    function buildPendingEventFingerprint(event) {
-      const metadata = readRecord2(event.metadataEvent) || {};
-      if (event.event === "worktree_bootstrap_complete" || event.event === "worktree_bootstrap_failed") {
-        return [event.meshId, event.event, event.nodeId || ""].join("::");
-      }
-      if (TERMINAL_COMPLETION_EVENTS.has(event.event)) {
-        const terminalTaskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
-        if (terminalTaskId) {
-          return [
-            event.meshId,
-            event.event,
-            terminalTaskId,
-            isWeakCompletionMetadata(metadata) ? "weak" : "genuine"
-          ].join("::");
-        }
-      }
-      const consensusGroupId = readNonEmptyString(metadata.consensusGroupId) || readNonEmptyString(readRecord2(metadata.payload)?.consensusGroupId);
-      if (consensusGroupId) {
-        const groupTaskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
-        return [event.meshId, event.event, groupTaskId || "", consensusGroupId, "group"].join("::");
-      }
-      const sessionId = resolveEventSessionId(metadata);
-      const providerSessionId = readNonEmptyString(metadata.providerSessionId);
-      const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
-      const jobId = readRefineJobId2(event);
-      const timestamp2 = metadata.timestamp !== void 0 && metadata.timestamp !== null ? String(metadata.timestamp) : "";
-      const alertReason = COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT.has(event.event) ? readNonEmptyString(metadata.reason) : void 0;
-      return [
-        event.meshId,
-        event.event,
-        event.nodeId || "",
-        sessionId || "",
-        providerSessionId || "",
-        taskId || "",
-        jobId || "",
-        timestamp2 || "",
-        ...alertReason ? [alertReason] : []
-      ].join("::");
-    }
-    function isDurablyDedupedEvent(event) {
-      if (!TERMINAL_COMPLETION_EVENTS.has(event.event)) return false;
-      const metadata = readRecord2(event.metadataEvent) || {};
-      const taskId = readNonEmptyString(metadata.taskId) || readNonEmptyString(readRecord2(metadata.payload)?.taskId);
-      return !!taskId;
-    }
-    function recordDurableTerminalDedup(event, fingerprint) {
-      if (!isDurablyDedupedEvent(event)) return;
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        store.recordCompletionFingerprint(event.meshId, `pending::${fingerprint}`, TERMINAL_COMPLETION_DEDUP_TTL_MS);
-        store.sweepExpiredFingerprints();
-      } catch {
-      }
-    }
-    function hasPendingCoordinatorEventDuplicate(event) {
-      const fingerprint = buildPendingEventFingerprint(event);
-      if (!fingerprint.trim()) return false;
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        if (store.hasPendingEventFingerprint(event.meshId, fingerprint)) return true;
-        if (isDurablyDedupedEvent(event) && store.hasCompletionFingerprint(event.meshId, `pending::${fingerprint}`)) {
-          return true;
-        }
-        return false;
-      } catch {
-        return false;
-      }
-    }
-    function refineTerminalEventFromLedger(meshId, pending) {
-      const acceptedJobIds = new Set(
-        pending.filter((event) => event.event === "refine:accepted").map((event) => readRefineJobId2(event)).filter(Boolean)
-      );
-      if (acceptedJobIds.size === 0) return [];
-      const existingTerminalJobIds = new Set(
-        pending.filter((event) => REFINE_TERMINAL_EVENTS.has(event.event)).map((event) => `${event.event}:${readRefineJobId2(event)}`).filter((value) => !value.endsWith(":"))
-      );
-      const backfilled = [];
-      const entries = readLedgerEntriesByKind(meshId, ["task_completed", "task_failed"]);
-      for (let i = entries.length - 1; i >= 0; i--) {
-        const entry = entries[i];
-        const payload = readRecord2(entry.payload);
-        if (payload?.source !== "refine_mesh_node_async_job") continue;
-        const refineJob = readRecord2(payload.refineJob);
-        const jobId = readNonEmptyString(refineJob?.jobId);
-        if (!jobId || !acceptedJobIds.has(jobId)) continue;
-        const eventName = entry.kind === "task_completed" ? "refine:completed" : "refine:failed";
-        if (existingTerminalJobIds.has(`${eventName}:${jobId}`)) continue;
-        existingTerminalJobIds.add(`${eventName}:${jobId}`);
-        const result = readRecord2(payload.result);
-        const metadataEvent = {
-          source: "refine_mesh_node_async_job",
-          jobId,
-          interactionId: readNonEmptyString(refineJob?.interactionId),
-          meshId,
-          nodeId: readNonEmptyString(refineJob?.nodeId) || entry.nodeId,
-          targetDaemonId: readNonEmptyString(refineJob?.targetDaemonId),
-          workspace: readNonEmptyString(refineJob?.workspace),
-          status: eventName === "refine:completed" ? "completed" : "failed",
-          startedAt: readNonEmptyString(refineJob?.startedAt),
-          completedAt: readNonEmptyString(refineJob?.completedAt) || entry.timestamp,
-          retryOfJobId: readNonEmptyString(refineJob?.retryOfJobId) || readNonEmptyString(payload.retryOfJobId),
-          ...result ? { result } : {}
-        };
-        const nodeLabel = readNonEmptyString(refineJob?.nodeId) || entry.nodeId || "refine job";
-        backfilled.push({
-          event: eventName,
-          meshId,
-          nodeLabel,
-          nodeId: readNonEmptyString(refineJob?.nodeId) || entry.nodeId,
-          workspace: readNonEmptyString(refineJob?.workspace),
-          metadataEvent,
-          coordinatorMessage: buildMeshSystemMessage({ event: eventName, nodeLabel, metadataEvent }),
-          queuedAt: Date.now()
-        });
-      }
-      return backfilled.reverse();
-    }
-    function readPendingEventTaskId(event) {
-      const metadataEvent = readRecord2(event.metadataEvent);
-      return readNonEmptyString(metadataEvent?.taskId);
-    }
-    function dropStaleTerminalTaskEvents(meshId, events) {
-      if (!events.some((event) => STALE_TASK_DROPPABLE_EVENTS.has(event.event))) return events;
-      let store;
-      try {
-        store = MeshRuntimeStore.getInstance();
-      } catch {
-        return events;
-      }
-      const terminalByTaskId = /* @__PURE__ */ new Map();
-      const isTaskTerminal = (taskId) => {
-        const cached5 = terminalByTaskId.get(taskId);
-        if (cached5 !== void 0) return cached5;
-        let terminal = false;
-        try {
-          const entry = store.findQueueEntryById(meshId, taskId);
-          terminal = !!entry && STALE_TASK_TERMINAL_STATUSES.has(entry.status);
-        } catch {
-          terminal = false;
-        }
-        terminalByTaskId.set(taskId, terminal);
-        return terminal;
-      };
-      return events.filter((event) => {
-        if (!STALE_TASK_DROPPABLE_EVENTS.has(event.event)) return true;
-        const taskId = readPendingEventTaskId(event);
-        if (!taskId) return true;
-        if (!isTaskTerminal(taskId)) return true;
-        traceMeshEventDrop("stale_task_terminal", {
-          taskId,
-          sessionId: resolveEventSessionId(event.metadataEvent) ?? event.targetCoordinatorSessionId,
-          nodeId: event.nodeId,
-          meshId,
-          event: event.event
-        }, "task row is already terminal (completed/failed/cancelled) \u2014 non-terminal alert is stale");
-        return false;
-      });
-    }
-    function reconcilePendingMeshCoordinatorEvents(meshId, events) {
-      const backfilled = refineTerminalEventFromLedger(meshId, events);
-      const terminalJobIds = new Set(
-        [...events.filter((event) => REFINE_TERMINAL_EVENTS.has(event.event)), ...backfilled].map((event) => readRefineJobId2(event)).filter(Boolean)
-      );
-      const reconciled = terminalJobIds.size === 0 ? events : events.filter((event) => !(event.event === "refine:accepted" && terminalJobIds.has(readRefineJobId2(event))));
-      const fresh = dropStaleTerminalTaskEvents(meshId, reconciled);
-      return backfilled.length === 0 ? fresh : [...fresh, ...backfilled];
-    }
-    function getPendingRetentionCounters() {
-      return { ...pendingRetentionCounters };
-    }
-    function ledgerRecordExpiredUndrainedEvent(row) {
-      try {
-        const restored = row.payload && typeof row.payload === "object" ? row.payload : void 0;
-        const finalSummary = restored?.metadataEvent ? readMeshCompletionSummary(restored.metadataEvent) : void 0;
-        appendLedgerEntry3(row.meshId, {
-          kind: "event_held",
-          ...restored?.nodeId ? { nodeId: restored.nodeId } : {},
-          payload: {
-            event: row.event,
-            reason: PENDING_RETENTION_EXPIRED_HOLD_REASON,
-            recoverable: true,
-            nodeLabel: restored?.nodeLabel ?? "",
-            ...restored?.workspace ? { workspace: restored.workspace } : {},
-            targetCoordinatorDaemonId: restored?.targetCoordinatorDaemonId ?? null,
-            ...readNonEmptyString(restored?.eventId) ? { eventId: restored.eventId } : {},
-            queuedAt: restored?.queuedAt ?? null,
-            ...finalSummary ? { finalSummary } : {},
-            // Full original event so mesh_requeue_held_events can restore it
-            // losslessly (event_held→pending), same as every other event_held feeder.
-            ...restored ? { heldEvent: restored } : {}
-          }
-        });
-      } catch (e) {
-        pendingRetentionCounters.undrainedExpiredMirrorFailed++;
-        LOG.warn("MeshEvents", `Failed to ledger-record retention-expired pending event ${row.event} (row ${row.id}, mesh ${row.meshId}) \u2014 it is being deleted UNRECOVERABLY: ${e?.message || e}`);
-      }
-    }
-    function prunePendingMeshCoordinatorEventsRetention() {
-      try {
-        const { drainedExpired, undrainedExpired, undrainedRows } = MeshRuntimeStore.getInstance().prunePendingEvents({
-          drainedOlderThanMs: PENDING_EVENTS_DRAINED_RETENTION_MS,
-          undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS
-        });
-        pendingRetentionCounters.drainedExpired += drainedExpired;
-        pendingRetentionCounters.undrainedExpired += undrainedExpired;
-        if (undrainedRows.length > 0) {
-          for (const row of undrainedRows) {
-            ledgerRecordExpiredUndrainedEvent(row);
-          }
-          const meshIds = [...new Set(undrainedRows.map((r) => r.meshId))];
-          const droppedAt = (/* @__PURE__ */ new Date()).toISOString();
-          LOG.warn(
-            "MeshEvents",
-            `Pending-event retention DROPPED ${undrainedRows.length} never-delivered event(s) at ${droppedAt} (queued >30d, still undrained) across mesh(es) ${meshIds.join(", ")} \u2014 mirrored to the ledger as event_held (reason: ${PENDING_RETENTION_EXPIRED_HOLD_REASON}); recover with mesh_requeue_held_events.`
-          );
-        }
-        const removed = drainedExpired + undrainedExpired;
-        if (removed > 0) {
-          LOG.info("MeshEvents", `Pruned ${removed} stale pending-event row(s) (drained >7d / undrained >30d)`);
-        } else {
-          pendingRetentionCounters.sweepsNoop++;
-        }
-        return removed;
-      } catch (e) {
-        LOG.warn("MeshEvents", `Pending-event retention prune failed: ${e?.message || e}`);
-        return 0;
-      }
-    }
-    function stampPendingEventV2(event, hint) {
-      if (event.protocolVersion === MESH_PROTOCOL_VERSION_V2 && readNonEmptyString(event.eventId)) {
-        return event;
-      }
-      const coordinatorIdentity = hint?.dispatchedBy ?? coordinatorIdentityFromEmitFields2({
-        daemonId: event.targetCoordinatorDaemonId,
-        coordinatorRunId: hint?.coordinatorRunId,
-        sessionId: event.targetCoordinatorSessionId
-      });
-      const selfFallback = !coordinatorIdentity;
-      const dispatchedBy = coordinatorIdentity ?? coordinatorIdentityFromEmitFields2({
-        daemonId: readNonEmptyString(loadConfig().machineId)
-      });
-      const intendedFor = hint?.intendedFor ?? (selfFallback ? void 0 : coordinatorIdentity);
-      const stamp2 = buildPendingEventEmitStamp({
-        eventName: event.event,
-        eventId: (0, import_crypto9.randomUUID)(),
-        dispatchedBy,
-        intendedFor,
-        // Force broadcast for the self-fallback so a unicast-defaulting terminal
-        // event isn't addressed to this daemon alone; an explicit hint still wins.
-        scope: hint?.scope ?? (selfFallback ? "broadcast" : void 0)
-      });
-      if (!stamp2) return event;
-      const dispatchedBySelfFallback = selfFallback && stamp2.scope === "broadcast";
-      const isWorktreeBootstrapEvent = event.event === "worktree_bootstrap_complete" || event.event === "worktree_bootstrap_failed";
-      const selfFallbackTarget = dispatchedBySelfFallback && !isWorktreeBootstrapEvent && !readNonEmptyString(event.targetCoordinatorDaemonId) && !readNonEmptyString(event.targetCoordinatorSessionId) ? readNonEmptyString(stamp2.dispatchedBy.daemonId) : void 0;
-      return {
-        ...event,
-        protocolVersion: stamp2.protocolVersion,
-        eventId: stamp2.eventId,
-        scope: stamp2.scope,
-        dispatchedBy: stamp2.dispatchedBy,
-        ...stamp2.intendedFor ? { intendedFor: stamp2.intendedFor } : {},
-        ...dispatchedBySelfFallback ? { dispatchedBySelfFallback: true } : {},
-        ...selfFallbackTarget ? { targetCoordinatorDaemonId: selfFallbackTarget } : {}
-      };
-    }
-    function readCoordinatorIdentityFromWire(raw) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-      const obj = raw;
-      const daemonId = readNonEmptyString(obj.daemonId);
-      const coordinatorRunId = readNonEmptyString(obj.coordinatorRunId);
-      if (!daemonId || !coordinatorRunId) return void 0;
-      const sessionId = readNonEmptyString(obj.sessionId);
-      return { daemonId, coordinatorRunId, ...sessionId ? { sessionId } : {} };
-    }
-    function serializeV2EnvelopeToWire2(event) {
-      const out = {};
-      if (event.protocolVersion) out.protocolVersion = event.protocolVersion;
-      if (readNonEmptyString(event.eventId)) out.eventId = event.eventId;
-      if (event.scope) out.scope = event.scope;
-      if (event.dispatchedBy) out.dispatchedBy = event.dispatchedBy;
-      if (event.intendedFor) out.intendedFor = event.intendedFor;
-      return out;
-    }
-    function readV2EnvelopeFromWire(payload) {
-      const out = {};
-      if (payload.protocolVersion === MESH_PROTOCOL_VERSION_V2) out.protocolVersion = MESH_PROTOCOL_VERSION_V2;
-      const eventId = readNonEmptyString(payload.eventId);
-      if (eventId) out.eventId = eventId;
-      if (isMeshEventScope(payload.scope)) out.scope = payload.scope;
-      const dispatchedBy = readCoordinatorIdentityFromWire(payload.dispatchedBy);
-      if (dispatchedBy) out.dispatchedBy = dispatchedBy;
-      const intendedFor = readCoordinatorIdentityFromWire(payload.intendedFor);
-      if (intendedFor) out.intendedFor = intendedFor;
-      return out;
-    }
-    function queuePendingMeshCoordinatorEvent(rawEvent, hint) {
-      const event = stampPendingEventV2(rawEvent, hint);
-      return persistPendingMeshCoordinatorEvent(event);
-    }
-    function persistPendingMeshCoordinatorEvent(event) {
-      try {
-        if (hasPendingRefineTerminalEventDuplicate(event)) {
-          LOG.info("MeshEvents", `Suppressed duplicate pending ${event.event} for refine job ${readRefineJobId2(event)}`);
-          return true;
-        }
-        if (hasPendingCoordinatorEventDuplicate(event)) {
-          LOG.info("MeshEvents", `Suppressed duplicate pending ${event.event} for mesh ${event.meshId}`);
-          return true;
-        }
-        const fingerprint = buildPendingEventFingerprint(event);
-        MeshRuntimeStore.getInstance().insertPendingEvent({
-          id: (0, import_crypto9.randomUUID)(),
-          meshId: event.meshId,
-          coordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
-          event: event.event,
-          payload: event,
-          fingerprint: fingerprint || null,
-          queuedAt: event.queuedAt,
-          // v2 envelope columns (B2a) — all nullable so v1 rows coexist. The
-          // authoritative copy still rides inside `payload`; these columns exist
-          // for queryable idempotency (event_id) and scope-based drain filtering
-          // (scope / intended_for) without JSON-parsing every row.
-          protocolVersion: event.protocolVersion ?? null,
-          eventId: event.eventId ?? null,
-          scope: event.scope ?? null,
-          dispatchedBy: event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
-          intendedFor: event.intendedFor ? JSON.stringify(event.intendedFor) : null
-        });
-        recordDurableTerminalDedup(event, fingerprint);
-        return true;
-      } catch (e) {
-        LOG.error(
-          "MeshEvents",
-          `PENDING-EVENT PERSIST FAILED \u2014 ${event.event} for mesh ${event.meshId} is NOT queued and will NOT be delivered (SQLite is the only store; there is no fallback): ${e?.message || e}`
-        );
-        return false;
-      }
-    }
-    function requeueDrainedPendingMeshCoordinatorEvent(event) {
-      const fingerprint = buildPendingEventFingerprint(event);
-      if (!fingerprint.trim()) return false;
-      let requeued = false;
-      try {
-        requeued = MeshRuntimeStore.getInstance().requeueDrainedPendingEventByFingerprint(event.meshId, fingerprint);
-      } catch (e) {
-        LOG.error(
-          "MeshEvents",
-          `HELD-EVENT RE-QUEUE FAILED \u2014 ${event.event} for mesh ${event.meshId} was NOT durably returned to the queue (SQLite is the only store): ${e?.message || e}`
-        );
-        return false;
-      }
-      return requeued;
-    }
-    function drainPendingMeshCoordinatorEvents3(meshId, coordinatorDaemonId, opts) {
-      if (!meshId) return [];
-      const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
-      const drainer = resolveDrainerIdentity(daemonIds, opts?.drainerIdentity);
-      let priorDrainedEventIds = /* @__PURE__ */ new Set();
-      try {
-        priorDrainedEventIds = MeshRuntimeStore.getInstance().drainedEventIdsForMesh(meshId);
-      } catch {
-      }
-      const onlyEvents = opts?.onlyEvents;
-      const merged = [];
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        if (store.pendingEventCount(meshId) > 0) {
-          const drainedBy = drainer ? JSON.stringify(drainer) : null;
-          for (const row of store.drainPendingEvents(
-            meshId,
-            daemonIds.length > 0 ? daemonIds : void 0,
-            { ...onlyEvents ? { onlyEvents } : {}, drainedBy }
-          )) {
-            const event = row.payload;
-            if (event) merged.push(event);
-          }
-        }
-      } catch (e) {
-        if (!loggedSqlitePendingDrainFailure) {
-          loggedSqlitePendingDrainFailure = true;
-          LOG.warn("MeshEvents", `SQLite pending-event drain failed for mesh ${meshId} \u2014 NO events can be delivered while the store is unavailable (there is no fallback store; further occurrences at debug): ${e?.message || e}`);
-        } else {
-          LOG.debug("MeshEvents", `SQLite pending-event drain failed for mesh ${meshId}; no events delivered this cycle: ${e?.message || e}`);
-        }
-      }
-      if (merged.length === 0) return [];
-      const routed = routeV2EventsForDrainer(merged, drainer, {
-        alreadyDrained: (eventId) => priorDrainedEventIds.has(eventId),
-        batchSeen: /* @__PURE__ */ new Set(),
-        countMetrics: true,
-        ...opts?.countLiveCoordinatorSessions ? { countLiveCoordinatorSessions: opts.countLiveCoordinatorSessions } : {}
-      });
-      return reconcilePendingMeshCoordinatorEvents(meshId, routed);
-    }
-    function retractPendingDispatchBlockedEvent(meshId, taskId, coordinatorDaemonId) {
-      if (!meshId || !taskId) return 0;
-      let removed = 0;
-      const matchesTask = (event) => {
-        if (!event || event.event !== "mesh:dispatch_blocked") return false;
-        const rowTaskId = readNonEmptyString(event.metadataEvent?.taskId);
-        return rowTaskId === taskId;
-      };
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        const ids = [];
-        for (const row of store.peekPendingEvents(meshId)) {
-          if (row.event !== "mesh:dispatch_blocked") continue;
-          if (matchesTask(row.payload)) ids.push(row.id);
-        }
-        if (ids.length) removed += store.deletePendingEventsById(ids);
-      } catch (e) {
-        LOG.warn("MeshEvents", `Failed to retract dispatch_blocked for task ${taskId} on mesh ${meshId}: ${e?.message || e}`);
-      }
-      return removed;
-    }
-    function getPendingMeshCoordinatorEvents(meshId, coordinatorDaemonId, opts) {
-      if (!meshId) return [];
-      const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
-      const drainer = resolveDrainerIdentity(daemonIds, opts?.drainerIdentity);
-      let priorDrainedEventIds = /* @__PURE__ */ new Set();
-      try {
-        priorDrainedEventIds = MeshRuntimeStore.getInstance().drainedEventIdsForMesh(meshId);
-      } catch {
-      }
-      const merged = [];
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        if (store.pendingEventCount(meshId) > 0) {
-          for (const row of store.peekPendingEvents(meshId, daemonIds.length > 0 ? daemonIds : void 0)) {
-            const event = row.payload;
-            if (event) merged.push(event);
-          }
-        }
-      } catch {
-      }
-      const routed = routeV2EventsForDrainer(merged, drainer, {
-        alreadyDrained: (eventId) => priorDrainedEventIds.has(eventId),
-        batchSeen: /* @__PURE__ */ new Set(),
-        countMetrics: false
-      });
-      return reconcilePendingMeshCoordinatorEvents(meshId, routed).map((event) => annotatePendingEventWithTurnProjection(meshId, event));
-    }
-    function annotatePendingEventWithTurnProjection(meshId, event) {
-      try {
-        const taskId = typeof event?.metadataEvent?.taskId === "string" ? event.metadataEvent.taskId.trim() : "";
-        if (!taskId) return event;
-        const row = resolveTurnAttemptRow({ meshId, taskId });
-        if (!row) return event;
-        return {
-          ...event,
-          attemptId: row.attemptId,
-          turnStage: row.stage,
-          ...row.terminalOutcome ? { terminalOutcome: row.terminalOutcome } : {}
-        };
-      } catch {
-        return event;
-      }
-    }
-    function readHeldTaskId(restored, payload) {
-      const fromMeta = restored?.metadataEvent && typeof restored.metadataEvent === "object" ? readNonEmptyString(restored.metadataEvent.taskId) : "";
-      return fromMeta || readNonEmptyString(payload.taskId) || "";
-    }
-    function requeueHeldMeshCoordinatorEvents3(meshId, filter) {
-      const result = {
-        meshId,
-        matched: 0,
-        alreadyRequeued: 0,
-        unrecoverable: 0,
-        requeued: 0,
-        dedupSuppressed: 0,
-        entries: []
-      };
-      const all = readLedgerEntries3(meshId);
-      const requeuedIds = /* @__PURE__ */ new Set();
-      for (const entry of all) {
-        if (entry.kind !== "event_held_requeued") continue;
-        const id = readNonEmptyString(entry.payload?.heldEntryId);
-        if (id) requeuedIds.add(id);
-      }
-      const sinceMs = filter?.since ? new Date(filter.since).getTime() : NaN;
-      const wantEvent = readNonEmptyString(filter?.event);
-      const wantNode = readNonEmptyString(filter?.nodeId);
-      const wantTask = readNonEmptyString(filter?.taskId);
-      const wantReason = readNonEmptyString(filter?.reason);
-      for (const entry of all) {
-        if (entry.kind !== "event_held") continue;
-        const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
-        if (payload.recoverable !== true) continue;
-        const restored = payload.heldEvent && typeof payload.heldEvent === "object" ? { ...payload.heldEvent } : void 0;
-        const eventName = restored?.event || readNonEmptyString(payload.event);
-        const nodeId = restored?.nodeId || entry.nodeId || readNonEmptyString(payload.nodeId) || void 0;
-        const taskId = readHeldTaskId(restored, payload);
-        const reason = readNonEmptyString(payload.reason) || void 0;
-        if (wantEvent && eventName !== wantEvent) continue;
-        if (wantNode && nodeId !== wantNode) continue;
-        if (wantTask && taskId !== wantTask) continue;
-        if (wantReason && reason !== wantReason) continue;
-        if (filter?.since && !Number.isNaN(sinceMs) && new Date(entry.timestamp).getTime() < sinceMs) continue;
-        result.matched++;
-        if (requeuedIds.has(entry.id)) {
-          result.alreadyRequeued++;
-          result.entries.push({ heldEntryId: entry.id, event: eventName, ...nodeId ? { nodeId } : {}, ...taskId ? { taskId } : {}, ...reason ? { reason } : {}, outcome: "already_requeued" });
-          continue;
-        }
-        if (!restored || !readNonEmptyString(restored.event) || !readNonEmptyString(restored.meshId)) {
-          result.unrecoverable++;
-          result.entries.push({ heldEntryId: entry.id, event: eventName, ...nodeId ? { nodeId } : {}, ...taskId ? { taskId } : {}, ...reason ? { reason } : {}, outcome: "unrecoverable" });
-          continue;
-        }
-        const beforeDup = hasPendingCoordinatorEventDuplicate(restored);
-        let ok = false;
-        try {
-          ok = queuePendingMeshCoordinatorEvent(restored);
-        } catch (e) {
-          LOG.warn("MeshEvents", `Requeue of held ${eventName} for mesh ${meshId} failed: ${e?.message || e}`);
-        }
-        appendLedgerEntry3(meshId, {
-          kind: "event_held_requeued",
-          ...nodeId ? { nodeId } : {},
-          payload: {
-            heldEntryId: entry.id,
-            event: eventName,
-            requeued: ok,
-            ...taskId ? { taskId } : {},
-            ...reason ? { reason } : {},
-            ...beforeDup ? { dedupSuppressed: true } : {}
-          }
-        });
-        requeuedIds.add(entry.id);
-        result.requeued++;
-        if (beforeDup) result.dedupSuppressed++;
-        result.entries.push({ heldEntryId: entry.id, event: eventName, ...nodeId ? { nodeId } : {}, ...taskId ? { taskId } : {}, ...reason ? { reason } : {}, outcome: "requeued" });
-      }
-      return result;
-    }
-    function clearPendingMeshCoordinatorEvents(meshId, _coordinatorDaemonId) {
-      if (!meshId) return;
-      try {
-        MeshRuntimeStore.getInstance().clearPendingEventsForMesh(meshId);
-      } catch {
-      }
-    }
-    var import_crypto9;
-    var REFINE_TERMINAL_EVENTS;
-    var meshV2DrainCounters;
-    var warnedV2Violations;
-    var loggedSqlitePendingDrainFailure;
-    var TERMINAL_COMPLETION_EVENTS;
-    var COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT;
-    var TERMINAL_COMPLETION_DEDUP_TTL_MS;
-    var STALE_TASK_DROPPABLE_EVENTS;
-    var STALE_TASK_TERMINAL_STATUSES;
-    var PENDING_EVENTS_DRAINED_RETENTION_MS;
-    var PENDING_EVENTS_UNDRAINED_RETENTION_MS;
-    var PENDING_RETENTION_EXPIRED_HOLD_REASON;
-    var pendingRetentionCounters;
-    var init_mesh_events_pending = __esm2({
-      "src/mesh/mesh-events-pending.ts"() {
-        "use strict";
-        import_crypto9 = require("crypto");
-        init_logger();
-        init_config();
-        init_mesh_ledger();
-        init_mesh_runtime_store();
-        init_mesh_turn_presentation();
-        init_mesh_events_utils();
-        init_mesh_event_trace();
-        init_dist();
-        init_contracts();
-        REFINE_TERMINAL_EVENTS = /* @__PURE__ */ new Set(["refine:completed", "refine:failed"]);
-        meshV2DrainCounters = {
-          /** v2 events that passed validation and unicast/broadcast routing → delivered. */
-          v2Delivered: 0,
-          /** v2 unicast events skipped because intendedFor addressed another coordinator. */
-          v2RoutedAway: 0,
-          /** v2 events skipped because their eventId was already drained (idempotency). */
-          v2DedupSkipped: 0,
-          /** v2 events that failed assertPendingMeshCoordinatorEventV2 but were PASSED
-           *  THROUGH (accept mode). Non-zero here is the rollout signal that a producer
-           *  emits a malformed envelope. */
-          v2ValidationFailedAccepted: 0,
-          /** unicast events re-attributed to the drainer via daemon-core match (a
-           *  coordinatorRunId change orphaned them). */
-          v2ReattributedToDrainer: 0,
-          /** REFINE-EVENT-SESSION-SCOPED-UNICAST: unicast events delivered while addressed only
-           *  at DAEMON granularity (no sessionId in intendedFor) even though >1 coordinator
-           *  session was live on that daemon — i.e. delivered by race, not by address. Non-zero
-           *  here names an emit path that still fails to stamp targetCoordinatorSessionId. */
-          v2AmbiguousUnicastDelivered: 0,
-          /** v1 (unversioned) events passed through as broadcast (rollout baseline). */
-          v1BroadcastAccepted: 0,
-          /** T6 enforce: v2 events that FAILED validation and were QUARANTINED (held back
-           *  from delivery, not dropped). Non-zero here means a producer is still emitting a
-           *  malformed envelope after enforce was turned on. */
-          v2ValidationFailedQuarantined: 0,
-          /** T6 enforce: v1 (unversioned) events QUARANTINED because no v2 envelope could be
-           *  derived at emit time. Non-zero here means a producer path still emits v1 after
-           *  enforce — it should reach 0 once every node is on a v2-stamping build. */
-          v1UnversionedQuarantined: 0
-        };
-        warnedV2Violations = /* @__PURE__ */ new Set();
-        loggedSqlitePendingDrainFailure = false;
-        TERMINAL_COMPLETION_EVENTS = /* @__PURE__ */ new Set(["agent:generating_completed", "agent:stopped"]);
-        COORDINATOR_ALERT_EVENTS_WITH_REASON_FINGERPRINT = /* @__PURE__ */ new Set([
-          "mesh:dispatch_blocked"
-        ]);
-        TERMINAL_COMPLETION_DEDUP_TTL_MS = 60 * 60 * 1e3;
-        STALE_TASK_DROPPABLE_EVENTS = /* @__PURE__ */ new Set([
-          // Actionable dispatch-skip page ("this task will NOT dispatch on its own"). Meaningless
-          // once the task is terminal — the measured 081317f3 case.
-          "mesh:dispatch_blocked",
-          // Stall watchdog ("no progress observed"). A terminal task cannot make progress; the
-          // alert only invites the coordinator to re-drive already-finished work.
-          "monitor:no_progress"
-        ]);
-        STALE_TASK_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
-        PENDING_EVENTS_DRAINED_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
-        PENDING_EVENTS_UNDRAINED_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
-        PENDING_RETENTION_EXPIRED_HOLD_REASON = "pending_retention_expired";
-        pendingRetentionCounters = {
-          /** Already-drained rows deleted past the 7-day dedup-useful window. Not a drop. */
-          drainedExpired: 0,
-          /** Never-delivered rows deleted past the 30-day undrained window. A genuine
-           *  silent-drop risk — mirrored to event_held before deletion (see below). */
-          undrainedExpired: 0,
-          /** undrainedExpired rows that failed to mirror to the ledger (ledger write threw).
-           *  Non-zero here means those specific rows are NOT recoverable via
-           *  mesh_requeue_held_events — the delete still proceeds (retention must not wedge
-           *  on a ledger fault), but this count is the operator's signal of true loss. */
-          undrainedExpiredMirrorFailed: 0,
-          /** How many times the sweep has run and found nothing to prune (0 in both
-           *  windows). Purely diagnostic — confirms the sweep is actually firing. */
-          sweepsNoop: 0
-        };
       }
     });
     function taskIsParked(task) {
@@ -99084,189 +99303,21 @@ ${marker}`,
     });
     function readTurnOutboxDiagnostics(nowMs = Date.now()) {
       const metrics3 = getTurnLedgerMetrics(nowMs);
+      const policy = resolveOutboxEnqueuePolicy(process.env);
       return {
         oldestPendingAgeMs: metrics3.outboxOldestPendingAgeMs,
         byStatus: metrics3.outboxByStatus,
-        backlogPending: metrics3.outboxByStatus.pending ?? 0
+        backlogPending: metrics3.outboxByStatus.pending ?? 0,
+        enqueueBlocked: policy.blocked,
+        enqueueBlockReason: policy.reason,
+        enqueueSuppressed: getOutboxEnqueueBlockedCount()
       };
     }
     var init_mesh_turn_outbox_diagnostics = __esm2({
       "src/mesh/mesh-turn-outbox-diagnostics.ts"() {
         "use strict";
         init_mesh_turn_ledger();
-      }
-    });
-    function getRedriveInjectedTaskIds() {
-      return { taskIds: injectedTaskIds, overflowed: injectedTaskIdsOverflowed };
-    }
-    function getRedriveEpochStartMs() {
-      return processStartMs;
-    }
-    function stateFor(meshId) {
-      let s2 = state.get(meshId);
-      if (!s2) {
-        s2 = {
-          injected: 0,
-          skipped: 0,
-          consecutiveFailures: 0,
-          lastFailureAt: null,
-          quarantineSkips: 0,
-          quarantinedAt: null
-        };
-        state.set(meshId, s2);
-      }
-      return s2;
-    }
-    function getRedriveState(meshId) {
-      const s2 = state.get(meshId);
-      return s2 ? { ...s2 } : null;
-    }
-    function isMeshQuarantined(meshId, nowMs = Date.now()) {
-      const s2 = state.get(meshId);
-      if (!s2 || s2.quarantinedAt === null) return false;
-      return nowMs - s2.quarantinedAt < QUARANTINE_COOLDOWN_MS;
-    }
-    function getQuarantinedMeshCount(nowMs = Date.now()) {
-      let count = 0;
-      for (const meshId of state.keys()) {
-        if (isMeshQuarantined(meshId, nowMs)) count++;
-      }
-      return count;
-    }
-    function getTotalQuarantineSkips() {
-      let total = 0;
-      for (const s2 of state.values()) total += s2.quarantineSkips;
-      return total;
-    }
-    function getTotalRedriveInjected() {
-      let total = 0;
-      for (const s2 of state.values()) total += s2.injected;
-      return total;
-    }
-    function isTerminalRedriveEnabled(env2) {
-      return env2[REDRIVE_ENV] === "on";
-    }
-    function assertRedriveConsumerNameIsPruneSafe(prunePrefixes) {
-      for (const prefix of prunePrefixes) {
-        if (REDRIVE_CONSUMER.startsWith(prefix)) {
-          throw new Error(
-            `redrive consumer name '${REDRIVE_CONSUMER}' matches boot-GC prefix '${prefix}' \u2014 it would be pruned on every boot, rewinding or dropping the redelivery cursor`
-          );
-        }
-      }
-    }
-    function buildRedriveInjection(meshId, entry) {
-      if (!REDRIVEN_TERMINAL_KINDS.includes(entry.ledgerKind)) return null;
-      const taskId = entry.taskId || (typeof entry.payload.taskId === "string" ? entry.payload.taskId : void 0);
-      if (!taskId) return null;
-      const event = typeof entry.payload.event === "string" ? entry.payload.event : "agent:generating_completed";
-      const sessionId = entry.sessionId || (typeof entry.payload.sessionId === "string" ? entry.payload.sessionId : void 0);
-      const providerType = entry.providerType || (typeof entry.payload.providerType === "string" ? entry.payload.providerType : void 0);
-      const nodeId = entry.nodeId || (typeof entry.payload.nodeId === "string" ? entry.payload.nodeId : void 0);
-      const metadataEvent = {
-        taskId,
-        ...sessionId ? { sessionId } : {},
-        ...providerType ? { providerType } : {},
-        // Fingerprint parity with the drain: a weak original was stamped
-        // evidenceLevel='insufficient'; a bare record reads as genuine. Sourced
-        // from the projected `weak` (Stage 5a-1) — NOT recomputed from
-        // evidenceLevel, which is not projected and would not be equivalent.
-        ...entry.payload.weak === true ? { evidenceLevel: "insufficient" } : {},
-        source: "seqscribe_redelivery",
-        redriveRedelivery: true
-      };
-      return {
-        event,
-        meshId,
-        nodeId: nodeId || void 0,
-        metadataEvent,
-        queuedAt: Date.now()
-      };
-    }
-    function consumeRedriveEntry(meshId, entry, nowMs = Date.now()) {
-      const s2 = stateFor(meshId);
-      if (isMeshQuarantined(meshId, nowMs)) {
-        s2.quarantineSkips++;
-        LOG.warn(
-          "MeshRedrive",
-          `mesh=${meshId} redrive quarantined (consecutiveFailures=${s2.consecutiveFailures}) \u2014 skip-and-advance entry=${entry.id} to release the \xA77.6 archive floor; the legacy outbox drain remains the redelivery path for this terminal while quarantined`
-        );
-        return "quarantined";
-      }
-      const injection = buildRedriveInjection(meshId, entry);
-      if (!injection) {
-        s2.skipped++;
-        return "skipped";
-      }
-      let queued = false;
-      try {
-        queued = queuePendingMeshCoordinatorEvent(injection);
-      } catch (error48) {
-        recordFailure(s2, meshId, nowMs);
-        throw error48 instanceof Error ? error48 : new Error(String(error48));
-      }
-      if (!queued) {
-        recordFailure(s2, meshId, nowMs);
-        throw new Error(`pending queue rejected redrive injection for task ${injection.metadataEvent.taskId}`);
-      }
-      s2.consecutiveFailures = 0;
-      s2.quarantinedAt = null;
-      s2.injected++;
-      const injectedTaskId = injection.metadataEvent.taskId;
-      if (typeof injectedTaskId === "string") {
-        if (injectedTaskIds.size >= REDRIVE_TASK_ID_CAP && !injectedTaskIds.has(injectedTaskId)) {
-          injectedTaskIdsOverflowed = true;
-        } else {
-          injectedTaskIds.add(injectedTaskId);
-        }
-      }
-      LOG.debug(
-        "MeshRedrive",
-        `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} \u2014 dedup collapses it onto the original if already delivered`
-      );
-      return "injected";
-    }
-    function recordFailure(s2, meshId, nowMs) {
-      s2.consecutiveFailures++;
-      s2.lastFailureAt = nowMs;
-      if (s2.consecutiveFailures >= QUARANTINE_FAILURE_THRESHOLD) {
-        s2.quarantinedAt = nowMs;
-        LOG.warn(
-          "MeshRedrive",
-          `mesh=${meshId} redrive entering quarantine after ${s2.consecutiveFailures} consecutive failures \u2014 cooldown ${QUARANTINE_COOLDOWN_MS}ms before the next auto-resolving probe attempt`
-        );
-      }
-    }
-    function __resetTerminalRedriveForTests() {
-      state.clear();
-      injectedTaskIds.clear();
-      injectedTaskIdsOverflowed = false;
-    }
-    var REDRIVE_CONSUMER;
-    var REDRIVE_ENV;
-    var REDRIVEN_TERMINAL_KINDS;
-    var QUARANTINE_FAILURE_THRESHOLD;
-    var QUARANTINE_COOLDOWN_MS;
-    var REDRIVE_TASK_ID_CAP;
-    var state;
-    var injectedTaskIds;
-    var injectedTaskIdsOverflowed;
-    var processStartMs;
-    var init_mesh_terminal_redrive = __esm2({
-      "src/mesh/mesh-terminal-redrive.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_events_pending();
-        REDRIVE_CONSUMER = "stage5a-mesh-terminal-redrive";
-        REDRIVE_ENV = "ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE";
-        REDRIVEN_TERMINAL_KINDS = ["task_completed", "task_failed"];
-        QUARANTINE_FAILURE_THRESHOLD = 5;
-        QUARANTINE_COOLDOWN_MS = 6e4;
-        REDRIVE_TASK_ID_CAP = 1e4;
-        state = /* @__PURE__ */ new Map();
-        injectedTaskIds = /* @__PURE__ */ new Set();
-        injectedTaskIdsOverflowed = false;
-        processStartMs = Date.now();
+        init_mesh_turn_outbox_enqueue_policy();
       }
     });
     function readRedriveCoverageDiagnostics(_nowMs = Date.now()) {
@@ -99422,6 +99473,13 @@ ${marker}`,
               // `getTurnLedgerMetrics`, which is a plain MeshRuntimeStore-backed
               // read — no boot-time arming like `beacon` above, so it is called
               // directly rather than via a ctx.deps getter closure.
+              //
+              // Also carries the Stage 5b-1 enqueue state (`enqueueBlocked`,
+              // `enqueueBlockReason`, `enqueueSuppressed`). Read those WITH
+              // `backlogPending`: blocked + a falling backlog is the intended 5b-1
+              // transition, while `enqueueBlockReason: 'redrive_disabled'` means
+              // the interlock REFUSED a requested block because the redrive leg is
+              // off — the outbox is still enqueueing, deliberately.
               outbox: readTurnOutboxDiagnostics(),
               // Stage 5, 5a-3: the 5a→5b gate's evidence that the redrive
               // consumer (5a-2) is actually keeping up with the legacy outbox
@@ -140645,6 +140703,7 @@ ${e?.stderr || ""}`;
       OPERATING_NOTE_KEEP_LATEST: () => OPERATING_NOTE_KEEP_LATEST,
       OPERATING_NOTE_KIND: () => OPERATING_NOTE_KIND,
       OPERATING_NOTE_TOMBSTONE_KIND: () => OPERATING_NOTE_TOMBSTONE_KIND,
+      OUTBOX_ENQUEUE_ENV: () => OUTBOX_ENQUEUE_ENV,
       P2pRelayFailureError: () => P2pRelayFailureError,
       PARITY_BACKFILL_CAP: () => PARITY_BACKFILL_CAP,
       PARITY_BACKFILL_FAILURE_LIMIT: () => PARITY_BACKFILL_FAILURE_LIMIT,
@@ -140707,6 +140766,7 @@ ${e?.stderr || ""}`;
       __resetMeshParityForTests: () => __resetMeshParityForTests,
       __resetMeshReadModelForTests: () => __resetMeshReadModelForTests,
       __resetMeshReadReadinessForTests: () => __resetMeshReadReadinessForTests,
+      __resetOutboxEnqueuePolicyForTests: () => __resetOutboxEnqueuePolicyForTests,
       __resetTerminalRedriveConsumerForTests: () => __resetTerminalRedriveConsumerForTests,
       __resetTerminalRedriveForTests: () => __resetTerminalRedriveForTests,
       __resetTranscriptParityForTests: () => __resetTranscriptParityForTests,
@@ -140845,6 +140905,7 @@ ${e?.stderr || ""}`;
       deriveWorkspaceBranchIdentity: () => deriveWorkspaceBranchIdentity,
       deriveWorkspaceOwnerTag: () => deriveWorkspaceOwnerTag,
       describeDiskSpace: () => describeDiskSpace,
+      describeOutboxEnqueuePolicy: () => describeOutboxEnqueuePolicy,
       describeTaskDependencyState: () => describeTaskDependencyState3,
       detectAllVersions: () => detectAllVersions,
       detectCLI: () => detectCLI,
@@ -140928,6 +140989,7 @@ ${e?.stderr || ""}`;
       getMeshStatusMissionSummaries: () => getMeshStatusMissionSummaries3,
       getMeshStatusMissionsCompact: () => getMeshStatusMissionsCompact3,
       getNpmExecOptions: () => getNpmExecOptions,
+      getOutboxEnqueueBlockedCount: () => getOutboxEnqueueBlockedCount,
       getParkedTasks: () => getParkedTasks,
       getPendingMeshCoordinatorEvents: () => getPendingMeshCoordinatorEvents,
       getProcessInstanceContext: () => getProcessInstanceContext,
@@ -141004,6 +141066,7 @@ ${e?.stderr || ""}`;
       isSyntheticTestMeshId: () => isSyntheticTestMeshId,
       isTaskReadonly: () => isTaskReadonly2,
       isTerminalRedriveEnabled: () => isTerminalRedriveEnabled,
+      isTurnOutboxEnqueueBlocked: () => isTurnOutboxEnqueueBlocked,
       isUserFacingChatMessage: () => isUserFacingChatMessage,
       isWeakCompletionEvidence: () => isWeakCompletionEvidence2,
       isWorkerMcpEnabled: () => isWorkerMcpEnabled,
@@ -141150,6 +141213,7 @@ ${e?.stderr || ""}`;
       readStatuslineStatus: () => readStatuslineStatus,
       readTaskStatsEntries: () => readTaskStatsEntries,
       readTokenCount: () => readTokenCount,
+      readTurnOutboxDiagnostics: () => readTurnOutboxDiagnostics,
       readV2EnvelopeFromWire: () => readV2EnvelopeFromWire,
       rebuildMeshReadModel: () => rebuildMeshReadModel,
       reconcileDirectDispatchCompletionFromTranscript: () => reconcileDirectDispatchCompletionFromTranscript3,
@@ -141217,6 +141281,7 @@ ${e?.stderr || ""}`;
       resolveNotBefore: () => resolveNotBefore2,
       resolveNpmPublishedVersion: () => resolveNpmPublishedVersion,
       resolveOnDependencyFailurePolicy: () => resolveOnDependencyFailurePolicy,
+      resolveOutboxEnqueuePolicy: () => resolveOutboxEnqueuePolicy,
       resolveProviderChannel: () => resolveProviderChannel,
       resolveProviderMaxParallel: () => resolveProviderMaxParallel,
       resolveScopedMeshId: () => resolveScopedMeshId,
@@ -159841,6 +159906,7 @@ data: ${JSON.stringify(msg.data)}
       configureTerminalRedrive(null);
     }
     init_mesh_terminal_redrive();
+    init_mesh_turn_outbox_enqueue_policy();
     init_transcript_publisher();
     init_dist();
     init_logger();
@@ -160877,6 +160943,15 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           `mesh dual-write/parity unavailable: ${error48 instanceof Error ? error48.message : String(error48)}`
         );
       }
+      try {
+        const enqueuePolicyNote = describeOutboxEnqueuePolicy(process.env);
+        if (enqueuePolicyNote) {
+          const refused = resolveOutboxEnqueuePolicy(process.env).reason === "redrive_disabled";
+          if (refused) LOG.warn("MeshOutbox", enqueuePolicyNote);
+          else LOG.info("MeshOutbox", enqueuePolicyNote);
+        }
+      } catch {
+      }
       setupMeshEventForwarding(components);
       try {
         migratePendingEventsJsonlToSqlite();
@@ -161897,6 +161972,8 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     init_mesh_terminal_redrive();
     init_mesh_turn_outbox_coverage_diagnostics();
     init_mesh_turn_ledger();
+    init_mesh_turn_outbox_enqueue_policy();
+    init_mesh_turn_outbox_diagnostics();
     init_mesh_parity();
     init_transcript_publisher();
     init_topics2();
