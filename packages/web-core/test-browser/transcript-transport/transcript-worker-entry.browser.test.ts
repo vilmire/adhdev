@@ -27,9 +27,16 @@ describe('transcript-worker-entry.ts (real dedicated Worker + OPFS)', () => {
             type: 'module',
         });
 
-        const { port1, port2 } = new MessageChannel();
-        worker.postMessage({ sessionKey, writerId }, [port2]);
-        port1.start();
+        // TWO ports, in the order the entry reads them positionally: the wire
+        // port and the snapshot port (§8 unit 4b — see the two-ports note in
+        // `transcript-worker-host.ts`). The entry refuses to open storage
+        // unless both are present, so transferring only one would leave this
+        // worker inert.
+        const wire = new MessageChannel();
+        const snapshots = new MessageChannel();
+        worker.postMessage({ sessionKey, writerId }, [wire.port2, snapshots.port2]);
+        wire.port1.start();
+        snapshots.port1.start();
 
         // The entry point's storage directory is `${OPFS_DIRECTORY}/${writerId}`,
         // `${sessionKey}.sqlite3` inside it (transcript-worker-entry.ts:42,47,50).

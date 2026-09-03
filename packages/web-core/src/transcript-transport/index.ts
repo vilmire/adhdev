@@ -17,10 +17,28 @@ export {
 } from './browser-reject-authority.js';
 export {
     isTranscriptBridgeControlEvent,
+    isTranscriptBridgeSnapshotMessage,
+    isTranscriptSessionActivation,
     transcriptBridgeControlEvent,
+    transcriptBridgeSnapshotMessage,
+    transcriptSessionActivation,
     type TranscriptBridgeControlEvent,
     type TranscriptBridgeControlEventName,
+    type TranscriptBridgeSnapshotMessage,
+    type TranscriptSessionActivation,
 } from './bridge-protocol.js';
+export {
+    subscribeSessionTranscript,
+    type TranscriptSessionSubscriptionHandle,
+    type TranscriptSessionSubscriptionOptions,
+    type TranscriptSessionUpdate,
+} from './transcript-session-subscription.js';
+export {
+    runTranscriptWorkerSession,
+    type TranscriptWorkerSessionHandle,
+    type TranscriptWorkerSessionOptions,
+    type TranscriptWorkerSessionPort,
+} from './transcript-worker-session.js';
 export { workerPortChannel, type MessagePortLike, type WorkerPortChannel } from './message-port-channel.js';
 export {
     DEFAULT_RTC_PRE_OPEN_CAP,
@@ -49,6 +67,13 @@ export {
     type TranscriptWorkerHostOptions,
     type TranscriptWorkerLike,
 } from './transcript-worker-host.js';
+export {
+    ADHDEV_AUTHORITY_ID,
+    SESSION_TRANSCRIPT_RING,
+    safeSessionId,
+    sessionTranscriptPolicy,
+    sessionTranscriptTopic,
+} from './topic-addressing.js';
 export { isTranscriptWorkerEnabled, type TranscriptFlagEnv } from './web-transcript-flag.js';
 export {
     TranscriptWorkerNode,

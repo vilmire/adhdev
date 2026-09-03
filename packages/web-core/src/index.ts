@@ -101,6 +101,13 @@ export { default as DashboardHeader } from './components/dashboard/DashboardHead
 export { default as HistoryModal } from './components/dashboard/HistoryModal'
 export { default as ToastContainer } from './components/dashboard/ToastContainer'
 export { buildConversations } from './components/dashboard/buildConversations'
+// (§8 unit 4b) Transcript replica delivery into the chat pane. Exported so the
+// cloud assembly — which owns the P2P/worker transport — can route a verified
+// snapshot to whichever controllers are warm, without reaching into the module.
+export {
+    applyTranscriptReplicaSnapshotToControllers,
+    reportTranscriptReplicaFallbackForSession,
+} from './components/dashboard/session-chat-tail-controller'
 export type { ActiveConversation } from './components/dashboard/types'
 export { isCliConv, isAcpConv } from './components/dashboard/types'
 

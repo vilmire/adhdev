@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures'
 import type { SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-core'
+import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection'
 import type { ActiveConversation, DashboardMessage } from './types'
+import { mapTranscriptSnapshotToChatTailUpdate } from './transcript-chat-pane-adapter'
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionIdForRead } from './conversation-identity'
@@ -645,6 +647,33 @@ export class SessionChatTailController {
     this.emit()
   }
 
+  /**
+   * (§8 unit 4b) Apply a verified transcript replica snapshot.
+   *
+   * Routes through the SAME `handleUpdate` every legacy `session.chat_tail`
+   * update takes, deliberately: the shrink-defense, dedup, force-apply and
+   * busy-deferral rules there are transcript-source-agnostic and must not be
+   * bypassed just because this update came from the replica. The only thing
+   * that differs is the labelling the adapter puts on the update
+   * (`transcriptReadSource: 'replica'`, plus `omittedBefore`/`stale`), which
+   * `handleUpdate` already reads.
+   *
+   * The two sources are never merged into one live window: whichever update
+   * arrives last wins, exactly as two legacy updates would.
+   */
+  applyTranscriptReplicaSnapshot(
+    snapshot: ReplicatedTranscriptSnapshotV1,
+    options: { omittedBefore: boolean; stale?: boolean },
+  ): void {
+    this.handleUpdate(
+      mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+        subscriptionKey: this.subscriptionKey,
+        omittedBefore: options.omittedBefore,
+        stale: options.stale === true,
+      }),
+    )
+  }
+
   subscribe(listener: (snapshot: SessionChatTailSnapshot) => void): () => void {
     this.listeners.add(listener)
     listener(this.snapshot)
@@ -951,6 +980,59 @@ export function getSessionChatTailSnapshotForConversation(
   if (!controller) return undefined
   const snapshot = controller.getSnapshot()
   return snapshot.hasLiveSnapshot ? snapshot : undefined
+}
+
+/**
+ * (§8 unit 4b) Deliver a verified replica snapshot to every warm controller for
+ * `(daemonId, sessionId)`.
+ *
+ * Prefix-matched rather than exact-keyed because one session can have several
+ * controllers alive at once — the pane's (keyed by `historySessionId`) and the
+ * mobile inbox's warm one (keyed by the sessionId) — and BOTH are legitimate
+ * consumers of the same transcript. This is what makes `web_warm_mobile_preview`
+ * need no separate subscription: it reads the snapshot this call already
+ * applied.
+ *
+ * Returns how many controllers were updated; 0 means nothing is warm for this
+ * session, which is normal (the replica arrived for a session the user is not
+ * looking at) and NOT a fallback condition.
+ */
+export function applyTranscriptReplicaSnapshotToControllers(
+  daemonId: string,
+  sessionId: string,
+  snapshot: ReplicatedTranscriptSnapshotV1,
+  options: { omittedBefore: boolean; stale?: boolean },
+): number {
+  if (!daemonId || !sessionId) return 0
+  const prefix = `${daemonId}::${sessionId}::`
+  let applied = 0
+  for (const [key, controller] of controllerRegistry.entries()) {
+    if (!key.startsWith(prefix)) continue
+    controller.applyTranscriptReplicaSnapshot(snapshot, options)
+    applied += 1
+  }
+  return applied
+}
+
+/**
+ * (§8 unit 4b, design §5.6) Label every warm controller for this session as
+ * having fallen back to legacy, with a reason.
+ *
+ * Telemetry only — it never touches `liveMessages`, so the legacy
+ * `session.chat_tail` subscription that is still running remains the single
+ * source of what is displayed. That is the whole fallback direction: replica →
+ * legacy, never the reverse.
+ */
+export function reportTranscriptReplicaFallbackForSession(
+  daemonId: string,
+  sessionId: string,
+  reason: string,
+): void {
+  if (!daemonId || !sessionId) return
+  const prefix = `${daemonId}::${sessionId}::`
+  for (const [key, controller] of controllerRegistry.entries()) {
+    if (key.startsWith(prefix)) controller.reportTranscriptReplicaFallback(reason)
+  }
 }
 
 export function resetSessionChatTailControllersForTest(): void {

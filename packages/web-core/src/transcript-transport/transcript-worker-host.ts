@@ -12,11 +12,32 @@
  *     MessagePort
  *       ↕  transcript-worker-entry.ts  ← worker: node + OPFS + SUB
  *
- * ── Scope: foundation only ────────────────────────────────────────────────
- * This starts and stops the transport plumbing. It deliberately does NOT
- * define topics, request session activation, subscribe, or surface snapshots
- * to React — that is consumer cutover (§8 unit 5), which builds on this. The
- * only thing crossing back to the caller here is lifecycle status.
+ * ── Two ports, on purpose ─────────────────────────────────────────────────
+ * The host transfers TWO MessagePorts to the worker:
+ *
+ *   port2 (wire)     ── opaque seqscribe frames, bridged to the transport.
+ *                       `main-thread-bridge.ts` owns `onmessage` on the main
+ *                       half and forwards strings byte-for-byte.
+ *   snapshot port    ── verified `ReplicatedTranscriptSnapshotV1` objects,
+ *                       worker → main only.
+ *
+ * They are separate because the wire port's main-thread half must stay
+ * provably content-blind: `main-thread-bridge-canary.test.ts` scans that
+ * module's source and fails on `JSON.parse`/`JSON.stringify` OR on the words
+ * `topic`/`snapshot`/`revision`/`sessionId`/`messages` appearing in executable
+ * code. Routing snapshots through the same port would force exactly that
+ * vocabulary into the bridge and dissolve a load-bearing invariant. A second
+ * port keeps "relay bytes" and "deliver verified content" as two channels with
+ * two different rules, rather than one channel with a conditional.
+ *
+ * Nothing is ever SENT on the snapshot port from the main thread, so transcript
+ * content has no path back onto the wire (or, on the cloud lane, toward the
+ * server — design §2.3).
+ *
+ * ── Scope ─────────────────────────────────────────────────────────────────
+ * This starts and stops the transport plumbing and delivers verified snapshots
+ * to its caller. Which SESSION is activated is the caller's decision, sent via
+ * `activateSession()`.
  *
  * ── Why worker construction is injected ───────────────────────────────────
  * `new Worker(new URL('./transcript-worker-entry.js', import.meta.url))` is a
@@ -27,6 +48,11 @@
  * understands. `createTranscriptWorker()` in web-cloud is that one-liner.
  */
 import { bridgeTranscriptTransport, type MainThreadBridgeHandle, type MainThreadBridgePortLike } from './main-thread-bridge.js';
+import {
+    isTranscriptBridgeSnapshotMessage,
+    transcriptSessionActivation,
+    type TranscriptBridgeSnapshotMessage,
+} from './bridge-protocol.js';
 import type { WebSocketLike } from 'seqscribe';
 
 /** The `Worker` surface this host needs — narrowed so it is testable without a real Worker. */
@@ -35,7 +61,10 @@ export interface TranscriptWorkerLike {
     terminate(): void;
 }
 
-/** The `MessageChannel` surface this host needs. */
+/**
+ * The `MessageChannel` surface this host needs. Called TWICE per host — once
+ * for the wire port, once for the snapshot port (see the header).
+ */
 export interface TranscriptMessageChannelLike {
     readonly port1: MainThreadBridgePortLike & { start?(): void; close?(): void };
     readonly port2: unknown;
@@ -59,6 +88,13 @@ export interface TranscriptWorkerHostOptions {
     readonly preOpenQueueCap?: number;
     /** Fires when the bridge sheds its pre-open queue (typed reset, never a silent drop). */
     readonly onOverflow?: () => void;
+    /**
+     * A verified-complete revision arrived for one of the activated sessions.
+     *
+     * Delivered exactly as the worker verified it — the main thread neither
+     * parses nor re-validates. See the two-ports note in this file's header.
+     */
+    readonly onSnapshot?: (message: TranscriptBridgeSnapshotMessage) => void;
 }
 
 export interface TranscriptWorkerHostHandle {
@@ -66,6 +102,14 @@ export interface TranscriptWorkerHostHandle {
     pendingCount(): number;
     /** True until `stop()`. */
     running(): boolean;
+    /**
+     * Set the absolute list of sessions the worker should subscribe to.
+     *
+     * Idempotent and absolute (not incremental) — see
+     * `TranscriptSessionActivation`. Safe to call before the transport opens;
+     * the worker applies it once its node is ready.
+     */
+    activateSessions(sessionIds: readonly string[], ownerWriterId?: string): void;
     /** Tears down the bridge and terminates the worker. Idempotent. */
     stop(): void;
 }
@@ -83,13 +127,24 @@ export function startTranscriptWorkerHost(
     transport: WebSocketLike,
     options: TranscriptWorkerHostOptions,
 ): TranscriptWorkerHostHandle {
-    const channel = (options.createChannel ?? (() => new MessageChannel() as unknown as TranscriptMessageChannelLike))();
+    const createChannel = options.createChannel ?? (() => new MessageChannel() as unknown as TranscriptMessageChannelLike);
+    const channel = createChannel();
+    const snapshotChannel = createChannel();
     const worker = options.createWorker();
 
-    // The worker receives port2 and owns it for its lifetime; the main thread
-    // keeps port1 and never looks inside the frames crossing it.
-    worker.postMessage({ sessionKey: options.sessionKey, writerId: options.writerId }, [channel.port2]);
+    // The worker receives both port2s and owns them for its lifetime; the main
+    // thread keeps the port1s. It never looks inside the WIRE frames, and it
+    // never sends on the snapshot port.
+    worker.postMessage({ sessionKey: options.sessionKey, writerId: options.writerId }, [
+        channel.port2,
+        snapshotChannel.port2,
+    ]);
     channel.port1.start?.();
+    snapshotChannel.port1.start?.();
+
+    snapshotChannel.port1.onmessage = (ev: { data: unknown }): void => {
+        if (isTranscriptBridgeSnapshotMessage(ev.data)) options.onSnapshot?.(ev.data);
+    };
 
     let bridge: MainThreadBridgeHandle | null = bridgeTranscriptTransport(transport, channel.port1, {
         ...(options.preOpenQueueCap !== undefined ? { preOpenQueueCap: options.preOpenQueueCap } : {}),
@@ -101,19 +156,26 @@ export function startTranscriptWorkerHost(
     return {
         pendingCount: () => bridge?.pendingCount() ?? 0,
         running: () => !stopped,
+        activateSessions(sessionIds: readonly string[], ownerWriterId?: string): void {
+            if (stopped) return;
+            snapshotChannel.port1.postMessage(transcriptSessionActivation(sessionIds, ownerWriterId));
+        },
         stop(): void {
             if (stopped) return;
             stopped = true;
             bridge?.close();
             bridge = null;
-            // Closing the port before terminating keeps the worker's own
+            snapshotChannel.port1.onmessage = null;
+            // Closing the ports before terminating keeps the worker's own
             // `onClose` path observable rather than yanking the thread
             // mid-frame; `terminate()` then releases the OPFS access handles
             // the SAH pool VFS holds.
-            try {
-                channel.port1.close?.();
-            } catch {
-                // already gone
+            for (const port of [channel.port1, snapshotChannel.port1]) {
+                try {
+                    port.close?.();
+                } catch {
+                    // already gone
+                }
             }
             worker.terminate();
         },

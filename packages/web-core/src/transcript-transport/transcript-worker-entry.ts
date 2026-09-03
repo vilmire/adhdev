@@ -22,9 +22,11 @@
  * by the (not-yet-built, consumer-cutover) code that owns the real transport.
  */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
-import { sqliteWasmHandle, type SqliteWasmDbLike } from 'seqscribe';
+import { sqliteWasmHandle, type PeerHandle, type SqliteWasmDbLike } from 'seqscribe';
+import { browserRejectAuthority } from './browser-reject-authority.js';
 import { workerPortChannel } from './message-port-channel.js';
 import { TranscriptWorkerNode, type TranscriptWorkerStorage } from './transcript-worker-node.js';
+import { runTranscriptWorkerSession, type TranscriptWorkerSessionPort } from './transcript-worker-session.js';
 
 interface DedicatedWorkerScope {
     onmessage: ((ev: { data: unknown; ports?: readonly MessagePort[] }) => void) | null;
@@ -40,6 +42,13 @@ function sqliteWorkerScope(): DedicatedWorkerScope {
 
 /** Directory root under OPFS for transcript replica databases (per-session file below it). */
 const OPFS_DIRECTORY = '.adhdev-transcript';
+
+/**
+ * Local label for the single peer on this channel — the daemon that dialed it.
+ * Peer ids are per-node bookkeeping, not a wire identity, so a fixed label is
+ * correct here: this channel is 1:1 with one daemon for its whole lifetime.
+ */
+const DAEMON_PEER_ID = 'daemon';
 
 async function openOpfsStorage(sessionKey: string, writerId: string): Promise<TranscriptWorkerStorage> {
     const sqlite3 = await sqlite3InitModule();
@@ -66,7 +75,8 @@ let activeNode: TranscriptWorkerNode | null = null;
 
 scope.onmessage = (ev) => {
     const port = ev.ports?.[0];
-    if (!port) return;
+    const snapshotPort = ev.ports?.[1];
+    if (!port || !snapshotPort) return;
     const init = ev.data as { sessionKey?: unknown; writerId?: unknown } | null;
     const sessionKey = typeof init?.sessionKey === 'string' ? init.sessionKey : null;
     const writerId = typeof init?.writerId === 'string' ? init.writerId : null;
@@ -75,18 +85,42 @@ scope.onmessage = (ev) => {
     const node = new TranscriptWorkerNode({
         writerId,
         openStorage: () => openOpfsStorage(sessionKey, writerId),
+        // Satisfies seqscribe's `finalityAuthority` presence gate without any
+        // key material, and arms the ring-only interlock. See
+        // `browser-reject-authority.ts` — this is what lets a browser define a
+        // content-class transcript topic with no fleet secret.
+        authority: browserRejectAuthority,
     });
     activeNode = node;
 
     void node.open().then(() => {
-        const { onControl } = workerPortChannel(port);
+        const { channel, onControl } = workerPortChannel(port);
+
+        // The daemon is the only peer on this channel, and it SERVES the
+        // transcript topics; this node only subscribes, so it grants nothing
+        // back. Grants are per-topic and the daemon's own grant map (narrowed
+        // by `declareSessionInterest`) is what actually authorizes the read.
+        let peer: PeerHandle | null = node.attach(channel, {
+            peerId: DAEMON_PEER_ID,
+            peerClass: 'content',
+            grants: {},
+        });
+
+        const session = runTranscriptWorkerSession({
+            node,
+            port: snapshotPort as unknown as TranscriptWorkerSessionPort,
+            currentPeer: () => peer,
+        });
+
         onControl((event) => {
-            // A reset control event already closed the channel
-            // (`message-port-channel.ts`); this worker's job for the
-            // transport foundation is just to observe that transition —
-            // topic activation / re-attach on reset is consumer-cutover
-            // territory (§8 units 5+).
-            void event;
+            // `transport_closed`/`queue_overflow` already closed the channel
+            // (`message-port-channel.ts`), so the peer and every subscription
+            // on it are dead. Drop them and let the next attach rebuild from
+            // the retained activation set — never resume across a gap that may
+            // have dropped bytes (§3.6 criterion 4).
+            if (event.event === 'transport_open') return;
+            peer = null;
+            session.detach();
         });
     });
 };
