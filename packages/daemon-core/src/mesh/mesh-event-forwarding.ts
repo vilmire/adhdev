@@ -295,6 +295,23 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const eventSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
     const eventNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
 
+    // WEAK-SNAPSHOT-FOR-REDRIVE (Stage 5a-1): the function-entry frozen read of the weak-evidence
+    // verdict, taken BEFORE any branch below mutates args.metadataEvent (reviewRecommended /
+    // completionDiagnostic are stamped at several sites, and isWeakCompletionEvidence treats
+    // reviewRecommended===true as weak — see the ORDERING SAFETY note at markSessionTerminal).
+    //
+    // ★Why this exists as a SECOND snapshot rather than reusing markSessionTerminal's
+    // weakEvidenceAtEntry: that one is block-scoped inside markSessionTerminal and is NOT in
+    // scope at the terminal ledger append below — the append runs on a different branch. And the
+    // ledger's own `evidenceLevel` is NOT a substitute: it is re-resolved later by
+    // resolveUnifiedCompletionEvidenceLevel (merging a freshly computed level with the prior
+    // one) and is deliberately allowed to disagree with this snapshot. Deriving weakness from
+    // the projected evidenceLevel would therefore compute a DIFFERENT pending-event fingerprint
+    // than drainMeshTurnOutbox does, breaking the `…::weak` / `…::genuine` dedup parity that the
+    // seqscribe redrive consumer (Stage 5a-2) depends on to collapse onto the original delivery.
+    // Both snapshots are taken pre-mutation, so they agree by construction.
+    const weakEvidenceAtInject = isWeakCompletionEvidence(args.metadataEvent);
+
     // EVTTRACE correlation context for this event's coordinator-side lifecycle (queue /
     // dedup / suppress). Observation only — never read by any decision below.
     const traceCtx = {
@@ -1343,6 +1360,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     // ledger with a review flag, matching what buildMeshSystemMessage already
                     // surfaced to the coordinator off the same metadataEvent mutation.
                     ...(args.metadataEvent.reviewRecommended === true ? { reviewRecommended: true } : {}),
+                    // WEAK-SNAPSHOT-FOR-REDRIVE (Stage 5a-1): the function-entry frozen verdict,
+                    // carried on the ledger entry so the seqscribe projection can expose it and the
+                    // Stage 5a-2 redrive consumer can rebuild the SAME pending-event fingerprint
+                    // the outbox drain builds (`…::weak` / `…::genuine`). Deliberately NOT derived
+                    // from the neighbouring evidenceLevel/reviewRecommended fields above: those are
+                    // re-resolved post-mutation and may legitimately disagree with this snapshot.
+                    // Written only for terminal kinds, and only when true, so the projected payload
+                    // gains a key exactly where the redrive path needs it.
+                    ...(weakEvidenceAtInject ? { weak: true } : {}),
                 },
             });
             if (ledgerKind === 'task_completed') {
