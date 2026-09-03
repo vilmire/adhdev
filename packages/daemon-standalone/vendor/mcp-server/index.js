@@ -91741,6 +91741,9 @@ ${cleanBody}`;
       activeService = deps ? new TranscriptProjectionService(deps) : null;
       return activeService;
     }
+    function activeTranscriptProjectionService() {
+      return activeService;
+    }
     function notifyTranscriptObservation(sessionId, observation) {
       activeService?.observe(sessionId, observation);
     }
@@ -140349,8 +140352,10 @@ ${e?.stderr || ""}`;
       __resetMeshParityForTests: () => __resetMeshParityForTests,
       __resetMeshReadModelForTests: () => __resetMeshReadModelForTests,
       __resetMeshReadReadinessForTests: () => __resetMeshReadReadinessForTests,
+      __resetTranscriptParityForTests: () => __resetTranscriptParityForTests,
       abandonMeshGraphGate: () => abandonMeshGraphGate3,
       activateKnownMeshTopics: () => activateKnownMeshTopics,
+      activeTranscriptProjectionService: () => activeTranscriptProjectionService,
       addNode: () => addNode,
       appendAssistantJournal: () => appendAssistantJournal,
       appendLedgerEntry: () => appendLedgerEntry3,
@@ -140901,6 +140906,7 @@ ${e?.stderr || ""}`;
       toJsonValue: () => toJsonValue,
       tombstoneOperatingNote: () => tombstoneOperatingNote2,
       totalTokens: () => totalTokens,
+      transcriptParityCounters: () => transcriptParityCounters,
       triggerMeshQueue: () => triggerMeshQueue,
       turnStageToSurfaceStatus: () => turnStageToSurfaceStatus,
       uninstallClaudeStatusline: () => uninstallClaudeStatusline,
@@ -159386,87 +159392,6 @@ data: ${JSON.stringify(msg.data)}
     }
     init_mesh_read_model();
     init_transcript_publisher();
-    init_native_history_executor();
-    init_logger();
-    init_logger();
-    init_mesh_dual_write();
-    init_topics2();
-    var DEFINED_TRANSCRIPT_TOPICS = /* @__PURE__ */ Symbol.for("adhdev.seqscribe.definedTranscriptTopics");
-    function definedTopicsFor(node) {
-      const host = node;
-      let map3 = host[DEFINED_TRANSCRIPT_TOPICS];
-      if (!map3) {
-        map3 = /* @__PURE__ */ new Map();
-        Object.defineProperty(node, DEFINED_TRANSCRIPT_TOPICS, {
-          value: map3,
-          enumerable: false,
-          writable: false,
-          configurable: true
-        });
-      }
-      return map3;
-    }
-    function ensureSessionTranscriptTopic(node, claims, rawSessionId, ownerDaemonId) {
-      const topic = sessionTranscriptTopic(rawSessionId);
-      const claimResult = claims.claim({ topic, rawSessionId, ownerDaemonId });
-      if (!claimResult.ok) {
-        return { ok: false, reason: claimResult.reason, existing: claimResult.existing };
-      }
-      const cache2 = definedTopicsFor(node);
-      const known = cache2.get(topic);
-      if (known === true) return { ok: true, topic };
-      if (known === false) return { ok: false, reason: "define_failed" };
-      if (!node.authorityEnabled) {
-        return { ok: false, reason: "authority_unavailable" };
-      }
-      if (node.topics.some((d) => d.topic === topic)) {
-        cache2.set(topic, true);
-        return { ok: true, topic };
-      }
-      try {
-        const policy = sessionTranscriptPolicy();
-        node.node.defineTopic(topic, policy);
-        node.topics.push({ topic, policy });
-        cache2.set(topic, true);
-        LOG.info("Seqscribe", `transcript topic defined topic=${topic}`);
-        announceTopicActivated(node, topic);
-        return { ok: true, topic };
-      } catch (error48) {
-        cache2.set(topic, false);
-        LOG.warn(
-          "Seqscribe",
-          `transcript topic activation failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-        );
-        return { ok: false, reason: "define_failed" };
-      }
-    }
-    init_topics2();
-    init_transcript_revision_codec();
-    var TRANSCRIPT_PARITY_SCAN_ROWS = SESSION_TRANSCRIPT_RING;
-    function readLocalTranscriptParityActual(node, rawSessionId, expectedWriterId) {
-      const topic = sessionTranscriptTopic(rawSessionId);
-      let entries;
-      try {
-        const writerVec = node.node.vectors()[topic]?.writers[expectedWriterId];
-        const contig = writerVec && "contig" in writerVec ? writerVec.contig : 0;
-        const fromSeq = Math.max(1, contig - TRANSCRIPT_PARITY_SCAN_ROWS + 1);
-        const result = node.node.scanEntries(topic, {
-          writer: expectedWriterId,
-          fromSeq,
-          limit: TRANSCRIPT_PARITY_SCAN_ROWS
-        });
-        entries = result.entries;
-      } catch {
-        return { status: "missing" };
-      }
-      const assembler = new TranscriptRevisionAssembler(expectedWriterId);
-      for (const entry of entries) {
-        assembler.ingestRow(entry);
-      }
-      const latest = assembler.getLatestComplete();
-      if (!latest) return { status: "missing" };
-      return { status: "found", snapshot: latest.snapshot };
-    }
     init_dist();
     init_logger();
     init_transcript_projection();
@@ -159571,6 +159496,103 @@ data: ${JSON.stringify(msg.data)}
         }
       }
       return mismatches;
+    }
+    function transcriptParityCounters() {
+      return { ...counters5 };
+    }
+    function __resetTranscriptParityForTests() {
+      counters5.compared = 0;
+      counters5.missingCompleteRevision = 0;
+      counters5.fieldMismatch = 0;
+      counters5.extraMessage = 0;
+      counters5.wrongSession = 0;
+      counters5.wrongOwner = 0;
+      counters5.digestMismatch = 0;
+      counters5.mismatches = 0;
+      counters5.persistentMismatches = 0;
+      counters5.runs = 0;
+      pendingMissing2.clear();
+    }
+    init_native_history_executor();
+    init_logger();
+    init_logger();
+    init_mesh_dual_write();
+    init_topics2();
+    var DEFINED_TRANSCRIPT_TOPICS = /* @__PURE__ */ Symbol.for("adhdev.seqscribe.definedTranscriptTopics");
+    function definedTopicsFor(node) {
+      const host = node;
+      let map3 = host[DEFINED_TRANSCRIPT_TOPICS];
+      if (!map3) {
+        map3 = /* @__PURE__ */ new Map();
+        Object.defineProperty(node, DEFINED_TRANSCRIPT_TOPICS, {
+          value: map3,
+          enumerable: false,
+          writable: false,
+          configurable: true
+        });
+      }
+      return map3;
+    }
+    function ensureSessionTranscriptTopic(node, claims, rawSessionId, ownerDaemonId) {
+      const topic = sessionTranscriptTopic(rawSessionId);
+      const claimResult = claims.claim({ topic, rawSessionId, ownerDaemonId });
+      if (!claimResult.ok) {
+        return { ok: false, reason: claimResult.reason, existing: claimResult.existing };
+      }
+      const cache2 = definedTopicsFor(node);
+      const known = cache2.get(topic);
+      if (known === true) return { ok: true, topic };
+      if (known === false) return { ok: false, reason: "define_failed" };
+      if (!node.authorityEnabled) {
+        return { ok: false, reason: "authority_unavailable" };
+      }
+      if (node.topics.some((d) => d.topic === topic)) {
+        cache2.set(topic, true);
+        return { ok: true, topic };
+      }
+      try {
+        const policy = sessionTranscriptPolicy();
+        node.node.defineTopic(topic, policy);
+        node.topics.push({ topic, policy });
+        cache2.set(topic, true);
+        LOG.info("Seqscribe", `transcript topic defined topic=${topic}`);
+        announceTopicActivated(node, topic);
+        return { ok: true, topic };
+      } catch (error48) {
+        cache2.set(topic, false);
+        LOG.warn(
+          "Seqscribe",
+          `transcript topic activation failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
+        );
+        return { ok: false, reason: "define_failed" };
+      }
+    }
+    init_topics2();
+    init_transcript_revision_codec();
+    var TRANSCRIPT_PARITY_SCAN_ROWS = SESSION_TRANSCRIPT_RING;
+    function readLocalTranscriptParityActual(node, rawSessionId, expectedWriterId) {
+      const topic = sessionTranscriptTopic(rawSessionId);
+      let entries;
+      try {
+        const writerVec = node.node.vectors()[topic]?.writers[expectedWriterId];
+        const contig = writerVec && "contig" in writerVec ? writerVec.contig : 0;
+        const fromSeq = Math.max(1, contig - TRANSCRIPT_PARITY_SCAN_ROWS + 1);
+        const result = node.node.scanEntries(topic, {
+          writer: expectedWriterId,
+          fromSeq,
+          limit: TRANSCRIPT_PARITY_SCAN_ROWS
+        });
+        entries = result.entries;
+      } catch {
+        return { status: "missing" };
+      }
+      const assembler = new TranscriptRevisionAssembler(expectedWriterId);
+      for (const entry of entries) {
+        assembler.ingestRow(entry);
+      }
+      const latest = assembler.getLatestComplete();
+      if (!latest) return { status: "missing" };
+      return { status: "found", snapshot: latest.snapshot };
     }
     init_transcript_revision_codec();
     function decodeOwnEnvelope(writerId, envelope) {
@@ -160126,6 +160148,9 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           try {
             const dual = meshDualWriteCounters();
             const parity = meshParityCounters();
+            const transcriptService = activeTranscriptProjectionService();
+            const transcriptCounters = transcriptService?.getCounters() ?? null;
+            const transcriptParity = transcriptParityCounters();
             const snapshot = seqscribeCollector?.snapshot() ?? null;
             if (!snapshot) return null;
             return summarizeSeqscribeStats(snapshot.stats, {
@@ -160156,6 +160181,29 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
                 missingInShadow: parity.missingInShadow,
                 extraInShadow: parity.extraInShadow,
                 fieldMismatch: parity.fieldMismatch
+              },
+              // §8 unit 2, exactly mirroring the two blocks above.
+              // `active` follows the SERVICE, not the mode: mode
+              // `shadow` still publishes, so keying off the mode would
+              // read `false` on a daemon that is actively appending.
+              ...transcriptCounters ? {
+                transcript: {
+                  active: true,
+                  published: transcriptCounters.published,
+                  publishFailed: transcriptCounters.publishFailed,
+                  deduped: transcriptCounters.deduped,
+                  oversized: transcriptCounters.oversized,
+                  dropped: transcriptCounters.dropped
+                }
+              } : {},
+              // persistentMismatches is LOCAL-ONLY by the allow-lists in
+              // reporter.ts / daemon-status.ts — passed here so
+              // `get_status_metadata` can serve the Phase 4 promotion
+              // gate, and dropped before the status frame leaves.
+              transcriptParity: {
+                runs: transcriptParity.runs,
+                mismatches: transcriptParity.mismatches,
+                persistentMismatches: transcriptParity.persistentMismatches
               }
             });
           } catch (error48) {
@@ -161373,6 +161421,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     init_mesh_read_model_consumers();
     init_mesh_event_projection();
     init_mesh_parity();
+    init_transcript_publisher();
     init_topics2();
     function evaluateFleetStatusReadiness(input = {}, parity = fleetStatusParityCounters()) {
       const topicPresent = input.node?.topics.some((definition) => definition.topic === FLEET_STATUS_TOPIC) === true;
