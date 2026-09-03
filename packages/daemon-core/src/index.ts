@@ -1178,6 +1178,7 @@ export {
   buildRedriveInjection,
   consumeRedriveEntry,
   getRedriveState,
+  getTotalRedriveInjected,
   __resetTerminalRedriveForTests,
   type RedriveMeshState,
   type RedriveProjectedEntry,

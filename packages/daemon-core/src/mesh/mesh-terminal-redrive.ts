@@ -122,6 +122,24 @@ export function getRedriveState(meshId: string): RedriveMeshState | null {
     return s ? { ...s } : null;
 }
 
+/**
+ * Total entries this process has handed to the pending queue across every
+ * mesh, since boot (or the last test reset). Feeds the 5a-3 coverage metric:
+ * the outbox's own `delivered` counter (mesh-turn-ledger.ts) is likewise a
+ * cross-mesh cumulative total on the same store, so the two are comparable
+ * without a per-entry join — in dual-drive, a terminal the outbox delivered
+ * is a terminal redrive also independently injected (whichever path wins the
+ * dedup race, both attempted the injection; `injected` counts attempts that
+ * reached the queue, not just the one dedup let through — see
+ * `consumeRedriveEntry`, which increments `injected` on `queued === true`,
+ * a case dedup collapse also satisfies).
+ */
+export function getTotalRedriveInjected(): number {
+    let total = 0;
+    for (const s of state.values()) total += s.injected;
+    return total;
+}
+
 /** Whether the redrive leg is enabled. Off unless explicitly turned on. */
 export function isTerminalRedriveEnabled(env: Record<string, string | undefined>): boolean {
     return env[REDRIVE_ENV] === 'on';

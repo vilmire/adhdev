@@ -15,6 +15,7 @@ import { TRACK } from '../../track-identity.js';
 import { getCoordinatorForSession, listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
 import { currentRefineExecutorBootId } from '../../mesh/mesh-refine-executor-liveness.js';
 import { readTurnOutboxDiagnostics } from '../../mesh/mesh-turn-outbox-diagnostics.js';
+import { readRedriveCoverageDiagnostics } from '../../mesh/mesh-turn-outbox-coverage-diagnostics.js';
 // ★These two commands are the SWR read surfaces — the ONLY read path allowed to
 // schedule a background refresh (quota/refresh.ts readQuotaCacheWithRevalidate).
 // They qualify because they are on-demand and human-paced: a machine page load
@@ -120,6 +121,13 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // read — no boot-time arming like `beacon` above, so it is called
             // directly rather than via a ctx.deps getter closure.
             outbox: readTurnOutboxDiagnostics(),
+            // Stage 5, 5a-3: the 5a→5b gate's evidence that the redrive
+            // consumer (5a-2) is actually keeping up with the legacy outbox
+            // drain it is meant to replace, WITHOUT the flag being on (dual
+            // drive runs both regardless). `null` coveragePercent = the
+            // outbox has delivered nothing yet, not 0% coverage — see
+            // mesh-turn-outbox-coverage-diagnostics.ts.
+            outboxRedriveCoverage: readRedriveCoverageDiagnostics(),
         };
     },
 
