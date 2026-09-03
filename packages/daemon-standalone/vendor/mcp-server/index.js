@@ -77312,7 +77312,9 @@ ${rendered}`, "utf-8");
       const terminal = ctx.terminal;
       const terminalStatus = terminal ? statusFromTerminal(terminal) : void 0;
       const live = sessionStatusFromNodes(ctx.nodes, dispatch.nodeId, dispatch.sessionId);
-      const status = terminalStatus || live.status || "assigned";
+      const blockedLevelKind = terminal?.kind === "task_approval_needed" || terminal?.kind === "task_question_pending";
+      const liveContradictsBlockedLevel = blockedLevelKind && !!live.status && live.status !== "awaiting_approval" && live.status !== "awaiting_choice";
+      const status = (liveContradictsBlockedLevel ? live.status : terminalStatus || live.status) || "assigned";
       const terminalRow = Boolean(terminal && terminal.kind !== "task_approval_needed");
       const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
         status,
@@ -77352,6 +77354,11 @@ ${rendered}`, "utf-8");
       for (const record2 of activeWork) {
         if (record2.status !== "awaiting_approval") continue;
         if (!record2.nodeId || !record2.sessionId) continue;
+        const blockedAt = record2.terminalKind === "task_approval_needed" ? record2.terminalAt : void 0;
+        const dispatchAnchor = record2.dispatchedAt || record2.createdAt;
+        const waitingSince = blockedAt || dispatchAnchor;
+        const anchorShiftMs = blockedAt && dispatchAnchor ? new Date(blockedAt).getTime() - new Date(dispatchAnchor).getTime() : 0;
+        const waitingMs = Number.isFinite(anchorShiftMs) && anchorShiftMs > 0 ? Math.max(0, record2.elapsedMs - anchorShiftMs) : record2.elapsedMs;
         approvals.push({
           nodeId: record2.nodeId,
           sessionId: record2.sessionId,
@@ -77359,8 +77366,8 @@ ${rendered}`, "utf-8");
           taskId: record2.taskId,
           taskTitle: record2.taskTitle,
           status: "awaiting_approval",
-          waitingSince: record2.dispatchedAt || record2.createdAt,
-          waitingMs: record2.elapsedMs
+          waitingSince,
+          waitingMs
         });
       }
       const bySession = /* @__PURE__ */ new Map();
@@ -107747,7 +107754,7 @@ ${text}` : text;
                   questions: [question]
                 }, response).slice(0, -1);
                 for (const step of questionSteps) {
-                  if (this.assertFocusedClaudeTuiQuestion(question, prompt) === "completed") {
+                  if (await this.assertFocusedClaudeTuiQuestion(question, prompt) === "completed") {
                     completedWithoutReview = true;
                     break questionLoop;
                   }
@@ -108558,9 +108565,16 @@ ${text}` : text;
               throw new Error(`Cannot verify the focused Claude TUI question before answering: ${error48?.message || error48}`);
             }
           }
-          assertFocusedClaudeTuiQuestion(expected, prompt) {
-            const screenText = this.readClaudeTuiSnapshotForAnswer();
-            const focused = readFocusedClaudeTuiQuestion(screenText);
+          async assertFocusedClaudeTuiQuestion(expected, prompt) {
+            const settleTimeoutMs = expected.allowFreeform ? _SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS : _SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
+            const deadline = Date.now() + settleTimeoutMs;
+            let screenText = this.readClaudeTuiSnapshotForAnswer();
+            let focused = readFocusedClaudeTuiQuestion(screenText);
+            while (Date.now() < deadline && !(focused && this.claudeTuiQuestionMatches(expected, focused))) {
+              await new Promise((resolve33) => setTimeout(resolve33, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+              screenText = this.readClaudeTuiSnapshotForAnswer();
+              focused = readFocusedClaudeTuiQuestion(screenText);
+            }
             if (focused) {
               if (this.claudeTuiQuestionMatches(expected, focused)) return "focused";
               throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"; focused question is "${focused.question}")`);

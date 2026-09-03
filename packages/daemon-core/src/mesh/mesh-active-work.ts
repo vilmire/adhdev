@@ -450,7 +450,41 @@ function buildLedgerDirectDispatchRecord(
     const terminal = ctx.terminal;
     const terminalStatus = terminal ? statusFromTerminal(terminal) : undefined;
     const live = sessionStatusFromNodes(ctx.nodes, dispatch.nodeId, dispatch.sessionId);
-    const status = terminalStatus || live.status || 'assigned';
+    // STALE-BLOCKED-AFTER-RESUME (live defect, 2026-09-02): a resolved modal
+    // used to pin this record to awaiting_approval FOREVER.
+    //
+    // task_approval_needed / task_question_pending are LEVEL assertions about a
+    // modal that was open at that instant — unlike task_completed/task_failed,
+    // which are true terminals. There is no task_approval_resolved ledger kind,
+    // so when the owner answers and the worker resumes NORMAL work it emits no
+    // row that supersedes the blocked one. The unconditional `terminalStatus ||
+    // live.status` below therefore let the stale ledger row outrank a live
+    // session that had already moved back to generating, and the record stayed
+    // in the approval inbox indefinitely.
+    //
+    // That is not cosmetic: a coordinator trusting the inbox calls mesh_approve
+    // against a modal that no longer exists, injecting keys into a working
+    // session (observed three times in one day, each caught only by manually
+    // cross-checking mesh_read_terminal).
+    //
+    // So for these two kinds only, a live session status that is NOT itself a
+    // blocked state wins — it is direct evidence the modal closed. Real
+    // terminals keep absolute authority (unchanged), and a live sniff that is
+    // absent, or that still reports blocked, leaves the ledger row in force —
+    // so a genuinely-waiting task is still surfaced (APPROVAL-INBOX-BLINDSPOT).
+    // `task_question_pending` is included for correctness-by-construction, not
+    // because it can reach here today: the terminal index at the top of this
+    // file admits only TERMINAL_LEDGER_KINDS + task_approval_needed, so a
+    // question row is never selected as `terminal` on this path (statusFromTerminal's
+    // task_question_pending branch is likewise unreachable from here). Listing it
+    // means that if the index is ever widened, a resolved question cannot
+    // reintroduce this defect under a different kind.
+    const blockedLevelKind = terminal?.kind === 'task_approval_needed' || terminal?.kind === 'task_question_pending';
+    const liveContradictsBlockedLevel = blockedLevelKind
+        && !!live.status
+        && live.status !== 'awaiting_approval'
+        && live.status !== 'awaiting_choice';
+    const status = (liveContradictsBlockedLevel ? live.status : terminalStatus || live.status) || 'assigned';
     const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
     const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
         status,
@@ -521,6 +555,30 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
     for (const record of activeWork) {
         if (record.status !== 'awaiting_approval') continue;
         if (!record.nodeId || !record.sessionId) continue;
+        // WAITING-SINCE ANCHOR (live defect, 2026-09-02): this used to report
+        // the task's original DISPATCH time — a moment before the modal existed,
+        // often by many minutes — so "waiting 41m" described the task's whole
+        // lifetime rather than how long the approval had actually been blocked,
+        // and the inbox sorted on that inflated figure. When the record's
+        // terminal row IS the approval event, its timestamp is the real moment
+        // the session became blocked; prefer it. Fall back to dispatch/creation
+        // for records whose blocked state came from a live-session sniff with no
+        // ledger row to date it (unchanged behaviour for that case).
+        const blockedAt = record.terminalKind === 'task_approval_needed' ? record.terminalAt : undefined;
+        const dispatchAnchor = record.dispatchedAt || record.createdAt;
+        const waitingSince = blockedAt || dispatchAnchor;
+        // waitingMs must stay consistent with the anchor, or the inbox would
+        // sort on a dispatch-anchored figure while displaying a modal-anchored
+        // timestamp. `elapsedMs` is measured from `dispatchAnchor` against the
+        // build's `now`, so shifting the anchor forward subtracts exactly the
+        // gap between dispatch and the modal opening — no second clock read,
+        // which keeps every row comparable against the same `now`.
+        const anchorShiftMs = blockedAt && dispatchAnchor
+            ? new Date(blockedAt).getTime() - new Date(dispatchAnchor).getTime()
+            : 0;
+        const waitingMs = Number.isFinite(anchorShiftMs) && anchorShiftMs > 0
+            ? Math.max(0, record.elapsedMs - anchorShiftMs)
+            : record.elapsedMs;
         approvals.push({
             nodeId: record.nodeId,
             sessionId: record.sessionId,
@@ -528,8 +586,8 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
             taskId: record.taskId,
             taskTitle: record.taskTitle,
             status: 'awaiting_approval',
-            waitingSince: record.dispatchedAt || record.createdAt,
-            waitingMs: record.elapsedMs,
+            waitingSince,
+            waitingMs,
         });
     }
     // DETERMINISTIC DEDUP (rc.19 live defect: mesh_list_pending_approvals returned the
