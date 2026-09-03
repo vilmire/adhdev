@@ -1764,7 +1764,14 @@ export class DaemonCliManager {
                         // daemon write a worker config for the 6 providers that
                         // declare no isolation rules of their own.
                         mcpConfig: provLookup?.meshCoordinator?.mcpConfig,
-                        resolvedSpecPath: (provLookup as unknown as { _resolvedSpecPath?: string } | undefined)?._resolvedSpecPath,
+                        // `provLookup` comes from getMeta(), which returns the
+                        // raw map entry — and `_resolvedSpecPath` is only ever
+                        // set on resolve()'s deep CLONE, so reading the hidden
+                        // field off it yielded undefined for every provider.
+                        // That silently disabled pre_launch_trust on the worker
+                        // path (no trust plan → no ledgered grant → agy stalled
+                        // on its folder-trust prompt in every fresh worktree).
+                        resolvedSpecPath: this.providerLoader.getResolvedSpecPath(providerType) ?? undefined,
                         // The runtime session id is the stable launch identity:
                         // two workers on one workspace therefore receive distinct
                         // private HOMEs and distinct provenance usage records.
