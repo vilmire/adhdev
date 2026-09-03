@@ -34,6 +34,7 @@ import {
 import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../../hooks/dashboardCommandUtils'
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
+import { buildTranscriptReadSourceAttributes } from './transcript-chat-pane-adapter';
 import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { publishChatTyping } from './chat-typing-indicator-store';
@@ -406,7 +407,13 @@ export default function ChatPane({
     }, [activeConv.connectionState, activeConv.status, canOpenPanel, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
 
     return (
-        <div className="flex-1 min-h-0 w-full flex flex-col relative">
+        /* (§8 unit 4c, design §5.6) Makes the replica/legacy decision
+           observable without devtools — see `buildTranscriptReadSourceAttributes`
+           for why it is a data attribute rather than visible UI or a log. */
+        <div
+            className="flex-1 min-h-0 w-full flex flex-col relative"
+            {...buildTranscriptReadSourceAttributes(chatTailState)}
+        >
             {/* Message Stream */}
 {/* Compact chat header. The old Activity toggle lived here but it didn't carry
                 its weight — activity rows already follow the user's preference, and the

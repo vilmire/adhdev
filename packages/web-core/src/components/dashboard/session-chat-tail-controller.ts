@@ -689,10 +689,44 @@ export class SessionChatTailController {
     }
     this.retainCount += 1
     this.connect()
+    // (§8 unit 4c) 0 → 1 is the edge where this session becomes READ, which is
+    // exactly when transcript interest must widen to include it. Only the edge
+    // notifies: a second consumer retaining an already-read controller changes
+    // no interest set, and notifying on it would churn every subscriber.
+    if (this.retainCount === 1) notifyControllerRegistryChanged()
+  }
+
+  /**
+   * (§8 unit 4c) Is some mounted consumer currently reading this controller?
+   *
+   * The registry is append-only — a controller is never deleted once created,
+   * so registry MEMBERSHIP is a record of every session ever opened this page
+   * load, not of what is being read now. `retainCount` is the only thing that
+   * distinguishes the two, which makes this the least-privilege filter for
+   * transcript session interest: declaring on membership would grant the
+   * daemon-side transcript topics for every session the user ever clicked.
+   */
+  isRetained(): boolean {
+    return this.retainCount > 0
+  }
+
+  /**
+   * (§8 unit 4c) The routing pair this controller reads, for callers that must
+   * group controllers by daemon. Deliberately omits `historySessionId`: the
+   * session-interest wire contract is a set of SESSION ids, and two controllers
+   * for one session (pane + warm inbox) must collapse to one declared id.
+   */
+  getIdentity(): { daemonId: string; sessionId: string } {
+    return { daemonId: this.daemonId, sessionId: this.sessionId }
   }
 
   release(): void {
+    const wasRetained = this.retainCount > 0
     this.retainCount = Math.max(0, this.retainCount - 1)
+    // (§8 unit 4c) The 1 → 0 edge NARROWS transcript interest. Notified before
+    // the deferred disconnect below so the grant is revoked promptly rather
+    // than waiting on the transport teardown timer.
+    if (wasRetained && this.retainCount === 0) notifyControllerRegistryChanged()
     if (this.retainCount !== 0 || this.pendingDisconnectTimer) {
       return
     }
@@ -1033,6 +1067,63 @@ export function reportTranscriptReplicaFallbackForSession(
   for (const [key, controller] of controllerRegistry.entries()) {
     if (key.startsWith(prefix)) controller.reportTranscriptReplicaFallback(reason)
   }
+}
+
+/**
+ * (§8 unit 4c) Which sessions, per daemon, are being READ right now.
+ *
+ * This is the transcript-replica interest source, and it is derived rather
+ * than declared for one reason: the set of sessions the chat pane and the warm
+ * mobile preview are reading is ALREADY materialized here, as the retained
+ * entries of the controller registry. Those are exactly roster ids 1-2
+ * (`web_chat_pane` / `web_warm_mobile_preview`, design §4) — the two consumers
+ * a replica snapshot is delivered to by
+ * `applyTranscriptReplicaSnapshotToControllers`. Deriving from the same
+ * registry keeps "what we asked the daemon to replicate" and "what we can
+ * actually deliver to" from drifting apart; threading the selection through
+ * React separately would let one change without the other, which is the
+ * failure mode that leaves the lane granted but the panes on legacy.
+ *
+ * ── Least privilege (design §9 item 4) ────────────────────────────────────
+ * Filtered on `isRetained()`, NOT on registry membership. The registry is
+ * append-only, so membership accumulates every session opened this page load;
+ * granting on that would keep widening the daemon's grant map for the whole
+ * session. Retention drops on unmount, so the declared set tracks what is
+ * mounted.
+ *
+ * Keys are daemonIds; values are deduped and sorted so a caller can compare
+ * two results for equality without normalizing first.
+ */
+export function collectRetainedTranscriptSessionInterest(): Map<string, string[]> {
+  const byDaemon = new Map<string, Set<string>>()
+  for (const controller of controllerRegistry.values()) {
+    if (!controller.isRetained()) continue
+    const { daemonId, sessionId } = controller.getIdentity()
+    if (!daemonId || !sessionId) continue
+    const existing = byDaemon.get(daemonId)
+    if (existing) existing.add(sessionId)
+    else byDaemon.set(daemonId, new Set([sessionId]))
+  }
+  // A controller is keyed by `daemonId::sessionId::historySessionId`, so one
+  // session can have two entries (pane + warm inbox, differing history id).
+  // The wire contract is a set of SESSION ids, hence the dedup above.
+  const result = new Map<string, string[]>()
+  for (const [daemonId, sessionIds] of byDaemon.entries()) {
+    result.set(daemonId, [...sessionIds].sort())
+  }
+  return result
+}
+
+/**
+ * (§8 unit 4c) Subscribe to changes in the retained-session set.
+ *
+ * Fires on controller creation and on every retain/release EDGE (0↔1), which
+ * are precisely the transitions that change the result of
+ * `collectRetainedTranscriptSessionInterest`. Callers re-read and diff; this
+ * intentionally carries no payload so there is one derivation path, not two.
+ */
+export function subscribeTranscriptSessionInterest(listener: () => void): () => void {
+  return subscribeControllerRegistry(listener)
 }
 
 export function resetSessionChatTailControllersForTest(): void {

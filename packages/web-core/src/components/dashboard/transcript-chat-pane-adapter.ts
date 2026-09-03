@@ -41,6 +41,42 @@ import type {
 } from '@adhdev/daemon-core'
 import type { DashboardMessage } from './types'
 
+/**
+ * (§8 unit 4c) The chat pane's observable read-source readout.
+ *
+ * Design §5.6 makes `transcriptReadSource` the single source of truth for
+ * "which transport produced this tail", explicitly so a rollback cannot
+ * degrade into an invisible merge of two sources. Units 4b/5 computed and
+ * stored it correctly, but NOTHING read it — so replica and legacy rendered
+ * identically and there was no way, short of a debugger, to tell whether the
+ * replica lane was actually feeding the pane or had silently fallen back.
+ *
+ * These attributes close that gap on the pane's root element. They are a
+ * developer/rollout signal, deliberately not user-facing chrome: visible UI
+ * would need copy, i18n and a product decision, and would surface transport
+ * plumbing to every user for no benefit. They ship in production builds
+ * (unlike a dev-only panel) because live verification is exactly where the
+ * distinction matters, and they express CURRENT STATE (unlike a console log)
+ * so they can be asserted in a DOM test and inspected at any moment.
+ *
+ * `fallbackReason` / `stale` are OMITTED rather than emitted empty: absence is
+ * meaningful. A session that never attempted the replica has no reason at all,
+ * which must not be confused with one that fell back for an unrecorded reason.
+ */
+export function buildTranscriptReadSourceAttributes(state: {
+    transcriptReadSource: 'replica' | 'legacy'
+    transcriptFallbackReason?: string
+    stale?: boolean
+}): Record<string, string> {
+    return {
+        'data-transcript-read-source': state.transcriptReadSource,
+        ...(state.transcriptFallbackReason
+            ? { 'data-transcript-fallback-reason': state.transcriptFallbackReason }
+            : {}),
+        ...(state.stale ? { 'data-transcript-stale': 'true' } : {}),
+    }
+}
+
 /** One roster-mapped message. `turnKey` (the allow-listed "stable message key",
  * §2.4) stands in for the richer `bubbleId`/`providerUnitKey`/`id` fields a
  * live `read_chat` message carries, since the wire allow-list has only one
