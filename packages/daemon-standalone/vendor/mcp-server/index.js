@@ -89449,7 +89449,9 @@ ${cleanBody}`;
               const coordinatorMeshId = readNonEmptyString(flushSettings.meshCoordinatorFor);
               if (coordinatorMeshId) {
                 const status = readNonEmptyString(flushState.status).toLowerCase();
-                if (status === "idle") {
+                const flushDrainStatus = typeof flushSource.getDrainStatus === "function" ? flushSource.getDrainStatus() : null;
+                const flushIdle = flushDrainStatus !== null ? flushDrainStatus === "idle" : status === "idle";
+                if (flushIdle) {
                   try {
                     const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
                     const pendingEvents = drainPendingMeshCoordinatorEvents3(coordinatorMeshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
@@ -93040,7 +93042,16 @@ ${cleanBody}`;
               targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
               queuedAt: event.queuedAt,
               ...fingerprint ? { fingerprint } : {},
-              ...finalSummary ? { finalSummary } : {}
+              ...finalSummary ? { finalSummary } : {},
+              // NOTIF-LOSS (A1): the machine recovery copy, matching every other
+              // event_held feeder (ledgerRecordQuarantinedEvent /
+              // ledgerRecordExpiredUndrainedEvent). Without it this entry claims
+              // `recoverable: true` but requeueHeldMeshCoordinatorEvents — which
+              // reconstructs solely from payload.heldEvent — reports it
+              // `unrecoverable`, so mesh_requeue_held_events could not recover the
+              // single reason code responsible for ~98% of holds. The C1 guarantee
+              // documented above only holds once the event itself is carried.
+              heldEvent: event
             }
           });
           LOG.info("MeshReconcile", `Ledger-recorded held ${event.event} for mesh ${meshId} (reason ${reason}) \u2014 recoverable from ledger`);

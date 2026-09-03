@@ -2103,8 +2103,27 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                     const flushSettings = flushState.settings && typeof flushState.settings === 'object' ? flushState.settings as Record<string, unknown> : {};
                     const coordinatorMeshId = readNonEmptyString(flushSettings.meshCoordinatorFor);
                     if (coordinatorMeshId) {
+                        // NOTIF-LOSS (A1): decide idle on the RAW adapter turn-state, matching
+                        // findLiveCoordinators and flushPendingForMeshIdleCoordinators. This is
+                        // the third and last site of PTY-OVERTRUST-DRAIN (Defect B), missed when
+                        // the other two were converted: getState().status overlays the
+                        // auto-approve hold-idle mask that paints a genuinely-idle adapter
+                        // `generating`, which made THIS fast path — the only interval-independent
+                        // delivery route — silently no-op on any auto-approving coordinator. The
+                        // completion then fell through to the 4s reconcile poll, whose own
+                        // predicate had already bucketed the same coordinator as generating, and
+                        // landed as a `generating_no_idle_coordinator` hold (50 of 51 measured
+                        // holds on 2026-09-02). Reading the raw state here closes the window
+                        // regardless of how short the coordinator's idle gap is.
+                        // Fall back to the masked literal for instances without getDrainStatus().
                         const status = readNonEmptyString(flushState.status).toLowerCase();
-                        if (status === 'idle') {
+                        const flushDrainStatus: string | null = typeof (flushSource as any).getDrainStatus === 'function'
+                            ? (flushSource as any).getDrainStatus()
+                            : null;
+                        const flushIdle = flushDrainStatus !== null
+                            ? flushDrainStatus === 'idle'
+                            : (status === 'idle');
+                        if (flushIdle) {
                             try {
                                 // Drain with the daemon's full coordinator-id set (status id + machineId).
                                 // The MCP layer stamps the prefixed status id (`standalone_<machineId>` /
