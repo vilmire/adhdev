@@ -55,6 +55,10 @@ adhdev-oss/
 .turbo/
 coverage/
 
+# vitest browser-mode failure screenshots / attachments
+__screenshots__/
+.vitest-attachments/
+
 # Debug / temp files
 *.patch
 codex_*
