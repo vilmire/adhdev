@@ -1167,6 +1167,30 @@ export {
   maxEntryBytes,
   type ProjectedMeshEvent,
 } from './seqscribe/mesh-event-projection.js';
+// Stage 5a-2: terminal-notification redrive from the replica — the seqscribe
+// half of the turn outbox's redelivery guarantee (dual-driven with it in 5a).
+export {
+  REDRIVE_CONSUMER,
+  REDRIVE_ENV,
+  REDRIVEN_TERMINAL_KINDS,
+  isTerminalRedriveEnabled,
+  assertRedriveConsumerNameIsPruneSafe,
+  buildRedriveInjection,
+  consumeRedriveEntry,
+  getRedriveState,
+  __resetTerminalRedriveForTests,
+  type RedriveMeshState,
+  type RedriveProjectedEntry,
+} from './mesh/mesh-terminal-redrive.js';
+export {
+  configureTerminalRedrive,
+  ensureTerminalRedriveConsumer,
+  ensureTerminalRedriveConsumersAtBoot,
+  registeredRedriveMeshIds,
+  __resetTerminalRedriveConsumerForTests,
+  type RedriveEntryEnvelope,
+  type RedriveHandler,
+} from './seqscribe/mesh-terminal-redrive-consumer.js';
 // Phase 2 Stage 3: the parity verifier that compares the two stores.
 export {
   runMeshParityCheck,

@@ -90,6 +90,15 @@ import {
     pruneStaleConsumersAtBoot,
 } from '../seqscribe/mesh-read-model.js';
 import {
+    configureTerminalRedrive,
+    ensureTerminalRedriveConsumersAtBoot,
+} from '../seqscribe/mesh-terminal-redrive-consumer.js';
+import {
+    REDRIVE_CONSUMER,
+    consumeRedriveEntry,
+    isTerminalRedriveEnabled,
+} from '../mesh/mesh-terminal-redrive.js';
+import {
     activeTranscriptProjectionService,
     configureTranscriptProjection,
 } from '../seqscribe/transcript-publisher.js';
@@ -1111,6 +1120,36 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             // Runs BEFORE the parity loop arms so the first sweep sees a clean
             // consumer set. Best-effort by construction — see the function.
             pruneStaleConsumersAtBoot();
+            // Stage 5a-2: the terminal-notification redrive leg. Runs AFTER the
+            // prune above, so registration never races the GC — and note that
+            // REDRIVE_CONSUMER is deliberately outside both prune prefixes, so
+            // the GC cannot delete this cursor even when the order changes.
+            //
+            // Dual-driven with the turn outbox during 5a: both paths inject into
+            // the pending-events queue and the fingerprint dedup collapses the
+            // second arrival. Flag-gated and OFF by default — turning it off is
+            // the rollback.
+            try {
+                if (isTerminalRedriveEnabled(process.env)) {
+                    configureTerminalRedrive(components.seqscribeNode, {
+                        consumerName: REDRIVE_CONSUMER,
+                        handler: ({ meshId, entry }) => {
+                            // Throwing holds the durable cursor — see the module note.
+                            consumeRedriveEntry(meshId, entry);
+                        },
+                    });
+                    const registered = ensureTerminalRedriveConsumersAtBoot();
+                    LOG.info(
+                        'MeshRedrive',
+                        `terminal redrive armed on ${registered} mesh topic(s) — dual-driven with the turn outbox`,
+                    );
+                }
+            } catch (error) {
+                LOG.warn(
+                    'MeshRedrive',
+                    `terminal redrive unavailable: ${error instanceof Error ? error.message : String(error)}`,
+                );
+            }
             components.seqscribeParityLoop = startMeshParityLoop(components.seqscribeNode);
         }
     } catch (error) {
@@ -1266,6 +1305,9 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // unsubscribed before step 7 closes the node. A consumer still registered
     // when the node closes would touch the store after the owner lock released.
     try { configureMeshReadModel(null); } catch { /* noop */ }
+    // Unsubscribes the redrive registrations. The durable cursors persist, so the
+    // next boot resumes from where this process stopped rather than replaying.
+    try { configureTerminalRedrive(null); } catch { /* noop */ }
     // Detach the handoff-note topic writer for the same reason as the legs
     // above — a report landing during shutdown must not append into a node
     // step 7 is about to close. The sink is dropped too so the report path
