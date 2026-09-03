@@ -99033,6 +99033,123 @@ ${marker}`,
         init_mesh_turn_ledger();
       }
     });
+    function stateFor(meshId) {
+      let s2 = state.get(meshId);
+      if (!s2) {
+        s2 = { injected: 0, skipped: 0, consecutiveFailures: 0, lastFailureAt: null };
+        state.set(meshId, s2);
+      }
+      return s2;
+    }
+    function getRedriveState(meshId) {
+      const s2 = state.get(meshId);
+      return s2 ? { ...s2 } : null;
+    }
+    function getTotalRedriveInjected() {
+      let total = 0;
+      for (const s2 of state.values()) total += s2.injected;
+      return total;
+    }
+    function isTerminalRedriveEnabled(env2) {
+      return env2[REDRIVE_ENV] === "on";
+    }
+    function assertRedriveConsumerNameIsPruneSafe(prunePrefixes) {
+      for (const prefix of prunePrefixes) {
+        if (REDRIVE_CONSUMER.startsWith(prefix)) {
+          throw new Error(
+            `redrive consumer name '${REDRIVE_CONSUMER}' matches boot-GC prefix '${prefix}' \u2014 it would be pruned on every boot, rewinding or dropping the redelivery cursor`
+          );
+        }
+      }
+    }
+    function buildRedriveInjection(meshId, entry) {
+      if (!REDRIVEN_TERMINAL_KINDS.includes(entry.ledgerKind)) return null;
+      const taskId = entry.taskId || (typeof entry.payload.taskId === "string" ? entry.payload.taskId : void 0);
+      if (!taskId) return null;
+      const event = typeof entry.payload.event === "string" ? entry.payload.event : "agent:generating_completed";
+      const sessionId = entry.sessionId || (typeof entry.payload.sessionId === "string" ? entry.payload.sessionId : void 0);
+      const providerType = entry.providerType || (typeof entry.payload.providerType === "string" ? entry.payload.providerType : void 0);
+      const nodeId = entry.nodeId || (typeof entry.payload.nodeId === "string" ? entry.payload.nodeId : void 0);
+      const metadataEvent = {
+        taskId,
+        ...sessionId ? { sessionId } : {},
+        ...providerType ? { providerType } : {},
+        // Fingerprint parity with the drain: a weak original was stamped
+        // evidenceLevel='insufficient'; a bare record reads as genuine. Sourced
+        // from the projected `weak` (Stage 5a-1) — NOT recomputed from
+        // evidenceLevel, which is not projected and would not be equivalent.
+        ...entry.payload.weak === true ? { evidenceLevel: "insufficient" } : {},
+        source: "seqscribe_redelivery",
+        redriveRedelivery: true
+      };
+      return {
+        event,
+        meshId,
+        nodeId: nodeId || void 0,
+        metadataEvent,
+        queuedAt: Date.now()
+      };
+    }
+    function consumeRedriveEntry(meshId, entry) {
+      const s2 = stateFor(meshId);
+      const injection = buildRedriveInjection(meshId, entry);
+      if (!injection) {
+        s2.skipped++;
+        return "skipped";
+      }
+      let queued = false;
+      try {
+        queued = queuePendingMeshCoordinatorEvent(injection);
+      } catch (error48) {
+        s2.consecutiveFailures++;
+        s2.lastFailureAt = Date.now();
+        throw error48 instanceof Error ? error48 : new Error(String(error48));
+      }
+      if (!queued) {
+        s2.consecutiveFailures++;
+        s2.lastFailureAt = Date.now();
+        throw new Error(`pending queue rejected redrive injection for task ${injection.metadataEvent.taskId}`);
+      }
+      s2.consecutiveFailures = 0;
+      s2.injected++;
+      LOG.debug(
+        "MeshRedrive",
+        `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} \u2014 dedup collapses it onto the original if already delivered`
+      );
+      return "injected";
+    }
+    function __resetTerminalRedriveForTests() {
+      state.clear();
+    }
+    var REDRIVE_CONSUMER;
+    var REDRIVE_ENV;
+    var REDRIVEN_TERMINAL_KINDS;
+    var state;
+    var init_mesh_terminal_redrive = __esm2({
+      "src/mesh/mesh-terminal-redrive.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_events_pending();
+        REDRIVE_CONSUMER = "stage5a-mesh-terminal-redrive";
+        REDRIVE_ENV = "ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE";
+        REDRIVEN_TERMINAL_KINDS = ["task_completed", "task_failed"];
+        state = /* @__PURE__ */ new Map();
+      }
+    });
+    function readRedriveCoverageDiagnostics(nowMs = Date.now()) {
+      const metrics3 = getTurnLedgerMetrics(nowMs);
+      const outboxDelivered = metrics3.outboxByStatus.delivered ?? 0;
+      const redriveInjected = getTotalRedriveInjected();
+      const coveragePercent = outboxDelivered > 0 ? Math.min(100, redriveInjected / outboxDelivered * 100) : null;
+      return { redriveInjected, outboxDelivered, coveragePercent };
+    }
+    var init_mesh_turn_outbox_coverage_diagnostics = __esm2({
+      "src/mesh/mesh-turn-outbox-coverage-diagnostics.ts"() {
+        "use strict";
+        init_mesh_turn_ledger();
+        init_mesh_terminal_redrive();
+      }
+    });
     var init_quota = __esm2({
       "src/quota/index.ts"() {
         "use strict";
@@ -99061,6 +99178,7 @@ ${marker}`,
         init_coordinator_registry();
         init_mesh_refine_executor_liveness();
         init_mesh_turn_outbox_diagnostics();
+        init_mesh_turn_outbox_coverage_diagnostics();
         init_quota();
         init_quota();
         statusMetaHandlers = {
@@ -99138,7 +99256,14 @@ ${marker}`,
               // `getTurnLedgerMetrics`, which is a plain MeshRuntimeStore-backed
               // read — no boot-time arming like `beacon` above, so it is called
               // directly rather than via a ctx.deps getter closure.
-              outbox: readTurnOutboxDiagnostics()
+              outbox: readTurnOutboxDiagnostics(),
+              // Stage 5, 5a-3: the 5a→5b gate's evidence that the redrive
+              // consumer (5a-2) is actually keeping up with the legacy outbox
+              // drain it is meant to replace, WITHOUT the flag being on (dual
+              // drive runs both regardless). `null` coveragePercent = the
+              // outbox has delivered nothing yet, not 0% coverage — see
+              // mesh-turn-outbox-coverage-diagnostics.ts.
+              outboxRedriveCoverage: readRedriveCoverageDiagnostics()
             };
           },
           /**
@@ -140643,6 +140768,7 @@ ${e?.stderr || ""}`;
       getSessionHostRecoveryLabel: () => import_session_host_core3.getSessionHostRecoveryLabel,
       getSessionHostSurfaceKind: () => import_session_host_core3.getSessionHostSurfaceKind,
       getSessionRecoveryContext: () => getSessionRecoveryContext3,
+      getTotalRedriveInjected: () => getTotalRedriveInjected,
       getTrackIdentity: () => getTrackIdentity,
       getTurnPresentationMetrics: () => getTurnPresentationMetrics,
       getUsageDir: () => getUsageDir,
@@ -159534,95 +159660,7 @@ data: ${JSON.stringify(msg.data)}
     function __resetTerminalRedriveConsumerForTests() {
       configureTerminalRedrive(null);
     }
-    init_logger();
-    init_mesh_events_pending();
-    var REDRIVE_CONSUMER = "stage5a-mesh-terminal-redrive";
-    var REDRIVE_ENV = "ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE";
-    var REDRIVEN_TERMINAL_KINDS = ["task_completed", "task_failed"];
-    var state = /* @__PURE__ */ new Map();
-    function stateFor(meshId) {
-      let s2 = state.get(meshId);
-      if (!s2) {
-        s2 = { injected: 0, skipped: 0, consecutiveFailures: 0, lastFailureAt: null };
-        state.set(meshId, s2);
-      }
-      return s2;
-    }
-    function getRedriveState(meshId) {
-      const s2 = state.get(meshId);
-      return s2 ? { ...s2 } : null;
-    }
-    function isTerminalRedriveEnabled(env2) {
-      return env2[REDRIVE_ENV] === "on";
-    }
-    function assertRedriveConsumerNameIsPruneSafe(prunePrefixes) {
-      for (const prefix of prunePrefixes) {
-        if (REDRIVE_CONSUMER.startsWith(prefix)) {
-          throw new Error(
-            `redrive consumer name '${REDRIVE_CONSUMER}' matches boot-GC prefix '${prefix}' \u2014 it would be pruned on every boot, rewinding or dropping the redelivery cursor`
-          );
-        }
-      }
-    }
-    function buildRedriveInjection(meshId, entry) {
-      if (!REDRIVEN_TERMINAL_KINDS.includes(entry.ledgerKind)) return null;
-      const taskId = entry.taskId || (typeof entry.payload.taskId === "string" ? entry.payload.taskId : void 0);
-      if (!taskId) return null;
-      const event = typeof entry.payload.event === "string" ? entry.payload.event : "agent:generating_completed";
-      const sessionId = entry.sessionId || (typeof entry.payload.sessionId === "string" ? entry.payload.sessionId : void 0);
-      const providerType = entry.providerType || (typeof entry.payload.providerType === "string" ? entry.payload.providerType : void 0);
-      const nodeId = entry.nodeId || (typeof entry.payload.nodeId === "string" ? entry.payload.nodeId : void 0);
-      const metadataEvent = {
-        taskId,
-        ...sessionId ? { sessionId } : {},
-        ...providerType ? { providerType } : {},
-        // Fingerprint parity with the drain: a weak original was stamped
-        // evidenceLevel='insufficient'; a bare record reads as genuine. Sourced
-        // from the projected `weak` (Stage 5a-1) — NOT recomputed from
-        // evidenceLevel, which is not projected and would not be equivalent.
-        ...entry.payload.weak === true ? { evidenceLevel: "insufficient" } : {},
-        source: "seqscribe_redelivery",
-        redriveRedelivery: true
-      };
-      return {
-        event,
-        meshId,
-        nodeId: nodeId || void 0,
-        metadataEvent,
-        queuedAt: Date.now()
-      };
-    }
-    function consumeRedriveEntry(meshId, entry) {
-      const s2 = stateFor(meshId);
-      const injection = buildRedriveInjection(meshId, entry);
-      if (!injection) {
-        s2.skipped++;
-        return "skipped";
-      }
-      let queued = false;
-      try {
-        queued = queuePendingMeshCoordinatorEvent(injection);
-      } catch (error48) {
-        s2.consecutiveFailures++;
-        s2.lastFailureAt = Date.now();
-        throw error48 instanceof Error ? error48 : new Error(String(error48));
-      }
-      if (!queued) {
-        s2.consecutiveFailures++;
-        s2.lastFailureAt = Date.now();
-        throw new Error(`pending queue rejected redrive injection for task ${injection.metadataEvent.taskId}`);
-      }
-      s2.consecutiveFailures = 0;
-      s2.injected++;
-      LOG.debug(
-        "MeshRedrive",
-        `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} \u2014 dedup collapses it onto the original if already delivered`
-      );
-      return "injected";
-    }
-    function __resetTerminalRedriveForTests() {
-      state.clear();
-    }
+    init_mesh_terminal_redrive();
     init_transcript_publisher();
     init_dist();
     init_logger();
@@ -161676,6 +161714,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     init_mesh_read_readiness();
     init_mesh_read_model_consumers();
     init_mesh_event_projection();
+    init_mesh_terminal_redrive();
     init_mesh_parity();
     init_transcript_publisher();
     init_topics2();
