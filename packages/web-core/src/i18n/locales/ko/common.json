@@ -588,15 +588,6 @@
             "reject": "거절",
             "waitingFor": "{{duration}} 대기 중"
         },
-        "chat": {
-            "loading": "불러오는 중…",
-            "empty": "메시지가 없습니다."
-        },
-        "coordinatorBadge": {
-            "daemon": "데몬: {{id}}",
-            "run": "실행: {{id}}",
-            "session": "세션: {{id}}"
-        },
         "difficulty": {
             "intro": "각 태스크 난이도를 브레인에 매핑하세요. 코디네이터가 태스크의 난이도를 분류하며, 쉬운 작업은 저노력의 저렴한 모델에서, 어려운 작업은 고노력의 강력한 모델에서 실행됩니다. 필드를 비워 두면 라우팅된 기본값을 유지합니다.",
             "connectPrompt": "브레인 프리셋을 편집하려면 코디네이터 데몬에 연결하세요.",
@@ -1002,53 +993,6 @@
             "failedTasks": "실패한 작업",
             "staleWork": "지연된 작업",
             "sessions": "세션"
-        },
-        "tasksView": {
-            "runningTitle": "지금 실행 중",
-            "attentionTitle": "확인 필요",
-            "adhocTitle": "미션 없는 태스크",
-            "readOnly": "읽기 전용",
-            "showGraph": "의존성 그래프 보기",
-            "hideGraph": "의존성 그래프 닫기",
-            "progress": "{{done}}/{{total}} 완료",
-            "chipRunning_one": "{{count}}개 실행 중",
-            "chipRunning_other": "{{count}}개 실행 중",
-            "chipQueued_one": "{{count}}개 대기",
-            "chipQueued_other": "{{count}}개 대기",
-            "chipFailed_one": "{{count}}개 실패",
-            "chipFailed_other": "{{count}}개 실패",
-            "chipDone_one": "{{count}}개 완료",
-            "chipDone_other": "{{count}}개 완료",
-            "chipBlocked_one": "{{count}}개 차단됨",
-            "chipBlocked_other": "{{count}}개 차단됨",
-            "status": {
-                "running": "실행 중",
-                "queued": "대기",
-                "done": "완료",
-                "failed": "실패",
-                "cancelled": "취소됨",
-                "blocked": "차단됨"
-            },
-            "missionStatus": {
-                "active": "진행 중",
-                "paused": "일시정지",
-                "completed": "완료",
-                "abandoned": "중단"
-            },
-            "actionRequeue": "재큐",
-            "actionCancel": "태스크 취소",
-            "actionConfirm": "한 번 더 클릭하면 실행",
-            "actionViewNode": "노드 보기",
-            "actionFailed": "큐 작업이 실패했습니다",
-            "showGoal": "미션 목표 보기",
-            "hideGoal": "미션 목표 접기",
-            "routingRan": "실행",
-            "routingFrom": "출처",
-            "routingWhy": "라우팅 이유",
-            "routingFitness": "적합도",
-            "routingReason": "사유",
-            "routingLosers": "슬롯 경쟁 탈락 {{count}}건",
-            "routingSkipped": "건너뛴 노드 {{count}}개"
         },
         "blueprint": {
             "liveQueue": "라이브 큐",
@@ -2128,44 +2072,6 @@
             "apiReference": "API 레퍼런스 →",
             "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되었습니다. docs/FROZEN_SURFACES.md 참고"
         },
-        "auditLogs": {
-            "title": "Audit Logs",
-            "subtitle": "보안 이벤트 및 API 기록",
-            "refresh": "새로고침",
-            "filterPlaceholder": "작업, 리소스 또는 소스로 필터...",
-            "loading": "불러오는 중...",
-            "noLogs": "로그 없음",
-            "noMatchingLogs": "일치하는 로그가 없습니다.",
-            "logsWillAppear": "작업이 발생하면 여기에 표시됩니다.",
-            "colAction": "작업",
-            "colResource": "리소스",
-            "colSource": "소스",
-            "colTime": "시간",
-            "logCount": "로그 {{count}}개",
-            "logCountFiltered": " ({{total}}개에서 필터됨)"
-        },
-        "inviteModal": {
-            "title": "팀원 초대",
-            "subtitle": "이메일로 초대 링크를 보내세요",
-            "manageSeats": "→ 결제에서 시트 관리",
-            "emailLabel": "이메일 주소",
-            "emailPlaceholder": "colleague@company.com",
-            "roleLabel": "역할",
-            "roleViewer": "뷰어",
-            "roleMember": "멤버",
-            "roleAdmin": "관리자",
-            "roleViewerDesc": "대시보드 및 채팅 기록을 볼 수 있습니다",
-            "roleMemberDesc": "에이전트를 제어하고 명령을 보낼 수 있습니다",
-            "roleAdminDesc": "멤버 및 설정을 관리할 수 있습니다",
-            "cancel": "취소",
-            "sending": "전송 중...",
-            "sendInvite": "초대 보내기",
-            "inviteSent": "초대를 보냈습니다!",
-            "shareWith": "이 링크를 공유하세요",
-            "copied": "복사됨!",
-            "copy": "복사",
-            "done": "완료"
-        },
         "shareModal": {
             "title": "세션 공유",
             "chatLabel": "채팅",
@@ -2476,9 +2382,6 @@
             "eyebrow": "시스템 공지",
             "visibleUntil": "{{time}}까지 표시",
             "dismiss": "닫기"
-        },
-        "upgradeBanner": {
-            "button": "업그레이드 →"
         },
         "push": {
             "title": "푸시 알림",
@@ -2919,52 +2822,6 @@
             "selectedWorkspace": "선택된 워크스페이스",
             "noWorkspaceSelected": "워크스페이스가 선택되지 않았습니다. 홈 디렉토리에서 실행됩니다."
         },
-        "agentTab": {
-            "selectToLaunch": "{{label}} 실행 선택",
-            "launchSettings": "실행 설정",
-            "noIdesDetected": "감지된 IDE가 없습니다.",
-            "scanSystem": "시스템 검사",
-            "noProviders": "사용 가능한 {{category}} 프로바이더가 없습니다.",
-            "noProvidersHint": "바이너리가 기본 위치 외에 설치된 경우 프로바이더에서 실행 파일 경로를 직접 지정하세요.",
-            "targetModel": "대상 모델",
-            "leaveEmptyDefault": "기본값은 비워두세요",
-            "startupArguments": "시작 인수",
-            "optionalFlags": "선택적 플래그...",
-            "openSession": "세션 열기",
-            "starting": "시작 중...",
-            "configure": "설정",
-            "select": "선택",
-            "launching": "실행 중...",
-            "launchBtn": "▶ 실행",
-            "running": "실행 중 ({{count}})",
-            "noRunning": "실행 중인 {{plural}} 없음",
-            "launchingProcess": "프로세스 실행 중...",
-            "waitingProcess": "프로세스 및 세션 등록을 기다리는 중...",
-            "startingBadge": "시작 중",
-            "chatView": "채팅 보기",
-            "terminalView": "터미널 보기",
-            "localTerminal": "로컬 터미널:",
-            "copied": "복사됨",
-            "copy": "복사",
-            "openRemoteControl": "원격 제어 열기",
-            "restart": "재시작",
-            "viewChat": "채팅 보기",
-            "openInDashboard": "현재 화면을 대시보드에서 열기",
-            "stop": "중지",
-            "extensions": "익스텐션",
-            "browseFolderTitle": "워크스페이스 선택",
-            "browseFolderDesc": "일반 탐색기 방식으로 폴더를 선택한 후 실행 대상으로 사용하세요.",
-            "browseFolderConfirm": "이 폴더 사용",
-            "detailMode": "모드",
-            "detailProvider": "프로바이더",
-            "detailResume": "이어하기",
-            "detailArguments": "인수",
-            "detailModel": "모델",
-            "categoryIde": "IDE",
-            "categoryCliPlural": "CLI",
-            "categoryAcp": "ACP 에이전트",
-            "categoryAcpPlural": "ACP 에이전트"
-        },
         "providers": {
             "filter": "필터",
             "sourceConfigTitle": "프로바이더 소스 설정",
@@ -3034,30 +2891,6 @@
             "specPinRollback": "되돌리기",
             "specPinRollbackHint": "스펙 {{version}} 으로 되돌립니다(로컬, 다운로드 없음).",
             "specPinRollingBack": "되돌리는 중…"
-        },
-        "providerFix": {
-            "aiAgent": "AI 에이전트",
-            "scriptsToFix": "수정할 스크립트",
-            "all": "전체",
-            "none": "없음",
-            "additionalInstructions": "추가 지침",
-            "optional": "(선택 사항)",
-            "agentOutput": "에이전트 출력",
-            "running": "● 실행 중...",
-            "agentGenerating": "에이전트가 응답을 생성하는 중...",
-            "validateHint": "`adhdev provider verify`를 실행하여 검증하세요",
-            "cancel": "취소",
-            "startFix": "수정 시작",
-            "cancelRunning": "⬛ 취소",
-            "back": "← 뒤로",
-            "close": "닫기",
-            "footerHint": "AI 에이전트가 프로바이더 스크립트를 구현합니다",
-            "scriptsSelected_one": "스크립트 {{count}}개 선택됨",
-            "scriptsSelected_other": "스크립트 {{count}}개 선택됨",
-            "titlePrefix": "자동 수정: {{name}}",
-            "descCodex": "OpenAI o3/gpt-5.4",
-            "descClaude": "Anthropic Claude",
-            "descGemini": "Google Gemini"
         },
         "providerClone": {
             "title": "✨ 사용자 프로바이더 생성",
@@ -3714,11 +3547,6 @@
         "statusDialog": {
             "conflicts": "충돌 있음",
             "clean": "변경 없음"
-        }
-    },
-    "ide": {
-        "header": {
-            "back": "뒤로"
         }
     },
     "notifications": {

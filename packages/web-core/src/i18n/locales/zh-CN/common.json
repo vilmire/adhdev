@@ -588,15 +588,6 @@
             "reject": "拒绝",
             "waitingFor": "已等待 {{duration}}"
         },
-        "chat": {
-            "loading": "正在加载…",
-            "empty": "没有消息。"
-        },
-        "coordinatorBadge": {
-            "daemon": "daemon: {{id}}",
-            "run": "run: {{id}}",
-            "session": "session: {{id}}"
-        },
         "difficulty": {
             "intro": "将每种任务难度映射到一个 brain。协调器会对任务难度进行分类；简单的工作随后在更便宜的模型上以低 effort 运行，困难的工作在更强的模型上以高 effort 运行。将字段留空以保留路由的默认值。",
             "connectPrompt": "连接到协调器守护进程以编辑 brain 预设。",
@@ -1002,53 +993,6 @@
             "failedTasks": "失败的任务",
             "staleWork": "陈旧工作",
             "sessions": "会话"
-        },
-        "tasksView": {
-            "runningTitle": "正在运行",
-            "attentionTitle": "需要关注",
-            "adhocTitle": "无任务组的任务",
-            "readOnly": "只读",
-            "showGraph": "显示依赖图",
-            "hideGraph": "隐藏依赖图",
-            "progress": "{{done}}/{{total}} 已完成",
-            "chipRunning_one": "{{count}} 个运行中",
-            "chipRunning_other": "{{count}} 个运行中",
-            "chipQueued_one": "{{count}} 个排队中",
-            "chipQueued_other": "{{count}} 个排队中",
-            "chipFailed_one": "{{count}} 个失败",
-            "chipFailed_other": "{{count}} 个失败",
-            "chipDone_one": "{{count}} 个已完成",
-            "chipDone_other": "{{count}} 个已完成",
-            "chipBlocked_one": "{{count}} 个被阻塞",
-            "chipBlocked_other": "{{count}} 个被阻塞",
-            "status": {
-                "running": "运行中",
-                "queued": "排队中",
-                "done": "已完成",
-                "failed": "失败",
-                "cancelled": "已取消",
-                "blocked": "被阻塞"
-            },
-            "missionStatus": {
-                "active": "进行中",
-                "paused": "已暂停",
-                "completed": "已完成",
-                "abandoned": "已放弃"
-            },
-            "actionRequeue": "重新排队",
-            "actionCancel": "取消任务",
-            "actionConfirm": "再次点击确认",
-            "actionViewNode": "查看节点",
-            "actionFailed": "队列操作失败",
-            "showGoal": "查看任务组目标",
-            "hideGoal": "收起任务组目标",
-            "routingRan": "运行于",
-            "routingFrom": "来源",
-            "routingWhy": "路由原因",
-            "routingFitness": "适配度",
-            "routingReason": "原因",
-            "routingLosers": "{{count}} 个槽位候选未被选中",
-            "routingSkipped": "跳过 {{count}} 个节点"
         },
         "blueprint": {
             "liveQueue": "实时队列",
@@ -2128,44 +2072,6 @@
             "apiReference": "API 参考 →",
             "frozenFeatureTitle": "已冻结 — 此功能已暂停。请参阅 docs/FROZEN_SURFACES.md"
         },
-        "auditLogs": {
-            "title": "Audit Logs",
-            "subtitle": "安全事件与 API 历史",
-            "refresh": "刷新",
-            "filterPlaceholder": "按操作、资源或来源筛选...",
-            "loading": "加载中...",
-            "noLogs": "暂无日志",
-            "noMatchingLogs": "未找到匹配的日志。",
-            "logsWillAppear": "操作发生时将在此处显示。",
-            "colAction": "操作",
-            "colResource": "资源",
-            "colSource": "来源",
-            "colTime": "时间",
-            "logCount": "{{count}} 条日志",
-            "logCountFiltered": "（从 {{total}} 条中筛选）"
-        },
-        "inviteModal": {
-            "title": "邀请团队成员",
-            "subtitle": "通过电子邮件发送邀请链接",
-            "manageSeats": "→ 在 Billing 中管理席位",
-            "emailLabel": "电子邮件地址",
-            "emailPlaceholder": "colleague@company.com",
-            "roleLabel": "角色",
-            "roleViewer": "查看者",
-            "roleMember": "成员",
-            "roleAdmin": "管理员",
-            "roleViewerDesc": "可查看仪表盘和聊天记录",
-            "roleMemberDesc": "可控制智能体并发送命令",
-            "roleAdminDesc": "可管理成员和设置",
-            "cancel": "取消",
-            "sending": "发送中...",
-            "sendInvite": "发送邀请",
-            "inviteSent": "邀请已发送！",
-            "shareWith": "将此链接分享给",
-            "copied": "已复制！",
-            "copy": "复制",
-            "done": "完成"
-        },
         "shareModal": {
             "title": "分享会话",
             "chatLabel": "聊天",
@@ -2476,9 +2382,6 @@
             "eyebrow": "系统通知",
             "visibleUntil": "显示至 {{time}}",
             "dismiss": "关闭"
-        },
-        "upgradeBanner": {
-            "button": "升级 →"
         },
         "push": {
             "title": "推送通知",
@@ -2919,52 +2822,6 @@
             "selectedWorkspace": "已选工作区",
             "noWorkspaceSelected": "未选择工作区。将在主目录中启动。"
         },
-        "agentTab": {
-            "selectToLaunch": "选择要启动的 {{label}}",
-            "launchSettings": "启动设置",
-            "noIdesDetected": "未检测到 IDE。",
-            "scanSystem": "扫描系统",
-            "noProviders": "没有可用的 {{category}} 提供程序。",
-            "noProvidersHint": "如果二进制文件安装在默认位置之外，请在 Providers 中设置自定义可执行路径。",
-            "targetModel": "目标模型",
-            "leaveEmptyDefault": "留空则使用默认值",
-            "startupArguments": "启动参数",
-            "optionalFlags": "可选标志...",
-            "openSession": "打开会话",
-            "starting": "启动中...",
-            "configure": "配置",
-            "select": "选择",
-            "launching": "启动中...",
-            "launchBtn": "▶ 启动",
-            "running": "运行中 ({{count}})",
-            "noRunning": "没有正在运行的 {{plural}}",
-            "launchingProcess": "正在启动进程...",
-            "waitingProcess": "正在等待进程和会话注册...",
-            "startingBadge": "启动中",
-            "chatView": "聊天视图",
-            "terminalView": "终端视图",
-            "localTerminal": "本地终端：",
-            "copied": "已复制",
-            "copy": "复制",
-            "openRemoteControl": "打开远程控制",
-            "restart": "重启",
-            "viewChat": "查看聊天",
-            "openInDashboard": "在仪表板中打开当前视图",
-            "stop": "停止",
-            "extensions": "扩展",
-            "browseFolderTitle": "选择工作区",
-            "browseFolderDesc": "在常规的资源管理器式对话框中选择一个文件夹，然后将其用作启动目标。",
-            "browseFolderConfirm": "使用此文件夹",
-            "detailMode": "模式",
-            "detailProvider": "提供程序",
-            "detailResume": "恢复",
-            "detailArguments": "参数",
-            "detailModel": "模型",
-            "categoryIde": "IDE",
-            "categoryCliPlural": "CLI",
-            "categoryAcp": "ACP 代理",
-            "categoryAcpPlural": "ACP 代理"
-        },
         "providers": {
             "filter": "筛选",
             "sourceConfigTitle": "提供程序来源配置",
@@ -3034,30 +2891,6 @@
             "specPinRollback": "回滚",
             "specPinRollbackHint": "恢复到规格 {{version}}（本地，无需下载）。",
             "specPinRollingBack": "回滚中…"
-        },
-        "providerFix": {
-            "aiAgent": "AI 代理",
-            "scriptsToFix": "要修复的脚本",
-            "all": "全部",
-            "none": "无",
-            "additionalInstructions": "附加说明",
-            "optional": "（可选）",
-            "agentOutput": "代理输出",
-            "running": "● 运行中...",
-            "agentGenerating": "代理正在生成...",
-            "validateHint": "运行 `adhdev provider verify` 进行验证",
-            "cancel": "取消",
-            "startFix": "开始修复",
-            "cancelRunning": "⬛ 取消",
-            "back": "← 返回",
-            "close": "关闭",
-            "footerHint": "AI 代理将实现提供程序脚本",
-            "scriptsSelected_one": "已选择 {{count}} 个脚本",
-            "scriptsSelected_other": "已选择 {{count}} 个脚本",
-            "titlePrefix": "自动修复：{{name}}",
-            "descCodex": "OpenAI o3/gpt-5.4",
-            "descClaude": "Anthropic Claude",
-            "descGemini": "Google Gemini"
         },
         "providerClone": {
             "title": "✨ 创建用户提供程序",
@@ -3714,11 +3547,6 @@
         "statusDialog": {
             "conflicts": "冲突",
             "clean": "干净"
-        }
-    },
-    "ide": {
-        "header": {
-            "back": "返回"
         }
     },
     "notifications": {

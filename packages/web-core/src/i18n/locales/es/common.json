@@ -588,15 +588,6 @@
             "reject": "Rechazar",
             "waitingFor": "Esperando {{duration}}"
         },
-        "chat": {
-            "loading": "Cargando…",
-            "empty": "No hay mensajes."
-        },
-        "coordinatorBadge": {
-            "daemon": "daemon: {{id}}",
-            "run": "run: {{id}}",
-            "session": "session: {{id}}"
-        },
         "difficulty": {
             "intro": "Asigna cada dificultad de tarea a un brain. El coordinador clasifica la dificultad de una tarea; el trabajo fácil se ejecuta entonces en un modelo más económico con effort bajo, y el trabajo difícil en un modelo más potente con effort alto. Deja un campo en blanco para conservar el valor predeterminado del enrutamiento.",
             "connectPrompt": "Conéctate a un daemon coordinador para editar los presets de brain.",
@@ -1007,53 +998,6 @@
             "failedTasks": "Tareas fallidas",
             "staleWork": "Trabajo obsoleto",
             "sessions": "Sesiones"
-        },
-        "tasksView": {
-            "runningTitle": "En ejecución",
-            "attentionTitle": "Requiere atención",
-            "adhocTitle": "Tareas sin misión",
-            "readOnly": "solo lectura",
-            "showGraph": "Mostrar grafo de dependencias",
-            "hideGraph": "Ocultar grafo de dependencias",
-            "progress": "{{done}}/{{total}} completadas",
-            "chipRunning_one": "{{count}} en ejecución",
-            "chipRunning_other": "{{count}} en ejecución",
-            "chipQueued_one": "{{count}} en cola",
-            "chipQueued_other": "{{count}} en cola",
-            "chipFailed_one": "{{count}} fallida",
-            "chipFailed_other": "{{count}} fallidas",
-            "chipDone_one": "{{count}} completada",
-            "chipDone_other": "{{count}} completadas",
-            "chipBlocked_one": "{{count}} bloqueada",
-            "chipBlocked_other": "{{count}} bloqueadas",
-            "status": {
-                "running": "en ejecución",
-                "queued": "en cola",
-                "done": "completada",
-                "failed": "fallida",
-                "cancelled": "cancelada",
-                "blocked": "bloqueada"
-            },
-            "missionStatus": {
-                "active": "activa",
-                "paused": "pausada",
-                "completed": "completada",
-                "abandoned": "abandonada"
-            },
-            "actionRequeue": "Reencolar",
-            "actionCancel": "Cancelar tarea",
-            "actionConfirm": "Haz clic de nuevo para confirmar",
-            "actionViewNode": "Ver nodo",
-            "actionFailed": "La acción de cola falló",
-            "showGoal": "Ver objetivo de la misión",
-            "hideGoal": "Ocultar objetivo de la misión",
-            "routingRan": "ejecutado en",
-            "routingFrom": "desde",
-            "routingWhy": "Por qué esta ruta",
-            "routingFitness": "Idoneidad",
-            "routingReason": "Motivo",
-            "routingLosers": "{{count}} candidato(s) de slot descartado(s)",
-            "routingSkipped": "{{count}} nodo(s) omitido(s)"
         },
         "blueprint": {
             "liveQueue": "Cola en vivo",
@@ -2133,44 +2077,6 @@
             "apiReference": "Referencia de API →",
             "frozenFeatureTitle": "Congelado — esta función está en pausa. Consulta docs/FROZEN_SURFACES.md"
         },
-        "auditLogs": {
-            "title": "Audit Logs",
-            "subtitle": "Eventos de seguridad e historial de API",
-            "refresh": "Actualizar",
-            "filterPlaceholder": "Filtrar por acción, recurso u origen...",
-            "loading": "Cargando...",
-            "noLogs": "Sin registros",
-            "noMatchingLogs": "No se encontraron registros coincidentes.",
-            "logsWillAppear": "Las acciones aparecerán aquí a medida que ocurran.",
-            "colAction": "Acción",
-            "colResource": "Recurso",
-            "colSource": "Origen",
-            "colTime": "Hora",
-            "logCount": "{{count}} registros",
-            "logCountFiltered": " (filtrado de {{total}})"
-        },
-        "inviteModal": {
-            "title": "Invitar a un miembro del equipo",
-            "subtitle": "Envía un enlace de invitación por correo electrónico",
-            "manageSeats": "→ Gestionar asientos en Billing",
-            "emailLabel": "Dirección de correo electrónico",
-            "emailPlaceholder": "colleague@company.com",
-            "roleLabel": "Rol",
-            "roleViewer": "Espectador",
-            "roleMember": "Miembro",
-            "roleAdmin": "Administrador",
-            "roleViewerDesc": "Puede ver paneles e historial de chat",
-            "roleMemberDesc": "Puede controlar agentes y enviar comandos",
-            "roleAdminDesc": "Puede gestionar miembros y configuración",
-            "cancel": "Cancelar",
-            "sending": "Enviando...",
-            "sendInvite": "Enviar invitación",
-            "inviteSent": "¡Invitación enviada!",
-            "shareWith": "Comparte este enlace con",
-            "copied": "¡Copiado!",
-            "copy": "Copiar",
-            "done": "Listo"
-        },
         "shareModal": {
             "title": "Compartir sesión",
             "chatLabel": "Chat",
@@ -2481,9 +2387,6 @@
             "eyebrow": "Aviso del sistema",
             "visibleUntil": "Visible hasta {{time}}",
             "dismiss": "Descartar"
-        },
-        "upgradeBanner": {
-            "button": "Mejorar →"
         },
         "push": {
             "title": "Notificaciones push",
@@ -2924,52 +2827,6 @@
             "selectedWorkspace": "Espacio de trabajo seleccionado",
             "noWorkspaceSelected": "No hay espacio de trabajo seleccionado. Esto se inicia en el directorio home."
         },
-        "agentTab": {
-            "selectToLaunch": "Selecciona {{label}} para iniciar",
-            "launchSettings": "Configuración de inicio",
-            "noIdesDetected": "No se detectaron IDE.",
-            "scanSystem": "Escanear sistema",
-            "noProviders": "No hay proveedores de {{category}} disponibles.",
-            "noProvidersHint": "Configura una ruta de ejecutable personalizada en Providers si el binario está instalado fuera de la ubicación predeterminada.",
-            "targetModel": "Modelo objetivo",
-            "leaveEmptyDefault": "Dejar vacío para usar el valor predeterminado",
-            "startupArguments": "Argumentos de inicio",
-            "optionalFlags": "Flags opcionales...",
-            "openSession": "Abrir sesión",
-            "starting": "Iniciando...",
-            "configure": "Configurar",
-            "select": "Seleccionar",
-            "launching": "Lanzando...",
-            "launchBtn": "▶ Lanzar",
-            "running": "En ejecución ({{count}})",
-            "noRunning": "No hay {{plural}} en ejecución",
-            "launchingProcess": "Lanzando proceso...",
-            "waitingProcess": "Esperando a que se registren el proceso y la sesión...",
-            "startingBadge": "iniciando",
-            "chatView": "Vista de chat",
-            "terminalView": "Vista de terminal",
-            "localTerminal": "Terminal local:",
-            "copied": "Copiado",
-            "copy": "Copiar",
-            "openRemoteControl": "Abrir control remoto",
-            "restart": "Reiniciar",
-            "viewChat": "Ver chat",
-            "openInDashboard": "Abrir la vista actual en el panel",
-            "stop": "Detener",
-            "extensions": "Extensiones",
-            "browseFolderTitle": "Seleccionar espacio de trabajo",
-            "browseFolderDesc": "Elige una carpeta en un cuadro de diálogo estilo explorador habitual y úsala como destino de lanzamiento.",
-            "browseFolderConfirm": "Usar esta carpeta",
-            "detailMode": "Modo",
-            "detailProvider": "Proveedor",
-            "detailResume": "Reanudar",
-            "detailArguments": "Argumentos",
-            "detailModel": "Modelo",
-            "categoryIde": "IDE",
-            "categoryCliPlural": "CLIs",
-            "categoryAcp": "Agente ACP",
-            "categoryAcpPlural": "Agentes ACP"
-        },
         "providers": {
             "filter": "Filtrar",
             "sourceConfigTitle": "Configuración de origen de proveedores",
@@ -3039,30 +2896,6 @@
             "specPinRollback": "Revertir",
             "specPinRollbackHint": "Volver a la spec {{version}} (local, sin descarga).",
             "specPinRollingBack": "Revirtiendo…"
-        },
-        "providerFix": {
-            "aiAgent": "Agente de IA",
-            "scriptsToFix": "Scripts a corregir",
-            "all": "Todos",
-            "none": "Ninguno",
-            "additionalInstructions": "Instrucciones adicionales",
-            "optional": "(opcional)",
-            "agentOutput": "Salida del agente",
-            "running": "● En ejecución...",
-            "agentGenerating": "El agente está generando...",
-            "validateHint": "Ejecuta `adhdev provider verify` para validar",
-            "cancel": "Cancelar",
-            "startFix": "Iniciar corrección",
-            "cancelRunning": "⬛ Cancelar",
-            "back": "← Atrás",
-            "close": "Cerrar",
-            "footerHint": "El agente de IA implementará los scripts del proveedor",
-            "scriptsSelected_one": "{{count}} script seleccionado",
-            "scriptsSelected_other": "{{count}} scripts seleccionados",
-            "titlePrefix": "Corrección automática: {{name}}",
-            "descCodex": "OpenAI o3/gpt-5.4",
-            "descClaude": "Anthropic Claude",
-            "descGemini": "Google Gemini"
         },
         "providerClone": {
             "title": "✨ Crear proveedor de usuario",
@@ -3719,11 +3552,6 @@
         "statusDialog": {
             "conflicts": "conflictos",
             "clean": "limpio"
-        }
-    },
-    "ide": {
-        "header": {
-            "back": "Atrás"
         }
     },
     "notifications": {

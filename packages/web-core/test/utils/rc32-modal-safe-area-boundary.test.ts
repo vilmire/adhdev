@@ -30,27 +30,15 @@ describe('RC32 modal safe-area hardening (audited peers)', () => {
     expect(source).toContain('aria-label="Close"')
   })
 
-  it('ProviderFixModal / ProviderCloneModal use the modal z-token and a usable close target', () => {
-    const fixSource = readSource('pages/machine/ProviderFixModal.tsx')
+  it('ProviderCloneModal uses the modal z-token and a usable close target', () => {
     const cloneSource = readSource('pages/machine/ProviderCloneModal.tsx')
 
-    for (const source of [fixSource, cloneSource]) {
-      expect(source).toContain('z-[var(--z-modal)]')
-      expect(source).not.toContain('z-50')
-      expect(source).toContain('aria-label="Close"')
-      expect(source).toContain('h-11 w-11')
-    }
+    expect(cloneSource).toContain('z-[var(--z-modal)]')
+    expect(cloneSource).not.toContain('z-50')
+    expect(cloneSource).toContain('aria-label="Close"')
+    expect(cloneSource).toContain('h-11 w-11')
     // Clone modal previously had NO header close button at all.
     expect(cloneSource).toContain('flex items-start justify-between gap-3')
-  })
-
-  it('DashboardMobileSessionHostSheet sizes against dvh and clears the safe-area top', () => {
-    const source = readSource('components/dashboard/DashboardMobileSessionHostSheet.tsx')
-
-    expect(source).toContain('max-h-[88dvh]')
-    expect(source).toContain('max-h-[calc(88dvh-122px)]')
-    expect(source).not.toContain('88vh')
-    expect(source).toContain('pt-[env(safe-area-inset-top,0px)]')
   })
 
   it('LaunchPickModal dismisses via backdrop click and Escape in addition to Cancel', () => {
