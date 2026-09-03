@@ -42950,13 +42950,13 @@ var require_dist3 = __commonJS({
       const cleanedMarkers = Object.fromEntries(
         Object.entries(sessionReadMarkers).filter(([, v]) => typeof v === "string")
       );
-      const state = {
+      const state2 = {
         recentActivity,
         savedProviderSessions,
         sessionReads: mergedReads,
         sessionReadMarkers: cleanedMarkers
       };
-      (0, import_fs3.writeFileSync)(statePath, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 384 });
+      (0, import_fs3.writeFileSync)(statePath, JSON.stringify(state2, null, 2), { encoding: "utf-8", mode: 384 });
     }
     function loadConfig() {
       const configPath = getConfigPath();
@@ -46208,8 +46208,8 @@ child.on('exit', () => process.exit(0));
       notifyQuotaCacheChanged();
     }
     function cancelFailureRetry(provider) {
-      const state = failureRetries.get(provider);
-      if (state?.timer) clearTimeout(state.timer);
+      const state2 = failureRetries.get(provider);
+      if (state2?.timer) clearTimeout(state2.timer);
       failureRetries.delete(provider);
     }
     function isFailureRetryDue(provider, now = Date.now()) {
@@ -46254,8 +46254,8 @@ child.on('exit', () => process.exit(0));
       );
       const delayMs = Math.max(retryAtMs - Date.now(), backoffMs, 0);
       const timer = setTimeout(() => {
-        const state = failureRetries.get(provider);
-        if (state) state.timer = null;
+        const state2 = failureRetries.get(provider);
+        if (state2) state2.timer = null;
         if (isEnabled && !isEnabled(provider)) return;
         void refreshQuotaCacheOnce([{ provider, fetch: fetch2 }], isEnabled).catch((e) => LOG.warn("Quota", `${provider}: scheduled retry failed: ${e?.message || e}`));
       }, delayMs);
@@ -48865,7 +48865,7 @@ ${error48.message || ""}`;
       }
       return buildRecentActivityKey(entry);
     }
-    function appendRecentActivity(state, entry) {
+    function appendRecentActivity(state2, entry) {
       const nextEntry = {
         ...entry,
         workspace: entry.workspace ? normalizeWorkspace(entry.workspace) : void 0,
@@ -48875,14 +48875,14 @@ ${error48.message || ""}`;
         id: buildRecentActivityKeyForEntry(entry),
         lastUsedAt: entry.lastUsedAt || Date.now()
       };
-      const filtered = (state.recentActivity || []).filter((item) => item.id !== nextEntry.id);
+      const filtered = (state2.recentActivity || []).filter((item) => item.id !== nextEntry.id);
       return {
-        ...state,
+        ...state2,
         recentActivity: [nextEntry, ...filtered].slice(0, MAX_ACTIVITY)
       };
     }
-    function getRecentActivity(state, limit = 20) {
-      return [...state.recentActivity || []].map((entry) => ({
+    function getRecentActivity(state2, limit = 20) {
+      return [...state2.recentActivity || []].map((entry) => ({
         ...entry,
         summaryMetadata: normalizePersistedSummaryMetadata({
           summaryMetadata: entry.summaryMetadata
@@ -48894,62 +48894,62 @@ ${error48.message || ""}`;
       if (normalizedProviderSessionId) return `provider:${normalizedProviderSessionId}`;
       return sessionId;
     }
-    function getSessionSeenAt(state, sessionId, providerSessionId) {
+    function getSessionSeenAt(state2, sessionId, providerSessionId) {
       const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
-      return Math.max(state.sessionReads?.[providerKey] || 0, state.sessionReads?.[sessionId] || 0);
+      return Math.max(state2.sessionReads?.[providerKey] || 0, state2.sessionReads?.[sessionId] || 0);
     }
-    function getSessionSeenMarker(state, sessionId, providerSessionId) {
+    function getSessionSeenMarker(state2, sessionId, providerSessionId) {
       const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
-      const providerSeenAt = state.sessionReads?.[providerKey] || 0;
-      const sessionSeenAt = state.sessionReads?.[sessionId] || 0;
-      const providerMarker = state.sessionReadMarkers?.[providerKey] || "";
-      const sessionMarker = state.sessionReadMarkers?.[sessionId] || "";
+      const providerSeenAt = state2.sessionReads?.[providerKey] || 0;
+      const sessionSeenAt = state2.sessionReads?.[sessionId] || 0;
+      const providerMarker = state2.sessionReadMarkers?.[providerKey] || "";
+      const sessionMarker = state2.sessionReadMarkers?.[sessionId] || "";
       if (sessionSeenAt > providerSeenAt && sessionMarker) return sessionMarker;
       if (providerSeenAt > sessionSeenAt && providerMarker) return providerMarker;
       return providerMarker || sessionMarker;
     }
-    function getSessionNotificationDismissal(state, sessionId, providerSessionId) {
+    function getSessionNotificationDismissal(state2, sessionId, providerSessionId) {
       const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
-      return state.sessionNotificationDismissals?.[providerKey] || state.sessionNotificationDismissals?.[sessionId] || "";
+      return state2.sessionNotificationDismissals?.[providerKey] || state2.sessionNotificationDismissals?.[sessionId] || "";
     }
-    function getSessionNotificationUnreadOverride(state, sessionId, providerSessionId) {
+    function getSessionNotificationUnreadOverride(state2, sessionId, providerSessionId) {
       const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
-      return state.sessionNotificationUnreadOverrides?.[providerKey] || state.sessionNotificationUnreadOverrides?.[sessionId] || "";
+      return state2.sessionNotificationUnreadOverrides?.[providerKey] || state2.sessionNotificationUnreadOverrides?.[sessionId] || "";
     }
-    function dismissSessionNotification(state, sessionId, notificationId, providerSessionId) {
+    function dismissSessionNotification(state2, sessionId, notificationId, providerSessionId) {
       const dismissalId = String(notificationId || "").trim();
-      if (!dismissalId) return state;
+      if (!dismissalId) return state2;
       const dismissalKeys = Array.from(new Set([
         sessionId,
         buildSessionReadStateKey(sessionId, providerSessionId)
       ].filter(Boolean)));
-      const nextSessionNotificationDismissals = { ...state.sessionNotificationDismissals || {} };
-      const nextSessionNotificationUnreadOverrides = { ...state.sessionNotificationUnreadOverrides || {} };
+      const nextSessionNotificationDismissals = { ...state2.sessionNotificationDismissals || {} };
+      const nextSessionNotificationUnreadOverrides = { ...state2.sessionNotificationUnreadOverrides || {} };
       for (const key2 of dismissalKeys) {
         nextSessionNotificationDismissals[key2] = dismissalId;
         delete nextSessionNotificationUnreadOverrides[key2];
       }
       return {
-        ...state,
+        ...state2,
         sessionNotificationDismissals: nextSessionNotificationDismissals,
         sessionNotificationUnreadOverrides: nextSessionNotificationUnreadOverrides
       };
     }
-    function markSessionNotificationUnread(state, sessionId, notificationId, providerSessionId) {
+    function markSessionNotificationUnread(state2, sessionId, notificationId, providerSessionId) {
       const unreadId = String(notificationId || "").trim();
-      if (!unreadId) return state;
+      if (!unreadId) return state2;
       const unreadKeys = Array.from(new Set([
         sessionId,
         buildSessionReadStateKey(sessionId, providerSessionId)
       ].filter(Boolean)));
-      const nextSessionNotificationDismissals = { ...state.sessionNotificationDismissals || {} };
-      const nextSessionNotificationUnreadOverrides = { ...state.sessionNotificationUnreadOverrides || {} };
+      const nextSessionNotificationDismissals = { ...state2.sessionNotificationDismissals || {} };
+      const nextSessionNotificationUnreadOverrides = { ...state2.sessionNotificationUnreadOverrides || {} };
       for (const key2 of unreadKeys) {
         nextSessionNotificationUnreadOverrides[key2] = unreadId;
         delete nextSessionNotificationDismissals[key2];
       }
       return {
-        ...state,
+        ...state2,
         sessionNotificationDismissals: nextSessionNotificationDismissals,
         sessionNotificationUnreadOverrides: nextSessionNotificationUnreadOverrides
       };
@@ -48998,9 +48998,9 @@ ${error48.message || ""}`;
         inboxBucket: "idle"
       };
     }
-    function markSessionSeen(state, sessionId, seenAt = Date.now(), completionMarker, providerSessionId) {
-      const prev = state.sessionReads || {};
-      const prevMarkers = state.sessionReadMarkers || {};
+    function markSessionSeen(state2, sessionId, seenAt = Date.now(), completionMarker, providerSessionId) {
+      const prev = state2.sessionReads || {};
+      const prevMarkers = state2.sessionReadMarkers || {};
       const nextMarker = typeof completionMarker === "string" ? completionMarker : "";
       const readKeys = Array.from(new Set([
         sessionId,
@@ -49008,8 +49008,8 @@ ${error48.message || ""}`;
       ].filter(Boolean)));
       const nextSessionReads = { ...prev };
       const nextSessionReadMarkers = { ...prevMarkers };
-      const nextSessionNotificationDismissals = { ...state.sessionNotificationDismissals || {} };
-      const nextSessionNotificationUnreadOverrides = { ...state.sessionNotificationUnreadOverrides || {} };
+      const nextSessionNotificationDismissals = { ...state2.sessionNotificationDismissals || {} };
+      const nextSessionNotificationUnreadOverrides = { ...state2.sessionNotificationUnreadOverrides || {} };
       for (const key2 of readKeys) {
         nextSessionReads[key2] = Math.max(prev[key2] || 0, seenAt);
         if (nextMarker) nextSessionReadMarkers[key2] = nextMarker;
@@ -49017,7 +49017,7 @@ ${error48.message || ""}`;
         delete nextSessionNotificationUnreadOverrides[key2];
       }
       return {
-        ...state,
+        ...state2,
         sessionReads: nextSessionReads,
         sessionReadMarkers: nextMarker ? nextSessionReadMarkers : prevMarkers,
         sessionNotificationDismissals: nextSessionNotificationDismissals,
@@ -49046,11 +49046,11 @@ ${error48.message || ""}`;
     function buildSavedProviderSessionKey(providerSessionId) {
       return `saved:${providerSessionId.trim()}`;
     }
-    function upsertSavedProviderSession(state, entry) {
+    function upsertSavedProviderSession(state2, entry) {
       const providerSessionId = typeof entry.providerSessionId === "string" ? entry.providerSessionId.trim() : "";
-      if (!providerSessionId) return state;
+      if (!providerSessionId) return state2;
       const id = buildSavedProviderSessionKey(providerSessionId);
-      const existing = (state.savedProviderSessions || []).find((item) => item.id === id);
+      const existing = (state2.savedProviderSessions || []).find((item) => item.id === id);
       const nextEntry = {
         id,
         kind: entry.kind,
@@ -49065,14 +49065,14 @@ ${error48.message || ""}`;
         createdAt: existing?.createdAt || entry.createdAt || Date.now(),
         lastUsedAt: entry.lastUsedAt || Date.now()
       };
-      const filtered = (state.savedProviderSessions || []).filter((item) => item.id !== id);
+      const filtered = (state2.savedProviderSessions || []).filter((item) => item.id !== id);
       return {
-        ...state,
+        ...state2,
         savedProviderSessions: [nextEntry, ...filtered].slice(0, MAX_SAVED_SESSIONS)
       };
     }
-    function getSavedProviderSessions(state, filters) {
-      return [...state.savedProviderSessions || []].filter((entry) => {
+    function getSavedProviderSessions(state2, filters) {
+      return [...state2.savedProviderSessions || []].filter((entry) => {
         if (filters?.providerType && entry.providerType !== filters.providerType) return false;
         if (filters?.kind && entry.kind !== filters.kind) return false;
         return true;
@@ -53890,8 +53890,8 @@ ${lines.join("\n")}
         delete queueEntry.blockedReason;
       }
     }
-    function syncNodeRowState(byId, target, state, patch) {
-      target.state = state;
+    function syncNodeRowState(byId, target, state2, patch) {
+      target.state = state2;
       target.materializationVersion = patch.materializationVersion;
       target.materializedDigest = patch.materializedDigest;
       byId.set(target.nodeId, target);
@@ -55867,18 +55867,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         return void 0;
       }
       if (!row) return void 0;
-      const state = {
+      const state2 = {
         liveConfirmedSinceAck: row.holdReason === "live",
         consecutiveReadFailures: row.readFailureCount ?? 0,
         ...row.firstIdleSinceAck !== null && row.firstIdleSinceAck !== void 0 ? { transcriptIdleSinceMs: row.firstIdleSinceAck } : {},
         ...row.heldAt !== null && row.heldAt !== void 0 ? { heldSinceMs: row.heldAt } : {}
       };
-      inFlightAckedHoldState.set(synthKey, state);
-      return state;
+      inFlightAckedHoldState.set(synthKey, state2);
+      return state2;
     }
-    function setHoldState(synthKey, meshId, state) {
+    function setHoldState(synthKey, meshId, state2) {
       const store = holdStore();
-      let priorHeldSinceMs = state.heldSinceMs ?? inFlightAckedHoldState.get(synthKey)?.heldSinceMs;
+      let priorHeldSinceMs = state2.heldSinceMs ?? inFlightAckedHoldState.get(synthKey)?.heldSinceMs;
       if (priorHeldSinceMs === void 0 && store) {
         try {
           priorHeldSinceMs = store.getInflightHold(taskIdFromSynthKey(meshId, synthKey))?.heldAt ?? void 0;
@@ -55886,18 +55886,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         }
       }
       const heldSinceMs = priorHeldSinceMs ?? Date.now();
-      inFlightAckedHoldState.set(synthKey, { ...state, heldSinceMs });
+      inFlightAckedHoldState.set(synthKey, { ...state2, heldSinceMs });
       if (!store) return;
       try {
         store.upsertInflightHold({
           taskId: taskIdFromSynthKey(meshId, synthKey),
           meshId,
-          holdReason: state.liveConfirmedSinceAck ? "live" : "unconfirmed",
+          holdReason: state2.liveConfirmedSinceAck ? "live" : "unconfirmed",
           // Only meaningful when the row is NEW — upsertInflightHold deliberately
           // preserves held_at on conflict, so an existing row keeps its original anchor.
           heldAt: heldSinceMs,
-          firstIdleSinceAck: state.transcriptIdleSinceMs ?? null,
-          readFailureCount: state.consecutiveReadFailures
+          firstIdleSinceAck: state2.transcriptIdleSinceMs ?? null,
+          readFailureCount: state2.consecutiveReadFailures
         });
       } catch {
       }
@@ -56283,11 +56283,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (len % 4)
               throw new Error("_sha2: outputLen should be aligned to 32bit");
             const outLen = len / 4;
-            const state = this.get();
-            if (outLen > state.length)
+            const state2 = this.get();
+            if (outLen > state2.length)
               throw new Error("_sha2: outputLen bigger than state");
             for (let i = 0; i < outLen; i++)
-              oview.setUint32(4 * i, state[i], isLE);
+              oview.setUint32(4 * i, state2[i], isLE);
           }
           digest() {
             const { buffer, outputLen } = this;
@@ -56622,21 +56622,21 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         utf8 = new globalThis.TextEncoder();
       }
     });
-    function stamp(state, pt) {
-      const l = Math.max(state.l, pt);
-      const c = l === state.l ? state.c + 1 : 0;
+    function stamp(state2, pt) {
+      const l = Math.max(state2.l, pt);
+      const c = l === state2.l ? state2.c + 1 : 0;
       if (c >= HLC_C_LIMIT)
         throw new SeqscribeError("ERR_ENTRY_ENCODING", "hlc.c overflow at stamp");
       const next = { l, c };
       return { state: next, hlc: { ...next } };
     }
-    function merge3(state, remote, pt) {
-      const l = Math.max(state.l, remote.l, pt);
+    function merge3(state2, remote, pt) {
+      const l = Math.max(state2.l, remote.l, pt);
       let c;
-      if (l === state.l && l === remote.l)
-        c = Math.max(state.c, remote.c) + 1;
-      else if (l === state.l)
-        c = state.c + 1;
+      if (l === state2.l && l === remote.l)
+        c = Math.max(state2.c, remote.c) + 1;
+      else if (l === state2.l)
+        c = state2.c + 1;
       else if (l === remote.l)
         c = remote.c + 1;
       else
@@ -60262,10 +60262,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             ]);
             this.logCounts.delete(topic);
           }
-          checkpointPut(topic, view, version2, ord, state) {
+          checkpointPut(topic, view, version2, ord, state2) {
             this.db.run(`INSERT OR REPLACE INTO sq_checkpoints
          (topic, view, view_version, ord_l, ord_c, ord_w, ord_s, state)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [topic, view, version2, ord.l, ord.c, ord.writer, ord.seq, state]);
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [topic, view, version2, ord.l, ord.c, ord.writer, ord.seq, state2]);
           }
           // latest checkpoint strictly before `before` (for late-arrival recompute)
           checkpointBefore(topic, view, version2, before) {
@@ -62107,7 +62107,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               throw new SeqscribeError("ERR_UNKNOWN_VIEW", name);
             const bound = { l: ord.l, c: ord.c, writer: ord.writer, seq: ord.seq + 1 };
             const ckpt = this.deps.store.checkpointBefore(inst.topic, inst.name, inst.def.version, bound);
-            let state = ckpt ? JSON.parse(ckpt.state) : inst.def.init;
+            let state2 = ckpt ? JSON.parse(ckpt.state) : inst.def.init;
             let cursor = ckpt ? ckpt.ord : null;
             outer: for (; ; ) {
               const entries = this.deps.store.entriesAfterOrder(inst.topic, cursor, FOLD_BATCH);
@@ -62117,20 +62117,20 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 const o = orderOf(e);
                 if (orderCompare(o, ord) > 0)
                   break outer;
-                state = inst.def.reduce(state, e);
+                state2 = inst.def.reduce(state2, e);
                 cursor = o;
               }
             }
-            const canonical = jcs(state);
+            const canonical = jcs(state2);
             return { state: JSON.parse(canonical), stateHash: sha256HexUtf8(canonical) };
           }
           // bootstrap adoption (§7.8): install the snapshot's at-cut state as this
           // view's base — recorded as a checkpoint so recomputes restore from it
-          installState(name, state, ord) {
+          installState(name, state2, ord) {
             const inst = this.views.get(name);
             if (!inst)
               throw new SeqscribeError("ERR_UNKNOWN_VIEW", name);
-            inst.state = state === void 0 ? inst.def.init : state;
+            inst.state = state2 === void 0 ? inst.def.init : state2;
             inst.ord = ord;
             inst.sinceCheckpoint = 0;
             inst.faulted = false;
@@ -63865,10 +63865,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function configureMeshReadReadinessCollector(collector) {
       seqscribeCollectorRef = collector;
     }
-    function logTransition(meshId, state) {
-      if (loggedTransitions.get(meshId) === state) return;
-      loggedTransitions.set(meshId, state);
-      LOG.info("Seqscribe", `mesh read path mesh=${meshId} \u2192 ${state}`);
+    function logTransition(meshId, state2) {
+      if (loggedTransitions.get(meshId) === state2) return;
+      loggedTransitions.set(meshId, state2);
+      LOG.info("Seqscribe", `mesh read path mesh=${meshId} \u2192 ${state2}`);
     }
     function evaluateMeshReadReadiness(meshId) {
       if (!isMeshReadPrimary()) return { ready: false, reason: "mode_not_primary" };
@@ -66010,14 +66010,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * Terminal/state transition for one node (phase B step 4). Plain row write — the
            * TRANSITION DECISION lives in the transition runner, not here.
            */
-          updateNodeState(graphId, nodeId, state, nowIso, opts) {
+          updateNodeState(graphId, nodeId, state2, nowIso, opts) {
             this.db.prepare(`
             UPDATE mesh_task_graph_nodes
             SET state = ?, skip_reason = COALESCE(?, skip_reason),
                 failure_reason = COALESCE(?, failure_reason),
                 updated_at = ?, state_changed_at = ?
             WHERE graph_id = ? AND node_id = ?
-        `).run(state, opts?.skipReason ?? null, opts?.failureReason ?? null, nowIso, nowIso, graphId, nodeId);
+        `).run(state2, opts?.skipReason ?? null, opts?.failureReason ?? null, nowIso, nowIso, graphId, nodeId);
           }
           /**
            * Phase-B materialization CAS (design :332-334): the update lands ONLY when the
@@ -66585,8 +66585,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       });
     }
     function readWarmupConnectionState(connection) {
-      const state = connection?.state;
-      return typeof state === "string" && state.length > 0 ? state : void 0;
+      const state2 = connection?.state;
+      return typeof state2 === "string" && state2.length > 0 ? state2 : void 0;
     }
     function resolveWarmupDeadlineOpts(opts) {
       const { getConnection, daemonId, connectTimeoutMs, responseTimeoutMs } = opts;
@@ -67346,7 +67346,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return { status: "failed", required: required2, configSource: loaded.path || loaded.source, configSourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")), commandsRun: [] };
       }
       const execFileAsync8 = (0, import_node_util3.promisify)(import_node_child_process4.execFile);
-      const state = {
+      const state2 = {
         status: "running",
         required: required2,
         configSource: loaded.path || loaded.source,
@@ -67361,15 +67361,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (initiallyAbsent.length > 0) {
           const appearedNow = initiallyAbsent.filter((p) => (0, import_fs9.existsSync)((0, import_path8.join)(workspace, p)));
           if (appearedNow.length > 0) {
-            state.status = "stale";
-            state.completedAt = (/* @__PURE__ */ new Date()).toISOString();
-            state.error = `Bootstrap interrupted: staleInputs files appeared during run: ${appearedNow.join(", ")}`;
-            return state;
+            state2.status = "stale";
+            state2.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+            state2.error = `Bootstrap interrupted: staleInputs files appeared during run: ${appearedNow.join(", ")}`;
+            return state2;
           }
         }
         const cwd = command.cwd ? (0, import_path8.resolve)(workspace, command.cwd) : workspace;
         const startedAt = Date.now();
-        state.lastCommand = command.displayCommand;
+        state2.lastCommand = command.displayCommand;
         const resolvedCommand = resolveWin32Executable(command.command);
         const spawn7 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
@@ -67382,7 +67382,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             windowsHide: true,
             ...spawn7.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
-          state.commandsRun?.push({
+          state2.commandsRun?.push({
             command: command.command,
             args: command.args,
             displayCommand: command.displayCommand,
@@ -67397,11 +67397,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           });
         } catch (error48) {
           const exitCode = typeof error48?.code === "number" ? error48.code : null;
-          state.status = "failed";
-          state.exitCode = exitCode;
-          state.error = error48?.message || String(error48);
-          state.completedAt = (/* @__PURE__ */ new Date()).toISOString();
-          state.commandsRun?.push({
+          state2.status = "failed";
+          state2.exitCode = exitCode;
+          state2.error = error48?.message || String(error48);
+          state2.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+          state2.commandsRun?.push({
             command: command.command,
             args: command.args,
             displayCommand: command.displayCommand,
@@ -67416,16 +67416,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             stdout: truncateOutput(error48?.stdout),
             stderr: truncateOutput(error48?.stderr || error48?.message)
           });
-          return state;
+          return state2;
         }
       }
-      state.status = "ready";
-      state.exitCode = 0;
-      state.completedAt = (/* @__PURE__ */ new Date()).toISOString();
+      state2.status = "ready";
+      state2.exitCode = 0;
+      state2.completedAt = (/* @__PURE__ */ new Date()).toISOString();
       if (staleInputPaths.length > 0) {
-        state.staleInputsDigest = computeStaleInputsDigest(workspace, staleInputPaths);
+        state2.staleInputsDigest = computeStaleInputsDigest(workspace, staleInputPaths);
       }
-      return state;
+      return state2;
     }
     var import_fs9;
     var import_path8;
@@ -68673,8 +68673,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function isMeshConnectionDefinitivelyDown(connection) {
       if (!connection) return true;
-      const state = readMeshConnectionState(connection);
-      return state === "failed" || state === "closed" || state === "disconnected";
+      const state2 = readMeshConnectionState(connection);
+      return state2 === "failed" || state2 === "closed" || state2 === "disconnected";
     }
     async function probeRemoteMeshGitStatusWithRetry(args) {
       if (args.getConnection && isMeshConnectionDefinitivelyDown(args.getConnection(args.daemonId))) {
@@ -68839,12 +68839,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const meta3 = readObjectRecord(record2?.meta);
       const isSelfCoordinator = Boolean(readStringValue(meta3.meshCoordinatorFor));
       let chatStatus = readStringValue(record2?.chatStatus, record2?.activeChat?.status, meta3.chatStatus, meta3.sessionStatus);
-      const state = readLiveMeshSessionState(record2);
-      const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === "idle" || state === "idle") ? "Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response." : null;
+      const state2 = readLiveMeshSessionState(record2);
+      const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === "idle" || state2 === "idle") ? "Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response." : null;
       const sessionId = readStringValue(record2?.sessionId) || "unknown";
       const turn = resolveSessionTurnPresentation({
         sessionId: sessionId === "unknown" ? void 0 : sessionId,
-        legacyStatus: chatStatus || state,
+        legacyStatus: chatStatus || state2,
         providerType: readStringValue(record2?.providerType) || void 0,
         surface: "mesh_status"
       });
@@ -68852,7 +68852,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return {
         sessionId,
         providerType: readStringValue(record2?.providerType),
-        state,
+        state: state2,
         chatStatus,
         ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
         lifecycle: readStringValue(record2?.lifecycle),
@@ -71567,8 +71567,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return this.idleReminderState.get(meshId) ?? null;
           }
           /** Record that an idle-active-mission reminder just fired for a mesh (debounce marker). */
-          setIdleReminderState(meshId, state) {
-            this.idleReminderState.set(meshId, state);
+          setIdleReminderState(meshId, state2) {
+            this.idleReminderState.set(meshId, state2);
           }
           /** Clear the idle-reminder debounce marker for a mesh — mesh deletion / test cleanup. */
           clearIdleReminderState(meshId) {
@@ -77716,14 +77716,14 @@ ${rendered}`, "utf-8");
     function localNonCoordinatorSessionBusy(states, meshId, now) {
       if (!Array.isArray(states)) return false;
       const busyStatuses = /* @__PURE__ */ new Set(["generating", "waiting_approval", "waiting_choice"]);
-      for (const state of states) {
-        if (!state) continue;
-        const settings = state.settings && typeof state.settings === "object" ? state.settings : {};
+      for (const state2 of states) {
+        if (!state2) continue;
+        const settings = state2.settings && typeof state2.settings === "object" ? state2.settings : {};
         const coordinatorFor = typeof settings.meshCoordinatorFor === "string" ? settings.meshCoordinatorFor : void 0;
         if (coordinatorFor === meshId) continue;
-        const lastUpdated = typeof state.lastUpdated === "number" ? state.lastUpdated : void 0;
+        const lastUpdated = typeof state2.lastUpdated === "number" ? state2.lastUpdated : void 0;
         if (lastUpdated !== void 0 && now - lastUpdated > LOCAL_SESSION_STALE_MS) continue;
-        if (busyStatuses.has(state.status)) return true;
+        if (busyStatuses.has(state2.status)) return true;
       }
       return false;
     }
@@ -81241,10 +81241,10 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function localCoordinatorDaemonId() {
       return canonicalDaemonId2(readNonEmptyString(loadConfig().machineId));
     }
-    function isIdleSessionState(state) {
-      const status = readNonEmptyString(state?.status).toLowerCase();
+    function isIdleSessionState(state2) {
+      const status = readNonEmptyString(state2?.status).toLowerCase();
       if (TERMINAL_SESSION_STATUSES.includes(status)) return false;
-      return status === "idle" || state?.activeChat?.status === "waiting_input";
+      return status === "idle" || state2?.activeChat?.status === "waiting_input";
     }
     function sweepAutoLaunchOrphanSessions(components, meshId) {
       let sessions;
@@ -81262,19 +81262,19 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
       const byId = new Map(queue.map((t) => [t.id, t]));
       for (const inst of sessions) {
-        let state;
+        let state2;
         try {
-          state = inst.getState();
+          state2 = inst.getState();
         } catch {
           continue;
         }
-        const settings = state?.settings || {};
+        const settings = state2?.settings || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) continue;
         const originTaskId = readNonEmptyString(settings.autoLaunchedForQueueTaskId);
         if (!originTaskId) continue;
-        const sessionId = readNonEmptyString(state?.instanceId);
+        const sessionId = readNonEmptyString(state2?.instanceId);
         if (!sessionId) continue;
-        if (!isIdleSessionState(state)) continue;
+        if (!isIdleSessionState(state2)) continue;
         if (sessionHasActiveAssignment(meshId, sessionId)) continue;
         const originTask = byId.get(originTaskId);
         const assignedElsewhere = !!originTask && originTask.status === "assigned" && !!readNonEmptyString(originTask.assignedSessionId) && !sessionIdsEquivalent(readNonEmptyString(originTask.assignedSessionId), sessionId);
@@ -81379,9 +81379,9 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const { sessionId, nodeId, providerType } = ctx;
       const backoffKey = `${meshId}::${task.id}`;
       const nowMs = Date.now();
-      const state = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
-      if (state.nextAttemptAtMs && nowMs < state.nextAttemptAtMs) return "backoff";
-      const atCap = state.cycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
+      const state2 = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
+      if (state2.nextAttemptAtMs && nowMs < state2.nextAttemptAtMs) return "backoff";
+      const atCap = state2.cycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
       const live = remoteSessionAppearsLive(meshId, sessionId);
       if ((live || atCap) && nodeId && providerType) {
         try {
@@ -81407,7 +81407,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           return "respawn";
         }
       }
-      const cycles = Math.min(state.cycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
+      const cycles = Math.min(state2.cycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
       autoLaunchAwaitClaimBackoff.set(backoffKey, { cycles, nextAttemptAtMs: nowMs + awaitClaimWindowMs(cycles) });
       recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "awaiting_launched_session_claim_backoff", nodeId, sessionId });
       return "backoff";
@@ -81504,10 +81504,10 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (!allowed || !isMeshTaskDifficulty2(task.difficulty) || task.difficulty === "freeform") return true;
       return allowed.includes(task.difficulty);
     }
-    function readSessionModel(state) {
-      const controlModel = typeof state?.controlValues?.model === "string" ? state.controlValues.model.trim() : "";
+    function readSessionModel(state2) {
+      const controlModel = typeof state2?.controlValues?.model === "string" ? state2.controlValues.model.trim() : "";
       if (controlModel) return controlModel;
-      const modelItem = Array.isArray(state?.summaryMetadata?.items) ? state.summaryMetadata.items.find((item) => item?.id === "model") : void 0;
+      const modelItem = Array.isArray(state2?.summaryMetadata?.items) ? state2.summaryMetadata.items.find((item) => item?.id === "model") : void 0;
       const summaryModel = typeof modelItem?.shortValue === "string" && modelItem.shortValue.trim() ? modelItem.shortValue.trim() : typeof modelItem?.value === "string" ? modelItem.value.trim() : "";
       return summaryModel || void 0;
     }
@@ -81611,28 +81611,28 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function isTerminalSessionStatus(status) {
       return ["stopped", "failed", "terminated", "exited", "closed"].includes(status);
     }
-    function isIdleSessionState2(state) {
-      const status = readNonEmptyString(state?.status).toLowerCase();
+    function isIdleSessionState2(state2) {
+      const status = readNonEmptyString(state2?.status).toLowerCase();
       if (isTerminalSessionStatus(status)) return false;
-      return status === "idle" || state?.activeChat?.status === "waiting_input";
+      return status === "idle" || state2?.activeChat?.status === "waiting_input";
     }
-    function sessionStateLooksActive(state) {
-      const status = readNonEmptyString(state?.status).toLowerCase();
-      const chatStatus = readNonEmptyString(state?.activeChat?.status).toLowerCase();
+    function sessionStateLooksActive(state2) {
+      const status = readNonEmptyString(state2?.status).toLowerCase();
+      const chatStatus = readNonEmptyString(state2?.activeChat?.status).toLowerCase();
       const active = /* @__PURE__ */ new Set(["generating", "streaming", "no_progress", "long_generating", "working", "starting", "waiting_approval"]);
       return active.has(status) || active.has(chatStatus);
     }
     function nodeHasActiveMeshWork(components, meshId, nodeId, currentSessionId) {
       if (nodeHasActiveAssignment(meshId, nodeId)) return true;
       return components.instanceManager.getByCategory("cli").some((inst) => {
-        const state = inst.getState();
-        const settings = state.settings || {};
+        const state2 = inst.getState();
+        const settings = state2.settings || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
-        const sessionId = readNonEmptyString(state.instanceId);
-        if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState2(state)) return false;
-        return sessionStateLooksActive(state);
+        const sessionId = readNonEmptyString(state2.instanceId);
+        if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState2(state2)) return false;
+        return sessionStateLooksActive(state2);
       });
     }
     function isLaunchableNode(node) {
@@ -81659,9 +81659,9 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     }
     function isSessionActivelyGenerating(components, sessionId) {
       if (!sessionId) return false;
-      const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
-      if (!state) return false;
-      return sessionStateLooksActive(state);
+      const state2 = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+      if (!state2) return false;
+      return sessionStateLooksActive(state2);
     }
     function resolveSessionBusyVerdict(components, sessionId) {
       if (!sessionId) return "UNKNOWN";
@@ -81672,21 +81672,21 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           return sid && sessionIdsEquivalent(sid, sessionId);
         });
         if (!inst) return "UNKNOWN";
-        const state = inst.getState?.();
-        if (!state) return "UNKNOWN";
-        return sessionStateLooksActive(state) ? "GENERATING" : "IDLE_CONFIRMED";
+        const state2 = inst.getState?.();
+        if (!state2) return "UNKNOWN";
+        return sessionStateLooksActive(state2) ? "GENERATING" : "IDLE_CONFIRMED";
       } catch {
         return "UNKNOWN";
       }
     }
     function liveSessionCountForNode(components, meshId, nodeId) {
       const localInstances = components.instanceManager.getByCategory("cli").filter((inst) => {
-        const state = inst.getState();
-        const settings = state.settings || {};
+        const state2 = inst.getState();
+        const settings = state2.settings || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
-        const status = readNonEmptyString(state.status).toLowerCase();
+        const status = readNonEmptyString(state2.status).toLowerCase();
         return !isTerminalSessionStatus(status);
       });
       let count = localInstances.length;
@@ -81702,23 +81702,23 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         getQueue3(meshId, { status: ["assigned"] }).filter((task2) => daemonIdsEquivalent4(task2.assignedNodeId, nodeId)).map((task2) => readNonEmptyString(task2.assignedSessionId)).filter(Boolean)
       );
       return components.instanceManager.getByCategory("cli").some((inst) => {
-        const state = inst.getState();
-        const settings = state.settings || {};
+        const state2 = inst.getState();
+        const settings = state2.settings || {};
         if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
         if (readNonEmptyString(settings.meshCoordinatorFor) === meshId) return false;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
-        const status = readNonEmptyString(state.status).toLowerCase();
+        const status = readNonEmptyString(state2.status).toLowerCase();
         if (isTerminalSessionStatus(status)) return false;
-        const sessionId = readNonEmptyString(state.instanceId);
+        const sessionId = readNonEmptyString(state2.instanceId);
         if (sessionId && busySessionIds.has(sessionId)) return false;
-        const sessionProviderType = state.type || readNonEmptyString(settings.providerType);
+        const sessionProviderType = state2.type || readNonEmptyString(settings.providerType);
         if (task.requiredTags?.length) {
           if (sessionProviderType && !nodeSatisfiesRequiredTags3(task.requiredTags, buildMeshNodeCapabilityTags3(node, sessionProviderType))) {
             return false;
           }
         }
-        const allowance = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), sessionProviderType, readSessionModel(state));
+        const allowance = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), sessionProviderType, readSessionModel(state2));
         if (!taskMeetsSessionDifficultyFloor(task, allowance)) return false;
         return true;
       });
@@ -82475,15 +82475,15 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         const instances = components.instanceManager?.getByCategory?.("cli") || [];
         const sessions = [];
         for (const inst of instances) {
-          const state = inst.getState?.();
-          if (!state) continue;
-          const settings = state.settings || {};
+          const state2 = inst.getState?.();
+          if (!state2) continue;
+          const settings = state2.settings || {};
           if (readNonEmptyString(settings.meshNodeFor) !== meshId) continue;
           const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
           if (!daemonIdsEquivalent4(instNodeId, nodeId)) continue;
-          const status = readNonEmptyString(state.status).toLowerCase();
+          const status = readNonEmptyString(state2.status).toLowerCase();
           if (isTerminalSessionStatus(status)) continue;
-          const sessionId = readNonEmptyString(state.instanceId);
+          const sessionId = readNonEmptyString(state2.instanceId);
           if (!sessionId) continue;
           sessions.push({
             sessionId,
@@ -84857,24 +84857,24 @@ ${block2.text}`,
       const localCandidates = [];
       const cliInstances = components.instanceManager.getByCategory("cli");
       for (const inst of cliInstances) {
-        const state = inst.getState();
-        const settings = state.settings || {};
+        const state2 = inst.getState();
+        const settings = state2.settings || {};
         const instMeshId = readNonEmptyString(settings.meshNodeFor);
         if (instMeshId !== meshId) continue;
         const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!nodeId) continue;
-        if (!isIdleSessionState2(state)) {
-          const status = readNonEmptyString(state.status).toLowerCase();
+        if (!isIdleSessionState2(state2)) {
+          const status = readNonEmptyString(state2.status).toLowerCase();
           skippedSessions.push({
             nodeId,
-            sessionId: readNonEmptyString(state.instanceId),
+            sessionId: readNonEmptyString(state2.instanceId),
             reason: isTerminalSessionStatus(status) ? "terminal_session" : "session_not_idle",
             status: status || void 0
           });
           continue;
         }
-        const sessionId = state.instanceId;
-        const providerType = state.type || readNonEmptyString(settings.providerType);
+        const sessionId = state2.instanceId;
+        const providerType = state2.type || readNonEmptyString(settings.providerType);
         if (providerType) {
           localIdleSessionsChecked += 1;
           localCandidates.push({ nodeId, sessionId, providerType, origin: "local", node: mesh.nodes.find((n) => meshNodeIdMatches4(n, nodeId)) });
@@ -85063,8 +85063,8 @@ ${block2.text}`,
         AUTO_LAUNCH_COOLDOWN_MS = 5e3;
       }
     });
-    function readSettings(state) {
-      return state?.settings && typeof state.settings === "object" ? state.settings : {};
+    function readSettings(state2) {
+      return state2?.settings && typeof state2.settings === "object" ? state2.settings : {};
     }
     function resolveWorkerDelegateRouting(components, instanceId, deps) {
       const sessionId = readNonEmptyString(instanceId);
@@ -85083,10 +85083,10 @@ ${block2.text}`,
       });
       const sourceInstance = components.instanceManager.getInstance(instanceId);
       if (!sourceInstance || sourceInstance.category !== "cli") return reject("not_cli");
-      const state = sourceInstance.getState();
-      workspace = readNonEmptyString(state.workspace);
+      const state2 = sourceInstance.getState();
+      workspace = readNonEmptyString(state2.workspace);
       if (!workspace) return reject("no_workspace");
-      const settings = readSettings(state);
+      const settings = readSettings(state2);
       coordinatorDaemonId = readNonEmptyString(settings.meshCoordinatorDaemonId);
       runtimeNodeId = readNonEmptyString(settings.meshNodeId);
       const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
@@ -85383,9 +85383,9 @@ ${block2.text}`,
         return { ...DEFAULT_STATE };
       }
     }
-    function saveState(state) {
+    function saveState(state2) {
       const statePath = getStatePath();
-      const normalized = normalizeState(state);
+      const normalized = normalizeState(state2);
       (0, import_fs18.writeFileSync)(statePath, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 384 });
     }
     function resetState() {
@@ -85398,11 +85398,11 @@ ${block2.text}`,
       const key2 = typeof sessionId === "string" ? sessionId.trim() : "";
       const value = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
       if (!key2 || !value) return;
-      const state = loadState();
-      if (state.sessionProviderSessionPins[key2] === value) return;
+      const state2 = loadState();
+      if (state2.sessionProviderSessionPins[key2] === value) return;
       saveState({
-        ...state,
-        sessionProviderSessionPins: { ...state.sessionProviderSessionPins, [key2]: value }
+        ...state2,
+        sessionProviderSessionPins: { ...state2.sessionProviderSessionPins, [key2]: value }
       });
     }
     function loadDeferredRestartSchedules() {
@@ -85410,21 +85410,21 @@ ${block2.text}`,
     }
     function recordDeferredRestartSchedule(record2) {
       const key2 = deferredRestartScheduleKey(record2.meshId, record2.nodeId);
-      const state = loadState();
-      const existing = state.deferredRestartSchedules[key2];
+      const state2 = loadState();
+      const existing = state2.deferredRestartSchedules[key2];
       if (existing && existing.mode === record2.mode && existing.killSessionHost === record2.killSessionHost && existing.scheduledAt === record2.scheduledAt && existing.expiresAt === record2.expiresAt) return;
       saveState({
-        ...state,
-        deferredRestartSchedules: { ...state.deferredRestartSchedules, [key2]: record2 }
+        ...state2,
+        deferredRestartSchedules: { ...state2.deferredRestartSchedules, [key2]: record2 }
       });
     }
     function clearDeferredRestartSchedule(meshId, nodeId) {
       const key2 = deferredRestartScheduleKey(meshId, nodeId);
-      const state = loadState();
-      if (!(key2 in state.deferredRestartSchedules)) return;
-      const next = { ...state.deferredRestartSchedules };
+      const state2 = loadState();
+      if (!(key2 in state2.deferredRestartSchedules)) return;
+      const next = { ...state2.deferredRestartSchedules };
       delete next[key2];
-      saveState({ ...state, deferredRestartSchedules: next });
+      saveState({ ...state2, deferredRestartSchedules: next });
     }
     var import_fs18;
     var import_path15;
@@ -86281,27 +86281,27 @@ ${cleanBody}`;
       }
       return false;
     }
-    function buildWorkspaceSession(state, cdpManagers, options) {
+    function buildWorkspaceSession(state2, cdpManagers, options) {
       const profile = options.profile || "full";
-      const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
-      const summaryMetadata = normalizeProviderSummaryMetadata(state.summaryMetadata);
-      const controlValues = normalizeProviderStateControlValues(state.controlValues);
+      const activeChat = normalizeActiveChatData(state2.activeChat, getActiveChatOptions(profile));
+      const summaryMetadata = normalizeProviderSummaryMetadata(state2.summaryMetadata);
+      const controlValues = normalizeProviderStateControlValues(state2.controlValues);
       const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
       const includeSessionControls = shouldIncludeSessionControls(profile);
-      const workspace = state.workspace || null;
+      const workspace = state2.workspace || null;
       const git3 = getGitSummaryForWorkspace(workspace, options);
-      const title = activeChat?.title || state.name;
-      const meshCoordinatorFor = state.settings?.meshCoordinatorFor;
-      const registryEntry = state.instanceId ? getCoordinatorForSession(state.instanceId) : void 0;
+      const title = activeChat?.title || state2.name;
+      const meshCoordinatorFor = state2.settings?.meshCoordinatorFor;
+      const registryEntry = state2.instanceId ? getCoordinatorForSession(state2.instanceId) : void 0;
       const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
       const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: "coordinator" } : void 0;
       const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : void 0;
-      const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
+      const resolved = resolveSessionStatusUnified({ sessionId: state2.instanceId, providerType: state2.type, activeChat, providerStatus: state2.status });
       return {
-        id: state.instanceId || state.type,
+        id: state2.instanceId || state2.type,
         parentId: null,
-        providerType: state.type,
-        providerName: state.name,
+        providerType: state2.type,
+        providerName: state2.name,
         kind: "workspace",
         transport: "cdp-page",
         status: resolved.status,
@@ -86311,16 +86311,16 @@ ${cleanBody}`;
         ...git3 && { git: git3 },
         activeChat,
         ...summaryMetadata && { summaryMetadata },
-        ...includeSessionMetadata && { capabilities: state.sessionCapabilities || IDE_SESSION_CAPABILITIES, messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT },
-        cdpConnected: state.cdpConnected ?? isCdpConnected(cdpManagers, state.type),
+        ...includeSessionMetadata && { capabilities: state2.sessionCapabilities || IDE_SESSION_CAPABILITIES, messageInput: state2.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT },
+        cdpConnected: state2.cdpConnected ?? isCdpConnected(cdpManagers, state2.type),
         ...includeSessionControls && {
           ...controlValues && { controlValues },
-          providerControls: state.providerControls
+          providerControls: state2.providerControls
         },
-        errorMessage: state.errorMessage,
-        errorReason: state.errorReason,
-        lastUpdated: state.lastUpdated,
-        settings: state.settings,
+        errorMessage: state2.errorMessage,
+        errorReason: state2.errorReason,
+        lastUpdated: state2.lastUpdated,
+        settings: state2.settings,
         ...coordinator && { coordinator },
         ...meshQueueStats && { meshQueueStats }
       };
@@ -86383,122 +86383,122 @@ ${cleanBody}`;
       const hasInterestingStatus = !!status && !["idle", "panel_hidden", "disconnected", "not_monitored"].includes(status);
       return hasActiveChat || hasMessages || hasModal || hasStreams || hasProviderSessionId || hasControlValues || hasProviderControls || hasOpenPanelCapability || hasSummaryMetadata || hasError || hasInterestingStatus;
     }
-    function buildCliSession(state, options) {
+    function buildCliSession(state2, options) {
       const profile = options.profile || "full";
-      const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
-      const summaryMetadata = normalizeProviderSummaryMetadata(state.summaryMetadata);
-      const controlValues = normalizeProviderStateControlValues(state.controlValues);
+      const activeChat = normalizeActiveChatData(state2.activeChat, getActiveChatOptions(profile));
+      const summaryMetadata = normalizeProviderSummaryMetadata(state2.summaryMetadata);
+      const controlValues = normalizeProviderStateControlValues(state2.controlValues);
       const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
       const includeRuntimeMetadata = shouldIncludeRuntimeMetadata(profile);
       const includeSessionControls = shouldIncludeSessionControls(profile);
-      const workspace = state.workspace || null;
+      const workspace = state2.workspace || null;
       const git3 = getGitSummaryForWorkspace(workspace, options);
-      const meshCoordinatorFor = state.settings?.meshCoordinatorFor;
-      const registryEntry = state.instanceId ? getCoordinatorForSession(state.instanceId) : void 0;
+      const meshCoordinatorFor = state2.settings?.meshCoordinatorFor;
+      const registryEntry = state2.instanceId ? getCoordinatorForSession(state2.instanceId) : void 0;
       const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
       const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: "coordinator" } : void 0;
       const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : void 0;
-      const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
+      const resolved = resolveSessionStatusUnified({ sessionId: state2.instanceId, providerType: state2.type, activeChat, providerStatus: state2.status });
       const resolvedStatus = resolved.status;
       return {
-        id: state.instanceId,
+        id: state2.instanceId,
         parentId: null,
-        providerType: state.type,
-        providerName: state.name,
-        providerSessionId: state.providerSessionId,
+        providerType: state2.type,
+        providerName: state2.name,
+        providerSessionId: state2.providerSessionId,
         kind: "agent",
         transport: "pty",
         status: resolvedStatus,
         ...resolved.turn.authority === "turn_reducer" ? { turn: resolved.turn } : {},
-        title: activeChat?.title || state.name,
+        title: activeChat?.title || state2.name,
         workspace,
         ...git3 && { git: git3 },
         ...includeRuntimeMetadata && {
-          runtimeKey: state.runtime?.runtimeKey,
-          runtimeDisplayName: state.runtime?.displayName,
-          runtimeWorkspaceLabel: state.runtime?.workspaceLabel,
-          runtimeLifecycle: state.runtime?.lifecycle ?? null,
-          runtimeSurfaceKind: state.runtime?.surfaceKind,
-          runtimeWriteOwner: state.runtime?.writeOwner || null,
-          runtimeAttachedClients: state.runtime?.attachedClients || [],
-          runtimeRestoredFromStorage: state.runtime?.restoredFromStorage === true,
-          runtimeRecoveryState: state.runtime?.recoveryState ?? null
+          runtimeKey: state2.runtime?.runtimeKey,
+          runtimeDisplayName: state2.runtime?.displayName,
+          runtimeWorkspaceLabel: state2.runtime?.workspaceLabel,
+          runtimeLifecycle: state2.runtime?.lifecycle ?? null,
+          runtimeSurfaceKind: state2.runtime?.surfaceKind,
+          runtimeWriteOwner: state2.runtime?.writeOwner || null,
+          runtimeAttachedClients: state2.runtime?.attachedClients || [],
+          runtimeRestoredFromStorage: state2.runtime?.restoredFromStorage === true,
+          runtimeRecoveryState: state2.runtime?.recoveryState ?? null
         },
-        mode: state.mode,
-        resume: state.resume,
+        mode: state2.mode,
+        resume: state2.resume,
         activeChat,
-        activeInteractivePrompt: state.activeInteractivePrompt ?? null,
+        activeInteractivePrompt: state2.activeInteractivePrompt ?? null,
         ...summaryMetadata && { summaryMetadata },
         ...includeSessionMetadata && {
-          capabilities: state.mode === "terminal" ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
-          messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT
+          capabilities: state2.mode === "terminal" ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
+          messageInput: state2.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT
         },
         ...includeSessionControls && {
           ...controlValues && { controlValues },
-          providerControls: state.providerControls
+          providerControls: state2.providerControls
         },
-        errorMessage: state.errorMessage,
-        errorReason: state.errorReason,
-        lastUpdated: state.lastUpdated,
-        settings: state.settings,
+        errorMessage: state2.errorMessage,
+        errorReason: state2.errorReason,
+        lastUpdated: state2.lastUpdated,
+        settings: state2.settings,
         ...coordinator && { coordinator },
         ...meshQueueStats && { meshQueueStats },
         // Emit these booleans explicitly (including false) so an un-hide/un-mute clears a
         // previously-true value downstream. Consumers merge with `?? existing` and copy only
         // `!== undefined` fields, so an absent field on false never overwrote a prior true —
         // the toggle-off direction silently stuck. See session-entry-merge.ts.
-        surfaceHidden: resolveSurfaceHidden(state.settings),
+        surfaceHidden: resolveSurfaceHidden(state2.settings),
         // status-gated so a one-shot silent-idle arm mutes ONLY the idle/completion
         // snapshot, never an approval/generating frame in the same turn.
-        muted: resolveMuted(state.settings, resolvedStatus)
+        muted: resolveMuted(state2.settings, resolvedStatus)
       };
     }
-    function buildAcpSession(state, options) {
+    function buildAcpSession(state2, options) {
       const profile = options.profile || "full";
-      const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
-      const summaryMetadata = normalizeProviderSummaryMetadata(state.summaryMetadata);
-      const controlValues = normalizeProviderStateControlValues(state.controlValues);
+      const activeChat = normalizeActiveChatData(state2.activeChat, getActiveChatOptions(profile));
+      const summaryMetadata = normalizeProviderSummaryMetadata(state2.summaryMetadata);
+      const controlValues = normalizeProviderStateControlValues(state2.controlValues);
       const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
       const includeSessionControls = shouldIncludeSessionControls(profile);
-      const workspace = state.workspace || null;
+      const workspace = state2.workspace || null;
       const git3 = getGitSummaryForWorkspace(workspace, options);
-      const meshCoordinatorFor = state.settings?.meshCoordinatorFor;
-      const registryEntry = state.instanceId ? getCoordinatorForSession(state.instanceId) : void 0;
+      const meshCoordinatorFor = state2.settings?.meshCoordinatorFor;
+      const registryEntry = state2.instanceId ? getCoordinatorForSession(state2.instanceId) : void 0;
       const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
       const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: "coordinator" } : void 0;
       const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : void 0;
-      const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
+      const resolved = resolveSessionStatusUnified({ sessionId: state2.instanceId, providerType: state2.type, activeChat, providerStatus: state2.status });
       const resolvedStatus = resolved.status;
       return {
-        id: state.instanceId,
+        id: state2.instanceId,
         parentId: null,
-        providerType: state.type,
-        providerName: state.name,
+        providerType: state2.type,
+        providerName: state2.name,
         kind: "agent",
         transport: "acp",
         status: resolvedStatus,
         ...resolved.turn.authority === "turn_reducer" ? { turn: resolved.turn } : {},
-        title: activeChat?.title || state.name,
+        title: activeChat?.title || state2.name,
         workspace,
         ...git3 && { git: git3 },
         activeChat,
         ...summaryMetadata && { summaryMetadata },
-        ...includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES, messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT },
+        ...includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES, messageInput: state2.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT },
         ...includeSessionControls && {
           ...controlValues && { controlValues },
-          providerControls: state.providerControls
+          providerControls: state2.providerControls
         },
-        errorMessage: state.errorMessage,
-        errorReason: state.errorReason,
-        lastUpdated: state.lastUpdated,
-        settings: state.settings,
+        errorMessage: state2.errorMessage,
+        errorReason: state2.errorReason,
+        lastUpdated: state2.lastUpdated,
+        settings: state2.settings,
         ...coordinator && { coordinator },
         ...meshQueueStats && { meshQueueStats },
         // Emit explicitly (including false) so un-hide/un-mute clears a prior true downstream —
         // see buildCliSession above and session-entry-merge.ts.
-        surfaceHidden: resolveSurfaceHidden(state.settings),
+        surfaceHidden: resolveSurfaceHidden(state2.settings),
         // status-gated one-shot silent-idle arm — see buildCliSession above.
-        muted: resolveMuted(state.settings, resolvedStatus)
+        muted: resolveMuted(state2.settings, resolvedStatus)
       };
     }
     function buildSessionEntries(allStates, cdpManagers, options = {}) {
@@ -86506,18 +86506,18 @@ ${cleanBody}`;
       const ideStates = allStates.filter((s2) => s2.category === "ide");
       const cliStates = allStates.filter((s2) => s2.category === "cli");
       const acpStates = allStates.filter((s2) => s2.category === "acp");
-      for (const state of ideStates) {
-        sessions.push(buildWorkspaceSession(state, cdpManagers, options));
-        for (const ext of state.extensions) {
+      for (const state2 of ideStates) {
+        sessions.push(buildWorkspaceSession(state2, cdpManagers, options));
+        for (const ext of state2.extensions) {
           if (!shouldIncludeExtensionSession(ext)) continue;
-          sessions.push(buildExtensionAgentSession(state, ext, options));
+          sessions.push(buildExtensionAgentSession(state2, ext, options));
         }
       }
-      for (const state of cliStates) {
-        sessions.push(buildCliSession(state, options));
+      for (const state2 of cliStates) {
+        sessions.push(buildCliSession(state2, options));
       }
-      for (const state of acpStates) {
-        sessions.push(buildAcpSession(state, options));
+      for (const state2 of acpStates) {
+        sessions.push(buildAcpSession(state2, options));
       }
       const extensionParentIds = new Set(
         sessions.filter((session) => session.transport === "cdp-webview" && !!session.parentId).map((session) => session.parentId)
@@ -86855,9 +86855,9 @@ ${cleanBody}`;
     function buildStatusSnapshot(options) {
       const profile = options.profile || "full";
       const cfg = loadConfig();
-      const state = loadState();
+      const state2 = loadState();
       const wsState = getWorkspaceState(cfg);
-      const recentActivity = getRecentActivity(state, 20);
+      const recentActivity = getRecentActivity(state2, 20);
       const unreadSourceSessions = buildSessionEntries(
         options.allStates,
         options.cdpManagers,
@@ -86878,8 +86878,8 @@ ${cleanBody}`;
       for (const sourceSession of unreadSourceSessions) {
         const session = sessionsById.get(sourceSession.id);
         if (!session) continue;
-        const lastSeenAt = getSessionSeenAt(state, sourceSession.id, sourceSession.providerSessionId);
-        const seenCompletionMarker = getSessionSeenMarker(state, sourceSession.id, sourceSession.providerSessionId);
+        const lastSeenAt = getSessionSeenAt(state2, sourceSession.id, sourceSession.providerSessionId);
+        const seenCompletionMarker = getSessionSeenMarker(state2, sourceSession.id, sourceSession.providerSessionId);
         const lastUsedAt = getSessionLastUsedAt(sourceSession);
         const completionMarker = getSessionCompletionMarker(sourceSession);
         const { unread, inboxBucket } = sourceSession.surfaceHidden ? { unread: false, inboxBucket: "idle" } : getUnreadState(
@@ -86901,8 +86901,8 @@ ${cleanBody}`;
           lastMessageAt: sourceSession.lastMessageAt,
           lastUpdated: sourceSession.lastUpdated
         }, {
-          dismissedNotificationId: getSessionNotificationDismissal(state, sourceSession.id, sourceSession.providerSessionId),
-          unreadNotificationId: getSessionNotificationUnreadOverride(state, sourceSession.id, sourceSession.providerSessionId)
+          dismissedNotificationId: getSessionNotificationDismissal(state2, sourceSession.id, sourceSession.providerSessionId),
+          unreadNotificationId: getSessionNotificationUnreadOverride(state2, sourceSession.id, sourceSession.providerSessionId)
         });
         session.lastSeenAt = lastSeenAt;
         session.unread = overlayUnread;
@@ -88066,8 +88066,8 @@ ${cleanBody}`;
       if (!sessionId) return false;
       try {
         const instance = components.instanceManager?.getInstance?.(sessionId);
-        const state = instance?.getState?.();
-        const settings = state?.settings || {};
+        const state2 = instance?.getState?.();
+        const settings = state2?.settings || {};
         if (settings.autoApprove !== true) return false;
         const resolvedLocally = instance?.approvalRecentlyResolvedLocally;
         return typeof resolvedLocally === "function" ? resolvedLocally.call(instance) === true : false;
@@ -88321,13 +88321,13 @@ ${cleanBody}`;
       const sessionId = readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId);
       if (sessionId) {
         try {
-          const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
-          const settings = state?.settings || {};
+          const state2 = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
+          const settings = state2?.settings || {};
           const meshNodeFor = readNonEmptyString(settings.meshNodeFor);
           if (meshNodeFor) return meshNodeFor;
           const byStamp = recoverMeshIdByNodeId(readNonEmptyString(settings.meshNodeId));
           if (byStamp) return byStamp;
-          const sessionWorkspace = readNonEmptyString(state?.workspace);
+          const sessionWorkspace = readNonEmptyString(state2?.workspace);
           const bySessionWorkspace = sessionWorkspace ? readNonEmptyString(getCachedMeshByWorkspace(sessionWorkspace)?.id) : "";
           if (bySessionWorkspace) return bySessionWorkspace;
         } catch {
@@ -89353,15 +89353,15 @@ ${cleanBody}`;
       const idleCoordinators = [];
       try {
         for (const inst of components.instanceManager.getByCategory("cli")) {
-          const state = inst.getState();
-          const settings = state.settings && typeof state.settings === "object" ? state.settings : {};
+          const state2 = inst.getState();
+          const settings = state2.settings && typeof state2.settings === "object" ? state2.settings : {};
           if (readNonEmptyString(settings.meshCoordinatorFor) !== meshId) continue;
-          const status = readNonEmptyString(state.status).toLowerCase();
+          const status = readNonEmptyString(state2.status).toLowerCase();
           const modalParked = typeof inst.isModalParked === "function" ? inst.isModalParked() === true : status === "waiting_choice" || status === "waiting_approval";
           const drainStatus = typeof inst.getDrainStatus === "function" ? inst.getDrainStatus() : null;
           const idle = drainStatus !== null ? drainStatus === "idle" : status === "idle";
           if (idle && !modalParked) {
-            idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state.instanceId) });
+            idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state2.instanceId) });
           }
         }
       } catch {
@@ -89798,8 +89798,8 @@ ${cleanBody}`;
       return `${meshId}::${canonicalDaemonId2(daemonId) ?? daemonId}`;
     }
     function isRemotePullBackedOff(meshId, daemonId, nowMs) {
-      const state = remotePullBackoffByDaemon.get(pullBackoffKey(meshId, daemonId));
-      return !!state && nowMs < state.nextPullAtMs;
+      const state2 = remotePullBackoffByDaemon.get(pullBackoffKey(meshId, daemonId));
+      return !!state2 && nowMs < state2.nextPullAtMs;
     }
     function noteRemotePullResult(meshId, daemonId, result, nowMs) {
       const key2 = pullBackoffKey(meshId, daemonId);
@@ -90440,11 +90440,11 @@ ${cleanBody}`;
       }
       return { version: 1, nodes: {} };
     }
-    function saveRetentionState(state) {
+    function saveRetentionState(state2) {
       const file2 = retentionStatePath();
       const tmp = `${file2}.${process.pid}.${Date.now()}.tmp`;
       try {
-        fs18.writeFileSync(tmp, JSON.stringify(state, null, 2), { encoding: "utf8", mode: 384 });
+        fs18.writeFileSync(tmp, JSON.stringify(state2, null, 2), { encoding: "utf8", mode: 384 });
         fs18.renameSync(tmp, file2);
       } catch (e) {
         try {
@@ -90455,25 +90455,25 @@ ${cleanBody}`;
       }
     }
     function acquireWorktreeRetentionLease(args) {
-      const state = loadRetentionState();
+      const state2 = loadRetentionState();
       const key2 = stateKey(args.meshId, args.nodeId);
-      const record2 = state.nodes[key2];
+      const record2 = state2.nodes[key2];
       const lease = record2?.lease;
       if (lease && lease.owner !== args.owner && lease.expiresAt > args.nowMs) return false;
-      state.nodes[key2] = {
+      state2.nodes[key2] = {
         ...record2 ?? { firstPassAt: args.nowMs, lastPassAt: args.nowMs, lastTickId: "", passCount: 0 },
         lease: { owner: args.owner, expiresAt: args.nowMs + args.leaseMs }
       };
-      saveRetentionState(state);
+      saveRetentionState(state2);
       return true;
     }
     function releaseWorktreeRetentionLease(args) {
-      const state = loadRetentionState();
+      const state2 = loadRetentionState();
       const key2 = stateKey(args.meshId, args.nodeId);
-      const record2 = state.nodes[key2];
+      const record2 = state2.nodes[key2];
       if (record2?.lease && record2.lease.owner === args.owner) {
         delete record2.lease;
-        saveRetentionState(state);
+        saveRetentionState(state2);
       }
     }
     async function defaultRunGit(args, cwd) {
@@ -90695,8 +90695,8 @@ ${cleanBody}`;
       }
       const acquired = acquireWorktreeRetentionLease({ meshId, nodeId, owner, nowMs: opts.nowMs, leaseMs });
       if (!acquired) {
-        const state = loadRetentionState();
-        const lease = state.nodes[stateKey(meshId, nodeId)]?.lease;
+        const state2 = loadRetentionState();
+        const lease = state2.nodes[stateKey(meshId, nodeId)]?.lease;
         entry.reasonCode = "lease_held";
         entry.detail = "Another retention pass holds an unexpired removal lease for this node.";
         if (entry.auto) {
@@ -90801,9 +90801,9 @@ ${cleanBody}`;
           ...cleanup.branchRefReason ? { branchRefReason: cleanup.branchRefReason } : {}
         };
         metrics2.removed++;
-        const state = loadRetentionState();
-        delete state.nodes[stateKey(meshId, nodeId)];
-        saveRetentionState(state);
+        const state2 = loadRetentionState();
+        delete state2.nodes[stateKey(meshId, nodeId)];
+        saveRetentionState(state2);
       } finally {
         releaseWorktreeRetentionLease({ meshId, nodeId, owner });
       }
@@ -90818,24 +90818,24 @@ ${cleanBody}`;
       metrics2.ticks++;
       const entries = await buildPlan(deps, { ...opts, graceMs });
       const recordPasses = opts.recordPasses !== false;
-      const state = loadRetentionState();
+      const state2 = loadRetentionState();
       let stateDirty = false;
       for (const entry of entries) {
         const key2 = stateKey(meshId, entry.nodeId);
         if (!entry.candidate) {
-          if (recordPasses && state.nodes[key2] && !state.nodes[key2].lease) {
-            delete state.nodes[key2];
+          if (recordPasses && state2.nodes[key2] && !state2.nodes[key2].lease) {
+            delete state2.nodes[key2];
             stateDirty = true;
           }
           continue;
         }
         const now = opts.nowMs;
-        const existing = state.nodes[key2];
+        const existing = state2.nodes[key2];
         let record2;
         if (!existing) {
           if (recordPasses) {
             record2 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 1 };
-            state.nodes[key2] = record2;
+            state2.nodes[key2] = record2;
             stateDirty = true;
           } else {
             record2 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 0 };
@@ -90872,7 +90872,7 @@ ${cleanBody}`;
       }
       if (stateDirty) {
         try {
-          saveRetentionState(state);
+          saveRetentionState(state2);
         } catch (e) {
           LOG.warn(LOG_CATEGORY, `Failed to persist retention state for mesh ${meshId}: ${e?.message || e}`);
         }
@@ -91120,11 +91120,11 @@ ${cleanBody}`;
       }
       return role;
     }
-    function validateBubbleState(state, source, index) {
-      if (typeof state !== "string" || !VALID_BUBBLE_STATES.includes(state)) {
+    function validateBubbleState(state2, source, index) {
+      if (typeof state2 !== "string" || !VALID_BUBBLE_STATES.includes(state2)) {
         throw new Error(`${source}: messages[${index}].bubbleState must be one of ${VALID_BUBBLE_STATES.join(", ")}`);
       }
-      return state;
+      return state2;
     }
     function validateTurnStatus(turnStatus, source) {
       if (typeof turnStatus !== "string" || !VALID_TURN_STATUSES.includes(turnStatus)) {
@@ -92917,15 +92917,15 @@ ${cleanBody}`;
     function findLiveCoordinators(components) {
       const out = [];
       for (const inst of components.instanceManager.getByCategory("cli")) {
-        const state = inst.getState();
-        const settings = state.settings && typeof state.settings === "object" ? state.settings : {};
+        const state2 = inst.getState();
+        const settings = state2.settings && typeof state2.settings === "object" ? state2.settings : {};
         const meshId = readNonEmptyString(settings.meshCoordinatorFor);
         if (!meshId) continue;
-        const status = readNonEmptyString(state.status).toLowerCase();
+        const status = readNonEmptyString(state2.status).toLowerCase();
         const modalParked = typeof inst.isModalParked === "function" ? inst.isModalParked() === true : status === "waiting_choice" || status === "waiting_approval";
         const drainStatus = typeof inst.getDrainStatus === "function" ? inst.getDrainStatus() : null;
         const idle = drainStatus !== null ? drainStatus === "idle" : status === "idle";
-        const sessionId = readNonEmptyString(state.instanceId);
+        const sessionId = readNonEmptyString(state2.instanceId);
         if (getLogLevel() === "debug") {
           let adapterRaw = "?";
           try {
@@ -94905,8 +94905,8 @@ ${cleanBody}`;
       }
       return result;
     }
-    function isCancelExempt(state) {
-      return state === "completed" || state === "released" || state === "skipped" || state === "cancelled" || state === "failed" || state === "expired";
+    function isCancelExempt(state2) {
+      return state2 === "completed" || state2 === "released" || state2 === "skipped" || state2 === "cancelled" || state2 === "failed" || state2 === "expired";
     }
     function cancelGateDownstreamSubtree(store, gateNode, nowIso, reason = `coordinator_gate_timeout:${gateNode.nodeId}`) {
       const graphStore = store.graphStore();
@@ -95007,7 +95007,7 @@ ${cleanBody}`;
         }
       }
       if (counts.size === 0) return "no live worker frontier";
-      return [...counts.entries()].map(([state, n]) => `${n} ${state}`).join(", ");
+      return [...counts.entries()].map(([state2, n]) => `${n} ${state2}`).join(", ");
     }
     function gateSummary(gate) {
       const label = gate.ref || gate.gateId;
@@ -96166,15 +96166,15 @@ ${cleanBody}`;
       });
       return matches.map((t, i) => ({ t, i })).sort((a, b) => (b.t.priority ?? 0) - (a.t.priority ?? 0) || a.i - b.i).map((x) => x.t);
     }
-    function statusForState(state) {
-      if (state.status) return state.status;
-      if (state.modal) return "approval";
-      if (state.id === "busy" || state.id === "generating") return "generating";
+    function statusForState(state2) {
+      if (state2.status) return state2.status;
+      if (state2.modal) return "approval";
+      if (state2.id === "busy" || state2.id === "generating") return "generating";
       return "idle";
     }
-    function modalKindForState(state) {
-      if (state.modal_kind) return state.modal_kind;
-      if (state.modal) return "approval";
+    function modalKindForState(state2) {
+      if (state2.modal_kind) return state2.modal_kind;
+      if (state2.modal) return "approval";
       return null;
     }
     var init_fsm_types = __esm2({
@@ -99210,8 +99210,8 @@ ${marker}`,
             let meshWorker = null;
             if (!coord && target) {
               try {
-                const state = ctx.deps.instanceManager?.getInstance?.(sessionId)?.getState?.();
-                const settings = state?.settings || {};
+                const state2 = ctx.deps.instanceManager?.getInstance?.(sessionId)?.getState?.();
+                const settings = state2?.settings || {};
                 const workerMeshId = typeof settings.meshNodeFor === "string" ? settings.meshNodeFor.trim() : "";
                 const workerNodeId = typeof settings.meshNodeId === "string" ? settings.meshNodeId.trim() : "";
                 const workerTaskId = typeof settings.meshActiveTaskId === "string" ? settings.meshActiveTaskId.trim() : "";
@@ -101085,13 +101085,13 @@ ${marker}`,
       const windowMs = typeof config2.windowMs === "number" && Number.isFinite(config2.windowMs) && config2.windowMs > 0 ? Math.floor(config2.windowMs) : void 0;
       return { patterns, key: key2, ...maxAttempts !== void 0 ? { maxAttempts } : {}, ...windowMs !== void 0 ? { windowMs } : {} };
     }
-    function decideStartupDismiss(config2, state, screenSnapshot, spawnAt, now) {
+    function decideStartupDismiss(config2, state2, screenSnapshot, spawnAt, now) {
       if (!config2) return { dismiss: false };
       if (!screenSnapshot.trim()) return { dismiss: false };
       if (spawnAt <= 0) return { dismiss: false };
       if (now - spawnAt > (config2.windowMs ?? DEFAULT_WINDOW_MS)) return { dismiss: false };
-      if (state.attempts >= (config2.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)) return { dismiss: false };
-      if (screenSnapshot === state.lastDismissedSnapshot) return { dismiss: false };
+      if (state2.attempts >= (config2.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)) return { dismiss: false };
+      if (screenSnapshot === state2.lastDismissedSnapshot) return { dismiss: false };
       for (const pattern of config2.patterns) {
         try {
           if (new RegExp(pattern.regex, pattern.flags).test(screenSnapshot)) {
@@ -101102,9 +101102,9 @@ ${marker}`,
       }
       return { dismiss: false };
     }
-    function recordStartupDismiss(state, screenSnapshot) {
-      state.attempts += 1;
-      state.lastDismissedSnapshot = screenSnapshot;
+    function recordStartupDismiss(state2, screenSnapshot) {
+      state2.attempts += 1;
+      state2.lastDismissedSnapshot = screenSnapshot;
     }
     var DEFAULT_MAX_ATTEMPTS;
     var DEFAULT_WINDOW_MS;
@@ -101695,12 +101695,12 @@ ${marker}`,
             const cursor = this.adapter.getCursorPosition();
             const screen = this.adapter.snapshot();
             const ev = this.evalFsmNow(screen, cursor, now);
-            const state = stateById(this.spec, this.currentStateId);
+            const state2 = stateById(this.spec, this.currentStateId);
             return {
               currentState: this.currentStateId,
-              label: state?.label ?? this.currentStateId,
+              label: state2?.label ?? this.currentStateId,
               stateAgeMs: now - this.stateEnteredAt,
-              status: state ? statusForState(state) : "idle",
+              status: state2 ? statusForState(state2) : "idle",
               cursor,
               transitions: ev.transitions
             };
@@ -101919,24 +101919,24 @@ ${marker}`,
           /** Re-derive the visible modal + controls for the current state and emit a
            *  state_changed if anything differs from the last emit. */
           emitStateChanged(forceEmit) {
-            const state = stateById(this.spec, this.currentStateId);
-            if (!state) return;
+            const state2 = stateById(this.spec, this.currentStateId);
+            if (!state2) return;
             const screen = this.adapter.snapshot();
             const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
             const sections = resolveSections(this.spec.sections ?? {}, lines);
-            const modalLines = state.modal ? this.scrollbackLines() : lines;
-            const modalSections = state.modal ? resolveSections(this.spec.sections ?? {}, modalLines) : sections;
+            const modalLines = state2.modal ? this.scrollbackLines() : lines;
+            const modalSections = state2.modal ? resolveSections(this.spec.sections ?? {}, modalLines) : sections;
             const modalFullScreen = modalLines.join("\n");
-            const modal = this.deriveModal(state, modalSections, modalFullScreen);
-            const controls = this.deriveControls(state.id);
-            const title = modal?.title ?? this.deriveTitle(state, modalSections, modalFullScreen);
+            const modal = this.deriveModal(state2, modalSections, modalFullScreen);
+            const controls = this.deriveControls(state2.id);
+            const title = modal?.title ?? this.deriveTitle(state2, modalSections, modalFullScreen);
             const next = {
               // status is derived from the FSM state itself (statusForState), NOT from
               // whether a modal was parsed this frame. A modal state whose buttons briefly
               // fail to parse (PTY repaint → deriveModal returns null) must still report
               // its authoritative status (e.g. 'approval'), so the adapter never collapses
               // an approval/busy state to idle on a transient modal-parse miss.
-              state: { id: state.id, label: state.label, title, status: statusForState(state) },
+              state: { id: state2.id, label: state2.label, title, status: statusForState(state2) },
               modal,
               controls
             };
@@ -101952,15 +101952,15 @@ ${marker}`,
                 // status field already collapsed it to 'approval' so the modal is
                 // surfaced. The auto-approve worker needs the distinction back to
                 // avoid answering a /model picker on the user's behalf.
-                modal: next.modal ? { title: next.modal.title, buttons: next.modal.buttons.map((b) => ({ index: b.index, label: b.label })), kind: modalKindForState(state) } : null,
+                modal: next.modal ? { title: next.modal.title, buttons: next.modal.buttons.map((b) => ({ index: b.index, label: b.label })), kind: modalKindForState(state2) } : null,
                 controls: next.controls.map((c) => ({ id: c.id, label: c.label, action_type: c.actionType }))
               });
-              this.fireNotifications(state.id, title);
-              this.armOrCancelDelegateTimers(state.id);
+              this.fireNotifications(state2.id, title);
+              this.armOrCancelDelegateTimers(state2.id);
             }
           }
-          deriveModal(state, sections, fullScreen) {
-            const rule = state.extract?.buttons;
+          deriveModal(state2, sections, fullScreen) {
+            const rule = state2.extract?.buttons;
             if (!rule) return null;
             const hay = sectionText(sections, rule.section, fullScreen);
             const minCount = rule.min_count ?? 2;
@@ -101970,11 +101970,11 @@ ${marker}`,
               if (whole.length >= minCount) buttons = whole;
             }
             if (buttons.length < minCount) return null;
-            const title = this.deriveTitle(state, sections, fullScreen);
+            const title = this.deriveTitle(state2, sections, fullScreen);
             return { title, buttons };
           }
-          deriveTitle(state, sections, fullScreen) {
-            const rule = state.extract?.title;
+          deriveTitle(state2, sections, fullScreen) {
+            const rule = state2.extract?.title;
             if (!rule) return null;
             return extractTitle(rule, sections, fullScreen);
           }
@@ -107478,10 +107478,10 @@ ${text}` : text;
             if (!this.spawned) return { status: "starting", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
             this.refreshWirePendingQuestion();
             this.maybeRefreshNativeHistory();
-            const state = this.latestState;
-            if (!state) return { status: "starting", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
+            const state2 = this.latestState;
+            if (!state2) return { status: "starting", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
             const modal = this.latestModal;
-            if (state.status === "approval") {
+            if (state2.status === "approval") {
               return {
                 status: "waiting_approval",
                 messages: [],
@@ -107498,7 +107498,7 @@ ${text}` : text;
                 // the true FSM index without re-parsing. resolveModal() below relies on the same
                 // ordered list to translate an array position to the correct FSM index.
                 activeModal: modal ? {
-                  message: modal.title ?? state.label,
+                  message: modal.title ?? state2.label,
                   buttons: modal.buttons.map((b) => b.label),
                   buttonMeta: modal.buttons.map((b) => ({ index: b.index, label: b.label })),
                   kind: modal.kind ?? null
@@ -107518,7 +107518,7 @@ ${text}` : text;
                 ...sessionFields
               };
             }
-            if (state.status === "generating") {
+            if (state2.status === "generating") {
               return { status: "generating", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
             }
             return { status: "idle", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, fsmReadySeen: readySeen === true, ...sessionFields };
@@ -117087,11 +117087,11 @@ ${installInfo}`
                   acpInstance.onEvent("send_message", { input });
                 },
                 getStatus: () => {
-                  const state = acpInstance.getState();
+                  const state2 = acpInstance.getState();
                   return {
-                    status: state.status,
-                    messages: state.activeChat?.messages || [],
-                    activeModal: state.activeChat?.activeModal || null
+                    status: state2.status,
+                    messages: state2.activeChat?.messages || [],
+                    activeModal: state2.activeChat?.activeModal || null
                   };
                 },
                 getPartialResponse: () => "",
@@ -117942,9 +117942,9 @@ Run 'adhdev doctor' for detailed diagnostics.`
       if (!dispatch) return "skipped";
       let settings = {};
       try {
-        const state = ctx.deps.instanceManager.getInstance(sessionId)?.getState?.();
-        if (state?.settings && typeof state.settings === "object") {
-          settings = state.settings;
+        const state2 = ctx.deps.instanceManager.getInstance(sessionId)?.getState?.();
+        if (state2?.settings && typeof state2.settings === "object") {
+          settings = state2.settings;
         }
       } catch {
       }
@@ -118142,9 +118142,9 @@ Run 'adhdev doctor' for detailed diagnostics.`
               historyBehavior: providerMeta?.historyBehavior,
               scripts: providerMeta?.scripts
             });
-            const state = loadState();
-            const savedSessions = getSavedProviderSessions(state, { providerType, kind });
-            const recentSessions = getRecentActivity(state, 200).filter((entry) => entry.providerType === providerType && entry.kind === kind && entry.providerSessionId);
+            const state2 = loadState();
+            const savedSessions = getSavedProviderSessions(state2, { providerType, kind });
+            const recentSessions = getRecentActivity(state2, 200).filter((entry) => entry.providerType === providerType && entry.kind === kind && entry.providerSessionId);
             const savedSessionById = new Map(savedSessions.map((entry) => [entry.providerSessionId, entry]));
             const recentSessionById = new Map(recentSessions.map((entry) => [entry.providerSessionId, entry]));
             const canResumeById = supportsExplicitSessionResume(providerMeta?.resume);
@@ -125269,10 +125269,10 @@ ${effect.notification.body || ""}`.trim();
             if (current) args.push(current);
             return args;
           }
-          setProviderAvailability(type2, state) {
+          setProviderAvailability(type2, state2) {
             this.providerAvailability.set(type2, {
-              installed: !!state.installed,
-              detectedPath: state.detectedPath ?? null
+              installed: !!state2.installed,
+              detectedPath: state2.detectedPath ?? null
             });
           }
           setCliDetectionResults(results, replace = true) {
@@ -127250,16 +127250,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
                   return (aNode === preferredNodeId ? -1 : 0) - (bNode === preferredNodeId ? -1 : 0);
                 });
                 for (const inst of sorted) {
-                  const state = inst.getState();
-                  const settings = state.settings || {};
+                  const state2 = inst.getState();
+                  const settings = state2.settings || {};
                   const nodeId = readStringValue(settings.meshNodeId, settings.nodeId);
                   if (!nodeId || nodeId !== preferredNodeId) continue;
                   const meshNodeFor = readStringValue(settings.meshNodeFor);
                   if (meshNodeFor !== meshId) continue;
-                  const status = (readStringValue(state.status) || "").toLowerCase();
+                  const status = (readStringValue(state2.status) || "").toLowerCase();
                   if (status !== "idle") continue;
-                  const sessionId = typeof state.instanceId === "string" ? state.instanceId : "";
-                  const providerType = readStringValue(state.type, settings.providerType) || "";
+                  const sessionId = typeof state2.instanceId === "string" ? state2.instanceId : "";
+                  const providerType = readStringValue(state2.type, settings.providerType) || "";
                   if (sessionId && providerType) {
                     tryAssignQueueTask2(ctx.deps, meshId, nodeId, sessionId, providerType);
                     break;
@@ -129631,10 +129631,10 @@ ${mergeTreeErr?.stderr || ""}`;
     function collectBlockingSessions(deps, meshId) {
       const blocking = [];
       const states = deps.instanceManager.collectAllStates();
-      const consider = (state) => {
-        const status = String(state?.status || "");
-        const instanceId = typeof state?.instanceId === "string" ? state.instanceId : null;
-        const pendingOutbound = typeof state?.pendingOutboundCount === "number" && state.pendingOutboundCount > 0;
+      const consider = (state2) => {
+        const status = String(state2?.status || "");
+        const instanceId = typeof state2?.instanceId === "string" ? state2.instanceId : null;
+        const pendingOutbound = typeof state2?.pendingOutboundCount === "number" && state2.pendingOutboundCount > 0;
         const turn = resolveSessionTurnPresentation({
           sessionId: instanceId,
           legacyStatus: status,
@@ -129647,13 +129647,13 @@ ${mergeTreeErr?.stderr || ""}`;
           // The coordinator marker is stamped by mesh_coordinator_launch and
           // re-stamped on restore (cli-manager.restoreHostedSessions). Ad-hoc
           // coordinator sessions have no marker and are NOT waived by selfOnly.
-          selfCoordinator: !!meshId && state?.settings?.meshCoordinatorFor === meshId,
+          selfCoordinator: !!meshId && state2?.settings?.meshCoordinatorFor === meshId,
           pendingOutbound
         });
       };
-      for (const state of states) {
-        consider(state);
-        const childStates = "extensions" in state && Array.isArray(state.extensions) ? state.extensions : [];
+      for (const state2 of states) {
+        consider(state2);
+        const childStates = "extensions" in state2 && Array.isArray(state2.extensions) ? state2.extensions : [];
         for (const child of childStates) consider(child);
       }
       return blocking;
@@ -130916,8 +130916,8 @@ ${mergeTreeErr?.stderr || ""}`;
             const payload = isFriendlyArrayForm ? rawResponse : normalizeInteractivePromptResponse(rawResponse);
             const heldPrompt = (() => {
               try {
-                const state = instance.getState?.();
-                return state?.activeChat?.activeInteractivePrompt ?? state?.activeInteractivePrompt ?? null;
+                const state2 = instance.getState?.();
+                return state2?.activeChat?.activeInteractivePrompt ?? state2?.activeInteractivePrompt ?? null;
               } catch {
                 return null;
               }
@@ -134482,9 +134482,9 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         changeImpact: ctx.changeImpact,
         // M2-2: consume the node's persisted bootstrap state; persist re-runs.
         persistedBootstrapState: node.worktreeBootstrap,
-        onBootstrapStateChange: (state) => {
-          node.worktreeBootstrap = state;
-          void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ updateNode: updateNode2 }) => updateNode2(mesh.id, node.id, { worktreeBootstrap: state })).catch(() => {
+        onBootstrapStateChange: (state2) => {
+          node.worktreeBootstrap = state2;
+          void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ updateNode: updateNode2 }) => updateNode2(mesh.id, node.id, { worktreeBootstrap: state2 })).catch(() => {
           });
         }
       });
@@ -139269,21 +139269,21 @@ ${e?.stderr || ""}`;
       }
       try {
         const { runMeshWorktreeBootstrap: runMeshWorktreeBootstrap2 } = await Promise.resolve().then(() => (init_worktree_bootstrap_config(), worktree_bootstrap_config_exports));
-        const state = await runMeshWorktreeBootstrap2(mesh, worktreePath);
+        const state2 = await runMeshWorktreeBootstrap2(mesh, worktreePath);
         const outcome = {
-          status: state.status,
-          required: state.required !== false,
-          error: state.error,
-          lastCommand: state.lastCommand,
-          exitCode: state.exitCode ?? void 0,
-          configSource: state.configSource,
+          status: state2.status,
+          required: state2.required !== false,
+          error: state2.error,
+          lastCommand: state2.lastCommand,
+          exitCode: state2.exitCode ?? void 0,
+          configSource: state2.configSource,
           submodulesInitialized
         };
-        if (state.status === "failed" || state.status === "stale") {
+        if (state2.status === "failed" || state2.status === "stale") {
           const level = outcome.required ? "error" : "warn";
-          LOG[level]("MeshGraphWorkspace", `worktree bootstrap ${state.status}${outcome.required ? " (REQUIRED)" : ""} for ${worktreePath}: ${state.error || "no error reported"}${state.lastCommand ? ` [last: ${state.lastCommand}]` : ""}`);
-        } else if (state.status !== "ready") {
-          LOG.info("MeshGraphWorkspace", `worktree bootstrap ${state.status} for ${worktreePath} (${state.configSource || "no config"})`);
+          LOG[level]("MeshGraphWorkspace", `worktree bootstrap ${state2.status}${outcome.required ? " (REQUIRED)" : ""} for ${worktreePath}: ${state2.error || "no error reported"}${state2.lastCommand ? ` [last: ${state2.lastCommand}]` : ""}`);
+        } else if (state2.status !== "ready") {
+          LOG.info("MeshGraphWorkspace", `worktree bootstrap ${state2.status} for ${worktreePath} (${state2.configSource || "no config"})`);
         }
         return outcome;
       } catch (e) {
@@ -140377,6 +140377,9 @@ ${e?.stderr || ""}`;
       READ_MODEL_CONSUMER: () => READ_MODEL_CONSUMER,
       RECENT_MAGI_CAP: () => RECENT_MAGI_CAP,
       RECENT_TERMINAL_REFINE_CAP: () => RECENT_TERMINAL_REFINE_CAP,
+      REDRIVEN_TERMINAL_KINDS: () => REDRIVEN_TERMINAL_KINDS,
+      REDRIVE_CONSUMER: () => REDRIVE_CONSUMER,
+      REDRIVE_ENV: () => REDRIVE_ENV,
       RawTerminalAttachment: () => RawTerminalAttachment,
       SEQSCRIBE_DB_NAME: () => SEQSCRIBE_DB_NAME,
       SESSION_TRANSCRIPT_RING: () => SESSION_TRANSCRIPT_RING,
@@ -140407,6 +140410,8 @@ ${e?.stderr || ""}`;
       __resetMeshParityForTests: () => __resetMeshParityForTests,
       __resetMeshReadModelForTests: () => __resetMeshReadModelForTests,
       __resetMeshReadReadinessForTests: () => __resetMeshReadReadinessForTests,
+      __resetTerminalRedriveConsumerForTests: () => __resetTerminalRedriveConsumerForTests,
+      __resetTerminalRedriveForTests: () => __resetTerminalRedriveForTests,
       __resetTranscriptParityForTests: () => __resetTranscriptParityForTests,
       abandonMeshGraphGate: () => abandonMeshGraphGate3,
       activateKnownMeshTopics: () => activateKnownMeshTopics,
@@ -140420,6 +140425,7 @@ ${e?.stderr || ""}`;
       armBeacon: () => armBeacon,
       assertNoDependencyCycle: () => assertNoDependencyCycle,
       assertNoPlaintextHintTopics: () => assertNoPlaintextHintTopics,
+      assertRedriveConsumerNameIsPruneSafe: () => assertRedriveConsumerNameIsPruneSafe,
       assistantJournalPolicy: () => assistantJournalPolicy,
       backfillMeshEventShadow: () => backfillMeshEventShadow,
       baseTopicDefinitions: () => baseTopicDefinitions,
@@ -140456,6 +140462,7 @@ ${e?.stderr || ""}`;
       buildP2pRelayFailurePayload: () => buildP2pRelayFailurePayload3,
       buildParkedTaskNotice: () => buildParkedTaskNotice,
       buildPinnedGlobalInstallCommand: () => buildPinnedGlobalInstallCommand,
+      buildRedriveInjection: () => buildRedriveInjection,
       buildRuntimeSystemChatMessage: () => buildRuntimeSystemChatMessage,
       buildSessionEntries: () => buildSessionEntries,
       buildSessionModalDeliverySignature: () => buildSessionModalDeliverySignature,
@@ -140504,9 +140511,11 @@ ${e?.stderr || ""}`;
       configureFleetStatusParity: () => configureFleetStatusParity,
       configureMeshDualWrite: () => configureMeshDualWrite,
       configureMeshReadModel: () => configureMeshReadModel,
+      configureTerminalRedrive: () => configureTerminalRedrive,
       connectCdpManager: () => connectCdpManager,
       consoleSymbols: () => consoleSymbols,
       consumeAssistantJournal: () => consumeAssistantJournal,
+      consumeRedriveEntry: () => consumeRedriveEntry,
       contentTopicsFor: () => contentTopicsFor,
       coordinatorGateAbandonedReason: () => coordinatorGateAbandonedReason,
       coordinatorGateBlockReason: () => coordinatorGateBlockReason,
@@ -140551,6 +140560,8 @@ ${e?.stderr || ""}`;
       enqueueTask: () => enqueueTask3,
       enqueueTaskGraph: () => enqueueTaskGraph3,
       ensureSessionHostReady: () => ensureSessionHostReady,
+      ensureTerminalRedriveConsumer: () => ensureTerminalRedriveConsumer,
+      ensureTerminalRedriveConsumersAtBoot: () => ensureTerminalRedriveConsumersAtBoot,
       estimateProjectedEntryBytes: () => estimateProjectedEntryBytes,
       evaluateFleetStatusReadiness: () => evaluateFleetStatusReadiness,
       evaluateFsm: () => evaluateFsm,
@@ -140626,6 +140637,7 @@ ${e?.stderr || ""}`;
       getRecentCommands: () => getRecentCommands,
       getRecentDebugTrace: () => getRecentDebugTrace,
       getRecentLogs: () => getRecentLogs,
+      getRedriveState: () => getRedriveState,
       getSavedProviderSessions: () => getSavedProviderSessions,
       getSeqscribeDbPath: () => getSeqscribeDbPath,
       getSessionHostRecoveryLabel: () => import_session_host_core3.getSessionHostRecoveryLabel,
@@ -140686,6 +140698,7 @@ ${e?.stderr || ""}`;
       isSyntheticTestCoordinatorSession: () => isSyntheticTestCoordinatorSession,
       isSyntheticTestMeshId: () => isSyntheticTestMeshId,
       isTaskReadonly: () => isTaskReadonly2,
+      isTerminalRedriveEnabled: () => isTerminalRedriveEnabled,
       isUserFacingChatMessage: () => isUserFacingChatMessage,
       isWeakCompletionEvidence: () => isWeakCompletionEvidence2,
       isWorkerMcpEnabled: () => isWorkerMcpEnabled,
@@ -140852,6 +140865,7 @@ ${e?.stderr || ""}`;
       recoverExpiredWorkspaceSagas: () => recoverExpiredWorkspaceSagas,
       registerExtensionProviders: () => registerExtensionProviders,
       registerMeshCoordinator: () => registerMeshCoordinator,
+      registeredRedriveMeshIds: () => registeredRedriveMeshIds,
       releaseMeshGraphGate: () => releaseMeshGraphGate3,
       removeMagiKindPanel: () => removeMagiKindPanel2,
       removeNode: () => removeNode,
@@ -144449,8 +144463,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const registeredProviderSessionId = typeof session?.providerSessionId === "string" ? session.providerSessionId.trim() : "";
       if (registeredProviderSessionId) return registeredProviderSessionId;
       const instance = getTargetInstance(h, args);
-      const state = instance?.getState?.();
-      const providerSessionId = typeof state?.providerSessionId === "string" ? state.providerSessionId.trim() : "";
+      const state2 = instance?.getState?.();
+      const providerSessionId = typeof state2?.providerSessionId === "string" ? state2.providerSessionId.trim() : "";
       if (providerSessionId) return providerSessionId;
       const currentSession = h.currentSession;
       if (currentSession?.sessionId === targetSessionId) {
@@ -145828,23 +145842,23 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         capabilities: session.capabilities
       };
     }
-    function summarizeStateForDebug(state) {
-      if (!state || typeof state !== "object") return null;
-      const activeChat = state.activeChat && typeof state.activeChat === "object" ? state.activeChat : null;
+    function summarizeStateForDebug(state2) {
+      if (!state2 || typeof state2 !== "object") return null;
+      const activeChat = state2.activeChat && typeof state2.activeChat === "object" ? state2.activeChat : null;
       return {
-        type: state.type,
-        name: state.name,
-        category: state.category,
-        status: state.status,
-        instanceId: state.instanceId,
-        providerSessionId: state.providerSessionId,
-        title: state.title,
-        transport: state.transport,
-        mode: state.mode,
-        workspace: state.workspace,
-        runtime: state.runtime,
-        errorMessage: state.errorMessage,
-        errorReason: state.errorReason,
+        type: state2.type,
+        name: state2.name,
+        category: state2.category,
+        status: state2.status,
+        instanceId: state2.instanceId,
+        providerSessionId: state2.providerSessionId,
+        title: state2.title,
+        transport: state2.transport,
+        mode: state2.mode,
+        workspace: state2.workspace,
+        runtime: state2.runtime,
+        errorMessage: state2.errorMessage,
+        errorReason: state2.errorReason,
         activeChat: activeChat ? {
           status: activeChat.status,
           title: activeChat.title,
@@ -145853,9 +145867,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           activeInteractivePrompt: activeChat.activeInteractivePrompt ?? null,
           messagesTail: Array.isArray(activeChat.messages) ? activeChat.messages.slice(-10) : void 0
         } : null,
-        activeInteractivePrompt: state.activeInteractivePrompt ?? null,
-        controlValues: state.controlValues,
-        summaryMetadata: state.summaryMetadata
+        activeInteractivePrompt: state2.activeInteractivePrompt ?? null,
+        controlValues: state2.controlValues,
+        summaryMetadata: state2.summaryMetadata
       };
     }
     function buildDebugBundleText(bundle) {
@@ -146132,11 +146146,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         return null;
       }
     }
-    function getStateMessageCount(state) {
-      return Array.isArray(state?.messages) ? state.messages.length : 0;
+    function getStateMessageCount(state2) {
+      return Array.isArray(state2?.messages) ? state2.messages.length : 0;
     }
-    function getStateLastSignature(state) {
-      const messages = Array.isArray(state?.messages) ? state.messages : [];
+    function getStateLastSignature(state2) {
+      const messages = Array.isArray(state2?.messages) ? state2.messages : [];
       const last = messages[messages.length - 1];
       if (!last) return "";
       return `${last.role || ""}:${String(last.content || "").replace(/\s+/g, " ").trim()}`;
@@ -146153,10 +146167,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const beforeSignature = getStateLastSignature(before);
       for (let attempt = 0; attempt < 12; attempt += 1) {
         await new Promise((resolve33) => setTimeout(resolve33, 250));
-        const state = await readExtensionChatState(h);
-        if (state?.status === "waiting_approval") return true;
-        const afterCount = getStateMessageCount(state);
-        const afterSignature = getStateLastSignature(state);
+        const state2 = await readExtensionChatState(h);
+        if (state2?.status === "waiting_approval") return true;
+        const afterCount = getStateMessageCount(state2);
+        const afterSignature = getStateLastSignature(state2);
         if (afterCount > beforeCount) return true;
         if (afterSignature && afterSignature !== beforeSignature) return true;
       }
@@ -147738,12 +147752,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function handleWorkspaceList() {
       const config2 = loadWorkspaceConfig();
       if ("error" in config2) return { success: false, error: config2.error };
-      const state = getWorkspaceState(config2);
+      const state2 = getWorkspaceState(config2);
       return {
         success: true,
-        workspaces: state.workspaces,
-        defaultWorkspaceId: state.defaultWorkspaceId,
-        defaultWorkspacePath: state.defaultWorkspacePath
+        workspaces: state2.workspaces,
+        defaultWorkspaceId: state2.defaultWorkspaceId,
+        defaultWorkspacePath: state2.defaultWorkspacePath
       };
     }
     function handleWorkspaceAdd(args) {
@@ -147757,8 +147771,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if ("error" in result) return { success: false, error: result.error };
       const saveResult = persistWorkspaceConfig(result.config);
       if ("error" in saveResult) return { success: false, error: saveResult.error };
-      const state = getWorkspaceState(result.config);
-      return { success: true, entry: result.entry, ...state };
+      const state2 = getWorkspaceState(result.config);
+      return { success: true, entry: result.entry, ...state2 };
     }
     function handleWorkspaceRemove(args) {
       const id = (args?.id || "").trim();
@@ -147770,8 +147784,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if ("error" in result) return { success: false, error: result.error };
       const saveResult = persistWorkspaceConfig(result.config);
       if ("error" in saveResult) return { success: false, error: saveResult.error };
-      const state = getWorkspaceState(result.config);
-      return { success: true, removedId: id, ...state };
+      const state2 = getWorkspaceState(result.config);
+      return { success: true, removedId: id, ...state2 };
     }
     function handleWorkspaceSetDefault(args) {
       const clear = args?.clear === true || args?.id === null || args?.id === "";
@@ -147782,10 +147796,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if ("error" in result2) return { success: false, error: result2.error };
         const saveResult2 = persistWorkspaceConfig(result2.config);
         if ("error" in saveResult2) return { success: false, error: saveResult2.error };
-        const state2 = getWorkspaceState(result2.config);
+        const state3 = getWorkspaceState(result2.config);
         return {
           success: true,
-          ...state2
+          ...state3
         };
       }
       const pathArg = args?.path != null && String(args.path).trim() ? String(args.path).trim() : "";
@@ -147813,8 +147827,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if ("error" in result) return { success: false, error: result.error };
       const saveResult = persistWorkspaceConfig(result.config);
       if ("error" in saveResult) return { success: false, error: saveResult.error };
-      const state = getWorkspaceState(result.config);
-      return { success: true, ...state };
+      const state2 = getWorkspaceState(result.config);
+      return { success: true, ...state2 };
     }
     var COMMAND_DEBUG_LEVELS = /* @__PURE__ */ new Set([
       "read_chat",
@@ -149205,33 +149219,33 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       // the dashboard re-subscribes on reopen if it ever does.
       giveUpAfterMs: 5 * 6e4
     };
-    function decideMissingSessionAttempt(state, now, policy = DEFAULT_CHAT_TAIL_MISSING_SESSION_POLICY) {
-      if (!state) return { action: "attempt" };
-      const missingFor = now - state.firstMissingAt;
+    function decideMissingSessionAttempt(state2, now, policy = DEFAULT_CHAT_TAIL_MISSING_SESSION_POLICY) {
+      if (!state2) return { action: "attempt" };
+      const missingFor = now - state2.firstMissingAt;
       if (missingFor >= policy.giveUpAfterMs) return { action: "drop" };
       if (missingFor < policy.graceMs) return { action: "attempt" };
-      const sinceLastAttempt = now - state.lastAttemptAt;
-      return sinceLastAttempt >= resolveBackoffMs(state, policy) ? { action: "attempt" } : { action: "skip" };
+      const sinceLastAttempt = now - state2.lastAttemptAt;
+      return sinceLastAttempt >= resolveBackoffMs(state2, policy) ? { action: "attempt" } : { action: "skip" };
     }
-    function resolveBackoffMs(state, policy = DEFAULT_CHAT_TAIL_MISSING_SESSION_POLICY) {
-      const stepsIntoBackoff = Math.max(0, state.consecutiveMisses - 1);
+    function resolveBackoffMs(state2, policy = DEFAULT_CHAT_TAIL_MISSING_SESSION_POLICY) {
+      const stepsIntoBackoff = Math.max(0, state2.consecutiveMisses - 1);
       const boundedExponent = Math.min(stepsIntoBackoff, 20);
       const scaled = policy.initialBackoffMs * Math.pow(2, boundedExponent);
       return Math.min(scaled, policy.maxBackoffMs);
     }
-    function recordMissingSessionAttempt(state, now) {
-      if (!state) {
+    function recordMissingSessionAttempt(state2, now) {
+      if (!state2) {
         return { firstMissingAt: now, lastAttemptAt: now, consecutiveMisses: 1, warned: false };
       }
       return {
-        firstMissingAt: state.firstMissingAt,
+        firstMissingAt: state2.firstMissingAt,
         lastAttemptAt: now,
-        consecutiveMisses: state.consecutiveMisses + 1,
-        warned: state.warned
+        consecutiveMisses: state2.consecutiveMisses + 1,
+        warned: state2.warned
       };
     }
-    function shouldWarnForMissingSession(state) {
-      return !state.warned;
+    function shouldWarnForMissingSession(state2) {
+      return !state2.warned;
     }
     function isMissingLiveSessionResult(result) {
       if (!result || typeof result !== "object") return false;
@@ -149523,12 +149537,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         for (const entry of this.collectPushEntries("session.modal", connectionId)) {
           const params = entry.params;
           const sessionId = params.targetSessionId;
-          const state = source(sessionId);
-          if (!state) continue;
+          const state2 = source(sessionId);
+          if (!state2) continue;
           const now = this.now();
-          const activeModal = state.activeModal;
-          const status = String(state.status || "idle");
-          const title = typeof state.title === "string" ? state.title : void 0;
+          const activeModal = state2.activeModal;
+          const status = String(state2.status || "idle");
+          const title = typeof state2.title === "string" ? state2.title : void 0;
           const interactionId = this.opts.interactionId?.(sessionId);
           const prepared = prepareSessionModalUpdate({
             key: entry.key,
@@ -149629,16 +149643,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       async buildChatTailUpdate(input) {
         const read = this.opts.sources?.readChatTail;
         if (!read) return null;
-        const { key: key2, params, state } = input;
+        const { key: key2, params, state: state2 } = input;
         const result = await read({
           targetSessionId: params.targetSessionId,
           ...params.historySessionId ? { historySessionId: params.historySessionId } : {},
-          ...state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}
+          ...state2.cursor.tailLimit > 0 ? { tailLimit: state2.cursor.tailLimit } : {}
         });
         if (isMissingLiveSessionResult(result)) {
           const now = this.now();
-          const missing = recordMissingSessionAttempt(state.missingSession, now);
-          state.missingSession = missing;
+          const missing = recordMissingSessionAttempt(state2.missingSession, now);
+          state2.missingSession = missing;
           const warnNow = shouldWarnForMissingSession(missing);
           if (warnNow) missing.warned = true;
           this.opts.chatTail?.onMissingSession?.({
@@ -149648,22 +149662,22 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           });
           return null;
         }
-        if (state.missingSession) state.missingSession = void 0;
+        if (state2.missingSession) state2.missingSession = void 0;
         const interactionId = this.opts.interactionId?.(params.targetSessionId);
         const prepared = prepareSessionChatTailUpdate({
           key: key2,
           sessionId: params.targetSessionId,
           ...params.historySessionId ? { historySessionId: params.historySessionId } : {},
-          seq: state.seq,
+          seq: state2.seq,
           timestamp: this.now(),
           ...interactionId ? { interactionId } : {},
-          cursor: state.cursor,
-          lastDeliveredSignature: state.lastDeliveredSignature,
+          cursor: state2.cursor,
+          lastDeliveredSignature: state2.lastDeliveredSignature,
           result
         });
-        state.cursor = prepared.cursor;
-        state.seq = prepared.seq;
-        state.lastDeliveredSignature = prepared.lastDeliveredSignature;
+        state2.cursor = prepared.cursor;
+        state2.seq = prepared.seq;
+        state2.lastDeliveredSignature = prepared.lastDeliveredSignature;
         this.opts.chatTail?.onPrepared?.({
           sessionId: params.targetSessionId,
           lastDeliveredSignature: prepared.lastDeliveredSignature,
@@ -150328,20 +150342,20 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (!sessionId) return void 0;
         const getInstance = this.deps.instanceManager?.getInstance;
         if (typeof getInstance !== "function") return void 0;
-        let state;
+        let state2;
         try {
-          state = getInstance.call(this.deps.instanceManager, sessionId)?.getState?.();
+          state2 = getInstance.call(this.deps.instanceManager, sessionId)?.getState?.();
         } catch {
           return void 0;
         }
-        const settings = state?.settings;
+        const settings = state2?.settings;
         if (!settings) return void 0;
         return {
           surfaceHidden: resolveSurfaceHidden(settings),
           // Status-gated exactly as builders.ts does: pass the session's live status so a
           // one-shot silent-idle arm mutes only the idle/completion frame and never an
           // approval/choice frame in the same turn.
-          muted: resolveMuted(settings, state?.status)
+          muted: resolveMuted(settings, state2?.status)
         };
       }
       buildServerStatusEvent(event) {
@@ -150705,8 +150719,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       hasScript(name) {
         return typeof this.provider.scripts?.[name] === "function";
       }
-      getStateTitle(state) {
-        return typeof state.title === "string" ? state.title : "";
+      getStateTitle(state2) {
+        return typeof state2.title === "string" ? state2.title : "";
       }
       parseMaybeJson(raw) {
         if (typeof raw !== "string") return raw;
@@ -150805,11 +150819,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (!lhs || !rhs) return false;
         return lhs === rhs || lhs.includes(rhs) || rhs.includes(lhs);
       }
-      messageCount(state) {
-        return Array.isArray(state?.messages) ? state.messages.length : 0;
+      messageCount(state2) {
+        return Array.isArray(state2?.messages) ? state2.messages.length : 0;
       }
-      lastMessageSignature(state) {
-        const messages = Array.isArray(state?.messages) ? state.messages : [];
+      lastMessageSignature(state2) {
+        const messages = Array.isArray(state2?.messages) ? state2.messages : [];
         const last = messages[messages.length - 1];
         if (!last) return "";
         return `${last.role || ""}:${String(last.content || "").replace(/\s+/g, " ").trim()}`;
@@ -150819,17 +150833,17 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const beforeSignature = this.lastMessageSignature(before);
         for (let attempt = 0; attempt < 12; attempt += 1) {
           await new Promise((resolve33) => setTimeout(resolve33, 250));
-          let state;
+          let state2;
           try {
-            state = await this.readChat(evaluate);
+            state2 = await this.readChat(evaluate);
           } catch {
             continue;
           }
-          if (state.status === "waiting_approval") {
+          if (state2.status === "waiting_approval") {
             return true;
           }
-          const afterCount = this.messageCount(state);
-          const afterSignature = this.lastMessageSignature(state);
+          const afterCount = this.messageCount(state2);
+          const afterSignature = this.lastMessageSignature(state2);
           if (afterCount > beforeCount) return true;
           if (afterSignature && afterSignature !== beforeSignature) return true;
         }
@@ -150852,16 +150866,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           raw = await evaluate(script);
           const data = typeof raw === "string" ? JSON.parse(raw) : raw;
           if (data?.error) {
-            const state2 = this.errorState(data.error);
+            const state3 = this.errorState(data.error);
             if (this.lastSuccessState?.messages?.length) {
-              state2.messages = this.lastSuccessState.messages;
+              state3.messages = this.lastSuccessState.messages;
             }
-            return state2;
+            return state3;
           }
           const validated = validateReadChatResultPayload(data, `${this.agentType} readChat`);
           const validatedStatus = validated.status;
           const streamStatus = validatedStatus === "generating" || validatedStatus === "no_progress" || validatedStatus === "long_generating" ? "streaming" : validatedStatus;
-          const state = {
+          const state2 = {
             agentType: this.agentType,
             agentName: this.agentName,
             extensionId: this.extensionId,
@@ -150871,26 +150885,26 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             ...validated.activeModal ? { activeModal: validated.activeModal } : {}
           };
           if (typeof validated.title === "string" && validated.title.trim()) {
-            state.title = validated.title.trim();
+            state2.title = validated.title.trim();
           }
           const providerSessionId = typeof validated.providerSessionId === "string" && validated.providerSessionId.trim() ? validated.providerSessionId.trim() : "";
           if (providerSessionId) {
-            state.sessionId = providerSessionId;
-            state.providerSessionId = providerSessionId;
+            state2.sessionId = providerSessionId;
+            state2.providerSessionId = providerSessionId;
           }
           const controlValues = extractProviderControlValues(this.provider.controls, validated);
           const surface = resolveProviderStateSurface({
             controlValues,
             summaryMetadata: validated.summaryMetadata
           });
-          if (surface.controlValues) state.controlValues = surface.controlValues;
-          if (surface.summaryMetadata) state.summaryMetadata = surface.summaryMetadata;
+          if (surface.controlValues) state2.controlValues = surface.controlValues;
+          if (surface.summaryMetadata) state2.summaryMetadata = surface.summaryMetadata;
           const effects = normalizeProviderEffects(validated);
-          if (effects.length > 0) state.effects = effects;
-          if (state.messages.length > 0) {
-            this.lastSuccessState = state;
+          if (effects.length > 0) state2.effects = effects;
+          if (state2.messages.length > 0) {
+            this.lastSuccessState = state2;
           }
-          return state;
+          return state2;
         } catch (error48) {
           const reason = error48 instanceof Error ? error48.message : String(error48);
           if (this.isTransportError(reason)) {
@@ -150898,11 +150912,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           }
           const preview = this.summarizeRaw(raw);
           const detail = preview ? ` (reason=${reason}; raw=${preview})` : ` (reason=${reason})`;
-          const state = this.errorState(`Failed to parse ${this.agentName} state${detail}`);
+          const state2 = this.errorState(`Failed to parse ${this.agentName} state${detail}`);
           if (this.lastSuccessState?.messages?.length) {
-            state.messages = this.lastSuccessState.messages;
+            state2.messages = this.lastSuccessState.messages;
           }
-          return state;
+          return state2;
         }
       }
       async sendMessage(evaluate, text) {
@@ -150992,8 +151006,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         for (let attempt = 0; attempt < 6; attempt += 1) {
           await new Promise((resolve33) => setTimeout(resolve33, 250));
-          const state = await this.readChat(evaluate);
-          const title = this.getStateTitle(state);
+          const state2 = await this.readChat(evaluate);
+          const title = this.getStateTitle(state2);
           if (this.titlesMatch(title, sessionId)) return true;
         }
         return false;
@@ -151095,9 +151109,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const child = (this.sessionRegistry?.listChildren(parentSessionId) || []).find((entry) => entry.transport === "cdp-webview" && entry.providerType === agentType);
         return child?.sessionId || null;
       }
-      getStateError(state) {
-        if (typeof state.error === "string" && state.error.trim()) return state.error.trim();
-        if (typeof state._error === "string" && state._error.trim()) return state._error.trim();
+      getStateError(state2) {
+        if (typeof state2.error === "string" && state2.error.trim()) return state2.error.trim();
+        if (typeof state2._error === "string" && state2._error.trim()) return state2._error.trim();
         return "unknown";
       }
       async connectManagedSession(cdp, parentSessionId, runtimeSessionId) {
@@ -151163,10 +151177,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (hiddenCacheFresh) return agent.lastState;
         try {
           const evaluate = (expr, timeout) => cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
-          const state = await agent.adapter.readChat(evaluate);
-          const resolvedProviderSessionId = typeof state.providerSessionId === "string" && state.providerSessionId.trim() ? state.providerSessionId.trim() : typeof state.sessionId === "string" && state.sessionId.trim() && state.sessionId !== agent.runtimeSessionId ? state.sessionId.trim() : void 0;
+          const state2 = await agent.adapter.readChat(evaluate);
+          const resolvedProviderSessionId = typeof state2.providerSessionId === "string" && state2.providerSessionId.trim() ? state2.providerSessionId.trim() : typeof state2.sessionId === "string" && state2.sessionId.trim() && state2.sessionId !== agent.runtimeSessionId ? state2.sessionId.trim() : void 0;
           const normalizedState = {
-            ...state,
+            ...state2,
             sessionId: agent.runtimeSessionId,
             ...resolvedProviderSessionId ? { providerSessionId: resolvedProviderSessionId } : {}
           };
@@ -151579,7 +151593,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_store2();
     init_runtime();
     init_logger();
-    function projectHotChatSessionStatesFromProviderState(state) {
+    function projectHotChatSessionStatesFromProviderState(state2) {
       const project = (item) => ({
         id: item.instanceId,
         status: item.activeChat?.status || item.status,
@@ -151591,10 +151605,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         runtimeRestoredFromStorage: item.runtime?.restoredFromStorage === true,
         runtimeRecoveryState: item.runtime?.recoveryState ?? null
       });
-      if (state.category === "ide") {
-        return [project(state), ...state.extensions.map(project)];
+      if (state2.category === "ide") {
+        return [project(state2), ...state2.extensions.map(project)];
       }
-      return [project(state)];
+      return [project(state2)];
     }
     var ProviderInstanceManager = class {
       instances = /* @__PURE__ */ new Map();
@@ -151676,15 +151690,15 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const states = [];
         for (const [id, instance] of this.instances) {
           try {
-            const state = instance.getState();
-            states.push(state);
-            this.emitPendingEvents(instance.type, state);
-            if (state.category === "ide") {
-              for (const childState of state.extensions) {
+            const state2 = instance.getState();
+            states.push(state2);
+            this.emitPendingEvents(instance.type, state2);
+            if (state2.category === "ide") {
+              for (const childState of state2.extensions) {
                 this.emitPendingEvents(childState.type, childState, {
                   targetSessionId: childState.instanceId,
-                  workspaceName: state.workspace || void 0,
-                  parentSessionId: state.instanceId
+                  workspaceName: state2.workspace || void 0,
+                  parentSessionId: state2.instanceId
                 });
               }
             }
@@ -151707,8 +151721,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               sessions.push(projected);
               continue;
             }
-            const state = instance.getState();
-            sessions.push(...projectHotChatSessionStatesFromProviderState(state));
+            const state2 = instance.getState();
+            sessions.push(...projectHotChatSessionStatesFromProviderState(state2));
           } catch (e) {
             LOG.warn("InstanceMgr", `[InstanceManager] Failed to collect hot chat metadata from ${id}: ${e.message}`);
           }
@@ -151794,15 +151808,15 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           listener(payload);
         }
       }
-      emitPendingEvents(providerType, state, extra = {}) {
-        for (const event of state.pendingEvents) {
+      emitPendingEvents(providerType, state2, extra = {}) {
+        for (const event of state2.pendingEvents) {
           for (const listener of this.eventListeners) {
             listener({
               ...event,
               providerType,
-              instanceId: state.instanceId,
-              targetSessionId: state.instanceId,
-              workspaceName: state.workspace || void 0,
+              instanceId: state2.instanceId,
+              targetSessionId: state2.instanceId,
+              workspaceName: state2.workspace || void 0,
               ...extra
             });
           }
@@ -151878,17 +151892,17 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const working = /* @__PURE__ */ new Set(["generating", "waiting_approval", "waiting_choice", "starting", "streaming", "working", "no_progress", "long_generating"]);
         for (const [id, inst] of this.instances) {
           if (id === excludeInstanceId) continue;
-          let state;
+          let state2;
           try {
-            state = inst.getState();
+            state2 = inst.getState();
           } catch {
             continue;
           }
-          const settings = state.settings || {};
+          const settings = state2.settings || {};
           if (settings.meshNodeFor !== meshId) continue;
           if (settings.meshActiveTaskId !== taskId) continue;
-          const status = (typeof state.status === "string" ? state.status : "").toLowerCase();
-          const chatStatus = (typeof state.activeChat?.status === "string" ? state.activeChat.status : "").toLowerCase();
+          const status = (typeof state2.status === "string" ? state2.status : "").toLowerCase();
+          const chatStatus = (typeof state2.activeChat?.status === "string" ? state2.activeChat.status : "").toLowerCase();
           if (working.has(status) || working.has(chatStatus)) return id;
         }
         return null;
@@ -153650,8 +153664,8 @@ async (params) => {
       }
       return failures;
     }
-    function isCliTargetState(state) {
-      return state.category === "cli" || state.category === "acp";
+    function isCliTargetState(state2) {
+      return state2.category === "cli" || state2.category === "acp";
     }
     function getCliAdapterFromInstance(instance) {
       if (!instance) return null;
@@ -153744,7 +153758,7 @@ async (params) => {
       }
       let resolvedInstanceId = requestedInstanceId;
       if (freshSession) {
-        const staleTargets = ctx.instanceManager.collectAllStates().filter((state) => (state.category === "cli" || state.category === "acp") && state.type === type2).map((state) => state.instanceId);
+        const staleTargets = ctx.instanceManager.collectAllStates().filter((state2) => (state2.category === "cli" || state2.category === "acp") && state2.type === type2).map((state2) => state2.instanceId);
         for (const staleId of staleTargets) {
           ctx.instanceManager.removeInstance(staleId);
         }
@@ -159446,6 +159460,169 @@ data: ${JSON.stringify(msg.data)}
       };
     }
     init_mesh_read_model();
+    init_logger();
+    init_mesh_event_projection();
+    init_topics2();
+    var registrations = /* @__PURE__ */ new Map();
+    var activeNode4 = null;
+    var activeHandler = null;
+    var activeConsumerName = null;
+    function configureTerminalRedrive(node, opts) {
+      for (const registration of registrations.values()) {
+        try {
+          registration.unsub();
+        } catch {
+        }
+      }
+      registrations.clear();
+      activeNode4 = node;
+      activeHandler = opts?.handler ?? null;
+      activeConsumerName = opts?.consumerName ?? null;
+    }
+    function ensureTerminalRedriveConsumer(meshId) {
+      const node = activeNode4;
+      const handler = activeHandler;
+      const consumerName = activeConsumerName;
+      if (!node || !handler || !consumerName) return false;
+      if (registrations.has(meshId)) return true;
+      const topic = meshEventsTopic(meshId);
+      if (!node.topics.some((d) => d.topic === topic)) return false;
+      try {
+        const unsub = node.node.onEntry(topic, consumerName, async (entry) => {
+          if (entry.kind !== MESH_EVENT_ENTRY_KIND) return;
+          const projected = entry.payload;
+          if (!projected || typeof projected !== "object") return;
+          const record2 = projected;
+          if (typeof record2.id !== "string" || typeof record2.ledgerKind !== "string") return;
+          await handler({
+            meshId,
+            entry: {
+              id: record2.id,
+              ledgerKind: record2.ledgerKind,
+              nodeId: typeof record2.nodeId === "string" ? record2.nodeId : null,
+              sessionId: typeof record2.sessionId === "string" ? record2.sessionId : null,
+              providerType: typeof record2.providerType === "string" ? record2.providerType : null,
+              taskId: typeof record2.taskId === "string" ? record2.taskId : null,
+              payload: record2.payload && typeof record2.payload === "object" ? record2.payload : {}
+            }
+          });
+        });
+        registrations.set(meshId, { topic, unsub });
+        return true;
+      } catch (error48) {
+        LOG.warn(
+          "MeshRedrive",
+          `redrive consumer failed to register topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
+        );
+        return false;
+      }
+    }
+    function ensureTerminalRedriveConsumersAtBoot() {
+      const node = activeNode4;
+      if (!node) return 0;
+      let registered = 0;
+      for (const definition of node.topics) {
+        const meshId = meshIdFromEventsTopic(definition.topic);
+        if (meshId === null) continue;
+        if (ensureTerminalRedriveConsumer(meshId)) registered++;
+      }
+      return registered;
+    }
+    function registeredRedriveMeshIds() {
+      return [...registrations.keys()].sort();
+    }
+    function __resetTerminalRedriveConsumerForTests() {
+      configureTerminalRedrive(null);
+    }
+    init_logger();
+    init_mesh_events_pending();
+    var REDRIVE_CONSUMER = "stage5a-mesh-terminal-redrive";
+    var REDRIVE_ENV = "ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE";
+    var REDRIVEN_TERMINAL_KINDS = ["task_completed", "task_failed"];
+    var state = /* @__PURE__ */ new Map();
+    function stateFor(meshId) {
+      let s2 = state.get(meshId);
+      if (!s2) {
+        s2 = { injected: 0, skipped: 0, consecutiveFailures: 0, lastFailureAt: null };
+        state.set(meshId, s2);
+      }
+      return s2;
+    }
+    function getRedriveState(meshId) {
+      const s2 = state.get(meshId);
+      return s2 ? { ...s2 } : null;
+    }
+    function isTerminalRedriveEnabled(env2) {
+      return env2[REDRIVE_ENV] === "on";
+    }
+    function assertRedriveConsumerNameIsPruneSafe(prunePrefixes) {
+      for (const prefix of prunePrefixes) {
+        if (REDRIVE_CONSUMER.startsWith(prefix)) {
+          throw new Error(
+            `redrive consumer name '${REDRIVE_CONSUMER}' matches boot-GC prefix '${prefix}' \u2014 it would be pruned on every boot, rewinding or dropping the redelivery cursor`
+          );
+        }
+      }
+    }
+    function buildRedriveInjection(meshId, entry) {
+      if (!REDRIVEN_TERMINAL_KINDS.includes(entry.ledgerKind)) return null;
+      const taskId = entry.taskId || (typeof entry.payload.taskId === "string" ? entry.payload.taskId : void 0);
+      if (!taskId) return null;
+      const event = typeof entry.payload.event === "string" ? entry.payload.event : "agent:generating_completed";
+      const sessionId = entry.sessionId || (typeof entry.payload.sessionId === "string" ? entry.payload.sessionId : void 0);
+      const providerType = entry.providerType || (typeof entry.payload.providerType === "string" ? entry.payload.providerType : void 0);
+      const nodeId = entry.nodeId || (typeof entry.payload.nodeId === "string" ? entry.payload.nodeId : void 0);
+      const metadataEvent = {
+        taskId,
+        ...sessionId ? { sessionId } : {},
+        ...providerType ? { providerType } : {},
+        // Fingerprint parity with the drain: a weak original was stamped
+        // evidenceLevel='insufficient'; a bare record reads as genuine. Sourced
+        // from the projected `weak` (Stage 5a-1) — NOT recomputed from
+        // evidenceLevel, which is not projected and would not be equivalent.
+        ...entry.payload.weak === true ? { evidenceLevel: "insufficient" } : {},
+        source: "seqscribe_redelivery",
+        redriveRedelivery: true
+      };
+      return {
+        event,
+        meshId,
+        nodeId: nodeId || void 0,
+        metadataEvent,
+        queuedAt: Date.now()
+      };
+    }
+    function consumeRedriveEntry(meshId, entry) {
+      const s2 = stateFor(meshId);
+      const injection = buildRedriveInjection(meshId, entry);
+      if (!injection) {
+        s2.skipped++;
+        return "skipped";
+      }
+      let queued = false;
+      try {
+        queued = queuePendingMeshCoordinatorEvent(injection);
+      } catch (error48) {
+        s2.consecutiveFailures++;
+        s2.lastFailureAt = Date.now();
+        throw error48 instanceof Error ? error48 : new Error(String(error48));
+      }
+      if (!queued) {
+        s2.consecutiveFailures++;
+        s2.lastFailureAt = Date.now();
+        throw new Error(`pending queue rejected redrive injection for task ${injection.metadataEvent.taskId}`);
+      }
+      s2.consecutiveFailures = 0;
+      s2.injected++;
+      LOG.debug(
+        "MeshRedrive",
+        `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} \u2014 dedup collapses it onto the original if already delivered`
+      );
+      return "injected";
+    }
+    function __resetTerminalRedriveForTests() {
+      state.clear();
+    }
     init_transcript_publisher();
     init_dist();
     init_logger();
@@ -160454,6 +160631,26 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
             );
           }
           pruneStaleConsumersAtBoot();
+          try {
+            if (isTerminalRedriveEnabled(process.env)) {
+              configureTerminalRedrive(components.seqscribeNode, {
+                consumerName: REDRIVE_CONSUMER,
+                handler: ({ meshId, entry }) => {
+                  consumeRedriveEntry(meshId, entry);
+                }
+              });
+              const registered = ensureTerminalRedriveConsumersAtBoot();
+              LOG.info(
+                "MeshRedrive",
+                `terminal redrive armed on ${registered} mesh topic(s) \u2014 dual-driven with the turn outbox`
+              );
+            }
+          } catch (error48) {
+            LOG.warn(
+              "MeshRedrive",
+              `terminal redrive unavailable: ${error48 instanceof Error ? error48.message : String(error48)}`
+            );
+          }
           components.seqscribeParityLoop = startMeshParityLoop(components.seqscribeNode);
         }
       } catch (error48) {
@@ -160583,6 +160780,10 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       }
       try {
         configureMeshReadModel(null);
+      } catch {
+      }
+      try {
+        configureTerminalRedrive(null);
       } catch {
       }
       try {
