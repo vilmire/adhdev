@@ -143,7 +143,10 @@ export interface ISpecDriver {
     getSpecPath(): string;
     shutdown(): void;
     getStateHistory(): ReadonlyArray<DriverHistoryEntry>;
-    getSections(): Array<{ id: string; text: string }> | null;
+    /** Sections resolved from `screenText`, or from a fresh snapshot when
+     *  omitted. Callers that already hold a screen MUST pass it, so the
+     *  sections and the screen describe the same frame. */
+    getSections(screenText?: string): Array<{ id: string; text: string }> | null;
     getLastBusyAt(): number;
     hasIdleHoldPending(): boolean;
     hasSeenReady(): boolean;
@@ -912,9 +915,17 @@ export class FsmDriver implements ISpecDriver {
     getEventTimeline(limit?: number): ReadonlyArray<SpecPtyEvent> {
         return this.adapter.getEventTimeline(limit);
     }
-    getSections(): Array<{ id: string; text: string }> | null {
+    getSections(screenText?: string): Array<{ id: string; text: string }> | null {
         try {
-            const screen = this.adapter.snapshot();
+            // Slice the caller's screen when one is supplied. Taking a fresh
+            // snapshot here would read a DIFFERENT frame than the caller already
+            // holds: during generating the TUI repaints continuously (spinner,
+            // reflow after a resize), so the two reads land on separate frames
+            // and the reported sections stop matching the reported screen —
+            // observed as a screen whose first line was wrapped at one width
+            // while `footer` came from a later paint at another width, a
+            // combination no single VT buffer can hold.
+            const screen = screenText ?? this.adapter.snapshot();
             const lines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
             return resolveSections(this.spec.sections ?? {}, lines).map(s => ({ id: s.id, text: s.text }));
         } catch { return null; }

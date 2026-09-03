@@ -1195,12 +1195,16 @@ export class SpecCliAdapter implements CliAdapter {
      *  section is named), resolved from the driver's current sections. */
     private readScreenSectionText(sectionId?: string): string {
         try {
-            const sections = this.driver.getSections();
+            // One read: the section text and the whole-screen fallback must come
+            // from the same frame, or a repaint between them yields a section
+            // that never coexisted with the screen it is reported against.
+            const screen = this.driver.getScreen();
+            const sections = this.driver.getSections(screen);
             if (sectionId && sections) {
                 const hit = sections.find(s => s.id === sectionId);
                 if (hit) return hit.text;
             }
-            return this.driver.getScreen();
+            return screen;
         } catch {
             return '';
         }
@@ -1210,7 +1214,9 @@ export class SpecCliAdapter implements CliAdapter {
         let sections: Record<string, string> | undefined;
         try {
             screen = this.driver.snapshot();
-            const driverSections = this.driver.getSections?.();
+            // Pass `screen` so the sections describe the frame we just captured
+            // (see FsmDriver.getSections) rather than a later repaint.
+            const driverSections = this.driver.getSections?.(screen);
             if (driverSections) {
                 sections = Object.fromEntries(driverSections.map(s => [s.id, s.text]));
             } else {
@@ -1440,9 +1446,10 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
-    private readCurrentScreenSections(_screenText: string): Record<string, string> {
+    private readCurrentScreenSections(screenText: string): Record<string, string> {
         try {
-            const sections = this.driver.getSections() ?? [];
+            // Resolve against the caller's screen, not a fresh read.
+            const sections = this.driver.getSections(screenText) ?? [];
             return Object.fromEntries(sections.map(section => [section.id, section.text]));
         } catch {
             return {};
@@ -2316,7 +2323,8 @@ export class SpecCliAdapter implements CliAdapter {
             workingDir: this.workingDir,
             spawnedAtMs: this.spawnedAtMs,
             providerSessionId: this.providerSessionId ?? null,
-            sections: this.driver.getSections?.() ?? null,
+            // Same frame as `screen` above — see FsmDriver.getSections.
+            sections: this.driver.getSections?.(screen) ?? null,
             stateHistory: history,
             specPath: this.driver.getSpecPath?.() ?? null,
             // v4 FSM live transition table — present only for FsmDriver. Lets
