@@ -77,7 +77,7 @@ function attachWorkerSide(port: MessagePort): { received: string[]; send(msg: st
 const OPTS = { writerId: 'writer_abc', sessionKey: 'sess_1' }
 
 describe('startTranscriptWorkerHost', () => {
-    it('hands the worker its init payload and transfers exactly one port', () => {
+    it('hands the worker its init payload and transfers exactly two ports (wire + snapshot)', () => {
         const worker = fakeWorker()
         const host = startTranscriptWorkerHost(new FakeTransport(), {
             ...OPTS,
@@ -85,7 +85,10 @@ describe('startTranscriptWorkerHost', () => {
         })
 
         expect(worker.messages).toEqual([{ sessionKey: 'sess_1', writerId: 'writer_abc' }])
-        expect(worker.transfers[0]).toHaveLength(1)
+        // Two ports, in a fixed order: [wire, snapshot]. The worker entry reads
+        // them positionally (`ev.ports[0]`/`[1]`), so the count AND the order
+        // are part of the contract — see the two-ports note in the host header.
+        expect(worker.transfers[0]).toHaveLength(2)
         expect(host.running()).toBe(true)
         host.stop()
     })
