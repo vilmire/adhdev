@@ -388,6 +388,15 @@ export function recordHeldTerminalEventsToLedger(
                     queuedAt: event.queuedAt,
                     ...(fingerprint ? { fingerprint } : {}),
                     ...(finalSummary ? { finalSummary } : {}),
+                    // NOTIF-LOSS (A1): the machine recovery copy, matching every other
+                    // event_held feeder (ledgerRecordQuarantinedEvent /
+                    // ledgerRecordExpiredUndrainedEvent). Without it this entry claims
+                    // `recoverable: true` but requeueHeldMeshCoordinatorEvents — which
+                    // reconstructs solely from payload.heldEvent — reports it
+                    // `unrecoverable`, so mesh_requeue_held_events could not recover the
+                    // single reason code responsible for ~98% of holds. The C1 guarantee
+                    // documented above only holds once the event itself is carried.
+                    heldEvent: event,
                 },
             });
             LOG.info('MeshReconcile', `Ledger-recorded held ${event.event} for mesh ${meshId} (reason ${reason}) — recoverable from ledger`);
