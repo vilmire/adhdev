@@ -2,6 +2,10 @@ import { randomUUID } from 'crypto';
 import { MeshRuntimeStore, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store.js';
 import { LOG } from '../logging/logger.js';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import {
+    isTurnOutboxEnqueueBlocked,
+    recordOutboxEnqueueBlocked,
+} from './mesh-turn-outbox-enqueue-policy.js';
 
 /**
  * TURN-LEDGER (Stage 5) — the authoritative causal turn ledger/reducer for prompt
@@ -1772,6 +1776,22 @@ export type TurnOutboxKind = 'coordinator_completion' | 'coordinator_ack';
  * (`<attemptId>:terminal`), so re-enqueue after a crash/replay is INSERT OR IGNORE
  * — exactly one logical completion notification per attempt, even though the
  * transport underneath remains at-least-once.
+ *
+ * ── Stage 5b-1 ────────────────────────────────────────────────────────────────
+ * When the enqueue block is in force (`ADHDEV_MESH_OUTBOX_ENQUEUE=off` AND the
+ * redrive leg enabled — see mesh-turn-outbox-enqueue-policy.ts for why those are
+ * interlocked rather than independent) this returns `false` WITHOUT touching the
+ * store. `false` is the same value the `INSERT OR IGNORE` duplicate path already
+ * returns, so no caller's control flow changes.
+ *
+ * ★ The check lives HERE, not at the (currently single) call site, so that a
+ * future second producer cannot reintroduce rows by construction. Draining is
+ * deliberately untouched: 5b-1 is "new rows 0, residue keeps draining"; disabling
+ * the drain triggers is 5b-2.
+ *
+ * `bypassEnqueueBlock` exists for the outbox's own regression suites, which must
+ * still be able to create rows to prove the DRAIN half keeps working while the
+ * block is on. Production never sets it.
  */
 export function enqueueTerminalOutbox(args: {
     meshId: string;
@@ -1781,7 +1801,13 @@ export function enqueueTerminalOutbox(args: {
     /** The PendingMeshCoordinatorEvent-shaped payload (content per the v2 envelope). */
     payload: Record<string, unknown>;
     nowMs?: number;
+    /** TESTS ONLY — seed residue rows regardless of the 5b-1 block. */
+    bypassEnqueueBlock?: boolean;
 }): boolean {
+    if (!args.bypassEnqueueBlock && isTurnOutboxEnqueueBlocked()) {
+        recordOutboxEnqueueBlocked();
+        return false;
+    }
     const nowMs = args.nowMs ?? Date.now();
     const nowIso = new Date(nowMs).toISOString();
     return MeshRuntimeStore.getInstance().enqueueTurnOutbox({

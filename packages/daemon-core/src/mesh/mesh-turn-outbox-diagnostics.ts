@@ -29,6 +29,11 @@
  */
 
 import { getTurnLedgerMetrics } from './mesh-turn-ledger.js';
+import {
+    resolveOutboxEnqueuePolicy,
+    getOutboxEnqueueBlockedCount,
+    type OutboxEnqueueBlockReason,
+} from './mesh-turn-outbox-enqueue-policy.js';
 
 /** Local-only snapshot of the turn outbox's redrive-backstop health. */
 export interface TurnOutboxDiagnostics {
@@ -42,6 +47,24 @@ export interface TurnOutboxDiagnostics {
      * status vocabulary just to answer "is anything stuck".
      */
     backlogPending: number;
+    /**
+     * Stage 5b-1: whether new rows are currently suppressed.
+     *
+     * ★ Read together with `backlogPending`, this is the whole 5b-1 picture:
+     * `enqueueBlocked: true` with `backlogPending` draining toward 0 is the
+     * intended transition state. `enqueueBlocked: false` with
+     * `enqueueBlockReason: 'redrive_disabled'` is the REFUSED-unsafe case — the
+     * operator asked for the block and the interlock declined it — which is the
+     * single most likely "I set the flag and nothing happened" support question.
+     */
+    enqueueBlocked: boolean;
+    /** Fixed-vocabulary reason for the enqueue state. Never carries identifiers. */
+    enqueueBlockReason: OutboxEnqueueBlockReason;
+    /**
+     * Terminals whose outbox row this process suppressed. Distinguishes a working
+     * block (>0 and rising) from an idle daemon (0) — a zero backlog alone cannot.
+     */
+    enqueueSuppressed: number;
 }
 
 /**
@@ -52,9 +75,16 @@ export interface TurnOutboxDiagnostics {
  */
 export function readTurnOutboxDiagnostics(nowMs: number = Date.now()): TurnOutboxDiagnostics {
     const metrics = getTurnLedgerMetrics(nowMs);
+    // Live env read, matching the producer's own check — a value cached at module
+    // load would report a stale policy after a flag flip, which is precisely when
+    // someone is reading this surface.
+    const policy = resolveOutboxEnqueuePolicy(process.env);
     return {
         oldestPendingAgeMs: metrics.outboxOldestPendingAgeMs,
         byStatus: metrics.outboxByStatus,
         backlogPending: metrics.outboxByStatus.pending ?? 0,
+        enqueueBlocked: policy.blocked,
+        enqueueBlockReason: policy.reason,
+        enqueueSuppressed: getOutboxEnqueueBlockedCount(),
     };
 }

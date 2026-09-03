@@ -99,6 +99,10 @@ import {
     isTerminalRedriveEnabled,
 } from '../mesh/mesh-terminal-redrive.js';
 import {
+    describeOutboxEnqueuePolicy,
+    resolveOutboxEnqueuePolicy,
+} from '../mesh/mesh-turn-outbox-enqueue-policy.js';
+import {
     activeTranscriptProjectionService,
     configureTranscriptProjection,
 } from '../seqscribe/transcript-publisher.js';
@@ -1160,6 +1164,24 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             `mesh dual-write/parity unavailable: ${error instanceof Error ? error.message : String(error)}`,
         );
     }
+
+    // 10b. Stage 5b-1: state the turn-outbox enqueue policy once, including the
+    // REFUSED case.
+    //
+    // ★ Deliberately OUTSIDE the seqscribe block above. The refusal
+    // (`ADHDEV_MESH_OUTBOX_ENQUEUE=off` with the redrive leg not enabled) is
+    // exactly the situation where seqscribe may have failed to come up at all —
+    // logging it only on the success path would hide the one message the operator
+    // needs. A refused block is otherwise invisible: rows keep appearing, which
+    // is indistinguishable from the flag never being read.
+    try {
+        const enqueuePolicyNote = describeOutboxEnqueuePolicy(process.env);
+        if (enqueuePolicyNote) {
+            const refused = resolveOutboxEnqueuePolicy(process.env).reason === 'redrive_disabled';
+            if (refused) LOG.warn('MeshOutbox', enqueuePolicyNote);
+            else LOG.info('MeshOutbox', enqueuePolicyNote);
+        }
+    } catch { /* diagnostics only — never block boot */ }
 
     // 11. Setup Mesh Event Forwarding (queue persistence) + periodic reconcile loop.
     // injectMeshSystemMessage now ONLY persists events to the pending-events queue;
