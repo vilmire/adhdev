@@ -57,6 +57,29 @@ export function sanitizeSpawnEnv(
     delete env.NO_COLOR;
     delete env.COLOR;
 
+    // Never forward an inherited terminal geometry. COLUMNS/LINES are advisory
+    // overrides that a TUI trusts *in preference to* the real TTY size
+    // (measured: with COLUMNS=17 exported, a child on a genuine 80-column PTY
+    // reports `tput cols` = 17). The PTY here is sized independently from the
+    // adapter's own geometry, so any inherited value is by definition unrelated
+    // to the terminal the child was actually given.
+    //
+    // When the two disagree the child lays out for the phantom width and the
+    // VT renders at the real one, so in-place repaints (`\r`, absolute cursor
+    // moves) land on the wrong row: content fragments across the buffer with a
+    // blank gap between the stale head and the live tail. Observed on
+    // antigravity-cli as a "Running command" spinner split into two rows 28
+    // blank lines apart, which the spec's from_top/from_bottom sections then
+    // sliced into separate body/footer values.
+    //
+    // Deleting them makes the child measure the TTY via ioctl(TIOCGWINSZ) —
+    // the PTY's real size, which is exactly what the VT is sized to. node-pty
+    // does not set these itself, so a clean parent env is already the normal
+    // case; this only removes a value that leaked in from whatever launched
+    // the daemon (interactive shell, tmux, CI runner, nested CLI).
+    delete env.COLUMNS;
+    delete env.LINES;
+
     // Do not leak a parent Claude Code session identity into spawned claude-cli
     // children. CLAUDE_CODE_CHILD_SESSION makes a spawned claude run as a nested
     // child that does NOT persist its ~/.claude/projects transcript, so the
