@@ -149,7 +149,7 @@ export function useDashboardMobileMachineActions({
             const payload: Record<string, unknown> = { cliType: providerType }
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
-            // Home-directory launch: only when no dir/workspaceId set (mirrors AgentTab /
+            // Home-directory launch: only when no dir/workspaceId set (mirrors
             // useMachineActions). Fixes the "Choose a workspace…" error when picking Home.
             else if (opts?.useHome) payload.useHome = true
             if (opts?.resumeSessionId) payload.resumeSessionId = opts.resumeSessionId

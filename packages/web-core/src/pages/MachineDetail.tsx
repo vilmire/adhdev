@@ -7,7 +7,7 @@
  * - Delegates each tab to its own sub-component
  *
  * Sub-components in ./machine/:
- *   OverviewTab, AgentTab (unified IDE/CLI/ACP), ProvidersTab, LogsTab, LaunchPickModal
+ *   OverviewTab, ProvidersTab, LogsTab, MachineWorkspaceTab, LaunchPickModal
  *
  * Shared hook: useMachineActions (launch/stop/restart/workspace handlers)
  * Shared types: ./machine/types.ts

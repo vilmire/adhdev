@@ -588,15 +588,6 @@
             "reject": "却下",
             "waitingFor": "{{duration}} 待機中"
         },
-        "chat": {
-            "loading": "読み込んでいます…",
-            "empty": "メッセージはありません。"
-        },
-        "coordinatorBadge": {
-            "daemon": "daemon: {{id}}",
-            "run": "run: {{id}}",
-            "session": "session: {{id}}"
-        },
         "difficulty": {
             "intro": "各タスクの難易度をブレインに対応付けます。コーディネーターはタスクの難易度を分類し、簡単な作業は低コストのモデルで低い effort で実行し、難しい作業はより強力なモデルで高い effort で実行します。ルーティングのデフォルトを維持するにはフィールドを空欄のままにしてください。",
             "connectPrompt": "ブレインのプリセットを編集するには、コーディネーターデーモンに接続してください。",
@@ -1002,53 +993,6 @@
             "failedTasks": "失敗したタスク",
             "staleWork": "古い作業",
             "sessions": "セッション"
-        },
-        "tasksView": {
-            "runningTitle": "実行中",
-            "attentionTitle": "要確認",
-            "adhocTitle": "ミッションなしのタスク",
-            "readOnly": "読み取り専用",
-            "showGraph": "依存関係グラフを表示",
-            "hideGraph": "依存関係グラフを閉じる",
-            "progress": "{{done}}/{{total}} 完了",
-            "chipRunning_one": "{{count}}件実行中",
-            "chipRunning_other": "{{count}}件実行中",
-            "chipQueued_one": "{{count}}件待機",
-            "chipQueued_other": "{{count}}件待機",
-            "chipFailed_one": "{{count}}件失敗",
-            "chipFailed_other": "{{count}}件失敗",
-            "chipDone_one": "{{count}}件完了",
-            "chipDone_other": "{{count}}件完了",
-            "chipBlocked_one": "{{count}}件ブロック",
-            "chipBlocked_other": "{{count}}件ブロック",
-            "status": {
-                "running": "実行中",
-                "queued": "待機",
-                "done": "完了",
-                "failed": "失敗",
-                "cancelled": "キャンセル",
-                "blocked": "ブロック"
-            },
-            "missionStatus": {
-                "active": "進行中",
-                "paused": "一時停止",
-                "completed": "完了",
-                "abandoned": "中止"
-            },
-            "actionRequeue": "再キュー",
-            "actionCancel": "タスクをキャンセル",
-            "actionConfirm": "もう一度クリックで実行",
-            "actionViewNode": "ノードを表示",
-            "actionFailed": "キュー操作に失敗しました",
-            "showGoal": "ミッション目標を表示",
-            "hideGoal": "ミッション目標を閉じる",
-            "routingRan": "実行",
-            "routingFrom": "由来",
-            "routingWhy": "ルーティング理由",
-            "routingFitness": "適合度",
-            "routingReason": "理由",
-            "routingLosers": "スロット競合で外れた候補 {{count}} 件",
-            "routingSkipped": "スキップしたノード {{count}} 件"
         },
         "blueprint": {
             "liveQueue": "ライブキュー",
@@ -2128,44 +2072,6 @@
             "apiReference": "API リファレンス →",
             "frozenFeatureTitle": "凍結中 — この機能は一時停止しています。docs/FROZEN_SURFACES.md を参照してください"
         },
-        "auditLogs": {
-            "title": "Audit Logs",
-            "subtitle": "セキュリティイベントと API 履歴",
-            "refresh": "更新",
-            "filterPlaceholder": "アクション、リソース、ソースで絞り込み...",
-            "loading": "読み込み中...",
-            "noLogs": "ログがありません",
-            "noMatchingLogs": "一致するログが見つかりません。",
-            "logsWillAppear": "アクションが発生するとここに表示されます。",
-            "colAction": "アクション",
-            "colResource": "リソース",
-            "colSource": "ソース",
-            "colTime": "時刻",
-            "logCount": "{{count}} 件のログ",
-            "logCountFiltered": "（{{total}} 件中の絞り込み結果）"
-        },
-        "inviteModal": {
-            "title": "チームメンバーを招待",
-            "subtitle": "メールで招待リンクを送信します",
-            "manageSeats": "→ Billing でシートを管理",
-            "emailLabel": "メールアドレス",
-            "emailPlaceholder": "colleague@company.com",
-            "roleLabel": "ロール",
-            "roleViewer": "閲覧者",
-            "roleMember": "メンバー",
-            "roleAdmin": "管理者",
-            "roleViewerDesc": "ダッシュボードとチャット履歴を閲覧できます",
-            "roleMemberDesc": "エージェントの操作とコマンド送信ができます",
-            "roleAdminDesc": "メンバーと設定を管理できます",
-            "cancel": "キャンセル",
-            "sending": "送信中...",
-            "sendInvite": "招待を送信",
-            "inviteSent": "招待を送信しました！",
-            "shareWith": "このリンクを共有する相手",
-            "copied": "コピーしました！",
-            "copy": "コピー",
-            "done": "完了"
-        },
         "shareModal": {
             "title": "セッションを共有",
             "chatLabel": "チャット",
@@ -2476,9 +2382,6 @@
             "eyebrow": "システム通知",
             "visibleUntil": "{{time}} まで表示",
             "dismiss": "閉じる"
-        },
-        "upgradeBanner": {
-            "button": "アップグレード →"
         },
         "push": {
             "title": "プッシュ通知",
@@ -2919,52 +2822,6 @@
             "selectedWorkspace": "選択したワークスペース",
             "noWorkspaceSelected": "ワークスペースが選択されていません。ホームディレクトリで起動します。"
         },
-        "agentTab": {
-            "selectToLaunch": "起動する {{label}} を選択",
-            "launchSettings": "起動設定",
-            "noIdesDetected": "IDE が検出されませんでした。",
-            "scanSystem": "システムをスキャン",
-            "noProviders": "利用可能な {{category}} プロバイダーがありません。",
-            "noProvidersHint": "バイナリを既定の場所以外にインストールしている場合は、Providers でカスタムの実行パスを設定してください。",
-            "targetModel": "対象モデル",
-            "leaveEmptyDefault": "既定値を使う場合は空欄のまま",
-            "startupArguments": "起動引数",
-            "optionalFlags": "任意のフラグ...",
-            "openSession": "セッションを開く",
-            "starting": "起動中...",
-            "configure": "設定",
-            "select": "選択",
-            "launching": "起動中...",
-            "launchBtn": "▶ 起動",
-            "running": "実行中 ({{count}})",
-            "noRunning": "実行中の {{plural}} はありません",
-            "launchingProcess": "プロセスを起動しています...",
-            "waitingProcess": "プロセスとセッションの登録を待機しています...",
-            "startingBadge": "起動中",
-            "chatView": "チャットビュー",
-            "terminalView": "ターミナルビュー",
-            "localTerminal": "ローカルターミナル:",
-            "copied": "コピーしました",
-            "copy": "コピー",
-            "openRemoteControl": "リモートコントロールを開く",
-            "restart": "再起動",
-            "viewChat": "チャットを表示",
-            "openInDashboard": "現在のビューをダッシュボードで開く",
-            "stop": "停止",
-            "extensions": "拡張機能",
-            "browseFolderTitle": "ワークスペースを選択",
-            "browseFolderDesc": "通常のエクスプローラー形式のダイアログでフォルダーを選び、起動対象として使用します。",
-            "browseFolderConfirm": "このフォルダーを使用",
-            "detailMode": "モード",
-            "detailProvider": "プロバイダー",
-            "detailResume": "再開",
-            "detailArguments": "引数",
-            "detailModel": "モデル",
-            "categoryIde": "IDE",
-            "categoryCliPlural": "CLI",
-            "categoryAcp": "ACP エージェント",
-            "categoryAcpPlural": "ACP エージェント"
-        },
         "providers": {
             "filter": "フィルター",
             "sourceConfigTitle": "プロバイダーソース設定",
@@ -3034,30 +2891,6 @@
             "specPinRollback": "ロールバック",
             "specPinRollbackHint": "仕様 {{version}} に戻します（ローカル、ダウンロード不要）。",
             "specPinRollingBack": "ロールバック中…"
-        },
-        "providerFix": {
-            "aiAgent": "AI エージェント",
-            "scriptsToFix": "修正するスクリプト",
-            "all": "すべて",
-            "none": "なし",
-            "additionalInstructions": "追加の指示",
-            "optional": "（任意）",
-            "agentOutput": "エージェント出力",
-            "running": "● 実行中...",
-            "agentGenerating": "エージェントが生成中です...",
-            "validateHint": "検証するには `adhdev provider verify` を実行してください",
-            "cancel": "キャンセル",
-            "startFix": "修正を開始",
-            "cancelRunning": "⬛ キャンセル",
-            "back": "← 戻る",
-            "close": "閉じる",
-            "footerHint": "AI エージェントがプロバイダースクリプトを実装します",
-            "scriptsSelected_one": "{{count}} 件のスクリプトを選択中",
-            "scriptsSelected_other": "{{count}} 件のスクリプトを選択中",
-            "titlePrefix": "自動修正: {{name}}",
-            "descCodex": "OpenAI o3/gpt-5.4",
-            "descClaude": "Anthropic Claude",
-            "descGemini": "Google Gemini"
         },
         "providerClone": {
             "title": "✨ ユーザープロバイダーを作成",
@@ -3714,11 +3547,6 @@
         "statusDialog": {
             "conflicts": "コンフリクト",
             "clean": "クリーン"
-        }
-    },
-    "ide": {
-        "header": {
-            "back": "戻る"
         }
     },
     "notifications": {
