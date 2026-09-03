@@ -101647,9 +101647,9 @@ ${marker}`,
           getEventTimeline(limit) {
             return this.adapter.getEventTimeline(limit);
           }
-          getSections() {
+          getSections(screenText) {
             try {
-              const screen = this.adapter.snapshot();
+              const screen = screenText ?? this.adapter.snapshot();
               const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
               return resolveSections(this.spec.sections ?? {}, lines).map((s2) => ({ id: s2.id, text: s2.text }));
             } catch {
@@ -107977,12 +107977,13 @@ ${text}` : text;
            *  section is named), resolved from the driver's current sections. */
           readScreenSectionText(sectionId) {
             try {
-              const sections = this.driver.getSections();
+              const screen = this.driver.getScreen();
+              const sections = this.driver.getSections(screen);
               if (sectionId && sections) {
                 const hit = sections.find((s2) => s2.id === sectionId);
                 if (hit) return hit.text;
               }
-              return this.driver.getScreen();
+              return screen;
             } catch {
               return "";
             }
@@ -107992,7 +107993,7 @@ ${text}` : text;
             let sections;
             try {
               screen = this.driver.snapshot();
-              const driverSections = this.driver.getSections?.();
+              const driverSections = this.driver.getSections?.(screen);
               if (driverSections) {
                 sections = Object.fromEntries(driverSections.map((s2) => [s2.id, s2.text]));
               } else {
@@ -108207,9 +108208,9 @@ ${text}` : text;
               }
             }
           }
-          readCurrentScreenSections(_screenText) {
+          readCurrentScreenSections(screenText) {
             try {
-              const sections = this.driver.getSections() ?? [];
+              const sections = this.driver.getSections(screenText) ?? [];
               return Object.fromEntries(sections.map((section) => [section.id, section.text]));
             } catch {
               return {};
@@ -108842,7 +108843,8 @@ ${text}` : text;
               workingDir: this.workingDir,
               spawnedAtMs: this.spawnedAtMs,
               providerSessionId: this.providerSessionId ?? null,
-              sections: this.driver.getSections?.() ?? null,
+              // Same frame as `screen` above — see FsmDriver.getSections.
+              sections: this.driver.getSections?.(screen) ?? null,
               stateHistory: history,
               specPath: this.driver.getSpecPath?.() ?? null,
               // v4 FSM live transition table — present only for FsmDriver. Lets
