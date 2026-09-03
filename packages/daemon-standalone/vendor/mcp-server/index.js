@@ -72107,6 +72107,35 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             }
             this.maybeCheckpointWal();
           }
+          /**
+           * Task ids of outbox rows marked `delivered` AT OR AFTER `sinceIso`.
+           *
+           * ★ REMOVED IN 5c together with `mesh_turn_outbox` itself
+           * (docs/design/2026-08-29-seqscribe-outbox-migration.md §5 row 1). It exists
+           * only to prove the 5a→5b migration is safe, and has no consumer that
+           * outlives the table.
+           *
+           * ★ Why a `sinceIso` window rather than the whole table: `delivered` rows are
+           * NEVER pruned (there is no `DELETE FROM mesh_turn_outbox` anywhere), so an
+           * all-time enumeration is unbounded AND spans daemon generations the redrive
+           * counterpart cannot possibly have seen. Windowing on `updated_at` — which
+           * `markTurnOutboxDelivered` stamps at the moment of delivery — restricts the
+           * denominator to the same process lifetime the redrive set covers. See the
+           * epoch note in mesh-turn-outbox-coverage-diagnostics.ts.
+           *
+           * Rows with a NULL task_id are excluded: the redrive path cannot re-arm a
+           * task-less entry (`buildRedriveInjection` returns null for one), so counting
+           * it against coverage would assert an impossible obligation.
+           */
+          listDeliveredTurnOutboxTaskIdsSince(sinceIso, limit) {
+            const rows = this.db.prepare(`
+            SELECT DISTINCT task_id FROM mesh_turn_outbox
+            WHERE status = 'delivered' AND task_id IS NOT NULL AND updated_at >= ?
+            ORDER BY updated_at ASC
+            LIMIT ?
+        `).all(sinceIso, limit);
+            return rows.map((r) => r.task_id);
+          }
           countTurnOutboxByStatus(meshId) {
             const rows = meshId ? this.db.prepare("SELECT status, COUNT(*) AS n FROM mesh_turn_outbox WHERE mesh_id = ? GROUP BY status").all(meshId) : this.db.prepare("SELECT status, COUNT(*) AS n FROM mesh_turn_outbox GROUP BY status").all();
             const out = {};
@@ -99044,6 +99073,12 @@ ${marker}`,
         init_mesh_turn_ledger();
       }
     });
+    function getRedriveInjectedTaskIds() {
+      return { taskIds: injectedTaskIds, overflowed: injectedTaskIdsOverflowed };
+    }
+    function getRedriveEpochStartMs() {
+      return processStartMs;
+    }
     function stateFor(meshId) {
       let s2 = state.get(meshId);
       if (!s2) {
@@ -99154,6 +99189,14 @@ ${marker}`,
       s2.consecutiveFailures = 0;
       s2.quarantinedAt = null;
       s2.injected++;
+      const injectedTaskId = injection.metadataEvent.taskId;
+      if (typeof injectedTaskId === "string") {
+        if (injectedTaskIds.size >= REDRIVE_TASK_ID_CAP && !injectedTaskIds.has(injectedTaskId)) {
+          injectedTaskIdsOverflowed = true;
+        } else {
+          injectedTaskIds.add(injectedTaskId);
+        }
+      }
       LOG.debug(
         "MeshRedrive",
         `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} \u2014 dedup collapses it onto the original if already delivered`
@@ -99173,13 +99216,19 @@ ${marker}`,
     }
     function __resetTerminalRedriveForTests() {
       state.clear();
+      injectedTaskIds.clear();
+      injectedTaskIdsOverflowed = false;
     }
     var REDRIVE_CONSUMER;
     var REDRIVE_ENV;
     var REDRIVEN_TERMINAL_KINDS;
     var QUARANTINE_FAILURE_THRESHOLD;
     var QUARANTINE_COOLDOWN_MS;
+    var REDRIVE_TASK_ID_CAP;
     var state;
+    var injectedTaskIds;
+    var injectedTaskIdsOverflowed;
+    var processStartMs;
     var init_mesh_terminal_redrive = __esm2({
       "src/mesh/mesh-terminal-redrive.ts"() {
         "use strict";
@@ -99190,27 +99239,58 @@ ${marker}`,
         REDRIVEN_TERMINAL_KINDS = ["task_completed", "task_failed"];
         QUARANTINE_FAILURE_THRESHOLD = 5;
         QUARANTINE_COOLDOWN_MS = 6e4;
+        REDRIVE_TASK_ID_CAP = 1e4;
         state = /* @__PURE__ */ new Map();
+        injectedTaskIds = /* @__PURE__ */ new Set();
+        injectedTaskIdsOverflowed = false;
+        processStartMs = Date.now();
       }
     });
-    function readRedriveCoverageDiagnostics(nowMs = Date.now()) {
-      const metrics3 = getTurnLedgerMetrics(nowMs);
-      const outboxDelivered = metrics3.outboxByStatus.delivered ?? 0;
-      const redriveInjected = getTotalRedriveInjected();
-      const coveragePercent = outboxDelivered > 0 ? Math.min(100, redriveInjected / outboxDelivered * 100) : null;
+    function readRedriveCoverageDiagnostics(_nowMs = Date.now()) {
+      const { taskIds: injectedTaskIds2, overflowed } = getRedriveInjectedTaskIds();
+      const sinceIso = new Date(getRedriveEpochStartMs()).toISOString();
+      let deliveredTaskIds = [];
+      try {
+        deliveredTaskIds = MeshRuntimeStore.getInstance().listDeliveredTurnOutboxTaskIdsSince(sinceIso, COVERAGE_JOIN_LIMIT + 1);
+      } catch {
+      }
+      const deliveredTruncated = deliveredTaskIds.length > COVERAGE_JOIN_LIMIT;
+      if (deliveredTruncated) deliveredTaskIds = deliveredTaskIds.slice(0, COVERAGE_JOIN_LIMIT);
+      const joinTruncated = deliveredTruncated || overflowed;
+      let coveredTerminals = 0;
+      for (const taskId of deliveredTaskIds) {
+        if (injectedTaskIds2.has(taskId)) coveredTerminals++;
+      }
+      const outboxDelivered = deliveredTaskIds.length;
+      const uncoveredTerminals = outboxDelivered - coveredTerminals;
+      const coveragePercent = joinTruncated || outboxDelivered === 0 ? null : coveredTerminals / outboxDelivered * 100;
+      const fullyCovered = !joinTruncated && uncoveredTerminals === 0;
+      if (joinTruncated) {
+        LOG.warn(
+          "MeshRedrive",
+          `redrive coverage join truncated (deliveredRows=${outboxDelivered}${deliveredTruncated ? "+" : ""}, redriveSetOverflowed=${overflowed}) \u2014 reporting coverage as unknown rather than a ratio over a partial set`
+        );
+      }
       return {
-        redriveInjected,
+        redriveInjected: getTotalRedriveInjected(),
         outboxDelivered,
+        coveredTerminals,
+        uncoveredTerminals,
         coveragePercent,
-        quarantinedMeshCount: getQuarantinedMeshCount(nowMs),
+        fullyCovered,
+        joinTruncated,
+        quarantinedMeshCount: getQuarantinedMeshCount(_nowMs),
         quarantineSkipsTotal: getTotalQuarantineSkips()
       };
     }
+    var COVERAGE_JOIN_LIMIT;
     var init_mesh_turn_outbox_coverage_diagnostics = __esm2({
       "src/mesh/mesh-turn-outbox-coverage-diagnostics.ts"() {
         "use strict";
-        init_mesh_turn_ledger();
+        init_logger();
+        init_mesh_runtime_store();
         init_mesh_terminal_redrive();
+        COVERAGE_JOIN_LIMIT = 1e4;
       }
     });
     var init_quota = __esm2({
@@ -140423,6 +140503,7 @@ ${e?.stderr || ""}`;
       CHAT_MESSAGE_VISIBILITIES: () => CHAT_MESSAGE_VISIBILITIES,
       COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
       CONFIG_SETTINGS_TOPIC: () => CONFIG_SETTINGS_TOPIC,
+      COVERAGE_JOIN_LIMIT: () => COVERAGE_JOIN_LIMIT,
       CTRL_C: () => CTRL_C,
       CdpDomHandlers: () => CdpDomHandlers,
       CliProviderInstance: () => CliProviderInstance,
@@ -140572,6 +140653,7 @@ ${e?.stderr || ""}`;
       REDRIVEN_TERMINAL_KINDS: () => REDRIVEN_TERMINAL_KINDS,
       REDRIVE_CONSUMER: () => REDRIVE_CONSUMER,
       REDRIVE_ENV: () => REDRIVE_ENV,
+      REDRIVE_TASK_ID_CAP: () => REDRIVE_TASK_ID_CAP,
       RawTerminalAttachment: () => RawTerminalAttachment,
       SEQSCRIBE_DB_NAME: () => SEQSCRIBE_DB_NAME,
       SESSION_TRANSCRIPT_RING: () => SESSION_TRANSCRIPT_RING,
@@ -140748,9 +140830,11 @@ ${e?.stderr || ""}`;
       detectIDEs: () => detectIDEs,
       detectNewlySettledCompletedSessions: () => detectNewlySettledCompletedSessions,
       drainPendingMeshCoordinatorEvents: () => drainPendingMeshCoordinatorEvents3,
+      drainTurnOutbox: () => drainTurnOutbox,
       encodeDuplicateMeshDispatchCode: () => encodeDuplicateMeshDispatchCode,
       enqueueTask: () => enqueueTask3,
       enqueueTaskGraph: () => enqueueTaskGraph3,
+      enqueueTerminalOutbox: () => enqueueTerminalOutbox,
       ensureSessionHostReady: () => ensureSessionHostReady,
       ensureTerminalRedriveConsumer: () => ensureTerminalRedriveConsumer,
       ensureTerminalRedriveConsumersAtBoot: () => ensureTerminalRedriveConsumersAtBoot,
@@ -140830,6 +140914,8 @@ ${e?.stderr || ""}`;
       getRecentCommands: () => getRecentCommands,
       getRecentDebugTrace: () => getRecentDebugTrace,
       getRecentLogs: () => getRecentLogs,
+      getRedriveEpochStartMs: () => getRedriveEpochStartMs,
+      getRedriveInjectedTaskIds: () => getRedriveInjectedTaskIds,
       getRedriveState: () => getRedriveState,
       getSavedProviderSessions: () => getSavedProviderSessions,
       getSeqscribeDbPath: () => getSeqscribeDbPath,
@@ -141036,6 +141122,7 @@ ${e?.stderr || ""}`;
       readMeshCompletionSummary: () => readMeshCompletionSummary,
       readOperatingNotes: () => readOperatingNotes,
       readProjectedEntriesByKind: () => readProjectedEntriesByKind,
+      readRedriveCoverageDiagnostics: () => readRedriveCoverageDiagnostics,
       readSessionUsage: () => readSessionUsage,
       readStatuslineStatus: () => readStatuslineStatus,
       readTaskStatsEntries: () => readTaskStatsEntries,
@@ -161785,6 +161872,8 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     init_mesh_read_model_consumers();
     init_mesh_event_projection();
     init_mesh_terminal_redrive();
+    init_mesh_turn_outbox_coverage_diagnostics();
+    init_mesh_turn_ledger();
     init_mesh_parity();
     init_transcript_publisher();
     init_topics2();

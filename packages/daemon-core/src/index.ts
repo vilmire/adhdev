@@ -1188,9 +1188,29 @@ export {
   isMeshQuarantined,
   getQuarantinedMeshCount,
   getTotalQuarantineSkips,
+  // Stage 5a-3 coverage join: the injected task-id SET and the epoch it was
+  // recorded in. Exported so the root gate can decide the subset proposition
+  // against the real counters rather than a reimplementation.
+  REDRIVE_TASK_ID_CAP,
+  getRedriveInjectedTaskIds,
+  getRedriveEpochStartMs,
   type RedriveMeshState,
   type RedriveProjectedEntry,
 } from './mesh/mesh-terminal-redrive.js';
+// Stage 5a-3: the redrive/outbox coverage join — the 5a→5b gate's item ②.
+// ★ REMOVED IN 5c along with the outbox itself (§5 row 10).
+export {
+  readRedriveCoverageDiagnostics,
+  COVERAGE_JOIN_LIMIT,
+  type RedriveCoverageDiagnostics,
+} from './mesh/mesh-turn-outbox-coverage-diagnostics.js';
+// Stage 5a-3: the outbox enqueue/drain pair, so the coverage gate can drive a
+// REAL delivery (enqueue → drain → status='delivered') rather than reaching
+// into the store. ★ REMOVED IN 5c along with the outbox (§5 rows 2-3).
+export {
+  enqueueTerminalOutbox,
+  drainTurnOutbox,
+} from './mesh/mesh-turn-ledger.js';
 export {
   configureTerminalRedrive,
   ensureTerminalRedriveConsumer,

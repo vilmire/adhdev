@@ -83,12 +83,20 @@ describe('get_status_metadata — redrive coverage (Stage 5, 5a-3)', () => {
         // Stage 5a-4: quarantinedMeshCount / quarantineSkipsTotal joined this
         // key set — both are plain aggregate integers (no meshId), same
         // content-boundary discipline as the three original fields.
+        // Stage 5a-3 rework: the set-join fields (coveredTerminals /
+        // uncoveredTerminals / fullyCovered / joinTruncated) joined too. All
+        // remain counts+booleans — the task ids the join reads never escape
+        // readRedriveCoverageDiagnostics.
         expect(Object.keys(coverage).sort()).toEqual([
             'coveragePercent',
+            'coveredTerminals',
+            'fullyCovered',
+            'joinTruncated',
             'outboxDelivered',
             'quarantineSkipsTotal',
             'quarantinedMeshCount',
             'redriveInjected',
+            'uncoveredTerminals',
         ])
         expect(Number.isInteger(coverage.redriveInjected)).toBe(true)
         expect(Number.isInteger(coverage.outboxDelivered)).toBe(true)
