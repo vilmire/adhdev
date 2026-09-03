@@ -855,8 +855,7 @@
             "predictedSlotPinned": "ターゲットノードにピン留め済み — そのノードの予測スロット",
             "statsPending": "待機 {{count}}",
             "statsAssigned": "割当 {{count}}",
-            "jumpToState": "クリックでこの状態の次のカードへ移動",
-            "hiddenLoadMore": "+過去 {{count}}件"
+            "jumpToState": "クリックでこの状態の次のカードへ移動"
         },
         "obs": {
             "tabOverview": "概要",

@@ -855,8 +855,7 @@
             "predictedSlotPinned": "Pinned to a target node — predicted slot on that node",
             "statsPending": "{{count}} queued",
             "statsAssigned": "{{count}} assigned",
-            "jumpToState": "Click to jump to the next card in this state",
-            "hiddenLoadMore": "+{{count}} earlier"
+            "jumpToState": "Click to jump to the next card in this state"
         },
         "obs": {
             "tabOverview": "Overview",

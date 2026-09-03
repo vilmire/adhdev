@@ -1571,7 +1571,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                             ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                             : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
                     >
-                        {t('meshGraph.taskDag.hiddenLoadMore', { count: scoped.hiddenCount })}
+                        {t('meshGraph.taskDag.loadMore', { count: Math.min(TASK_DAG_LOAD_MORE_STEP, scoped.hiddenCount) })}
                     </button>
                 )}
             </div>

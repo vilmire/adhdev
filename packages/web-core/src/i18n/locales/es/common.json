@@ -855,8 +855,7 @@
             "predictedSlotPinned": "Fijado a un nodo destino — slot previsto en ese nodo",
             "statsPending": "{{count}} en cola",
             "statsAssigned": "{{count}} asignadas",
-            "jumpToState": "Clic para saltar a la siguiente tarjeta en este estado",
-            "hiddenLoadMore": "+{{count}} anteriores"
+            "jumpToState": "Clic para saltar a la siguiente tarjeta en este estado"
         },
         "obs": {
             "tabOverview": "Resumen",
