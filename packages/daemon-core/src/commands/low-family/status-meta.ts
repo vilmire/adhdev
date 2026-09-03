@@ -126,7 +126,9 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // drain it is meant to replace, WITHOUT the flag being on (dual
             // drive runs both regardless). `null` coveragePercent = the
             // outbox has delivered nothing yet, not 0% coverage — see
-            // mesh-turn-outbox-coverage-diagnostics.ts.
+            // mesh-turn-outbox-coverage-diagnostics.ts. Also carries the 5a-4
+            // quarantine counters (`quarantinedMeshCount`,
+            // `quarantineSkipsTotal`) — plain aggregate integers, no meshId.
             outboxRedriveCoverage: readRedriveCoverageDiagnostics(),
         };
     },

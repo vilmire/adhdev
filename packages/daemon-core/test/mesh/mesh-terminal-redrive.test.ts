@@ -53,6 +53,9 @@ import {
     consumeRedriveEntry,
     getRedriveState,
     __resetTerminalRedriveForTests,
+    QUARANTINE_FAILURE_THRESHOLD,
+    QUARANTINE_COOLDOWN_MS,
+    isMeshQuarantined,
     type RedriveProjectedEntry,
 } from '../../src/mesh/mesh-terminal-redrive.js';
 
@@ -234,5 +237,85 @@ describe('terminal redrive — dual drive against the real pending queue (Stage 
 
         const genuineInjection = buildRedriveInjection(MESH, projectedTerminal(nextTaskId()));
         expect(genuineInjection!.metadataEvent).not.toHaveProperty('evidenceLevel');
+    });
+
+    describe('quarantine (Stage 5a-4) — against the real pending queue', () => {
+        it('trips after QUARANTINE_FAILURE_THRESHOLD real consecutive failures, then stops throwing', () => {
+            const store = MeshRuntimeStore.getInstance();
+            const spy = vi.spyOn(store, 'insertPendingEvent')
+                .mockImplementation(() => { throw new Error('simulated persist failure'); });
+            try {
+                for (let i = 0; i < QUARANTINE_FAILURE_THRESHOLD; i++) {
+                    expect(() => consumeRedriveEntry(MESH, projectedTerminal(nextTaskId()))).toThrow();
+                }
+                expect(isMeshQuarantined(MESH)).toBe(true);
+
+                // ★ Load-bearing for the §7.6 archive floor: the seqscribe
+                // `onEntry` cursor advances ONLY when the callback resolves
+                // (consume.ts). Once quarantined, `consumeRedriveEntry` must
+                // NOT throw even though the queue is STILL failing underneath
+                // — a throw here would mean quarantine never actually stops
+                // pinning the archive floor, defeating the entire feature.
+                let outcome: string | undefined;
+                expect(() => {
+                    outcome = consumeRedriveEntry(MESH, projectedTerminal(nextTaskId()));
+                }).not.toThrow();
+                expect(outcome).toBe('quarantined');
+            } finally {
+                spy.mockRestore();
+            }
+        });
+
+        it('does not attempt the queue at all while quarantined (skip, not a silent retry)', () => {
+            const store = MeshRuntimeStore.getInstance();
+            const failingSpy = vi.spyOn(store, 'insertPendingEvent')
+                .mockImplementation(() => { throw new Error('simulated persist failure'); });
+            try {
+                for (let i = 0; i < QUARANTINE_FAILURE_THRESHOLD; i++) {
+                    expect(() => consumeRedriveEntry(MESH, projectedTerminal(nextTaskId()))).toThrow();
+                }
+            } finally {
+                failingSpy.mockRestore();
+            }
+            expect(isMeshQuarantined(MESH)).toBe(true);
+
+            // The queue is healthy again, but the mesh is still quarantined —
+            // consumeRedriveEntry must skip WITHOUT calling insertPendingEvent,
+            // proving quarantine short-circuits before the attempt rather than
+            // catching a failure it never tried to avoid.
+            const healthySpy = vi.spyOn(store, 'insertPendingEvent');
+            try {
+                const taskId = nextTaskId();
+                expect(consumeRedriveEntry(MESH, projectedTerminal(taskId))).toBe('quarantined');
+                expect(healthySpy).not.toHaveBeenCalled();
+                expect(queuedRowsFor(taskId)).toBe(0);
+            } finally {
+                healthySpy.mockRestore();
+            }
+        });
+
+        it('auto-resolves: half-open probe after cooldown succeeds and clears the streak', () => {
+            const store = MeshRuntimeStore.getInstance();
+            const spy = vi.spyOn(store, 'insertPendingEvent')
+                .mockImplementation(() => { throw new Error('simulated persist failure'); });
+            const t0 = Date.now();
+            try {
+                for (let i = 0; i < QUARANTINE_FAILURE_THRESHOLD; i++) {
+                    expect(() => consumeRedriveEntry(MESH, projectedTerminal(nextTaskId()), t0)).toThrow();
+                }
+            } finally {
+                spy.mockRestore();
+            }
+            expect(isMeshQuarantined(MESH, t0)).toBe(true);
+
+            const afterCooldown = t0 + QUARANTINE_COOLDOWN_MS;
+            expect(isMeshQuarantined(MESH, afterCooldown)).toBe(false);
+
+            const taskId = nextTaskId();
+            expect(consumeRedriveEntry(MESH, projectedTerminal(taskId), afterCooldown)).toBe('injected');
+            expect(queuedRowsFor(taskId)).toBe(1);
+            expect(getRedriveState(MESH)!.consecutiveFailures).toBe(0);
+            expect(isMeshQuarantined(MESH, afterCooldown)).toBe(false);
+        });
     });
 });

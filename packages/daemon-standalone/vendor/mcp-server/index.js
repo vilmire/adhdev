@@ -99036,7 +99036,14 @@ ${marker}`,
     function stateFor(meshId) {
       let s2 = state.get(meshId);
       if (!s2) {
-        s2 = { injected: 0, skipped: 0, consecutiveFailures: 0, lastFailureAt: null };
+        s2 = {
+          injected: 0,
+          skipped: 0,
+          consecutiveFailures: 0,
+          lastFailureAt: null,
+          quarantineSkips: 0,
+          quarantinedAt: null
+        };
         state.set(meshId, s2);
       }
       return s2;
@@ -99044,6 +99051,23 @@ ${marker}`,
     function getRedriveState(meshId) {
       const s2 = state.get(meshId);
       return s2 ? { ...s2 } : null;
+    }
+    function isMeshQuarantined(meshId, nowMs = Date.now()) {
+      const s2 = state.get(meshId);
+      if (!s2 || s2.quarantinedAt === null) return false;
+      return nowMs - s2.quarantinedAt < QUARANTINE_COOLDOWN_MS;
+    }
+    function getQuarantinedMeshCount(nowMs = Date.now()) {
+      let count = 0;
+      for (const meshId of state.keys()) {
+        if (isMeshQuarantined(meshId, nowMs)) count++;
+      }
+      return count;
+    }
+    function getTotalQuarantineSkips() {
+      let total = 0;
+      for (const s2 of state.values()) total += s2.quarantineSkips;
+      return total;
     }
     function getTotalRedriveInjected() {
       let total = 0;
@@ -99090,8 +99114,16 @@ ${marker}`,
         queuedAt: Date.now()
       };
     }
-    function consumeRedriveEntry(meshId, entry) {
+    function consumeRedriveEntry(meshId, entry, nowMs = Date.now()) {
       const s2 = stateFor(meshId);
+      if (isMeshQuarantined(meshId, nowMs)) {
+        s2.quarantineSkips++;
+        LOG.warn(
+          "MeshRedrive",
+          `mesh=${meshId} redrive quarantined (consecutiveFailures=${s2.consecutiveFailures}) \u2014 skip-and-advance entry=${entry.id} to release the \xA77.6 archive floor; the legacy outbox drain remains the redelivery path for this terminal while quarantined`
+        );
+        return "quarantined";
+      }
       const injection = buildRedriveInjection(meshId, entry);
       if (!injection) {
         s2.skipped++;
@@ -99101,16 +99133,15 @@ ${marker}`,
       try {
         queued = queuePendingMeshCoordinatorEvent(injection);
       } catch (error48) {
-        s2.consecutiveFailures++;
-        s2.lastFailureAt = Date.now();
+        recordFailure(s2, meshId, nowMs);
         throw error48 instanceof Error ? error48 : new Error(String(error48));
       }
       if (!queued) {
-        s2.consecutiveFailures++;
-        s2.lastFailureAt = Date.now();
+        recordFailure(s2, meshId, nowMs);
         throw new Error(`pending queue rejected redrive injection for task ${injection.metadataEvent.taskId}`);
       }
       s2.consecutiveFailures = 0;
+      s2.quarantinedAt = null;
       s2.injected++;
       LOG.debug(
         "MeshRedrive",
@@ -99118,12 +99149,25 @@ ${marker}`,
       );
       return "injected";
     }
+    function recordFailure(s2, meshId, nowMs) {
+      s2.consecutiveFailures++;
+      s2.lastFailureAt = nowMs;
+      if (s2.consecutiveFailures >= QUARANTINE_FAILURE_THRESHOLD) {
+        s2.quarantinedAt = nowMs;
+        LOG.warn(
+          "MeshRedrive",
+          `mesh=${meshId} redrive entering quarantine after ${s2.consecutiveFailures} consecutive failures \u2014 cooldown ${QUARANTINE_COOLDOWN_MS}ms before the next auto-resolving probe attempt`
+        );
+      }
+    }
     function __resetTerminalRedriveForTests() {
       state.clear();
     }
     var REDRIVE_CONSUMER;
     var REDRIVE_ENV;
     var REDRIVEN_TERMINAL_KINDS;
+    var QUARANTINE_FAILURE_THRESHOLD;
+    var QUARANTINE_COOLDOWN_MS;
     var state;
     var init_mesh_terminal_redrive = __esm2({
       "src/mesh/mesh-terminal-redrive.ts"() {
@@ -99133,6 +99177,8 @@ ${marker}`,
         REDRIVE_CONSUMER = "stage5a-mesh-terminal-redrive";
         REDRIVE_ENV = "ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE";
         REDRIVEN_TERMINAL_KINDS = ["task_completed", "task_failed"];
+        QUARANTINE_FAILURE_THRESHOLD = 5;
+        QUARANTINE_COOLDOWN_MS = 6e4;
         state = /* @__PURE__ */ new Map();
       }
     });
@@ -99141,7 +99187,13 @@ ${marker}`,
       const outboxDelivered = metrics3.outboxByStatus.delivered ?? 0;
       const redriveInjected = getTotalRedriveInjected();
       const coveragePercent = outboxDelivered > 0 ? Math.min(100, redriveInjected / outboxDelivered * 100) : null;
-      return { redriveInjected, outboxDelivered, coveragePercent };
+      return {
+        redriveInjected,
+        outboxDelivered,
+        coveragePercent,
+        quarantinedMeshCount: getQuarantinedMeshCount(nowMs),
+        quarantineSkipsTotal: getTotalQuarantineSkips()
+      };
     }
     var init_mesh_turn_outbox_coverage_diagnostics = __esm2({
       "src/mesh/mesh-turn-outbox-coverage-diagnostics.ts"() {
@@ -99262,7 +99314,9 @@ ${marker}`,
               // drain it is meant to replace, WITHOUT the flag being on (dual
               // drive runs both regardless). `null` coveragePercent = the
               // outbox has delivered nothing yet, not 0% coverage — see
-              // mesh-turn-outbox-coverage-diagnostics.ts.
+              // mesh-turn-outbox-coverage-diagnostics.ts. Also carries the 5a-4
+              // quarantine counters (`quarantinedMeshCount`,
+              // `quarantineSkipsTotal`) — plain aggregate integers, no meshId.
               outboxRedriveCoverage: readRedriveCoverageDiagnostics()
             };
           },
@@ -140497,6 +140551,8 @@ ${e?.stderr || ""}`;
       ProviderChannelStore: () => ProviderChannelStore,
       ProviderInstanceManager: () => ProviderInstanceManager,
       ProviderLoader: () => ProviderLoader,
+      QUARANTINE_COOLDOWN_MS: () => QUARANTINE_COOLDOWN_MS,
+      QUARANTINE_FAILURE_THRESHOLD: () => QUARANTINE_FAILURE_THRESHOLD,
       QUOTA_AXIS: () => QUOTA_AXIS,
       QUOTA_AXIS_TTL_MS: () => QUOTA_AXIS_TTL_MS,
       READ_MODEL_CONSUMER: () => READ_MODEL_CONSUMER,
@@ -140757,6 +140813,7 @@ ${e?.stderr || ""}`;
       getParkedTasks: () => getParkedTasks,
       getPendingMeshCoordinatorEvents: () => getPendingMeshCoordinatorEvents,
       getProcessInstanceContext: () => getProcessInstanceContext,
+      getQuarantinedMeshCount: () => getQuarantinedMeshCount,
       getQueue: () => getQueue3,
       getRecentActivity: () => getRecentActivity,
       getRecentCommands: () => getRecentCommands,
@@ -140768,6 +140825,7 @@ ${e?.stderr || ""}`;
       getSessionHostRecoveryLabel: () => import_session_host_core3.getSessionHostRecoveryLabel,
       getSessionHostSurfaceKind: () => import_session_host_core3.getSessionHostSurfaceKind,
       getSessionRecoveryContext: () => getSessionRecoveryContext3,
+      getTotalQuarantineSkips: () => getTotalQuarantineSkips,
       getTotalRedriveInjected: () => getTotalRedriveInjected,
       getTrackIdentity: () => getTrackIdentity,
       getTurnPresentationMetrics: () => getTurnPresentationMetrics,
@@ -140807,6 +140865,7 @@ ${e?.stderr || ""}`;
       isMeshDualWriteActive: () => isMeshDualWriteActive,
       isMeshHostOwner: () => isMeshHostOwner,
       isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable3,
+      isMeshQuarantined: () => isMeshQuarantined,
       isMeshReadModelReady: () => isMeshReadModelReady,
       isMeshReadPrimary: () => isMeshReadPrimary,
       isMeshTestPollution: () => isMeshTestPollution,
