@@ -62882,6 +62882,21 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           // Stage 4B: strictly boolean at every producer (mesh-termination-bridge,
           // router-worktree-cleanup) — the intentional/accidental stop discriminator.
           "intentional",
+          // ── Stage 5a-1 addition (2026-09-03) ───────────────────────────────────
+          // `weak` — the completion-evidence strength discriminator, written by exactly
+          // one producer (mesh-event-forwarding's terminal ledger append) as the literal
+          // boolean `true`, from a function-entry frozen read of isWeakCompletionEvidence.
+          // It is a VERDICT ABOUT evidence, not the evidence itself: the free text that
+          // produced it (finalSummary, workerResult, completionDiagnostic bodies) stays
+          // off the topic, and no part of it is recoverable from this bit.
+          //
+          // ★ Do not confuse with `evidence` / `evidenceLevel`, which are NOT allow-listed:
+          // `evidence` is a nested object holding composed text (refused by
+          // isProjectableScalar anyway), and `evidenceLevel` is re-resolved after the
+          // snapshot is taken, so it is deliberately not the same predicate. The redrive
+          // consumer (Stage 5a-2) needs the frozen verdict to rebuild the pending-event
+          // fingerprint the outbox drain builds; evidenceLevel would give a different one.
+          "weak",
           // Counters
           "attempt",
           "attemptCount",
@@ -88326,6 +88341,7 @@ ${cleanBody}`;
     function injectMeshSystemMessage(components, args) {
       const eventSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
       const eventNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+      const weakEvidenceAtInject = isWeakCompletionEvidence2(args.metadataEvent);
       const traceCtx = {
         taskId: args.metadataEvent.taskId,
         sessionId: eventSessionId,
@@ -88971,7 +88987,16 @@ ${cleanBody}`;
               // so a text-sufficient-but-workspace-clean completion still lands in the
               // ledger with a review flag, matching what buildMeshSystemMessage already
               // surfaced to the coordinator off the same metadataEvent mutation.
-              ...args.metadataEvent.reviewRecommended === true ? { reviewRecommended: true } : {}
+              ...args.metadataEvent.reviewRecommended === true ? { reviewRecommended: true } : {},
+              // WEAK-SNAPSHOT-FOR-REDRIVE (Stage 5a-1): the function-entry frozen verdict,
+              // carried on the ledger entry so the seqscribe projection can expose it and the
+              // Stage 5a-2 redrive consumer can rebuild the SAME pending-event fingerprint
+              // the outbox drain builds (`…::weak` / `…::genuine`). Deliberately NOT derived
+              // from the neighbouring evidenceLevel/reviewRecommended fields above: those are
+              // re-resolved post-mutation and may legitimately disagree with this snapshot.
+              // Written only for terminal kinds, and only when true, so the projected payload
+              // gains a key exactly where the redrive path needs it.
+              ...weakEvidenceAtInject ? { weak: true } : {}
             }
           });
           if (ledgerKind === "task_completed") {
