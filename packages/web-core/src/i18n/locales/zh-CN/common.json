@@ -855,8 +855,7 @@
             "predictedSlotPinned": "已固定到目标节点 — 该节点上的预测槽位",
             "statsPending": "排队 {{count}}",
             "statsAssigned": "已分配 {{count}}",
-            "jumpToState": "点击跳转到此状态的下一张卡片",
-            "hiddenLoadMore": "+早前 {{count}}"
+            "jumpToState": "点击跳转到此状态的下一张卡片"
         },
         "obs": {
             "tabOverview": "概览",

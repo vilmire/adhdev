@@ -855,8 +855,7 @@
             "predictedSlotPinned": "대상 노드 핀 지정됨 — 해당 노드의 예측 슬롯",
             "statsPending": "대기 {{count}}",
             "statsAssigned": "할당 {{count}}",
-            "jumpToState": "클릭하면 이 상태의 다음 카드로 이동",
-            "hiddenLoadMore": "+이전 {{count}}개"
+            "jumpToState": "클릭하면 이 상태의 다음 카드로 이동"
         },
         "obs": {
             "tabOverview": "개요",
