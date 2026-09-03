@@ -117559,7 +117559,14 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   // daemon write a worker config for the 6 providers that
                   // declare no isolation rules of their own.
                   mcpConfig: provLookup?.meshCoordinator?.mcpConfig,
-                  resolvedSpecPath: provLookup?._resolvedSpecPath,
+                  // `provLookup` comes from getMeta(), which returns the
+                  // raw map entry — and `_resolvedSpecPath` is only ever
+                  // set on resolve()'s deep CLONE, so reading the hidden
+                  // field off it yielded undefined for every provider.
+                  // That silently disabled pre_launch_trust on the worker
+                  // path (no trust plan → no ledgered grant → agy stalled
+                  // on its folder-trust prompt in every fresh worktree).
+                  resolvedSpecPath: this.providerLoader.getResolvedSpecPath(providerType) ?? void 0,
                   // The runtime session id is the stable launch identity:
                   // two workers on one workspace therefore receive distinct
                   // private HOMEs and distinct provenance usage records.
@@ -124844,6 +124851,29 @@ ${effect.notification.body || ""}`.trim();
           */
           getMeta(type2) {
             return this.providers.get(type2);
+          }
+          /**
+          * Resolve the on-disk spec path for a provider WITHOUT resolving scripts.
+          *
+          * `resolve()` deep-clones the map entry, so the `_resolvedSpecPath` it sets
+          * lives only on that clone; `getMeta()` returns the map entry and therefore
+          * never carries the field. Callers that hold a `getMeta()` result and need
+          * the spec path must use this instead of reading the hidden field.
+          *
+          * Root cause this exists for (agy folder-trust stall): the delegated mesh
+          * worker launch path read `_resolvedSpecPath` off a `getMeta()` result, so
+          * `loadPreLaunchTrustFromSpecPath()` always received undefined → no trust
+          * plan → no worker-auto grant was ever ledgered → every fresh worktree hit
+          * antigravity's "Do you trust the contents of this project?" prompt, which
+          * has no reachable approval surface from the coordinator.
+          *
+          * Delegates to `resolve()` so the version/compatibility candidate walk stays
+          * defined in exactly one place; returns null for providers that ship no spec.
+          */
+          getResolvedSpecPath(type2, context) {
+            const resolved = this.resolve(type2, context);
+            const specPath = resolved?._resolvedSpecPath;
+            return typeof specPath === "string" && specPath.trim() ? specPath : null;
           }
           /**
           * Resolve provider type by alias
