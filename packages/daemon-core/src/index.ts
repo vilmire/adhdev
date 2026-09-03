@@ -1225,6 +1225,27 @@ export {
   type OutboxEnqueuePolicy,
   type OutboxEnqueueBlockReason,
 } from './mesh/mesh-turn-outbox-enqueue-policy.js';
+// Stage 5b-2: the drain-trigger disarm (②reconcile tick, ③boot) and its
+// two-part precondition — 5b-1 in force AND the residue observed empty on
+// consecutive sweeps. Exported for the same reason as the 5b-1 block above: the
+// gate must evaluate the SAME policy function the trigger sites do.
+// ★ REMOVED IN 5c along with the triggers themselves (§5 rows 5, 6).
+export {
+  OUTBOX_DRAIN_ENV,
+  REQUIRED_CLEAN_SWEEPS,
+  resolveOutboxDrainPolicy,
+  areOutboxDrainTriggersDisabled,
+  describeOutboxDrainPolicy,
+  recordOutboxResidueSweep,
+  getOutboxCleanSweepStreak,
+  getOutboxResidueObservations,
+  recordOutboxDrainTriggerSuppressed,
+  getOutboxDrainTriggersSuppressed,
+  __resetOutboxDrainPolicyForTests,
+  __resetOutboxDrainSuppressionForTests,
+  type OutboxDrainPolicy,
+  type OutboxDrainDisableReason,
+} from './mesh/mesh-turn-outbox-drain-policy.js';
 // Stage 5a-1 + 5b-1: the outbox backlog/enqueue-state surface behind
 // `get_status_metadata`. ★ REMOVED IN 5c (§5 row 10).
 export {

@@ -93187,6 +93187,134 @@ ${cleanBody}`;
         nonIdleEscapeTracks = /* @__PURE__ */ new Map();
       }
     });
+    function recordOutboxResidueSweep(pendingCount) {
+      if (pendingCount > 0) {
+        cleanSweepStreak = 0;
+        residueObservations++;
+        return 0;
+      }
+      if (cleanSweepStreak < REQUIRED_CLEAN_SWEEPS) cleanSweepStreak++;
+      return cleanSweepStreak;
+    }
+    function getOutboxCleanSweepStreak() {
+      return cleanSweepStreak;
+    }
+    function getOutboxResidueObservations() {
+      return residueObservations;
+    }
+    function __resetOutboxDrainPolicyForTests() {
+      cleanSweepStreak = 0;
+      residueObservations = 0;
+    }
+    function resolveOutboxDrainPolicy(env2) {
+      const requested = env2[OUTBOX_DRAIN_ENV] === "off";
+      const enqueueBlocked = resolveOutboxEnqueuePolicy(env2).blocked;
+      const residueClear = cleanSweepStreak >= REQUIRED_CLEAN_SWEEPS;
+      if (!requested) {
+        return {
+          disabled: false,
+          requested: false,
+          enqueueBlocked,
+          cleanSweeps: cleanSweepStreak,
+          residueClear,
+          reason: "not_requested"
+        };
+      }
+      if (!enqueueBlocked) {
+        return {
+          disabled: false,
+          requested: true,
+          enqueueBlocked: false,
+          cleanSweeps: cleanSweepStreak,
+          residueClear,
+          reason: "enqueue_active"
+        };
+      }
+      if (!residueClear) {
+        return {
+          disabled: false,
+          requested: true,
+          enqueueBlocked: true,
+          cleanSweeps: cleanSweepStreak,
+          residueClear: false,
+          reason: "residue_pending"
+        };
+      }
+      return {
+        disabled: true,
+        requested: true,
+        enqueueBlocked: true,
+        cleanSweeps: cleanSweepStreak,
+        residueClear: true,
+        reason: "disabled"
+      };
+    }
+    function areOutboxDrainTriggersDisabled(env2 = process.env) {
+      return resolveOutboxDrainPolicy(env2).disabled;
+    }
+    function recordOutboxDrainTriggerSuppressed() {
+      drainTriggersSuppressed++;
+    }
+    function getOutboxDrainTriggersSuppressed() {
+      return drainTriggersSuppressed;
+    }
+    function __resetOutboxDrainSuppressionForTests() {
+      drainTriggersSuppressed = 0;
+    }
+    function describeOutboxDrainPolicy(env2 = process.env) {
+      const policy = resolveOutboxDrainPolicy(env2);
+      if (!policy.requested) return null;
+      if (policy.reason === "enqueue_active") {
+        return `${OUTBOX_DRAIN_ENV}=off REFUSED \u2014 the Stage 5b-1 enqueue block is not in force, so new outbox rows are still being produced. Disarming the periodic and boot drains now would let that backlog grow with only the commit-time trigger to flush it. Apply the 5b-1 block first, let the residue drain to zero, then re-apply this.`;
+      }
+      if (policy.reason === "residue_pending") {
+        return `${OUTBOX_DRAIN_ENV}=off pending \u2014 the enqueue block is in force, but the residue has not yet been observed empty on ${REQUIRED_CLEAN_SWEEPS} consecutive sweeps (streak ${policy.cleanSweeps}/${REQUIRED_CLEAN_SWEEPS}). The periodic and boot drains keep running until it has, which is what drains the residue in the first place. This is the expected state at boot \u2014 the streak always starts at zero.`;
+      }
+      return `${OUTBOX_DRAIN_ENV}=off honoured \u2014 turn-outbox drain triggers \u2461(reconcile tick) and \u2462(boot) disarmed (Stage 5b-2); the residue was observed empty on ${REQUIRED_CLEAN_SWEEPS} consecutive sweeps and the seqscribe redrive leg is the delivery path. The commit-time trigger \u2460 stays armed as the residual flush path until 5c.`;
+    }
+    var OUTBOX_DRAIN_ENV;
+    var REQUIRED_CLEAN_SWEEPS;
+    var cleanSweepStreak;
+    var residueObservations;
+    var drainTriggersSuppressed;
+    var init_mesh_turn_outbox_drain_policy = __esm2({
+      "src/mesh/mesh-turn-outbox-drain-policy.ts"() {
+        "use strict";
+        init_mesh_turn_outbox_enqueue_policy();
+        OUTBOX_DRAIN_ENV = "ADHDEV_MESH_OUTBOX_DRAIN";
+        REQUIRED_CLEAN_SWEEPS = 5;
+        cleanSweepStreak = 0;
+        residueObservations = 0;
+        drainTriggersSuppressed = 0;
+      }
+    });
+    function readTurnOutboxDiagnostics(nowMs = Date.now()) {
+      const metrics3 = getTurnLedgerMetrics(nowMs);
+      const policy = resolveOutboxEnqueuePolicy(process.env);
+      const drainPolicy = resolveOutboxDrainPolicy(process.env);
+      return {
+        oldestPendingAgeMs: metrics3.outboxOldestPendingAgeMs,
+        byStatus: metrics3.outboxByStatus,
+        backlogPending: metrics3.outboxByStatus.pending ?? 0,
+        enqueueBlocked: policy.blocked,
+        enqueueBlockReason: policy.reason,
+        enqueueSuppressed: getOutboxEnqueueBlockedCount(),
+        drainTriggersDisabled: drainPolicy.disabled,
+        drainDisableReason: drainPolicy.reason,
+        drainCleanSweeps: drainPolicy.cleanSweeps,
+        drainRequiredCleanSweeps: REQUIRED_CLEAN_SWEEPS,
+        drainResidueObservations: getOutboxResidueObservations(),
+        drainTriggersSuppressed: getOutboxDrainTriggersSuppressed()
+      };
+    }
+    var init_mesh_turn_outbox_diagnostics = __esm2({
+      "src/mesh/mesh-turn-outbox-diagnostics.ts"() {
+        "use strict";
+        init_mesh_turn_ledger();
+        init_mesh_turn_outbox_enqueue_policy();
+        init_mesh_turn_outbox_drain_policy();
+      }
+    });
     function findLiveCoordinators(components) {
       const out = [];
       for (const inst of components.instanceManager.getByCategory("cli")) {
@@ -95655,9 +95783,17 @@ ${cleanBody}`;
         }
       }
       try {
-        await drainMeshTurnOutbox();
-      } catch (e) {
-        LOG.warn("MeshReconcile", `Turn outbox drain failed: ${e?.message || e}`);
+        recordOutboxResidueSweep(readTurnOutboxDiagnostics().backlogPending);
+      } catch {
+      }
+      if (areOutboxDrainTriggersDisabled()) {
+        recordOutboxDrainTriggerSuppressed();
+      } else {
+        try {
+          await drainMeshTurnOutbox();
+        } catch (e) {
+          LOG.warn("MeshReconcile", `Turn outbox drain failed: ${e?.message || e}`);
+        }
       }
       if (components.router) {
         for (const mesh of listMeshes()) {
@@ -96075,13 +96211,18 @@ ${cleanBody}`;
           } catch (e) {
             LOG.warn("TurnLedger", `Restart attempt reconstruction failed (reconcile continues on row state): ${e?.message || e}`);
           }
-          try {
-            const drained = await drainMeshTurnOutbox();
-            if (drained.delivered + drained.failed + drained.rescheduled > 0) {
-              LOG.info("TurnLedger", `Restart outbox drain: delivered=${drained.delivered} rescheduled=${drained.rescheduled} failed=${drained.failed}`);
+          if (areOutboxDrainTriggersDisabled()) {
+            recordOutboxDrainTriggerSuppressed();
+            LOG.info("TurnLedger", "Restart outbox drain skipped \u2014 Stage 5b-2 drain triggers disarmed (enqueue blocked and residue observed empty); the seqscribe redrive leg delivers.");
+          } else {
+            try {
+              const drained = await drainMeshTurnOutbox();
+              if (drained.delivered + drained.failed + drained.rescheduled > 0) {
+                LOG.info("TurnLedger", `Restart outbox drain: delivered=${drained.delivered} rescheduled=${drained.rescheduled} failed=${drained.failed}`);
+              }
+            } catch (e) {
+              LOG.warn("TurnLedger", `Restart outbox drain failed (rows stay pending; retried on next commit/boot): ${e?.message || e}`);
             }
-          } catch (e) {
-            LOG.warn("TurnLedger", `Restart outbox drain failed (rows stay pending; retried on next commit/boot): ${e?.message || e}`);
           }
         })();
       });
@@ -96130,6 +96271,8 @@ ${cleanBody}`;
         init_mesh_retention_config();
         init_mesh_completion_synthesis();
         init_mesh_event_forwarding();
+        init_mesh_turn_outbox_drain_policy();
+        init_mesh_turn_outbox_diagnostics();
         init_mesh_queue_assignment();
         init_mesh_turn_ledger();
         init_mesh_reconcile_coordinator_drain();
@@ -99299,25 +99442,6 @@ ${marker}`,
         "use strict";
         import_node_os3 = require("os");
         BOOT_ID = `${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
-      }
-    });
-    function readTurnOutboxDiagnostics(nowMs = Date.now()) {
-      const metrics3 = getTurnLedgerMetrics(nowMs);
-      const policy = resolveOutboxEnqueuePolicy(process.env);
-      return {
-        oldestPendingAgeMs: metrics3.outboxOldestPendingAgeMs,
-        byStatus: metrics3.outboxByStatus,
-        backlogPending: metrics3.outboxByStatus.pending ?? 0,
-        enqueueBlocked: policy.blocked,
-        enqueueBlockReason: policy.reason,
-        enqueueSuppressed: getOutboxEnqueueBlockedCount()
-      };
-    }
-    var init_mesh_turn_outbox_diagnostics = __esm2({
-      "src/mesh/mesh-turn-outbox-diagnostics.ts"() {
-        "use strict";
-        init_mesh_turn_ledger();
-        init_mesh_turn_outbox_enqueue_policy();
       }
     });
     function readRedriveCoverageDiagnostics(_nowMs = Date.now()) {
@@ -140703,6 +140827,7 @@ ${e?.stderr || ""}`;
       OPERATING_NOTE_KEEP_LATEST: () => OPERATING_NOTE_KEEP_LATEST,
       OPERATING_NOTE_KIND: () => OPERATING_NOTE_KIND,
       OPERATING_NOTE_TOMBSTONE_KIND: () => OPERATING_NOTE_TOMBSTONE_KIND,
+      OUTBOX_DRAIN_ENV: () => OUTBOX_DRAIN_ENV,
       OUTBOX_ENQUEUE_ENV: () => OUTBOX_ENQUEUE_ENV,
       P2pRelayFailureError: () => P2pRelayFailureError,
       PARITY_BACKFILL_CAP: () => PARITY_BACKFILL_CAP,
@@ -140736,6 +140861,7 @@ ${e?.stderr || ""}`;
       REDRIVE_CONSUMER: () => REDRIVE_CONSUMER,
       REDRIVE_ENV: () => REDRIVE_ENV,
       REDRIVE_TASK_ID_CAP: () => REDRIVE_TASK_ID_CAP,
+      REQUIRED_CLEAN_SWEEPS: () => REQUIRED_CLEAN_SWEEPS,
       RawTerminalAttachment: () => RawTerminalAttachment,
       SEQSCRIBE_DB_NAME: () => SEQSCRIBE_DB_NAME,
       SESSION_TRANSCRIPT_RING: () => SESSION_TRANSCRIPT_RING,
@@ -140766,6 +140892,8 @@ ${e?.stderr || ""}`;
       __resetMeshParityForTests: () => __resetMeshParityForTests,
       __resetMeshReadModelForTests: () => __resetMeshReadModelForTests,
       __resetMeshReadReadinessForTests: () => __resetMeshReadReadinessForTests,
+      __resetOutboxDrainPolicyForTests: () => __resetOutboxDrainPolicyForTests,
+      __resetOutboxDrainSuppressionForTests: () => __resetOutboxDrainSuppressionForTests,
       __resetOutboxEnqueuePolicyForTests: () => __resetOutboxEnqueuePolicyForTests,
       __resetTerminalRedriveConsumerForTests: () => __resetTerminalRedriveConsumerForTests,
       __resetTerminalRedriveForTests: () => __resetTerminalRedriveForTests,
@@ -140779,6 +140907,7 @@ ${e?.stderr || ""}`;
       appendRecentActivity: () => appendRecentActivity,
       appendRemoteLedgerEntries: () => appendRemoteLedgerEntries3,
       applyDaemonEnvOverrides: () => applyDaemonEnvOverrides,
+      areOutboxDrainTriggersDisabled: () => areOutboxDrainTriggersDisabled,
       armBeacon: () => armBeacon,
       assertNoDependencyCycle: () => assertNoDependencyCycle,
       assertNoPlaintextHintTopics: () => assertNoPlaintextHintTopics,
@@ -140905,6 +141034,7 @@ ${e?.stderr || ""}`;
       deriveWorkspaceBranchIdentity: () => deriveWorkspaceBranchIdentity,
       deriveWorkspaceOwnerTag: () => deriveWorkspaceOwnerTag,
       describeDiskSpace: () => describeDiskSpace,
+      describeOutboxDrainPolicy: () => describeOutboxDrainPolicy,
       describeOutboxEnqueuePolicy: () => describeOutboxEnqueuePolicy,
       describeTaskDependencyState: () => describeTaskDependencyState3,
       detectAllVersions: () => detectAllVersions,
@@ -140989,7 +141119,10 @@ ${e?.stderr || ""}`;
       getMeshStatusMissionSummaries: () => getMeshStatusMissionSummaries3,
       getMeshStatusMissionsCompact: () => getMeshStatusMissionsCompact3,
       getNpmExecOptions: () => getNpmExecOptions,
+      getOutboxCleanSweepStreak: () => getOutboxCleanSweepStreak,
+      getOutboxDrainTriggersSuppressed: () => getOutboxDrainTriggersSuppressed,
       getOutboxEnqueueBlockedCount: () => getOutboxEnqueueBlockedCount,
+      getOutboxResidueObservations: () => getOutboxResidueObservations,
       getParkedTasks: () => getParkedTasks,
       getPendingMeshCoordinatorEvents: () => getPendingMeshCoordinatorEvents,
       getProcessInstanceContext: () => getProcessInstanceContext,
@@ -141230,6 +141363,8 @@ ${e?.stderr || ""}`;
       recordMeshEventShadow: () => recordMeshEventShadow,
       recordMeshToolCall: () => recordMeshToolCall2,
       recordMissingSessionAttempt: () => recordMissingSessionAttempt,
+      recordOutboxDrainTriggerSuppressed: () => recordOutboxDrainTriggerSuppressed,
+      recordOutboxResidueSweep: () => recordOutboxResidueSweep,
       recordSessionUsage: () => recordSessionUsage,
       recordSingleEnqueueDecision: () => recordSingleEnqueueDecision3,
       recoverExpiredWorkspaceSagas: () => recoverExpiredWorkspaceSagas,
@@ -141281,6 +141416,7 @@ ${e?.stderr || ""}`;
       resolveNotBefore: () => resolveNotBefore2,
       resolveNpmPublishedVersion: () => resolveNpmPublishedVersion,
       resolveOnDependencyFailurePolicy: () => resolveOnDependencyFailurePolicy,
+      resolveOutboxDrainPolicy: () => resolveOutboxDrainPolicy,
       resolveOutboxEnqueuePolicy: () => resolveOutboxEnqueuePolicy,
       resolveProviderChannel: () => resolveProviderChannel,
       resolveProviderMaxParallel: () => resolveProviderMaxParallel,
@@ -159907,6 +160043,7 @@ data: ${JSON.stringify(msg.data)}
     }
     init_mesh_terminal_redrive();
     init_mesh_turn_outbox_enqueue_policy();
+    init_mesh_turn_outbox_drain_policy();
     init_transcript_publisher();
     init_dist();
     init_logger();
@@ -160952,6 +161089,15 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         }
       } catch {
       }
+      try {
+        const drainPolicyNote = describeOutboxDrainPolicy(process.env);
+        if (drainPolicyNote) {
+          const refused = resolveOutboxDrainPolicy(process.env).reason === "enqueue_active";
+          if (refused) LOG.warn("MeshOutbox", drainPolicyNote);
+          else LOG.info("MeshOutbox", drainPolicyNote);
+        }
+      } catch {
+      }
       setupMeshEventForwarding(components);
       try {
         migratePendingEventsJsonlToSqlite();
@@ -161973,6 +162119,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     init_mesh_turn_outbox_coverage_diagnostics();
     init_mesh_turn_ledger();
     init_mesh_turn_outbox_enqueue_policy();
+    init_mesh_turn_outbox_drain_policy();
     init_mesh_turn_outbox_diagnostics();
     init_mesh_parity();
     init_transcript_publisher();

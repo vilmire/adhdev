@@ -103,6 +103,10 @@ import {
     resolveOutboxEnqueuePolicy,
 } from '../mesh/mesh-turn-outbox-enqueue-policy.js';
 import {
+    describeOutboxDrainPolicy,
+    resolveOutboxDrainPolicy,
+} from '../mesh/mesh-turn-outbox-drain-policy.js';
+import {
     activeTranscriptProjectionService,
     configureTranscriptProjection,
 } from '../seqscribe/transcript-publisher.js';
@@ -1180,6 +1184,24 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             const refused = resolveOutboxEnqueuePolicy(process.env).reason === 'redrive_disabled';
             if (refused) LOG.warn('MeshOutbox', enqueuePolicyNote);
             else LOG.info('MeshOutbox', enqueuePolicyNote);
+        }
+    } catch { /* diagnostics only — never block boot */ }
+
+    // 10c. Stage 5b-2: state the turn-outbox DRAIN-TRIGGER policy once.
+    //
+    // ★ At boot a requested disarm is ALWAYS reported as not-yet-honoured, because
+    // the clean-sweep streak is process-local and starts at zero. That is correct,
+    // not a startup race to paper over: this process has not yet observed the
+    // residue, so drain trigger ③ must run. The log says so explicitly, because
+    // "I set the flag and the boot drain still ran" is the predictable question.
+    try {
+        const drainPolicyNote = describeOutboxDrainPolicy(process.env);
+        if (drainPolicyNote) {
+            // `enqueue_active` is an operator error (5b-1 was skipped) and warns;
+            // `residue_pending` is the expected boot state and is informational.
+            const refused = resolveOutboxDrainPolicy(process.env).reason === 'enqueue_active';
+            if (refused) LOG.warn('MeshOutbox', drainPolicyNote);
+            else LOG.info('MeshOutbox', drainPolicyNote);
         }
     } catch { /* diagnostics only — never block boot */ }
 
