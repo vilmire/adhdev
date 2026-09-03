@@ -14,6 +14,7 @@ import { getDaemonBuildInfo } from '../../build-info.js';
 import { TRACK } from '../../track-identity.js';
 import { getCoordinatorForSession, listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
 import { currentRefineExecutorBootId } from '../../mesh/mesh-refine-executor-liveness.js';
+import { readTurnOutboxDiagnostics } from '../../mesh/mesh-turn-outbox-diagnostics.js';
 // ★These two commands are the SWR read surfaces — the ONLY read path allowed to
 // schedule a background refresh (quota/refresh.ts readQuotaCacheWithRevalidate).
 // They qualify because they are on-demand and human-paced: a machine page load
@@ -113,6 +114,12 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // path. Raw numeric receive/comparison counters live alongside the
             // entries because no content or dynamic-key map is present.
             fleetStatusPeerView: ctx.deps.getFleetStatusPeerView?.() ?? null,
+            // Turn outbox redrive-backstop health (Stage 5, 5a-1 — see
+            // mesh-turn-outbox-diagnostics.ts header). Backed by
+            // `getTurnLedgerMetrics`, which is a plain MeshRuntimeStore-backed
+            // read — no boot-time arming like `beacon` above, so it is called
+            // directly rather than via a ctx.deps getter closure.
+            outbox: readTurnOutboxDiagnostics(),
         };
     },
 
