@@ -13,11 +13,17 @@ import {
 /**
  * §8 unit 3 — the parity comparator's `actual` reader (design §3.3/§5.3).
  *
- * Mocks `node.node.headOrder`/`scanEntries` directly (the same level
- * `mesh-consumer-lifecycle.test.ts` exercises against a REAL node for the
- * mesh events topic; this module is exercised against a fake one since it
- * only calls two node methods and the interesting behavior is entirely in
- * how it interprets their results).
+ * These mock the node's read methods to cover argument shaping and the
+ * never-throws contract cheaply.
+ *
+ * ★ A fake node is NOT sufficient on its own here, and this file used to be the
+ * proof: its `headOrder` fake returned `{seq: 3}` unconditionally, which the
+ * real library never does for this topic (`session.*.transcript` is a ring, and
+ * ring entries never reach the `sq_log` table `headOrder` queries — it returns
+ * `null` every time). The suite stayed green while live parity was a structural
+ * 100% mismatch. Behaviour that depends on real retention/storage semantics
+ * belongs in `transcript-parity-actual-real-node.test.ts`, which drives an
+ * actual seqscribe node; keep these two in step when changing the read path.
  */
 
 const IDENTITY: TranscriptRevisionIdentity = {
@@ -58,11 +64,21 @@ function entriesFor(identity: TranscriptRevisionIdentity) {
 }
 
 function fakeNode(opts: {
-    headOrder?: () => { seq: number } | null;
+    vectors?: () => Record<string, { writers: Record<string, { contig: number; chain: string }> }>;
     scanEntries?: (topic: string, o: unknown) => { entries: unknown[] };
 } = {}): SeqscribeNodeHandle {
     const node = {
-        headOrder: opts.headOrder ?? (() => ({ seq: 3 })),
+        // ★ NOT `headOrder`. The reader deliberately does not call it — on this
+        // ring topic the real library always answers `null` there (see the
+        // real-node suite). It reads the writer's `contig` head via `vectors()`
+        // instead, so that is what this fake must model.
+        vectors:
+            opts.vectors ??
+            (() => ({
+                'session.sess-1.transcript': {
+                    writers: { [IDENTITY.producerWriterId]: { contig: 3, chain: 'c' } },
+                },
+            })),
         scanEntries: opts.scanEntries ?? (() => ({ entries: [], complete: true, truncatedBelow: false })),
     };
     return {
@@ -79,13 +95,13 @@ function fakeNode(opts: {
 }
 
 describe('readLocalTranscriptParityActual', () => {
-    it('missing when headOrder returns null (no entries on the topic yet)', () => {
-        const node = fakeNode({ headOrder: () => null });
+    it('missing when the writer has no entries on the topic yet', () => {
+        const node = fakeNode({ vectors: () => ({}) });
         expect(readLocalTranscriptParityActual(node, IDENTITY.sessionId, IDENTITY.producerWriterId)).toEqual({ status: 'missing' });
     });
 
-    it('missing when headOrder throws', () => {
-        const node = fakeNode({ headOrder: () => { throw new Error('boom'); } });
+    it('missing when reading the writer head throws', () => {
+        const node = fakeNode({ vectors: () => { throw new Error('boom'); } });
         expect(readLocalTranscriptParityActual(node, IDENTITY.sessionId, IDENTITY.producerWriterId)).toEqual({ status: 'missing' });
     });
 
@@ -111,10 +127,31 @@ describe('readLocalTranscriptParityActual', () => {
         }
     });
 
-    it('passes the pinned headOrder.seq as toSeq and the expected writer to scanEntries', () => {
+    it('anchors the scan window to the writer head, not to seq 1', () => {
         let calledWith: unknown = null;
         const node = fakeNode({
-            headOrder: () => ({ seq: 42 }),
+            vectors: () => ({
+                'session.sess-1.transcript': {
+                    writers: { [IDENTITY.producerWriterId]: { contig: 900, chain: 'c' } },
+                },
+            }),
+            scanEntries: (topic, o) => {
+                calledWith = { topic, o };
+                return { entries: [], complete: true, truncatedBelow: false };
+            },
+        });
+        readLocalTranscriptParityActual(node, IDENTITY.sessionId, IDENTITY.producerWriterId);
+        // head 900, 500-wide window → 401..900. A `fromSeq` of 1 here would
+        // read 1..500 and miss every row the ring actually still holds.
+        expect(calledWith).toEqual({
+            topic: 'session.sess-1.transcript',
+            o: { writer: IDENTITY.producerWriterId, fromSeq: 401, limit: 500 },
+        });
+    });
+
+    it('starts at seq 1 while the writer head is still below the window width', () => {
+        let calledWith: unknown = null;
+        const node = fakeNode({
             scanEntries: (topic, o) => {
                 calledWith = { topic, o };
                 return { entries: [], complete: true, truncatedBelow: false };
@@ -123,7 +160,7 @@ describe('readLocalTranscriptParityActual', () => {
         readLocalTranscriptParityActual(node, IDENTITY.sessionId, IDENTITY.producerWriterId);
         expect(calledWith).toEqual({
             topic: 'session.sess-1.transcript',
-            o: { writer: IDENTITY.producerWriterId, toSeq: 42 },
+            o: { writer: IDENTITY.producerWriterId, fromSeq: 1, limit: 500 },
         });
     });
 });

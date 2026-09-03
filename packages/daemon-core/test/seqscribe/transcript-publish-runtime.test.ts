@@ -65,7 +65,16 @@ function fakeNode(opts: {
                 return ['topic', IDENTITY.producerWriterId, appended.length] as const;
             },
         }),
-        headOrder: () => ({ seq: appended.length }),
+        // The parity reader anchors its scan window to this writer's `contig`
+        // head via `vectors()` — it deliberately does NOT use `headOrder`,
+        // which on a real ring topic always answers null (see
+        // transcript-parity-actual-real-node.test.ts). Model the head the same
+        // way a real node would: one seq per appended row.
+        vectors: () => ({
+            [sessionTranscriptTopic(IDENTITY.sessionId)]: {
+                writers: { [IDENTITY.producerWriterId]: { contig: appended.length, chain: 'c' } },
+            },
+        }),
         scanEntries: opts.scanEntries ?? (() => ({
             entries: appended.map((e, i) => ({ writer: IDENTITY.producerWriterId, seq: i + 1, kind: e.kind, payload: e.payload })),
             complete: true,
