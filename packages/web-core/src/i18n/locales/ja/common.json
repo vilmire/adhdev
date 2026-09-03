@@ -794,7 +794,8 @@
         "taskDag": {
             "plan": {
                 "depsFailed_one": "先行{{count}}件が失敗",
-                "depsFailed_other": "先行{{count}}件が失敗"
+                "depsFailed_other": "先行{{count}}件が失敗",
+                "openTask": "このタスクを開く"
             },
             "gate": {
                 "holding_one": "{{count}}件を保留中",

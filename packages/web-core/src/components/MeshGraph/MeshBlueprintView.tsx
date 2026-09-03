@@ -329,7 +329,14 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 + refresh drop to their own line instead of being crushed. ── */}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    <div ref={setStatsHost} className="flex min-w-0 items-center gap-1.5" />
+                    {/* `w-max` (2026-09-03): the chips inside are `shrink-0`,
+                        but this host was `min-w-0` inside the scroller — a
+                        min-w-0 flex child adopts the SCROLLER's width, so the
+                        row had no room for the last chip and `overflow-x-auto`
+                        clipped it mid-word ("1 assigned" → "1 as") instead of
+                        becoming scrollable. `w-max` sizes the host to its
+                        content, which is what makes the row actually scroll. */}
+                    <div ref={setStatsHost} className="flex w-max items-center gap-1.5" />
                 </div>
                 {includeTerminal && !graphsLoading && (
                     <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-3xs text-text-muted">
