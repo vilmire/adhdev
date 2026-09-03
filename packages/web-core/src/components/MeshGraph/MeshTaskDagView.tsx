@@ -92,6 +92,15 @@ interface MeshTaskDagViewProps {
      * chip strip over empty canvas read as clutter).
      */
     statsContainer?: HTMLElement | null
+    /**
+     * Command seam for the built-in side panel's on-demand finalSummary fetch
+     * (docs/design/2026-09-02-blueprint-followups.md §1). Only used when
+     * `onTaskOpen` is NOT provided — callers that route into the shared
+     * MeshOverviewDetailModal (MeshBlueprintView) fetch there instead.
+     */
+    daemonId?: string | null
+    meshId?: string | null
+    sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
 }
 
 type TaskFlowNodeData = Record<string, unknown> & {
@@ -966,7 +975,7 @@ async function layoutElkElements(tasks: TaskDagNode[], taskEdges: TaskDagData['e
     return positions
 }
 
-export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, pinnedSlots, initialTerminalLimit, nodeLabels, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles, onMissionOpen, focusMission }: MeshTaskDagViewProps) {
+export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, predictedSlots, pinnedSlots, initialTerminalLimit, nodeLabels, onTaskOpen, statsContainer, graphs, onGateOpen, missionTitles, onMissionOpen, focusMission, daemonId, meshId, sendDaemonCommand }: MeshTaskDagViewProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -1374,6 +1383,30 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
 
     const selectedNode = selectedTaskId ? dag.nodes.find(node => node.id === selectedTaskId) ?? null : null
 
+    // finalSummary lives in the append-only mesh_task_outputs ledger, not on the
+    // queue row (docs/design/2026-09-02-blueprint-followups.md §1) — fetched on
+    // demand over P2P when the built-in side panel opens a terminal task. Only
+    // relevant when onTaskOpen is unset (the panel actually renders here rather
+    // than delegating to MeshOverviewDetailModal, which fetches on its own).
+    const selectedTaskIsTerminal = selectedNode?.task.status === 'completed' || selectedNode?.task.status === 'failed'
+    const [selectedOutput, setSelectedOutput] = useState<{ finalSummary?: string; providerType?: string } | null>(null)
+    const [selectedOutputFetching, setSelectedOutputFetching] = useState(false)
+    useEffect(() => {
+        setSelectedOutput(null)
+        if (onTaskOpen || !selectedTaskIsTerminal || !selectedTaskId || !daemonId || !sendDaemonCommand) return
+        let cancelled = false
+        setSelectedOutputFetching(true)
+        sendDaemonCommand(daemonId, 'mesh_task_output', { meshId: meshId ?? undefined, taskId: selectedTaskId })
+            .then(raw => {
+                if (cancelled) return
+                const body = raw && typeof raw === 'object' && 'result' in raw ? (raw as any).result : raw
+                if (body?.output) setSelectedOutput(body.output)
+            })
+            .catch(() => { /* leave selectedOutput null — panel falls back to "unavailable" */ })
+            .finally(() => { if (!cancelled) setSelectedOutputFetching(false) })
+        return () => { cancelled = true }
+    }, [onTaskOpen, selectedTaskIsTerminal, selectedTaskId, daemonId, meshId, sendDaemonCommand])
+
     // Non-terminal tasks are what the blueprint is FOR — when any exist, the
     // initial viewport frames them instead of the whole history sprawl. Runs
     // once per layout identity so it never fights the user's panning.
@@ -1624,9 +1657,20 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     <div className="flex flex-wrap gap-1.5 text-3xs">
                         {statBadge(selectedNode.task.status, selectedNode.task.status === 'failed' ? 'danger' : selectedNode.task.status === 'assigned' ? 'info' : 'default')}
                         {selectedNode.task.difficulty && statBadge(selectedNode.task.difficulty)}
+                        {(selectedNode.task.assignedProviderType || selectedOutput?.providerType) && statBadge(selectedNode.task.assignedProviderType || selectedOutput!.providerType!)}
                         {selectedNode.task.missionId && statBadge(selectedNode.task.missionId, 'info')}
                         {selectedNode.task.assignedNodeId && statBadge(`@ ${selectedNode.task.assignedNodeId.slice(0, 14)}`)}
                     </div>
+                    {!onTaskOpen && selectedTaskIsTerminal && (
+                        <div className="mt-2">
+                            <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.finalSummary')}</div>
+                            {selectedOutput?.finalSummary
+                                ? <div className={`whitespace-pre-wrap rounded-lg border px-2 py-1.5 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{selectedOutput.finalSummary}</div>
+                                : selectedOutputFetching
+                                    ? <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.finalSummaryLoading')}</div>
+                                    : <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.finalSummaryUnavailable')}</div>}
+                        </div>
+                    )}
                     {selectedNode.waitingOn.length > 0 && (
                         <div className="mt-2 text-3xs">
                             <span className="font-semibold">{t('meshGraph.taskDag.waitsOn', { count: selectedNode.waitingOn.length })}:</span>

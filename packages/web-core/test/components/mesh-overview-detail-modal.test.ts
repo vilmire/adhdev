@@ -112,3 +112,50 @@ describe('MeshOverviewDetailModal — gate kind', () => {
         expect(html).not.toMatch(/Claim|Release gate|Abandon/)
     })
 })
+
+// Task-detail completion info (docs/design/2026-09-02-blueprint-followups.md
+// §1): difficulty/completing-provider render straight from the queue row;
+// finalSummary is a P2P fetch-on-open, so with no command seam the panel
+// falls back to the "unavailable" label rather than hanging or crashing.
+describe('MeshOverviewDetailModal — queue kind completion info', () => {
+    function renderQueueDetail(task: Record<string, unknown>): string {
+        return renderToStaticMarkup(
+            h(MeshOverviewDetailModal, {
+                meshTheme,
+                detail: {
+                    kind: 'queue' as const,
+                    task: {
+                        id: 'task-1234abcd',
+                        meshId: 'mesh-1',
+                        message: 'Fix the flaky retry test',
+                        createdAt: '2026-09-02T00:00:00.000Z',
+                        updatedAt: '2026-09-02T01:00:00.000Z',
+                        ...task,
+                    } as any,
+                },
+                onClose: () => {},
+                daemonId: null,
+                meshId: null,
+                sendDaemonCommand: null,
+                resolveNodeLabel: (nodeId: string | undefined | null) => nodeId ?? 'unknown',
+            }),
+        )
+    }
+
+    it('renders difficulty and the completing provider from the queue row', () => {
+        const html = renderQueueDetail({ status: 'completed', difficulty: 'difficult', assignedProviderType: 'claude-cli' })
+        expect(html).toContain('Difficult')
+        expect(html).toContain('claude-cli')
+    })
+
+    it('falls back to "unavailable" for a terminal task with no command seam to fetch finalSummary', () => {
+        const html = renderQueueDetail({ status: 'completed' })
+        expect(html).toContain('Final summary')
+        expect(html).toContain('Final summary unavailable')
+    })
+
+    it('does not show the final-summary block for a non-terminal task', () => {
+        const html = renderQueueDetail({ status: 'assigned' })
+        expect(html).not.toContain('Final summary')
+    })
+})

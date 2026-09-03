@@ -303,7 +303,7 @@ function ActionButton({ theme, tone, label, confirmLabel, armed, busy, onClick }
     )
 }
 
-function MissionGroupCard({ group, theme, nodeLabels, routingIndex, expandedTaskId, onToggleTask, actions, onFocusNode }: {
+function MissionGroupCard({ group, theme, nodeLabels, routingIndex, expandedTaskId, onToggleTask, actions, onFocusNode, daemonId, meshId, sendDaemonCommand }: {
     group: MissionTaskGroup
     theme: MeshGraphTheme
     nodeLabels: Map<string, string>
@@ -312,6 +312,9 @@ function MissionGroupCard({ group, theme, nodeLabels, routingIndex, expandedTask
     onToggleTask: (id: string) => void
     actions?: TaskRowActions | null
     onFocusNode?: (nodeId: string) => void
+    daemonId?: string | null
+    meshId?: string | null
+    sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
 }) {
     const { t } = useTranslation('common')
     const hasLiveWork = group.counts.assigned > 0 || group.counts.pending > 0 || group.counts.failed > 0
@@ -384,7 +387,7 @@ function MissionGroupCard({ group, theme, nodeLabels, routingIndex, expandedTask
                     )}
                     {showGraph && group.hasDependencies ? (
                         <div className={`mx-1 mb-1 h-[300px] overflow-hidden rounded-xl border ${theme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
-                            <MeshTaskDagView tasks={group.tasks} compact />
+                            <MeshTaskDagView tasks={group.tasks} compact daemonId={daemonId} meshId={meshId} sendDaemonCommand={sendDaemonCommand} />
                         </div>
                     ) : (
                         group.tasks.map(task => (
@@ -555,6 +558,9 @@ export default function MeshTasksView({ tasks, status, emptyMessage, daemonId, s
                     onToggleTask={toggleTask}
                     actions={actions}
                     onFocusNode={onFocusNode}
+                    daemonId={daemonId}
+                    meshId={status.meshId}
+                    sendDaemonCommand={sendDaemonCommand}
                 />
             ))}
         </div>

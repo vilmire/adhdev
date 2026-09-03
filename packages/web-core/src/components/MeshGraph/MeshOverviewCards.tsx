@@ -638,6 +638,9 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, daemonId, 
                             onOpenMission={onOpenMission}
                             onOpenTask={onOpenTask}
                             queueTasks={queueTasks}
+                            daemonId={daemonId}
+                            meshId={meshId}
+                            sendDaemonCommand={sendDaemonCommand}
                         />
                     )}
                     {detail.kind === 'session' && <SessionDetail meshTheme={meshTheme} node={detail.node} session={detail.session} queueTasks={queueTasks} onOpenTask={onOpenTask} />}
@@ -935,7 +938,7 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
     )
 }
 
-function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenMission, onOpenTask, queueTasks }: {
+function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenMission, onOpenTask, queueTasks, daemonId, meshId, sendDaemonCommand }: {
     meshTheme: MeshGraphTheme
     task: RepoMeshQueueTask
     resolveNodeLabel?: (nodeId: string | undefined | null) => string
@@ -945,7 +948,7 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
     onOpenMission?: (missionId: string) => void
     onOpenTask?: (task: RepoMeshQueueTask) => void
     queueTasks?: RepoMeshQueueTask[]
-}) {
+} & MeshCommandSeam) {
     const { t } = useTranslation('common')
     const sessionId = task.assignedSessionId || task.targetSessionId
     const linkClass = `text-left underline-offset-2 hover:underline ${meshTheme.textSecondary}`
@@ -954,14 +957,62 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
         task: (queueTasks ?? []).find(candidate => candidate.id === id) ?? null,
         failure: (task.dependencyFailures ?? []).find(failure => failure.taskId === id) ?? null,
     }))
+
+    // finalSummary lives in the append-only mesh_task_outputs ledger, not on the
+    // queue row (docs/design/2026-09-02-blueprint-followups.md §1) — fetched on
+    // demand over P2P, same seam as MissionDetail's full-goal fetch below.
+    const isTerminal = task.status === 'completed' || task.status === 'failed'
+    const [output, setOutput] = useState<{ finalSummary?: string; providerType?: string } | null>(null)
+    const [fetchingOutput, setFetchingOutput] = useState(false)
+    const [outputError, setOutputError] = useState<string | null>(null)
+
+    useEffect(() => {
+        setOutput(null)
+        setOutputError(null)
+        if (!isTerminal || !daemonId || !sendDaemonCommand) return
+        let cancelled = false
+        setFetchingOutput(true)
+        sendDaemonCommand(daemonId, 'mesh_task_output', { meshId: meshId ?? undefined, taskId: task.id })
+            .then(raw => {
+                if (cancelled) return
+                const body = unwrapResult(raw)
+                if (body?.output) setOutput(body.output)
+                else if (body?.success === false) setOutputError(body.error || 'failed')
+            })
+            .catch(err => {
+                if (!cancelled) setOutputError(err instanceof Error ? err.message : 'failed to fetch task output')
+            })
+            .finally(() => {
+                if (!cancelled) setFetchingOutput(false)
+            })
+        return () => { cancelled = true }
+    }, [isTerminal, daemonId, meshId, sendDaemonCommand, task.id])
+
+    const completingProvider = task.assignedProviderType || output?.providerType
+
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
+                {completingProvider && <StatusBadge meshTheme={meshTheme} label={completingProvider} tone="muted" />}
                 {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}
             </div>
             {task.message && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{queueTaskDisplayText(task.message)}</div>}
+            {isTerminal && (
+                <div>
+                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelFinalSummary')}</div>
+                    {output?.finalSummary
+                        ? <div className={`whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{output.finalSummary}</div>
+                        : fetchingOutput
+                            ? <div className={`text-3xs ${meshTheme.textMuted}`}>{t('mesh.overview.detailFinalSummaryLoading')}</div>
+                            : outputError
+                                ? <div className={`text-3xs ${meshTheme.textMuted}`}>{t('mesh.overview.detailFinalSummaryUnavailable')}</div>
+                                : !daemonId || !sendDaemonCommand
+                                    ? <div className={`text-3xs ${meshTheme.textMuted}`}>{t('mesh.overview.detailFinalSummaryUnavailable')}</div>
+                                    : null}
+                </div>
+            )}
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelTaskId')} value={task.id} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCreated')} value={relativeTime(task.createdAt) ?? task.createdAt} />

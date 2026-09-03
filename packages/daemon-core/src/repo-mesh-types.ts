@@ -1932,6 +1932,21 @@ export interface RepoMeshQueueTask {
     dependsOn?: string[];
     /** M1/M3 mission this task belongs to (same wire-already provenance as dependsOn). */
     missionId?: string;
+    /**
+     * Provider type of the session that claimed this task, carried on
+     * {@link MeshWorkQueueEntry} — same wire-already provenance as `difficulty`
+     * and `dependsOn`, typed here for the task-detail completion-info UI.
+     * Absent on rows claimed by an older daemon, and on claim paths that drain
+     * into an already-running session (`mesh-work-queue.ts:295-299`); treat
+     * absence as "unknown", not "no provider".
+     */
+    assignedProviderType?: string;
+    /**
+     * Model the claiming session actually launched with — same absence caveats
+     * as {@link assignedProviderType}. This is the *executed* model; `model`/
+     * `modelSource` below are the *requested* model at enqueue time.
+     */
+    assignedModel?: string;
     /** G6 task-level scheduling priority ('low' | 'normal' | 'high'); absent = normal. */
     priority?: string;
     /**
