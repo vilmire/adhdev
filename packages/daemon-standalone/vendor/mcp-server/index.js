@@ -159402,18 +159402,19 @@ data: ${JSON.stringify(msg.data)}
     }
     init_topics2();
     init_transcript_revision_codec();
+    var TRANSCRIPT_PARITY_SCAN_ROWS = SESSION_TRANSCRIPT_RING;
     function readLocalTranscriptParityActual(node, rawSessionId, expectedWriterId) {
       const topic = sessionTranscriptTopic(rawSessionId);
-      let head;
-      try {
-        head = node.node.headOrder(topic);
-      } catch {
-        return { status: "missing" };
-      }
-      if (!head) return { status: "missing" };
       let entries;
       try {
-        const result = node.node.scanEntries(topic, { writer: expectedWriterId, toSeq: head.seq });
+        const writerVec = node.node.vectors()[topic]?.writers[expectedWriterId];
+        const contig = writerVec && "contig" in writerVec ? writerVec.contig : 0;
+        const fromSeq = Math.max(1, contig - TRANSCRIPT_PARITY_SCAN_ROWS + 1);
+        const result = node.node.scanEntries(topic, {
+          writer: expectedWriterId,
+          fromSeq,
+          limit: TRANSCRIPT_PARITY_SCAN_ROWS
+        });
         entries = result.entries;
       } catch {
         return { status: "missing" };
