@@ -315,19 +315,30 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 planned steps of every orchestration graph fuse INTO the live
                 queue instead of hiding behind per-graph picker chips, so the
                 row carries only the queue stats, the terminal-graph toggle and
-                refresh. ── */}
-            <div className="flex items-center gap-2">
+                refresh.
+
+                `flex-wrap` (2026-09-03, owner-reported narrow-viewport bug):
+                the task stats cluster (portaled from MeshTaskDagView) scrolls
+                horizontally and can shrink, but the graphs cluster is
+                `shrink-0` with its own load-more button — with no wrap, a
+                narrow viewport had nowhere to put that button's text except
+                to squeeze it, and un-nowrapped text squeezed below its own
+                natural width wraps letter-by-letter ("Load 50 more" →
+                "Loa"/"50"/"mor" stacked), which also collapsed its clickable
+                width to near zero. Wrapping lets the graphs cluster + toggle
+                + refresh drop to their own line instead of being crushed. ── */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     <div ref={setStatsHost} className="flex min-w-0 items-center gap-1.5" />
                 </div>
                 {includeTerminal && !graphsLoading && (
-                    <div className="flex shrink-0 items-center gap-1.5 text-3xs text-text-muted">
+                    <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-3xs text-text-muted">
                         <span>{t('repoMesh.graphs.shown', { count: graphs.length })}</span>
                         {graphPagination.canLoadMore && (
                             <button
                                 type="button"
                                 onClick={() => setGraphLimit(nextBlueprintGraphLimit)}
-                                className={`rounded-full border px-2 py-0.5 font-medium transition-colors ${meshTheme.isDark
+                                className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 font-medium transition-colors ${meshTheme.isDark
                                     ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                                     : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
                             >
