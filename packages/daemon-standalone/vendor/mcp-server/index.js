@@ -3681,6 +3681,8 @@ var require_dist = __commonJS({
       delete env2.CODEX_SANDBOX_NETWORK_DISABLED;
       delete env2.NO_COLOR;
       delete env2.COLOR;
+      delete env2.COLUMNS;
+      delete env2.LINES;
       delete env2.CLAUDECODE;
       delete env2.CLAUDE_CODE_CHILD_SESSION;
       delete env2.CLAUDE_CODE_ENTRYPOINT;
