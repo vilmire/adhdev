@@ -400,14 +400,19 @@ describe('turn ledger — evidence/stop ordering (6ms race)', () => {
 // outbox: re-enqueue after a crash replay is exactly-once (INSERT OR IGNORE),
 // and a row that exhausts its retry budget parks as `failed` observably.
 //
-// ★★ 5c-2 OWES REPLACEMENTS FOR BOTH, restated against the redrive leg:
-//   · exactly-once across a restart  → the durable cursor resuming mid-topic
-//     must not re-notify a terminal the coordinator already drained.
-//   · observable permanent failure   → the 5a-4 quarantine (which REPLACED the
-//     `failed` park) must be reachable and reported, not silent.
-// Deleting these without restating them is precisely the vacuous-green the
-// design's §5-15 warns about — the remaining suite would still be green with
-// the redrive leg's restart behaviour entirely unasserted.
+// ★★ Stage 5c-2 RESTATED BOTH against the redrive leg. They are not here because
+// neither is a turn-ledger property any more — the redrive leg is keyed by
+// projected ledger entry, not by turn attempt, so this suite cannot observe them:
+//   · exactly-once across a restart  → test/mesh/mesh-terminal-redrive-restart.test.ts
+//     ("does NOT re-notify a … terminal the coordinator already drained before the
+//     restart"). The durable cursor resuming mid-topic must not re-notify a terminal
+//     the coordinator already drained.
+//   · observable permanent failure   → test/commands/status-meta-terminal-redrive.test.ts
+//     ("reports a tripped quarantine on the health surface"). The 5a-4 quarantine
+//     REPLACED the `failed` park and must be reachable AND reported, not silent.
+// Deleting these without restating them would have been precisely the vacuous-green
+// the design's §5-15 warns about — the suite would still be green with the redrive
+// leg's restart behaviour entirely unasserted.
 
 describe('turn ledger — cancellation at every stage', () => {
     const stages: Array<{ name: string; advance: (taskId: string) => void }> = [

@@ -106,8 +106,25 @@ function queuedRowsFor(taskId: string): number {
     return row.n;
 }
 
-/** The injection drainMeshTurnOutbox performs, reproduced field-for-field. */
-function outboxDrainInject(taskId: string, weak: boolean): boolean {
+/**
+ * A SECOND, INDEPENDENT producer of the same terminal notification.
+ *
+ * ★ Stage 5c-2 renamed this from `outboxDrainInject`. It was written as a
+ * field-for-field reproduction of `drainMeshTurnOutbox`'s injection, and 5c-1
+ * deleted that drain — but the helper is kept, and kept UNCHANGED on the wire,
+ * because what it proves outlived its namesake. The property under test is that
+ * a terminal injected by some other path lands on the SAME fingerprint as the
+ * redrive's and collapses. Nothing about that depends on which producer built it:
+ * `source` and `outboxRedelivery` are not fingerprint inputs, so this payload is
+ * still a faithful stand-in for any non-redrive producer (mesh-events-stale, the
+ * stranded-dispatch reconciler, a legacy daemon still on the old build).
+ *
+ * ★ Rewriting it to emit `seqscribe_redelivery` would DESTROY the test: both
+ * sides would then be the redrive's own shape and the assertion would degenerate
+ * into "redrive collapses onto itself", which the repeated-redrive case already
+ * covers. The cross-producer fingerprint equality would go unasserted.
+ */
+function foreignProducerInject(taskId: string, weak: boolean): boolean {
     return queuePendingMeshCoordinatorEvent({
         event: 'agent:generating_completed',
         meshId: MESH,
@@ -137,15 +154,15 @@ describe('terminal redrive — dual drive against the real pending queue (Stage 
     for (const weak of [true, false]) {
         const slot = weak ? 'weak' : 'genuine';
 
-        it(`accepts a ${slot} terminal once when the outbox drains first, then redrive`, () => {
+        it(`accepts a ${slot} terminal once when another producer injects first, then redrive`, () => {
             const taskId = nextTaskId();
 
-            expect(outboxDrainInject(taskId, weak)).toBe(true);
+            expect(foreignProducerInject(taskId, weak)).toBe(true);
             expect(queuedRowsFor(taskId)).toBe(1);
 
-            // The redrive arrives second and must COLLAPSE onto the outbox's
-            // delivery. consumeRedriveEntry treats a dedup collapse as delivered
-            // (the queue returns true), so it must not throw.
+            // The redrive arrives second and must COLLAPSE onto the other
+            // producer's delivery. consumeRedriveEntry treats a dedup collapse as
+            // delivered (the queue returns true), so it must not throw.
             expect(() => consumeRedriveEntry(MESH, projectedTerminal(taskId, { weak })))
                 .not.toThrow();
 
@@ -155,7 +172,7 @@ describe('terminal redrive — dual drive against the real pending queue (Stage 
             expect(state?.consecutiveFailures).toBe(0);
         });
 
-        it(`accepts a ${slot} terminal once when redrive fires first, then the outbox`, () => {
+        it(`accepts a ${slot} terminal once when redrive fires first, then another producer`, () => {
             const taskId = nextTaskId();
 
             expect(consumeRedriveEntry(MESH, projectedTerminal(taskId, { weak }))).toBe('injected');
@@ -164,10 +181,10 @@ describe('terminal redrive — dual drive against the real pending queue (Stage 
             // ★ The reverse order is the one that proves fingerprint EQUALITY
             // rather than mere acceptance: if the redrive computed a different
             // fingerprint (e.g. by recomputing weakness from evidenceLevel
-            // instead of reading the projected `weak`), this outbox injection
-            // would land on a DIFFERENT key and add a second row.
-            outboxDrainInject(taskId, weak);
-            expect(queuedRowsFor(taskId), `${slot}: the outbox injection must collapse onto the redrive's`)
+            // instead of reading the projected `weak`), the foreign producer's
+            // injection would land on a DIFFERENT key and add a second row.
+            foreignProducerInject(taskId, weak);
+            expect(queuedRowsFor(taskId), `${slot}: the foreign producer's injection must collapse onto the redrive's`)
                 .toBe(1);
         });
 
