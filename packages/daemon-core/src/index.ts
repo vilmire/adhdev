@@ -310,6 +310,8 @@ export {
   MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA,
   loadMeshWorktreeBootstrapConfig,
   runMeshWorktreeBootstrap,
+  startMeshWorktreeBootstrap,
+  getWorktreeBootstrapQueueDepth,
   validateMeshWorktreeBootstrapConfig,
   type RepoMeshWorktreeBootstrapConfig,
   type WorktreeBootstrapState,
