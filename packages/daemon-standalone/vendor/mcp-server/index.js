@@ -115907,6 +115907,25 @@ ${rawInput}` : rawInput;
         "use strict";
       }
     });
+    function readTaskId(value) {
+      return typeof value === "string" && value.trim() ? value.trim() : void 0;
+    }
+    function resolveSessionCurrentTaskId(inputs) {
+      return readTaskId(inputs.currentTurnTaskId) ?? readTaskId(inputs.meshActiveTaskId);
+    }
+    function evaluateMeshStopTaskScope(inputs) {
+      const requested = readTaskId(inputs.requestedTaskId);
+      if (!requested) return { allowed: true, reason: "not_task_scoped" };
+      const sessionTaskId = resolveSessionCurrentTaskId(inputs);
+      if (!sessionTaskId) return { allowed: true, reason: "session_task_unknown" };
+      if (sessionTaskId === requested) return { allowed: true, reason: "task_match", sessionTaskId };
+      return { allowed: false, reason: "task_mismatch", sessionTaskId };
+    }
+    var init_mesh_stop_task_scope = __esm2({
+      "src/commands/mesh-stop-task-scope.ts"() {
+        "use strict";
+      }
+    });
     function hashSignatureParts(parts) {
       let hash2 = 2166136261;
       for (const part of parts) {
@@ -116715,6 +116734,7 @@ ${rawInput}` : rawInput;
         init_provider_input_support();
         init_logger();
         init_hosted_runtime_restore();
+        init_mesh_stop_task_scope();
         init_chat_commands_shared();
         init_auto_approve_modes();
         init_model_launch_args();
@@ -117844,8 +117864,28 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   if (typeof adapter.clearHistory === "function") adapter.clearHistory();
                   return { success: true, cleared: true };
                 } else if (action === "stop") {
+                  const stopScopeTaskId = (() => {
+                    const mc = args?.meshContext;
+                    return mc && typeof mc === "object" && typeof mc.taskId === "string" ? mc.taskId.trim() : "";
+                  })();
+                  const stopScope = evaluateMeshStopTaskScope({
+                    requestedTaskId: stopScopeTaskId || void 0,
+                    currentTurnTaskId: adapter.currentTurnTaskId,
+                    meshActiveTaskId: this.deps.getInstanceManager()?.getInstance(key2)?.getState?.()?.settings?.meshActiveTaskId
+                  });
+                  if (!stopScope.allowed) {
+                    LOG.warn("MeshDispatch", `Refusing task-scoped stop on session ${key2}: cancel targets task ${stopScopeTaskId} but the session is running task ${stopScope.sessionTaskId} \u2014 not killing unrelated work`);
+                    return {
+                      success: false,
+                      stopped: false,
+                      reason: "stop_task_mismatch",
+                      requestedTaskId: stopScopeTaskId,
+                      sessionTaskId: stopScope.sessionTaskId,
+                      error: `Session '${key2}' is running task ${stopScope.sessionTaskId}, not the cancelled task ${stopScopeTaskId} \u2014 stop refused to avoid killing unrelated work`
+                    };
+                  }
                   await this.stopSession(key2);
-                  return { success: true, stopped: true };
+                  return { success: true, stopped: true, ...stopScopeTaskId ? { stoppedTaskId: stopScopeTaskId, stopScope: stopScope.reason } : {} };
                 } else if (action === "interrupt_capability") {
                   const probe = adapter;
                   if (typeof probe.getInterruptCapability !== "function") {
@@ -167968,12 +168008,26 @@ async function meshQueueCancel(ctx, args) {
           cliType: assignedProviderType,
           agentType: assignedProviderType,
           action: "stop",
-          ...assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}
+          // CANCEL-STOP-TASK-SCOPE: taskId rides UNCONDITIONALLY, not only when a
+          // node is known. It is what makes the daemon's stop task-scoped: without
+          // it the daemon cannot tell whether this session is still running the
+          // cancelled task, and a stale 'assigned' row would kill a session that had
+          // moved on to unrelated work. nodeId stays optional (it only seeds the
+          // router's owner-resolution fallback), so it keeps its own guard.
+          meshContext: {
+            meshId: ctx.mesh.id,
+            taskId,
+            ...assignedNodeId ? { nodeId: assignedNodeId } : {}
+          }
         });
         const stopped = stopResult?.stopped === true || stopResult?.success === true;
         workerStop.stopped = stopped;
         if (!stopped) {
           workerStop.reason = readString(stopResult?.error) || "worker stop not confirmed";
+          if (readString(stopResult?.reason) === "stop_task_mismatch") {
+            workerStop.skipped = "session_moved_to_other_task";
+            workerStop.sessionTaskId = readString(stopResult?.sessionTaskId) || void 0;
+          }
         }
       } catch (e) {
         workerStop.stopped = false;
@@ -167983,7 +168037,7 @@ async function meshQueueCancel(ctx, args) {
       workerStop = { attempted: false, reason: "assigned_session_is_coordinator_self \u2014 stop suppressed" };
     }
     let orphanedPinnedTasks = [];
-    if (workerStop.attempted && assignedSessionId) {
+    if (workerStop.attempted && assignedSessionId && workerStop.skipped !== "session_moved_to_other_task") {
       try {
         orphanedPinnedTasks = (0, import_daemon_core8.notifyCoordinatorOfOrphanedPins)(ctx.mesh.id, assignedSessionId, {
           excludeTaskId: taskId,

@@ -37,6 +37,7 @@ import type { SessionRegistry } from '../sessions/registry.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
+import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
 // MESH-IMAGE-DISPATCH: shared with the dashboard send path so a multipart dispatch is
 // deduplicated by the SAME signature on both routes rather than by two divergent rules.
 import { buildSendInputSignature } from './chat-commands-shared.js';
@@ -325,6 +326,11 @@ type CliSessionBinding = {
 
 type CliAdapterWithExtraArgs = CliAdapter & {
     extraArgs?: string[];
+};
+
+/** CANCEL-STOP-TASK-SCOPE: per-turn task binding, set when the turn was submitted. */
+type CliAdapterWithTurnTaskId = CliAdapter & {
+    currentTurnTaskId?: string;
 };
 
 type CliStartOptions = {
@@ -2190,8 +2196,38 @@ export class DaemonCliManager {
                     if (typeof adapter.clearHistory === 'function') adapter.clearHistory();
                     return { success: true, cleared: true };
                 } else if (action === 'stop') {
+                    // CANCEL-STOP-TASK-SCOPE: a stop carrying meshContext.taskId is scoped to
+                    // THAT task (mesh_queue_cancel's in-flight halt). stopSession is a HARD
+                    // stop that removes the whole instance, and sessions are reused — so
+                    // before killing, confirm this session is actually running the cancelled
+                    // task. A stale 'assigned' queue row previously let a cancel of task1 kill
+                    // a session that had since moved on to task2, destroying unrelated work.
+                    // Unscoped stops (no taskId) and sessions with no resolvable task identity
+                    // are unaffected; see mesh-stop-task-scope.ts for why those fail open.
+                    const stopScopeTaskId = (() => {
+                        const mc = (args as any)?.meshContext;
+                        return mc && typeof mc === 'object' && typeof mc.taskId === 'string' ? mc.taskId.trim() : '';
+                    })();
+                    const stopScope = evaluateMeshStopTaskScope({
+                        requestedTaskId: stopScopeTaskId || undefined,
+                        currentTurnTaskId: (adapter as CliAdapterWithTurnTaskId).currentTurnTaskId,
+                        meshActiveTaskId: (this.deps.getInstanceManager()?.getInstance(key) as
+                            { getState?: () => { settings?: Record<string, unknown> } } | undefined)
+                            ?.getState?.()?.settings?.meshActiveTaskId,
+                    });
+                    if (!stopScope.allowed) {
+                        LOG.warn('MeshDispatch', `Refusing task-scoped stop on session ${key}: cancel targets task ${stopScopeTaskId} but the session is running task ${stopScope.sessionTaskId} — not killing unrelated work`);
+                        return {
+                            success: false,
+                            stopped: false,
+                            reason: 'stop_task_mismatch',
+                            requestedTaskId: stopScopeTaskId,
+                            sessionTaskId: stopScope.sessionTaskId,
+                            error: `Session '${key}' is running task ${stopScope.sessionTaskId}, not the cancelled task ${stopScopeTaskId} — stop refused to avoid killing unrelated work`,
+                        };
+                    }
                     await this.stopSession(key);
-                    return { success: true, stopped: true };
+                    return { success: true, stopped: true, ...(stopScopeTaskId ? { stoppedTaskId: stopScopeTaskId, stopScope: stopScope.reason } : {}) };
                 } else if (action === 'interrupt_capability') {
                     // Read-only probe: can this session's turn be interrupted? Resolved
                     // from the provider's OWN loaded spec, so the answer tracks whichever
