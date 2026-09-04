@@ -100,7 +100,23 @@ import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
  */
 export const REDRIVE_CONSUMER = 'stage5a-mesh-terminal-redrive';
 
-/** Env flag. Absent/anything-but-`on` = off, so the default is no behaviour change. */
+/**
+ * Env flag. ★ Stage 5c-1 INVERTED IT: absent = ON, only an explicit `off`
+ * disables the leg.
+ *
+ * Through 5a/5b this was opt-in (`=== 'on'`), and that was right: the leg was
+ * dual-driven with the turn outbox, so defaulting it off meant "no behaviour
+ * change" and the flag was the rollback. 5c-1 removes the outbox, which
+ * destroys that premise — with an opt-in default, every daemon that does not
+ * carry the env var would come out of this change with NO terminal-redrive
+ * backstop at all. The flag was only ever set out-of-band for the Jupiter soak;
+ * nothing in the tree sets it.
+ *
+ * So the default follows the machine it now solely replaces: the outbox was
+ * always on, and so is this. `=off` remains as the emergency kill switch, which
+ * is why the flag is not simply deleted — but note it is no longer a "rollback"
+ * in the 5b sense, because there is no second path to fall back to.
+ */
 export const REDRIVE_ENV = 'ADHDEV_SEQSCRIBE_TERMINAL_REDRIVE';
 
 /**
@@ -136,21 +152,7 @@ export const QUARANTINE_FAILURE_THRESHOLD = 5;
  */
 export const QUARANTINE_COOLDOWN_MS = 60_000;
 
-/**
- * Upper bound on remembered injected task ids (5a-3 join).
- *
- * ★ The coverage join needs the SET of tasks redrive re-armed, not just a count,
- * but an unbounded set on a long-lived daemon is a leak. The cap is generous
- * relative to the outbox window it is compared against (`COVERAGE_JOIN_LIMIT`)
- * and, crucially, overflowing does NOT silently degrade the metric: once the cap
- * is hit `redriveTaskIdsOverflowed` latches and coverage reports `null`
- * (unknown) instead of a ratio computed from a truncated set. Reporting
- * "unknown" is the only safe failure mode here — a truncated numerator would
- * read as a coverage REGRESSION, and a truncated denominator as a false 100%.
- */
-export const REDRIVE_TASK_ID_CAP = 10_000;
-
-/** Per-mesh delivery state. Read by the 5a-3 coverage metrics and the 5a-4 quarantine policy. */
+/** Per-mesh delivery state. Read by the redrive health surface and the 5a-4 quarantine policy. */
 export interface RedriveMeshState {
     /** Entries this process handed to the pending queue (dedup may absorb them). */
     injected: number;
@@ -172,31 +174,6 @@ export interface RedriveMeshState {
 }
 
 const state = new Map<string, RedriveMeshState>();
-
-/**
- * Task ids this process has re-armed, across every mesh (5a-3 coverage join).
- *
- * ★ Process-local and reset on restart, exactly like `RedriveMeshState`. That is
- * deliberate and is what the outbox side's `sinceIso` window aligns TO — see the
- * epoch note in mesh-turn-outbox-coverage-diagnostics.ts. Making this durable
- * was the alternative; it was rejected because the entire machine is deleted in
- * 5c, so persisting it would add a migration-only store that outlives nothing.
- */
-const injectedTaskIds = new Set<string>();
-let injectedTaskIdsOverflowed = false;
-
-/** Snapshot of the injected task-id set. `overflowed` invalidates the join (see cap note). */
-export function getRedriveInjectedTaskIds(): { taskIds: ReadonlySet<string>; overflowed: boolean } {
-    return { taskIds: injectedTaskIds, overflowed: injectedTaskIdsOverflowed };
-}
-
-/** Epoch ms this process began recording redrive injections. Bounds the outbox join window. */
-const processStartMs = Date.now();
-
-/** When this process started recording — the lower bound of the coverage epoch. */
-export function getRedriveEpochStartMs(): number {
-    return processStartMs;
-}
 
 function stateFor(meshId: string): RedriveMeshState {
     let s = state.get(meshId);
@@ -268,9 +245,17 @@ export function getTotalRedriveInjected(): number {
     return total;
 }
 
-/** Whether the redrive leg is enabled. Off unless explicitly turned on. */
+/**
+ * Whether the redrive leg is enabled. ON unless explicitly turned off (5c-1).
+ *
+ * ★ Fails SAFE on a typo, and note that "safe" reversed direction in 5c-1. While
+ * the outbox existed, a mistyped flag falling back to OFF was safe because the
+ * outbox still delivered. Now OFF is the dangerous state, so a near-miss value
+ * (`Off`, `0`, `false`, `no`) leaves the leg ARMED rather than silently
+ * disarming the only delivery path. Only the exact string `off` disables it.
+ */
 export function isTerminalRedriveEnabled(env: Record<string, string | undefined>): boolean {
-    return env[REDRIVE_ENV] === 'on';
+    return env[REDRIVE_ENV] !== 'off';
 }
 
 /**
@@ -418,17 +403,11 @@ export function consumeRedriveEntry(
     s.consecutiveFailures = 0;
     s.quarantinedAt = null;
     s.injected++;
-    // Record the task for the 5a-3 coverage join. Past the cap we stop growing
-    // and latch the overflow flag, which makes the coverage read report
-    // `null` rather than a ratio derived from a truncated set.
-    const injectedTaskId = injection.metadataEvent.taskId;
-    if (typeof injectedTaskId === 'string') {
-        if (injectedTaskIds.size >= REDRIVE_TASK_ID_CAP && !injectedTaskIds.has(injectedTaskId)) {
-            injectedTaskIdsOverflowed = true;
-        } else {
-            injectedTaskIds.add(injectedTaskId);
-        }
-    }
+    // ★ Stage 5c-1: the per-task-id Set that used to be maintained here is gone.
+    // It existed solely to compute the redrive-vs-outbox coverage join, whose
+    // denominator (`mesh_turn_outbox`) no longer exists — so it was a bounded but
+    // real per-process retention with no remaining reader. `s.injected` remains:
+    // the aggregate count is what the health surface reports.
     LOG.debug(
         'MeshRedrive',
         `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} — dedup collapses it onto the original if already delivered`,
@@ -459,6 +438,4 @@ function recordFailure(s: RedriveMeshState, meshId: string, nowMs: number): void
 /** Reset all module state. TESTS ONLY. */
 export function __resetTerminalRedriveForTests(): void {
     state.clear();
-    injectedTaskIds.clear();
-    injectedTaskIdsOverflowed = false;
 }

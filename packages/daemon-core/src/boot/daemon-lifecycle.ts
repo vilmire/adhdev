@@ -95,17 +95,10 @@ import {
 } from '../seqscribe/mesh-terminal-redrive-consumer.js';
 import {
     REDRIVE_CONSUMER,
+    REDRIVE_ENV,
     consumeRedriveEntry,
     isTerminalRedriveEnabled,
 } from '../mesh/mesh-terminal-redrive.js';
-import {
-    describeOutboxEnqueuePolicy,
-    resolveOutboxEnqueuePolicy,
-} from '../mesh/mesh-turn-outbox-enqueue-policy.js';
-import {
-    describeOutboxDrainPolicy,
-    resolveOutboxDrainPolicy,
-} from '../mesh/mesh-turn-outbox-drain-policy.js';
 import {
     activeTranscriptProjectionService,
     configureTranscriptProjection,
@@ -1128,15 +1121,15 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             // Runs BEFORE the parity loop arms so the first sweep sees a clean
             // consumer set. Best-effort by construction — see the function.
             pruneStaleConsumersAtBoot();
-            // Stage 5a-2: the terminal-notification redrive leg. Runs AFTER the
-            // prune above, so registration never races the GC — and note that
-            // REDRIVE_CONSUMER is deliberately outside both prune prefixes, so
-            // the GC cannot delete this cursor even when the order changes.
+            // The terminal-notification redrive leg. Runs AFTER the prune above,
+            // so registration never races the GC — and note that REDRIVE_CONSUMER
+            // is deliberately outside both prune prefixes, so the GC cannot delete
+            // this cursor even when the order changes.
             //
-            // Dual-driven with the turn outbox during 5a: both paths inject into
-            // the pending-events queue and the fingerprint dedup collapses the
-            // second arrival. Flag-gated and OFF by default — turning it off is
-            // the rollback.
+            // ★ Stage 5c-1: this is now the SOLE re-arm path for coordinator-bound
+            // terminal notifications. The turn outbox that dual-drove it through
+            // 5a/5b is gone, so the flag defaults ON and `=off` is a kill switch
+            // rather than a rollback — there is nothing left to fall back to.
             try {
                 if (isTerminalRedriveEnabled(process.env)) {
                     configureTerminalRedrive(components.seqscribeNode, {
@@ -1151,7 +1144,22 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                     const registered = ensureTerminalRedriveConsumersAtBoot();
                     LOG.info(
                         'MeshRedrive',
-                        `terminal redrive armed on ${registered} mesh topic(s) — dual-driven with the turn outbox`,
+                        `terminal redrive armed on ${registered} mesh topic(s) — sole terminal-notification re-arm path`,
+                    );
+                } else {
+                    // ★ Warn, not info. Since 5c-1 removed the turn outbox this is
+                    // the state where NOTHING re-arms a coordinator-bound terminal
+                    // notification after a crash, restart, or a queue write lost
+                    // between the reducer commit and the pending-events insert.
+                    // An operator who set this deliberately needs to see the cost
+                    // stated; one who set it by habit from the 5a/5b rollback
+                    // instructions needs to see it at all.
+                    LOG.warn(
+                        'MeshRedrive',
+                        `terminal redrive DISABLED by ${REDRIVE_ENV}=off — no terminal-notification `
+                        + 're-arm backstop exists on this daemon (the turn outbox it replaced was removed '
+                        + 'in Stage 5c-1). Completions lost between the reducer commit and the pending '
+                        + 'queue will not be recovered.',
                     );
                 }
             } catch (error) {
@@ -1169,41 +1177,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         );
     }
 
-    // 10b. Stage 5b-1: state the turn-outbox enqueue policy once, including the
-    // REFUSED case.
-    //
-    // ★ Deliberately OUTSIDE the seqscribe block above. The refusal
-    // (`ADHDEV_MESH_OUTBOX_ENQUEUE=off` with the redrive leg not enabled) is
-    // exactly the situation where seqscribe may have failed to come up at all —
-    // logging it only on the success path would hide the one message the operator
-    // needs. A refused block is otherwise invisible: rows keep appearing, which
-    // is indistinguishable from the flag never being read.
-    try {
-        const enqueuePolicyNote = describeOutboxEnqueuePolicy(process.env);
-        if (enqueuePolicyNote) {
-            const refused = resolveOutboxEnqueuePolicy(process.env).reason === 'redrive_disabled';
-            if (refused) LOG.warn('MeshOutbox', enqueuePolicyNote);
-            else LOG.info('MeshOutbox', enqueuePolicyNote);
-        }
-    } catch { /* diagnostics only — never block boot */ }
-
-    // 10c. Stage 5b-2: state the turn-outbox DRAIN-TRIGGER policy once.
-    //
-    // ★ At boot a requested disarm is ALWAYS reported as not-yet-honoured, because
-    // the clean-sweep streak is process-local and starts at zero. That is correct,
-    // not a startup race to paper over: this process has not yet observed the
-    // residue, so drain trigger ③ must run. The log says so explicitly, because
-    // "I set the flag and the boot drain still ran" is the predictable question.
-    try {
-        const drainPolicyNote = describeOutboxDrainPolicy(process.env);
-        if (drainPolicyNote) {
-            // `enqueue_active` is an operator error (5b-1 was skipped) and warns;
-            // `residue_pending` is the expected boot state and is informational.
-            const refused = resolveOutboxDrainPolicy(process.env).reason === 'enqueue_active';
-            if (refused) LOG.warn('MeshOutbox', drainPolicyNote);
-            else LOG.info('MeshOutbox', drainPolicyNote);
-        }
-    } catch { /* diagnostics only — never block boot */ }
+    // ★ Stage 5c-1 removed boot sections 10b/10c, which stated the turn-outbox
+    // enqueue-block (5b-1) and drain-trigger-disarm (5b-2) policies at startup.
+    // Both flags and the machine they governed are gone; the redrive leg's own
+    // armed/disarmed state is logged in section 10 above, which is the surviving
+    // thing an operator needs to see.
 
     // 11. Setup Mesh Event Forwarding (queue persistence) + periodic reconcile loop.
     // injectMeshSystemMessage now ONLY persists events to the pending-events queue;
