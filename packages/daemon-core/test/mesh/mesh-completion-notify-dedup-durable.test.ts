@@ -120,10 +120,13 @@ describe('DUPNOTIF-DURABLE gap_b — pending-event dedup survives the drain', ()
         expect(drained).toHaveLength(1);
 
         // The unresolved-delegate outbox hard-deletes rows by id to free the fingerprint
-        // (mesh-unresolved-forward-outbox). drainMeshTurnOutbox then replays the terminal
-        // notification after a restart — its exactly-once guarantee is documented as
-        // resting on "the pending-events fingerprint dedup", which is exactly what the
-        // delete just removed.
+        // (mesh-unresolved-forward-outbox — a DIFFERENT machine from the turn outbox,
+        // and one that stays: its writers are mesh non-members, so seqscribe cannot
+        // take it over). The terminal notification is then replayed after a restart —
+        // by the seqscribe redrive consumer since Stage 5c-1, by drainMeshTurnOutbox
+        // before it. Either way the exactly-once guarantee is documented as resting on
+        // "the pending-events fingerprint dedup", which is exactly what the delete just
+        // removed — hence this durable record (gap_b), the third dedup layer.
         const rows = store.recentDrainedPendingEvents(meshId, 10);
         expect(store.deletePendingEventsById(rows.map(r => r.id))).toBeGreaterThan(0);
         MeshRuntimeStore.resetForTests();

@@ -24,7 +24,6 @@ import {
     proposeTurnCompletion,
     closeAttemptForReassignment,
     drainHeldTurnSuspensionsForMesh,
-    enqueueTerminalOutbox,
     assertPromptInjectionAllowed,
     projectTurnAttempt,
     getTurnLedgerMetrics,
@@ -362,10 +361,10 @@ describe('held suspensions — waiting_choice before consumed (the fast-picker r
         const d2 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attempt.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event', nowMs: t0 + 71 });
         expect(d1).toMatchObject({ committed: true, duplicate: false });
         expect(d2).toMatchObject({ committed: true, duplicate: true });
-        const o1 = enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } });
-        const o2 = enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } });
-        expect(o1).toBe(true);
-        expect(o2).toBe(false);
+        // ★ Stage 5c-1: two `enqueueTerminalOutbox` assertions followed, checking
+        // that the outbox row was INSERT-OR-IGNORE exactly-once for this attempt.
+        // The reducer half above (committed/duplicate) is the part that survives;
+        // the outbox half is owed to 5c-2 as a redrive-cursor assertion.
     });
 
     it('normal in-order path is unchanged: direct suspension, no hold, no defer', () => {
