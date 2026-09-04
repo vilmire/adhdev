@@ -91,6 +91,20 @@ const FIRE_DRILL_REASONS = [
   { reason: 'topic_not_granted', layer: 'pre-subscription: topic defined, grant absent' },
   { reason: 'no_complete_revision', layer: 'post-subscription: subscribed, nothing committed' },
   { reason: 'projection_oversize', layer: 'producer-side: snapshot cannot be encoded' },
+  // ★ Added 2026-09-04 after a LIVE stall this drill did not catch. `no_node` is
+  // the reason web-cloud's `stopTranscriptHost` reports when the seqscribe
+  // replication lane itself goes away (`onSeqscribeTransport(null)`), so it
+  // fails at a layer none of the four above cover: the four are all "the lane is
+  // up but the answer is unusable", this one is "there is no lane". It is the
+  // only reason on the web pane path whose origin is TRANSPORT rather than
+  // content, which is exactly why the recovery axis below matters for it most.
+  //
+  // ★ Not to be confused with the `no_node` in daemon-core's half of this drill
+  // (`transcript-fallback-fire-drill.test.ts` "a missing store declines with
+  // no_node"): that is roster ids 3-8, the daemon consumer read over a missing
+  // store. This one is roster ids 1-2, the browser pane losing its lane. Same
+  // closed-union member, different consumer and different origin.
+  { reason: 'no_node', layer: 'transport: the replication lane itself is gone' },
 ] as const
 
 function snapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
@@ -147,6 +161,13 @@ function message(
  * `transcriptReadSource` field), so "the pane keeps rendering" is asserted
  * against real controller state rather than a fabricated snapshot object.
  */
+/**
+ * The `SubscriptionManager` each pane was built on, so a test can publish a
+ * SECOND update through the same delivery path the controller subscribed to
+ * (see the recovery axis). Keyed weakly — the registry is reset per pane.
+ */
+const controllerManagers = new WeakMap<object, SubscriptionManager>()
+
 function paneWithLegacyContent() {
   resetSessionChatTailControllersForTest()
   const manager = new SubscriptionManager()
@@ -173,21 +194,28 @@ function paneWithLegacyContent() {
     ],
   } as never)
 
+  controllerManagers.set(controller, manager)
   return controller
 }
 
 describe('★ §5.6 fallback fire drill — the pane survives every replica decline', () => {
-  it('the drill covers exactly the four §5.6 reasons, each at a distinct layer', () => {
+  it('the drill covers exactly the five drilled reasons, each at a distinct layer', () => {
     // A coverage ledger, same discipline as the §6.3 fixture table: if someone
-    // adds a fifth fallback reason to the drill, or drops one, that is a
+    // adds a sixth fallback reason to the drill, or drops one, that is a
     // deliberate change to what the gate claims — not a silent edit.
+    //
+    // ★ Frozen count 4 → 5 on 2026-09-04. Reason: the live `no_node` stall (see
+    // the entry's comment in FIRE_DRILL_REASONS). The four §5.6 reasons are
+    // content-layer faults; `no_node` is the transport-layer one, and the gate
+    // was blind to that whole layer.
     expect(FIRE_DRILL_REASONS.map((r) => r.reason)).toEqual([
       'authority_unavailable',
       'topic_not_granted',
       'no_complete_revision',
       'projection_oversize',
+      'no_node',
     ])
-    expect(new Set(FIRE_DRILL_REASONS.map((r) => r.layer)).size).toBe(4)
+    expect(new Set(FIRE_DRILL_REASONS.map((r) => r.layer)).size).toBe(5)
   })
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -240,6 +268,104 @@ describe('★ §5.6 fallback fire drill — the pane survives every replica decl
     const after = controller.getSnapshot()
     expect(after.transcriptReadSource).toBe('replica')
     expect(after.liveMessages.some((m) => m.content === 'replica answer')).toBe(true)
+  })
+
+  /**
+   * ★★ THE RECOVERY AXIS (added 2026-09-04 after a live stall).
+   *
+   * ── Why every case above passed while the product was broken ──────────────
+   * The assertions above are STATIC: they check that the content which was on
+   * screen at the instant of the fallback is still on screen one tick later.
+   * That is necessary but nowhere near sufficient, and the gap is the entire
+   * live defect: on `dev.adhf.dev` a pane fell back with `no_node` and then
+   * NEVER UPDATED AGAIN for 98 minutes. Frozen-but-populated passes every
+   * assertion in this file as originally written, because nothing here ever
+   * asked whether a SUBSEQUENT update still lands.
+   *
+   * "The pane keeps rendering" has to mean "the pane keeps rendering NEW
+   * content", not "the pane still holds old content". A screenshot cannot tell
+   * a live pane from a frozen one; only a second update can.
+   *
+   * So each reason is drilled twice: fall back, then push a fresh legacy update
+   * and assert it ARRIVES. Written as a loop over the same ledger so a future
+   * reason cannot be added with only the static half — the two `for` loops read
+   * from one array by construction.
+   */
+  for (const { reason } of FIRE_DRILL_REASONS) {
+    it(`${reason}: the pane still ACCEPTS NEW updates after the fallback (not frozen)`, () => {
+      const controller = paneWithLegacyContent()
+      const manager = controllerManagers.get(controller)!
+
+      controller.reportTranscriptReplicaFallback(reason)
+      expect(controller.getSnapshot().transcriptReadSource).toBe('legacy')
+
+      // The update that the live defect never delivered. Same topic/key the real
+      // `session.chat_tail` subscription publishes on, through the same manager
+      // the controller subscribed to — so this is the production delivery path,
+      // not a direct `handleUpdate` poke that would bypass the subscription.
+      manager.publish({
+        topic: 'session.chat_tail',
+        key: SUBSCRIPTION_KEY,
+        sessionId: SESSION,
+        seq: 2,
+        timestamp: 0,
+        status: 'idle',
+        messages: [
+          { role: 'user', kind: 'standard', content: 'legacy question', receivedAt: 1, timestamp: 1 },
+          { role: 'assistant', kind: 'standard', content: 'legacy answer', receivedAt: 2, timestamp: 2 },
+          { role: 'user', kind: 'standard', content: 'a question asked AFTER the fallback', receivedAt: 3, timestamp: 3 },
+          { role: 'assistant', kind: 'standard', content: 'the answer that must appear', receivedAt: 4, timestamp: 4 },
+        ],
+      } as never)
+
+      const after = controller.getSnapshot()
+      // ★ The anti-FROZEN assertion. This is the one that would have caught the
+      // live defect, and the one that no other case in this file makes.
+      expect(after.liveMessages.map((m) => m.content)).toContain('the answer that must appear')
+      expect(after.liveMessages).toHaveLength(4)
+      // Still labelled legacy — recovery of DATA does not silently relabel the
+      // source back to replica. Only a real replica update may do that.
+      expect(after.transcriptReadSource).toBe('legacy')
+    })
+  }
+
+  /**
+   * ★ The recovery axis must also hold for the transport reason specifically,
+   * through the REPLICA coming back — which is the unit-9 shape of the fix.
+   *
+   * §5.6's fallback direction (replica → legacy, never the reverse) is about a
+   * single read's LABEL, not about the lane being permanently condemned. Unit 9
+   * removes the legacy push transport, so after it lands there is no legacy to
+   * fall back to and `no_node` recovery can ONLY mean "the replica lane comes
+   * back". This asserts the controller supports that today, so unit 9 does not
+   * have to introduce it — and so a future edit that latched the pane to
+   * `legacy` forever would fail here rather than in production.
+   */
+  it('★ no_node: a recovered replica lane re-labels the pane and delivers again', () => {
+    const controller = paneWithLegacyContent()
+
+    controller.reportTranscriptReplicaFallback('no_node')
+    expect(controller.getSnapshot().transcriptReadSource).toBe('legacy')
+    expect(controller.getSnapshot().transcriptFallbackReason).toBe('no_node')
+
+    // The daemon re-admitted this browser and redialed the lane; the worker
+    // verified a fresh snapshot and it reaches the pane.
+    controller.applyTranscriptReplicaSnapshot(
+      snapshot({
+        revision: 5,
+        messages: [
+          message('user', 'legacy question', 1),
+          message('assistant', 'legacy answer', 2),
+          message('assistant', 'replica is back', 12),
+        ],
+      }),
+      { omittedBefore: false },
+    )
+
+    const after = controller.getSnapshot()
+    expect(after.liveMessages.some((m) => m.content === 'replica is back')).toBe(true)
+    // ★ The lane is not permanently condemned by a prior fallback.
+    expect(after.transcriptReadSource).toBe('replica')
   })
 
   /**
