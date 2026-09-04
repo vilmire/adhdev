@@ -14,8 +14,7 @@ import { getDaemonBuildInfo } from '../../build-info.js';
 import { TRACK } from '../../track-identity.js';
 import { getCoordinatorForSession, listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
 import { currentRefineExecutorBootId } from '../../mesh/mesh-refine-executor-liveness.js';
-import { readTurnOutboxDiagnostics } from '../../mesh/mesh-turn-outbox-diagnostics.js';
-import { readRedriveCoverageDiagnostics } from '../../mesh/mesh-turn-outbox-coverage-diagnostics.js';
+import { readTerminalRedriveDiagnostics } from '../../mesh/mesh-terminal-redrive-diagnostics.js';
 // ★These two commands are the SWR read surfaces — the ONLY read path allowed to
 // schedule a background refresh (quota/refresh.ts readQuotaCacheWithRevalidate).
 // They qualify because they are on-demand and human-paced: a machine page load
@@ -115,28 +114,22 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // path. Raw numeric receive/comparison counters live alongside the
             // entries because no content or dynamic-key map is present.
             fleetStatusPeerView: ctx.deps.getFleetStatusPeerView?.() ?? null,
-            // Turn outbox redrive-backstop health (Stage 5, 5a-1 — see
-            // mesh-turn-outbox-diagnostics.ts header). Backed by
-            // `getTurnLedgerMetrics`, which is a plain MeshRuntimeStore-backed
-            // read — no boot-time arming like `beacon` above, so it is called
-            // directly rather than via a ctx.deps getter closure.
+            // Terminal-redrive health (see mesh-terminal-redrive-diagnostics.ts).
             //
-            // Also carries the Stage 5b-1 enqueue state (`enqueueBlocked`,
-            // `enqueueBlockReason`, `enqueueSuppressed`). Read those WITH
-            // `backlogPending`: blocked + a falling backlog is the intended 5b-1
-            // transition, while `enqueueBlockReason: 'redrive_disabled'` means
-            // the interlock REFUSED a requested block because the redrive leg is
-            // off — the outbox is still enqueueing, deliberately.
-            outbox: readTurnOutboxDiagnostics(),
-            // Stage 5, 5a-3: the 5a→5b gate's evidence that the redrive
-            // consumer (5a-2) is actually keeping up with the legacy outbox
-            // drain it is meant to replace, WITHOUT the flag being on (dual
-            // drive runs both regardless). `null` coveragePercent = the
-            // outbox has delivered nothing yet, not 0% coverage — see
-            // mesh-turn-outbox-coverage-diagnostics.ts. Also carries the 5a-4
-            // quarantine counters (`quarantinedMeshCount`,
-            // `quarantineSkipsTotal`) — plain aggregate integers, no meshId.
-            outboxRedriveCoverage: readRedriveCoverageDiagnostics(),
+            // ★ Stage 5c-1 replaced the two fields that used to sit here —
+            // `outbox` (turn-outbox backlog/enqueue state) and
+            // `outboxRedriveCoverage` (the redrive-vs-outbox subset join) — with
+            // this single one. Both of the old fields were reads of
+            // `mesh_turn_outbox`, and that table is gone; the coverage join in
+            // particular had the outbox as its DENOMINATOR, so it could not
+            // survive the removal as anything but a vacuous constant.
+            //
+            // What to watch now that redrive is the sole re-arm path:
+            // `quarantinedMeshCount` is the successor to the outbox's `failed`
+            // park. Non-zero means a mesh's cursor is held, which also pins the
+            // seqscribe archive floor open — so it costs storage, not just
+            // notification latency. It auto-resolves after the cooldown.
+            terminalRedrive: readTerminalRedriveDiagnostics(),
         };
     },
 

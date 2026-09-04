@@ -1167,8 +1167,10 @@ export {
   maxEntryBytes,
   type ProjectedMeshEvent,
 } from './seqscribe/mesh-event-projection.js';
-// Stage 5a-2: terminal-notification redrive from the replica — the seqscribe
-// half of the turn outbox's redelivery guarantee (dual-driven with it in 5a).
+// Terminal-notification redrive from the replica. Introduced in Stage 5a-2 as
+// the seqscribe half of the turn outbox's redelivery guarantee and dual-driven
+// with it; since 5c-1 removed the outbox it is the SOLE path by which a
+// coordinator-bound terminal notification is re-armed.
 export {
   REDRIVE_CONSUMER,
   REDRIVE_ENV,
@@ -1188,70 +1190,18 @@ export {
   isMeshQuarantined,
   getQuarantinedMeshCount,
   getTotalQuarantineSkips,
-  // Stage 5a-3 coverage join: the injected task-id SET and the epoch it was
-  // recorded in. Exported so the root gate can decide the subset proposition
-  // against the real counters rather than a reimplementation.
-  REDRIVE_TASK_ID_CAP,
-  getRedriveInjectedTaskIds,
-  getRedriveEpochStartMs,
   type RedriveMeshState,
   type RedriveProjectedEntry,
 } from './mesh/mesh-terminal-redrive.js';
-// Stage 5a-3: the redrive/outbox coverage join — the 5a→5b gate's item ②.
-// ★ REMOVED IN 5c along with the outbox itself (§5 row 10).
+// The redrive leg's health surface (injection total + 5a-4 quarantine counters).
+// ★ Stage 5c-1: this replaced the outbox coverage join and the outbox backlog
+// diagnostics, whose subject — `mesh_turn_outbox` — was removed. See
+// mesh-terminal-redrive-diagnostics.ts for why the coverage half could not be
+// carried forward (its denominator was the outbox).
 export {
-  readRedriveCoverageDiagnostics,
-  COVERAGE_JOIN_LIMIT,
-  type RedriveCoverageDiagnostics,
-} from './mesh/mesh-turn-outbox-coverage-diagnostics.js';
-// Stage 5a-3: the outbox enqueue/drain pair, so the coverage gate can drive a
-// REAL delivery (enqueue → drain → status='delivered') rather than reaching
-// into the store. ★ REMOVED IN 5c along with the outbox (§5 rows 2-3).
-export {
-  enqueueTerminalOutbox,
-  drainTurnOutbox,
-} from './mesh/mesh-turn-ledger.js';
-// Stage 5b-1: the enqueue block and its redrive interlock. Exported so the root
-// gate evaluates the SAME policy function the producer does — a gate that
-// reimplemented the interlock could pass while the hot path skipped it.
-// ★ REMOVED IN 5c along with the outbox (§5 row 2).
-export {
-  OUTBOX_ENQUEUE_ENV,
-  resolveOutboxEnqueuePolicy,
-  isTurnOutboxEnqueueBlocked,
-  describeOutboxEnqueuePolicy,
-  getOutboxEnqueueBlockedCount,
-  __resetOutboxEnqueuePolicyForTests,
-  type OutboxEnqueuePolicy,
-  type OutboxEnqueueBlockReason,
-} from './mesh/mesh-turn-outbox-enqueue-policy.js';
-// Stage 5b-2: the drain-trigger disarm (②reconcile tick, ③boot) and its
-// two-part precondition — 5b-1 in force AND the residue observed empty on
-// consecutive sweeps. Exported for the same reason as the 5b-1 block above: the
-// gate must evaluate the SAME policy function the trigger sites do.
-// ★ REMOVED IN 5c along with the triggers themselves (§5 rows 5, 6).
-export {
-  OUTBOX_DRAIN_ENV,
-  REQUIRED_CLEAN_SWEEPS,
-  resolveOutboxDrainPolicy,
-  areOutboxDrainTriggersDisabled,
-  describeOutboxDrainPolicy,
-  recordOutboxResidueSweep,
-  getOutboxCleanSweepStreak,
-  getOutboxResidueObservations,
-  recordOutboxDrainTriggerSuppressed,
-  getOutboxDrainTriggersSuppressed,
-  __resetOutboxDrainPolicyForTests,
-  __resetOutboxDrainSuppressionForTests,
-  type OutboxDrainPolicy,
-  type OutboxDrainDisableReason,
-} from './mesh/mesh-turn-outbox-drain-policy.js';
-// Stage 5a-1 + 5b-1: the outbox backlog/enqueue-state surface behind
-// `get_status_metadata`. ★ REMOVED IN 5c (§5 row 10).
-export {
-  readTurnOutboxDiagnostics,
-  type TurnOutboxDiagnostics,
-} from './mesh/mesh-turn-outbox-diagnostics.js';
+  readTerminalRedriveDiagnostics,
+  type TerminalRedriveDiagnostics,
+} from './mesh/mesh-terminal-redrive-diagnostics.js';
 export {
   configureTerminalRedrive,
   ensureTerminalRedriveConsumer,
