@@ -16,6 +16,7 @@ import {
     getRegisteredSubmodulePaths,
     loadMeshWorktreeBootstrapConfig,
     runMeshWorktreeBootstrap,
+    startMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
 } from '../../mesh/worktree-bootstrap-config.js';
 import { loadRepoSettings } from '../../config/repo-settings.js';
@@ -1728,6 +1729,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             };
             await persistWorktreeSetupState(runningBootstrapState);
 
+            // Set by finishWorktreeSetup once the bootstrap is enqueued; still
+            // undefined if the setupWaitMs race fires while submodule init is running.
+            let queuedBehind: number | undefined;
+
             const finishWorktreeSetup = async (): Promise<{ submodulesInitialized: boolean; bootstrapState: WorktreeBootstrapState }> => {
                 let submodulesInitialized = false;
                 if (initSubmodules) {
@@ -1753,7 +1758,15 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                         console.warn('[mesh] Submodule init failed for worktree:', subErr.message);
                     }
                 }
-                const bootstrapState: WorktreeBootstrapState = await runMeshWorktreeBootstrap(mesh, result.worktreePath);
+                // WORKTREE-BOOTSTRAP-SERIAL-QUEUE: bootstraps run one at a time per
+                // daemon (they contend on the machine-wide npm cache), so this may sit
+                // queued behind another clone before it starts. Record the position it
+                // was queued at so the async response below can tell the coordinator
+                // "waiting for another clone" apart from "installing" — the status
+                // stays 'running' either way.
+                const started = startMeshWorktreeBootstrap(mesh, result.worktreePath);
+                queuedBehind = started.queuePosition;
+                const bootstrapState: WorktreeBootstrapState = await started.result;
                 await persistWorktreeSetupState(bootstrapState);
                 await appendCloneLedger(submodulesInitialized, bootstrapState);
                 return { submodulesInitialized, bootstrapState };
@@ -1859,10 +1872,33 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
 
             const bootstrapStartedMs = Date.now();
 
+            // WORKTREE-BOOTSTRAP-FAILED-EVENT: runMeshWorktreeBootstrap REPORTS a failure by
+            // RETURNING `status: 'failed'` — it does not throw (a non-zero command exit is a
+            // verdict, not a fault). Both emit sites below used to hardcode 'bootstrap_complete'
+            // for every resolved state, so the only path that could ever emit
+            // 'bootstrap_failed' was the `.catch` — i.e. an infrastructure throw the runner
+            // essentially never produces. A genuinely failed bootstrap therefore reached the
+            // coordinator labelled COMPLETE.
+            //
+            // That is precisely the premise the dispatch gate in mesh-event-forwarding relies on:
+            // it deliberately does NOT defer on 'failed' because "a failed bootstrap surfaces its
+            // own coordinator event and a dispatch there fails loudly rather than silently
+            // (deferring forever would hide it)". The event never fired, so nothing was loud — the
+            // coordinator learned about the broken tree only when Refinery re-ran the bootstrap
+            // pre-merge and hard-blocked on dependency_bootstrap_failed.
+            //
+            // Route on the actual terminal status instead. The receiving side is already fully
+            // wired for it (mesh-event-forwarding markWorktreeBootstrapTerminalState('failed'),
+            // mesh-event-classify, mesh-events-pending, and the 'worktree_bootstrap_failed'
+            // launchBlockedReason) — only the emitter was mislabelling. This does not defer
+            // anything: the gate's no-infinite-deferral design is untouched.
+            const terminalBootstrapEvent = (state: WorktreeBootstrapState): 'bootstrap_complete' | 'bootstrap_failed' =>
+                state.status === 'failed' ? 'bootstrap_failed' : 'bootstrap_complete';
+
             if (!setupResult.completed) {
                 setupPromise
                     .then(({ bootstrapState }) => {
-                        emitBootstrapEvent('bootstrap_complete', bootstrapState, bootstrapStartedMs);
+                        emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs);
                     })
                     .catch((error: any) => {
                         const failedState: WorktreeBootstrapState = {
@@ -1884,17 +1920,23 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                     branch: result.branch,
                     ...(result.baseSync ? { baseSync: result.baseSync } : {}),
                     ...(result.baseSync?.warning ? { baseStaleWarning: result.baseSync.warning } : {}),
-                    worktreeBootstrap: runningBootstrapState,
+                    worktreeBootstrap: queuedBehind ? { ...runningBootstrapState, queuePosition: queuedBehind } : runningBootstrapState,
                     worktreeSetup: {
                         status: 'running',
                         setupWaitMs,
-                        message: 'Worktree node is registered; submodule/bootstrap setup is continuing in the background.',
+                        ...(queuedBehind ? { queuedBehind } : {}),
+                        message: queuedBehind
+                            // WORKTREE-BOOTSTRAP-SERIAL-QUEUE: bootstraps are serialized per
+                            // daemon, so a concurrent clone waits rather than racing the
+                            // machine-wide npm cache.
+                            ? `Worktree node is registered; bootstrap is queued behind ${queuedBehind} other bootstrap${queuedBehind === 1 ? '' : 's'} on this daemon and will run when they finish.`
+                            : 'Worktree node is registered; submodule/bootstrap setup is continuing in the background.',
                     },
                 };
             }
 
             const { submodulesInitialized, bootstrapState } = setupResult.value;
-            emitBootstrapEvent('bootstrap_complete', bootstrapState, bootstrapStartedMs);
+            emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs);
             return {
                 success: true,
                 node,

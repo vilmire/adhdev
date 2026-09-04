@@ -48,6 +48,13 @@ export interface WorktreeBootstrapState extends MeshAsyncJobLifecycle {
     staleInputsDigest?: Record<string, string>;
     /** M2-1: why an evaluated state resolved to stale (digest_mismatch | never_ran). */
     staleReason?: string;
+    /**
+     * WORKTREE-BOOTSTRAP-SERIAL-QUEUE: how many bootstraps were already queued ahead
+     * of this one on this daemon when it was enqueued. Absent/0 means it started
+     * immediately. Purely informational — it never changes the gating semantics of
+     * `status`, which stays 'running' for a queued run.
+     */
+    queuePosition?: number;
 }
 
 // Fix (3) safety net: a worktree node whose bootstrap state is stuck 'running' far longer than
@@ -572,7 +579,98 @@ export function evaluateWorktreeBootstrapState(mesh: any, workspace: string, per
     };
 }
 
+/**
+ * WORKTREE-BOOTSTRAP-SERIAL-QUEUE
+ *
+ * Worktrees cloned within seconds of each other used to bootstrap concurrently and
+ * their `npm install` runs raced, leaving a half-installed tree behind. The victim
+ * worktree is then handed to a worker whose unrelated tests fail on missing native
+ * bindings, and Refinery re-runs the same bootstrap pre-merge and hard-blocks on
+ * `dependency_bootstrap_failed`.
+ *
+ * Measured on one machine, same repo, same command — only the execution mode differs:
+ *
+ *   2 concurrent (20s apart)  ✗ one died with `exitCode: null`, vendor stuck 20/83
+ *   3 concurrent (observed)   ✗ a third worktree sat at 0/83
+ *   2 sequential              ✓ both reached 83/83
+ *
+ * SCOPE: ONE AT A TIME PER DAEMON — deliberately NOT per-base. The contended
+ * resource is the npm cache, and `npm config get cache` is a single machine-wide
+ * path (`~/.npm`); it is not partitioned by repo. Two bootstraps of DIFFERENT bases
+ * therefore collide on exactly the same cache as two of the same base, so a per-base
+ * queue would only have prevented some of the collisions. An earlier revision of this
+ * fix keyed on `git rev-parse --git-common-dir` for that reason and was wrong.
+ *
+ * This does cost cross-base parallelism, and that trade is accepted deliberately: a
+ * bootstrap that dies mid-install costs a broken worker environment plus a blocked
+ * merge plus manual coordinator recovery, which is strictly worse than the wait.
+ */
+let BOOTSTRAP_QUEUE_TAIL: Promise<unknown> = Promise.resolve();
+/** Number of runs currently queued (waiting + the one running) on this daemon. */
+let BOOTSTRAP_QUEUE_DEPTH = 0;
+
+/** Test/diagnostic: runs currently queued (waiting or running) on this daemon. */
+export function getWorktreeBootstrapQueueDepth(): number {
+    return BOOTSTRAP_QUEUE_DEPTH;
+}
+
+/**
+ * Enqueue `run` on the daemon's single serial chain and return both the position it
+ * was queued at and a promise for its result.
+ *
+ * Constraint (2): a failing run must not wedge the queue. The chain is advanced with
+ * a promise that NEVER rejects (`.then(noop, noop)`), so the next item runs
+ * regardless of how the previous one ended; the caller still receives the real
+ * settled value/rejection through `result`.
+ */
+function enqueueBootstrap<T>(run: () => Promise<T>): { queuePosition: number; result: Promise<T> } {
+    // queuePosition is 0 when nothing was ahead of this run (it starts immediately).
+    const queuePosition = BOOTSTRAP_QUEUE_DEPTH;
+    BOOTSTRAP_QUEUE_DEPTH += 1;
+
+    const result = BOOTSTRAP_QUEUE_TAIL.then(run, run);
+    BOOTSTRAP_QUEUE_TAIL = result.then(() => undefined, () => undefined).then(() => {
+        BOOTSTRAP_QUEUE_DEPTH = Math.max(0, BOOTSTRAP_QUEUE_DEPTH - 1);
+    });
+    return { queuePosition, result };
+}
+
+/**
+ * Run the repo's worktree bootstrap, serialized against every other bootstrap on
+ * this daemon (see WORKTREE-BOOTSTRAP-SERIAL-QUEUE above).
+ *
+ * Constraint (3)/(4): callers keep their existing async contract — `clone_mesh_node`
+ * still returns immediately after its own setupWaitMs race, and a run still waiting
+ * its turn is reported as `'running'`, which is correct (the tree is not ready) and
+ * keeps the three existing 'running' gates (mesh-event-forwarding dispatch defer,
+ * mesh-auto-fast-forward, evaluateWorktreeBootstrapState) working unchanged.
+ * `queuePosition`/`queuedBehind` are additive so a coordinator can tell "waiting for
+ * another clone" apart from "installing".
+ *
+ * Constraint (5): the queue is in-memory only. A daemon restart loses it, and the
+ * state persisted for an interrupted run stays `'running'` — which the stale-running
+ * backstop (clean-tree co-requirement) or the staleInputs digest resolves into a
+ * re-bootstrap. The failure direction is "bootstrap again", never "ready without
+ * having run".
+ */
+export function startMeshWorktreeBootstrap(mesh: any, workspace: string): { queuePosition: number; result: Promise<WorktreeBootstrapState> } {
+    const { queuePosition, result } = enqueueBootstrap(() => runMeshWorktreeBootstrapUnqueued(mesh, workspace));
+    return {
+        queuePosition,
+        result: result.then((state) => (queuePosition > 0 ? { ...state, queuePosition } : state)),
+    };
+}
+
 export async function runMeshWorktreeBootstrap(mesh: any, workspace: string): Promise<WorktreeBootstrapState> {
+    return startMeshWorktreeBootstrap(mesh, workspace).result;
+}
+
+/**
+ * The actual bootstrap execution. NOT exported — every caller must go through
+ * {@link runMeshWorktreeBootstrap} / {@link startMeshWorktreeBootstrap} so the
+ * per-base serialization can never be bypassed.
+ */
+async function runMeshWorktreeBootstrapUnqueued(mesh: any, workspace: string): Promise<WorktreeBootstrapState> {
     const loaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
     if (!loaded.config) {
         return { status: 'not_configured', required: false, configSource: loaded.source, configSourceType: loaded.sourceType, error: loaded.error };

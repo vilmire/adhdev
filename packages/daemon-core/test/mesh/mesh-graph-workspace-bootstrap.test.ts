@@ -292,7 +292,14 @@ describe('clone path is unchanged (regression guard)', () => {
         // plus the separate rerun-bootstrap command handler. Two total; if the
         // saga fix had "helpfully" routed clone through the ports layer, or
         // added a second call, this count changes.
-        const invocations = crudSrc.match(/await runMeshWorktreeBootstrap\(/g) ?? [];
+        //
+        // WORKTREE-BOOTSTRAP-SERIAL-QUEUE: the clone site now calls the
+        // `startMeshWorktreeBootstrap` form so it can read back the queue position
+        // it was enqueued at; the rerun handler still uses the awaited form. Both
+        // are entry points to the SAME per-base-serialized runner, so the invariant
+        // this guard pins ("the clone path owns exactly one bootstrap call site")
+        // is unchanged — count both spellings.
+        const invocations = crudSrc.match(/\b(?:await runMeshWorktreeBootstrap|startMeshWorktreeBootstrap)\(/g) ?? [];
         expect(invocations).toHaveLength(2);
         // And the ports layer must NOT be imported by the clone path — the two
         // paths stay independent; sharing happens at runMeshWorktreeBootstrap.
