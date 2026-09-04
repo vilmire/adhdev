@@ -361,10 +361,15 @@ describe('held suspensions — waiting_choice before consumed (the fast-picker r
         const d2 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attempt.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event', nowMs: t0 + 71 });
         expect(d1).toMatchObject({ committed: true, duplicate: false });
         expect(d2).toMatchObject({ committed: true, duplicate: true });
-        // ★ Stage 5c-1: two `enqueueTerminalOutbox` assertions followed, checking
-        // that the outbox row was INSERT-OR-IGNORE exactly-once for this attempt.
-        // The reducer half above (committed/duplicate) is the part that survives;
-        // the outbox half is owed to 5c-2 as a redrive-cursor assertion.
+        // ★ Stage 5c-2 settles the 5c-1 marker that stood here. Two
+        // `enqueueTerminalOutbox` assertions followed, checking the outbox row was
+        // INSERT-OR-IGNORE exactly-once for this attempt. The reducer half above
+        // (committed/duplicate) survives and is asserted; the delivery half is NOT
+        // restated here, deliberately — the redrive leg has no per-attempt cursor
+        // to assert against. It is keyed by PROJECTED LEDGER ENTRY, so "the
+        // terminal is delivered exactly once" is no longer a property this
+        // attempt-scoped suite can observe. It is asserted where it now lives:
+        // test/mesh/mesh-terminal-redrive-restart.test.ts.
     });
 
     it('normal in-order path is unchanged: direct suspension, no hold, no defer', () => {

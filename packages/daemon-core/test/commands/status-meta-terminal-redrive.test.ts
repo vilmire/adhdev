@@ -18,12 +18,14 @@
 // is re-armed. `quarantinedMeshCount` is the successor to the deleted outbox's
 // `failed` park.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { statusMetaHandlers } from '../../src/commands/low-family/status-meta.js'
 import {
     __resetTerminalRedriveForTests,
     consumeRedriveEntry,
+    QUARANTINE_FAILURE_THRESHOLD,
 } from '../../src/mesh/mesh-terminal-redrive.js'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetTurnLedgerMetricsForTests } from '../../src/mesh/mesh-turn-ledger.js'
 
 /** Minimal deps for buildStatusSnapshot — the snapshot itself is not under test. */
@@ -81,6 +83,66 @@ describe('get_status_metadata — terminal redrive health', () => {
         // Summed across meshes — a per-mesh counter would leak the mesh axis onto
         // this surface, which the content boundary below forbids.
         expect(result.terminalRedrive.redriveInjected).toBe(2)
+
+        __resetTerminalRedriveForTests()
+    })
+
+    // ★ Stage 5c-2. The deleted `turn ledger — durable outbox / restart delivery`
+    // block asserted that a row exhausting its retry budget PARKED as `failed`
+    // observably — i.e. that a permanently undeliverable terminal became visible
+    // rather than vanishing. 5c-1 removed the `failed` park along with the table
+    // and named `quarantinedMeshCount` its successor, so that invariant is owed
+    // here, restated against the redrive leg.
+    //
+    // ★ Why this belongs on THIS surface and not in the redrive suite. The
+    // sibling mesh-terminal-redrive.test.ts already proves the quarantine TRIPS
+    // (isMeshQuarantined flips). That is the mechanism, not the guarantee: a
+    // quarantine that trips but never reaches an operator-visible field is
+    // exactly the silent permanent failure the outbox block existed to forbid.
+    // The two halves — reachable, and reported — must both be asserted, and only
+    // one of them is visible from the module's own unit surface.
+    it('reports a tripped quarantine on the health surface — a permanently failing leg is never silent', async () => {
+        __resetTerminalRedriveForTests()
+        __resetTurnLedgerMetricsForTests()
+
+        const meshId = 'mesh_status_meta_quarantine'
+        const entry = (n: number) => ({
+            id: `entry-q-${n}`,
+            ledgerKind: 'task_completed',
+            taskId: `task-q-${n}`,
+            payload: { taskId: `task-q-${n}`, event: 'agent:generating_completed' },
+        })
+
+        // Drive REAL consecutive failures until the leg quarantines. The store is
+        // made to throw rather than the module state being poked directly — a
+        // hand-set flag would prove the getter reads a field, not that a failing
+        // leg actually reaches this surface.
+        const store = MeshRuntimeStore.getInstance()
+        const spy = vi.spyOn(store, 'insertPendingEvent')
+            .mockImplementation(() => { throw new Error('simulated persist failure') })
+        try {
+            for (let i = 0; i < QUARANTINE_FAILURE_THRESHOLD; i++) {
+                expect(() => consumeRedriveEntry(meshId, entry(i))).toThrow()
+            }
+            // One more entry arrives while quarantined: skip-and-advance, counted.
+            expect(consumeRedriveEntry(meshId, entry(99))).toBe('quarantined')
+        } finally {
+            spy.mockRestore()
+        }
+
+        const result: any = await statusMetaHandlers.get_status_metadata({ deps: baseDeps() }, {})
+
+        expect(
+            result.terminalRedrive.quarantinedMeshCount,
+            'a quarantined mesh must be visible on the health surface',
+        ).toBe(1)
+        expect(
+            result.terminalRedrive.quarantineSkipsTotal,
+            'terminals shed while quarantined must be counted, not silently dropped',
+        ).toBeGreaterThan(0)
+        // Nothing was ever queued, so the success counter must NOT have moved —
+        // otherwise a fully failing leg would read as healthy on this surface.
+        expect(result.terminalRedrive.redriveInjected).toBe(0)
 
         __resetTerminalRedriveForTests()
     })

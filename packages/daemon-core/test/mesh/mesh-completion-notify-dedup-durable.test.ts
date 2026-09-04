@@ -111,7 +111,7 @@ describe('DUPNOTIF-DURABLE gap_b — pending-event dedup survives the drain', ()
         expect(drainPendingMeshCoordinatorEvents(meshId, CORE)).toHaveLength(0);
     });
 
-    it('REGRESSION: TURN-LEDGER outbox redelivery after its row was expired does not double-surface', () => {
+    it('REGRESSION: a terminal redelivery after its row was expired does not double-surface', () => {
         const meshId = `mesh-outbox-${randomUUID().slice(0, 8)}`;
         const store = MeshRuntimeStore.getInstance();
 
@@ -136,8 +136,14 @@ describe('DUPNOTIF-DURABLE gap_b — pending-event dedup survives the drain', ()
                 nodeId: 'node_worker',
                 sessionId: 'worker-session-1',
                 taskId: TASK,
-                timestamp: 1785432199999, // outbox re-stamps its own time
+                timestamp: 1785432199999, // the redelivering producer re-stamps its own time
                 finalSummary: 'read-only task complete',
+                // ★ Stage 5c-2: `source` is deliberately left at the historical
+                // value. It is NOT a fingerprint input, so it cannot affect what this
+                // test proves, and keeping it names the exact producer whose live
+                // triple-notification (session 3845d986) this suite was written from.
+                // The redrive-era successor to that producer is asserted in
+                // test/mesh/mesh-terminal-redrive-restart.test.ts.
                 source: 'turn_outbox_redelivery',
             },
         }));
