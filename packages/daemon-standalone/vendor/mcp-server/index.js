@@ -66980,7 +66980,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       isWorktreeBootstrapStaleRunning: () => isWorktreeBootstrapStaleRunning,
       loadMeshWorktreeBootstrapConfig: () => loadMeshWorktreeBootstrapConfig,
       resolveSubmoduleDefaultBranch: () => resolveSubmoduleDefaultBranch,
-      resolveWorktreeBootstrapBaseKey: () => resolveWorktreeBootstrapBaseKey,
       runMeshWorktreeBootstrap: () => runMeshWorktreeBootstrap,
       shouldDeferDispatchForBootstrap: () => shouldDeferDispatchForBootstrap,
       startMeshWorktreeBootstrap: () => startMeshWorktreeBootstrap,
@@ -67258,47 +67257,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         staleReason: "never_ran"
       };
     }
-    function resolveWorktreeBootstrapBaseKey(workspace) {
-      try {
-        const out = (0, import_node_child_process4.execFileSync)(
-          resolveWin32Executable("git"),
-          ["rev-parse", "--git-common-dir"],
-          { cwd: workspace, encoding: "utf8", timeout: 1e4, windowsHide: true }
-        );
-        const raw = String(out).trim();
-        if (!raw) return workspace;
-        return (0, import_path8.resolve)(workspace, raw).replace(/\\/g, "/").replace(/\/+$/, "");
-      } catch {
-        return `path:${workspace}`;
-      }
+    function getWorktreeBootstrapQueueDepth() {
+      return BOOTSTRAP_QUEUE_DEPTH;
     }
-    function getWorktreeBootstrapQueueDepth(baseKey) {
-      return BOOTSTRAP_QUEUE_DEPTH_BY_BASE.get(baseKey) ?? 0;
-    }
-    function enqueueOnBase(baseKey, run) {
-      const depth = (BOOTSTRAP_QUEUE_DEPTH_BY_BASE.get(baseKey) ?? 0) + 1;
-      BOOTSTRAP_QUEUE_DEPTH_BY_BASE.set(baseKey, depth);
-      const queuePosition = depth - 1;
-      const previous = BOOTSTRAP_QUEUE_BY_BASE.get(baseKey) ?? Promise.resolve();
-      const result = previous.then(run, run);
-      const settled = result.then(() => void 0, () => void 0).then(() => {
-        const remaining = (BOOTSTRAP_QUEUE_DEPTH_BY_BASE.get(baseKey) ?? 1) - 1;
-        if (remaining <= 0) {
-          BOOTSTRAP_QUEUE_DEPTH_BY_BASE.delete(baseKey);
-          if (BOOTSTRAP_QUEUE_BY_BASE.get(baseKey) === settled) BOOTSTRAP_QUEUE_BY_BASE.delete(baseKey);
-        } else {
-          BOOTSTRAP_QUEUE_DEPTH_BY_BASE.set(baseKey, remaining);
-        }
+    function enqueueBootstrap(run) {
+      const queuePosition = BOOTSTRAP_QUEUE_DEPTH;
+      BOOTSTRAP_QUEUE_DEPTH += 1;
+      const result = BOOTSTRAP_QUEUE_TAIL.then(run, run);
+      BOOTSTRAP_QUEUE_TAIL = result.then(() => void 0, () => void 0).then(() => {
+        BOOTSTRAP_QUEUE_DEPTH = Math.max(0, BOOTSTRAP_QUEUE_DEPTH - 1);
       });
-      BOOTSTRAP_QUEUE_BY_BASE.set(baseKey, settled);
       return { queuePosition, result };
     }
     function startMeshWorktreeBootstrap(mesh, workspace) {
-      const baseKey = resolveWorktreeBootstrapBaseKey(workspace);
-      const { queuePosition, result } = enqueueOnBase(baseKey, () => runMeshWorktreeBootstrapUnqueued(mesh, workspace));
+      const { queuePosition, result } = enqueueBootstrap(() => runMeshWorktreeBootstrapUnqueued(mesh, workspace));
       return {
         queuePosition,
-        baseKey,
         result: result.then((state2) => queuePosition > 0 ? { ...state2, queuePosition } : state2)
       };
     }
@@ -67413,8 +67387,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var DEFAULT_TIMEOUT_MS2;
     var DEFAULT_OUTPUT_LIMIT_BYTES;
     var OUTPUT_SUMMARY_CHARS;
-    var BOOTSTRAP_QUEUE_BY_BASE;
-    var BOOTSTRAP_QUEUE_DEPTH_BY_BASE;
+    var BOOTSTRAP_QUEUE_TAIL;
+    var BOOTSTRAP_QUEUE_DEPTH;
     var init_worktree_bootstrap_config = __esm2({
       "src/mesh/worktree-bootstrap-config.ts"() {
         "use strict";
@@ -67473,8 +67447,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         DEFAULT_TIMEOUT_MS2 = 12e4;
         DEFAULT_OUTPUT_LIMIT_BYTES = 128 * 1024;
         OUTPUT_SUMMARY_CHARS = 2e3;
-        BOOTSTRAP_QUEUE_BY_BASE = /* @__PURE__ */ new Map();
-        BOOTSTRAP_QUEUE_DEPTH_BY_BASE = /* @__PURE__ */ new Map();
+        BOOTSTRAP_QUEUE_TAIL = Promise.resolve();
+        BOOTSTRAP_QUEUE_DEPTH = 0;
       }
     });
     function workingDirBasename(p) {
@@ -138982,9 +138956,10 @@ ${e?.stderr || ""}`;
                 }
               };
               const bootstrapStartedMs = Date.now();
+              const terminalBootstrapEvent = (state2) => state2.status === "failed" ? "bootstrap_failed" : "bootstrap_complete";
               if (!setupResult.completed) {
                 setupPromise.then(({ bootstrapState: bootstrapState2 }) => {
-                  emitBootstrapEvent("bootstrap_complete", bootstrapState2, bootstrapStartedMs);
+                  emitBootstrapEvent(terminalBootstrapEvent(bootstrapState2), bootstrapState2, bootstrapStartedMs);
                 }).catch((error48) => {
                   const failedState = {
                     ...runningBootstrapState,
@@ -139010,12 +138985,12 @@ ${e?.stderr || ""}`;
                     status: "running",
                     setupWaitMs,
                     ...queuedBehind ? { queuedBehind } : {},
-                    message: queuedBehind ? `Worktree node is registered; bootstrap is queued behind ${queuedBehind} other bootstrap${queuedBehind === 1 ? "" : "s"} of the same base and will run when they finish.` : "Worktree node is registered; submodule/bootstrap setup is continuing in the background."
+                    message: queuedBehind ? `Worktree node is registered; bootstrap is queued behind ${queuedBehind} other bootstrap${queuedBehind === 1 ? "" : "s"} on this daemon and will run when they finish.` : "Worktree node is registered; submodule/bootstrap setup is continuing in the background."
                   }
                 };
               }
               const { submodulesInitialized, bootstrapState } = setupResult.value;
-              emitBootstrapEvent("bootstrap_complete", bootstrapState, bootstrapStartedMs);
+              emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs);
               return {
                 success: true,
                 node,
@@ -140633,6 +140608,7 @@ ${e?.stderr || ""}`;
       getTurnPresentationMetrics: () => getTurnPresentationMetrics,
       getUsageDir: () => getUsageDir,
       getWorkspaceState: () => getWorkspaceState,
+      getWorktreeBootstrapQueueDepth: () => getWorktreeBootstrapQueueDepth,
       globToRegExp: () => globToRegExp,
       handleGitCommand: () => handleGitCommand,
       hasCdpManager: () => hasCdpManager,
@@ -140909,7 +140885,6 @@ ${e?.stderr || ""}`;
       resolveSurfaceHidden: () => resolveSurfaceHidden,
       resolveTurnAttemptRow: () => resolveTurnAttemptRow,
       resolveWorktreeBaseDir: () => resolveWorktreeBaseDir,
-      resolveWorktreeBootstrapBaseKey: () => resolveWorktreeBootstrapBaseKey,
       resolveWorktreePath: () => resolveWorktreePath,
       rotateCaptureLogIfNeeded: () => rotateCaptureLogIfNeeded,
       runAsyncBatch: () => runAsyncBatch,
