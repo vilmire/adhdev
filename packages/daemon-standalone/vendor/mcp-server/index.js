@@ -86842,9 +86842,12 @@ ${cleanBody}`;
       return expandDaemonIdForms([statusInstanceId, machineId]);
     }
     function resolveLocalCodeChangeWorkspace(components, meshId, nodeId) {
+      return resolveLocalCodeChangeNode(components, meshId, nodeId)?.workspace;
+    }
+    function resolveLocalCodeChangeNode(components, meshId, nodeId) {
       if (!nodeId) return void 0;
       const mesh = getMesh(meshId);
-      const node = mesh?.nodes.find((n) => meshNodeIdMatches4(n, nodeId));
+      const node = mesh?.nodes.find((n2) => meshNodeIdMatches4(n2, nodeId));
       const workspace = readNonEmptyString3(node?.workspace);
       if (!workspace) return void 0;
       const nodeDaemonId = node ? readMeshNodeDaemonId(node) : void 0;
@@ -86853,7 +86856,9 @@ ${cleanBody}`;
         const isLocal = localDaemonIds.some((id) => daemonIdsEquivalent4(id, nodeDaemonId));
         if (!isLocal) return void 0;
       }
-      return workspace;
+      const n = node;
+      const isWorktree = n?.isLocalWorktree === true || !!readNonEmptyString3(n?.worktreeBranch) || !!readNonEmptyString3(n?.clonedFromNodeId);
+      return { workspace, isWorktree };
     }
     function checkGitEvidenceSync(workspace, sinceIso, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
@@ -86921,21 +86926,66 @@ ${cleanBody}`;
       }
     }
     function parsePorcelainV2Paths(output) {
-      const paths = [];
+      return parsePorcelainV2Entries(output).map((entry) => entry.path);
+    }
+    function parsePorcelainV2Entries(output) {
+      const entries = [];
       for (const line of output.split("\n")) {
         if (!line) continue;
         if (line.startsWith("? ")) {
-          paths.push(line.slice(2).trim());
+          const p = line.slice(2).trim();
+          if (p) entries.push({ path: p, untracked: true, staged: false });
           continue;
         }
         if (line.startsWith("1 ") || line.startsWith("2 ")) {
           const fields = line.split(" ");
+          const xy = fields[1] ?? "..";
           const rest = fields.slice(line.startsWith("2 ") ? 9 : 8).join(" ");
           const filePath = rest.split("	")[0];
-          if (filePath) paths.push(filePath);
+          if (filePath) entries.push({ path: filePath, untracked: false, staged: xy[0] !== "." });
         }
       }
-      return paths;
+      return entries;
+    }
+    function cleanupReadonlyBaseResidue(workspace, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      const remaining = () => Math.max(1, deadline - Date.now());
+      const result = { attempted: false, restored: [], skipped: [] };
+      try {
+        const statusOutput = (0, import_node_child_process6.execFileSync)(GIT, ["status", "--porcelain=v2"], {
+          cwd: workspace,
+          encoding: "utf8",
+          timeout: remaining(),
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"]
+        });
+        const entries = parsePorcelainV2Entries(statusOutput);
+        const restorable = [];
+        for (const entry of entries) {
+          if (entry.untracked) {
+            result.skipped.push({ path: entry.path, reason: "untracked" });
+            continue;
+          }
+          if (entry.staged) {
+            result.skipped.push({ path: entry.path, reason: "staged" });
+            continue;
+          }
+          restorable.push(entry.path);
+        }
+        result.attempted = true;
+        if (restorable.length === 0) return result;
+        (0, import_node_child_process6.execFileSync)(GIT, ["restore", "--worktree", "--", ...restorable], {
+          cwd: workspace,
+          timeout: remaining(),
+          windowsHide: true,
+          stdio: ["ignore", "ignore", "ignore"]
+        });
+        result.restored = restorable;
+        return result;
+      } catch (e) {
+        result.error = e?.message || String(e);
+        return result;
+      }
     }
     function assertTaskModeEvidenceStrategyIsExhaustive() {
       const missing = MESH_TASK_MODES.filter((mode) => !(mode in TASK_MODE_EVIDENCE_STRATEGY));
@@ -86986,14 +87036,26 @@ ${cleanBody}`;
       } else if (strategy.kind === "no_evidence_expected" && args.taskMode === "live_debug_readonly") {
         try {
           const gateNodeId = readNonEmptyString3(args.nodeId) || readNonEmptyString3(args.meshNodeId);
-          const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, gateNodeId);
-          if (workspace) {
+          const resolved = resolveLocalCodeChangeNode(components, args.meshId, gateNodeId);
+          if (resolved) {
+            const { workspace, isWorktree } = resolved;
             const gitCheck = checkGitEvidenceSync(workspace, args.preFlipAssignedAt, args.timeoutMs);
             if (gitCheck.checked && !gitCheck.noEvidenceSinceDispatch) {
               args.metadataEvent.reviewRecommended = true;
               args.metadataEvent.evidenceLevel = readNonEmptyString3(args.metadataEvent.evidenceLevel) || "reported";
               setCompletionDiagnostic({ readonlyContractViolation: true, evidenceScope: "live_debug_readonly_git" });
               LOG.warn("MeshLedger", `live_debug_readonly task ${args.taskId} (session ${args.sessionId}) completed with git evidence attributable to this dispatch \u2014 a read-only task should have produced NONE; flagged reviewRecommended (${JSON.stringify(gitCheck.detail)})`);
+              if (!isWorktree) {
+                const cleanup = cleanupReadonlyBaseResidue(workspace, args.timeoutMs);
+                setCompletionDiagnostic({ readonlyResidueCleanup: cleanup });
+                if (cleanup.error) {
+                  LOG.warn("MeshLedger", `Readonly residue cleanup FAILED on base checkout ${workspace} for task ${args.taskId}: ${cleanup.error}`);
+                } else if (cleanup.restored.length || cleanup.skipped.length) {
+                  LOG.warn("MeshLedger", `Readonly residue cleanup on base checkout ${workspace} for task ${args.taskId}: restored ${cleanup.restored.length} tracked file(s) ${JSON.stringify(cleanup.restored)}; left ${cleanup.skipped.length} untouched ${JSON.stringify(cleanup.skipped)}`);
+                }
+              } else {
+                setCompletionDiagnostic({ readonlyResidueCleanup: { attempted: false, restored: [], skipped: [], skippedReason: "worktree_node" } });
+              }
             }
           }
         } catch (e) {
