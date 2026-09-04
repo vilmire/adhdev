@@ -2,10 +2,6 @@ import { randomUUID } from 'crypto';
 import { MeshRuntimeStore, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store.js';
 import { LOG } from '../logging/logger.js';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
-import {
-    isTurnOutboxEnqueueBlocked,
-    recordOutboxEnqueueBlocked,
-} from './mesh-turn-outbox-enqueue-policy.js';
 
 /**
  * TURN-LEDGER (Stage 5) — the authoritative causal turn ledger/reducer for prompt
@@ -29,8 +25,8 @@ import {
  *    (meshId, taskId, attemptId, coordinator identity, worker session). `attemptId`
  *    is an opaque UUID, DISTINCT from taskId and the monotonic dispatchNonce; the
  *    attempt's `attemptSeq` carries the nonce ordering.
- *  - The SQLite MeshRuntimeStore tables (mesh_turn_attempts / mesh_turn_events /
- *    mesh_turn_outbox) are the ONE mutable source of truth for turn state. The JSONL
+ *  - The SQLite MeshRuntimeStore tables (mesh_turn_attempts / mesh_turn_events)
+ *    are the ONE mutable source of truth for turn state. The JSONL
  *    / mesh_event_ledger writes elsewhere remain audit/export only — when they
  *    disagree with this ledger, this ledger wins.
  *  - Causal stages with monotonic, idempotent transitions:
@@ -258,22 +254,20 @@ const metrics: TurnLedgerMetrics = {
     targetPinClearedByReason: {},
 };
 
-export function getTurnLedgerMetrics(nowMs: number = Date.now()): TurnLedgerMetrics & { outboxOldestPendingAgeMs: number | null; outboxByStatus: Record<string, number> } {
-    let outboxOldestPendingAgeMs: number | null = null;
-    let outboxByStatus: Record<string, number> = {};
-    try {
-        const store = MeshRuntimeStore.getInstance();
-        outboxOldestPendingAgeMs = store.oldestPendingTurnOutboxAgeMs(nowMs);
-        outboxByStatus = store.countTurnOutboxByStatus();
-    } catch { /* store unavailable — report counters only */ }
+/**
+ * ★ Stage 5c-1 removed the two outbox fields this returned alongside the
+ * counters (`outboxOldestPendingAgeMs`, `outboxByStatus`). They were the only
+ * reason this function touched `MeshRuntimeStore` at all; with the table gone it
+ * is a pure in-memory counter read, and `nowMs` is retained only so callers do
+ * not have to change.
+ */
+export function getTurnLedgerMetrics(_nowMs: number = Date.now()): TurnLedgerMetrics {
     return {
         ...metrics,
         completionProposalsRejected: { ...metrics.completionProposalsRejected },
         suspensionsDropped: { ...metrics.suspensionsDropped },
         redriveBlockedByReason: { ...metrics.redriveBlockedByReason },
         targetPinClearedByReason: { ...metrics.targetPinClearedByReason },
-        outboxOldestPendingAgeMs,
-        outboxByStatus,
     };
 }
 
@@ -1764,112 +1758,6 @@ export function reclaimQueueTerminatedTurnAttempts(meshId: string, nowMs: number
             + `${result.skipped > 0 ? ` (${result.skipped} skipped — already terminal)` : ''}`);
     }
     return result;
-}
-
-// ─── Durable outbox (outbound ACK/completion delivery) ─────────────────────
-
-export type TurnOutboxKind = 'coordinator_completion' | 'coordinator_ack';
-
-/**
- * Enqueue a coordinator-bound terminal notification in the SAME commit window as
- * the reducer's terminal decision. The row id is the attempt's terminal event id
- * (`<attemptId>:terminal`), so re-enqueue after a crash/replay is INSERT OR IGNORE
- * — exactly one logical completion notification per attempt, even though the
- * transport underneath remains at-least-once.
- *
- * ── Stage 5b-1 ────────────────────────────────────────────────────────────────
- * When the enqueue block is in force (`ADHDEV_MESH_OUTBOX_ENQUEUE=off` AND the
- * redrive leg enabled — see mesh-turn-outbox-enqueue-policy.ts for why those are
- * interlocked rather than independent) this returns `false` WITHOUT touching the
- * store. `false` is the same value the `INSERT OR IGNORE` duplicate path already
- * returns, so no caller's control flow changes.
- *
- * ★ The check lives HERE, not at the (currently single) call site, so that a
- * future second producer cannot reintroduce rows by construction. Draining is
- * deliberately untouched: 5b-1 is "new rows 0, residue keeps draining"; disabling
- * the drain triggers is 5b-2.
- *
- * `bypassEnqueueBlock` exists for the outbox's own regression suites, which must
- * still be able to create rows to prove the DRAIN half keeps working while the
- * block is on. Production never sets it.
- */
-export function enqueueTerminalOutbox(args: {
-    meshId: string;
-    taskId: string;
-    attemptId: string;
-    outcome: TurnTerminalOutcome;
-    /** The PendingMeshCoordinatorEvent-shaped payload (content per the v2 envelope). */
-    payload: Record<string, unknown>;
-    nowMs?: number;
-    /** TESTS ONLY — seed residue rows regardless of the 5b-1 block. */
-    bypassEnqueueBlock?: boolean;
-}): boolean {
-    if (!args.bypassEnqueueBlock && isTurnOutboxEnqueueBlocked()) {
-        recordOutboxEnqueueBlocked();
-        return false;
-    }
-    const nowMs = args.nowMs ?? Date.now();
-    const nowIso = new Date(nowMs).toISOString();
-    return MeshRuntimeStore.getInstance().enqueueTurnOutbox({
-        id: `${args.attemptId}:terminal`,
-        meshId: args.meshId,
-        attemptId: args.attemptId,
-        taskId: args.taskId,
-        kind: 'coordinator_completion',
-        payload: JSON.stringify({ outcome: args.outcome, ...args.payload }),
-        createdAt: nowIso,
-        updatedAt: nowIso,
-    });
-}
-
-/**
- * Drain due outbox rows through `deliver`. A row is marked delivered ONLY after the
- * handler resolves; a failure reschedules with backoff and survives restarts
- * (status stays 'pending'). Returns delivery counts for observability/tests.
- */
-export async function drainTurnOutbox(
-    deliver: (row: { id: string; meshId: string; taskId: string | null; attemptId: string | null; kind: string; payload: Record<string, unknown> }) => Promise<void>,
-    opts?: { meshId?: string; nowMs?: number; maxAttempts?: number; backoffMs?: (attemptCount: number) => number },
-): Promise<{ delivered: number; failed: number; rescheduled: number }> {
-    const store = MeshRuntimeStore.getInstance();
-    const nowMs = opts?.nowMs ?? Date.now();
-    const maxAttempts = opts?.maxAttempts ?? 8;
-    const backoffMs = opts?.backoffMs ?? ((n: number) => Math.min(60_000, 1000 * 2 ** Math.max(0, n - 1)));
-    const due = store.listDueTurnOutbox(nowMs, opts?.meshId);
-    let delivered = 0;
-    let failed = 0;
-    let rescheduled = 0;
-    for (const row of due) {
-        let payload: Record<string, unknown> = {};
-        try { payload = JSON.parse(row.payload) as Record<string, unknown>; } catch { /* deliver empty */ }
-        try {
-            await deliver({
-                id: row.id,
-                meshId: row.meshId,
-                taskId: row.taskId,
-                attemptId: row.attemptId,
-                kind: row.kind,
-                payload,
-            });
-            store.markTurnOutboxDelivered(row.id, new Date(nowMs).toISOString());
-            delivered += 1;
-        } catch (err: any) {
-            const nextAttemptCount = row.attemptCount + 1;
-            const terminal = nextAttemptCount >= maxAttempts;
-            store.markTurnOutboxAttemptFailed(row.id, {
-                updatedAt: new Date(nowMs).toISOString(),
-                nextAttemptAtMs: terminal ? null : nowMs + backoffMs(nextAttemptCount),
-                terminal,
-            });
-            if (terminal) {
-                failed += 1;
-                LOG.warn('TurnLedger', `Outbox row ${row.id} (${row.kind}, task ${row.taskId ?? '?'}) exhausted ${maxAttempts} delivery attempts: ${err?.message || err}`);
-            } else {
-                rescheduled += 1;
-            }
-        }
-    }
-    return { delivered, failed, rescheduled };
 }
 
 // ─── Evidence-collection / destructive-stop ordering ───────────────────────

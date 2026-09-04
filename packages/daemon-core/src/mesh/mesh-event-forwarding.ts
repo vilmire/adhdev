@@ -39,7 +39,6 @@ import {
 import { isMeshCoordinatorEvent, shouldForceInjectMeshEvent, EVENT_TO_LEDGER_KIND } from './mesh-event-classify.js';
 import {
     classifyNonceEcho,
-    enqueueTerminalOutbox,
     proposeTurnCompletion,
     recordTurnAck,
     recordTurnStage,
@@ -66,8 +65,6 @@ import {
     resolveActiveDirectDispatchTaskId,
     evaluateMeshEventSuppression,
     shouldSuppressAutoApprovingWorkerApproval,
-    drainMeshTurnOutbox,
-    scheduleTurnOutboxDrain,
     stopStaleMeshWorker,
     supersedeRedriveReclaimForLateCompletion,
     hasTerminalAuthorityForTask,
@@ -76,7 +73,9 @@ import {
 // (pure move, file-size gate decomposition) but external importers still reach them via
 // mesh-event-forwarding.js (mesh-reconcile-loop.ts, mesh-reconcile-stranded-dispatch.ts,
 // test/mesh/mesh-evidence-level-unify.test.ts, test/mesh/mesh-graph-envelope-worker-result.test.ts).
-export { drainMeshTurnOutbox, stopStaleMeshWorker, resolveGraphEnvelopeWorkerResult, resolveUnifiedCompletionEvidenceLevel } from './mesh-event-suppression.js';
+// ★ `drainMeshTurnOutbox` was dropped from this list in Stage 5c-1 along with the
+// outbox itself (design §5 row 12).
+export { stopStaleMeshWorker, resolveGraphEnvelopeWorkerResult, resolveUnifiedCompletionEvidenceLevel } from './mesh-event-suppression.js';
 
 // ---------------------------------------------------------------------------
 // BOOTSTRAP-MSG: worktreeHasQueuedTask predicate (exported for unit testing)
@@ -626,31 +625,27 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     reducerAllowsFlip = false;
                     LOG.info('TurnLedger', `Completion for task ${eventTaskId} (session ${sessionId}, outcome ${outcome}) rejected by the turn reducer: ${decision.reason} — skipping queue/dispatch flips`);
                     traceMeshEventDrop('turn_reducer_completion_rejected', traceCtx, decision.reason);
-                } else if (!decision.duplicate) {
-                    // Persist the outbound coordinator-completion delivery state in the same
-                    // commit window, so a crash between this commit and the pending-event
-                    // queue write below is recoverable on restart (outbox drain re-queues an
-                    // equivalent event; the pending-events fingerprint dedup keeps it
-                    // exactly-once).
-                    try {
-                        enqueueTerminalOutbox({
-                            meshId: args.meshId,
-                            taskId: eventTaskId,
-                            attemptId: decision.attemptId,
-                            outcome,
-                            payload: {
-                                event: args.event,
-                                nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
-                                sessionId,
-                                providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
-                                // Frozen read (weakEvidenceAtEntry), not a live re-call — see the
-                                // ORDERING SAFETY note where it's captured.
-                                weak: weakEvidenceAtEntry,
-                            },
-                        });
-                        scheduleTurnOutboxDrain();
-                    } catch { /* outbox is a recovery backstop — never fail the completion */ }
                 }
+                // ★ Stage 5c-1: the turn-outbox enqueue that used to sit here
+                // (under `else if (!decision.duplicate)`) is GONE, along with its
+                // commit-time drain trigger ①.
+                //
+                // What replaced it: the terminal ledger append this same commit
+                // performs is dual-written to the `mesh.<id>.events` seqscribe
+                // topic, and the redrive consumer (mesh-terminal-redrive.ts)
+                // re-arms the coordinator notification from the replica with a
+                // durable cursor. That is the same guarantee the outbox row
+                // carried — "this terminal gets (re)injected into the pending
+                // queue even across a crash" — sourced from the replica instead
+                // of a second table written in this transaction.
+                //
+                // ★ The `weak` value the outbox row used to carry (frozen
+                // `weakEvidenceAtEntry`) is NOT dropped: 5a-1 moved it into the
+                // terminal ledger payload and the projection allow-list, which is
+                // what lets redrive rebuild the identical `evidenceLevel` and so
+                // the identical dedup fingerprint. Removing that stamp would
+                // reintroduce the double-notification this migration's §4.3
+                // correction is about.
             } catch { /* reducer unavailable — the pre-Stage-5 writers govern (shadow mode) */ }
         }
         if (!reducerAllowsFlip) {

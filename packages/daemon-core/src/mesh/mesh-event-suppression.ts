@@ -10,7 +10,7 @@ import { appendLedgerEntry, extractJsonObjectFromSummary, isIntentionalCleanupSt
 import { updateTaskStatus, getActiveDirectDispatches, getQueue, REDRIVE_RECLAIM_REASONS, REDRIVE_SUPERSEDE_WINDOW_MS } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
-import { queuePendingMeshCoordinatorEvent, prunePendingMeshCoordinatorEventsRetention, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { prunePendingMeshCoordinatorEventsRetention, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
 import { meshNodeIdMatches, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
@@ -31,7 +31,6 @@ import {
     isWeakCompletionEvidence,
 } from './mesh-events-utils.js';
 import {
-    drainTurnOutbox,
     isTerminalTurnStage,
     runSessionDestructiveAction,
 } from './mesh-turn-ledger.js';
@@ -911,53 +910,6 @@ export function shouldSuppressAutoApprovingWorkerApproval(components: DaemonComp
     } catch {
         return false;
     }
-}
-
-/**
- * TURN-LEDGER (Stage 5): deliver due durable outbox rows (coordinator-bound terminal
- * notifications) into the pending-events queue. Exactly-once is preserved TWO ways:
- * the outbox row id (`<attemptId>:terminal`) is INSERT-OR-IGNORE at enqueue, and the
- * pending-events fingerprint dedup collapses a redelivery onto the same
- * [meshId, event, taskId, weak|genuine] fingerprint the original completion used —
- * so a crash between the reducer's terminal commit and the normal queue write, or a
- * restart with a pending outbox row, still yields exactly one coordinator completion.
- */
-export async function drainMeshTurnOutbox(opts?: { meshId?: string }): Promise<{ delivered: number; failed: number; rescheduled: number }> {
-    return drainTurnOutbox(async (row) => {
-        const payload = row.payload as Record<string, unknown>;
-        const event = typeof payload.event === 'string' ? payload.event : 'agent:generating_completed';
-        const metadataEvent: Record<string, unknown> = {
-            ...(row.taskId ? { taskId: row.taskId } : {}),
-            ...(typeof payload.sessionId === 'string' ? { sessionId: payload.sessionId } : {}),
-            ...(typeof payload.providerType === 'string' ? { providerType: payload.providerType } : {}),
-            // Fingerprint parity with the original completion: weak originals stamped
-            // evidenceLevel=insufficient; a bare record (no completionDiagnostic) reads
-            // as genuine — see isWeakCompletionEvidence / buildPendingEventFingerprint.
-            ...(payload.weak === true ? { evidenceLevel: 'insufficient' } : {}),
-            source: 'turn_outbox_redelivery',
-            outboxRedelivery: true,
-        };
-        const queued = queuePendingMeshCoordinatorEvent({
-            event,
-            meshId: row.meshId,
-            nodeId: typeof payload.nodeId === 'string' ? payload.nodeId : undefined,
-            metadataEvent,
-            queuedAt: Date.now(),
-        } as PendingMeshCoordinatorEvent);
-        if (!queued) throw new Error('pending queue rejected outbox redelivery');
-    }, { meshId: opts?.meshId });
-}
-
-let turnOutboxDrainScheduled = false;
-
-/** Best-effort async drain trigger (coalesced) after a terminal commit enqueued a row. */
-export function scheduleTurnOutboxDrain(): void {
-    if (turnOutboxDrainScheduled) return;
-    turnOutboxDrainScheduled = true;
-    setImmediate(() => {
-        turnOutboxDrainScheduled = false;
-        drainMeshTurnOutbox().catch(() => { /* failure leaves rows pending — retried on the next trigger/boot drain */ });
-    });
 }
 
 /**

@@ -23,16 +23,6 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
 import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
 import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, type TurnEventRow } from './mesh-turn-event-queries.js';
-import {
-    insertTurnOutboxRow,
-    selectDueTurnOutbox,
-    selectOldestPendingTurnOutboxAgeMs,
-    updateTurnOutboxDelivered,
-    updateTurnOutboxAttemptFailed,
-    selectDeliveredTurnOutboxTaskIdsSince,
-    countTurnOutboxRowsByStatus,
-    type DueTurnOutboxRow,
-} from './mesh-turn-outbox-queries.js';
 import { selectUnsettledTerminalQueueRowsAndAttempts } from './mesh-unsettled-terminal-queries.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
@@ -558,31 +548,10 @@ export class MeshRuntimeStore {
             CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_kind
                 ON mesh_turn_events(mesh_id, kind, recorded_at);
 
-            -- TURN-LEDGER (Stage 5): durable outbound delivery state (coordinator-bound
-            -- completion / ACK notifications) for restart recovery. A row is enqueued in
-            -- the SAME transaction as the reducer's terminal commit, so a crash between
-            -- commit and network delivery can never lose the notification; on boot the
-            -- drain resumes from status='pending' rows. Exactly-once logical delivery is
-            -- enforced by the row id (the attempt's terminal event id) — re-enqueue is
-            -- INSERT OR IGNORE — and by the downstream pending-events fingerprint dedup.
-            CREATE TABLE IF NOT EXISTS mesh_turn_outbox (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                attempt_id TEXT,
-                task_id TEXT,
-                kind TEXT NOT NULL,
-                payload TEXT NOT NULL DEFAULT '{}',
-                status TEXT NOT NULL DEFAULT 'pending',
-                attempt_count INTEGER NOT NULL DEFAULT 0,
-                next_attempt_at_ms INTEGER,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_outbox_due
-                ON mesh_turn_outbox(status, next_attempt_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_outbox_mesh
-                ON mesh_turn_outbox(mesh_id, status);
+            -- ★ Stage 5c-1: mesh_turn_outbox was defined here. It is no longer
+            -- created; existing DBs have it dropped by migrateMeshIsolationColumns
+            -- step 9. The re-drive guarantee it carried is now the seqscribe
+            -- redrive consumer's durable cursor (mesh-terminal-redrive.ts).
 
             -- TURN-LEDGER (Stage 5): durable HELD SUSPENSIONS. A waiting_approval /
             -- waiting_choice edge can legitimately arrive BEFORE the consumed ACK
@@ -779,6 +748,30 @@ export class MeshRuntimeStore {
             if (!toolCallCols.has('caller_role')) {
                 this.db.exec(`ALTER TABLE mesh_tool_call_log ADD COLUMN caller_role TEXT`);
             }
+
+            // 9. ★ Stage 5c-1: drop the retired `mesh_turn_outbox` table (design
+            //    docs/design/2026-08-29-seqscribe-outbox-migration.md §5 row 1).
+            //    Same shape as steps 5 and 6 above: nothing CREATEs, reads or
+            //    writes it any more, so a fresh store never has it and an existing
+            //    one sheds it once. Idempotent — DROP TABLE IF EXISTS no-ops on
+            //    every later boot, and dropping a table takes its indexes with it.
+            //
+            //    ★ Dropping rather than leaving it dormant is deliberate and is
+            //    the one genuinely irreversible step of 5c-1. It is safe because
+            //    5b established, on live evidence, that the table is EMPTY of work:
+            //    5b-1 blocked enqueue (new rows 0) and 5b-2 disarmed the drain
+            //    pumps only after the residue was observed empty across
+            //    REQUIRED_CLEAN_SWEEPS consecutive sweeps. What remains in an old
+            //    DB is `delivered` / `failed` history — rows this machine never
+            //    pruned (there was no DELETE path anywhere in the tree, which is
+            //    §11-4's defect ② and is resolved by this drop rather than by a
+            //    retention sweep that would exist only to be deleted).
+            //
+            //    ★ A pending row surviving here would be a completion notification
+            //    that never reached its coordinator. That cannot be recovered by a
+            //    flag revert after this point, which is why the drop is gated on
+            //    the 5b sweep evidence rather than run speculatively.
+            this.db.exec(`DROP TABLE IF EXISTS mesh_turn_outbox`);
         } catch (err: any) {
             // Best-effort: a failed isolation migration must not brick the store. The
             // CREATE-TABLE definitions above already carry the new schema for fresh DBs;
@@ -3346,63 +3339,6 @@ export class MeshRuntimeStore {
     /** By-KIND turn-event queries. SQL + index rationale: mesh-turn-event-queries.ts. */
     listTurnEventsByKind(meshId: string, kind: string, limit = 200): TurnEventRow[] { return selectTurnEventsByKind(this.db, meshId, kind, limit); }
     deleteTurnEventsByKindOlderThan(kind: string, cutoffIso: string, meshId?: string): number { return deleteTurnEventsByKindOlderThan(this.db, kind, cutoffIso, meshId); }
-
-    // ── TURN-LEDGER (Stage 5): durable outbound delivery (outbox) ────────────
-    //
-    // ★ SQL lives in mesh-turn-outbox-queries.ts (file-size gate decomposition).
-    // These stay as delegators because `db` is private; the three mutating ones
-    // keep `maybeCheckpointWal()` here since it is private class state, which
-    // preserves the original statement-then-checkpoint order exactly.
-    // ★★ This block and that file are REMOVED TOGETHER in 5c (§5 rows 1-3, 10).
-
-    /** Enqueue an outbound notification. INSERT OR IGNORE on the row id = exactly-once. */
-    enqueueTurnOutbox(row: {
-        id: string; meshId: string; attemptId?: string; taskId?: string;
-        kind: string; payload?: string; nextAttemptAtMs?: number | null;
-        createdAt: string; updatedAt: string;
-    }): boolean {
-        const inserted = insertTurnOutboxRow(this.db, row);
-        this.maybeCheckpointWal();
-        return inserted;
-    }
-
-    /** Due pending outbox rows (status='pending', next_attempt_at_ms NULL or <= nowMs). */
-    listDueTurnOutbox(nowMs: number, meshId?: string): DueTurnOutboxRow[] {
-        return selectDueTurnOutbox(this.db, nowMs, meshId);
-    }
-
-    /** Oldest pending outbox row age in ms (observability: outbox backlog age). */
-    oldestPendingTurnOutboxAgeMs(nowMs: number): number | null {
-        return selectOldestPendingTurnOutboxAgeMs(this.db, nowMs);
-    }
-
-    markTurnOutboxDelivered(id: string, updatedAt: string): void {
-        updateTurnOutboxDelivered(this.db, id, updatedAt);
-        this.maybeCheckpointWal();
-    }
-
-    /** Record a failed delivery attempt and schedule the retry (or park as 'failed' when no retry remains). */
-    markTurnOutboxAttemptFailed(id: string, opts: { updatedAt: string; nextAttemptAtMs?: number | null; terminal?: boolean }): void {
-        updateTurnOutboxAttemptFailed(this.db, id, opts);
-        this.maybeCheckpointWal();
-    }
-
-    /**
-     * Task ids of outbox rows marked `delivered` AT OR AFTER `sinceIso`.
-     *
-     * ★ REMOVED IN 5c together with `mesh_turn_outbox` itself
-     * (docs/design/2026-08-29-seqscribe-outbox-migration.md §5 row 1). It exists
-     * only to prove the 5a→5b migration is safe, and has no consumer that
-     * outlives the table. Rationale for the window + the NULL-task exclusion is
-     * on selectDeliveredTurnOutboxTaskIdsSince.
-     */
-    listDeliveredTurnOutboxTaskIdsSince(sinceIso: string, limit: number): string[] {
-        return selectDeliveredTurnOutboxTaskIdsSince(this.db, sinceIso, limit);
-    }
-
-    countTurnOutboxByStatus(meshId?: string): Record<string, number> {
-        return countTurnOutboxRowsByStatus(this.db, meshId);
-    }
 
     // ── TURN-LEDGER (Stage 5): held suspensions (pre-consumed waiting_*) ─────
 
