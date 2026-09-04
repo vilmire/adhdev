@@ -1310,7 +1310,11 @@ export async function meshQueueCancel(
         // pre-stamping attempted:true on a fire-and-forget call. Best-effort: any stop failure is
         // caught and surfaced in workerStop.reason — it must NEVER fail the cancel itself, which
         // already committed the queue 'cancelled' transition above.
-        let workerStop: { attempted: boolean; stopped?: boolean; sessionId?: string; nodeId?: string; reason?: string } = { attempted: false };
+        let workerStop: {
+            attempted: boolean; stopped?: boolean; sessionId?: string; nodeId?: string; reason?: string;
+            /** CANCEL-STOP-TASK-SCOPE: the daemon spared this session — it had moved on. */
+            skipped?: string; sessionTaskId?: string;
+        } = { attempted: false };
         if (wasAssigned && assignedSessionId && assignedSessionId !== ctx.coordinatorSessionId && assignedProviderType) {
             workerStop = { attempted: true, sessionId: assignedSessionId, nodeId: assignedNodeId };
             try {
@@ -1319,12 +1323,30 @@ export async function meshQueueCancel(
                     cliType: assignedProviderType,
                     agentType: assignedProviderType,
                     action: 'stop',
-                    ...(assignedNodeId ? { meshContext: { meshId: ctx.mesh.id, nodeId: assignedNodeId, taskId } } : {}),
+                    // CANCEL-STOP-TASK-SCOPE: taskId rides UNCONDITIONALLY, not only when a
+                    // node is known. It is what makes the daemon's stop task-scoped: without
+                    // it the daemon cannot tell whether this session is still running the
+                    // cancelled task, and a stale 'assigned' row would kill a session that had
+                    // moved on to unrelated work. nodeId stays optional (it only seeds the
+                    // router's owner-resolution fallback), so it keeps its own guard.
+                    meshContext: {
+                        meshId: ctx.mesh.id,
+                        taskId,
+                        ...(assignedNodeId ? { nodeId: assignedNodeId } : {}),
+                    },
                 });
                 const stopped = stopResult?.stopped === true || stopResult?.success === true;
                 workerStop.stopped = stopped;
                 if (!stopped) {
                     workerStop.reason = readString(stopResult?.error) || 'worker stop not confirmed';
+                    // CANCEL-STOP-TASK-SCOPE: a task-mismatch refusal is not a failure — the
+                    // daemon deliberately spared a session that had moved on to another task.
+                    // Name it distinctly so the coordinator does not read it as an unreachable
+                    // worker and retry/escalate against a session that is working correctly.
+                    if (readString(stopResult?.reason) === 'stop_task_mismatch') {
+                        workerStop.skipped = 'session_moved_to_other_task';
+                        workerStop.sessionTaskId = readString(stopResult?.sessionTaskId) || undefined;
+                    }
                 }
             } catch (e: any) {
                 workerStop.stopped = false;
@@ -1355,8 +1377,14 @@ export async function meshQueueCancel(
         //
         // Best-effort, exactly like the stop itself — a failure here must never fail the
         // cancel, which already committed the 'cancelled' transition.
+        //
+        // CANCEL-STOP-TASK-SCOPE exception: a `stop_task_mismatch` refusal is categorically
+        // different from an unconfirmed stop. It is a POSITIVE answer from a reachable daemon
+        // — "that session is alive and working another task, so I did not kill it". No session
+        // died, so nothing pinned to it is orphaned, and paging the coordinator would be a
+        // false alarm telling it to requeue work that is fine where it is.
         let orphanedPinnedTasks: OrphanedPinnedTask[] = [];
-        if (workerStop.attempted && assignedSessionId) {
+        if (workerStop.attempted && assignedSessionId && workerStop.skipped !== 'session_moved_to_other_task') {
             try {
                 orphanedPinnedTasks = notifyCoordinatorOfOrphanedPins(ctx.mesh.id, assignedSessionId, {
                     excludeTaskId: taskId,
