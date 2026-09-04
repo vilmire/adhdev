@@ -20,6 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { vendorBuildChainFor } from './vendor-build-chain.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Every TRACKED vendor directory under packages/daemon-standalone/vendor. This guard
@@ -43,10 +44,15 @@ function run(cmd, args) {
   execFileSync(cmd, args, { stdio: 'inherit', cwd: root, shell: isWin });
 }
 
-run(npm, ['run', 'build', '-w', 'packages/mesh-shared']);
-run(npm, ['run', 'build', '-w', 'packages/session-host-core']);
-run(npm, ['run', 'build', '-w', 'packages/session-host-daemon']);
-run(npm, ['run', 'build', '-w', 'packages/mcp-server']);
+// Rebuild the packages that feed the vendored bundles, in dependency order.
+// Shared with the root gate and the pre-commit hook via vendor-build-chain.mjs —
+// this list used to be hand-maintained per script and had already drifted: it
+// omitted daemon-core, which mcp-server INLINES, so this gate re-bundled whatever
+// daemon-core dist happened to be on disk and could report "in sync" against bytes
+// that did not match daemon-core's source.
+for (const spec of vendorBuildChainFor('oss')) {
+  run(npm, ['run', 'build', '-w', spec]);
+}
 run(npm, ['run', 'bundle:vendor', '-w', 'packages/daemon-standalone']);
 
 // ★Compare against HEAD, not the index. A bare `git diff` is worktree-vs-index, which
