@@ -3,7 +3,10 @@ import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatu
 import type { SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-core'
 import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection'
 import type { ActiveConversation, DashboardMessage } from './types'
-import { mapTranscriptSnapshotToChatTailUpdate } from './transcript-chat-pane-adapter'
+import {
+  isMappableTranscriptSnapshot,
+  mapTranscriptSnapshotToChatTailUpdate,
+} from './transcript-chat-pane-adapter'
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionIdForRead } from './conversation-identity'
@@ -660,11 +663,29 @@ export class SessionChatTailController {
    *
    * The two sources are never merged into one live window: whichever update
    * arrives last wins, exactly as two legacy updates would.
+   *
+   * ── (§8 unit 9-pre-c) Structural refusal ───────────────────────────────
+   * ★ A snapshot missing a required field is REFUSED here and reported as a
+   * `revision_invalid` fallback, rather than being mapped on a best-effort
+   * basis. The motivating case is `activeModal`: the mapper's
+   * `snapshot.activeModal ? ... : null` cannot tell "no modal" from "the
+   * projection stopped sending the field", so a regression rendered an
+   * approval-waiting session with no approval UI and reported nothing.
+   *
+   * Refusing keeps the pane on whatever legacy already put there and makes the
+   * fault observable — the same decline-and-fall-back contract roster ids 3-8
+   * already have (`isUsableSnapshot` in mcp-server / unit 7's daemon router).
+   * It does not throw: this runs inside a MessagePort `onmessage` handler with
+   * no catch above it, where a throw would drop the delivery silently.
    */
   applyTranscriptReplicaSnapshot(
     snapshot: ReplicatedTranscriptSnapshotV1,
     options: { omittedBefore: boolean; stale?: boolean },
   ): void {
+    if (!isMappableTranscriptSnapshot(snapshot)) {
+      this.reportTranscriptReplicaFallback('revision_invalid')
+      return
+    }
     this.handleUpdate(
       mapTranscriptSnapshotToChatTailUpdate(snapshot, {
         subscriptionKey: this.subscriptionKey,

@@ -265,6 +265,90 @@ describe('★ §5.6 fallback fire drill — the pane survives every replica decl
   })
 })
 
+/**
+ * ★ (§8 unit 9-pre-c) The `activeModal` silent-degradation fix, drilled
+ * end-to-end through the controller.
+ *
+ * Before the fix, a snapshot whose `activeModal` field had gone missing was
+ * mapped with `activeModal: null` and APPLIED — so a session sitting on
+ * `waiting_approval` rendered with no approval UI, the user could not act, and
+ * nothing reported a fault. That is the empty-success class this whole gate
+ * exists to catch, on roster ids 1-2 (the highest-traffic consumers).
+ *
+ * The fixed contract: refuse the snapshot, keep the pane on legacy content, and
+ * make the fault observable as `revision_invalid`.
+ */
+describe('★ 9-pre-c: a structurally-invalid replica snapshot is refused, not half-applied', () => {
+  it('a snapshot missing activeModal is refused — the pane keeps legacy content and reports revision_invalid', () => {
+    const controller = paneWithLegacyContent()
+    expect(controller.getSnapshot().liveMessages).toHaveLength(2)
+
+    // The projection regression: `activeModal` stops arriving on a session that
+    // is WAITING FOR APPROVAL — the case where losing the modal is worst.
+    const broken = { ...snapshot({ status: 'waiting_approval', revision: 2 }) } as Record<string, unknown>
+    delete broken.activeModal
+
+    controller.applyTranscriptReplicaSnapshot(
+      broken as unknown as ReplicatedTranscriptSnapshotV1,
+      { omittedBefore: false },
+    )
+
+    const after = controller.getSnapshot()
+    // ★ The pane was NOT replaced by an approval-less render.
+    expect(after.liveMessages.map((m) => m.content)).toEqual(['legacy question', 'legacy answer'])
+    expect(after.transcriptReadSource).toBe('legacy')
+    expect(after.transcriptFallbackReason).toBe('revision_invalid')
+  })
+
+  it('control: the SAME snapshot WITH activeModal applies and carries the approval UI', () => {
+    const controller = paneWithLegacyContent()
+
+    // ★ The tail must not SHRINK relative to the 2 legacy messages already on
+    // screen. `waiting_approval` is an active status, so the controller's A3
+    // shrink-defense would defer a 1-message tail — the update would be dropped
+    // for a reason that has nothing to do with `activeModal`, making this
+    // control vacuous. Found by running it, not by reading.
+    controller.applyTranscriptReplicaSnapshot(
+      snapshot({
+        status: 'waiting_approval',
+        revision: 2,
+        activeModal: { message: 'Run `rm -rf build/`?', buttons: ['Yes', 'No'] },
+        messages: [
+          message('user', 'legacy question', 1),
+          message('assistant', 'legacy answer', 2),
+          message('assistant', 'need approval', 5),
+        ],
+      }),
+      { omittedBefore: false },
+    )
+
+    const after = controller.getSnapshot()
+    expect(after.transcriptReadSource).toBe('replica')
+    expect(after.liveMessages.some((m) => m.content === 'need approval')).toBe(true)
+  })
+
+  it('a present-but-null activeModal is NORMAL and still applies — the fix must not reject ordinary sessions', () => {
+    const controller = paneWithLegacyContent()
+
+    controller.applyTranscriptReplicaSnapshot(
+      snapshot({
+        revision: 2,
+        activeModal: null,
+        // Non-shrinking, for the same reason as the control above.
+        messages: [
+          message('user', 'legacy question', 1),
+          message('assistant', 'legacy answer', 2),
+          message('assistant', 'ordinary answer', 9),
+        ],
+      }),
+      { omittedBefore: false },
+    )
+
+    expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
+    expect(controller.getSnapshot().liveMessages.some((m) => m.content === 'ordinary answer')).toBe(true)
+  })
+})
+
 // ───────────────────────────────────────────────────────────────────────────
 // Real-origin production of the reasons.
 //

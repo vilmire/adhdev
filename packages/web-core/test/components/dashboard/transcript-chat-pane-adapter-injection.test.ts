@@ -51,7 +51,10 @@ import {
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
-import { mapTranscriptSnapshotToChatTailUpdate } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
+import {
+  isMappableTranscriptSnapshot,
+  mapTranscriptSnapshotToChatTailUpdate,
+} from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 
 function buildSnapshot(overrides: Partial<ReplicatedTranscriptSnapshotV1> = {}): ReplicatedTranscriptSnapshotV1 {
   return {
@@ -137,7 +140,24 @@ describe('mapTranscriptSnapshotToChatTailUpdate — required-field injection (ro
     expect(mapTranscriptSnapshotToChatTailUpdate(inject('sessionId', base), OPTS).sessionId).toBeUndefined()
   })
 
-  it('activeModal: present → mapped message/buttons; removed → silently null (★ measured, NOT thrown — see note)', () => {
+  /**
+   * ★ UPDATED by unit 9-pre-c — the gap this case used to PIN is now FIXED.
+   *
+   * 9-pre-a measured the then-current behaviour: a missing `activeModal`
+   * mapped to `null`, indistinguishable from "no modal", so an
+   * approval-waiting session rendered with no approval UI and nothing
+   * reported it. That case was written against reality and flagged as a
+   * robustness gap, with the explicit note that it should be updated if the
+   * adapter later learned to fail closed. 9-pre-c is that change.
+   *
+   * The contract is now a DECLINE, not a throw — see
+   * `isMappableTranscriptSnapshot`'s header for why a throw is wrong on this
+   * path (it runs inside a MessagePort `onmessage` with no catch above it).
+   * The mapper itself is unchanged and still maps best-effort; the REFUSAL
+   * lives at the controller boundary, which is what the behavioural case in
+   * `transcript-fallback-fire-drill.test.ts` drives end to end.
+   */
+  it('activeModal: present → mapped message/buttons; removed → the snapshot is no longer mappable (★ 9-pre-c fix)', () => {
     const base = buildSnapshot({
       status: 'waiting_approval',
       activeModal: { message: 'Run `rm -rf build/`?', buttons: ['Yes', 'No'] },
@@ -147,19 +167,23 @@ describe('mapTranscriptSnapshotToChatTailUpdate — required-field injection (ro
     const mapped = mapTranscriptSnapshotToChatTailUpdate(base, OPTS)
     expect(mapped.activeModal).toEqual({ message: 'Run `rm -rf build/`?', buttons: ['Yes', 'No'] })
 
-    // ★ MEASURED BEHAVIOUR, not the desirable one. The adapter's
-    // `snapshot.activeModal ? {...} : null` treats a MISSING field and an
-    // absent modal identically, so a projection regression here degrades
-    // SILENTLY: an approval-waiting session renders with no approval UI, the
-    // user cannot act, and nothing reports an error.
-    //
-    // This is pinned rather than "fixed" because distinguishing the two cases
-    // is a src change, and unit 9-pre-a is explicitly test-only. The assertion
-    // is written against reality so it stays honest; if the adapter later
-    // learns to fail closed on a missing field, this case goes red and should
-    // be updated to expect the throw. Flagged to the owner as a real (small)
-    // robustness gap, not a blocker for the §5.6 gate.
-    expect(mapTranscriptSnapshotToChatTailUpdate(inject('activeModal', base), OPTS).activeModal).toBeNull()
+    // ★ A present-but-null modal is a NORMAL, renderable state and must stay
+    // mappable — otherwise every ordinary session would fall back.
+    expect(isMappableTranscriptSnapshot(base)).toBe(true)
+    expect(isMappableTranscriptSnapshot(buildSnapshot({ activeModal: null }))).toBe(true)
+
+    // ★ A MISSING field is a projection regression and is now refused, so the
+    // controller falls back to legacy instead of silently dropping the
+    // approval UI.
+    expect(isMappableTranscriptSnapshot(inject('activeModal', base))).toBe(false)
+
+    // A structurally malformed modal is refused too — `magi_approval_probe`
+    // and the pane both read `.message`/`.buttons` by name.
+    expect(
+      isMappableTranscriptSnapshot(
+        buildSnapshot({ activeModal: { message: 'x' } as never }),
+      ),
+    ).toBe(false)
   })
 
   it('provenance: present → messageSource.selected; removed → the mapper throws rather than dropping the native-source signal', () => {

@@ -109,6 +109,74 @@ function mapMessageSource(
     return { selected: provenance.messageSource }
 }
 
+/**
+ * (§8 unit 9-pre-c) Is this snapshot structurally complete enough to map?
+ *
+ * ── The defect this closes ─────────────────────────────────────────────────
+ * `mapTranscriptSnapshotToChatTailUpdate` reads `activeModal` as
+ * `snapshot.activeModal ? {...} : null`, which treats a MISSING field and an
+ * absent modal identically. `activeModal` is a REQUIRED, non-optional field on
+ * `ReplicatedTranscriptSnapshotV1` (`ReplicatedTranscriptModalV1 | null`) and
+ * `encodeTranscriptSnapshot` always emits it — so its absence is a projection
+ * regression, never a legitimate shape.
+ *
+ * Conflating the two degrades SILENTLY in the worst possible direction: a
+ * session sitting on `waiting_approval` renders with NO approval UI. The user
+ * cannot act, the agent stays blocked, and nothing reports an error. That is
+ * the same empty-success class the §5.6 fire drill exists to catch, on the
+ * highest-traffic consumer (roster ids 1-2).
+ *
+ * ── Why a validator here rather than a throw inside the mapper ─────────────
+ * ★ The production call chain has NO try/catch:
+ *   `p2p-manager.ts` `onSnapshot` → `applyTranscriptReplicaSnapshotToControllers`
+ *   → `applyTranscriptReplicaSnapshot` → this mapper,
+ * and `onSnapshot` is invoked directly inside `transcript-worker-host.ts`'s
+ * `snapshotChannel.port1.onmessage`. A raw throw would escape into a
+ * MessagePort event handler — killing that delivery AND skipping the
+ * downstream `transcriptSnapshotHandlers`, i.e. trading a silent wrong answer
+ * for a silent dropped one. Neither is a fallback.
+ *
+ * So the contract is a DECLINE, matching what every other roster consumer
+ * already does: unit 6's `isUsableSnapshot` (mcp-server) and unit 7's
+ * (`transcript-daemon-consumer-read.ts`) both refuse structurally-invalid
+ * snapshots and let the caller run legacy. This is the same discipline for
+ * ids 1-2, which were the only consumers lacking it.
+ *
+ * ★ An ALLOW-LIST of required shape, never a deny-list sanitizer — the
+ * repo-wide rule for every boundary of this kind (CLAUDE.md server content
+ * boundary). It asserts what must be present rather than stripping what must
+ * not be, so a field added upstream cannot slip through unvalidated.
+ *
+ * Deliberately NOT validated: `title` and `turnKey`, which the injection suite
+ * documents as structural-but-not-behaviour-gating, and `historySessionId` /
+ * `providerObservedStatus`, which are legitimately nullable and read
+ * defensively. Validating them would reject snapshots the pane can render
+ * perfectly well — a fallback is not free, it costs the replica lane.
+ */
+export function isMappableTranscriptSnapshot(snapshot: ReplicatedTranscriptSnapshotV1): boolean {
+    if (!snapshot || typeof snapshot !== 'object') return false
+    const value = snapshot as unknown as Record<string, unknown>
+
+    if (typeof value.sessionId !== 'string' || !value.sessionId) return false
+    if (typeof value.status !== 'string' || !value.status) return false
+    if (!Array.isArray(value.messages)) return false
+    if (!value.provenance || typeof value.provenance !== 'object') return false
+
+    // ★ The field this whole validator exists for. `undefined` means the
+    // projection stopped carrying it; `null` means "no modal", which is a
+    // normal and renderable state.
+    if (!('activeModal' in value)) return false
+    const modal = value.activeModal
+    if (modal !== null) {
+        if (!modal || typeof modal !== 'object') return false
+        const shape = modal as Record<string, unknown>
+        if (typeof shape.message !== 'string') return false
+        if (!Array.isArray(shape.buttons)) return false
+    }
+
+    return true
+}
+
 export interface TranscriptChatTailUpdate extends SessionChatTailUpdate {
     /** Ring/SNAP-reset discontinuity — design §3.7's "이전 내용 생략" signal. */
     omittedBefore: boolean
