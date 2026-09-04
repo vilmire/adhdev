@@ -27,7 +27,6 @@ import {
     drainHeldTurnSuspensionsForMesh,
     gateRedriveForHeldSuspension,
     evaluateRedrive,
-    enqueueTerminalOutbox,
     assertPromptInjectionAllowed,
     projectTurnAttempt,
     getTurnLedgerMetrics,
@@ -146,10 +145,10 @@ describe('held-suspension restart contract — gateRedriveForHeldSuspension', ()
         const d2 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attempt.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event', nowMs: t0 + 34_001 });
         expect(d1).toMatchObject({ committed: true, duplicate: false });
         expect(d2).toMatchObject({ committed: true, duplicate: true });
-        const o1 = enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } });
-        const o2 = enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } });
-        expect(o1).toBe(true);
-        expect(o2).toBe(false);
+        // ★ Stage 5c-1: two `enqueueTerminalOutbox` assertions followed, checking
+        // that the outbox row was INSERT-OR-IGNORE exactly-once for this attempt.
+        // The reducer half above (committed/duplicate) is the part that survives;
+        // the outbox half is owed to 5c-2 as a redrive-cursor assertion.
 
         const m = getTurnLedgerMetrics();
         expect(m.suspensionConsumedRecovered).toBe(1);
@@ -396,8 +395,6 @@ describe('held-suspension restart contract — gateRedriveForHeldSuspension', ()
         const d2 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attempt.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event', nowMs: t0 + 34_001 });
         expect(d1).toMatchObject({ committed: true, duplicate: false });
         expect(d2).toMatchObject({ committed: true, duplicate: true });
-        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(true);
-        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(false);
         expect(store.getTurnAttempt(attempt.attemptId)!.terminalOutcome).toBe('completed');
         expect(getTurnLedgerMetrics().suspensionConsumedRecovered).toBe(1);
         expect(getTurnLedgerMetrics().suspensionsApplied).toBe(1);
@@ -432,8 +429,6 @@ describe('held-suspension restart contract — gateRedriveForHeldSuspension', ()
         const done2 = proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attemptB.attemptId, sessionId: 'sessB', outcome: 'completed', source: 'provider_event', nowMs: t0 + 41_001 });
         expect(done1).toMatchObject({ committed: true, duplicate: false });
         expect(done2).toMatchObject({ committed: true, duplicate: true });
-        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attemptB.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(true);
-        expect(enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attemptB.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed' } })).toBe(false);
         expect(store.getTurnAttempt(attemptB.attemptId)!.terminalOutcome).toBe('completed');
 
         // A late completion echoing the DEAD attempt is stale and inert: it must

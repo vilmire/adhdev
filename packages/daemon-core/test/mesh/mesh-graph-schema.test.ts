@@ -88,7 +88,12 @@ describe('graph schema migration (design :98-191)', () => {
         const tables = tableNames((store as any).db);
         for (const t of GRAPH_TABLES) expect(tables, `missing table ${t}`).toContain(t);
         // Pre-existing runtime tables are still there — nothing was dropped/recreated.
-        for (const t of ['mesh_queue', 'mesh_event_ledger', 'mesh_turn_outbox']) {
+        // ★ `mesh_turn_outbox` was the third sample here until Stage 5c-1 removed
+        // that table deliberately. `mesh_turn_attempts` replaces it: this list is a
+        // spot-check that the GRAPH migration is additive, so any surviving
+        // turn-ledger table serves, and naming a table the tree still creates keeps
+        // the assertion meaningful rather than vacuous.
+        for (const t of ['mesh_queue', 'mesh_event_ledger', 'mesh_turn_attempts']) {
             expect(tables, `pre-existing table ${t} must survive`).toContain(t);
         }
         // Spot-check the indexes that the design's access patterns need.

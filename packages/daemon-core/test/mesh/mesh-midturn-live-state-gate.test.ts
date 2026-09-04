@@ -231,10 +231,14 @@ function authoritativeEvent(seed: ReturnType<typeof seedAssignedAttempt>, overri
   })
 }
 
-function totalTurnOutboxRows(meshId: string): number {
-  return Object.values(MeshRuntimeStore.getInstance().countTurnOutboxByStatus(meshId))
-    .reduce((sum, count) => sum + count, 0)
-}
+// ★ Stage 5c-1: a `totalTurnOutboxRows` helper stood here, and four assertions
+// below used it to check whether a terminal commit had produced an outbox row
+// (1) or been suppressed (0). The table is gone, so the helper and those four
+// assertions are removed — but note they were never the PRIMARY assertion in any
+// of the four cases: each is immediately preceded by an assertion on the turn
+// attempt's terminalOutcome/stage and on the task_completed ledger entry count,
+// which states the same proposition at the source of truth. Nothing here is owed
+// to 5c-2; the coverage was redundant, not lost.
 
 describe('MID-TURN-LIVE-STATE-GATE — suppresses a premature completion while the adapter proves the turn is still active', () => {
   it('suppresses when the live instance reports mid-tool/streaming pending evidence (interim, not final)', () => {
@@ -428,7 +432,6 @@ describe('MID-TURN-LIVE-STATE-GATE — authoritative completion and bounded retr
       })
       expect(readLedgerEntries(meshId).filter(e =>
         e.kind === 'task_completed' && e.payload?.taskId === seed.task.id)).toHaveLength(1)
-      expect(totalTurnOutboxRows(meshId)).toBe(1)
       const active = buildMeshActiveWork({
         meshId,
         queue: getQueue(meshId),
@@ -474,7 +477,6 @@ describe('MID-TURN-LIVE-STATE-GATE — authoritative completion and bounded retr
       expect(getQueue(meshId).find(t => t.id === seed.task.id)?.status).toBe('assigned')
       expect(MeshRuntimeStore.getInstance().getTurnAttempt(seed.attempt.attemptId)?.stage).toBe(suspendedStage)
       expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')).toHaveLength(0)
-      expect(totalTurnOutboxRows(meshId)).toBe(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -517,7 +519,6 @@ describe('MID-TURN-LIVE-STATE-GATE — authoritative completion and bounded retr
       expect(getQueue(meshId).find(t => t.id === seed.task.id)?.status).toBe('completed')
       expect(readLedgerEntries(meshId).filter(e =>
         e.kind === 'task_completed' && e.payload?.taskId === seed.task.id)).toHaveLength(1)
-      expect(totalTurnOutboxRows(meshId)).toBe(1)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -564,7 +565,6 @@ describe('MID-TURN-LIVE-STATE-GATE — authoritative completion and bounded retr
 
       expect(MeshRuntimeStore.getInstance().getTurnAttempt(seed.attempt.attemptId)?.terminalOutcome).toBe('cancelled')
       expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_completed')).toHaveLength(0)
-      expect(totalTurnOutboxRows(meshId)).toBe(0)
     } finally {
       cleanupMeshFiles(meshId)
     }

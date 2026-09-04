@@ -30,8 +30,6 @@ import {
     markAttemptRedriven,
     classifyNonceEcho,
     reconstructActiveAttempts,
-    enqueueTerminalOutbox,
-    drainTurnOutbox,
     isPromptInjectionAllowed,
     assertPromptInjectionAllowed,
     canTransitionTurnStage,
@@ -397,46 +395,19 @@ describe('turn ledger — evidence/stop ordering (6ms race)', () => {
     });
 });
 
-describe('turn ledger — durable outbox / restart delivery', () => {
-    it('enqueue is exactly-once; a restart with a pending outbox row delivers exactly one coordinator completion', async () => {
-        const taskId = nextTaskId();
-        const { attempt } = openTurnAttempt({ meshId: MESH, taskId, dispatchNonce: 1, sessionId: 'sessA' });
-        proposeTurnCompletion({ meshId: MESH, taskId, attemptId: attempt.attemptId, sessionId: 'sessA', outcome: 'completed', source: 'provider_event' });
-
-        const enq1 = enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed', sessionId: 'sessA' } });
-        expect(enq1).toBe(true);
-        // Re-enqueue (crash replay) — INSERT OR IGNORE, exactly one row.
-        const enq2 = enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'completed', payload: { event: 'agent:generating_completed', sessionId: 'sessA' } });
-        expect(enq2).toBe(false);
-
-        // Fault injection: the first delivery attempt fails AFTER the commit → rescheduled, not lost.
-        const failDrain = await drainTurnOutbox(async () => { throw new Error('transport down'); }, { backoffMs: () => 0 });
-        expect(failDrain).toMatchObject({ delivered: 0, failed: 0, rescheduled: 1 });
-
-        // ── daemon restart with the row still pending ──
-        simulateRestart();
-        const deliveries: string[] = [];
-        const drain = await drainTurnOutbox(async (row) => { deliveries.push(row.id); }, { nowMs: Date.now() + 1 });
-        expect(drain).toMatchObject({ delivered: 1, failed: 0, rescheduled: 0 });
-        expect(deliveries).toEqual([`${attempt.attemptId}:terminal`]);
-
-        // A later drain (any tick) finds nothing due — exactly one delivery.
-        const again = await drainTurnOutbox(async (row) => { deliveries.push(row.id); });
-        expect(again).toMatchObject({ delivered: 0, failed: 0, rescheduled: 0 });
-        expect(deliveries).toHaveLength(1);
-        const metrics = getTurnLedgerMetrics();
-        expect(metrics.outboxByStatus.delivered).toBe(1);
-    });
-
-    it('outbox rows that exhaust their retry budget park as failed (observable, never silent)', async () => {
-        const taskId = nextTaskId();
-        const { attempt } = openTurnAttempt({ meshId: MESH, taskId, dispatchNonce: 1, sessionId: 'sessA' });
-        enqueueTerminalOutbox({ meshId: MESH, taskId, attemptId: attempt.attemptId, outcome: 'failed', payload: {} });
-        const result = await drainTurnOutbox(async () => { throw new Error('permanent'); }, { maxAttempts: 1 });
-        expect(result).toMatchObject({ delivered: 0, failed: 1, rescheduled: 0 });
-        expect(getTurnLedgerMetrics().outboxByStatus.failed).toBe(1);
-    });
-});
+// ★ Stage 5c-1: the `turn ledger — durable outbox / restart delivery` describe
+// block stood here. It asserted two invariants against the now-deleted turn
+// outbox: re-enqueue after a crash replay is exactly-once (INSERT OR IGNORE),
+// and a row that exhausts its retry budget parks as `failed` observably.
+//
+// ★★ 5c-2 OWES REPLACEMENTS FOR BOTH, restated against the redrive leg:
+//   · exactly-once across a restart  → the durable cursor resuming mid-topic
+//     must not re-notify a terminal the coordinator already drained.
+//   · observable permanent failure   → the 5a-4 quarantine (which REPLACED the
+//     `failed` park) must be reachable and reported, not silent.
+// Deleting these without restating them is precisely the vacuous-green the
+// design's §5-15 warns about — the remaining suite would still be green with
+// the redrive leg's restart behaviour entirely unasserted.
 
 describe('turn ledger — cancellation at every stage', () => {
     const stages: Array<{ name: string; advance: (taskId: string) => void }> = [
