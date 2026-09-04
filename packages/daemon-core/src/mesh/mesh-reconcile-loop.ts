@@ -81,13 +81,6 @@ import {
     reconcileUnterminatedDirectDispatches,
     autoPruneStaleDirectDispatches,
 } from './mesh-completion-synthesis.js';
-import { drainMeshTurnOutbox } from './mesh-event-forwarding.js';
-import {
-    areOutboxDrainTriggersDisabled,
-    recordOutboxDrainTriggerSuppressed,
-    recordOutboxResidueSweep,
-} from './mesh-turn-outbox-drain-policy.js';
-import { readTurnOutboxDiagnostics } from './mesh-turn-outbox-diagnostics.js';
 import { runContinuousAutoFastForwardScan, runPendingCoordinatorCatchupScan, getMeshWithCache } from './mesh-queue-assignment.js';
 import {
     reclaimOrphanedTurnAttempts,
@@ -226,33 +219,17 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         }
     }
 
-    // ── PHASE 0.1: drain the durable TURN-LEDGER outbox (Stage 5) ────────────
-    // Coordinator-bound terminal notifications persisted at reducer commit time.
-    // Rows whose delivery failed are rescheduled with backoff — this per-tick drain
-    // is their retry pump (the commit-time and boot drains cover the happy paths).
-    // Exactly-once: pending-events fingerprint dedup collapses any redelivery.
+    // ── PHASE 0.1 REMOVED (Stage 5c-1) ──────────────────────────────────────
+    // This phase drained the durable turn outbox: it was retry pump ② for
+    // coordinator-bound terminal notifications, alongside the commit-time
+    // trigger ① and the boot trigger ③ below. All three are gone with the
+    // `mesh_turn_outbox` table.
     //
-    // Stage 5b-2: this is drain trigger ②. It is disarmed once the residue has been
-    // observed empty on REQUIRED_CLEAN_SWEEPS consecutive ticks AND 5b-1's enqueue
-    // block is in force — see mesh-turn-outbox-drain-policy.ts for why those two
-    // preconditions are interlocked rather than an independent flag.
-    //
-    // ★ The residue SWEEP runs unconditionally, before the disarm check. It is what
-    // accumulates the streak the disarm depends on, so short-circuiting it would
-    // freeze the streak at whatever it held and make the policy unable to ever
-    // re-engage (or, worse, to notice residue reappearing).
-    try {
-        recordOutboxResidueSweep(readTurnOutboxDiagnostics().backlogPending);
-    } catch { /* store unavailable — leave the streak untouched, i.e. no disarm */ }
-    if (areOutboxDrainTriggersDisabled()) {
-        recordOutboxDrainTriggerSuppressed();
-    } else {
-        try {
-            await drainMeshTurnOutbox();
-        } catch (e: any) {
-            LOG.warn('MeshReconcile', `Turn outbox drain failed: ${e?.message || e}`);
-        }
-    }
+    // What re-arms a terminal notification now: the seqscribe redrive consumer
+    // (mesh-terminal-redrive.ts), driven by replica convergence rather than by
+    // this tick. Its retry is the durable cursor — a failed injection does not
+    // advance it, so the entry is re-served — which is why no per-tick pump is
+    // needed here to replace this one.
 
     // ── PHASE 0.5: merge file-config membership into the router's inline cache ─
     // MESH-MEMBERSHIP-INLINE-CACHE-SYNC: getMeshForCommand's inline-cache-preferred
@@ -996,9 +973,10 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
     //      delivery/reconciliation from durable state instead of the lost in-memory
     //      streaks, and a recovered ≥consumed attempt is injection-ineligible by
     //      construction (no duplicate prompt injection);
-    //   2. drain the durable turn outbox — any coordinator completion committed
-    //      before the crash but not yet delivered is re-queued now (exactly-once via
-    //      the outbox id + pending-events fingerprint dedup);
+    //   2. (removed in Stage 5c-1 — this step drained the durable turn outbox for
+    //      completions committed before a crash. The seqscribe redrive consumer's
+    //      durable cursor covers that window now, resuming on its own rather than
+    //      from this boot hook.)
     //   3. drain held suspensions — a waiting_* edge held before a crash whose
     //      consumed ACK is already durable is applied through the FSM now (rows
     //      still pre-consumed stay held for the live ACK; terminal-attempt rows are
@@ -1035,32 +1013,11 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
             } catch (e: any) {
                 LOG.warn('TurnLedger', `Restart attempt reconstruction failed (reconcile continues on row state): ${e?.message || e}`);
             }
-            // Stage 5b-2: this is drain trigger ③. It is disarmed by the SAME policy
-            // as trigger ②, but note the asymmetry that policy deliberately creates:
-            // the clean-sweep streak is process-local and starts at zero, so at this
-            // point in a fresh process the residue is by definition UNOBSERVED and
-            // the policy refuses with `residue_pending`. Trigger ③ therefore still
-            // runs on the boot immediately after the flag is set, and only stops
-            // firing once a process has itself watched the backlog stay empty across
-            // REQUIRED_CLEAN_SWEEPS ticks — i.e. never on the first boot drain of a
-            // process, which is exactly the case ③ exists for (rows committed before
-            // a crash). This is not a redundant guard: it is what makes the disarm
-            // hold across the LATER boots of a converged fleet, once a live process
-            // has established the streak and the flag is read fresh on each tick.
-            if (areOutboxDrainTriggersDisabled()) {
-                recordOutboxDrainTriggerSuppressed();
-                LOG.info('TurnLedger', 'Restart outbox drain skipped — Stage 5b-2 drain triggers disarmed '
-                    + '(enqueue blocked and residue observed empty); the seqscribe redrive leg delivers.');
-            } else {
-                try {
-                    const drained = await drainMeshTurnOutbox();
-                    if (drained.delivered + drained.failed + drained.rescheduled > 0) {
-                        LOG.info('TurnLedger', `Restart outbox drain: delivered=${drained.delivered} rescheduled=${drained.rescheduled} failed=${drained.failed}`);
-                    }
-                } catch (e: any) {
-                    LOG.warn('TurnLedger', `Restart outbox drain failed (rows stay pending; retried on next commit/boot): ${e?.message || e}`);
-                }
-            }
+            // ★ Stage 5c-1: boot drain trigger ③ removed with the outbox. The
+            // restart recovery it provided — replaying rows committed before a
+            // crash — is now the redrive consumer's durable cursor resuming from
+            // where it stopped, which covers the same window without a second
+            // table to drain.
         })();
     });
     const timer = setInterval(() => {
