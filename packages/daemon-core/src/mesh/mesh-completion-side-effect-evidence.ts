@@ -74,6 +74,30 @@ export function resolveLocalCodeChangeWorkspace(
     meshId: string,
     nodeId: string | undefined,
 ): string | undefined {
+    return resolveLocalCodeChangeNode(components, meshId, nodeId)?.workspace;
+}
+
+/**
+ * Same resolution as resolveLocalCodeChangeWorkspace, but also reports whether the
+ * resolved node is a WORKTREE checkout rather than the daemon's base checkout. Split out
+ * (rather than widening the existing return type) so every current caller keeps its
+ * one-line `if (!workspace) return` shape; only the residue-cleanup path below needs the
+ * extra axis.
+ *
+ * `isWorktree` is deliberately a THREE-signal OR (`isLocalWorktree` || `worktreeBranch` ||
+ * `clonedFromNodeId`) rather than reading the single canonical `isLocalWorktree` flag:
+ * that flag is optional on the node entry and older/externally-registered worktree nodes
+ * carry only the branch or the clone pointer (web-core's mesh-visualization.ts makes the
+ * same OR for exactly this reason). Getting this wrong in the false direction would run a
+ * destructive-ish cleanup on a worktree whose changes are the task's legitimate output, so
+ * the predicate is biased to answer "worktree" on ANY worktree hint — undefined (an
+ * unresolvable node) is treated as worktree too, i.e. NOT eligible for cleanup.
+ */
+export function resolveLocalCodeChangeNode(
+    components: DaemonComponents,
+    meshId: string,
+    nodeId: string | undefined,
+): { workspace: string; isWorktree: boolean } | undefined {
     if (!nodeId) return undefined;
     const mesh = getMesh(meshId);
     const node = mesh?.nodes.find((n: any) => meshNodeIdMatches(n, nodeId));
@@ -86,7 +110,11 @@ export function resolveLocalCodeChangeWorkspace(
         const isLocal = localDaemonIds.some((id) => daemonIdsEquivalent(id, nodeDaemonId));
         if (!isLocal) return undefined;
     }
-    return workspace;
+    const n = node as unknown as Record<string, unknown> | undefined;
+    const isWorktree = n?.isLocalWorktree === true
+        || !!readNonEmptyString(n?.worktreeBranch)
+        || !!readNonEmptyString(n?.clonedFromNodeId);
+    return { workspace, isWorktree };
 }
 
 export interface SyncGitEvidenceResult {
@@ -263,19 +291,130 @@ export function checkGitEvidenceSync(workspace: string, sinceIso: string | undef
 
 /** Parse `git status --porcelain=v2` output into the list of changed file paths (relative). */
 function parsePorcelainV2Paths(output: string): string[] {
-    const paths: string[] = [];
+    return parsePorcelainV2Entries(output).map((entry) => entry.path);
+}
+
+interface PorcelainV2Entry {
+    path: string;
+    /** Untracked ('? ' lines) — never eligible for the residue cleanup below. */
+    untracked: boolean;
+    /**
+     * True when the entry's INDEX position differs from HEAD (porcelain v2's XY field, X
+     * column !== '.'). A staged path is excluded from the cleanup: restoring only the
+     * worktree would leave a half-reverted state, and blowing away the index is a bigger
+     * hammer than "undo the residue a read-only task left".
+     */
+    staged: boolean;
+}
+
+/**
+ * Parse `git status --porcelain=v2` into per-entry records carrying the tracked/staged axes
+ * the residue cleanup needs. parsePorcelainV2Paths stays the thin projection the evidence
+ * probe already used, so the two can never disagree about WHICH paths are in play.
+ */
+function parsePorcelainV2Entries(output: string): PorcelainV2Entry[] {
+    const entries: PorcelainV2Entry[] = [];
     for (const line of output.split('\n')) {
         if (!line) continue;
-        if (line.startsWith('? ')) { paths.push(line.slice(2).trim()); continue; }
+        if (line.startsWith('? ')) {
+            const p = line.slice(2).trim();
+            if (p) entries.push({ path: p, untracked: true, staged: false });
+            continue;
+        }
         if (line.startsWith('1 ') || line.startsWith('2 ')) {
             const fields = line.split(' ');
+            // Field 1 is the two-character XY status; X ('.' = unmodified in index) is the
+            // staged column.
+            const xy = fields[1] ?? '..';
             const rest = fields.slice(line.startsWith('2 ') ? 9 : 8).join(' ');
             // A rename ('2 ' entries) separates old/new paths with a tab; take the new path.
             const filePath = rest.split('\t')[0];
-            if (filePath) paths.push(filePath);
+            if (filePath) entries.push({ path: filePath, untracked: false, staged: xy[0] !== '.' });
         }
     }
-    return paths;
+    return entries;
+}
+
+export interface ReadonlyResidueCleanupResult {
+    /** True when the cleanup actually ran a `git restore` (or had nothing tracked to restore). */
+    attempted: boolean;
+    /** Tracked, unstaged paths whose worktree modification was reverted. */
+    restored: string[];
+    /** Paths deliberately left alone, with why — surfaced in the diagnostic so nothing is silently skipped. */
+    skipped: { path: string; reason: 'untracked' | 'staged' }[];
+    /** Present when the restore itself failed (fail-open: the violation is still reported). */
+    error?: string;
+}
+
+/**
+ * READONLY-BASE-RESIDUE-CLEANUP: revert the working-tree residue a read-only task left on a
+ * BASE (non-worktree) checkout.
+ *
+ * WHY THIS EXISTS: a read-only task that mutates the base checkout anyway (the observed
+ * case: a `check:vendor`-style command regenerating tracked vendor files) leaves that
+ * checkout dirty, and nothing downstream cleans it. The next Refinery merge on that node
+ * then dies with `merge_failed` on a dirty tree — a failure whose cause is invisible from
+ * where it surfaces. The violation itself is already detected and flagged
+ * (readonlyContractViolation, above); this is the missing second half that stops it
+ * cascading.
+ *
+ * WHY THE SCOPE IS THIS NARROW — the cleanup touches EXACTLY tracked, unstaged worktree
+ * modifications (`git restore --worktree --`), nothing else:
+ *   - NEVER `git clean` in any form: untracked files are the user's/agent's own work,
+ *     `node_modules`, local config, scratch output. Deleting them to fix a merge is
+ *     catastrophically out of proportion, and unrecoverable (no git object backs them).
+ *   - Untracked files are therefore left in place and REPORTED as skipped. They also do not
+ *     block a merge the way tracked modifications do, so leaving them is not merely the safe
+ *     choice — it is sufficient for the failure this fixes.
+ *   - Staged changes are left in place and reported. Restoring only the worktree half would
+ *     leave a half-reverted state that is worse than either extreme, and resetting the
+ *     index reaches beyond "undo residue" into rewriting intent someone may have expressed
+ *     deliberately. A staged path on a read-only task is anomalous enough that a human
+ *     should see it — the diagnostic and the review flag deliver that.
+ *   - WORKTREE nodes are excluded by the CALLER: a worktree's changes may be the task's
+ *     legitimate output, and a worktree's dirty tree does not wedge the base checkout the
+ *     way this failure did.
+ *
+ * Fail-open like every other probe in this file: any git error is caught, recorded in the
+ * result, and never surfaced as a task failure.
+ */
+export function cleanupReadonlyBaseResidue(workspace: string, timeoutMs: number): ReadonlyResidueCleanupResult {
+    const deadline = Date.now() + timeoutMs;
+    const remaining = () => Math.max(1, deadline - Date.now());
+    const result: ReadonlyResidueCleanupResult = { attempted: false, restored: [], skipped: [] };
+    try {
+        const statusOutput = execFileSync(GIT, ['status', '--porcelain=v2'], {
+            cwd: workspace,
+            encoding: 'utf8',
+            timeout: remaining(),
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const entries = parsePorcelainV2Entries(statusOutput);
+        const restorable: string[] = [];
+        for (const entry of entries) {
+            if (entry.untracked) { result.skipped.push({ path: entry.path, reason: 'untracked' }); continue; }
+            if (entry.staged) { result.skipped.push({ path: entry.path, reason: 'staged' }); continue; }
+            restorable.push(entry.path);
+        }
+        result.attempted = true;
+        if (restorable.length === 0) return result;
+
+        // `--worktree` only (never `--staged`): revert the working-tree copy to the index,
+        // leaving the index itself untouched. `--` terminates options so a path that looks
+        // like a flag can't be reinterpreted.
+        execFileSync(GIT, ['restore', '--worktree', '--', ...restorable], {
+            cwd: workspace,
+            timeout: remaining(),
+            windowsHide: true,
+            stdio: ['ignore', 'ignore', 'ignore'],
+        });
+        result.restored = restorable;
+        return result;
+    } catch (e: any) {
+        result.error = e?.message || String(e);
+        return result;
+    }
 }
 
 // ─── Per-taskMode completion-evidence strategy (structural registry) ──────
@@ -481,14 +620,36 @@ export function applyTaskModeCompletionEvidence(
         // fail-open/local-only/bounded-timeout guarantees as the code_change path.
         try {
             const gateNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.meshNodeId);
-            const workspace = resolveLocalCodeChangeWorkspace(components, args.meshId, gateNodeId);
-            if (workspace) {
+            const resolved = resolveLocalCodeChangeNode(components, args.meshId, gateNodeId);
+            if (resolved) {
+                const { workspace, isWorktree } = resolved;
                 const gitCheck = checkGitEvidenceSync(workspace, args.preFlipAssignedAt, args.timeoutMs);
                 if (gitCheck.checked && !gitCheck.noEvidenceSinceDispatch) {
                     args.metadataEvent.reviewRecommended = true;
                     args.metadataEvent.evidenceLevel = readNonEmptyString(args.metadataEvent.evidenceLevel) || 'reported';
                     setCompletionDiagnostic({ readonlyContractViolation: true, evidenceScope: 'live_debug_readonly_git' });
                     LOG.warn('MeshLedger', `live_debug_readonly task ${args.taskId} (session ${args.sessionId}) completed with git evidence attributable to this dispatch — a read-only task should have produced NONE; flagged reviewRecommended (${JSON.stringify(gitCheck.detail)})`);
+
+                    // READONLY-BASE-RESIDUE-CLEANUP: detection alone left the residue sitting
+                    // on the checkout, where the NEXT Refinery merge on that node dies with
+                    // merge_failed on a dirty tree — a cascade whose cause is invisible from
+                    // where it surfaces (observed: a read-only task ran a vendor-regenerating
+                    // command on a base checkout and killed an in-flight merge). Restricted to
+                    // BASE checkouts: a worktree's changes may be that task's legitimate output,
+                    // and a dirty worktree does not wedge the base checkout the way this did.
+                    // See cleanupReadonlyBaseResidue for why the scope is tracked-unstaged only
+                    // (never `git clean`, untracked and staged paths deliberately preserved).
+                    if (!isWorktree) {
+                        const cleanup = cleanupReadonlyBaseResidue(workspace, args.timeoutMs);
+                        setCompletionDiagnostic({ readonlyResidueCleanup: cleanup });
+                        if (cleanup.error) {
+                            LOG.warn('MeshLedger', `Readonly residue cleanup FAILED on base checkout ${workspace} for task ${args.taskId}: ${cleanup.error}`);
+                        } else if (cleanup.restored.length || cleanup.skipped.length) {
+                            LOG.warn('MeshLedger', `Readonly residue cleanup on base checkout ${workspace} for task ${args.taskId}: restored ${cleanup.restored.length} tracked file(s) ${JSON.stringify(cleanup.restored)}; left ${cleanup.skipped.length} untouched ${JSON.stringify(cleanup.skipped)}`);
+                        }
+                    } else {
+                        setCompletionDiagnostic({ readonlyResidueCleanup: { attempted: false, restored: [], skipped: [], skippedReason: 'worktree_node' } });
+                    }
                 }
             }
         } catch (e: any) {

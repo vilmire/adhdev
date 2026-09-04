@@ -2520,6 +2520,198 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  // READONLY-BASE-RESIDUE-CLEANUP (target): detecting the violation was never enough — the
+  // residue stayed on the checkout and the NEXT Refinery merge on that node died with
+  // merge_failed on a dirty tree (observed: a read-only task ran a vendor-regenerating command
+  // on a base checkout and killed an in-flight merge). This proves the completion hook actually
+  // REVERTS the tracked modification on a BASE (non-worktree) node.
+  it('READONLY-BASE-RESIDUE-CLEANUP: a readonly violation on a BASE checkout reverts the tracked modification it left behind', () => {
+    const meshId = `mesh_readonly_residue_base_${Date.now()}`
+    const repo = tempGitRepo('readonly-residue-base')
+    const tracked = path.join(repo, 'README.md')
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        // Base checkout: no isLocalWorktree / worktreeBranch / clonedFromNodeId.
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued readonly investigation task', {
+        taskMode: 'live_debug_readonly',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      // The read-only task regenerated a TRACKED file (the observed vendor-file case).
+      fs.writeFileSync(tracked, 'regenerated vendor content that should not have been written\n')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-readonly-residue-base',
+        finalSummary: 'Investigation complete.',
+        workerResult: { status: 'success' },
+        timestamp: Date.now(),
+      })
+
+      // The violation is still reported (cleanup does not suppress the signal)...
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect((completedEntry?.payload as any).reviewRecommended).toBe(true)
+      expect((completedEntry?.payload as any).completionDiagnostic?.readonlyContractViolation).toBe(true)
+
+      // ...AND the residue is gone: the tracked file is back to its committed content and the
+      // tree is clean, so the next merge on this node is not wedged.
+      expect(fs.readFileSync(tracked, 'utf8')).toBe('hello\n')
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).trim()).toBe('')
+      expect((completedEntry?.payload as any).completionDiagnostic?.readonlyResidueCleanup).toMatchObject({
+        attempted: true,
+        restored: ['README.md'],
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  // READONLY-BASE-RESIDUE-CLEANUP control 1 (worktree): a worktree node's changes may be that
+  // task's legitimate output, and a dirty worktree does not wedge the base checkout the way the
+  // observed failure did. Cleanup must NOT run here — this test stays green whether or not the
+  // cleanup hook exists, which is exactly what makes it a control for the target above.
+  it('READONLY-BASE-RESIDUE-CLEANUP control: a readonly violation on a WORKTREE node leaves the modification intact', () => {
+    const meshId = `mesh_readonly_residue_worktree_${Date.now()}`
+    const repo = tempGitRepo('readonly-residue-worktree')
+    const tracked = path.join(repo, 'README.md')
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo, isLocalWorktree: true, worktreeBranch: 'fix/some-branch' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued readonly investigation task', {
+        taskMode: 'live_debug_readonly',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      fs.writeFileSync(tracked, 'worktree work product\n')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-readonly-residue-worktree',
+        finalSummary: 'Investigation complete.',
+        workerResult: { status: 'success' },
+        timestamp: Date.now(),
+      })
+
+      // Violation still flagged — the review signal is orthogonal to whether cleanup ran.
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect((completedEntry?.payload as any).completionDiagnostic?.readonlyContractViolation).toBe(true)
+      // But the worktree's content is untouched.
+      expect(fs.readFileSync(tracked, 'utf8')).toBe('worktree work product\n')
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  // READONLY-BASE-RESIDUE-CLEANUP control 2 (untracked safety): the cleanup must never reach for
+  // `git clean` in any form — untracked paths are the user's own work, node_modules, local
+  // config, scratch output, none of it recoverable from git objects. This pins that an untracked
+  // file survives the cleanup that DID revert the tracked one alongside it.
+  it('READONLY-BASE-RESIDUE-CLEANUP safety control: cleanup reverts the tracked file but leaves untracked files (node_modules et al) alive', () => {
+    const meshId = `mesh_readonly_residue_untracked_${Date.now()}`
+    const repo = tempGitRepo('readonly-residue-untracked')
+    const tracked = path.join(repo, 'README.md')
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: repo }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued readonly investigation task', {
+        taskMode: 'live_debug_readonly',
+        difficulty: 'medium',
+        targetNodeId: 'node_child_1',
+      })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      fs.writeFileSync(tracked, 'regenerated\n')
+      fs.mkdirSync(path.join(repo, 'node_modules'), { recursive: true })
+      fs.writeFileSync(path.join(repo, 'node_modules', 'installed.txt'), 'expensive to reinstall\n')
+      fs.writeFileSync(path.join(repo, 'local-scratch.txt'), 'the user was working on this\n')
+
+      const { components, emit } = createComponents(meshId, {
+        meshNodeFor: meshId,
+        meshNodeId: 'node_child_1',
+      })
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        targetSessionId: 'runtime-session-1',
+        meshNodeId: 'node_child_1',
+        taskId: queued.id,
+        providerType: 'claude-cli',
+        providerSessionId: 'provider-history-readonly-residue-untracked',
+        finalSummary: 'Investigation complete.',
+        workerResult: { status: 'success' },
+        timestamp: Date.now(),
+      })
+
+      // Untracked survivors intact — asserted FIRST and independently of the tracked-revert
+      // assertion below, so this stays a true SAFETY control: if the cleanup hook is removed
+      // entirely these still pass (nothing ran, nothing deleted), and they only fail if the
+      // cleanup actually reached for untracked files. Ordering them after the tracked
+      // assertion would make this test red for the wrong reason (cleanup absent) and destroy
+      // its ability to distinguish "didn't run" from "deleted the user's work".
+      expect(fs.existsSync(path.join(repo, 'node_modules', 'installed.txt'))).toBe(true)
+      expect(fs.readFileSync(path.join(repo, 'local-scratch.txt'), 'utf8')).toBe('the user was working on this\n')
+      // ...and the tracked residue was still reverted alongside them, with the untracked paths
+      // reported as deliberately skipped rather than silently ignored. (Both of these DO depend
+      // on the cleanup hook existing — they are the target-behavior half of this test, kept
+      // after the safety assertions above on purpose.)
+      expect(fs.readFileSync(tracked, 'utf8')).toBe('hello\n')
+      const cleanup = (readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')?.payload as any)
+        ?.completionDiagnostic?.readonlyResidueCleanup
+      expect(cleanup?.skipped).toEqual(
+        expect.arrayContaining([
+          { path: 'local-scratch.txt', reason: 'untracked' },
+          { path: 'node_modules/', reason: 'untracked' },
+        ]),
+      )
+    } finally {
+      cleanupMeshFiles(meshId)
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
   it('FALSE-COMPLETION-GIT-EVIDENCE gap 1 extension control: live_debug_readonly does NOT flag a dirty file that PREDATES this task\'s dispatch (stale leftover, not this task\'s violation)', () => {
     const meshId = `mesh_readonly_stale_dirty_${Date.now()}`
     const repo = tempGitRepo('readonly-stale')
