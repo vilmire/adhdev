@@ -79102,17 +79102,41 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const numeric = Number(value);
       return Number.isFinite(numeric) ? Math.max(min, numeric) : fallback;
     }
-    function pageHistoryRecords(agentType, records, offset = 0, limit = 30, excludeRecentCount = 0, historyBehavior) {
+    function compareHistoryMessagesForPaging(a, b) {
+      const byTime = a.receivedAt - b.receivedAt;
+      if (byTime !== 0) return byTime;
+      const aSeq = a.sequence;
+      const bSeq = b.sequence;
+      if (typeof aSeq === "number" && typeof bSeq === "number" && aSeq !== bSeq) {
+        return aSeq - bSeq;
+      }
+      return 0;
+    }
+    function findCollapsedIndexByIdentity(collapsed, cursor) {
+      if (!cursor) return -1;
+      for (let i = collapsed.length - 1; i >= 0; i -= 1) {
+        if (buildHistoryMessageIdentity(collapsed[i]) === cursor) return i;
+      }
+      return -1;
+    }
+    function buildHistoryMessageIdentity(message) {
+      const record2 = message;
+      if (record2.providerUnitKey) return `unit:${record2.providerUnitKey}`;
+      if (record2.bubbleId) return `bubble:${record2.bubbleId}`;
+      if (typeof record2.sequence === "number" && Number.isFinite(record2.sequence)) {
+        return `seq:${record2.sequence}`;
+      }
+      return "";
+    }
+    function pageHistoryRecords(agentType, records, offset = 0, limit = 30, excludeRecentCount = 0, historyBehavior, excludeFromIdentity) {
       const allMessages = records.map((message) => sanitizeHistoryMessage(agentType, message)).filter(Boolean);
-      allMessages.sort((a, b) => a.receivedAt - b.receivedAt);
+      allMessages.sort(compareHistoryMessagesForPaging);
       const chronological = dedupeAdjacentHistoryMessages(agentType, allMessages);
       const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
       const boundedLimit = normalizePaginationNumber(limit, 30, 1);
       const boundedOffset = normalizePaginationNumber(offset, 0, 0);
-      const boundedExclude = Math.min(
-        normalizePaginationNumber(excludeRecentCount, 0, 0),
-        collapsed.length
-      );
+      const cursorIndex = excludeFromIdentity ? findCollapsedIndexByIdentity(collapsed, excludeFromIdentity) : -1;
+      const boundedExclude = cursorIndex >= 0 ? collapsed.length - cursorIndex : Math.min(normalizePaginationNumber(excludeRecentCount, 0, 0), collapsed.length);
       const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
       const startInclusive = Math.max(0, endExclusive - boundedLimit);
       const sliced = collapsed.slice(startInclusive, endExclusive);
@@ -79297,7 +79321,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       collected.reverse();
       return { records: collected, readAllFiles };
     }
-    function readChatHistory(agentType, offset = 0, limit = 30, historySessionId, excludeRecentCount = 0, historyBehavior) {
+    function readChatHistory(agentType, offset = 0, limit = 30, historySessionId, excludeRecentCount = 0, historyBehavior, excludeFromIdentity) {
       try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, "_");
         const dir = path25.join(getHistoryDir(), sanitized);
@@ -79306,7 +79330,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         const bounded = isBoundedTailRequest(limit, offset, excludeRecentCount);
         if (bounded) {
           const fileSignatures = buildSavedHistoryFileSignatureMap(dir, files);
-          const cacheKey = `${sanitized}\0${historySessionId || ""}\0${offset}\0${limit}\0${excludeRecentCount}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? "1" : "0"}`;
+          const cacheKey = `${sanitized}\0${historySessionId || ""}\0${offset}\0${limit}\0${excludeRecentCount}\0${excludeFromIdentity || ""}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? "1" : "0"}`;
           const signature = buildSavedHistoryCacheSignature(files, fileSignatures);
           const cached5 = readBoundedTailCache(cacheKey, signature);
           if (cached5) return cached5;
@@ -79315,7 +79339,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           const numericExclude = Math.max(0, Number(excludeRecentCount));
           const needed = numericLimit + numericOffset + numericExclude + Math.max(BOUNDED_TAIL_SLACK, numericLimit);
           const { records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, needed);
-          const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior);
+          const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity);
           const boundedResult = readAllFiles ? result : { messages: result.messages, hasMore: true };
           writeBoundedTailCache(cacheKey, signature, boundedResult);
           return boundedResult;
@@ -79339,7 +79363,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
             }
           }
         }
-        return pageHistoryRecords(agentType, allMessages, offset, limit, excludeRecentCount, historyBehavior);
+        return pageHistoryRecords(agentType, allMessages, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity);
       } catch {
         return { messages: [], hasMore: false };
       }
@@ -79607,7 +79631,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           };
         }
         return {
-          ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),
+          ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity),
           source: "provider-native",
           sourcePath: nativeResult.sourcePath,
           sourceMtimeMs: nativeResult.sourceMtimeMs,
@@ -79624,7 +79648,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         };
       }
       return {
-        ...readChatHistory(agentType, options.offset || 0, options.limit || 30, options.historySessionId, options.excludeRecentCount || 0, options.historyBehavior),
+        ...readChatHistory(agentType, options.offset || 0, options.limit || 30, options.historySessionId, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity),
         source: "adhdev-mirror"
       };
     }
@@ -91199,6 +91223,11 @@ ${cleanBody}`;
         receivedAt: message.receivedAt,
         timestamp: message.timestamp,
         turnKey: message._turnKey,
+        // Per-MESSAGE ordinal. This map is an explicit field-by-field narrowing,
+        // so widening the downstream encoder's allow-list alone is NOT enough —
+        // the field has to survive here first or the encoder only ever sees
+        // undefined.
+        sequence: message.sequence,
         bubbleState: message.bubbleState,
         senderName: message.senderName,
         toolName: void 0,
@@ -91480,6 +91509,9 @@ ${cleanBody}`;
         receivedAt: numberField(candidate.receivedAt),
         timestamp: numberField(candidate.timestamp),
         turnKey: stringField(candidate.turnKey) ?? stringField(candidate._turnKey),
+        // Absent/non-numeric → null (UNKNOWN), never 0. See the field's doc on
+        // `ReplicatedTranscriptMessageV1`.
+        sequence: numberField(candidate.sequence),
         bubbleState: bubbleStateField(candidate.bubbleState),
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
@@ -92130,9 +92162,9 @@ ${cleanBody}`;
       if (message.senderName !== null) mapped.senderName = message.senderName;
       if (message.toolName !== null) mapped.toolName = message.toolName;
       if (message.turnKey !== null) {
-        mapped.bubbleId = message.turnKey;
         mapped._turnKey = message.turnKey;
       }
+      if (typeof message.sequence === "number") mapped.sequence = message.sequence;
       if (message.streaming !== null) mapped.meta = { streaming: message.streaming };
       return mapped;
     }
@@ -144944,6 +144976,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         offset: args.offset,
         limit: args.limit,
         excludeRecentCount: args.excludeRecentCount,
+        excludeFromIdentity: args.excludeFromIdentity,
         historyBehavior: args.historyBehavior,
         scripts: args.scripts,
         excludeInProgressTurn: args.excludeInProgressTurn,
@@ -145046,6 +145079,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const visibleCount = getCliVisibleTranscriptCount(adapter);
           if (visibleCount > excludeRecentCount) excludeRecentCount = visibleCount;
         }
+        const excludeFromIdentity = typeof args?.excludeFromIdentity === "string" && args.excludeFromIdentity ? args.excludeFromIdentity : void 0;
         const workspace = typeof args?.workspace === "string" ? args.workspace : typeof h.currentSession?.workspace === "string" ? h.currentSession.workspace : void 0;
         const {
           isRuntimeFallback: historySessionIdIsRuntimeFallback,
@@ -145062,6 +145096,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           offset: offset || 0,
           limit: limit || 30,
           excludeRecentCount,
+          excludeFromIdentity,
           historyBehavior: provider?.historyBehavior,
           scripts: provider?.scripts,
           sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
@@ -145076,6 +145111,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           offset: offset || 0,
           limit: limit || 30,
           excludeRecentCount,
+          excludeFromIdentity,
           historyBehavior: provider?.historyBehavior,
           scripts: provider?.scripts
         });
