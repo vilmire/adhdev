@@ -1223,6 +1223,32 @@ function normalizePaginationNumber(value: number, fallback: number, min: number)
 }
 
 /**
+ * Total order for paging.
+ *
+ * Sorting on `receivedAt` alone is NOT a total order: a Claude JSONL line fans
+ * out to several records that all inherit that line's single timestamp, and the
+ * ADHDev mirror stamps whole bursts with one `receivedAt`. `Array.prototype.sort`
+ * is stable, so ties previously resolved to *file read order* — which means the
+ * page boundary, and therefore which messages a page contains, could differ
+ * between two reads of identical data. That is a silent-hole source independent
+ * of the collapse arithmetic.
+ *
+ * `sequence` (monotonic per session/source, A2.3) breaks the tie when both sides
+ * carry it. When either lacks it we return 0 and let the stable sort preserve
+ * the incoming relative order — the previous behavior, no worse.
+ */
+function compareHistoryMessagesForPaging(a: HistoryMessage, b: HistoryMessage): number {
+    const byTime = a.receivedAt - b.receivedAt;
+    if (byTime !== 0) return byTime;
+    const aSeq = (a as HistoryMessage & { sequence?: number }).sequence;
+    const bSeq = (b as HistoryMessage & { sequence?: number }).sequence;
+    if (typeof aSeq === 'number' && typeof bSeq === 'number' && aSeq !== bSeq) {
+        return aSeq - bSeq;
+    }
+    return 0;
+}
+
+/**
  * (SEAM) Identity of the oldest message currently rendered in the live window.
  *
  * ── Why a cursor and not a count ───────────────────────────────────────────
@@ -1296,7 +1322,7 @@ function pageHistoryRecords(
     const allMessages = records
         .map((message) => sanitizeHistoryMessage(agentType, message))
         .filter(Boolean) as HistoryMessage[];
-    allMessages.sort((a, b) => a.receivedAt - b.receivedAt);
+    allMessages.sort(compareHistoryMessagesForPaging);
     const chronological = dedupeAdjacentHistoryMessages(agentType, allMessages);
     const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
     const boundedLimit = normalizePaginationNumber(limit, 30, 1);
