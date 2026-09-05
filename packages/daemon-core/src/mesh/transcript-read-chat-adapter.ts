@@ -62,9 +62,15 @@ import type {
 /**
  * One roster-mapped message, in the `ChatMessage`-ish shape the mcp-server
  * compactor reads (`isCoordinatorVisibleMessage`/`messageContent`, chat-
- * compact.ts). `turnKey` is the wire's only stable-identity field (§2.4), so
- * it stands in for the richer `bubbleId`/`providerUnitKey`/`id` a live
- * `read_chat` message carries.
+ * compact.ts).
+ *
+ * ★ `turnKey` is carried onto `_turnKey` ONLY — it must NOT stand in for
+ * `bubbleId`. `turnKey` is TURN-grained (one value per user message, shared by
+ * every bubble of that turn), while `bubbleId` is per-BUBBLE. Conflating them
+ * made all N bubbles of a turn share one identity. The wire also carries
+ * `sequence` (a monotonic per-session integer), which IS per-message and is
+ * mapped through as-is; `providerUnitKey` deliberately stays off the wire
+ * because it embeds a content hash (server content boundary).
  *
  * ★ `meta.streaming` is reconstructed from the allow-listed `streaming` scalar
  * ONLY when it is non-null. Never synthesize a `meta` object otherwise:
@@ -84,9 +90,12 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Record<st
     if (message.senderName !== null) mapped.senderName = message.senderName;
     if (message.toolName !== null) mapped.toolName = message.toolName;
     if (message.turnKey !== null) {
-        mapped.bubbleId = message.turnKey;
+        // `_turnKey` ONLY — never `bubbleId`. See this file's header: `turnKey`
+        // is turn-grained, so using it as per-bubble identity makes every bubble
+        // of one turn indistinguishable.
         mapped._turnKey = message.turnKey;
     }
+    if (typeof message.sequence === 'number') mapped.sequence = message.sequence;
     if (message.streaming !== null) mapped.meta = { streaming: message.streaming };
     return mapped;
 }
