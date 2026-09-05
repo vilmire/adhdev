@@ -71,20 +71,42 @@ describe('daemon-lifecycle getSeqscribeStats — transcript counter wiring (§8 
         // Computed-but-discarded is the exact bug being guarded against, so
         // assert the values land in the CALL, not merely in the closure.
         expect(tail).toMatch(/transcript:\s*\{/);
-        expect(tail).toMatch(/transcriptParity:\s*\{/);
         expect(tail).toMatch(/published:\s*transcriptCounters\.published/);
-        expect(tail).toMatch(/runs:\s*transcriptParity\.runs/);
+        // ★ The parity counters must arrive WHOLE — shorthand `transcriptParity,`
+        // rather than a re-keyed subset. See the dedicated test below for why a
+        // subset is a defect and not a style choice.
+        expect(tail).toMatch(/(?<![.\w])transcriptParity,/);
     });
 
-    it('passes persistentMismatches on THIS (local) call site', () => {
-        // Asymmetry with the cloud call site is deliberate and mirrors the
-        // mesh-axis `parity` block: `get_status_metadata` is a local operator
-        // read and is the only surface that can serve the Phase 4 promotion
-        // gate's `persistent mismatch 0` condition. The reporter's allow-list
-        // drops it before anything leaves the machine.
+    it('★passes the WHOLE parity counter object, never a narrowed subset', () => {
+        // §5.6's remaining promotion condition is `persistent mismatch 0`, and
+        // the old three-field slice `{runs, mismatches, persistentMismatches}`
+        // could not DECIDE it. `missing_complete_revision` is promoted to
+        // persistent only when the same session key is compared a SECOND time,
+        // and the sole non-test caller of `compareTranscriptRevision` is the
+        // per-append self-check in `transcript-publish-runtime.ts`. So `runs: 2`
+        // spread over two different sessions leaves `persistentMismatches: 0`
+        // meaning "the recurrence rule never fired" — indistinguishable, on the
+        // wire, from "checked repeatedly and clean". `sessionsRepeated` and
+        // `pendingMissingRevisits` are what separate those two, `compared` plus
+        // the six-class split says which axis is dirty, and `since` dates the
+        // zero so a fresh restart is not misread as parity.
+        //
+        // Every one of those fields is dropped again by the narrowing, so the
+        // narrowing itself is the defect this test pins. `summarizeSeqscribeStats`
+        // gates them behind `includeLocalDiagnostics` (this call site sets it;
+        // the cloud one does not), and `buildCloudSeqscribeSummary` is a fixed-key
+        // allow-list that never names `transcriptParityDetail` — so passing the
+        // whole object here widens no server-facing surface. The companion
+        // assertion lives in `test/status/cloud-status-content-boundary.test.ts`.
         const body = extractGetSeqscribeStatsBody(lifecycleSrc);
-        const tail = body.slice(body.indexOf('transcriptParity:'));
-        expect(tail).toMatch(/persistentMismatches:\s*transcriptParity\.persistentMismatches/);
+        const callTail = body.slice(body.indexOf('summarizeSeqscribeStats('));
+        const narrowed = /transcriptParity:\s*\{/.test(callTail);
+        expect(narrowed).toBe(false);
+        expect(callTail).toMatch(/(?<![.\w])transcriptParity,/);
+        // And the local-diagnostics opt-in must be ON here, or the detail block
+        // is computed and then dropped by summarizeSeqscribeStats.
+        expect(callTail).toMatch(/includeLocalDiagnostics:\s*true/);
     });
 
     it('keys transcript.active off the SERVICE, not the mode', () => {

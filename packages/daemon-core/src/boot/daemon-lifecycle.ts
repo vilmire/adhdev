@@ -838,11 +838,24 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                     // reporter.ts / daemon-status.ts — passed here so
                     // `get_status_metadata` can serve the Phase 4 promotion
                     // gate, and dropped before the status frame leaves.
-                    transcriptParity: {
-                        runs: transcriptParity.runs,
-                        mismatches: transcriptParity.mismatches,
-                        persistentMismatches: transcriptParity.persistentMismatches,
-                    },
+                    //
+                    // ★ The WHOLE counter object, not a three-field slice. §5.6's
+                    // remaining condition is `persistent mismatch 0`, and the
+                    // slice could not decide it: `missing_complete_revision` is
+                    // promoted to persistent only on a session key's SECOND
+                    // comparison, and the sole non-test caller is the per-append
+                    // self-check in transcript-publish-runtime.ts. So `runs=2`
+                    // over two different sessions leaves `persistentMismatches=0`
+                    // meaning "never evaluated", indistinguishable from "clean".
+                    // `sessionsRepeated`/`pendingMissingRevisits` remove that
+                    // ambiguity and `since` dates the zero across restarts.
+                    //
+                    // Only the three bucketed fields survive the projection into
+                    // the cloud frame; the rest land on `transcriptParityDetail`,
+                    // which summarizeSeqscribeStats gates behind
+                    // `includeLocalDiagnostics` and buildCloudSeqscribeSummary
+                    // (a fixed-key allow-list) never lists.
+                    transcriptParity,
                 });
             } catch (error) {
                 LOG.warn(

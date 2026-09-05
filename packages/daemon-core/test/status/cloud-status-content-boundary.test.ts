@@ -442,6 +442,19 @@ describe('cloud status seqscribe boundary', () => {
                 fromLedger: 9,
                 fallbacks: { consumer_lag: 7, parity_mismatch: 2 },
             },
+            // §5.6 gate instrumentation: the RAW, undecimated transcript parity
+            // counters `get_status_metadata` serves so an observer can tell a
+            // clean `persistentMismatches: 0` from an UNDECIDED one. Local-only
+            // for the dedup reason (raw monotonic counters) — the bucketed
+            // `transcriptParity*Bucket` fields remain the cloud-facing surface.
+            transcriptParityDetail: {
+                runs: 9, compared: 9, mismatches: 3, persistentMismatches: 1,
+                missingCompleteRevision: 2, fieldMismatch: 1, extraMessage: 0,
+                wrongSession: 0, wrongOwner: 0, digestMismatch: 0,
+                sessionsObserved: 4, sessionsRepeated: 3,
+                pendingMissingRevisits: 2, pendingMissingOpen: 1,
+                since: 1_700_000_000_000, uptimeMs: 3_600_000,
+            },
         } as any);
 
         expect(payload.seqscribe).toEqual(healthy);
@@ -451,6 +464,7 @@ describe('cloud status seqscribe boundary', () => {
             'throughput',
             'syncHotspots',
             'readRouting',
+            'transcriptParityDetail',
         ]) {
             expect(payload.seqscribe).not.toHaveProperty(local);
         }
@@ -460,6 +474,12 @@ describe('cloud status seqscribe boundary', () => {
         expect(wire).not.toContain('sess-1');
         expect(wire).not.toContain('mesh_abc');
         expect(wire).not.toContain('peer-a');
+        // The raw parity detail must not survive under ANY key a future
+        // refactor might rename it to: `since` is a wall-clock ms stamp, unique
+        // enough that finding it anywhere in the frame means the block leaked.
+        expect(wire).not.toContain('1700000000000');
+        expect(wire).not.toContain('sessionsRepeated');
+        expect(wire).not.toContain('pendingMissingRevisits');
     });
 });
 
