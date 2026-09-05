@@ -91677,7 +91677,8 @@ ${cleanBody}`;
         oversized: 0,
         dropped: 0,
         collectorUnavailable: 0,
-        sourcePending: 0
+        sourcePending: 0,
+        ptyDirtyCoalesced: 0
       };
     }
     function redactSessionId(id) {
@@ -91697,6 +91698,9 @@ ${cleanBody}`;
     function markTranscriptSessionDirty(sessionId) {
       activeService?.markDirty(sessionId);
     }
+    function markTranscriptPtyOutputActivity(sessionId) {
+      activeService?.markPtyOutputActivity(sessionId);
+    }
     function startTranscriptStatPolling(sessionId) {
       activeService?.startPolling(sessionId);
     }
@@ -91706,6 +91710,7 @@ ${cleanBody}`;
     var fs19;
     var import_node_crypto3;
     var MAX_TRACKED_SESSIONS;
+    var TRANSCRIPT_PTY_DIRTY_THROTTLE_MS;
     var TRANSCRIPT_STAT_POLL_INTERVAL_MS;
     var TranscriptProjectionService;
     var activeService;
@@ -91720,6 +91725,7 @@ ${cleanBody}`;
         init_transcript_observation();
         init_transcript_mode();
         MAX_TRACKED_SESSIONS = 512;
+        TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
         TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3e3;
         TranscriptProjectionService = class {
           deps;
@@ -91732,6 +91738,9 @@ ${cleanBody}`;
           inFlight = /* @__PURE__ */ new Set();
           pendingObservation = /* @__PURE__ */ new Map();
           pendingPull = /* @__PURE__ */ new Set();
+          /** PTY-only leading+trailing throttle state; direct dirty triggers bypass it. */
+          ptyDirtyTimers = /* @__PURE__ */ new Map();
+          ptyDirtyTrailing = /* @__PURE__ */ new Set();
           pollingSessions = /* @__PURE__ */ new Set();
           knownPaths = /* @__PURE__ */ new Map();
           lastSignatures = /* @__PURE__ */ new Map();
@@ -91772,6 +91781,42 @@ ${cleanBody}`;
             }
             if (!this.admitSession(sessionId)) return;
             void this.runPull(sessionId);
+          }
+          /**
+           * PTY-output trigger. Pull the leading edge immediately, then collapse all
+           * repaint chunks in the window into one trailing pull. The trailing pull is
+           * mandatory even for a single byte because providers may append their JSONL
+           * record just after writing the corresponding terminal output — without it
+           * the last chunk of a burst is silently never observed.
+           */
+          markPtyOutputActivity(sessionId) {
+            if (!sessionId) return;
+            if (this.mode() === "off") return;
+            if (!this.deps.collectObservation) {
+              this.counters.collectorUnavailable++;
+              return;
+            }
+            if (this.ptyDirtyTimers.has(sessionId)) {
+              this.ptyDirtyTrailing.add(sessionId);
+              this.counters.ptyDirtyCoalesced++;
+              return;
+            }
+            this.markDirty(sessionId);
+            this.ptyDirtyTrailing.add(sessionId);
+            this.armPtyDirtyTimer(sessionId);
+          }
+          armPtyDirtyTimer(sessionId) {
+            const timer = setTimeout(() => {
+              if (!this.ptyDirtyTrailing.delete(sessionId)) {
+                this.ptyDirtyTimers.delete(sessionId);
+                return;
+              }
+              this.ptyDirtyTimers.delete(sessionId);
+              this.armPtyDirtyTimer(sessionId);
+              this.markDirty(sessionId);
+            }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+            timer.unref?.();
+            this.ptyDirtyTimers.set(sessionId, timer);
           }
           startPolling(sessionId) {
             if (!sessionId) return;
@@ -91935,6 +91980,9 @@ ${cleanBody}`;
             this.pollingSessions.clear();
             this.knownPaths.clear();
             this.lastSignatures.clear();
+            for (const timer of this.ptyDirtyTimers.values()) clearTimeout(timer);
+            this.ptyDirtyTimers.clear();
+            this.ptyDirtyTrailing.clear();
           }
         };
         activeService = null;
@@ -149742,7 +149790,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       markChatOutputActivity(sessionId) {
         const cfg = this.opts.chatTail;
         if (!sessionId || !(cfg?.isCliSession?.(sessionId) ?? false)) return;
-        markTranscriptSessionDirty(sessionId);
+        markTranscriptPtyOutputActivity(sessionId);
         this.chatOutputActiveAt.set(sessionId, this.now());
         if (this.chatOutputFlushTimer) return;
         if (cfg?.scheduleGate && !cfg.scheduleGate()) return;

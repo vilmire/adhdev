@@ -7,6 +7,7 @@ import {
     __resetParsedJsonlCacheForTests,
 } from '../../src/providers/spec/native-history-executor.js';
 import {
+    TRANSCRIPT_PTY_DIRTY_THROTTLE_MS,
     TRANSCRIPT_STAT_POLL_INTERVAL_MS,
     __resetTranscriptProjectionForTests,
     configureTranscriptProjection,
@@ -85,16 +86,26 @@ describe('Transcript stat polling instead of PTY', () => {
         await flushProjection();
         expect(collectorCalls).toBe(0);
 
-        // 6. PTY output now drives the dirty trigger directly (§8 unit 9 retired
-        // the legacy chat_tail push that used to carry the fast path), so each
-        // output event pulls. Polling below is the safety net, not the latency
-        // path — see topic-registry-transcript-pty-dirty-trigger.test.ts.
+        // 6. PTY output drives the dirty trigger (§8 unit 9 retired the legacy
+        // chat_tail push that used to carry the fast path), but THROTTLED: a
+        // burst inside one window collapses to the leading pull plus one
+        // trailing pull. Not 20 — a raw pull per chunk re-encodes the whole
+        // snapshot each time. See topic-registry-transcript-pty-dirty-trigger.ts.
         const outputEvents = 20;
         for (let i = 0; i < outputEvents; i += 1) {
             topicRegistry.markChatOutputActivity(sessionId);
             await flushProjection();
         }
-        expect(collectorCalls).toBe(outputEvents);
+        expect(collectorCalls).toBe(1); // leading edge only, window still open
+
+        vi.advanceTimersByTime(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+        await flushProjection();
+        expect(collectorCalls).toBe(2); // + the mandatory trailing pull
+
+        // Window drains: no further pulls without new output.
+        vi.advanceTimersByTime(TRANSCRIPT_PTY_DIRTY_THROTTLE_MS * 3);
+        await flushProjection();
+        expect(collectorCalls).toBe(2);
         collectorCalls = 0;
 
         // ★ observe나 markDirty 가 한 번도 안 불려도, 폴링 루프가 lazy resolve 로 경로를 찾는다.
