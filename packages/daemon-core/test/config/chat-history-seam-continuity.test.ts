@@ -194,6 +194,42 @@ describe('chat history seam continuity (live window + paged history)', () => {
         })
     }
 
+    /**
+     * `receivedAt` alone is NOT a total order — a Claude JSONL line fans out to
+     * several records sharing that line's single timestamp. With a stable sort
+     * the tie previously resolved to file read order, so the page boundary (and
+     * therefore a page's contents) could differ between two reads of identical
+     * data. `sequence` breaks the tie deterministically.
+     */
+    it('orders same-timestamp records deterministically by sequence', async () => {
+        const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+        const at = 1_800_000_000_000
+        // All four share ONE receivedAt, and are supplied in REVERSE sequence
+        // order — the shape a fan-out produces when files are read newest-first.
+        const records = [3, 2, 1, 0].map(seq => ({
+            role: seq % 2 === 0 ? 'user' : 'assistant',
+            kind: 'standard',
+            content: `fanout-${seq}`,
+            receivedAt: at,
+            ts: new Date(at).toISOString(),
+            providerUnitKey: `v3:unit-${seq}`,
+            sequence: seq,
+        }))
+
+        const read = readProviderChatHistory('opaque-cli', {
+            canonicalHistory: CANONICAL_HISTORY,
+            scripts: makeScripts(records) as never,
+            historySessionId: 'sess',
+            workspace: '/w',
+            offset: 0,
+            limit: 20,
+        } as never)
+
+        expect(read.messages.map(m => m.content)).toEqual([
+            'fanout-0', 'fanout-1', 'fanout-2', 'fanout-3',
+        ])
+    })
+
     it('falls back to the count path when the cursor cannot be resolved', async () => {
         const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
         const records = buildNativeRecords(6)
