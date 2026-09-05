@@ -266,6 +266,21 @@ export interface SeqscribeStatusSummary {
      * (status/reporter.ts) is a fixed-key allow-list that does not list this key;
      * `test/status/cloud-status-content-boundary.test.ts` asserts it stays out.
      * The shape carries integers only — no session key, redacted or otherwise.
+     *
+     * ★ WHICH CALL SITES EMIT IT. Two production callers pass the parity
+     * counters, and only one can produce this field:
+     *   - daemon-core's `getSeqscribeStats` closure (boot/daemon-lifecycle.ts),
+     *     serving `get_status_metadata` — opts into the local diagnostics, so
+     *     the detail appears. This is the surface the §5.6 gate is read from.
+     *   - daemon-cloud's status-report supplier (adhdev-daemon.ts), building the
+     *     SERVER frame — does not opt in, so the detail is absent BY
+     *     CONSTRUCTION rather than by omission at the call site.
+     * Do not "fix" the cloud caller to pass it. These are raw monotonic
+     * counters: on the deduped status frame every heartbeat would hash
+     * differently and an idle daemon would transmit forever. That call site is
+     * additionally pinned by `tests/seqscribe-convergence.test.mjs` (G2), which
+     * greps its source text to keep the local-diagnostics opt-in out of the
+     * server-frame assembly one layer earlier than the allow-list would.
      */
     transcriptParityDetail?: {
         runs: number;
