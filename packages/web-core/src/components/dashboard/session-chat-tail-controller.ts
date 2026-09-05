@@ -164,6 +164,31 @@ const CHAT_TAIL_SUBSCRIBE_RETRY_MS = 1_000
  */
 const AUTHORITATIVE_TAIL_REFRESH_DEBOUNCE_MS = 750
 /**
+ * (LIVENESS) How often the watchdog ASKS the controller whether a refresh is
+ * warranted. This is only the tick rate of a boolean check — it is NOT the
+ * request rate. Every tick runs `shouldRefreshForLiveness()`, which almost
+ * always answers false; the actual read_chat spacing is governed by the two
+ * quiet-period constants below.
+ */
+const CHAT_TAIL_LIVENESS_TICK_MS = 5_000
+/**
+ * (LIVENESS) Quiet period after which a BUSY session (generating / streaming /
+ * working …) is considered to have stalled and is re-pulled.
+ *
+ * A generating session normally pushes updates continuously, so 20s of total
+ * silence while still claiming to generate means the push lane dropped
+ * something. Short, because this is exactly the window in which the user is
+ * staring at the pane waiting for the answer.
+ */
+const CHAT_TAIL_LIVENESS_BUSY_QUIET_MS = 20_000
+/**
+ * (LIVENESS) Quiet period for an IDLE session. Long, because an idle pane that
+ * receives nothing is usually CORRECT — nothing is happening. This exists only
+ * to bound the "we missed the final push and the session settled" case, where
+ * no further event will ever arrive to correct us.
+ */
+const CHAT_TAIL_LIVENESS_IDLE_QUIET_MS = 120_000
+/**
  * Upper bound on retained history messages from "Load older" paging.
  *
  * Each "Load older" page prepends into `historyMessages` with no prior cap, so a
@@ -637,6 +662,32 @@ export class SessionChatTailController {
    */
   private lastActiveStatusAt = 0
   /**
+   * (LIVENESS) Wall-clock of the last moment this controller observed ANY
+   * inbound activity for the session — an applied update, or a completed
+   * authoritative re-pull. It is the watchdog's staleness clock.
+   *
+   * ★ Stamped on APPLY, not on arrival: an update that `handleUpdate` rejects
+   * (shrink-defense, unchanged signature) has told us the lane is alive, so it
+   * would be wrong to treat the pane as stale — but see `lastInboundAt`, which
+   * is the field that actually carries that "lane is alive" meaning. This one
+   * answers "when did the rendered content last change".
+   */
+  private lastAppliedAt = 0
+  /**
+   * (LIVENESS) Wall-clock of the last inbound update of any kind, applied or
+   * not. The watchdog measures quiet against THIS, not `lastAppliedAt`: a
+   * session that is pushing updates we correctly discard as no-ops is a
+   * HEALTHY session, and re-pulling it would be pure waste. Only total silence
+   * is evidence that the push lane has dropped.
+   */
+  private lastInboundAt = 0
+  /**
+   * (LIVENESS) Last status this controller saw on the wire. Selects which quiet
+   * threshold applies — busy sessions get the short one, idle sessions the long
+   * one. Starts undefined ("nothing seen yet"), which is treated as idle.
+   */
+  private lastKnownStatus: unknown = undefined
+  /**
    * (§8 unit 9) True once THIS session has applied a verified replica snapshot
    * and has not fallen back since. It is the sole gate on the legacy
    * `session.chat_tail` subscription — see `shouldRunLegacySubscription`.
@@ -1011,6 +1062,62 @@ export class SessionChatTailController {
    * Debounced/guarded to ONE request per burst (mount+reconnect+focus can fire
    * together) and coalesced with any in-flight refresh — never a per-render loop.
    */
+  /**
+   * (LIVENESS) Should the watchdog spend a `read_chat` right now?
+   *
+   * ── The defect this closes ────────────────────────────────────────────────
+   * Every existing `refreshAuthoritativeTail` trigger is an EDGE: mount,
+   * Dockview hidden→visible, `visibilitychange`→visible, P2P reconnect. A pane
+   * that stays continuously visible therefore has no recovery path at all — if
+   * it misses one push it renders a stale tail INDEFINITELY, which is exactly
+   * the reported "messages never update unless I switch tabs or send". The
+   * user's own workaround (bounce to another view and back) is just them
+   * manufacturing the `refreshEnabled` false→true edge by hand.
+   *
+   * ── Why this is not simply a poll ─────────────────────────────────────────
+   * Polling every visible pane on a fixed short interval would multiply
+   * read_chat traffic by (open panes × session lifetime) for a defect that
+   * fires rarely. So the answer is false in every healthy case, and the checks
+   * are ordered cheapest-first:
+   *
+   *   1. Nothing has EVER arrived → the mount pull owns this, not us. A
+   *      session that has produced no inbound update has no "stopped
+   *      updating" to detect, and firing here would race the mount pull.
+   *   2. A re-pull is already in flight → single-flight; never stack requests.
+   *   3. The replica lane is healthy → the transcript replica is the
+   *      authority for this session and pushes its own revisions. A watchdog
+   *      read_chat here is the last-writer-wins hazard called out in review:
+   *      a legacy tail landing after a newer replica revision would overwrite
+   *      current content with older content. Refuse outright.
+   *   4. Quiet period not yet elapsed, measured against `lastInboundAt` and
+   *      scaled by status — short while busy (a generating session that has
+   *      gone silent is anomalous), long while idle (silence is the normal
+   *      and correct state).
+   */
+  shouldRefreshForLiveness(): boolean {
+    if (this.lastInboundAt === 0) return false
+    if (this.authoritativeRefreshPromise) return false
+    // ★ Replica is authoritative and self-pushing — a legacy read_chat here
+    // could regress the pane to older content (last-writer-wins).
+    if (this.replicaHealthy) return false
+    const quietMs = this.now() - this.lastInboundAt
+    const threshold = isBusyChatTailStatus(this.lastKnownStatus)
+      ? CHAT_TAIL_LIVENESS_BUSY_QUIET_MS
+      : CHAT_TAIL_LIVENESS_IDLE_QUIET_MS
+    return quietMs >= threshold
+  }
+
+  /**
+   * (LIVENESS) Test/diagnostic view of the watchdog clocks. Read-only.
+   */
+  getLivenessStateForTest(): { lastInboundAt: number; lastAppliedAt: number; lastKnownStatus: unknown } {
+    return {
+      lastInboundAt: this.lastInboundAt,
+      lastAppliedAt: this.lastAppliedAt,
+      lastKnownStatus: this.lastKnownStatus,
+    }
+  }
+
   refreshAuthoritativeTail(
     fetcher: () => Promise<SessionChatTailUpdate | null>,
     options: { force?: boolean } = {},
@@ -1029,9 +1136,19 @@ export class SessionChatTailController {
       try {
         const update = await fetcher()
         if (update) this.handleUpdate(update)
+        // (LIVENESS) A completed re-pull resets the quiet clock even when the
+        // response carried nothing new. Without this, a session whose lane is
+        // genuinely dead would satisfy the quiet threshold on EVERY subsequent
+        // tick and the watchdog would degenerate into a fixed-interval poll —
+        // the RPC storm this design exists to avoid. `handleUpdate` already
+        // stamped it when an update did arrive; this covers the empty case.
+        this.lastInboundAt = this.now()
       } catch {
         // Best-effort self-heal — a failed re-pull just leaves the existing
         // snapshot untouched; the next focus/reconnect retries.
+        // (LIVENESS) Reset the quiet clock on failure too. An offline or erroring
+        // daemon must back off to one attempt per quiet period, not one per tick.
+        this.lastInboundAt = this.now()
       }
     })().finally(() => {
       this.authoritativeRefreshPromise = null
@@ -1163,6 +1280,11 @@ export class SessionChatTailController {
     // still subjected to the shrink-defense, so the stale short tail emitted at the
     // instant generating ends cannot overwrite the hydrated bubbles.
     const updateTime = this.now()
+    // (LIVENESS) The lane is demonstrably alive: stamp inbound BEFORE any
+    // apply/discard decision, so a stream of correctly-discarded no-op updates
+    // still counts as health and never triggers a watchdog re-pull.
+    this.lastInboundAt = updateTime
+    this.lastKnownStatus = update.status
     const withinRecentActiveWindow = this.lastActiveStatusAt > 0
       && (updateTime - this.lastActiveStatusAt) <= DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS
     if (shouldGuardTailShrinkForStatus(update.status) || isBusyChatTailStatus(update.status)) {
@@ -1198,6 +1320,7 @@ export class SessionChatTailController {
         === lastSubstantiveAssistantIdentity(nextMessages)
       && this.snapshot.cursor.tailLimit === nextCursor.tailLimit
     if (unchanged) return
+    this.lastAppliedAt = updateTime
     this.snapshot = {
       ...this.snapshot,
       liveMessages: nextMessages,
@@ -1655,11 +1778,24 @@ export function useSessionChatTailController(
       lastConnected = connectedNow
     }, 2_000)
 
+    // (LIVENESS) Watchdog for the continuously-visible pane. Every existing
+    // trigger above is an edge — mount, hidden→visible, focus, reconnect — so a
+    // pane that never changes visibility has no recovery path and stays stale
+    // forever once it misses a push. This tick is only a boolean check; the
+    // controller decides (single-flight, replica-safe, status-scaled quiet
+    // period) and answers false in every healthy case, so it costs no RPC
+    // unless the lane has actually gone silent.
+    const livenessTimer = setInterval(() => {
+      if (!controller.shouldRefreshForLiveness()) return
+      void refreshAuthoritativeTail()
+    }, CHAT_TAIL_LIVENESS_TICK_MS)
+
     return () => {
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisible)
       }
       clearInterval(reconnectTimer)
+      clearInterval(livenessTimer)
     }
     // refreshAuthoritativeTail is stable across renders for a given session
     // identity; excluded to keep this a mount/session-scoped effect rather than
