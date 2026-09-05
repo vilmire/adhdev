@@ -30,6 +30,10 @@
  * surfaces as `omittedBefore` — ChatPane's "이전 내용 생략" banner. So a reset
  * here only sets a flag; it never clears `latest`.
  *
+ * That flag is NOT the raw `reset` bit, though: seqscribe SNAP-resets a fresh
+ * subscription too, so the banner has to be qualified by whether the ring tail
+ * still contains the owning writer's seq 1 — see `ringCoversWriterStart`.
+ *
  * A SNAP also carries the whole ring tail oldest-first, so it must resolve to a
  * SINGLE atomic swap to the newest verifiable revision — see the long note in
  * `ingest` below for why replaying each one is a user-visible regression.
@@ -44,10 +48,13 @@ import type { TranscriptWorkerNode } from './transcript-worker-node.js';
 export interface TranscriptSessionUpdate {
     readonly snapshot: ReplicatedTranscriptSnapshotV1;
     /**
-     * A SNAP reset has occurred since the previous delivered revision, so rows
-     * before this one may never have been seen — design §3.7's "이전 내용 생략".
-     * Sticky until the next clean (non-reset) revision, because the gap does not
-     * heal just because a later revision happens to arrive without a reset flag.
+     * Rows before this one may never have been seen — design §3.7's
+     * "이전 내용 생략". Raised when a SNAP reset arrives whose ring tail no
+     * longer holds the owning writer's first row (evicted history, or a
+     * producer restart that dropped the in-memory ring); a reset on a ring
+     * that still reaches seq 1 is just this subscription starting, and does
+     * NOT raise it. Sticky until the next clean revision, because the gap does
+     * not heal just because a later revision arrives without a reset flag.
      */
     readonly omittedBefore: boolean;
 }
@@ -110,6 +117,29 @@ function toRevisionRow(row: Row): TranscriptRevisionRow | null {
 }
 
 /**
+ * Does this SNAP's ring tail still hold the owning writer's FIRST row?
+ *
+ * Writer seq is per-(topic, writer) and starts at 1 (`vendor/seqscribe/src/
+ * log.ts:706,723`), and a session's transcript is a topic of its own, so
+ * "the owner's lowest seq here is 1" means the ring never evicted anything
+ * this writer wrote — there is no earlier content the viewer is missing.
+ *
+ * Scoped to `ownerWriterId` because the ring is topic-wide: a foreign writer's
+ * rows are rejected downstream by the codec's owner gate anyway, and letting
+ * one of them supply seq 1 would fake coverage the owner does not have. When
+ * the owner id is unknown (it is optional — the browser may not know it before
+ * the first `begin`), coverage cannot be established, so this returns false and
+ * the caller keeps the banner: unknown resolves toward warning, not silence.
+ */
+function ringCoversWriterStart(rows: readonly Row[], ownerWriterId: string | undefined): boolean {
+    if (ownerWriterId === undefined) return false;
+    for (const row of rows) {
+        if (row.writer === ownerWriterId && row.seq === 1) return true;
+    }
+    return false;
+}
+
+/**
  * Define the session's transcript topic, subscribe to its ring tail through the
  * already-attached daemon peer, and reassemble verified snapshots.
  *
@@ -138,7 +168,35 @@ export function subscribeSessionTranscript(
         // Sticky: a reset marks the NEXT delivered revision as discontinuous.
         // Cleared only when that revision is actually delivered below, so a
         // reset followed by rows that never complete keeps the flag armed.
-        if (reset) pendingOmittedBefore = true;
+        //
+        // ── But a reset alone does NOT mean rows were lost ─────────────────
+        // seqscribe SNAP-resets a FRESH subscription too: `handleSub` falls
+        // through to `sendSnap(..., true)` for "fresh or beyond retention or
+        // epoch mismatch" alike (`vendor/seqscribe/src/subs.ts:178-180`), so
+        // `reset === true` conflates "you missed rows" with "you just got
+        // here". Treating the flag as authoritative therefore raised the
+        // "이전 내용 생략" banner on EVERY first subscription, including
+        // sessions whose entire history was sitting in the ring.
+        //
+        // The ring itself distinguishes the two. Writer seq is per-(topic,
+        // writer) and starts at 1 (`log.ts:706,723` — `head.contigSeq + 1`
+        // over a stream keyed by topic+writer), and one session's transcript
+        // is one topic. So the owner's LOWEST seq in the tail being 1 proves
+        // the ring still holds that writer's very first row, i.e. nothing
+        // ahead of the delivered revision was evicted.
+        //
+        // Only the positive direction is sound. seq > 1 is NOT proof of
+        // eviction: `rings` is in-memory only (`log.ts:131`, populated solely
+        // by `persist()` at :889 with no disk restore) while `contigSeq`
+        // persists in `sq_writers`, so a producer restart yields an empty
+        // ring whose next rows start well above 1. That is still a real
+        // discontinuity for the viewer, so banner-on-uncertainty remains the
+        // safe default — do not invert this into "seq > 1 ⇒ evicted".
+        //
+        // `||=`, never `=`: an armed flag must survive a later reset that
+        // happens to arrive with a complete ring, because the gap the earlier
+        // reset opened does not heal.
+        if (reset && !ringCoversWriterStart(rows, options.ownerWriterId)) pendingOmittedBefore = true;
 
         // ── Why a reset collapses to ONE emission ──────────────────────────
         // A SNAP hands over the WHOLE ring tail, oldest-first. Since one
