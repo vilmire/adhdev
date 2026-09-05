@@ -706,6 +706,33 @@ export class SessionChatTailController {
    * The two sources are never merged into one live window: whichever update
    * arrives last wins, exactly as two legacy updates would.
    *
+   * ── Why last-writer-wins, and NOT `seq` ordering ───────────────────────────
+   * `handleUpdate` deliberately does not read `update.seq`. It is not an
+   * oversight to fix by adding a comparison: the three sources that reach this
+   * method carry `seq` values from three INCOMPARABLE domains, and each has a
+   * defect that makes it unusable as an ordering key.
+   *
+   *   1. `read_chat` re-pull (`refreshAuthoritativeTail`) hardcodes `seq: 0`.
+   *      That path exists precisely to OVERRIDE a stale live window (D8
+   *      self-heal); ordering it by seq would make the self-heal always lose.
+   *   2. Legacy `session.chat_tail` seq is a PER-SUBSCRIPTION counter — the
+   *      daemon seeds `seq: 0` per subscription entry (topic-registry.ts) and
+   *      increments per delivery (subscription-updates.ts). It resets on every
+   *      resubscribe, so after a WS reconnect every fresh update would sit
+   *      below the pre-reconnect high-water mark and be rejected forever.
+   *   3. Replica seq is `snapshot.revision` (transcript-chat-pane-adapter.ts),
+   *      a transcript revision from an unrelated numbering space.
+   *
+   * Per-SOURCE monotonicity (rejecting only replica-vs-replica regressions) is
+   * the one variant that is not immediately self-defeating, but it does not
+   * address the risk either: the flap this would be meant to prevent is
+   * CROSS-source interleaving, which per-source ordering cannot order by
+   * construction. Ordering these sources needs a shared monotonic clock the
+   * wire does not currently carry — introducing one is a protocol change, not a
+   * local fix here. Until then last-writer-wins is the deliberate contract, and
+   * the shrink-defense / force-apply / dedup rules above are what actually
+   * protect the window from a bad update.
+   *
    * ── (§8 unit 9-pre-c) Structural refusal ───────────────────────────────
    * ★ A snapshot missing a required field is REFUSED here and reported as a
    * `revision_invalid` fallback, rather than being mapped on a best-effort
@@ -1286,10 +1313,19 @@ export function buildWarmSessionChatTailDescriptorState(
 
 export function useSessionChatTailController(
   activeConv: ActiveConversation,
-  options?: { enabled?: boolean; tailLimit?: number },
+  options?: { enabled?: boolean; tailLimit?: number; refreshEnabled?: boolean },
 ): SessionChatTailControllerHandle {
   const { sendData, sendCommand, isConnected } = useTransport()
   const enabled = options?.enabled !== false
+  // (CHAT-TAB-SWITCH-STALE-FALLBACK) Panel visibility must NOT gate `enabled`.
+  // Dropping the controller when a pane is merely hidden empties the snapshot
+  // (`hasLiveSnapshot: false`), which makes the pane fall back to the stale
+  // status-meta `conversation.messages` list — the "old messages then catch-up"
+  // the user sees on every session-tab switch. Visibility only gates the
+  // one-shot authoritative re-pull below, which is the part that actually costs
+  // a round trip; holding the (registry-shared, refcounted) subscription while
+  // hidden is what keeps the live window intact across a switch.
+  const refreshEnabled = options?.refreshEnabled !== false
   const daemonId = getConversationDaemonRouteId(activeConv)
   const sessionId = activeConv.sessionId || ''
   // Only a REAL, DISTINCT provider conv id is sent to the daemon as
@@ -1424,8 +1460,12 @@ export function useSessionChatTailController(
   // the authoritative tail so a browser stranded on a stale user-only snapshot
   // recovers without a hard refresh.
   useEffect(() => {
-    if (!controller || !enabled || !daemonId || !sessionId) return
-    // Initial mount pull.
+    if (!controller || !enabled || !refreshEnabled || !daemonId || !sessionId) return
+    // Initial mount pull. Also fires on the hidden→visible edge, because
+    // `refreshEnabled` is a dep: a pane that comes back into view re-pulls the
+    // authoritative tail once. It does so on top of a live snapshot that was
+    // never dropped, so it corrects rather than repopulates — no stale-fallback
+    // frame in between.
     void refreshAuthoritativeTail(true)
 
     const onVisible = () => {
@@ -1460,7 +1500,7 @@ export function useSessionChatTailController(
     // identity; excluded to keep this a mount/session-scoped effect rather than
     // re-running on every meta append.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controller, daemonId, enabled, sessionId, historySessionId])
+  }, [controller, daemonId, enabled, refreshEnabled, sessionId, historySessionId])
 
   return useMemo(
     () => buildControllerHandle(snapshot, loadHistoryPage),
