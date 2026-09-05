@@ -393,6 +393,26 @@ export class SpecCliAdapter implements CliAdapter {
         // Content-free at info — the prompt body is user data.
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length})`);
         LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);
+        // QUEUED-SEND-LOSS: honour the `{status}` contract this signature has
+        // always declared. It was previously unfulfilled — the dispatch was
+        // fire-and-forget and the method returned undefined — so every caller
+        // treated a body merely parked in the driver's in-memory FIFO as sent.
+        if (typeof this.driver.sendMessageWithDisposition === 'function') {
+            const disposition = this.driver.sendMessageWithDisposition(text, _opts?.bracketedPaste);
+            if (disposition.status === 'queued') {
+                LOG.info(
+                    'SpecAdapter',
+                    `[${this.cliType}] send QUEUED not submitted — ${disposition.reason} `
+                    + `(len=${text.length}, queueDepth=${disposition.queueDepth})`,
+                );
+                return { status: 'queued' };
+            }
+            // A duplicate resend was deliberately suppressed mid-delivery: the
+            // original body is already on its way, so the caller's send is
+            // accounted for. Reporting it as delivered matches the pre-existing
+            // behaviour of this path.
+            return { status: 'delivered' };
+        }
         this.driver.dispatch({ kind: 'send_message', text, bracketedPaste: _opts?.bracketedPaste });
     }
 

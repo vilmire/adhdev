@@ -3398,6 +3398,7 @@ var require_dist = __commonJS({
     var os3 = __toESM2(require("os"));
     var path2 = __toESM2(require("path"));
     var net = __toESM2(require("net"));
+    var import_string_decoder = require("string_decoder");
     function generateUUID2() {
       if (typeof crypto !== "undefined" && crypto.randomUUID) {
         return crypto.randomUUID();
@@ -3432,8 +3433,9 @@ var require_dist = __commonJS({
     }
     function createLineParser(onEnvelope) {
       let buffer = "";
-      return (chunk) => {
-        buffer += chunk.toString();
+      const decoder = new import_string_decoder.StringDecoder("utf8");
+      const parser = (chunk) => {
+        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
         let newlineIndex = buffer.indexOf("\n");
         while (newlineIndex >= 0) {
           const rawLine = buffer.slice(0, newlineIndex).trim();
@@ -3444,6 +3446,12 @@ var require_dist = __commonJS({
           newlineIndex = buffer.indexOf("\n");
         }
       };
+      parser.end = () => {
+        const remainder = buffer + decoder.end();
+        buffer = "";
+        return remainder;
+      };
+      return parser;
     }
     var establishedSockets = /* @__PURE__ */ new WeakSet();
     var SessionHostClient = class {
@@ -101721,6 +101729,10 @@ ${marker}`,
                 return;
             }
           }
+          /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
+          sendMessageWithDisposition(text, bracketedPaste) {
+            return this.handleSendMessage(text, bracketedPaste);
+          }
           /** Forward runtime metadata to the terminal transport so mesh binding
            *  fields (meshNodeId / meshNodeFor / workspaceLabel / lifecycle) reach
            *  the session registry. Not a DashboardCommand — this is a control-plane
@@ -101802,6 +101814,13 @@ ${marker}`,
             if (this.pendingSendDrainTimer) {
               clearTimeout(this.pendingSendDrainTimer);
               this.pendingSendDrainTimer = null;
+            }
+            if (this.pendingSends.length > 0) {
+              const lengths = this.pendingSends.map((s2) => s2.text.length);
+              LOG.warn(
+                "FsmDriver",
+                `[${this.specTag()}] DISCARDING ${this.pendingSends.length} queued send(s) on shutdown \u2014 owner input accepted but never submitted (session=${this.opts.sessionId || "unknown"}, lengths=[${lengths.join(",")}])`
+              );
             }
             this.pendingSends.length = 0;
             this.specWatcher?.close();
@@ -102343,17 +102362,19 @@ ${marker}`,
           handleSendMessage(text, bracketedPaste) {
             if (this.isDuplicateResend(text)) {
               LOG.info("FsmDriver", `[${this.specTag()}] send suppressed \u2014 duplicate resend within ${DUPLICATE_RESEND_WINDOW_MS}ms (len=${text.length})`);
-              return;
+              return { status: "duplicate" };
             }
             if (!this.canSendNow()) {
               this.pendingSends.push({ text, bracketedPaste });
+              const reason = this.sendBlockedReason();
               LOG.info(
                 "FsmDriver",
-                `[${this.specTag()}] send queued \u2014 ${this.sendBlockedReason()} (len=${text.length}, queued=${this.pendingSends.length})`
+                `[${this.specTag()}] send queued \u2014 ${reason} (len=${text.length}, queued=${this.pendingSends.length})`
               );
-              return;
+              return { status: "queued", queueDepth: this.pendingSends.length, reason };
             }
             this.beginSend(text, bracketedPaste);
+            return { status: "delivered" };
           }
           /** True when a send can be written to the PTY right now. */
           canSendNow() {
@@ -107582,6 +107603,17 @@ ${text}` : text;
           async sendMessage(text, _opts) {
             LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text.length})`);
             LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? "\u2026" : ""}`);
+            if (typeof this.driver.sendMessageWithDisposition === "function") {
+              const disposition = this.driver.sendMessageWithDisposition(text, _opts?.bracketedPaste);
+              if (disposition.status === "queued") {
+                LOG.info(
+                  "SpecAdapter",
+                  `[${this.cliType}] send QUEUED not submitted \u2014 ${disposition.reason} (len=${text.length}, queueDepth=${disposition.queueDepth})`
+                );
+                return { status: "queued" };
+              }
+              return { status: "delivered" };
+            }
             this.driver.dispatch({ kind: "send_message", text, bracketedPaste: _opts?.bracketedPaste });
           }
           getStatus(_options) {
@@ -146406,19 +146438,28 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             if (!text) return { success: false, error: "text required for PTY send" };
             await waitOnceForFreshHermesCliStart(adapter, _log);
             const forceSend = args?.force === true || args?.forceSend === true;
+            let sendResult;
             if (forceSend && typeof adapter.forceSendMessage === "function") {
-              await adapter.forceSendMessage(text);
+              sendResult = await adapter.forceSendMessage(text);
             } else if (forceSend) {
-              await adapter.sendMessage(text, { force: true });
+              sendResult = await adapter.sendMessage(text, { force: true });
             } else {
-              await adapter.sendMessage(text);
+              sendResult = await adapter.sendMessage(text);
             }
+            const queued = sendResult?.status === "queued";
             const target = getTargetInstance(h, args);
             if (target?.category === "cli" && target.type === adapter.cliType && typeof target.recordAcknowledgedUserInput === "function") {
               target.recordAcknowledgedUserInput(input);
             }
+            if (queued) {
+              _log(`send queued (not yet submitted) for ${adapter.cliType}`);
+            }
             return {
               ..._logSendSuccess(`${transport}-adapter`, adapter.cliType),
+              // `sent` distinguishes submitted from merely accepted; the
+              // command still succeeds, because queueing is the correct
+              // behaviour while the agent is generating.
+              ...queued ? { sent: false, queued: true, submitted: false } : { submitted: true },
               ...forceSend ? { forceSent: true } : {}
             };
           } catch (e) {
