@@ -613,6 +613,21 @@ export class SessionChatTailController {
    * 0 means "no active update seen yet" (settled idle — no transition protection).
    */
   private lastActiveStatusAt = 0
+  /**
+   * (§8 unit 9) True once THIS session has applied a verified replica snapshot
+   * and has not fallen back since. It is the sole gate on the legacy
+   * `session.chat_tail` subscription — see `shouldRunLegacySubscription`.
+   *
+   * ★ Deliberately NOT derived from `snapshot.transcriptReadSource`, even
+   * though the two agree most of the time. `transcriptReadSource` is a LABEL on
+   * the last update and is reset by `clearLiveSnapshot()` (tab switch, session
+   * reset) back to `'legacy'`; the legacy transport's arming must not be
+   * silently toggled by a label reset that says nothing about whether the
+   * replica lane is alive. This field tracks the LANE, that field describes the
+   * DATA, and conflating them is how a healthy replica session would start
+   * re-subscribing to legacy on every pane reset.
+   */
+  private replicaHealthy = false
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -683,6 +698,19 @@ export class SessionChatTailController {
    * legacy update (or the current one) already carries.
    */
   reportTranscriptReplicaFallback(reason: string): void {
+    // (§8 unit 9) ★ RE-ARM FIRST, and OUTSIDE the dedup guard below.
+    //
+    // Any fallback, for any reason, means the replica is no longer serving this
+    // session — so the legacy transport must come back before anything else,
+    // including before the early return. The dedup guard exists to avoid
+    // re-emitting an identical label; it must never be allowed to skip the
+    // re-arm, because the second identical report is exactly the case where a
+    // resubscribe was previously dropped (report `no_node`, controller
+    // retained later, report `no_node` again → still unsubscribed forever).
+    const wasHealthy = this.replicaHealthy
+    this.replicaHealthy = false
+    if (wasHealthy || !this.transportSubscription) this.syncLegacySubscription()
+
     if (this.snapshot.transcriptReadSource === 'legacy' && this.snapshot.transcriptFallbackReason === reason) return
     this.snapshot = {
       ...this.snapshot,
@@ -762,6 +790,23 @@ export class SessionChatTailController {
         stale: options.stale === true,
       }),
     )
+
+    // (§8 unit 9) ★ Suppress legacy only AFTER a verified snapshot has actually
+    // been applied — never on arrival, and never before the structural refusal
+    // above. Ordering is the whole safety property: retiring the legacy
+    // transport on the *promise* of a replica read is what would produce an
+    // empty pane, so the transport is stood down only once this session has
+    // real replica content on screen.
+    //
+    // `handleUpdate` may still legitimately DEFER this update (the shrink
+    // defense / busy deferral). That is fine and deliberately not special-cased:
+    // a deferral means the pane keeps the content it already had, and the lane
+    // is demonstrably alive and delivering — which is exactly what this flag
+    // claims. A lane that stops delivering reports a fallback and re-arms.
+    if (!this.replicaHealthy) {
+      this.replicaHealthy = true
+      this.syncLegacySubscription()
+    }
   }
 
   subscribe(listener: (snapshot: SessionChatTailSnapshot) => void): () => void {
@@ -947,8 +992,55 @@ export class SessionChatTailController {
     }
   }
 
+  /**
+   * (§8 unit 9) Whether the legacy `session.chat_tail` push subscription should
+   * be running for this session RIGHT NOW.
+   *
+   * ── Why per-session replica health, and not the build flag ────────────────
+   * The obvious gate — `isTranscriptWorkerEnabled()` — is unusable, and using
+   * it would delete the chat pane's only working transport. That flag is a
+   * BROWSER BUILD-TIME boolean: it says the worker was wired into this bundle,
+   * not that any daemon is actually producing replica revisions. A daemon whose
+   * `ADHDEV_SEQSCRIBE_TRANSCRIPT` is unset resolves to `shadow`
+   * (`daemon-core/src/seqscribe/transcript-mode.ts:39`) — and `shadow` is the
+   * DEFAULT. So "flag on" routinely coexists with "zero replica content", and
+   * gating on it would blank those panes with nothing to fall back to.
+   *
+   * The lane can also disappear at runtime long after any flag was read: the
+   * daemon closing the replication channel surfaces as `onSeqscribeTransport(null)`
+   * → `stopTranscriptHost` → a `no_node` fallback report (web-cloud
+   * `p2p-manager.ts`). A build-time constant cannot observe that at all.
+   *
+   * So the gate is the only signal that actually tracks the thing we care
+   * about: has a VERIFIED replica snapshot been applied to this very session,
+   * and has nothing reported a fallback since. It is self-healing in both
+   * directions and needs no environment knowledge whatsoever — a shadow daemon,
+   * a severed lane, and a browser built without the worker all look identical
+   * from here (`replicaHealthy === false`) and all keep legacy running.
+   */
+  private shouldRunLegacySubscription(): boolean {
+    return !this.replicaHealthy
+  }
+
+  /**
+   * (§8 unit 9) Bring the legacy transport in line with current replica health.
+   *
+   * Called on every health transition. Idempotent in both directions:
+   * `connect()` no-ops when a subscription already exists and `disconnect()`
+   * no-ops when none does, so a repeated fallback report or a burst of replica
+   * snapshots does not churn the subscription.
+   */
+  private syncLegacySubscription(): void {
+    if (this.retainCount <= 0) return
+    if (this.shouldRunLegacySubscription()) this.connect()
+    else this.disconnect()
+  }
+
   private connect(): void {
     if (this.transportSubscription || !this.sendData || !this.daemonId || !this.sessionId) return
+    // (§8 unit 9) A healthy replica serves this session; legacy stays dormant
+    // until a fallback re-arms it.
+    if (!this.shouldRunLegacySubscription()) return
     this.transportSubscription = this.manager.subscribe(
       { sendData: this.sendData },
       this.daemonId,
@@ -974,6 +1066,14 @@ export class SessionChatTailController {
     this.listeners.clear()
     this.retainCount = 0
     this.loadHistoryPromise = null
+    // (§8 unit 9) ★ Disarm the suppression, not just the subscription. A
+    // disposed controller may be retained again later (the registry recycles by
+    // key), and the replica lane does NOT survive disposal — the worker host is
+    // per-daemon and re-seeds interest on reconnect. Leaving this true would
+    // bring the controller back up with legacy suppressed and no replica
+    // feeding it: a permanently empty pane. Health must be re-earned by an
+    // actual snapshot after every dispose.
+    this.replicaHealthy = false
   }
 
   private emit(): void {
